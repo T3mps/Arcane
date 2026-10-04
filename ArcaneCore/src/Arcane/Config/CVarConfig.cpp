@@ -7,6 +7,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -158,6 +159,28 @@ namespace Arcane
             return nullptr;
         }
 
+        // Removes the leaf FindLeaf would find; an object it leaves empty goes too.
+        bool EraseLeaf(nlohmann::json& doc, std::string_view key)
+        {
+            if (!doc.is_object()) return false;
+            if (auto it = doc.find(std::string(key)); it != doc.end() && !it->is_object())
+            {
+                doc.erase(it);
+                return true;
+            }
+            for (std::size_t dot = key.find('.'); dot != std::string_view::npos; dot = key.find('.', dot + 1))
+            {
+                auto it = doc.find(std::string(key.substr(0, dot)));
+                if (it == doc.end() || !it->is_object()) continue;
+                if (EraseLeaf(*it, key.substr(dot + 1)))
+                {
+                    if (it->empty()) doc.erase(it);
+                    return true;
+                }
+            }
+            return false;
+        }
+
         std::optional<std::string> ReadWholeFile(const std::filesystem::path& file)
         {
             std::ifstream in(file, std::ios::binary);
@@ -177,7 +200,7 @@ namespace Arcane
                     Walk(registry, name, *it, by, sourceModule, unknown);
                     continue;
                 }
-                const CVarHandle handle = registry.Find(name);
+                const CVarHandle handle = registry.Resolve(name);
                 if (handle.IsStale())
                 {
                     unknown.push_back(name);
@@ -235,8 +258,16 @@ namespace Arcane
 
     void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir)
     {
-        // category -> its owned (key, value) pairs; ordered, so the writes are too.
-        std::map<std::string, std::vector<std::pair<std::string, nlohmann::json>>> owned;
+        // category -> the (key, value) pairs it owns, plus the renamed keys
+        // (aliases' old names) this write retires from the file. Ordered, so
+        // the writes are too.
+        struct CategoryWrite
+        {
+            std::vector<std::pair<std::string, nlohmann::json>> values;
+            std::vector<std::string> retired;
+        };
+        std::map<std::string, CategoryWrite> owned;
+        std::set<std::string> written;
         for (const CVarListEntry& entry : registry.List())
         {
             if (!HasFlag(entry.flags, CVarFlags::Archive)) continue;
@@ -254,15 +285,27 @@ namespace Arcane
                 if (const auto meta = registry.Metadata(registry.Find(entry.name))) enumNames = meta->enumNames;
             nlohmann::json json = ArchiveJson(*value, enumNames);
             if (json.is_null()) continue;
-            owned[std::move(category)].emplace_back(entry.name.substr(dot + 1), std::move(json));
+            written.insert(entry.name);
+            owned[std::move(category)].values.emplace_back(entry.name.substr(dot + 1), std::move(json));
+        }
+        // settings spec s4.7: a renamed cvar's old key goes wherever its new one is written.
+        for (const auto& [oldName, newName] : registry.Aliases())
+        {
+            if (!written.contains(newName)) continue;
+            const auto dot = oldName.find('.');
+            if (dot == std::string::npos) continue;          // a dot-less old name was never archived
+            std::string category = oldName.substr(0, dot);
+            if (IsDocumentCategory(category)) continue;
+            owned[std::move(category)].retired.push_back(oldName.substr(dot + 1));
         }
         if (owned.empty()) return;
         std::error_code ec;
         std::filesystem::create_directories(userDir, ec);
-        for (auto& [category, values] : owned)
+        for (auto& [category, write] : owned)
         {
             const std::filesystem::path file = userDir / (category + ".json");
             const std::optional<std::string> before = ReadWholeFile(file);
+            if (write.values.empty() && !before) continue;   // only retirements, and no file to retire them from
             nlohmann::json doc = nlohmann::json::object();
             if (before)
             {
@@ -271,6 +314,7 @@ namespace Arcane
                     doc = std::move(parsed);
                 else
                 {
+                    if (write.values.empty()) continue;      // never back up or replace a file only to retire a key
                     std::filesystem::path bad = file;
                     bad += ".bad";
                     std::error_code copied;
@@ -287,7 +331,9 @@ namespace Arcane
                              file.generic_string(), bad.generic_string());
                 }
             }
-            for (auto& [key, value] : values)
+            for (const std::string& key : write.retired)
+                EraseLeaf(doc, key);
+            for (auto& [key, value] : write.values)
             {
                 if (nlohmann::json* leaf = FindLeaf(doc, key))
                     *leaf = std::move(value);
@@ -298,17 +344,17 @@ namespace Arcane
             if (before && *before == text) continue;
             std::filesystem::path tmp = file;
             tmp += ".tmp";
-            bool written = false;
+            bool written2 = false;   // `written` is the set of archived names above
             std::error_code renamed;
             {
                 std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
                 out << text;
                 out.flush();
-                written = static_cast<bool>(out);
+                written2 = static_cast<bool>(out);
             }
-            if (written)
+            if (written2)
                 std::filesystem::rename(tmp, file, renamed);   // replaces: the old file or the new, never half of one
-            if (!written || renamed)
+            if (!written2 || renamed)
             {
                 ARC_WARN("cvar: cannot write '{}'{}{}", file.generic_string(), renamed ? ": " : "",
                          renamed ? renamed.message() : std::string());

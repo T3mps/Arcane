@@ -4,8 +4,10 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRef.hpp>
 
+#include <map>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Arcane
@@ -125,6 +127,8 @@ namespace Arcane
         std::unordered_map<std::string, std::uint32_t> byName;
         std::vector<Command> commands;
         std::unordered_map<std::string, std::uint32_t> commandByName;
+        std::map<std::string, std::string> aliases;     // old -> new
+        std::unordered_set<std::string> warnedAliases;  // old names already warned about
         bool publishing = false;
         std::string lastError;
     };
@@ -276,6 +280,8 @@ namespace Arcane
                           "', refused from '" + std::string(desc.module) + "'");
         if (m->commandByName.contains(name))
             return refuse("collides with a command");
+        if (const auto alias = m->aliases.find(name); alias != m->aliases.end())
+            return refuse("collides with an alias of '" + alias->second + "'");
 
         std::uint32_t index = 0;
         if (!m->freeSlots.empty())
@@ -323,7 +329,7 @@ namespace Arcane
                                        std::string module, CommandFn fn, void* user)
     {
         if (name.empty() || !fn) return false;
-        if (m->byName.contains(name) || m->commandByName.contains(name)) return false;
+        if (m->byName.contains(name) || m->commandByName.contains(name) || m->aliases.contains(name)) return false;
         if (HasFlag(flags, CVarFlags::Dev) && !m->devCvars) return false;
         const std::uint32_t index = static_cast<std::uint32_t>(m->commands.size());
         m->commands.push_back(Command{ std::move(name), std::move(help), std::move(module), flags, fn, user, true });
@@ -509,7 +515,10 @@ namespace Arcane
 
     std::optional<CVarExplain> CVarRegistry::Explain(std::string_view name) const
     {
-        const CVarHandle handle = Find(name);
+        CVarHandle handle = Find(name);
+        if (handle.IsStale())
+            if (const auto alias = m->aliases.find(std::string(name)); alias != m->aliases.end())
+                handle = Find(alias->second);   // a read: no rename warning
         if (handle.IsStale()) return std::nullopt;
         const Slot& slot = m->slots[handle.index];
         CVarExplain out;
@@ -568,7 +577,7 @@ namespace Arcane
             return { ok, std::move(text) };
         }
 
-        const CVarHandle handle = Find(name);
+        const CVarHandle handle = Resolve(name);
         if (handle.IsStale()) return { false, "unknown '" + name + "'" };
         const Slot& slot = m->slots[handle.index];
         if (args.empty())
@@ -599,6 +608,51 @@ namespace Arcane
         const CVarHandle handle = Find("cheats");
         const auto value = Get(handle);
         return value && value->type == CVarType::Bool && value->AsBool();
+    }
+
+    bool CVarRegistry::RegisterAlias(std::string_view oldName, std::string_view newName)
+    {
+        if (oldName.empty() || newName.empty() || oldName == newName) return false;
+        const std::string from{ oldName };
+        const std::string to{ newName };
+        if (m->byName.contains(from) || m->commandByName.contains(from)) return false;
+        if (m->aliases.contains(to)) return false;                     // the target is itself an old name
+        if (const auto it = m->aliases.find(from); it != m->aliases.end()) return it->second == to;
+        for (auto& [old, target] : m->aliases)
+            if (target == from) target = to;                           // a -> b, then b -> c: a -> c
+        m->aliases.emplace(from, to);
+        return true;
+    }
+
+    CVarHandle CVarRegistry::Resolve(std::string_view name)
+    {
+        if (const CVarHandle direct = Find(name); !direct.IsStale()) return direct;
+        const auto it = m->aliases.find(std::string(name));
+        if (it == m->aliases.end()) return {};
+        if (m->warnedAliases.insert(it->first).second)
+            ARC_WARN("cvar: '{}' is renamed '{}' -- update the file, --set or script that names it (warned once)",
+                     it->first, it->second);
+        return Find(it->second);
+    }
+
+    std::string CVarRegistry::AliasTarget(std::string_view oldName) const
+    {
+        const auto it = m->aliases.find(std::string(oldName));
+        return it == m->aliases.end() ? std::string{} : it->second;
+    }
+
+    std::vector<std::pair<std::string, std::string>> CVarRegistry::Aliases() const
+    {
+        return std::vector<std::pair<std::string, std::string>>(m->aliases.begin(), m->aliases.end());
+    }
+
+    bool Detail::RegisterDeclaredAlias(std::string_view oldName, std::string_view newName)
+    {
+        const bool ok = CVarRegistry::Get().RegisterAlias(oldName, newName);
+        if (!ok)
+            ARC_ERROR("cvar: the alias '{}' -> '{}' was refused (an empty or equal name, a live cvar or command "
+                      "under the old name, or a chain)", oldName, newName);
+        return ok;
     }
 
     CVarHandle Detail::RegisterDeclaredCVar(const CVarDesc& desc)

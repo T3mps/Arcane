@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Arcane
@@ -128,6 +129,21 @@ namespace Arcane
                                            std::string module, CommandFn fn, void* user);
 
         [[nodiscard]] CVarHandle Find(std::string_view name) const;
+        // Renames (settings spec s4.7). `oldName` resolves to `newName` in
+        // config files, --set and the console, with one warning per old name;
+        // WriteCVarArchive writes only `newName` and drops the old key.
+        // Refused (false) when either name is empty, they are equal, `oldName`
+        // is a live cvar or command, `oldName` already aliases a DIFFERENT
+        // name, or `newName` is itself an old name. The same pair again is a
+        // success (a reloaded module re-runs its statics). Renaming a name
+        // others alias to (b -> c while a -> b) re-points them: no chains.
+        // Aliases are not module-scoped: an unload leaves them.
+        bool RegisterAlias(std::string_view oldName, std::string_view newName);
+        // Find, then the alias table, warning once per old name. For names a
+        // PERSON wrote -- files, --set, the console. Code uses Find.
+        [[nodiscard]] CVarHandle Resolve(std::string_view name);
+        [[nodiscard]] std::string AliasTarget(std::string_view oldName) const;   // empty when not an alias
+        [[nodiscard]] std::vector<std::pair<std::string, std::string>> Aliases() const;   // (old, new), by old
         [[nodiscard]] std::optional<CVarValue> Get(CVarHandle handle) const;
         // The declaration's metadata. nullopt for a stale handle.
         [[nodiscard]] std::optional<CVarMetadata> Metadata(CVarHandle handle) const;

@@ -105,6 +105,9 @@ namespace Arcane
         // compiled out of Dist is not a refusal worth a line).
         ARC_CORE_API CVarHandle RegisterDeclaredCVar(const CVarDesc& desc);
 
+        // ARC_CVAR_ALIAS: register on CVarRegistry::Get() and log a refusal.
+        ARC_CORE_API bool RegisterDeclaredAlias(std::string_view oldName, std::string_view newName);
+
         // The module a static declaration in THIS binary belongs to (O1):
         // the project's ARC_MODULE_NAME define (a bare token, e.g.
         // ARC_MODULE_NAME=editor), else "engine". Inline in the header on

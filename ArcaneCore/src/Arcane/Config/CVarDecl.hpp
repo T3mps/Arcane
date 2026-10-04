@@ -28,6 +28,13 @@
 
 #define ARC_CVAR_EXTERN(ident, T) extern const ::Arcane::CVarRef<T> ident
 
+// A rename (settings spec s4.7): the old name keeps working in config files,
+// --set and the console, with a one-time warning; the next archive write
+// saves the new name. Namespace scope, in a .cpp.
+#define ARC_CVAR_ALIAS(oldLit, newLit)                                                         \
+    static const bool ARC_CVAR_CAT(arcCVarAlias_, __LINE__) =                                  \
+        ::Arcane::Detail::RegisterDeclaredAlias(oldLit, newLit)
+
 #define ARC_COMMAND(nameLit, flagExpr, helpLit, fn)                                        \
     static const bool ARC_CVAR_CAT(arcCmd_, __LINE__) =                                    \
         ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit, "engine", fn, nullptr)

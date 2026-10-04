@@ -42,7 +42,9 @@ namespace Arcane
     // An existing file is MERGED: keys this write does not own (another
     // module's cvars, hand-written settings) stay, and a key already present
     // -- flat ("graph.x") or nested ({"graph":{"x":..}}) -- is updated in
-    // place. An unreadable file is kept beside it as <category>.json.bad and
+    // place. A renamed cvar's old key (RegisterAlias, settings spec s4.7) is
+    // dropped wherever its new name is written, so the next save migrates the
+    // file. An unreadable file is kept beside it as <category>.json.bad and
     // replaced. Each file goes to <category>.json.tmp first and is renamed
     // over the old one, so a crash mid-write never leaves a torn file; an
     // unchanged file is not rewritten.
