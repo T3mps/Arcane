@@ -1,6 +1,8 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarRef.hpp>
 
 #include <sstream>
 #include <unordered_map>
@@ -594,5 +596,20 @@ namespace Arcane
         const CVarHandle handle = Find("cheats");
         const auto value = Get(handle);
         return value && value->type == CVarType::Bool && value->AsBool();
+    }
+
+    CVarHandle Detail::RegisterDeclaredCVar(const CVarDesc& desc)
+    {
+        CVarRegistry& registry = CVarRegistry::Get();
+        const CVarHandle handle = registry.Register(desc);
+#if defined(ARC_BUILD_DIST)
+        const bool compiledOut = HasFlag(desc.flags, CVarFlags::Dev);   // Get()'s registry is built without Dev cvars
+#else
+        const bool compiledOut = false;
+#endif
+        if (handle.IsStale() && !compiledOut)
+            ARC_ERROR("cvar: the declaration of '{}' (module '{}') was refused: {}", desc.name, desc.module,
+                      registry.LastError());
+        return handle;
     }
 }

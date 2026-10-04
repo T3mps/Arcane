@@ -1069,7 +1069,7 @@ project "ArcaneEditor"
     if os.target() == "windows" then
         dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
     end
-    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)", "ARC_MODULE_NAME=editor" }
     postbuildcommands {
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
         -- shape as ArcaneRuntime's matching comment above (safe under /m: idempotent by
@@ -1822,6 +1822,9 @@ project "ArcaneTests"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        -- settings S1-7: the module the test exe's static cvar declarations
+        -- belong to (Detail::DeclaringModule, CVarRef.hpp). A bare token.
+        "ARC_MODULE_NAME=tests",
         -- imgui is exported from ArcaneClient.dll; this exe imports it (matches the
         -- DLL's dllexport so <imgui.h> here resolves to the DLL's symbols).
         "IMGUI_API=__declspec(dllimport)",
