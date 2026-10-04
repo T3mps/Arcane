@@ -96,6 +96,34 @@ namespace Arcane
         Server,
     };
 
+    // Who a setting is for (settings spec 2026-10-03 s3.2), declared once per
+    // setting. Editor settings live in the editor DLL, so a game never has them.
+    enum class Audience : std::uint8_t
+    {
+        Editor,
+        Game,
+        PlayerSafe,   // a Game refinement any player may change
+        Server,
+    };
+
+    // Where a setting's DEFAULT is edited (s3.3; inventory Pref-M / Pref-P /
+    // Project): the Preferences window, machine-wide or per project, or the
+    // shared Project Settings window.
+    enum class SettingScope : std::uint8_t
+    {
+        PreferencesMachine,
+        PreferencesProject,
+        Project,
+    };
+
+    // When a change reaches its consumer (s3.4).
+    enum class ApplyMode : std::uint8_t
+    {
+        Live,        // the next Publish
+        NextWorld,   // read when a world, registry or physics world is created
+        Restart,     // read once at boot
+    };
+
     // The thirteen value types. Enum shares Int32's storage; the type tag
     // keeps them apart, so an Enum never equals an Int32.
     class CVarValue

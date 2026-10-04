@@ -44,4 +44,12 @@ namespace Arcane
     // "bool", "int32", "uint32", "int64", "uint64", "float", "double",
     // "string", "color", "vec2", "vec3", "vec4", "enum".
     ARC_CORE_API const char* CVarTypeName(CVarType type);
+
+    // The settings windows' label for a cvar, from its last dotted segment:
+    // "fitMinZoom" -> "Fit Min Zoom", "byteBudgetMB" -> "Byte Budget MB",
+    // "HTTPPort" -> "HTTP Port", "grid3D" -> "Grid3D", "max_players" -> "Max Players".
+    ARC_CORE_API std::string DeriveCVarDisplayName(std::string_view cvarName);
+    // Every segment but the last, through the same word split, joined by '/':
+    // "physics.solver.substeps" -> "Physics/Solver". A dot-less name -> "General".
+    ARC_CORE_API std::string DeriveCVarCategoryPath(std::string_view cvarName);
 }

@@ -1,5 +1,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 
+#include <Arcane/Config/CVarFormat.hpp>
+
 #include <charconv>
 #include <sstream>
 #include <unordered_map>
@@ -62,6 +64,18 @@ namespace Arcane
             return t <= CVarType::String;
         }
 
+        // settings spec s4.1: the hint a String (or, for "slider", a number)
+        // carries to the settings window.
+        bool WidgetFits(std::string_view widget, CVarType type)
+        {
+            if (widget.empty()) return true;
+            if (widget == "slider") return type >= CVarType::Int32 && type <= CVarType::Float64;
+            if (widget == "path:file" || widget == "path:dir" || widget == "keychord" || widget == "font")
+                return type == CVarType::String;
+            if (widget.starts_with("asset:")) return widget.size() > 6 && type == CVarType::String;
+            return false;
+        }
+
         void ListCommand(std::string_view, std::string& out, void* user);
         void ExplainCommand(std::string_view args, std::string& out, void* user);
     }
@@ -77,6 +91,16 @@ namespace Arcane
         std::string declaredBy;
         std::optional<CVarValue> min;
         std::optional<CVarValue> max;
+        CVarValue defaultValue = CVarValue::Bool(false);
+        std::string displayName;
+        std::string keywords;
+        std::string widget;
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
+        std::int32_t order = 0;
+        std::string categoryPath;
+        std::vector<std::string> enumNames;
         CVarValue published = CVarValue::Bool(false);
         std::vector<CVarHistoryRecord> history;
         bool dirty = false;
@@ -194,6 +218,12 @@ namespace Arcane
             m->lastError = "cvar '" + std::string(desc.name) + "' has no v1 accessor";
             return {};
         }
+        if (!WidgetFits(desc.widget, desc.type))
+        {
+            m->lastError = "cvar '" + std::string(desc.name) + "' has widget '" + std::string(desc.widget) +
+                           "', which does not fit its type (" + CVarTypeName(desc.type) + ")";
+            return {};
+        }
         if (HasFlag(desc.flags, CVarFlags::Dev) && !m->devCvars)
         {
             m->lastError = "cvar '" + std::string(desc.name) + "' is Dev and this build compiled it out";
@@ -237,6 +267,16 @@ namespace Arcane
         slot.min = desc.min;
         slot.max = desc.max;
         slot.published = Clamp(desc.defaultValue, slot.min, slot.max);
+        slot.defaultValue = slot.published;
+        slot.displayName = desc.displayName.empty() ? DeriveCVarDisplayName(desc.name) : std::string(desc.displayName);
+        slot.keywords = desc.keywords;
+        slot.widget = desc.widget;
+        slot.audience = desc.audience;
+        slot.scope = desc.scope;
+        slot.apply = desc.apply;
+        slot.order = desc.order;
+        slot.categoryPath = desc.categoryPath.empty() ? DeriveCVarCategoryPath(desc.name) : std::string(desc.categoryPath);
+        slot.enumNames = desc.enumNames;
         slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         slot.dirty = false;
         m->byName.emplace(slot.name, index);
@@ -270,6 +310,32 @@ namespace Arcane
         const Slot& slot = m->slots[handle.index];
         if (!slot.alive || slot.generation != handle.generation) return std::nullopt;
         return slot.published;
+    }
+
+    std::optional<CVarMetadata> CVarRegistry::Metadata(CVarHandle handle) const
+    {
+        if (handle.index >= m->slots.size()) return std::nullopt;
+        const Slot& slot = m->slots[handle.index];
+        if (!slot.alive || slot.generation != handle.generation) return std::nullopt;
+        CVarMetadata out;
+        out.name = slot.name;
+        out.help = slot.help;
+        out.module = slot.declaredBy;
+        out.type = slot.type;
+        out.flags = slot.flags;
+        out.defaultValue = slot.defaultValue;
+        out.min = slot.min;
+        out.max = slot.max;
+        out.displayName = slot.displayName;
+        out.keywords = slot.keywords;
+        out.widget = slot.widget;
+        out.audience = slot.audience;
+        out.scope = slot.scope;
+        out.apply = slot.apply;
+        out.order = slot.order;
+        out.categoryPath = slot.categoryPath;
+        out.enumNames = slot.enumNames;
+        return out;
     }
 
     SetResult CVarRegistry::Set(CVarHandle handle, CVarValue value, SetBy by,

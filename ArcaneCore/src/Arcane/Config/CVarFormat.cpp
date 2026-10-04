@@ -101,6 +101,40 @@ namespace Arcane
             }
             return out;
         }
+
+        bool Upper(char c) { return c >= 'A' && c <= 'Z'; }
+        bool Lower(char c) { return c >= 'a' && c <= 'z'; }
+        bool Digit(char c) { return c >= '0' && c <= '9'; }
+
+        // camelCase / snake_case -> "Title Case Words". A word starts at a
+        // capital after a lower-case letter ("fitMin" -> Fit Min), or at the
+        // last capital of an acronym or digit run that a lower-case letter
+        // follows ("HTTPPort" -> HTTP Port, "d3d12Debug" -> D3d12 Debug).
+        // '_' and '-' separate words. A trailing acronym stays whole.
+        std::string Words(std::string_view segment)
+        {
+            std::string out;
+            bool wordStart = true;
+            for (std::size_t i = 0; i < segment.size(); ++i)
+            {
+                const char c = segment[i];
+                if (c == '_' || c == '-')
+                {
+                    wordStart = true;
+                    continue;
+                }
+                if (i > 0 && Upper(c))
+                {
+                    const char prev = segment[i - 1];
+                    const bool lowerNext = i + 1 < segment.size() && Lower(segment[i + 1]);
+                    if (Lower(prev) || ((Upper(prev) || Digit(prev)) && lowerNext)) wordStart = true;
+                }
+                if (wordStart && !out.empty()) out += ' ';
+                out += (wordStart && Lower(c)) ? static_cast<char>(c - 'a' + 'A') : c;
+                wordStart = false;
+            }
+            return out;
+        }
     }
 
     std::string CVarColorToHex(const CVarColor& c)
@@ -276,5 +310,28 @@ namespace Arcane
         case CVarType::Enum: return "enum";
         }
         return "unknown";
+    }
+
+    std::string DeriveCVarDisplayName(std::string_view cvarName)
+    {
+        const auto dot = cvarName.rfind('.');
+        return Words(dot == std::string_view::npos ? cvarName : cvarName.substr(dot + 1));
+    }
+
+    std::string DeriveCVarCategoryPath(std::string_view cvarName)
+    {
+        const auto last = cvarName.rfind('.');
+        if (last == std::string_view::npos) return "General";
+        std::string out;
+        std::string_view rest = cvarName.substr(0, last);
+        while (!rest.empty())
+        {
+            const auto dot = rest.find('.');
+            if (!out.empty()) out += '/';
+            out += Words(rest.substr(0, dot));
+            if (dot == std::string_view::npos) break;
+            rest.remove_prefix(dot + 1);
+        }
+        return out;
     }
 }

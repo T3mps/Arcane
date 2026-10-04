@@ -31,6 +31,17 @@ namespace Arcane
         CVarFlags flags = CVarFlags::None;
         std::string_view help;
         std::string_view module;    // who declared it; unload drops the cvar
+        // Settings metadata (settings spec 2026-10-03 s4.2). Appended, so the
+        // positional aggregate form above keeps compiling.
+        std::string_view displayName;        // empty = derived from the last name segment
+        std::string_view keywords;           // space-separated search words
+        std::string_view widget;             // "", "asset:<kind>", "path:file", "path:dir", "keychord", "font", "slider"
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
+        std::int32_t order = 0;              // stable sort within a category
+        std::string_view categoryPath;       // empty = derived from the dotted name ("Physics/Solver")
+        std::vector<std::string> enumNames;  // an Enum's ordered names (required for one)
     };
 
     struct CVarHistoryRecord
@@ -58,6 +69,29 @@ namespace Arcane
         std::string help;
         CVarType type = CVarType::Bool;
         CVarFlags flags = CVarFlags::None;
+    };
+
+    // Everything a declaration said, with the derived display strings filled
+    // in (settings spec s4.2). What the settings windows and PlayerSettings read.
+    struct CVarMetadata
+    {
+        std::string name;
+        std::string help;
+        std::string module;                  // the declaring module
+        CVarType type = CVarType::Bool;
+        CVarFlags flags = CVarFlags::None;   // as stored (Archive adds UserSettable)
+        CVarValue defaultValue = CVarValue::Bool(false);   // after the range clamp
+        std::optional<CVarValue> min;
+        std::optional<CVarValue> max;
+        std::string displayName;             // declared, else DeriveCVarDisplayName(name)
+        std::string keywords;
+        std::string widget;
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
+        std::int32_t order = 0;
+        std::string categoryPath;            // declared, else DeriveCVarCategoryPath(name)
+        std::vector<std::string> enumNames;
     };
 
     struct ExecResult
@@ -95,6 +129,8 @@ namespace Arcane
 
         [[nodiscard]] CVarHandle Find(std::string_view name) const;
         [[nodiscard]] std::optional<CVarValue> Get(CVarHandle handle) const;
+        // The declaration's metadata. nullopt for a stale handle.
+        [[nodiscard]] std::optional<CVarMetadata> Metadata(CVarHandle handle) const;
 
         // sourceModule tags the history record so UnregisterModule can pop it.
         SetResult Set(CVarHandle handle, CVarValue value, SetBy by,
