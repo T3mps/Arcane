@@ -13,10 +13,10 @@
 |---|---|---|---|---|
 | Part 1: ArcaneCore and the vendored library configs | 82 | 101 | 28 | 1 |
 | Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 126 | 102 | 34 | 0 |
-| Part 3: ArcaneEditor and ArcaneHub | 178 | 39 | 120 | 14 |
-| **Total** | **386** | **242** | **182** | **15** |
+| Part 3: ArcaneEditor and ArcaneHub | 184 | 39 | 115 | 14 |
+| **Total** | **392** | **242** | **177** | **15** |
 
-These counts are after S5-1 (R1-R4 + s16.11 applied): the Reconciliation below is applied to every part-table row, the scope vocabulary is Pref-M / Pref-P / Project, each category has exactly one settings struct (and each struct one category, since `ARC_SETTINGS` registers `<category>.<field>`), and the Part 3 "Editor Dev" px metrics are DERIVED from `editor.ui.scale`. `scripts/settings-inventory-lint.ps1` checks all of it (rules L1-L9; exit 0 = reconciled) and prints these counts. Earlier counts: first pass 481 / 233 / 111; after the reconciliation was written but before S5-1 applied it, 447 / 239 / 111 (the lint counts that file as 455 / 240 / 111 / 15). They are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
+These counts are after S5-1 (R1-R4 + s16.11 applied): the Reconciliation below is applied to every part-table row, the scope vocabulary is Pref-M / Pref-P / Project, each category has exactly one settings struct (and each struct one category, since `ARC_SETTINGS` registers `<category>.<field>`), and the Part 3 "Editor Dev" px metrics are DERIVED from `editor.ui.scale` (except five that S6-28 / S6-32 / S6-34 convert as cvars, read as `Ui::Px(setting)`; the lint exempts them by name). `scripts/settings-inventory-lint.ps1` checks all of it (rules L1-L9; exit 0 = reconciled) and prints these counts. Earlier counts: first pass 481 / 233 / 111; after the reconciliation was written but before S5-1 applied it, 447 / 239 / 111 (the lint counts that file as 455 / 240 / 111 / 15). They are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
 
 ## Should anything NOT be exposed? (spec s16.8)
 
@@ -806,7 +806,7 @@ Creation sites:
 | ArcaneServer/src/ServerConfig.hpp:22; ServerConfig.cpp:56 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); string "0.016666666666666666" | SETTING | server.tickHz | ServerSettings | Server | Project | Restart | 1..240 Hz | Y | reconciled: a server tick distinct from the client sim.fixedHz. BOTH: keep the flag and add the cvar; it sets RunLoop fixedHz (ServerApp.cpp:102) |
 | ServerConfig.cpp:55 | frames | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: run budget |
 | ServerConfig.cpp:53-54,61,63 | project / plugin / report / print-engine-info | "" / false | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY |
-| ArcaneServer/src/ServerApp.cpp:102-103,170 | SetFixedHz / sleep_until pacing | from fixedDt | DERIVED | — | — | — | — | — | — | Y | Follows sim.fixedHz |
+| ArcaneServer/src/ServerApp.cpp:102-103, :164, :170 | SetFixedHz / Loop().Advance step / sleep_until pacing | from fixedDt | DERIVED | — | — | — | — | — | — | Y | Follows server.tickHz (R1 split; --fixed-dt overrides) |
 | ArcaneServer/src/main.cpp:125 | diag.unattended | true | CONSTANT | — | — | — | — | — | — | N | A dedicated server has no desktop session; changing it is a bug |
 | main.cpp:50; ArcaneServer/src/ServerReport.hpp:24 | relaunch strip list; kSchemaVersion 1 | — | CONSTANT | — | — | — | — | — | — | N | Relaunch-line rule; report format |
 
@@ -1106,7 +1106,7 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Viewport/ViewportGrid.cpp:192, :200 | major every 10 | 10 | CONSTANT | — | — | — | — | — | — | N | decimal-decade identity |
 | Viewport/DeferredPick.hpp:205 | kMaxFramesInFlight | 64 frames | SETTING | editor.viewport.pickMaxFramesInFlight | EditorViewportSettings | Editor Dev | Pref-M | Live | 4..1024 | N | abandon budget |
 | App/EditorAppFrame.cpp:1391 | windowed Play simDt clamp | 0.25 s | DERIVED | (sim.maxFrameDeltaSeconds) | — | — | — | — | — | Y | spiral-of-death clamp; changes outcome after a stall (reconciled R1: read through sim.maxFrameDeltaSeconds, one clamp for the runtime and editor Play; was editor.play.maxSimDtSeconds) |
-| App/EditorApp.cpp:2435-2436 | first-frame viewport fallback | 1280×720 px | DERIVED | — | — | — | — | — | — | N | one frame only; low value; base px x editor.ui.scale (s16.11; was editor.viewport.fallbackExtent) |
+| App/EditorApp.cpp:2435-2436 | first-frame viewport fallback | 1280×720 px | SETTING | editor.viewport.fallbackExtent | EditorViewportSettings | Editor Dev | Pref-M | Restart | — | N | one frame only; low value; a render-target extent, not UI chrome (kept SETTING: owned by S6-32, fallbackExtentW/H) |
 | App/EditorAppFrame.cpp:538, :4034 | minimized / skipped-frame sleep | 1 ms | SETTING | app.window.minimizedSleepMs | AppWindowSettings | Game Dev | Pref-P | Live | 0..100 | N | no background or unfocused throttle exists (see Notes) (reconciled R1: the same minimized sleep as the runtime; the background throttle is the new editor.perf.backgroundFps) |
 | — (new) | background / unfocused frame throttle | 0 (fps; 0 = no throttle) | SETTING | editor.perf.backgroundFps | EditorPerfSettings | Editor | Pref-M | Live | 0=off, 1..240 | N | new row (R1): 0 keeps today's behaviour (no throttle); kept apart from app.window.minimizedSleepMs on purpose (reconciled R1) |
 
@@ -1120,7 +1120,7 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Widgets/GraphNodeLod.hpp:79 | kEps | 1e-4 | CONSTANT | — | — | — | — | — | — | N | float-compare epsilon |
 | Widgets/GraphGridPhase.hpp:82 | kZoomExponent | 0.7 | SETTING | editor.graph.grid.zoomExponent | GraphGridSettings | Editor Dev | Pref-M | Live | 0.1..1 | N | — |
 | Widgets/GraphGridPhase.hpp:84 | kBaseSpacingPx | 20 | SETTING | editor.graph.grid.baseSpacing | GraphGridSettings | Editor Dev | Pref-M | Live | 4..128 | N | — |
-| Widgets/GraphGridPhase.hpp:87 | kMinorTargetPx | 22 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.grid.minorTargetPx) |
+| Widgets/GraphGridPhase.hpp:87 | kMinorTargetPx | 22 px | SETTING | editor.graph.grid.minorTargetPx | GraphGridSettings | Editor Dev | Pref-M | Live | 4..128 | N | kept SETTING: owned by S6-34; read as Ui::Px(setting) per S4-16 |
 | Widgets/GraphGridPhase.hpp:91 | kMajorEvery | 8 | SETTING | editor.graph.grid.majorEvery | GraphGridSettings | Editor Dev | Pref-M | Live | {2,4,8,16} | N | must be a power of two |
 | Widgets/GraphGridPhase.hpp:97 | kScaleEpsilon | 1e-4 | CONSTANT | — | — | — | — | — | — | N | divide-by-zero guard |
 | Widgets/GraphCanvasStyle.hpp:42 | kGraphNodeRounding | 4 px | SETTING | editor.graph.nodeRounding | EditorGraphSettings | Editor | Pref-M | Restart | 0..16 | N | latched at CreateEditor |
@@ -1135,12 +1135,12 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Documents/ShaderGraphPinLegend.cpp:26 | kLegendDotRadius | 4 px | DERIVED | — | — | — | — | — | — | N | = kPinDotRadius (comment says it mirrors it) |
 | Documents/ShaderGraphPinLegend.cpp:31-32 | legend pair / row gaps | 3 / 4 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.legend.dotGap) |
 | Documents/ShaderEditorDocument.cpp:391-392 | kNodePadX/Y | 10 / 6 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.nodePadding) |
-| Documents/ShaderEditorDocument.cpp:404 | kNodeHeaderGap | 5 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.nodeHeaderGap) |
+| Documents/ShaderEditorDocument.cpp:404 | kNodeHeaderGap | 5 px | SETTING | editor.graph.nodeHeaderGap | EditorGraphSettings | Editor Dev | Pref-M | Live | 0..16 | N | kept SETTING: owned by S6-34; read as Ui::Px(setting) per S4-16 |
 | Documents/ShaderEditorDocument.cpp:413 | kCullGuardBand | 0.25 | SETTING | editor.graph.cullGuardBand | EditorGraphSettings | Editor Dev | Pref-M | Live | 0..1 | N | UE GuardBandArea |
 | Documents/ShaderEditorDocument.cpp:417 | kPinDotRadius | 4 px | SETTING | editor.graph.pinDotRadius | EditorGraphSettings | Editor | Pref-M | Live | 2..10 | N | — |
 | Documents/ShaderEditorDocument.cpp:709 | kPinChipSlot | 2×(dot+gap+ring) | DERIVED | — | — | — | — | — | — | N | formula |
 | Documents/ShaderEditorDocument.cpp:3363, :4829 | cfg.ShiftAddsToSelection | true | SETTING | editor.graph.shiftAddsToSelection | EditorGraphSettings | Editor | Pref-M | Restart | bool | N | UE modifier semantics |
-| Documents/ShaderEditorDocument.cpp:1687 | checker kCell | 32 px @512 | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.shader.previewCheckerCell) |
+| Documents/ShaderEditorDocument.cpp:1687 | checker kCell | 32 px @512 | DERIVED | — | — | — | — | — | — | N | render-target texels, derived from kGraphPreviewSize (512 / 16 cells), not editor.ui.scale (was editor.shader.previewCheckerCell) |
 | Documents/ShaderEditorDocument.cpp:1689, :1697 | checker light colour / extent | (0.16,0.16,0.19), 0.8 | SETTING | editor.shader.previewChecker* | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Documents/ShaderEditorDocument.cpp:4795 | kThumbMin | 96 px | SETTING | editor.graph.nodePreviewMinPx | EditorGraphSettings | Editor | Pref-M | Live | 32..512 | N | — |
 | Documents/ShaderEditorDocument.hpp:985 | kNavHistoryMax | 32 | SETTING | editor.shader.navHistoryMax | ShaderEditorSettings | Editor Dev | Pref-M | Live | 1..256 | N | — |
@@ -1185,7 +1185,7 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Widgets/EditorWidgets.cpp:85 | kLabelColumnFraction | 0.4 | SETTING | editor.inspector.labelColumnFraction | InspectorSettings | Editor | Pref-M | Live | 0.2..0.7 | N | UE exposes the splitter |
 | Widgets/EditorWidgets.cpp:95 | kLabelSeedMinAvailEm | 8 em | SETTING | editor.inspector.labelSeedMinEm | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Widgets/EditorWidgets.cpp:252 | kAxisBarWidth | 3 px | DERIVED | — | — | — | — | — | — | N | matches ImGuiStyle::ColorMarkerSize |
-| Widgets/EditorWidgets.hpp:256 | kAssetRowThumbSize | 18 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.ui.assetRowThumbPx) |
+| Widgets/EditorWidgets.hpp:256 | kAssetRowThumbSize | 18 px | SETTING | editor.ui.assetRowThumbPx | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | kept SETTING: owned by S6-28; read as Ui::Px(setting) per S4-16 |
 | Panels/AssetInspectorSource.cpp:37 | kAssetPageThumbSize | 140 px | SETTING | editor.inspector.assetThumbMaxPx | InspectorSettings | Editor | Pref-M | Live | 64..512 | N | it is also assetThumbMinPx's max (:40), so DERIVED there |
 | Panels/AssetInspectorSource.cpp:68-69 | compact header min / text column min | 250 / 110 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.inspector.previewCompact*) |
 | Panels/AssetInspectorSource.cpp:50, :56 | fallback 64 / 0.30 | dup of cvar defaults | DERIVED | — | — | — | — | — | — | N | shadow copy; delete (s10.2) |
@@ -1223,7 +1223,7 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Panels/AssetPanelCommon.hpp:414 | kTableRowHeight | 24 px | SETTING | editor.ui.tableRowHeight | EditorUiSettings | Editor | Pref-M | Live | 16..48 | N | density (reconciled R1: one struct per prefix, editor.ui.* -> EditorUiSettings) |
 | Panels/AssetPanelCommon.cpp:415-416 | tooltip width / thumb | 210 / 64 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.tooltip{Width,Thumb}) |
 | Panels/AssetPanelCommon.cpp:452 | kNamedTargets | 3 | SETTING | editor.assets.namedTargets | EditorAssetsSettings | Editor Dev | Pref-M | Live | 1..20 | N | — |
-| Panels/AssetReferenceField.cpp:22 | kAssetRefThumbSize | 20 px | DERIVED | — | — | — | — | — | — | N | its comment says "not a tunable"; candidate for the allow-list base px x editor.ui.scale (s16.11; was editor.ui.assetRefThumbPx) |
+| Panels/AssetReferenceField.cpp:22 | kAssetRefThumbSize | 20 px | SETTING | editor.ui.assetRefThumbPx | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | its comment says "not a tunable"; kept SETTING: owned by S6-28; read as Ui::Px(setting) per S4-16 |
 | Panels/AssetReferenceField.cpp:90, :234 | row offset / min name width | 24 / 16 px | DERIVED | — | — | — | — | — | — | N | = row height / a floor |
 | Panels/AssetStatusPanel.cpp:67-71 | tile height / min width, section gap, progress height, selection border | 64/72/6/4/2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetStatus.*) |
 | Panels/AssetStatusPanel.cpp:88-89 | right column width, caption gap | 300 / 2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetStatus.rightColumnWidth) |
@@ -1270,7 +1270,8 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Documents/CrashReportDocument.cpp:79 | log tail | 200 lines | SETTING | diagnostics.logTailLines | DiagnosticsSettings | Game Dev | Pref-P | Live | 20..5000 | N | (reconciled R1) |
 | Documents/CrashReportDocument.cpp:168 | window first size | 760×760 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.crash.initialSize) |
 | Documents/CrashReportDocument.cpp:202; Panels/EditorPanels.cpp:1217 | "Copied" flash | 0.75 s | SETTING | ui.copyFlashSeconds | UiSettings | Game Dev | Pref-M | Live | 0..5 | N | two copies (reconciled R1) |
-| Documents/CrashReportDocument.cpp:262, :283, :387 | field width, max rows, text rows | 320 px, 24, 16 lines | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.crash.*) |
+| Documents/CrashReportDocument.cpp:262, :387 | field width, text rows | 320 px, 16 lines | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.crash.*) |
+| Documents/CrashReportDocument.cpp:283 | max rows | 24 | SETTING | editor.crash.maxRows | CrashViewerSettings | Editor | Pref-M | Live | — | N | a row count, not a px value (split from the :262/:387 row; owned by S6-40, which declares it Editor / Pref-M / Live) |
 | Documents/MeshDocument.hpp:448 | kPreviewSize | 512 px | SETTING | editor.mesh.previewResolution | MeshDocSettings | Editor | Pref-M | Restart (reopen) | 128..2048 | N | GPU budget |
 | Documents/MeshDocument.cpp:395-396 | kFovYDegrees / kMargin | 45 deg / 1.5 | SETTING | editor.mesh.preview{Fov,Margin} | MeshDocSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Documents/MeshDocument.cpp:402, :422-423, :431 | view dir, near/far, light dir, ambient | (1,0.75,1), 0.05/4d+1, (0.4,1,0.3), 0.12 | SETTING | editor.preview.light.direction / .ambient | EditorPreviewLightSettings | Editor | Pref-M | Live | — | N | a different light dir from the material previews (inconsistent) (reconciled R1: the default moves to the shared value (0.45,0.7,0.8); no golden captures the mesh document) |

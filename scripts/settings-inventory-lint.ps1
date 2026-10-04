@@ -111,8 +111,13 @@ foreach ($r in $rows) {
     if ($r.Symbol -match 'RECV_CHUNK_SIZE|kInitialResidentSlots|spill copy chunk|writer reserve|read buffer|kChunkFrames|BootStage weights' -and $r.Verdict -ne 'CONSTANT') { Fail $r 'L7' 'R2: capacity hint is CONSTANT' }
 }
 # L9 spec s16.11: an "Editor Dev" px metric is DERIVED (editor.ui.scale x base), not its own cvar.
+# Exempt by name (kept SETTING: owned by S6-xx; read as Ui::Px(setting) per S4-16, except fallbackExtent, a raw
+# render-target extent owned by S6-32): S6-28 / S6-32 / S6-34
+# convert these rows as cvars, so the frozen inventory keeps them SETTING (S5-1 fix round 1).
+$l9KeptSetting = @('editor.viewport.fallbackExtent','editor.graph.grid.minorTargetPx','editor.graph.nodeHeaderGap',
+                   'editor.ui.assetRowThumbPx','editor.ui.assetRefThumbPx')
 foreach ($r in $setting) {
-    if ($r.Part -eq 3 -and $r.Aud -match '^Editor Dev$' -and $r.Value -match '\bpx\b' -and $r.Name -notmatch '^editor\.theme\.' -and $r.Name -notmatch '^editor\.layout\.factory\.' -and $r.Name -notmatch '^editor\.thumbnail\.') { Fail $r 'L9' 'px metric must be DERIVED from editor.ui.scale (s16.11)' }
+    if ($r.Part -eq 3 -and $r.Aud -match '^Editor Dev$' -and $r.Value -match '\bpx\b' -and $r.Name -notmatch '^editor\.theme\.' -and $r.Name -notmatch '^editor\.layout\.factory\.' -and $r.Name -notmatch '^editor\.thumbnail\.' -and $r.Name -notin $l9KeptSetting) { Fail $r 'L9' 'px metric must be DERIVED from editor.ui.scale (s16.11)' }
     # The splash and reporter layout px are DERIVED too (base x 1, an ARC_CONSTANT base; S5-1 step 2).
     if ($r.Name -match '^app\.splash\.\w*Px\b|^diagnostics\.reporter\.layout\.') { Fail $r 'L9' 'splash/reporter px metric must be DERIVED (s16.11)' }
 }
