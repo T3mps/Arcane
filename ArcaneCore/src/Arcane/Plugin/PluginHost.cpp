@@ -7,6 +7,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/ClientHooks.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Sim/NetDriver.hpp>
@@ -72,6 +73,16 @@ namespace Arcane
                 return plugin.has_value() && plugin->IsLoaded();
             }
         };
+
+        // Load under the SOURCE dll's stem as the cvar module (settings spec
+        // s4.3). The host loads a versioned copy (<stem>_<gen>.dll), but every
+        // generation of one module must register -- and unregister -- under one name.
+        std::optional<Plugin> LoadScoped(const std::filesystem::path& dll, const std::string& module,
+                                         PluginResolveError* error)
+        {
+            const CVarModuleScope scope(module);
+            return Plugin::Load(dll, error);   // a null `error` is that overload's own contract
+        }
 
         // Restores whatever ImGui context was current before a call into
         // PluginHost, regardless of what the plugin's entry point does to
@@ -261,6 +272,7 @@ namespace Arcane
         // register, with the cause already named here.
         bool InitImage(Plugin& p)
         {
+            const CVarModuleScope scope(p.CVarModule());   // OnInit's AddCallback/RegisterCommand belong to the module
             const Module::ImageSpan image = p.LoadedModule().Image();
             if (!image.base)
             {
@@ -391,6 +403,12 @@ namespace Arcane
                 }
             }
 
+            // Settings spec s4.4: flush the User rung to the archive (when this
+            // host archives) BEFORE the module's cvars leave with the image
+            // (~Plugin unregisters them). A hot reload then reads them back.
+            if (!runtimes.empty())
+                (void)runtimes.front()->SaveUserCVars();
+
             img.plugin.reset();   // FreeLibrary / dlclose
         }
 
@@ -399,6 +417,10 @@ namespace Arcane
         // its Shutdown; this catches one that forgot, BEFORE FreeLibrary.
         void DisownPluginImages()
         {
+            // The secondaries' cvars go with their images at the caller's
+            // plugins.clear() (~Plugin); the User archive is written first (s4.4).
+            if (!plugins.empty() && !runtimes.empty())
+                (void)runtimes.front()->SaveUserCVars();
             for (auto& img : plugins)
             {
                 if (!img.plugin)
@@ -441,7 +463,7 @@ namespace Arcane
             {
                 const std::string name = src.stem().string();
                 PluginResolveError resolveError;
-                std::optional<Plugin> p = Plugin::Load(src, &resolveError);
+                std::optional<Plugin> p = LoadScoped(src, name, &resolveError);
                 RefreshContext();
                 if (!p || !InitImage(*p))
                 {
@@ -612,7 +634,7 @@ namespace Arcane
                 rt->ResetRegistry();
 
         PluginResolveError resolveError;
-        std::optional<Plugin> loadedNext = Plugin::Load(next.dll, &resolveError);
+        std::optional<Plugin> loadedNext = LoadScoped(next.dll, name, &resolveError);
         RefreshContext();
         const bool initRan = loadedNext && InitImage(*loadedNext);
         bool ok = initRan;
@@ -665,7 +687,7 @@ namespace Arcane
         bool rolledBack = false;
         if (previous && !previous->dll.empty())
         {
-            std::optional<Plugin> rollback = Plugin::Load(previous->dll);
+            std::optional<Plugin> rollback = LoadScoped(previous->dll, name, nullptr);
             RefreshContext();
             if (rollback)
             {
@@ -875,7 +897,7 @@ namespace Arcane
         }
 
         PluginResolveError resolveError;
-        std::optional<Plugin> plugin = Plugin::Load(img.dll, &resolveError);
+        std::optional<Plugin> plugin = LoadScoped(img.dll, name, &resolveError);
         m_impl->RefreshContext();
         const bool initRan = plugin && m_impl->InitImage(*plugin);
         if (!initRan)

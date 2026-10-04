@@ -6,6 +6,7 @@
 // plugin kind, so this class owns the GamePlugin_* ABI. If editor/tool plugins
 // appear later, split this into GamePlugin.
 
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace Arcane
 {
@@ -57,11 +59,43 @@ namespace Arcane
         [[nodiscard]] bool IsLoaded() const noexcept { return m_module.IsLoaded(); }
         [[nodiscard]] const Module& LoadedModule() const noexcept { return m_module; }
         [[nodiscard]] const PluginVTable& VTable() const noexcept { return m_vtable; }
+        // The cvar module this image's registrations belong to (settings spec
+        // s4.4): the CVarModuleScope open when it loaded (PluginHost names the
+        // SOURCE dll's stem), else this file's stem. The Plugin OWNS them:
+        // destroying it unregisters them, before the image unmaps.
+        [[nodiscard]] const std::string& CVarModule() const noexcept { return m_cvars.module; }
 
     private:
-        Plugin(Module module, PluginVTable vtable) noexcept;
+        // Move-only. Inline, so a Plugin destroyed in any module unregisters
+        // through ArcaneCore's exported registry.
+        struct CVarOwner
+        {
+            std::string module;
+            CVarOwner() = default;
+            explicit CVarOwner(std::string m) noexcept : module(std::move(m)) {}
+            CVarOwner(CVarOwner&& o) noexcept : module(std::exchange(o.module, {})) {}
+            CVarOwner& operator=(CVarOwner&& o) noexcept
+            {
+                if (this != &o) { Release(); module = std::exchange(o.module, {}); }
+                return *this;
+            }
+            CVarOwner(const CVarOwner&) = delete;
+            CVarOwner& operator=(const CVarOwner&) = delete;
+            ~CVarOwner() { Release(); }
+            void Release() noexcept
+            {
+                if (module.empty()) return;
+                CVarRegistry::Get().UnregisterModule(module);
+                module.clear();
+            }
+        };
+
+        Plugin(Module module, PluginVTable vtable, std::string cvarModule) noexcept;
 
         Module m_module;
         PluginVTable m_vtable{};
+        // Declared AFTER m_module: members destroy in reverse, so the module's
+        // cvars, commands and callbacks go BEFORE the FreeLibrary.
+        CVarOwner m_cvars;
     };
 }

@@ -1,6 +1,9 @@
 #include <Arcane/Plugin/Plugin.hpp>
 
+#include <Arcane/Config/CVarRegistry.hpp>
+
 #include <cstdint>
+#include <string>
 #include <utility>
 
 namespace
@@ -75,8 +78,8 @@ namespace
 
 namespace Arcane
 {
-    Plugin::Plugin(Module module, PluginVTable vtable) noexcept
-        : m_module(std::move(module)), m_vtable(vtable)
+    Plugin::Plugin(Module module, PluginVTable vtable, std::string cvarModule) noexcept
+        : m_module(std::move(module)), m_vtable(vtable), m_cvars(std::move(cvarModule))
     {
     }
 
@@ -115,14 +118,33 @@ namespace Arcane
         }
 #endif
 
-        std::optional<Module> module = Module::Load(std::move(path));
+        // The image's ARC_CVAR/ARC_COMMAND statics run INSIDE Module::Load, on
+        // this thread (settings spec s4.3). Attribute them to the open
+        // CVarModuleScope (PluginHost opens one naming the source dll), else to
+        // this file's stem.
+        const std::string cvarModule = CVarRegistry::ScopedModule().empty()
+            ? path.stem().string()
+            : std::string(CVarRegistry::ScopedModule());
+        std::optional<Module> module;
+        {
+            const CVarModuleScope scope(cvarModule);
+            module = Module::Load(std::move(path));
+        }
         if (!module)
+        {
+            CVarRegistry::Get().UnregisterModule(cvarModule);   // a failing DllMain may have run some statics
             return std::nullopt;   // Kind::None; caller reads Module::LastLoadError()
+        }
 
         PluginVTable vtable{};
         if (!ResolveGamePluginAbi(*module, vtable, error))
+        {
+            // Refused AFTER its statics ran: drop their registrations before
+            // `module` unmaps the code they point into.
+            CVarRegistry::Get().UnregisterModule(cvarModule);
             return std::nullopt;
+        }
 
-        return Plugin(std::move(*module), vtable);
+        return Plugin(std::move(*module), vtable, cvarModule);
     }
 }

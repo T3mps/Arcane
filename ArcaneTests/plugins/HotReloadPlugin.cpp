@@ -18,10 +18,12 @@
 #include "HotReloadShared.hpp"
 
 #include <Arcane/Plugin/GameModule.hpp>
+#include <Arcane/Config/CVarDecl.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
 #include <cstdint>
+#include <string>
 
 #ifndef HOTRELOAD_STEP
   #define HOTRELOAD_STEP 1
@@ -41,6 +43,31 @@ ARC_COMPONENT(Arcane::HotReloadTest::RoleCounters)
 ARC_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
               Arcane::RoleMask::Server,
               Arcane::SystemPhase::FixedUpdate)
+
+// The cvar-lifetime probes (settings spec s4.4; CVarModuleLifetimeTest):
+//   - one Archive cvar whose default is this build's step;
+//   - one command that answers with that step;
+//   - one callback into this image on an ENGINE cvar.
+// After an unload or a reload, a stale function pointer would answer with the
+// OLD step, or call into unmapped code.
+ARC_CVAR(cvar_hotReloadStep, "hotreload.step", std::int32_t, HOTRELOAD_STEP,
+         .flags = ::Arcane::CVarFlags::Archive,
+         .help = "The hot-reload fixture's build step (1 = V1, 10 = V2).");
+
+namespace
+{
+    ::Arcane::CommandResult PingCommand(std::string_view, void*)
+    {
+        return { true, "step " + std::to_string(HOTRELOAD_STEP) };
+    }
+
+    void OnHistorySizeChanged(::Arcane::CVarHandle, void*)
+    {
+        ARC_INFO("HotReloadPlugin: console.historySize changed (step {})", HOTRELOAD_STEP);
+    }
+}
+
+ARC_COMMAND("hotreload.ping", ::Arcane::CVarFlags::None, "Answers with the fixture's build step.", &PingCommand);
 
 namespace Arcane::HotReloadTest
 {
@@ -72,6 +99,10 @@ namespace Arcane::HotReloadTest
 #endif
             }
             CacheHandle();
+            // The cross-module callback probe: PluginHost's CVarModuleScope
+            // around Init tags it with this module, and the unload must drop it.
+            ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                      &OnHistorySizeChanged, nullptr);
             // The s4 contract: factories register ONCE per DLL load, with an
             // explicit mask; each Runtime instantiates what its NetMode matches.
             // ServerOnlyTick arrived through ARC_SYSTEM before OnInit;
