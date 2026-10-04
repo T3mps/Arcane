@@ -574,9 +574,13 @@ namespace Arcane
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
         CVarRegistry& cvars = CVarRegistry::Get();
-        for (const CVarLayerDir& layer : CVarLayerSources().dirs)
+        const LayerSources layers = CVarLayerSources();
+        for (const CVarLayerDir& layer : layers.dirs)
             ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
         cvars.Publish();
+        // Unknown keys and type mismatches in any rung's files go to the
+        // Problems panel (settings spec s4.8, s12); the whole set is replaced.
+        PublishCVarConfigDiagnostics(ValidateCVarLayers(cvars, layers));
         return true;
     }
 
@@ -608,6 +612,8 @@ namespace Arcane
         // project/user layers entirely rather than leaving them shadowed by
         // nothing once nothing re-layers over them.
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
+        // The project's config rows go away with it; only the engine rung remains.
+        PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()));
     }
 
     void Runtime::SetUserCVarArchiving(bool enabled) noexcept

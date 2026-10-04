@@ -240,6 +240,7 @@ namespace Arcane
                                            std::string module, LegacyCommandFn fn, void* user);
 
         [[nodiscard]] CVarHandle Find(std::string_view name) const;
+        [[nodiscard]] bool IsCompiledOut(std::string_view name) const;   // a Dev cvar this registry refused (devCvars=false)
         // Renames (settings spec s4.7). `oldName` resolves to `newName` in
         // config files, --set and the console, with one warning per old name;
         // WriteCVarArchive writes only `newName` and drops the old key.

@@ -9,6 +9,7 @@
 
 #include <Json.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -18,8 +19,29 @@ namespace Arcane
 {
     struct CVarApplyReport
     {
-        std::vector<std::string> unknownKeys;
+        std::vector<std::string> unknownKeys;      // no cvar declares it (a Dev cvar a Dist build compiled out is not reported)
+        std::vector<std::string> typeMismatches;   // declared, but the JSON value has the wrong type: refused
     };
+
+    // One config problem, for the Problems panel (settings spec s4.8, s12).
+    struct CVarConfigIssue
+    {
+        enum class Kind : std::uint8_t { UnknownKey, TypeMismatch };
+        Kind                  kind = Kind::UnknownKey;
+        std::filesystem::path file;
+        std::string           key;      // the full cvar name, "<category>.<key>"
+        int                   line = 0; // 1-based line of the key's first mention; 0 = not found
+    };
+
+    // Read every rung's files WITHOUT applying them, and report each key no cvar
+    // declares and each value of the wrong JSON type. Rows are ordered by rung,
+    // then file name.
+    ARC_CORE_API std::vector<CVarConfigIssue> ValidateCVarLayers(CVarRegistry& registry, const LayerSources& layers);
+
+    // Replace the Problems set "config.cvars" with one row per issue: the File
+    // locator is the file at the key's line, and the message names the key.
+    // Logs one warning per issue for headless runs.
+    ARC_CORE_API void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues);
 
     // `category` is the file stem. Keys in `doc` become `<category>.<key>`.
     // Nested objects join with further dots. Document-shaped categories record

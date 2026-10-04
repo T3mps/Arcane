@@ -1,8 +1,10 @@
 #include <Arcane/Config/CVarConfig.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarFormat.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -188,11 +190,26 @@ namespace Arcane
             return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
 
+        // 1-based line of a key's first mention: the path relative to the
+        // category (a flat "graph.x"), else its last segment (nested). 0 = not found.
+        int LineOfKey(const std::string& text, const std::string& name, const std::string& category)
+        {
+            const std::string rel = name.size() > category.size() + 1 ? name.substr(category.size() + 1) : name;
+            std::size_t pos = text.find("\"" + rel + "\"");
+            if (pos == std::string::npos)
+                if (const auto dot = rel.rfind('.'); dot != std::string::npos)
+                    pos = text.find("\"" + rel.substr(dot + 1) + "\"");
+            if (pos == std::string::npos) return 0;
+            return 1 + static_cast<int>(std::count(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(pos), '\n'));
+        }
+
         // What a walk may touch. A non-empty `onlyModule` means only the cvars
         // that module declared, and no unknown-key report (settings spec s4.4).
+        // `apply` false reads and reports only (ValidateCVarLayers): no Set.
         struct WalkOptions
         {
             std::string_view onlyModule;
+            bool             apply = true;
         };
 
         void Walk(CVarRegistry& registry, const std::string& prefix, const nlohmann::json& node,
@@ -212,7 +229,8 @@ namespace Arcane
                 const CVarHandle handle = registry.Resolve(name);
                 if (handle.IsStale())
                 {
-                    if (opts.onlyModule.empty()) report.unknownKeys.push_back(name);
+                    // A Dev cvar a Dist build compiled out is ignored silently (spec s12).
+                    if (opts.onlyModule.empty() && !registry.IsCompiledOut(name)) report.unknownKeys.push_back(name);
                     continue;
                 }
                 if (!opts.onlyModule.empty() && registry.ModuleOf(handle) != opts.onlyModule)
@@ -226,13 +244,13 @@ namespace Arcane
                 std::optional<CVarValue> value = ValueFromJson(*it, current->type, enumNames, numericEnum);
                 if (!value)
                 {
-                    report.unknownKeys.push_back(name);   // the wrong shape for its type: refused, reported
+                    report.typeMismatches.push_back(name);   // the wrong shape for its type: refused, reported
                     continue;
                 }
-                if (numericEnum)
+                if (numericEnum && opts.apply)   // the validating pass stays quiet: the applying one already said it
                     ARC_WARN("cvar: '{}' gives an Enum as the number {}; write \"{}\" -- the next archive write saves the name",
                              name, *numericEnum, enumNames[static_cast<std::size_t>(*numericEnum)]);
-                registry.Set(handle, std::move(*value), by, sourceModule, CVarContext::Editor);
+                if (opts.apply) registry.Set(handle, std::move(*value), by, sourceModule, CVarContext::Editor);
             }
         }
 
@@ -270,8 +288,69 @@ namespace Arcane
             const CVarApplyReport part = ApplyCategory(registry, stem, doc, by, IsDocumentCategory(stem), sourceModule,
                                                        WalkOptions{ onlyModule });
             report.unknownKeys.insert(report.unknownKeys.end(), part.unknownKeys.begin(), part.unknownKeys.end());
+            report.typeMismatches.insert(report.typeMismatches.end(), part.typeMismatches.begin(), part.typeMismatches.end());
         }
         return report;
+    }
+
+    std::vector<CVarConfigIssue> ValidateCVarLayers(CVarRegistry& registry, const LayerSources& layers)
+    {
+        std::vector<CVarConfigIssue> issues;
+        for (const CVarLayerDir& layer : layers.dirs)
+        {
+            std::error_code ec;
+            if (!std::filesystem::is_directory(layer.dir, ec)) continue;
+            std::vector<std::filesystem::path> files;
+            for (const auto& entry : std::filesystem::directory_iterator(layer.dir, ec))
+                if (entry.is_regular_file() && entry.path().extension() == ".json") files.push_back(entry.path());
+            std::sort(files.begin(), files.end());
+            for (const std::filesystem::path& file : files)
+            {
+                const std::string stem = file.stem().string();
+                if (IsDocumentCategory(stem)) continue;
+                const std::optional<std::string> text = ReadWholeFile(file);
+                if (!text) continue;
+                const auto doc = nlohmann::json::parse(*text, nullptr, false);
+                if (doc.is_discarded() || !doc.is_object()) continue;   // the archive's .bad path owns broken files
+                const CVarApplyReport report = ApplyCategory(registry, stem, doc, layer.by, false, layer.sourceModule,
+                                                             WalkOptions{ {}, false });
+                for (const std::string& key : report.unknownKeys)
+                    issues.push_back(CVarConfigIssue{ CVarConfigIssue::Kind::UnknownKey, file, key, LineOfKey(*text, key, stem) });
+                for (const std::string& key : report.typeMismatches)
+                    issues.push_back(CVarConfigIssue{ CVarConfigIssue::Kind::TypeMismatch, file, key, LineOfKey(*text, key, stem) });
+            }
+        }
+        return issues;
+    }
+
+    void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues)
+    {
+        std::vector<Diagnostic> rows;
+        rows.reserve(issues.size());
+        for (const CVarConfigIssue& issue : issues)
+        {
+            const std::string fileName = issue.file.filename().string();
+            Diagnostic d;
+            d.scope = DiagScope::Project;
+            if (issue.kind == CVarConfigIssue::Kind::UnknownKey)
+            {
+                d.severity = DiagSeverity::Warning;
+                d.code     = "config.cvar.unknown-key";
+                d.message  = "Unknown setting '" + issue.key + "' in " + fileName + ".";
+                d.detail   = "No loaded module declares it, so it was not applied. Check the spelling, or load the module that declares it.";
+            }
+            else
+            {
+                d.severity = DiagSeverity::Error;
+                d.code     = "config.cvar.type-mismatch";
+                d.message  = "Setting '" + issue.key + "' in " + fileName + " has the wrong type.";
+                d.detail   = "The value was refused; the setting keeps the value of the rungs below it.";
+            }
+            d.locator = DiagLocator::File(issue.file.generic_string(), issue.line);
+            ARC_WARN("cvar config: {} '{}' at {}:{}", d.code, issue.key, issue.file.generic_string(), issue.line);
+            rows.push_back(std::move(d));
+        }
+        Diagnostics::Publish("config.cvars", rows);
     }
 
     void CVarRegistry::ApplyLayersFor(std::string_view module, const LayerSources& layers)

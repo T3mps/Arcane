@@ -60,6 +60,17 @@ namespace
         c->calls.emplace_back(std::string(key),
                               std::vector<Arcane::Diagnostic>(diags.begin(), diags.end()));
     }
+
+    // The sets published under exactly `key`, in order. A module (re)load also
+    // republishes "config.cvars" (settings spec s4.8), so a test that pins
+    // PluginHost's own key reads this, not the whole call list.
+    std::vector<std::vector<Arcane::Diagnostic>> Under(const Capture& c, std::string_view key)
+    {
+        std::vector<std::vector<Arcane::Diagnostic>> out;
+        for (const auto& [k, diags] : c.calls)
+            if (k == key) out.push_back(diags);
+        return out;
+    }
 }
 
 TEST_CASE("A DLL that cannot be loaded reports the OS error", "[plugin][diagnostics]")
@@ -266,10 +277,10 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
     CHECK_FALSE(host.ForceReload());
     CHECK(host.IsLoaded());   // still on last-good
 
-    REQUIRE(cap.calls.size() == 1);
-    CHECK(cap.calls[0].first == "plugin:HotReloadPluginV1");
-    REQUIRE(cap.calls[0].second.size() == 1);
-    CHECK(cap.calls[0].second[0].code == "plugin.abi.mismatch");
+    std::vector<std::vector<Arcane::Diagnostic>> plugin = Under(cap, "plugin:HotReloadPluginV1");
+    REQUIRE(plugin.size() == 1);
+    REQUIRE(plugin[0].size() == 1);
+    CHECK(plugin[0][0].code == "plugin.abi.mismatch");
 
     // Swap the good image back and reload again: succeeds, and retracts the row
     // via Diagnostics::Clear -- a Publish with an empty set for the SAME key.
@@ -277,9 +288,9 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
                                std::filesystem::copy_options::overwrite_existing);
     CHECK(host.ForceReload());
 
-    REQUIRE(cap.calls.size() == 2);
-    CHECK(cap.calls[1].first == "plugin:HotReloadPluginV1");
-    CHECK(cap.calls[1].second.empty());
+    plugin = Under(cap, "plugin:HotReloadPluginV1");
+    REQUIRE(plugin.size() == 2);
+    CHECK(plugin[1].empty());
 
     Arcane::Diagnostics::SetSink(nullptr, nullptr);
     host.Unload();

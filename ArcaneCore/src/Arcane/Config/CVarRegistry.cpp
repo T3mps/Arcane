@@ -199,6 +199,7 @@ namespace Arcane
         std::unordered_map<std::string, std::uint32_t> commandByName;
         std::map<std::string, std::string> aliases;     // old -> new
         std::unordered_set<std::string> warnedAliases;  // old names already warned about
+        std::unordered_set<std::string> compiledOut;    // Dev names refused because devCvars=false (spec s12: not unknown keys)
         bool publishing = false;
         std::string lastError;
 
@@ -577,7 +578,10 @@ namespace Arcane
             return refuse("has widget '" + std::string(desc.widget) + "', which does not fit its type (" +
                           CVarTypeName(desc.type) + ")");
         if (HasFlag(desc.flags, CVarFlags::Dev) && !m->devCvars)
+        {
+            m->compiledOut.insert(name);
             return refuse("is Dev and this build compiled it out");
+        }
         if (const auto existing = m->byName.find(name); existing != m->byName.end())
             return refuse("already registered by module '" + m->slots[existing->second].declaredBy +
                           "', refused from '" + module + "'");
@@ -653,6 +657,11 @@ namespace Arcane
         const Slot& slot = m->slots[it->second];
         if (!slot.alive) return {};
         return CVarHandle{ it->second, slot.generation };
+    }
+
+    bool CVarRegistry::IsCompiledOut(std::string_view name) const
+    {
+        return m->compiledOut.contains(std::string(name));
     }
 
     std::optional<CVarValue> CVarRegistry::Get(CVarHandle handle) const

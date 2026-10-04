@@ -7,6 +7,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/ClientHooks.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
@@ -98,10 +99,13 @@ namespace Arcane
         // reaches is attributed to the module -- an ENGINE Register (which fills
         // CurrentModule(), CVarRegistry.cpp) or AddCallback first reached from
         // inside a module tick is tagged with the module and dropped at its
-        // unload. Today the only lazy engine site of that kind is Log.cpp's
-        // log.level registration, safely under call_once at log init; S1-27's
-        // deferred note on a registry constructed inside a scope is the same
-        // class. The exact closure, "refuse untagged adds from module images" (an
+        // unload. The one lazy engine site of that kind, Log.cpp's log.level
+        // registration (the process's first ARC_* line, which CAN be inside a
+        // plugin's scope -- a random ArcaneTests order showed it), opens Core's
+        // own CVarModuleScope around its Register and AddCallback for that
+        // reason; S1-27's deferred note on a registry constructed inside a scope
+        // is the same class. The exact closure, "refuse untagged adds from
+        // module images" (an
         // image-range check of the registering code against the loaded
         // Module::Image() spans, the UnregisterModuleRange pattern in
         // TeardownImage), is OWED to S2-3: module code also runs OUTSIDE every
@@ -333,7 +337,10 @@ namespace Arcane
         void LayerModuleCVars(const Plugin& p)
         {
             if (runtimes.empty() || p.CVarModule().empty()) return;
-            CVarRegistry::Get().ApplyLayersFor(p.CVarModule(), Primary().CVarLayerSources());
+            const LayerSources layers = Primary().CVarLayerSources();
+            CVarRegistry::Get().ApplyLayersFor(p.CVarModule(), layers);
+            // The module's keys are known now: republish the whole set.
+            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), layers));
         }
 
         // Give every attached world the module's matching systems. Idempotent (Astra

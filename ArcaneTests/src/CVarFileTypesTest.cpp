@@ -120,7 +120,8 @@ TEST_CASE("a Color reads from [r,g,b(,a)] linear, and a wrong shape is reported,
 
     const nlohmann::json bad = { { "offset", { 1.0, 2.0, 3.0 } }, { "origin", "1 2 3" }, { "mode", "Medium" }, { "tint", "#12" } };
     const CVarApplyReport report = ApplyCVarCategory(reg, "look", bad, SetBy::Project, false, "project");
-    CHECK(report.unknownKeys.size() == 4);
+    CHECK(report.typeMismatches.size() == 4);   // declared, wrong shape: a mismatch, not an unknown key (spec s12)
+    CHECK(report.unknownKeys.empty());
     reg.Publish();
     CHECK(reg.Get(reg.Find("look.offset"))->AsVec2() == CVarVec2{});      // untouched
     CHECK(reg.Get(reg.Find("look.mode"))->AsEnum() == 0);
@@ -152,7 +153,8 @@ TEST_CASE("a numeric Enum in a file applies with one warning and is saved back a
     CVarRegistry other;
     Roster(other);
     const CVarApplyReport outside = ApplyCVarDirectory(other, user, SetBy::User, "user");
-    CHECK(outside.unknownKeys == std::vector<std::string>{ "look.mode" });
+    CHECK(outside.typeMismatches == std::vector<std::string>{ "look.mode" });
+    CHECK(outside.unknownKeys.empty());
     std::filesystem::remove_all(user);
 }
 
