@@ -6,6 +6,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Config/CVarModule.hpp>   // ARC_MODULE_NAME_STRING: the Core scope around log.level's registration (Init)
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Mosaic/Assert.hpp>
@@ -255,6 +256,12 @@ namespace Arcane::Log
         // default. An Archive value from Saved/Config applies through the
         // callback when config loads and publishes.
         std::call_once(s_levelCvarOnce, [level] {
+            // Core's own scope, not the ambient one: this registration is LAZY
+            // (the process's first ARC_* line), and the CVarModuleScope open at
+            // that moment may be a plugin's (PluginHost brackets every call into
+            // an image). Inherited, log.level and its callback would be the
+            // plugin's and die at its unload. They are Core's whoever logs first.
+            const Arcane::CVarModuleScope core(ARC_MODULE_NAME_STRING);
             Arcane::CVarDesc desc;
             desc.name = "log.level";
             desc.type = Arcane::CVarType::Int32;
