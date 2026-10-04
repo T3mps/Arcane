@@ -358,6 +358,21 @@ Each category below gets a settings struct and appears in Project Settings unles
   - while the conflict stands, the more specific context wins (Graph over Global); between equal contexts, the newer binding wins. The tooltip says which one fires.
   - "Reset all" restores the defaults.
 - **Menus** show the current chord next to each item, so the menus and the page cannot drift.
+- **Key type: labelled by default, physical for positional clusters** (user, 2026-10-03, after research). Every action declares how its key is matched:
+  - **Labelled (logical, the default):** for keys chosen for their letter or mnemonic (Ctrl+Z, Ctrl+S, F to frame, Del). This matches the OS and every other app on the user's layout.
+  - **Physical (scancode):** only for keys chosen for their POSITION, used like a joystick: fly-camera W/A/S/D/Q/E, and a positional gizmo tool row (W/E/R) if kept. On AZERTY these become Z/Q/S/D in the same places.
+  - **Precedent:**
+    - SDL's keyboard guidance (scancodes for "a joystick with a lot of buttons", keycodes for "press I for inventory");
+    - the W3C UI Events `code` vs `key` split;
+    - Godot (`physical_keycode` for movement; its editor freelook and the QWER tool row are physical since PR #73651, everything else logical);
+    - Unity's Input System (keys named by position; `#(a)` binds by character);
+    - VS Code (`ctrl+z` by produced character; `[KeyZ]` for a position).
+
+    Unreal and Blender use labels everywhere, and their AZERTY users must rebind the viewport keys by hand.
+  - **Cvar format, following VS Code:** `"Ctrl+Z"` is labelled and `"[KeyW]"` is physical. The shortcuts page has a Type column, so the user can flip any binding.
+  - **Display** always uses the current layout's labels. Physical keys go through the layout map (SDL `GetKeyFromScancode` + `GetKeyName`), so an AZERTY camera row reads "Forward: Z".
+  - **Non-Latin layouts** (Cyrillic, Greek): a labelled letter chord falls back to the key's QWERTY position when the layout produces no Latin letter, so Ctrl+C works on a Russian layout as it does across Windows.
+  - **Both input routes resolve through the one action map:** the ImGui-key route (the 49 checks) and the SDL-scancode route (the 22 viewport/camera bindings).
 - Game input actions are a different thing: the project's `input.json`, edited in the Input Actions document. Project Settings › Input links to that document.
 
 ### 7.3 Fonts and scale (Preferences › Appearance)
@@ -447,7 +462,7 @@ The audit's first deliverable is `docs/superpowers/audits/2026-10-xx-settings-in
   - `TextureImportSettings` defaults become `assets.import.texture.*`. Per-asset import overrides stay in the asset's `.meta`.
 - **Every converted constant leaves no shadow copy.** The `constexpr` is deleted, and a grep sweep proves it (the zero-legacy grep method).
 
-### 10.3 After the arc (form OPEN, s16.8)
+### 10.3 After the arc (form (a), decided 2026-10-03)
 The project rule stands: a new tunable is a setting. How it is enforced is decided with the user once they have read the inventory's "Should NOT be exposed" findings. Two candidates:
 - **(a) Classification, not conversion.** A new numeric constant must be either a setting or carry an `ARC_CONSTANT("<reason>")` marker (a comment macro), and the guard fails only on unmarked ones. Real constants stay constants, with their reason written down.
 - **(b) Report, not a failure.** The guard lists new unmarked constants in the gate report for review.
@@ -596,8 +611,12 @@ Push; `git add -A`; touch the user's untracked files; SendInput or focus stealin
 5. **Shortcut conflicts:** allowed and shown red on BOTH (every) conflicting row, with a tooltip naming the exact conflict (s7.2).
 6. **Server surface:** yes, both: the engine seam plus the ArcaneServer console, and Aphelyon's services wiring in S7.
 7. **Project identity fields** stay in `.arcproj` (the Project page).
-8. **OPEN: the new-constant guard (s10.3).** The user asked: "Is there anything today that shouldn't be exposed? If yes, we shouldn't error on every new number constant." The inventory's "Should NOT be exposed" sections answer the first part, and the guard's form is decided after the user reads them.
+8. **The new-constant guard (s10.3): form (a), the `ARC_CONSTANT("why")` marker.** The user asked: "Is there anything today that shouldn't be exposed?" The inventory answered yes (12 categories), so the guard does not fail on every constant. It fails only on a new numeric constant that is neither a setting nor marked with its reason.
 9. **Server settings in player contexts (user question, 2026-10-03):** the original draft was too restrictive (`Server` was absent from every player surface). It is replaced by audience x context with a game-installable `CVarPolicy` (s3.2): a single-player game or listen-server host sets `Server` settings like Source's local `sv_*`, cheat ones behind `server.cheats`, and games widen or narrow access themselves.
+
+10. **The inventory's proposals (Reconciliation R1-R4): all as proposed** (user, 2026-10-03).
+11. **One UI-scale setting:** yes. About 60 hard pixel sizes become DERIVED from `editor.ui.scale` x their base size (and the font size where text-relative), not about 100 individual Dev cvars.
+12. **Shortcut key type:** labelled by default, physical for positional clusters, after research (s7.2).
 
 ## 17. Out of scope
 - A remote console UI.
