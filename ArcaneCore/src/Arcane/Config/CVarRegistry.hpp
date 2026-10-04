@@ -5,6 +5,7 @@
 #include <Arcane/Core/Api.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -177,6 +178,25 @@ namespace Arcane
         }
     };
 
+    // One config rung, read from a directory of <category>.json files.
+    struct CVarLayerDir
+    {
+        SetBy                 by = SetBy::EngineConfig;
+        std::filesystem::path dir;
+        std::string           sourceModule;
+    };
+
+    // Every config rung a host applies, weakest first, plus its --set list
+    // (settings spec s4.4). ApplyLayersFor re-applies all of them to the cvars
+    // of a module that (re)loaded, so it gets exactly the values a cold boot
+    // would give it.
+    struct LayerSources
+    {
+        std::vector<CVarLayerDir> dirs;
+        std::vector<std::string>  commandLine;                      // "name=value", SetBy::CommandLine
+        CVarContext               commandLineContext = CVarContext::Editor;
+    };
+
     // RAII. While one is alive on this thread, cvar and command registrations
     // and callbacks are attributed to `module` (settings spec s4.3/s4.4). The
     // plugin host opens one around a module's load (its statics run inside
@@ -257,6 +277,11 @@ namespace Arcane
                       const CVarCaller* caller = nullptr);
 
         void UnregisterModule(std::string_view module);
+
+        // Re-apply every rung in `layers` (directories, then the --set items) to
+        // the cvars `module` declared, and nothing else; then Publish. Defined
+        // in CVarConfig.cpp beside the file reader.
+        void ApplyLayersFor(std::string_view module, const LayerSources& layers);
 
         // The innermost CVarModuleScope on this thread, else empty.
         [[nodiscard]] static std::string_view ScopedModule() noexcept;

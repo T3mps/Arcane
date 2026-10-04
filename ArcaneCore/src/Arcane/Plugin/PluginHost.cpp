@@ -324,6 +324,18 @@ namespace Arcane
             return ok;
         }
 
+        // Settings spec s4.4 (O2): a module that (re)loaded gets exactly the
+        // values a cold boot would give it -- every config rung and the --set
+        // list, re-applied to its own cvars and published -- BEFORE its Init, so
+        // OnInit already reads configured values. Called OUTSIDE the module's
+        // scope on purpose: the Publish inside dispatches engine-side callbacks,
+        // which must stay engine-attributed.
+        void LayerModuleCVars(const Plugin& p)
+        {
+            if (runtimes.empty() || p.CVarModule().empty()) return;
+            CVarRegistry::Get().ApplyLayersFor(p.CVarModule(), Primary().CVarLayerSources());
+        }
+
         // Give every attached world the module's matching systems. Idempotent (Astra
         // answers AlreadyRegistered, which InstantiateInto ignores), so the load,
         // attach and reload paths can all call it without coordinating.
@@ -500,6 +512,7 @@ namespace Arcane
                 const std::string name = src.stem().string();
                 PluginResolveError resolveError;
                 std::optional<Plugin> p = LoadScoped(src, name, &resolveError);
+                if (p) LayerModuleCVars(*p);
                 RefreshContext();
                 if (!p || !InitImage(*p))
                 {
@@ -671,6 +684,7 @@ namespace Arcane
 
         PluginResolveError resolveError;
         std::optional<Plugin> loadedNext = LoadScoped(next.dll, name, &resolveError);
+        if (loadedNext) LayerModuleCVars(*loadedNext);
         RefreshContext();
         const bool initRan = loadedNext && InitImage(*loadedNext);
         bool ok = initRan;
@@ -724,6 +738,7 @@ namespace Arcane
         if (previous && !previous->dll.empty())
         {
             std::optional<Plugin> rollback = LoadScoped(previous->dll, name, nullptr);
+            if (rollback) LayerModuleCVars(*rollback);
             RefreshContext();
             if (rollback)
             {
@@ -934,6 +949,7 @@ namespace Arcane
 
         PluginResolveError resolveError;
         std::optional<Plugin> plugin = LoadScoped(img.dll, name, &resolveError);
+        if (plugin) m_impl->LayerModuleCVars(*plugin);
         m_impl->RefreshContext();
         const bool initRan = plugin && m_impl->InitImage(*plugin);
         if (!initRan)

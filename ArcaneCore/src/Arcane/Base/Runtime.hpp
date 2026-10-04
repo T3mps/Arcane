@@ -25,10 +25,12 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace Arcane
@@ -49,6 +51,11 @@ namespace Arcane
     // The replication seam (Arcane/Sim/NetDriver.hpp). Runtime stores it, never
     // owns it, and asks it exactly one question -- see SetNetDriver below.
     struct INetDriver;
+    // The cvar rungs (Arcane/Config/CVarRegistry.hpp, settings spec s4.4).
+    // Runtime only builds and stores them; CVarRegistry::ApplyLayersFor
+    // consumes them, so callers of CVarLayerSources include that header.
+    struct LayerSources;
+    enum class CVarContext : std::uint8_t;
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -222,6 +229,17 @@ namespace Arcane
         // then be gone) and at exit. False when archiving is off or no project
         // is open.
         bool SaveUserCVars();
+
+        // --- the cvar rungs (settings spec s4.4) ---
+        // Every config rung this Runtime layers -- the engine rung, then each
+        // active plugin, the project and the user dir of the open project --
+        // plus the host's --set list. That is exactly what
+        // CVarRegistry::ApplyLayersFor needs to give a module that (re)loads
+        // later the values a cold boot would.
+        [[nodiscard]] LayerSources CVarLayerSources() const;
+        // The host's --set list and its context (the input_config boot stage
+        // records them), kept for the modules that load after that stage.
+        void SetCVarCommandLine(std::vector<std::string> sets, CVarContext context);
 
         // Register an editor-created asset file with the open project's registry
         // (Project::RegisterAsset). Idempotent. nullopt when no project is open or

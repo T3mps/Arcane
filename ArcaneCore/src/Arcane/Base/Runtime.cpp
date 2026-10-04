@@ -108,6 +108,8 @@ namespace Arcane
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         bool                                        archiveUserCVars = false;   // SetUserCVarArchiving (T3-D2)
+        std::vector<std::string>                    cvarCommandLine;                                   // SetCVarCommandLine
+        CVarContext                                 cvarCommandLineContext = CVarContext::Editor;
         // The client seam (spec s2, plan 1 P6). Both null on a headless host; a
         // ClientRuntime sets them from its own ctor and clears them from its dtor,
         // so neither can outlive the object it points at.
@@ -497,6 +499,28 @@ namespace Arcane
         }
     }
 
+    LayerSources Runtime::CVarLayerSources() const
+    {
+        LayerSources layers;
+        layers.dirs.push_back(CVarLayerDir{ SetBy::EngineConfig, m_impl->engineConfigDir, "engine-config" });
+        if (m_impl->project)
+        {
+            for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
+                layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
+            layers.dirs.push_back(CVarLayerDir{ SetBy::Project, m_impl->project->Root() / "Config", "project" });
+            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
+        }
+        layers.commandLine = m_impl->cvarCommandLine;
+        layers.commandLineContext = m_impl->cvarCommandLineContext;
+        return layers;
+    }
+
+    void Runtime::SetCVarCommandLine(std::vector<std::string> sets, CVarContext context)
+    {
+        m_impl->cvarCommandLine = std::move(sets);
+        m_impl->cvarCommandLineContext = context;
+    }
+
     bool Runtime::OpenProject(const std::filesystem::path& pathOrFile, AssetRegistry::ScanProgressFn onProgress,
                               ProjectOpenOptions opts)
     {
@@ -546,12 +570,12 @@ namespace Arcane
             m_impl->config.LayerDir(pluginRoot / "Config");
         m_impl->config.LayerProject(m_impl->project->Root() / "Config",
                                     m_impl->project->Root() / "Saved" / "Config");
+        // The cvar rungs come from the ONE source a module that loads later is
+        // re-layered from (CVarLayerSources; settings spec s4.4), so the two
+        // can never disagree.
         CVarRegistry& cvars = CVarRegistry::Get();
-        ApplyCVarDirectory(cvars, m_impl->engineConfigDir, SetBy::EngineConfig, "engine-config");
-        for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
-            ApplyCVarDirectory(cvars, pluginRoot / "Config", SetBy::Plugin, pluginRoot.filename().string());
-        ApplyCVarDirectory(cvars, m_impl->project->Root() / "Config", SetBy::Project, "project");
-        ApplyCVarDirectory(cvars, UserCVarDir(*m_impl->project), SetBy::User, "user");
+        for (const CVarLayerDir& layer : CVarLayerSources().dirs)
+            ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
         cvars.Publish();
         return true;
     }

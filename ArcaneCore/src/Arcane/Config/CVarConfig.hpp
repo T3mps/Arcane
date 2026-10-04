@@ -29,8 +29,11 @@ namespace Arcane
                                                       std::string_view sourceModule);
 
     // Every *.json in dir. "input" is document-shaped; the rest are cvars.
+    // `onlyModule` non-empty: apply only that module's cvars, and report no
+    // unknown keys (ApplyLayersFor; settings spec s4.4).
     ARC_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
-                                                       SetBy by, std::string_view sourceModule);
+                                                       SetBy by, std::string_view sourceModule,
+                                                       std::string_view onlyModule = {});
 
     // The user layer's write half (T3-D2): one <category>.json per category
     // with something to archive, in the shape ApplyCVarDirectory(..., SetBy::User)

@@ -12,6 +12,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Project/Project.hpp>
 
+#include "Helpers/CVarTestDesc.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"
 
@@ -209,4 +210,77 @@ TEST_CASE("a callback a module adds from a tick entry point leaves with its imag
     }
     reg.UnregisterModule("lifetime-test");
     reg.Publish();
+}
+
+TEST_CASE("ApplyLayersFor touches only the named module's cvars, and re-applying replaces its records", "[cvar]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_s1_layers_only";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    std::ofstream(dir / "lay.json", std::ios::binary) << R"({ "mine": 5, "other": 6 })";
+
+    Arcane::CVarRegistry reg;
+    const Arcane::CVarHandle mine = reg.Register(Arcane::Test::Desc("lay.mine", Arcane::CVarValue::Int32(0), Arcane::Audience::Game, Arcane::CVarFlags::None, "ModA"));
+    const Arcane::CVarHandle other = reg.Register(Arcane::Test::Desc("lay.other", Arcane::CVarValue::Int32(0), Arcane::Audience::Game, Arcane::CVarFlags::None, "ModB"));
+    Arcane::LayerSources layers;
+    layers.dirs.push_back(Arcane::CVarLayerDir{ Arcane::SetBy::Project, dir, "project" });
+    layers.commandLine = { "lay.other=9", "lay.mine=8" };
+    reg.ApplyLayersFor("ModA", layers);                       // publishes
+    CHECK(reg.Get(mine)->AsInt32() == 8);                     // the command line outranks the Project rung
+    CHECK(reg.Get(other)->AsInt32() == 0);                    // ModB's cvar is not touched
+    reg.ApplyLayersFor("ModA", layers);
+    CHECK(reg.Explain("lay.mine")->history.size() == 3);      // Default, Project, CommandLine -- replaced, not appended
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("a module that loads AFTER the project opened gets its Project rung, and its --set items", "[cvar][hotreload]")
+{
+    RestoreV1();
+    const fs::path dir = ScratchProject("layers");
+    { std::ofstream(dir / "P" / "Config" / "hotreload.json", std::ios::binary) << R"({ "step": 42 })"; }
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    REQUIRE(rt.OpenProject(dir / "P"));                       // hotreload.step does not exist yet
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 42);
+    CHECK(reg.Explain("hotreload.step")->setBy == Arcane::SetBy::Project);
+    host.Unload();
+
+    rt.SetCVarCommandLine({ "hotreload.step=77" }, Arcane::CVarContext::Editor);
+    REQUIRE(host.Load());
+    CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 77);
+    CHECK(reg.Explain("hotreload.step")->setBy == Arcane::SetBy::CommandLine);
+    host.Unload();
+    rt.SetCVarCommandLine({}, Arcane::CVarContext::Editor);
+    rt.CloseProject();
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("a User value survives a hot reload: flushed before the unload, re-applied from the archive after", "[cvar][hotreload]")
+{
+    RestoreV1();
+    const fs::path dir = ScratchProject("survive");
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    rt.SetUserCVarArchiving(true);
+    REQUIRE(rt.OpenProject(dir / "P"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    REQUIRE(reg.Set(reg.Find("hotreload.step"), Arcane::CVarValue::Int32(9), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+    reg.Publish();
+
+    fs::copy_file("HotReloadPluginV2.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    REQUIRE(host.ForceReload());
+    CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 9);    // V2's default is 10
+    CHECK(reg.Explain("hotreload.step")->setBy == Arcane::SetBy::User);
+    host.Unload();
+    RestoreV1();
+    rt.CloseProject();
+    std::error_code ec; fs::remove_all(dir, ec);
 }

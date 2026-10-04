@@ -264,8 +264,11 @@ namespace Arcane::HostBoot
             // project's Config/diagnostics.json takes effect exactly the way its
             // input map does), and a whole BootStage for one bool would be
             // ceremony. See HostBoot::ApplyDiagnosticsConfig.
-            ApplyDiagnosticsConfig(ctx.runtime->Configuration(), ctx.cvarContext,
-                                   ctx.hostConfig ? ctx.hostConfig->cvarSets : std::vector<std::string>{});
+            const std::vector<std::string> sets = ctx.hostConfig ? ctx.hostConfig->cvarSets : std::vector<std::string>{};
+            // Settings spec s4.4: kept on the Runtime so a game module that
+            // loads (or hot-reloads) after this stage is layered like a cold boot.
+            ctx.runtime->SetCVarCommandLine(sets, ctx.cvarContext);
+            ApplyDiagnosticsConfig(ctx.runtime->Configuration(), ctx.cvarContext, sets);
             return true;
         }));
         // sprite_tables is Fatal, not Optional (2026-07-30 review, Fix 5):

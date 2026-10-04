@@ -188,8 +188,15 @@ namespace Arcane
             return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
 
+        // What a walk may touch. A non-empty `onlyModule` means only the cvars
+        // that module declared, and no unknown-key report (settings spec s4.4).
+        struct WalkOptions
+        {
+            std::string_view onlyModule;
+        };
+
         void Walk(CVarRegistry& registry, const std::string& prefix, const nlohmann::json& node,
-                  SetBy by, std::string_view sourceModule, std::vector<std::string>& unknown)
+                  SetBy by, std::string_view sourceModule, const WalkOptions& opts, CVarApplyReport& report)
         {
             if (!node.is_object()) return;
             for (auto it = node.begin(); it != node.end(); ++it)
@@ -197,15 +204,19 @@ namespace Arcane
                 const std::string name = prefix.empty() ? it.key() : prefix + "." + it.key();
                 if (it->is_object())
                 {
-                    Walk(registry, name, *it, by, sourceModule, unknown);
+                    Walk(registry, name, *it, by, sourceModule, opts, report);
                     continue;
                 }
+                // Resolve, not Find: a file names a cvar the way a PERSON wrote
+                // it, so a renamed cvar's old key still lands (settings spec s4.7).
                 const CVarHandle handle = registry.Resolve(name);
                 if (handle.IsStale())
                 {
-                    unknown.push_back(name);
+                    if (opts.onlyModule.empty()) report.unknownKeys.push_back(name);
                     continue;
                 }
+                if (!opts.onlyModule.empty() && registry.ModuleOf(handle) != opts.onlyModule)
+                    continue;
                 const auto current = registry.Get(handle);
                 if (!current) continue;
                 std::vector<std::string> enumNames;
@@ -215,7 +226,7 @@ namespace Arcane
                 std::optional<CVarValue> value = ValueFromJson(*it, current->type, enumNames, numericEnum);
                 if (!value)
                 {
-                    unknown.push_back(name);   // the wrong shape for its type: refused, reported
+                    report.unknownKeys.push_back(name);   // the wrong shape for its type: refused, reported
                     continue;
                 }
                 if (numericEnum)
@@ -224,20 +235,26 @@ namespace Arcane
                 registry.Set(handle, std::move(*value), by, sourceModule, CVarContext::Editor);
             }
         }
+
+        CVarApplyReport ApplyCategory(CVarRegistry& registry, std::string_view category, const nlohmann::json& doc,
+                                      SetBy by, bool documentShaped, std::string_view sourceModule, const WalkOptions& opts)
+        {
+            CVarApplyReport report;
+            if (documentShaped || !doc.is_object()) return report;
+            Walk(registry, std::string(category), doc, by, sourceModule, opts, report);
+            return report;
+        }
     }
 
     CVarApplyReport ApplyCVarCategory(CVarRegistry& registry, std::string_view category,
                                       const nlohmann::json& doc, SetBy by, bool documentShaped,
                                       std::string_view sourceModule)
     {
-        CVarApplyReport report;
-        if (documentShaped || !doc.is_object()) return report;
-        Walk(registry, std::string(category), doc, by, sourceModule, report.unknownKeys);
-        return report;
+        return ApplyCategory(registry, category, doc, by, documentShaped, sourceModule, WalkOptions{});
     }
 
     CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
-                                       SetBy by, std::string_view sourceModule)
+                                       SetBy by, std::string_view sourceModule, std::string_view onlyModule)
     {
         CVarApplyReport report;
         std::error_code ec;
@@ -250,10 +267,31 @@ namespace Arcane
             auto doc = nlohmann::json::parse(in, nullptr, false);
             if (doc.is_discarded()) continue;
             const std::string stem = entry.path().stem().string();
-            auto part = ApplyCVarCategory(registry, stem, doc, by, IsDocumentCategory(stem), sourceModule);
+            const CVarApplyReport part = ApplyCategory(registry, stem, doc, by, IsDocumentCategory(stem), sourceModule,
+                                                       WalkOptions{ onlyModule });
             report.unknownKeys.insert(report.unknownKeys.end(), part.unknownKeys.begin(), part.unknownKeys.end());
         }
         return report;
+    }
+
+    void CVarRegistry::ApplyLayersFor(std::string_view module, const LayerSources& layers)
+    {
+        if (module.empty()) return;
+        for (const CVarLayerDir& layer : layers.dirs)
+            (void)ApplyCVarDirectory(*this, layer.dir, layer.by, layer.sourceModule, module);
+        for (const std::string& item : layers.commandLine)
+        {
+            const auto eq = item.find('=');
+            if (eq == std::string::npos || eq == 0) continue;   // ApplyCVarCommandLine warned at boot
+            const std::string name = item.substr(0, eq);
+            // Resolve, as Execute does below: a `--set old.name=...` written against
+            // a renamed cvar belongs to the module that declared the NEW name.
+            const CVarHandle handle = Resolve(name);
+            if (handle.IsStale() || ModuleOf(handle) != module) continue;
+            const ExecResult result = Execute(name + " " + item.substr(eq + 1), layers.commandLineContext, SetBy::CommandLine);
+            if (!result.ok) ARC_WARN("cvar: --set {}: {}", name, result.text);
+        }
+        Publish();
     }
 
     void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir)
