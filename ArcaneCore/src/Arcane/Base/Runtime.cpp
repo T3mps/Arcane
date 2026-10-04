@@ -9,6 +9,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- the engine dir and the open project are configured here (settings spec s11.0)
 #include <Arcane/Plugin/ClientHooks.hpp>   // IClientHooks -- the ONE Core->Client reach-back (plan 1 P6)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
@@ -69,6 +70,18 @@ namespace Arcane
                 return std::filesystem::path(buf).parent_path();
 #endif
             return std::filesystem::current_path();
+        }
+
+        // Paths follows the OPEN project (settings spec s11.0). It is cleared
+        // only when the project being dropped is still the configured one,
+        // because another Runtime may own the current project.
+        void ForgetProjectPaths(const std::filesystem::path& root)
+        {
+            Paths::Config paths = Paths::Current();
+            if (!paths.projectDir || *paths.projectDir != root) return;
+            paths.projectDir.reset();
+            paths.gameName.clear();
+            Paths::Configure(paths);
         }
 
         // ASCII name for a SerializationError so a Save failure logs a readable
@@ -223,7 +236,16 @@ namespace Arcane
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
-            engineConfigDir = ExeDir() / "data" / "EngineConfig";
+            // Arcane::Paths names the engine dir once per process (settings spec
+            // s11.0): the first Runtime sets it to the exe dir -- where the shipped
+            // data/EngineConfig defaults sit -- unless a host already did.
+            Paths::Config paths = Paths::Current();
+            if (paths.engineDir.empty())
+            {
+                paths.engineDir = ExeDir();
+                Paths::Configure(paths);
+            }
+            engineConfigDir = Paths::Get(Paths::Location::EngineConfig);
             config.LoadEngineDefaults(engineConfigDir);
             ApplyCVarDirectory(CVarRegistry::Get(), engineConfigDir, SetBy::EngineConfig, "engine-config");
             CVarRegistry::Get().Publish();
@@ -253,7 +275,11 @@ namespace Arcane
         // no module is loaded -- the common case -- so this costs nothing.
         InstantiateModuleSystems();
     }
-    Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
+    Runtime::~Runtime()   // do not reset the module slot: a later Runtime re-installs
+    {
+        if (m_impl && m_impl->project)
+            ForgetProjectPaths(m_impl->project->Root());
+    }
 
     ProcessContext& Runtime::Process()      noexcept { return *m_impl->process; }
     NetMode         Runtime::Mode()   const noexcept { return m_impl->mode; }
@@ -479,9 +505,20 @@ namespace Arcane
     {
         // The cvar User layer's home: read by OpenProject, written back by
         // the archive (T3-D2). One definition, so the two can never disagree.
+        // Resolved through Arcane::Paths (settings spec s11.1): <project>/Saved/
+        // Config in dev, byte-identical to before; the per-user OS dir in Dist.
         std::filesystem::path UserCVarDir(const Project& project)
         {
-            return project.Root() / "Saved" / "Config";
+            return Paths::Join(Paths::Location::GameUserDir, Paths::ForProject(project.Root()), "Config");
+        }
+
+        // The cvar Project layer's home, resolved through Arcane::Paths the same
+        // way (settings spec s11.0): <project>/Config. One definition shared by
+        // OpenProject's LayerProject and CVarLayerSources, so the two can never
+        // disagree (lane P merge, S1-29 x S1-32).
+        std::filesystem::path ProjectCVarDir(const Project& project)
+        {
+            return Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(project.Root()));
         }
 
         // The outgoing project's rungs leave with it (settings spec s4.5): its
@@ -507,7 +544,7 @@ namespace Arcane
         {
             for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
                 layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
-            layers.dirs.push_back(CVarLayerDir{ SetBy::Project, m_impl->project->Root() / "Config", "project" });
+            layers.dirs.push_back(CVarLayerDir{ SetBy::Project, ProjectCVarDir(*m_impl->project), "project" });
             layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         }
         layers.commandLine = m_impl->cvarCommandLine;
@@ -554,6 +591,10 @@ namespace Arcane
         if (m_impl->project)
             ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
         m_impl->project = std::move(*proj);
+        Paths::Config paths = Paths::Current();
+        paths.projectDir = m_impl->project->Root();
+        paths.gameName = m_impl->project->Manifest().name;
+        Paths::Configure(paths);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
         // GUID loads resolve through THIS project's registry (Assets AssetId seam).
@@ -568,8 +609,7 @@ namespace Arcane
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
         for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
             m_impl->config.LayerDir(pluginRoot / "Config");
-        m_impl->config.LayerProject(m_impl->project->Root() / "Config",
-                                    m_impl->project->Root() / "Saved" / "Config");
+        m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir(*m_impl->project));
         // The cvar rungs come from the ONE source a module that loads later is
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
@@ -612,6 +652,7 @@ namespace Arcane
         {
             ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
             CVarRegistry::Get().Publish();
+            ForgetProjectPaths(m_impl->project->Root());
         }
         m_impl->project.reset();
         m_impl->assets->SetContentRoot({});

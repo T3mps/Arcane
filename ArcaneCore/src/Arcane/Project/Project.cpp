@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN, ARC_ERROR
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/Diagnostics and editor.lock resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 
 #include <Json.hpp>
@@ -276,7 +277,7 @@ namespace Arcane
         // (below) still lists this root unconditionally, so a run that ITSELF
         // writes a report mid-session can still mount diag:// -- out of scope,
         // the defect is enumeration of PRE-EXISTING crash history at open time.
-        const std::filesystem::path diagDir = root / "Saved" / "Diagnostics";
+        const std::filesystem::path diagDir = Paths::Resolve(Paths::Location::DiagnosticsDir, Paths::ForProject(root));
         if (opts.mountDiagnostics && std::filesystem::is_directory(diagDir, ec))
         {
             proj.m_mounts.Mount("diag", diagDir);
@@ -491,7 +492,7 @@ namespace Arcane
         // unconditionally is safe.
         std::vector<std::pair<std::string, std::filesystem::path>> roots;
         roots.emplace_back("game", m_root / "Content");
-        roots.emplace_back("diag", m_root / "Saved" / "Diagnostics");
+        roots.emplace_back("diag", Paths::Resolve(Paths::Location::DiagnosticsDir, Paths::ForProject(m_root)));
         // source:// listed unconditionally for the same reason diag:// is: a
         // Source/ created after Open() (a first New C++ Class, one day) must
         // still find its root here rather than warn "outside every content
@@ -621,7 +622,7 @@ namespace Arcane
     {
         std::filesystem::path FileFor(const std::filesystem::path& projectRoot)
         {
-            return projectRoot / "Saved" / "editor.lock";
+            return Paths::Join(Paths::Location::ProjectSaved, Paths::ForProject(projectRoot), "editor.lock");
         }
 
         std::string ToJson(const Info& info)

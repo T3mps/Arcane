@@ -1,10 +1,19 @@
 // Arcane::Paths (settings spec s11.0): every well-known location, per build
 // type. Windows-only resolution checks (the desk); the Linux XDG branch is named
-// in Paths.cpp for the port. [paths]
+// in Paths.cpp for the port. The last two cases pin the Core consumers: Runtime
+// keeps Paths in step with the engine dir and the open project, and PluginHost
+// stages its images under TempDir. [paths]
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Engine.hpp>
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Platform/Paths.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Project/Project.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
+#include "../plugins/HotReloadShared.hpp"
 
 #include <filesystem>
 #include <string>
@@ -145,4 +154,45 @@ TEST_CASE("Paths: Configure/Current/Get/ForProject round-trip; Get creates nothi
     CHECK(Same(other.engineDir, root / "engine"));
     CHECK(Same(*Arcane::Paths::Current().projectDir, root / "proj"));          // ForProject changes nothing global
     fs::remove_all(root, ec);
+}
+
+TEST_CASE("Runtime keeps Paths in step: the engine dir at construction, the project on open, cleared on close and on destruction", "[paths][project]")
+{
+    const ScopedPathsConfig restore;
+    Arcane::Paths::Configure(Arcane::Paths::Config{});         // a fresh process's state
+    const fs::path dir = fs::temp_directory_path() / "arcane_paths_runtime";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const fs::path exeDir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
+    CHECK(Same(Arcane::Paths::Get(L::EngineDir), exeDir));
+    CHECK(Same(Arcane::Paths::Get(L::EngineConfig), exeDir / "data" / "EngineConfig"));
+    REQUIRE(rt.OpenProject(dir / "A"));
+    CHECK(Same(Arcane::Paths::Get(L::ProjectDir), rt.CurrentProject()->Root()));
+    CHECK(Arcane::Paths::Current().gameName == "Alpha");
+    CHECK(Same(Arcane::Paths::Get(L::GameUserDir) / "Config", rt.CurrentProject()->Root() / "Saved" / "Config"));   // the User rung's home, unchanged
+    rt.CloseProject();
+    CHECK(Arcane::Paths::Get(L::ProjectDir).empty());
+    CHECK(Arcane::Paths::Current().gameName.empty());
+    {
+        Arcane::Runtime scoped(Arcane::Test::Process());
+        REQUIRE(scoped.OpenProject(dir / "A"));
+        CHECK_FALSE(Arcane::Paths::Get(L::ProjectDir).empty());
+    }
+    CHECK(Arcane::Paths::Get(L::ProjectDir).empty());           // a Runtime that dies with its project open forgets it
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("PluginHost stages its versioned module copies under Paths' TempDir", "[paths][hotreload]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.Components()->RegisterComponent<Arcane::HotReloadTest::Pulse>();
+    rt.Components()->RegisterComponent<Arcane::HotReloadTest::RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    CHECK(fs::exists(Arcane::Paths::Get(L::TempDir) / "plugins" / "HotReloadPluginV1_1.dll"));
+    host.Unload();
 }

@@ -9,6 +9,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Paths::TempDir -- where the versioned plugin images are staged (settings spec s11.0)
 #include <Arcane/Plugin/ClientHooks.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Sim/NetDriver.hpp>
@@ -26,42 +27,22 @@
 #include <utility>
 #include <vector>
 
-// Only for the process id that namespaces this host's plugin images (see
-// HostProcessTag). Every other platform detail lives behind Module.
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace Arcane
 {
     namespace
     {
-        // Copy-and-load stages the plugin into a temp image so the SOURCE dll stays
-        // rebuildable while the host has one mapped. That image directory must be
-        // per-PROCESS: two hosts on the same project (the editor with the game module
-        // loaded, plus a separate-window ArcaneRuntime spawned from its Play button)
-        // otherwise both stage "<stem>_1.dll" into one shared directory -- and the
-        // second one cannot write it, because Windows locks a mapped DLL against
-        // overwrite. That failed the copy, failed Init, and closed the new window a
-        // moment after it opened. The generation counter cannot fix this on its own:
-        // it restarts at 1 in every host, so the collision is on the FIRST load.
-        std::string HostProcessTag()
-        {
-#ifdef _WIN32
-            return std::to_string(static_cast<unsigned long>(::GetCurrentProcessId()));
-#else
-            return std::to_string(static_cast<long>(::getpid()));
-#endif
-        }
-
+        // Copy-and-load stages the plugin into a temp image (the PluginImage below,
+        // written by Impl::CopyVersioned) so the SOURCE dll stays rebuildable while
+        // the host has one mapped. That image directory must be per-PROCESS: two
+        // hosts on the same project (the editor with the game module loaded, plus a
+        // separate-window ArcaneRuntime spawned from its Play button) otherwise both
+        // stage "<stem>_1.dll" into one shared directory -- and the second one
+        // cannot write it, because Windows locks a mapped DLL against overwrite.
+        // That failed the copy, failed Init, and closed the new window a moment
+        // after it opened. The generation counter cannot fix this on its own: it
+        // restarts at 1 in every host, so the collision is on the FIRST load.
+        // Paths' TempDir is per process (<OS temp>/Arcane/<pid>), which is what
+        // keeps two hosts apart.
         struct PluginImage
         {
             std::optional<Plugin> plugin;
@@ -242,7 +223,7 @@ namespace Arcane
         Impl(ProcessContext& proc, std::filesystem::path src)
             : process(proc), source(std::move(src))
         {
-            tempDir = std::filesystem::temp_directory_path() / "arcane_plugins" / HostProcessTag();
+            tempDir = Paths::Join(Paths::Location::TempDir, Paths::Current(), "plugins");
             RefreshContext();
         }
 
@@ -814,12 +795,14 @@ namespace Arcane
     PluginHost::~PluginHost()
     {
         Unload();
-        // Unload's DeleteFiles removed the images; take the now-empty per-process
-        // directory with them so TEMP does not collect one dead folder per run.
-        // Best effort by design: remove() on a non-empty directory just reports an
-        // error into `ec`, which is the right outcome if something is still mapped.
+        // Unload's DeleteFiles removed the images; take the now-empty staging
+        // directory and its per-process parent with them so TEMP does not collect
+        // one dead folder per run. Best effort by design: remove() on a non-empty
+        // directory just reports an error into `ec`, which is the right outcome if
+        // something is still mapped (or if another subsystem still uses the parent).
         std::error_code ec;
         std::filesystem::remove(m_impl->tempDir, ec);
+        std::filesystem::remove(m_impl->tempDir.parent_path(), ec);   // <OS temp>/Arcane/<pid>, if now empty
     }
 
     void PluginHost::AddPlugin(std::filesystem::path dll)
