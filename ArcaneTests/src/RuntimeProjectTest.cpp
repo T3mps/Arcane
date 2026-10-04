@@ -9,6 +9,7 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -280,6 +281,53 @@ TEST_CASE("Runtime::CloseProject returns to the fresh-Runtime no-project state",
     REQUIRE(Arcane::Project::Create(dir / "B", "Beta").has_value());
     REQUIRE(rt.OpenProject(dir / "B") == true);
     REQUIRE(rt.CurrentProject()->Manifest().name == "Beta");
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+// Settings spec s4.5 (O3): re-opening a project REPLACES its rungs, and the
+// project's Project rung leaves with it on a switch or a close, as its User
+// rung already did (T3-D2).
+TEST_CASE("Runtime: re-opening a project replaces its cvar rungs, and a switch or close pops them", "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("cvar_rungs");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    REQUIRE(Arcane::Project::Create(dir / "B", "Beta").has_value());
+    WriteFile(dir / "A" / "Config" / "s1rungs.json", R"({ "knob": 5 })");
+
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s1-rungs-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    Arcane::CVarDesc desc;
+    desc.name = "s1rungs.knob";
+    desc.type = Arcane::CVarType::Int32;
+    desc.defaultValue = Arcane::CVarValue::Int32(1);
+    desc.help = "S1-21 rung probe.";
+    desc.module = "s1-rungs-test";
+    const Arcane::CVarHandle knob = cvars.Register(desc);
+    REQUIRE_FALSE(knob.IsStale());
+    const auto projectRecords = [&]
+    {
+        const auto explained = cvars.Explain("s1rungs.knob");
+        return std::count_if(explained->history.begin(), explained->history.end(),
+                             [](const Arcane::CVarHistoryRecord& h) { return h.by == Arcane::SetBy::Project; });
+    };
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "A"));
+    CHECK(cvars.Get(knob)->AsInt32() == 5);
+    REQUIRE(rt.OpenProject(dir / "A"));                  // the same project again
+    CHECK(projectRecords() == 1);                        // replaced, not appended
+    REQUIRE(rt.OpenProject(dir / "B"));                  // B's Config has no knob
+    CHECK(cvars.Get(knob)->AsInt32() == 1);              // A's Project rung did not leak into B
+    CHECK(cvars.Explain("s1rungs.knob")->setBy == Arcane::SetBy::Default);
+    REQUIRE(rt.OpenProject(dir / "A"));
+    CHECK(cvars.Get(knob)->AsInt32() == 5);
+    rt.CloseProject();
+    CHECK(cvars.Get(knob)->AsInt32() == 1);
+    CHECK(projectRecords() == 0);
 
     std::error_code ec; fs::remove_all(dir, ec);
 }

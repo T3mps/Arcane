@@ -16,7 +16,7 @@ namespace Arcane
     enum class SetResult : std::uint8_t
     {
         Applied,          // accepted into the pending store; visible after Publish
-        RefusedWeaker,    // a stronger SetBy already holds the value
+        RefusedWeaker,    // recorded beneath a stronger SetBy, which still wins
         Stale,            // handle generation does not match
         TypeMismatch,
         Denied,           // permission / cheat gate

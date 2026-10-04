@@ -203,11 +203,12 @@ namespace Arcane
 
         // --- the user cvar archive (T3-D2) ---
         // OpenProject reads the project's Saved/Config/ as the cvar User layer.
-        // A project's User layer leaves with it: CloseProject, and OpenProject
-        // replacing an open project (a switch), drop every SetBy::User record
-        // (CVarRegistry::RevertLayer) so the next project starts from its own
-        // file. With archiving ON (off by default) they first WRITE it back
-        // (WriteCVarArchive: Archive cvars the User rung holds, nothing else).
+        // A project's rungs leave with it: CloseProject, and OpenProject
+        // replacing an open project (a switch), drop every SetBy::User, Project
+        // and Plugin record (CVarRegistry::RevertLayer) so the next project
+        // starts from its own files. With archiving ON (off by default) they
+        // first WRITE the User layer back (WriteCVarArchive: Archive cvars the
+        // User rung holds, nothing else).
         // The editor turns it on for a windowed session; ArcaneRuntime and
         // ArcaneServer leave it off -- neither host sets the User rung itself,
         // and a shipped game's settings belong in a per-user directory, not

@@ -4,6 +4,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRef.hpp>
 
+#include <algorithm>
 #include <map>
 #include <sstream>
 #include <unordered_map>
@@ -398,14 +399,21 @@ namespace Arcane
             if (HasFlag(slot.flags, CVarFlags::Cheat) && !CheatsEnabled()) return SetResult::Denied;
         }
 
-        const SetBy winner = slot.history.empty() ? SetBy::Default : slot.history.back().by;
-        if (by < winner) return SetResult::RefusedWeaker;
-
         value = Clamp(std::move(value), slot.min, slot.max);
-        slot.history.push_back(CVarHistoryRecord{ by, value, std::string(sourceModule) });
+        // ONE record per (rung, source) (settings spec s4.5, O3): a repeat
+        // replaces its own record, so re-opening a project or re-applying a
+        // layer never grows the history. Records stay ordered weakest rung
+        // first (newest last within a rung), so the back is always the winner.
+        // A set beneath a stronger rung is RECORDED there: it is what that rung
+        // holds once the stronger one is reverted. It reports RefusedWeaker
+        // because it does not win now.
+        std::erase_if(slot.history, [&](const CVarHistoryRecord& h) { return h.by == by && h.module == sourceModule; });
+        const auto at = std::find_if(slot.history.begin(), slot.history.end(),
+                                     [by](const CVarHistoryRecord& h) { return h.by > by; });
+        const bool wins = at == slot.history.end();
+        slot.history.insert(at, CVarHistoryRecord{ by, std::move(value), std::string(sourceModule) });
         slot.dirty = true;
-        if (!m->publishing) { /* stays pending until Publish */ }
-        return SetResult::Applied;
+        return wins ? SetResult::Applied : SetResult::RefusedWeaker;
     }
 
     void CVarRegistry::UnregisterModule(std::string_view module)

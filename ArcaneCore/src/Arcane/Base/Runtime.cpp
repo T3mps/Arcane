@@ -482,14 +482,18 @@ namespace Arcane
             return project.Root() / "Saved" / "Config";
         }
 
-        // The outgoing project's User layer leaves with it (Runtime.hpp, the
-        // user cvar archive): written back first when this host archives.
-        void ReleaseUserCVarLayer(const Project& outgoing, bool archive)
+        // The outgoing project's rungs leave with it (settings spec s4.5): its
+        // User layer (archived first when this host archives, T3-D2), its
+        // Project layer and its plugins' layers, so the next project starts from
+        // its own files and never inherits a key only the old one set.
+        void ReleaseProjectCVarLayers(const Project& outgoing, bool archive)
         {
             CVarRegistry& cvars = CVarRegistry::Get();
             if (archive)
                 WriteCVarArchive(cvars, UserCVarDir(outgoing));
             cvars.RevertLayer(SetBy::User);
+            cvars.RevertLayer(SetBy::Project);
+            cvars.RevertLayer(SetBy::Plugin);
         }
     }
 
@@ -522,9 +526,9 @@ namespace Arcane
         }
 
         // A switch: the outgoing project's settings are archived (if this host
-        // archives) and its User layer dropped before the incoming one layers.
+        // archives) and its rungs dropped before the incoming one layers.
         if (m_impl->project)
-            ReleaseUserCVarLayer(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
@@ -564,11 +568,12 @@ namespace Arcane
         // resolver; `config.LoadEngineDefaults(engineConfigDir)` is the only
         // config call the ctor makes) -- so a project-less Runtime looks the
         // same whether it never opened a project or just closed one.
-        // The cvar User layer leaves with the project (archived first when
-        // this host archives); the other rungs are untouched, as before.
+        // The cvar User, Project and Plugin rungs leave with the project (the
+        // User layer archived first when this host archives); the engine,
+        // EditorUser, command-line, code and console rungs are untouched.
         if (m_impl->project)
         {
-            ReleaseUserCVarLayer(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
             CVarRegistry::Get().Publish();
         }
         m_impl->project.reset();
