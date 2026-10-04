@@ -61,7 +61,7 @@ The user's decisions, in order:
 - `ViewportSettings` (camera mode, speed, grid, gizmo size), stored in `imgui.ini`;
 - `UndoSettings` and `TextureImportSettings`;
 - 31 theme colour tokens (`EditorTheme.hpp`, `inline constexpr ImVec4`);
-- about 40 hard-coded editor key checks (`IsKeyPressed`, `Shortcut`) across 8 files;
+- about 49 ImGui-routed editor key checks across 11 files, plus 22 raw SDL-scancode bindings (viewport/camera, `EditorAppFrame.cpp`) and 7 keys inside the vendored imgui-node-editor (corrected by the 2026-10-03 inventory);
 - about 575 numeric `constexpr`s across ArcaneCore, ArcaneClient, ArcaneEditor, ArcaneRuntime and ArcaneServer. Many are true constants and many are tunables.
 
 **Library configs Arcane fills today with defaults:**
@@ -141,6 +141,8 @@ Every setting has a **home scope**, which picks the window it appears in and the
   - Switching back to "All projects" clears the project value.
   - The Modified filter has a "Project overrides" option that lists them all.
 - `Project`: shared and committed. Edits write the Project rung, the project's `Config/<category>.json`. This covers rendering, physics, Astra memory, networking, input, assets and cook, and game settings.
+
+**Scope is where the DEFAULT is edited. The override rung follows the audience** (inventory Reconciliation R2). A `PlayerSafe` setting's player override always writes the per-machine User rung (`GameUserDir` in Dist; s8.2), even when its default lives in Project. Examples: `render.backend`, `render.vsync`, window size, input deadzones. The inventory writes scope as `Pref-M` (machine-wide, the EditorUser rung), `Pref-P` (per-project User rung) or `Project`.
 
 The layer system is unchanged: engine -> plugin -> project -> user -> command line -> code -> console. So a project default can still be overridden locally (the user rung wins), and both windows show that (s6.4).
 
@@ -266,7 +268,7 @@ Each category below gets a settings struct and appears in Project Settings unles
 | Category | Library / system | Examples | Apply |
 |---|---|---|---|
 | `astra.memory` | Astra `Registry::Config` | chunkSize, chunksPerBlock, maxChunks, initialBlocks, useHugePages, min/maxChunkBytes; ResourceStorage limits | NextWorld |
-| `physics` (2D) | Manifold2D world definition | broadphase, hashCellSize, gravity, substepCount, contactHertz, contactDampingRatio, restitutionThreshold, sleep thresholds; the fixed step (`sim.fixedHz`) | gravity Live; the rest NextWorld; all `Deterministic` |
+| `physics` (2D) | Manifold2D world definition | broadphase, hashCellSize, gravity, substepCount, contactHertz, contactDampingRatio, restitutionThreshold, sleep thresholds; the fixed step (`sim.fixedHz`) | all NextWorld (Manifold2D has no gravity setter; PhysicsSystem captures dt at creation); all `Deterministic`. `server.tickHz` is separate from `sim.fixedHz` |
 | `render` | the renderer and NRI | backend (D3D12/Vulkan), vsync, frames in flight, mesh cull, selection-outline width, MSAA/AA, gamma, debug markers | mixed; backend Restart |
 | `jobs` | enkiTS / job system | worker threads, pin main thread | Restart |
 | `net` | Arcane `Net` (TcpSocket, RateLimiter, Protocol), host ports | timeouts, rate-limit buckets, buffer sizes, server port defaults | Restart / Live per field |
@@ -274,6 +276,7 @@ Each category below gets a settings struct and appears in Project Settings unles
 | `input` | input system (non-document parts) | dead zones, repeat delay; action maps stay document-shaped in `input.json` | Live |
 | `log` / `diagnostics` | logging and crash capture | log level, sinks, capture-on-hang timeout, minidump kind | Live / Restart |
 | `editor.*` | ArcaneEditor (Preferences) | undo, graph, inspector, viewport camera and grid, autosave, theme, fonts, shortcuts, layouts | mostly Live |
+| `audio`, `app` (splash, window), `boot`, `console`, `runtime`, `sim`, `server`, `debug.physics`, `editor.thumbnail` | the systems found by the 2026-10-03 inventory | see the inventory's canonical names (Reconciliation R1) | per row |
 
 - Two existing defaults move the thumbnail golden set if they ever change: thumbnail size and the mesh light triple (the cvar plan's exclusion). They become cvars with IDENTICAL defaults, and only a deliberate change re-blesses.
 - The replication arc adds `net.replication.*` through the same declarations. There is no separate design.
@@ -430,6 +433,10 @@ The audit's first deliverable is `docs/superpowers/audits/2026-10-xx-settings-in
   - a value whose change would be a bug, not a preference.
 - **SETTING:** a value a reasonable developer or player might want different, including budgets, caps, timeouts, sizes, speeds, colours, thresholds, counts and toggles.
 - **When in doubt: SETTING with `Dev`**, so it is reachable in development and not shown to players.
+- **OTHER-STORE:** a real preference that is not a cvar, because it lives in another process or store (the Hub's `settings.archub`), in shipped template assets, or in an environment rung.
+- **Capacity hints** (reserve sizes, I/O chunk sizes): CONSTANT with an `ARC_CONSTANT` marker. They have no observable preference.
+
+**Diagnostics policy (inventory R2):** evidence capture (DRED, the crash handler, the hang watchdog) cannot be turned off in a shipped build. Its switches are `Dev`, never archived, and command-line only. The reporter UI (`diagnostics.spawnReporter`) is an ordinary Game setting.
 
 ### 10.2 Conversion rules
 - **Defaults are byte-identical**, so a converted value has the same type and value. The whole suite, the goldens and the trajectory fixture must be unchanged by the sweep. A golden diff during the sweep is a conversion bug, not a re-bless.
@@ -551,10 +558,13 @@ Editor Preferences values are per user and per project (`<project>/Saved/Config`
 
 ### 14.1 Tranches (gated, subagent-driven, as in the node-page phase)
 1. **S1 Core:** types (`Enum`, `Color`, `Vec*`), metadata, audience/scope/apply, declaration overloads plus nameable handles, module capture, `UnregisterModule` wiring plus `ApplyLayersFor`, history per (rung, source), the O4 fixes, `CommandResult`, the snapshot plus `PublishImmediate`, aliases, and the Problems surfacing of unknown keys. Gate.
-2. **S2 Settings structs and bindings:** `ARC_SETTINGS` over reflection, the new attributes, `Settings<T>()`, the EditorUser rung, the Astra and Manifold2D bindings (fixtures unchanged), and the jobs/render/log bindings for what already exists. Gate.
+2. **S2 Settings structs and bindings:** `ARC_SETTINGS` over reflection, the new attributes, `Settings<T>()`, the EditorUser rung (needed by every Pref-M row, so it lands before S4), the Astra and Manifold2D bindings (fixtures unchanged), and the jobs/render/log bindings for what already exists. Gate.
 3. **S3 The windows:** the tree, search and filters, rows, provenance, window undo, the Restart flow, custom-page registration, Preferences wired to the menu, and Project Settings replacing the read-out. Gate (desk by automation).
 4. **S4 The rich pages:** theme (presets, preview, contrast), the editor action registry plus the shortcuts page (the 40 key checks routed), fonts and scale, and layouts. Gate.
-5. **S5 The audit:** finalize the inventory (first run read-only on 2026-10-03) with the user's corrections. **User review point** before S6 (s16.3).
+5. **S5 The audit:** finalize the inventory (first pass read-only on 2026-10-03, reconciled the same day). Steps, in order:
+   1. apply the Reconciliation (one name per value, the scope vocabulary, the R2 policies) mechanically;
+   2. **user review point:** the user's row-by-row corrections (s16.3);
+   3. freeze the names. S6 converts only frozen rows.
 6. **S6 The sweep:** conversions by subsystem (render, physics/sim, assets/cook, net, input, editor UX, host and diagnostics), each a task with "defaults identical" proven; the stray stores migrated; and the guard test. Gate (full suite, goldens and trajectory unchanged).
 7. **S7 Players and server:** `PlayerSettings` List/Set, the Dist user directory, `RemoteCVarService` plus the ArcaneServer console, and the Aphelyon services wiring plus the audit sink (Aphelyon commit). Gate. Close.
 

@@ -3,20 +3,20 @@
 **Status:** first pass, for the user's review (spec `docs/superpowers/specs/2026-10-03-settings-and-cvar-completion-design.md`, s10 and s16.3). Nothing was changed in code. Three read-only audits ran in parallel, one per part below.
 
 **How to review:**
-- Skim the SETTING rows. Correct any verdict, name, audience (Editor/Game/PlayerSafe/Server, +Dev), scope (Preferences/Project) or apply mode (Live/NextWorld/Restart) you disagree with.
+- Skim the SETTING rows. Correct any verdict, name, audience (Editor/Game/PlayerSafe/Server, +Dev), scope (Pref-M machine-wide / Pref-P per-project / Project) or apply mode (Live/NextWorld/Restart) you disagree with.
 - Mark rows directly in this file, or tell me "row X: ...".
 - S5 of the plan finalizes this file with your corrections before any conversion starts.
 
 ## Summary
 
-| Part | SETTING | CONSTANT | DERIVED |
-|---|---|---|---|
-| Part 1: ArcaneCore and the vendored library configs | 85 | 99 | 27 |
-| Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 141 | 96 | 28 |
-| Part 3: ArcaneEditor and ArcaneHub | 255 | 38 | 56 |
-| **Total** | **481** | **233** | **111** |
+| Part | SETTING | CONSTANT | DERIVED | OTHER-STORE |
+|---|---|---|---|---|
+| Part 1: ArcaneCore and the vendored library configs | 84 | 99 | 27 | 1 |
+| Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 127 | 102 | 28 | 0 |
+| Part 3: ArcaneEditor and ArcaneHub | 236 | 38 | 56 | 14 |
+| **Total** | **447** | **239** | **111** | **15** |
 
-These counts are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
+These counts are after the reconciliation below (first pass: 481 / 233 / 111). They are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
 
 ## Should anything NOT be exposed? (spec s16.8)
 
@@ -36,6 +36,58 @@ These counts are rows by verdict, so a grouped row (e.g. "keepalive idle / inter
 12. **Values whose change would be a bug:** DRED always on, memory zero-init off, `Theme::kNone`, the dock split clamp, the permanent Viewport panel.
 
 So a guard that fails on EVERY new number constant would be wrong. The recommended guard form is in s16.8 / s10.3 (a): a new constant is either a setting or carries an `ARC_CONSTANT("why")` marker.
+
+## Reconciliation (2026-10-03, after an independent review)
+
+The three parts were audited in parallel, so some values were inventoried twice under different names with conflicting metadata. Everything below was checked against the code. **These resolutions override any row in the part tables.** S5 applies them mechanically, BEFORE the user's row-by-row review, so no value gets corrected twice.
+
+### R1. One name per value (canonical names)
+
+| Value | Was (conflicting) | Canonical | Notes |
+|---|---|---|---|
+| Thumbnail size / time / FOV / retries (MaterialPreviewHarvester.cpp) | `assets.thumbnail.*` (Part 2) vs `editor.assets.thumbnail*` (Part 3) | `editor.thumbnail.size`, `.time`, `.meshFovDegrees`, `.maxRetries` (EditorThumbnailSettings, Editor Dev, **Project**, Restart) | Part 2's rows were dropped (out of its scope). Project scope: thumbnails are a shared cache and goldens depend on them. The checker cell and light stay DERIVED (Part 3). |
+| Gizmo snap steps and size | `editor.viewport.snap.*` / `editor.viewport.gizmo.*` (Part 2) vs `editor.gizmo.snap.*` / `editor.gizmo.size` (Part 3) | `editor.gizmo.snap.translate`, `.rotateDegrees`, `.scale`, `editor.gizmo.size` (EditorGizmoSettings, Pref-P) | Part 3 is right: `gizmoSize` lives in the layout ini (ViewportSettings), not a cvar. It migrates. |
+| Splash | `splash.*` (Part 1) vs `app.splash.*` (Part 2) | `app.splash.enabled`, `.image`, `.backgroundColor`, `.showProgress`, `.minDurationSeconds` (SplashSettings, Game, Project, Restart) | (0.05,0.05,0.06) and 0x0D0D0F are one colour: ONE default. Moves out of `.arcproj` (R3). |
+| Viewport grid | GridNode `editor.viewport.grid.majorEvery` SETTING (Part 2) vs ViewportGrid "major every 10" CONSTANT (Part 3); two structs | ONE `EditorGridSettings`: `editor.viewport.grid.majorEvery`, `.lineColor`, `.minorAlpha`, `.majorAlpha` | Same concept, two renderers: the 3D GridNode (depth-tested) and the 2D ViewportGrid (ortho lines). One family, read by both. Mode-only differences get `grid3D.*` / `grid2D.*` sub-keys. |
+| Axis colours (4 spellings) | `editor.viewport.axisColor.*`, `editor.viewport.grid.axis{X,Y}Color`, `editor.theme.axisX/Y/Z`, gizmo `kColorX/Y/Z` | `editor.theme.axisX/Y/Z` (theme tokens) | Grid, gizmo and inspector bars become DERIVED from the tokens. |
+| Selection outline colours | separate `render.outline.*Color` settings | DERIVED from `editor.theme.amber` (select) and `editor.theme.graphNodeHoverBorder` (hover) | Exact matches: (1,0.65,0.10) = kAmber; (0.25,0.70,1) = kGraphNodeHovBorderColor. Outline WIDTHS stay settings. |
+| Fixed step vs server tick | `sim.fixedHz` with two metadata sets | `sim.fixedHz` (SimSettings, Game, Project, **NextWorld**, [10,480], det Y) **and** `server.tickHz` (ServerSettings, Server, Project, Restart, [1,240]) | A client and a server can differ. |
+| Frame-delta clamp | `sim.maxFrameDeltaSeconds` (Part 2) vs `editor.play.maxSimDtSeconds` (Part 3) | ONE `sim.maxFrameDeltaSeconds` (det Y), read by the runtime AND editor Play | Two values would let Play-in-editor diverge from shipped behaviour. |
+| Shader compile debounce (4 copies: RuntimeApp.cpp:311, ShaderCompiler.cpp:405, ShaderCompiler.hpp:111, EditorApp.cpp:689) | `render.shader.compileDebounceSeconds` vs `editor.shader.compileDebounceSeconds` | `render.shader.compileDebounceSeconds` (Game Dev, Pref-P) | Moves the settle frame: identical default required. |
+| Idle / minimized sleep | `render.window.minimizedSleepMs` vs `editor.perf.idleSleepMs` | `app.window.minimizedSleepMs` (Game) + `editor.perf.backgroundFps` (new, Editor) | Two different behaviours, kept apart on purpose. |
+| Copy-flash duration | `diagnostics.reporter.copyFlashSeconds` vs `editor.ui.copyFlashSeconds` | `ui.copyFlashSeconds` | The reporter receives it through its command line (it has no registry). |
+| Crash log tail lines | `diagnostics.reporter.logTailLines` vs `editor.crash.logTailLines` | `diagnostics.logTailLines` | One value for the reporter and the editor's crash document. |
+| Preview lights | `editor.preview.light*` on two different values (MeshDocument (0.4,1,0.3); MaterialSpherePreview (0.45,0.7,0.8)) | ONE `editor.preview.light.direction`, `.ambient`, `.colour` | The mesh document's odd light was drift. The default becomes the shared (0.45,0.7,0.8). The mesh document's look changes, so that is called out at its conversion. |
+| `log.level` | Preferences (Part 1) vs Pref-P (Part 3); the line cited as Log.cpp:261 / :258 | `log.level` (LogSettings, Game, Pref-P, Live) at Log.cpp:258-263 (the ARC_CVAR spans those lines) | |
+| `console.historySize` | Game (Part 1) vs Editor (Part 3) | Game (Pref-P) | It is registered in Core and serves both consoles. |
+| Struct names | `JobSettings` vs `JobsSettings`; strays (`editor.outliner.slowClickMaxSeconds` in InspectorSettings; `editor.ui.tableRowHeight` in AssetBrowserSettings) | `JobsSettings`; **one struct per prefix**: `editor.outliner.*` -> OutlinerSettings, `editor.ui.*` -> EditorUiSettings | |
+| The two ConsoleModels | "unbounded growth" was ambiguous | Core `Config/ConsoleModel::m_lines` is the unbounded one -> `console.maxLines`. The editor `Panels/ConsoleModel` is already a 512-line ring -> `editor.console.ringLines` | |
+
+### R2. Policy resolutions (proposed; the user may override at review)
+
+- **Diagnostics cannot be turned off in shipped builds.**
+  - Evidence capture (DRED, the crash handler, the hang watchdog) stays on in every shipped build.
+  - `diagnostics.installCrashHandler` and `diagnostics.hangWatchdog` become **Dev, never archived, command-line only** (`--set` for debugger sessions).
+  - The reporter UI is a preference, not evidence: `diagnostics.spawnReporter` stays a Game setting. Dumps are written regardless.
+- **`log.pattern` is CONSTANT.** The editor Console categorises lines by parsing the log prefix (`Panels/ConsoleModel.cpp:18`, `:48`). Changing the pattern would break that.
+- **Gravity is NextWorld** until Manifold2D gains a setter (Manifold2D-first, then a re-vendor). The apply vocabulary stays three modes (Live, NextWorld, Restart); "Live via world rebuild" is NextWorld.
+- **Scope has two fields.** "Scope" says where the DEFAULT is edited (the Preferences or Project window). The override rung follows the audience:
+  - `PlayerSafe` overrides always write the per-machine User rung (`GameUserDir` in Dist), even when the default lives in Project. Examples: `render.backend`, `render.vsync`, window size, tearing, anisotropy, input deadzones.
+  - The spec (s3.3, s8) is amended to say so.
+- **The scope vocabulary is `Pref-M` / `Pref-P` / `Project` everywhere.** In Parts 1-2, "Preferences" reads as Pref-P unless the row is theme/fonts/keys/layout (Pref-M). Every Pref-M row needs the EditorUser rung, so **S2 builds that rung before S4** (theme, keys, fonts, layouts).
+- **Input thresholds are det Y.** `input.pressThreshold`, `.holdSeconds`, `.tapSeconds` and the deadzones decide which actions fire from raw device input. Recorded raw input replays differently if they change.
+- **Capacity hints are CONSTANT with an `ARC_CONSTANT` marker.** Reserve sizes and I/O chunks have no observable preference. Six rows were reclassified.
+- **Template data and the Hub are OTHER-STORE.** Template content belongs in shipped template assets. The Hub (Rust/Tauri) keeps `settings.archub` and `theme.css`, and a JSON bridge comes later. A fourth verdict, `OTHER-STORE`, keeps them out of the cvar count.
+
+### R3. Second stores (proposed)
+- **`.arcproj`** keeps identity only (name, GUID, ABI, game module, boot scene; spec s16.7). Its `physics.gravity` and splash blocks move to `Config/physics.json` and `Config/app.json`. On first open, the existing block is migrated into the Project rung and removed from `.arcproj` (with a Hub check: the Hub reads only identity).
+- **`protocol.json` `settings`** (ports, caps, timeouts, token length, max message size) become `net.*` Server cvars. During migration, protocol.json's `settings` object is read as a Project-rung layer. The code-side duplicates go: `MAX_PAYLOAD_SIZE` vs `max_message_size`; `HasToken() >= 64` vs `token_length`.
+- **Networking lives in Core** (`Net/`), and its consumers are the Aphelyon services, not ArcaneServer. That is why Part 2 found "no net.* in ArcaneServer" while Part 1 has about 15 `net.*` rows. Both are correct.
+- **`D3D12SDKVersion = 619`** is defined twice (Runtime main.cpp:24, Editor main.cpp:43). It stays CONSTANT, moved into one shared header (a must-match pair).
+
+### R4. Pulled forward (not settings work)
+- **`Message::ToString` password exposure: latent, not live.** It would include the first 100 payload characters, enough for a Login password. But a 2026-10-03 search found **no caller** in Arcane, Aphelyon or the Gacha Server, and the services never log payloads. So no existing log holds credentials, and no purge is needed. The fix stays: redact auth-message payloads in `ToString`, so the trap can't be sprung later. It is a small Core fix, separate from the settings tranches.
+- **Debug HUD in Dist:** a per-configuration default (on in Debug/Release, off in Dist), the same pattern as the validation cvars. Goldens are captured from Debug/Release, so they keep it on.
 
 ## Findings that need the user's eyes
 
@@ -59,7 +111,7 @@ So a guard that fails on EVERY new number constant would be wrong. The recommend
 - **Capacity hints** (reserve sizes, I/O chunk sizes) were marked SETTING Dev by the "when in doubt" rule. Recommendation: make them CONSTANT with a marker.
 
 **Bugs and gaps found, outside settings** (to queue separately):
-- **Possible security issue:** `Message::ToString` logs up to 100 chars of the payload, which for Login/Register may include a plaintext password (Protocol.hpp:413). Check where ToString is logged (Aphelyon server).
+- **Latent security issue:** `Message::ToString` would include up to 100 payload chars, enough for a Login password (Protocol.hpp:413). It has NO caller today, so no log holds credentials; it gets redacted anyway (Reconciliation R4).
 - **Debug HUD in shipped builds:** the runtime debug HUD draws in every configuration, including Dist.
 - **The parallel physics solver is never enabled:** `PhysicsWorld::SetExecutor` is never called.
 - **`log.level` never reaches Astra/Manifold2D logs:** `Mosaic::SetLogLevel` is never called.
@@ -68,8 +120,8 @@ So a guard that fails on EVERY new number constant would be wrong. The recommend
 - **Every game uses engine identity:** the window is titled "Arcane Runtime", the base input context is "demo", and it boots on the engine splash.
 - **No player settings exist yet:** fullscreen, display mode, master volume. Spatial audio is forced off.
 - **Menus show wrong shortcuts:** Redo shows only Ctrl+Y; Rename/Delete only fire with the Outliner focused.
-- **The same default is spelled in several places:** the fixed step in 6 places (one with a digit fewer), the shader debounce in 3, and the preview light in 2 different ways. The sweep deletes the copies.
-- **Unbounded growth:** the Console's line buffer grows without bound, and diagnostics reports have no retention.
+- **The same default is spelled in several places:** the fixed step in 6 places (one with a digit fewer), the shader debounce in 4, and the preview light in 2 different ways. The sweep deletes the copies.
+- **Unbounded growth:** Core's `Config/ConsoleModel::m_lines` grows without bound (the editor's `Panels/ConsoleModel` is already a 512-line ring), and diagnostics reports have no retention.
 
 ---
 
@@ -120,7 +172,7 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 | Core/Base/Diagnostics.cpp:2020 | watchdog poll | 250 (ms) | SETTING | diagnostics.watchdogPollMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [10,1000] | N | detection resolution |
 | Core/Base/Diagnostics.cpp:2132 | watchdog join wait | 5000 (ms) | SETTING | diagnostics.watchdogJoinTimeoutMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [100,30000] | N | when in doubt |
 | Core/Base/Diagnostics.cpp:3052 | `kMinFatalWaitMs` | 5000 (ms) | SETTING | diagnostics.minFatalWaitMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [1000,60000] | N | when in doubt |
-| Core/Base/Diagnostics.cpp:2610 | env `ARCANE_BUILD_MACHINE` / `CI` / `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE` | env toggles | SETTING | (fold into diagnostics.spawnReporter as a CommandLine/env rung) | DiagnosticsSettings | Game Dev | Project | Restart | bool | N | toggle that bypasses the cvar store |
+| Core/Base/Diagnostics.cpp:2610 | env `ARCANE_BUILD_MACHINE` / `CI` / `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE` | env toggles | OTHER-STORE | (fold into diagnostics.spawnReporter as a CommandLine/env rung) | — | — | — | — | — | — | an environment rung, not a new cvar (reconciled). toggle that bypasses the cvar store |
 | Core/Base/Diagnostics.cpp:225-231 | `kPathMax`, `kReasonMax`, `kMaxFrames`, `kSectionRsv`, `kHeaderRsv`, `kEnvRsv`, `kEnvLeanRsv` | 1024, 1024, 96, 32 KiB, 8 KiB, 64 KiB, 8 KiB | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity; the crash path cannot allocate or read cvars |
 | Core/Base/Diagnostics.cpp:275-307 | snapshot buffers | 128, 4096, 256, 2048, 64, 8192 (chars) | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity |
 | Core/Base/Diagnostics.cpp:284 | `kInjectedMax` | 32 | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity |
@@ -445,7 +497,7 @@ Creation sites:
 | HostConfig.cpp:92, HostConfig.hpp:39 | screenshotPath (`--screenshot`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: verification output |
 | HostConfig.cpp:93, HostConfig.hpp:44 | printEngineInfo | false | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: the Hub's ABI probe |
 | HostConfig.cpp:94, HostConfig.hpp:67 | headless | false | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: a run mode; it requires `--frames` |
-| HostConfig.cpp:96, HostConfig.hpp:73 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); also the string "0.0166666666666666666" | DERIVED | (from sim.fixedHz) | — | Game | Project | NextWorld | >0 | Y | FLAG ONLY (headless); its default should read 1/sim.fixedHz instead of repeating 1/60 |
+| HostConfig.cpp:96, HostConfig.hpp:73 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); also the string "0.0166666666666666666" | DERIVED | — (from sim.fixedHz) | — | — | — | — | — | Y | FLAG ONLY (headless); its default should read 1/sim.fixedHz instead of repeating 1/60 |
 | HostConfig.cpp:98, HostConfig.hpp:95 | fixedTimeSeconds | unset | CONSTANT | — | — | — | — | — | — | Y | FLAG ONLY: pins the clock for verification |
 | HostConfig.cpp:101-103, HostConfig.hpp:99,103,206 | probes / cvarSets / reportPath | empty | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: `--set` is the command-line way into settings, not a setting itself |
 | HostConfig.cpp:104-119, HostConfig.hpp:223-292 | dump-layout, play-as, view-mode, select-name, tool, open-asset, select-asset, select-in-document | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: one-shot editor boot inputs (view-mode only seeds over the persisted editor.viewport state) |
@@ -475,7 +527,7 @@ Creation sites:
 | BootSplashWindow.cpp:50, :285, :327-328 | kTextRowHeightPx / kMarginPx / text inset | 24 / 12 / 12 (px) | SETTING | app.splash.textRowPx / marginPx | SplashSettings | Game Dev | Project | Restart | 0..256 | N | Splash layout metrics |
 | BootSplashWindow.cpp:42-43 | kUserSetProgress / kUserLoadImage | 1 / 2 | CONSTANT | — | — | — | — | — | — | N | Window-message IDs (in-process protocol) |
 | ArcaneRuntime/src/main.cpp:212 | splash image | "data/images/arcane_logo.png" | SETTING | app.splash.image | SplashSettings | Game | Project | Restart | asset path | N | Every game boots on the engine logo |
-| ArcaneClient/src/Arcane/Host/ProjectBoot.cpp:168,183,184,215,224,255,256,283,284,292,509,510,537,596 | BootStage weights | 5,1,1,25,45,3,2,2,9,1,5,3,1,2 | SETTING | — (allow-list candidate) | — | Game Dev | — | Restart | 1..100 | N | Progress-bar share estimates; low value as cvars |
+| ArcaneClient/src/Arcane/Host/ProjectBoot.cpp:168,183,184,215,224,255,256,283,284,292,509,510,537,596 | BootStage weights | 5,1,1,25,45,3,2,2,9,1,5,3,1,2 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Progress-bar share estimates; low value as cvars |
 | ProjectBoot.cpp:134 | kStride (scan progress throttle) | 32 (files) | SETTING | boot.scanProgressStride | BootSettings | Game Dev | Preferences | Live | 1..4096 | N | Status-line throttle; hand-copied in EditorAppProject.cpp (lockstep) |
 | ArcaneClient/src/Arcane/Host/BootSequence.cpp:279 | splash pump wait | 8 (ms) | SETTING | boot.splashPumpMs | BootSettings | Game Dev | Preferences | Restart | 1..100 | N | Repaint cadence during boot |
 | ArcaneClient/src/Arcane/Host/ProjectBoot.hpp:120 | SetBaseContext("demo") | "demo" (string) | SETTING | input.baseContext | InputSettings | Game | Project | NextWorld | context name | N | Every project's base input context is named "demo" |
@@ -578,7 +630,7 @@ Creation sites:
 | MeshNode.cpp:389-390 | mesh address mode | REPEAT | CONSTANT | — | — | — | — | — | — | N | Mesh-material UV tiling contract (belongs to the material, not a global) |
 | MeshNode.cpp:79 | kDepthClear | 1.0 | CONSTANT | — | — | — | — | — | — | N | Standard-Z depth with a LESS compare; changing it is a bug |
 | MeshNode.hpp:565 | kBindlessCapacity | 256 | CONSTANT | — | — | — | — | — | — | N | Must equal kMeshBindlessCapacity in data/shaders/mesh.hlsl:155 |
-| MeshNode.hpp:645 | kInitialResidentSlots | 16 | SETTING | — (allow-list candidate) | — | Game Dev | — | Restart | 1..4096 | N | Reserve hint only |
+| MeshNode.hpp:645 | kInitialResidentSlots | 16 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint only |
 | MeshNode.hpp:547; GridNode.hpp:175 | kFrameCbMaxBytes | 256 | CONSTANT | — | — | — | — | — | — | N | Constant-buffer placement alignment; the struct must fit |
 | MeshNode.hpp:346, :216 | kMeshRootDirect; default baseColor white | 1; (1,1,1,1) | CONSTANT | — | — | — | — | — | — | N | Root layout index; identity colour |
 | MeshCullNode.hpp:26 (cvar at MeshCullNode.cpp:21) | kMeshCullEnabled / render.meshCull | true | SETTING (already a cvar) | render.meshCull | RenderSettings | Game Dev | Project | Live | bool | N | Exists; only needs audience, scope and apply metadata |
@@ -641,7 +693,7 @@ Creation sites:
 | ArcaneClient/src/Arcane/Render/ShaderConventions.hpp:36-38; ShaderCompiler.hpp:59 | profiles vs/ps/cs_6_5 | SM 6.5 | CONSTANT | — | — | — | — | — | — | N | Minimum shader model contract |
 | ShaderConventions.hpp:33-35, :44 | entry names; kSpirvArgs | — | CONSTANT | — | — | — | — | — | — | N | Shader contract (SPIR-V shifts match kVulkanBindingOffsets) |
 | ShaderCompiler.cpp:204-205 | FNV | — | CONSTANT | — | — | — | — | — | — | N | Math |
-| ShaderCompiler.cpp:244 | read buffer | 64 KiB | SETTING | — (allow-list candidate) | — | Game Dev | — | Restart | — | N | I/O buffer size hint |
+| ShaderCompiler.cpp:244 | read buffer | 64 KiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O buffer size hint |
 
 ### ImGui NRI backend and console
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
@@ -689,8 +741,8 @@ Creation sites:
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ArcaneClient/src/Arcane/Edit/CommandStack.hpp:39-41 | UndoLimits maxSteps / byteBudget / spillThreshold | 100 / 512 MiB / 256 KiB | DERIVED | (editor.undo.*, which already exist) | — | Editor | — | — | — | N | The editor pushes these in through SetLimits; these are fallback copies of the cvar defaults |
-| CommandStack.cpp:111 | spill copy chunk | 1 MiB | SETTING | — (allow-list candidate) | — | Editor Dev | — | Live | — | N | I/O chunk hint |
-| ArcaneClient/src/Arcane/Edit/ComponentEditCommand.cpp:34 | writer reserve | 256 (bytes) | SETTING | — (allow-list candidate) | — | Editor Dev | — | Live | — | N | Reserve hint |
+| CommandStack.cpp:111 | spill copy chunk | 1 MiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O chunk hint |
+| ArcaneClient/src/Arcane/Edit/ComponentEditCommand.cpp:34 | writer reserve | 256 (bytes) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint |
 
 ### Physics debug draw
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
@@ -735,7 +787,7 @@ Creation sites:
 | AudioTypes.hpp:85 | SoundLoadDesc::mode | DecodeToMemory | SETTING | audio.defaultLoadMode | AudioSettings | Game | Project | NextWorld | decode \| stream | N | Memory against streaming |
 | AudioTypes.hpp:96-101 | PlayDesc bus / volume / pitch / pan / loop / startPaused | master / 1 / 1 / 0 / false / false | CONSTANT | — | — | — | — | — | — | N | Identity per-call defaults |
 | ArcaneClient/src/Arcane/Audio/AudioDevice.cpp:654 | MA_SOUND_FLAG_NO_SPATIALIZATION | always | SETTING | audio.spatialization | AudioSettings | Game | Project | NextWorld | bool | N | Spatial audio is hard-wired off |
-| AudioDevice.cpp:361 | kChunkFrames (null-backend pump) | 512 (frames) | SETTING | — (allow-list candidate) | — | Game Dev | — | Live | — | N | Scratch-chunk size hint |
+| AudioDevice.cpp:361 | kChunkFrames (null-backend pump) | 512 (frames) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Scratch-chunk size hint |
 
 ### Verify and settle harness
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
@@ -748,7 +800,7 @@ Creation sites:
 ### Server (ArcaneServer)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneServer/src/ServerConfig.hpp:22; ServerConfig.cpp:56 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); string "0.016666666666666666" | SETTING | sim.fixedHz (server tick rate) | ServerSettings | Server | Project | Restart | 1..240 Hz | Y | BOTH: keep the flag and add the cvar; it sets RunLoop fixedHz (ServerApp.cpp:102) |
+| ArcaneServer/src/ServerConfig.hpp:22; ServerConfig.cpp:56 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); string "0.016666666666666666" | SETTING | server.tickHz | ServerSettings | Server | Project | Restart | 1..240 Hz | Y | reconciled: a server tick distinct from the client sim.fixedHz. BOTH: keep the flag and add the cvar; it sets RunLoop fixedHz (ServerApp.cpp:102) |
 | ServerConfig.cpp:55 | frames | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: run budget |
 | ServerConfig.cpp:53-54,61,63 | project / plugin / report / print-engine-info | "" / false | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY |
 | ArcaneServer/src/ServerApp.cpp:102-103,170 | SetFixedHz / sleep_until pacing | from fixedDt | DERIVED | — | — | — | — | — | — | Y | Follows sim.fixedHz |
@@ -780,15 +832,9 @@ Creation sites:
 | ReporterArgs.hpp:24-46; ReporterWindow.hpp:38-40; ArcaneCrashReporter/src/ReportView.hpp:76 | exit codes; control IDs | — | CONSTANT | — | — | — | — | — | — | N | Protocol and IDs |
 | ArcaneCrashReporter/src/ReportView.cpp:189-205; ArcaneCrashReporter/src/SymbolizedText.cpp:154-163; ArcaneCrashReporter/src/Symbolizer.cpp:69,140,157,174,253 | timestamp format; report text headers; dbgeng buffers 1024 / 4096 | — | CONSTANT | — | — | — | — | — | — | N | Formats that get parsed back; API buffer sizes |
 
-### Thumbnails and preview lights (ArcaneEditor; outside the four directories, included because the brief asked)
-| file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp:44 | kThumbSize | 64 (px) | SETTING | assets.thumbnail.size | ThumbnailSettings | Editor | Project | Restart (and invalidates cached PNGs) | 32..512 | N | Also the on-disk PNG size and the loader's maxSize; one cvar must feed all three; re-blesses the thumbnail goldens |
-| MaterialPreviewHarvester.cpp:1257-1259 | mesh thumbnail light triple | dir (0.45, 0.7, 0.8), colour 1, ambient 0.12 | SETTING | assets.thumbnail.light.direction / .color / .ambient | ThumbnailSettings | Editor | Project | Restart | — | N | Re-blesses the thumbnail goldens; also duplicated at ArcaneEditor/src/Documents/MaterialSpherePreview.hpp:58-60 |
-| ArcaneEditor/src/Documents/MeshDocument.cpp:423-431 | mesh document light | dir norm(0.4, 1, 0.3), colour 1, ambient 0.12 | SETTING | editor.meshPreview.light.* | ThumbnailSettings | Editor | Preferences | Live | — | N | A third, different triple |
-| MaterialPreviewHarvester.cpp:1237 | kMeshThumbFovDegrees | 35 (deg) | SETTING | assets.thumbnail.meshFovDegrees | ThumbnailSettings | Editor Dev | Project | Restart | 10..90 | N | Affects goldens |
-| MaterialPreviewHarvester.cpp:55 | kThumbTime | 0.35 (s) | SETTING | assets.thumbnail.time | ThumbnailSettings | Editor Dev | Project | Restart | 0..10 | N | Affects goldens |
-| MaterialPreviewHarvester.cpp:47 | kCheckerCell | 16 (px) | SETTING | assets.thumbnail.checkerCellPx | ThumbnailSettings | Editor Dev | Preferences | Restart | 1..64 | N | Look |
+### Thumbnails and preview lights
+
+*Reconciled 2026-10-03: these rows duplicated Part 3 (MaterialPreviewHarvester.cpp is in ArcaneEditor) with conflicting names. Part 3's rows are canonical; see the Reconciliation table.*
 
 ### Should NOT be exposed
 - **Shader and HLSL contracts**
@@ -1097,8 +1143,8 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Documents/ShaderEditorDocument.hpp:1011 | kGraphPreviewSize | 512 px | SETTING | editor.shader.previewResolution | ShaderEditorSettings | Editor | Pref-M | Restart (reopen) | 128..2048 | N | GPU budget |
 | Documents/ShaderEditorDocument.cpp:2094 | doc first-use size | 980×640 px | SETTING | editor.documents.shaderInitialSize | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | FirstUseEver |
 | Documents/ShaderEditorDocument.cpp:3401-3416 | pass-chain auto-layout | 40, 190, 170, 90 px | SETTING | editor.shader.chainLayout.* | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | written into new .arcmat files |
-| Documents/ShaderEditorDocument.cpp:3999-4011 | new pass-graph node positions | (360,120), (100,120) | SETTING | (template data) | — | Editor Dev | Project | Live | — | N | belongs in a template asset (Notes) |
-| App/EditorAppProject.cpp:1708-1716 | new-material template nodes + colour | (420,200), (160,200), (0.2,0.8,1,1) | SETTING | (template data) | — | Editor Dev | Project | Live | — | N | belongs in a template asset |
+| Documents/ShaderEditorDocument.cpp:3999-4011 | new pass-graph node positions | (360,120), (100,120) | OTHER-STORE | (template data) | — | — | — | — | — | — | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset (Notes) |
+| App/EditorAppProject.cpp:1708-1716 | new-material template nodes + colour | (420,200), (160,200), (0.2,0.8,1,1) | OTHER-STORE | (template data) | — | — | — | — | — | — | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset |
 | Documents/ShaderEditorDocument.cpp:3534, :6064, :6199 | inline field widths | 120, 110, 70 px | SETTING | editor.graph.inlineFieldWidth | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | should scale with editor.ui.scale |
 | Documents/ShaderEditorDocument.cpp:3583 | pass thumb | 72 px | SETTING | editor.shader.passThumbPx | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Documents/ShaderEditorDocument.cpp:5925, :5981, :5993, :6006, :6111, :6137 | const-node widths | 64/106/190, 90, 140, 220, 120 px | SETTING | editor.graph.constFieldWidths | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | should scale |
@@ -1267,20 +1313,20 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Project/RecentProjects.cpp:30, :32 | kFormatVersion 1, ".arcproj" | — | CONSTANT | — | — | — | — | — | — | N | Hub file format |
 | Project/SceneRecents.hpp:32 | kFormatVersion | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
 | Project/StartPageModel.cpp:11-18 | relative-time buckets | 60 s / 1 h / 1 d / 30 d | CONSTANT | — | — | — | — | — | — | N | calendar arithmetic |
-| ArcaneHub/src-tauri/src/settings.rs:78 | default_project_dir | "" | SETTING | (Hub settings.archub) | Hub Settings | Editor (Hub) | Pref-M | Live | path | N | the Hub is Rust; it cannot join the cvar registry |
-| ArcaneHub/src-tauri/src/settings.rs:97 | launch_behavior | "tray" | SETTING | (Hub) | Hub Settings | Editor (Hub) | Pref-M | Live | tray/close/stay | N | — |
-| ArcaneHub/src-tauri/src/settings.rs:109 | project_view | "grid" | SETTING | (Hub) | Hub Settings | Editor (Hub) | Pref-M | Live | grid/list | N | — |
-| ArcaneHub/src-tauri/src/settings.rs:117, :123 | project_sort / sort_desc | "opened" / true | SETTING | (Hub) | Hub Settings | Editor (Hub) | Pref-M | Live | enum/bool | N | — |
-| ArcaneHub/src-tauri/src/settings.rs:135 | confirm_delete | true | SETTING | (Hub) | Hub Settings | Editor (Hub) | Pref-M | Live | bool | N | — |
-| ArcaneHub/src-tauri/src/launch.rs:67 | BOOT_WATCHDOG | 2 s | SETTING | (Hub) hub.bootWatchdogSeconds | — | Editor Dev (Hub) | Pref-M | Restart | 1..30 | N | slow disks |
-| ArcaneHub/src-tauri/src/spawn.rs:93-94 | PROBE_TIMEOUT / PROBE_POLL | 10 s / 25 ms | SETTING | (Hub) | — | Editor Dev (Hub) | Pref-M | Restart | — | N | — |
-| ArcaneHub/src-tauri/src/tray.rs:25 | QUICK_LAUNCH | 5 | SETTING | (Hub) | — | Editor (Hub) | Pref-M | Restart | 1..20 | N | — |
-| ArcaneHub/src-tauri/src/watch.rs:24 | disk watch poll | 2 s | SETTING | (Hub) | — | Editor Dev (Hub) | Pref-M | Restart | — | N | — |
+| ArcaneHub/src-tauri/src/settings.rs:78 | default_project_dir | "" | OTHER-STORE | (Hub settings.archub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). the Hub is Rust; it cannot join the cvar registry |
+| ArcaneHub/src-tauri/src/settings.rs:97 | launch_behavior | "tray" | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:109 | project_view | "grid" | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:117, :123 | project_sort / sort_desc | "opened" / true | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:135 | confirm_delete | true | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/launch.rs:67 | BOOT_WATCHDOG | 2 s | OTHER-STORE | (Hub) hub.bootWatchdogSeconds | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). slow disks |
+| ArcaneHub/src-tauri/src/spawn.rs:93-94 | PROBE_TIMEOUT / PROBE_POLL | 10 s / 25 ms | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/tray.rs:25 | QUICK_LAUNCH | 5 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/watch.rs:24 | disk watch poll | 2 s | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
 | ArcaneHub/src-tauri/src/resolve.rs:109 | COVER_MAX_BYTES | 2 MiB | CONSTANT | — | — | — | — | — | — | N | cover contract with the editor's 512 px PNG |
-| ArcaneHub/src-tauri/src/resolve.rs:150 | SCAN_VISIT_BUDGET | 100000 | SETTING | (Hub) | — | Editor Dev (Hub) | Pref-M | Restart | — | N | budget |
-| ArcaneHub/src-tauri/src/project.rs:198 | MAX_NAME_LEN | 64 | SETTING | (Hub) | — | Editor Dev (Hub) | Pref-M | Restart | — | N | check parity with engine Project validation (not verified) |
+| ArcaneHub/src-tauri/src/resolve.rs:150 | SCAN_VISIT_BUDGET | 100000 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). budget |
+| ArcaneHub/src-tauri/src/project.rs:198 | MAX_NAME_LEN | 64 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). check parity with engine Project validation (not verified) |
 | ArcaneHub/src-tauri/src/store.rs:34; project.rs:13 | format versions | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
-| ArcaneHub/src/lib/theme.css:45-99 | Hub theme tokens (25 vars: surfaces, text, accent #A24349, radii, durations) | — | SETTING | (Hub-local) | — | Editor (Hub) | Pref-M | Live | — | N | a separate palette from EditorTheme; unify or keep |
+| ArcaneHub/src/lib/theme.css:45-99 | Hub theme tokens (25 vars: surfaces, text, accent #A24349, radii, durations) | — | OTHER-STORE | (Hub-local) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). a separate palette from EditorTheme; unify or keep |
 
 ### Layout
 
