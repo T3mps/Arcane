@@ -279,29 +279,3 @@ TEST_CASE("Dock tab labels: a window that tints its own label keeps the tint on 
     CHECK(CountVerticesOfColor(r, tint) > 0);
     CHECK(CountVerticesOfColor(r, dim) == 0);
 }
-
-TEST_CASE("Docked window: no WindowPadding -- content runs to the panel's edges; undocked windows keep the style's", "[editor][docking]")
-{
-    // ARCANE LOCAL FIX in ThirdParty/imgui/imgui.cpp Begin (user desk, 2026-10-03: "a thin
-    // margin or padding around the interior of every panel"). Popups, tooltips, modals and
-    // floating windows still read style.WindowPadding.
-    DockHarness h;
-    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
-    REQUIRE(node != nullptr);
-    const ImGuiStyle& style = ImGui::GetStyle();
-    REQUIRE(style.WindowPadding.x > 0.0f);
-    REQUIRE(style.WindowPadding.y > 0.0f);
-
-    ImGuiWindow* docked = ImGui::FindWindowByName("Inset A");
-    REQUIRE(docked != nullptr);
-    REQUIRE(docked->DockIsActive);
-    CHECK(docked->WindowPadding.x == 0.0f);
-    CHECK(docked->WindowPadding.y == 0.0f);
-    CHECK(docked->DC.CursorStartPos.x == docked->Pos.x);
-
-    ImGuiWindow* floating = ImGui::FindWindowByName("##insethost");
-    REQUIRE(floating != nullptr);
-    REQUIRE_FALSE(floating->DockIsActive);
-    CHECK(floating->WindowPadding.x == style.WindowPadding.x);
-    CHECK(floating->WindowPadding.y == style.WindowPadding.y);
-}

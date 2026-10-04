@@ -8124,10 +8124,7 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
             window->WindowBorderSize = style.ChildBorderSize;
         else
             window->WindowBorderSize = ((flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) && !(flags & ImGuiWindowFlags_Modal)) ? style.PopupBorderSize : style.WindowBorderSize;
-        // ARCANE LOCAL FIX (2026-10-03, user desk): a DOCKED window draws no WindowPadding -- panel content runs to
-        // the panel's edges. Popups, tooltips, modals and floating windows keep style.WindowPadding (so menus and
-        // tooltips stay padded and the theme's padding is untouched); a panel that wants an inset adds its own.
-        window->WindowPadding = window->DockIsActive ? ImVec2(0.0f, 0.0f) : style.WindowPadding;
+        window->WindowPadding = style.WindowPadding;
         if (!window->DockIsActive && (flags & ImGuiWindowFlags_ChildWindow) && !(flags & ImGuiWindowFlags_Popup) && !(window->ChildFlags & ImGuiChildFlags_AlwaysUseWindowPadding) && window->WindowBorderSize == 0.0f)
             window->WindowPadding = ImVec2(0.0f, (flags & ImGuiWindowFlags_MenuBar) ? style.WindowPadding.y : 0.0f);
 
