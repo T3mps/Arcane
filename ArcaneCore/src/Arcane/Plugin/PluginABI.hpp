@@ -1040,7 +1040,30 @@ namespace Arcane
     //     and time fields. A v50 module was compiled against the old layouts and
     //     exports; reject the pairing. ReferenceProject.arcproj and
     //     Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 51;
+    // v52 (2026-10-04, settings arc S1 -- the cvar core):
+    //   - Layouts:
+    //     - CVarValue's variant grew (Color, Vec2/3/4, Enum);
+    //     - CVarDesc gained displayName, keywords, widget, audience, scope,
+    //       apply, order, categoryPath and enumNames;
+    //     - Plugin owns its cvar module (a new member).
+    //   - Signatures:
+    //     - Permission is gone: CVarRegistry::Set/Execute, ConsoleModel::Submit,
+    //       ApplyCVarCommandLine, ApplyCVarDirectory and ArcaneClient's
+    //       DrawConsoleInputLine take a CVarContext (+ an optional CVarCaller);
+    //     - HostBoot::BootContext::cvarPermission became cvarContext;
+    //     - CommandFn returns CommandResult.
+    //   - New ArcaneCore exports:
+    //     - CVarRegistry::Snapshot, PublishImmediate, ApplyLayersFor,
+    //       SetPolicy, SetAuditSink, RegisterAlias, ModuleOf, IsCompiledOut,
+    //       ScopedModule and CurrentModule;
+    //     - CVarModuleScope, ValidateCVarLayers, PublishCVarConfigDiagnostics;
+    //     - Runtime::CVarLayerSources and SetCVarCommandLine;
+    //     - Arcane::Paths.
+    //   - Declarations: the positional ARC_CVAR and ARC_CVAR_RANGED forms are
+    //     removed, and every module registers under its own ARC_MODULE_NAME.
+    // A v51 module was compiled against the old layouts and signatures; reject
+    // the pairing. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 52;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
