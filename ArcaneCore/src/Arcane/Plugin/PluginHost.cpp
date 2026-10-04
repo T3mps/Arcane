@@ -84,6 +84,36 @@ namespace Arcane
             return Plugin::Load(dll, error);   // a null `error` is that overload's own contract
         }
 
+        // EVERY vtable call into an image runs inside CVarModuleScope(p.CVarModule())
+        // (settings spec s4.4; Review Focus 2). AddCallback tags a callback with the
+        // innermost scope and UnregisterModule drops only the tagged ones, so a
+        // module that AddCallbacks from Shutdown, SaveState/LoadState, FixedUpdate,
+        // Update or DrawUI -- not only from its statics or Init -- still has that
+        // callback leave with its image instead of dangling into unmapped code.
+        // LoadScoped (the statics) and InitImage (Init) open the same scope
+        // themselves; every other call into a vtable goes through here. A later
+        // PluginHost edit that adds a vt call keeps this invariant.
+        //
+        // The scope is AMBIENT: thread_local, not image-scoped. Whatever the call
+        // reaches is attributed to the module -- an ENGINE Register (which fills
+        // CurrentModule(), CVarRegistry.cpp) or AddCallback first reached from
+        // inside a module tick is tagged with the module and dropped at its
+        // unload. Today the only lazy engine site of that kind is Log.cpp's
+        // log.level registration, safely under call_once at log init; S1-27's
+        // deferred note on a registry constructed inside a scope is the same
+        // class. The exact closure, "refuse untagged adds from module images" (an
+        // image-range check of the registering code against the loaded
+        // Module::Image() spans, the UnregisterModuleRange pattern in
+        // TeardownImage), is OWED to S2-3: module code also runs OUTSIDE every
+        // vtable call (its ECS systems tick through Runtime's SystemSchedulers),
+        // which no scope opened here can reach.
+        template <class F>
+        auto ScopedCall(const Plugin& p, F&& f)
+        {
+            const CVarModuleScope scope(p.CVarModule());
+            return f();
+        }
+
         // Restores whatever ImGui context was current before a call into
         // PluginHost, regardless of what the plugin's entry point does to
         // GImGui while it runs (2026-07-30 review, Fix 3). There is exactly
@@ -221,6 +251,12 @@ namespace Arcane
         {
             return runtimes.empty() ? nullptr : runtimes.front()->ClientHooks();
         }
+        // The primary MODULE's image, or null before Load() / after Unload(). The
+        // per-frame entry points read it to open that image's cvar module scope.
+        [[nodiscard]] const Plugin* PrimaryPlugin() const noexcept
+        {
+            return current && current->plugin ? &*current->plugin : nullptr;
+        }
 
         void RefreshContext()
         {
@@ -336,7 +372,7 @@ namespace Arcane
 
             const PluginVTable& vt = img.plugin->VTable();
             if (callShutdown && vt.Shutdown)
-                vt.Shutdown();
+                ScopedCall(*img.plugin, [&] { vt.Shutdown(); });
             // Drop plugin-created audio handles before clearing systems/registry, the
             // same window in which we tear down plugin-owned ECS state. The 2026-06-26
             // host refactor unified all teardown paths (unload, init-failure, reload-of-
@@ -516,7 +552,7 @@ namespace Arcane
         {
             for (auto it = plugins.rbegin(); it != plugins.rend(); ++it)
                 if (it->plugin && it->plugin->VTable().Shutdown)
-                    it->plugin->VTable().Shutdown();
+                    ScopedCall(*it->plugin, [&] { it->plugin->VTable().Shutdown(); });
         }
 
         // Re-Init each loaded plugin (load order) on the SAME mapped modules -- used to
@@ -591,7 +627,7 @@ namespace Arcane
             if (vt.SaveState)
             {
                 Astra::BinaryWriter w(snapshot);
-                vt.SaveState(w);
+                ScopedCall(*current->plugin, [&] { vt.SaveState(w); });
                 if (w.HasError())
                 {
                     ARC_ERROR("plugin: SaveState failed; aborting reload, keeping live plugin");
@@ -641,7 +677,7 @@ namespace Arcane
         if (ok && restoreState)
         {
             Astra::BinaryReader r(snapshot);
-            ok = loadedNext->VTable().LoadState(r);
+            ok = ScopedCall(*loadedNext, [&] { return loadedNext->VTable().LoadState(r); });
             // RESTORE ALL: the other worlds come back from their own registry bytes.
             for (auto& [rt, bytes] : secondaryWorlds)
             {
@@ -705,7 +741,7 @@ namespace Arcane
                     if (restoreState && !snapshot.empty())
                     {
                         Astra::BinaryReader r(snapshot);
-                        if (!previous->plugin->VTable().LoadState(r))
+                        if (!ScopedCall(*previous->plugin, [&] { return previous->plugin->VTable().LoadState(r); }))
                             ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
                     }
                     // Same restore-all the success path performs: the other worlds are
@@ -1038,18 +1074,23 @@ namespace Arcane
         // here makes, rather than special-casing "the ones we know misbehave
         // today."
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->FixedUpdate) vt->FixedUpdate(dt);
+        // Each call inside its own image's cvar module scope (ScopedCall, above).
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().FixedUpdate)
+            ScopedCall(*p, [&] { p->VTable().FixedUpdate(dt); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().FixedUpdate) img.plugin->VTable().FixedUpdate(dt);
+            if (img.plugin && img.plugin->VTable().FixedUpdate)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().FixedUpdate(dt); });
     }
 
     void PluginHost::UpdateAll(double dt, double alpha)
     {
         // See UiContextGuard's comment (Load() above).
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->Update) vt->Update(dt, alpha);
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().Update)
+            ScopedCall(*p, [&] { p->VTable().Update(dt, alpha); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().Update) img.plugin->VTable().Update(dt, alpha);
+            if (img.plugin && img.plugin->VTable().Update)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().Update(dt, alpha); });
     }
 
     void PluginHost::DrawUIAll()
@@ -1062,9 +1103,11 @@ namespace Arcane
         // once THIS FUNCTION returns, so every plugin's DrawUI is still free
         // to leave the game context set for as long as it's running.
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->DrawUI) vt->DrawUI();
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().DrawUI)
+            ScopedCall(*p, [&] { p->VTable().DrawUI(); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().DrawUI) img.plugin->VTable().DrawUI();
+            if (img.plugin && img.plugin->VTable().DrawUI)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().DrawUI(); });
     }
 
     bool PluginHost::IsLoaded() const noexcept

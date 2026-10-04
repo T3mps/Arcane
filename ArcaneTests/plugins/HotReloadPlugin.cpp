@@ -47,7 +47,10 @@ ARC_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
 // The cvar-lifetime probes (settings spec s4.4; CVarModuleLifetimeTest):
 //   - one Archive cvar whose default is this build's step;
 //   - one command that answers with that step;
-//   - one callback into this image on an ENGINE cvar.
+//   - one callback into this image on an ENGINE cvar, added from OnInit;
+//   - a SECOND callback on the same cvar, added from OnFixedUpdate (a tick
+//     entry point, OUTSIDE load/Init -- only PluginHost's scope around the
+//     vtable call can tag it; Review Focus 2).
 // After an unload or a reload, a stale function pointer would answer with the
 // OLD step, or call into unmapped code.
 ARC_CVAR(cvar_hotReloadStep, "hotreload.step", std::int32_t, HOTRELOAD_STEP,
@@ -119,8 +122,22 @@ namespace Arcane::HotReloadTest
 #endif
         }
 
+        // The tick-time callback probe (CVarModuleLifetimeTest's 4th case): an
+        // AddCallback from a tick entry point carries no module tag of its own,
+        // so only PluginHost's CVarModuleScope around the FixedUpdate vtable
+        // call (ScopedCall) attributes it to this module for the unload to
+        // drop. Once per instance -- and the instance is per image (the macro
+        // news it in Init, deletes it in Shutdown), so once per image.
+        bool tickCallbackAdded = false;
+
         void OnFixedUpdate(double) override
         {
+            if (!tickCallbackAdded)
+            {
+                tickCallbackAdded = true;
+                ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                          &OnHistorySizeChanged, nullptr);
+            }
             if (auto* p = Registry().GetComponent<Pulse>(pulse))
                 p->ticks += (HOTRELOAD_STEP);            // V1: +1, V2: +10 (observably different code)
         }

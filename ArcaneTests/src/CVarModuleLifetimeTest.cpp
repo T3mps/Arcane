@@ -18,10 +18,12 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -56,6 +58,15 @@ namespace
             sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
         }
     };
+
+    // Non-overlapping occurrences of `needle` in `text`.
+    std::size_t CountOf(const std::string& text, std::string_view needle)
+    {
+        std::size_t count = 0;
+        for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size()))
+            ++count;
+        return count;
+    }
 
     // Changes console.historySize, so every callback on it fires.
     void BumpHistorySize(Arcane::CVarRegistry& reg)
@@ -164,4 +175,38 @@ TEST_CASE("an unload flushes the module's unsaved User values to the archive fir
     in.close();
     rt.CloseProject();
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("a callback a module adds from a tick entry point leaves with its image", "[cvar][hotreload]")
+{
+    // Review Focus 2 (plan RF candidate 2): the fixture's OnFixedUpdate adds a
+    // SECOND callback on console.historySize, OUTSIDE load/Init. AddCallback
+    // tags it with the innermost CVarModuleScope, so only PluginHost's scope
+    // around the FixedUpdate vtable call (ScopedCall) names the module; an
+    // untagged add would survive the unload as a dangling function pointer
+    // and call into the unmapped image on the next matching Publish.
+    RestoreV1();
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    host.FixedUpdateAll(1.0 / 60.0);                           // the tick-time AddCallback lands here
+    {
+        LogCapture log;
+        BumpHistorySize(reg);
+        // Init's callback AND the tick's: proves the tick-time add landed.
+        CHECK(CountOf(log.text, "HotReloadPlugin: console.historySize changed (step 1)") == 2);
+    }
+
+    host.Unload();
+    REQUIRE(reg.Find("hotreload.step").IsStale());
+    {
+        LogCapture log;
+        BumpHistorySize(reg);                                   // neither callback may run
+        CHECK(log.text.find("HotReloadPlugin:") == std::string::npos);
+    }
+    reg.UnregisterModule("lifetime-test");
+    reg.Publish();
 }
