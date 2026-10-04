@@ -65,6 +65,19 @@ namespace Arcane
             return out;
         }
 
+        // The whole of `text` as one finite float: "nan", "inf" and a numeric
+        // prefix with trailing text ("1.5abc") are refused, because a
+        // published NaN never compares equal (callbacks every Publish, and
+        // Modified disagreeing with the reset arrow after a reload).
+        template <class F>
+        std::optional<F> ParseFinite(std::string_view text)
+        {
+            F v{};
+            const auto r = std::from_chars(text.data(), text.data() + text.size(), v);
+            if (r.ec != std::errc{} || r.ptr != text.data() + text.size() || !std::isfinite(v)) return std::nullopt;
+            return v;
+        }
+
         // Exactly `count` whole, finite floats into out[0..count).
         bool ParseFloats(std::string_view text, float* out, std::size_t count)
         {
@@ -72,11 +85,9 @@ namespace Arcane
             if (fields.size() != count) return false;
             for (std::size_t i = 0; i < count; ++i)
             {
-                const std::string_view f = fields[i];
-                float v = 0.0f;
-                const auto r = std::from_chars(f.data(), f.data() + f.size(), v);
-                if (r.ec != std::errc{} || r.ptr != f.data() + f.size() || !std::isfinite(v)) return false;
-                out[i] = v;
+                const std::optional<float> v = ParseFinite<float>(fields[i]);
+                if (!v) return false;
+                out[i] = *v;
             }
             return true;
         }
@@ -232,11 +243,13 @@ namespace Arcane
             error = "expected uint64";
             return std::nullopt;
         case CVarType::Float32:
-            try { return CVarValue::Float32(std::stof(token)); }
-            catch (...) { error = "expected float"; return std::nullopt; }
+            if (const auto v = ParseFinite<float>(token)) return CVarValue::Float32(*v);
+            error = "expected float";
+            return std::nullopt;
         case CVarType::Float64:
-            try { return CVarValue::Float64(std::stod(token)); }
-            catch (...) { error = "expected double"; return std::nullopt; }
+            if (const auto v = ParseFinite<double>(token)) return CVarValue::Float64(*v);
+            error = "expected double";
+            return std::nullopt;
         case CVarType::String:
             return CVarValue::String(token);
         case CVarType::Color:

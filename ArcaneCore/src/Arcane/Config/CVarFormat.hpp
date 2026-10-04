@@ -34,7 +34,10 @@ namespace Arcane
     //             optionally in [ ].
     //   Color:    "#RRGGBB", "#RRGGBBAA", or 3 or 4 finite linear floats.
     //   Enum:     an exact name from `enumNames`, or a decimal ordinal inside it.
-    // The eight v1 types parse exactly as v1's Execute did.
+    //   Float32/Float64: the whole token as one finite number; "nan", "inf"
+    //             and trailing text ("1.5abc") are refused (settings plan
+    //             Review Focus 3). Bool, the integers and String parse
+    //             exactly as v1's Execute did.
     ARC_CORE_API std::optional<CVarValue> ParseCVarText(std::string_view text, CVarType type,
                                                            const std::vector<std::string>& enumNames, std::string& error);
 

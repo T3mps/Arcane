@@ -2,7 +2,6 @@
 
 #include <Arcane/Config/CVarFormat.hpp>
 
-#include <charconv>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -11,22 +10,6 @@ namespace Arcane
 {
     namespace
     {
-        const char* TypeName(CVarType t)
-        {
-            switch (t)
-            {
-            case CVarType::Bool: return "bool";
-            case CVarType::Int32: return "int32";
-            case CVarType::UInt32: return "uint32";
-            case CVarType::Int64: return "int64";
-            case CVarType::UInt64: return "uint64";
-            case CVarType::Float32: return "float";
-            case CVarType::Float64: return "double";
-            case CVarType::String: return "string";
-            default: return "reserved";
-            }
-        }
-
         const char* SetByName(SetBy by)
         {
             switch (by)
@@ -41,22 +24,6 @@ namespace Arcane
             case SetBy::Console: return "Console";
             }
             return "?";
-        }
-
-        std::string Format(const CVarValue& v)
-        {
-            switch (v.type)
-            {
-            case CVarType::Bool: return v.AsBool() ? "true" : "false";
-            case CVarType::Int32: return std::to_string(v.AsInt32());
-            case CVarType::UInt32: return std::to_string(v.AsUInt32());
-            case CVarType::Int64: return std::to_string(v.AsInt64());
-            case CVarType::UInt64: return std::to_string(v.AsUInt64());
-            case CVarType::Float32: return std::to_string(v.AsFloat32());
-            case CVarType::Float64: return std::to_string(v.AsFloat64());
-            case CVarType::String: return v.AsString();
-            default: return {};
-            }
         }
 
         bool TakesRange(CVarType t)
@@ -202,7 +169,7 @@ namespace Arcane
             {
                 out += e.name;
                 out += " (";
-                out += TypeName(e.type);
+                out += CVarTypeName(e.type);
                 out += ") ";
                 out += e.help;
                 out += '\n';
@@ -221,9 +188,12 @@ namespace Arcane
                 out += "'";
                 return;
             }
+            std::vector<std::string> enumNames;
+            if (explained->type == CVarType::Enum)
+                if (const auto meta = self->Metadata(self->Find(explained->name))) enumNames = meta->enumNames;
             out += explained->name;
             out += " = ";
-            out += Format(explained->published);
+            out += FormatCVarValue(explained->published, enumNames);
             out += " [";
             out += SetByName(explained->setBy);
             out += "]\n";
@@ -233,7 +203,7 @@ namespace Arcane
                 out += SetByName(h.by);
                 if (!h.module.empty()) { out += " ("; out += h.module; out += ")"; }
                 out += " = ";
-                out += Format(h.value);
+                out += FormatCVarValue(h.value, enumNames);
                 out += '\n';
             }
         }
@@ -595,80 +565,20 @@ namespace Arcane
 
         const CVarHandle handle = Find(name);
         if (handle.IsStale()) return { false, "unknown '" + name + "'" };
-        if (args.empty())
-        {
-            const auto value = Get(handle);
-            return { true, name + " = " + (value ? Format(value.value()) : std::string{}) };
-        }
-        // Assignment is Task 7's --set path and the console. Parse the eight types.
         const Slot& slot = m->slots[handle.index];
+        if (args.empty())
+            return { true, slot.name + " = " + FormatCVarValue(slot.published, slot.enumNames) };
+        // The console and --set (ApplyCVarCommandLine) parse every type the same way.
         std::string token{ args };
         while (!token.empty() && token.back() == ' ') token.pop_back();
-        CVarValue parsed = slot.published;
-        switch (slot.type)
-        {
-        case CVarType::Bool:
-        {
-            if (token == "1" || token == "true") parsed = CVarValue::Bool(true);
-            else if (token == "0" || token == "false") parsed = CVarValue::Bool(false);
-            else return { false, "expected true or false" };
-            break;
-        }
-        case CVarType::Int32:
-        {
-            std::int32_t v = 0;
-            const auto r = std::from_chars(token.data(), token.data() + token.size(), v);
-            if (r.ec != std::errc{}) return { false, "expected int32" };
-            parsed = CVarValue::Int32(v);
-            break;
-        }
-        case CVarType::UInt32:
-        {
-            std::uint32_t v = 0;
-            const auto r = std::from_chars(token.data(), token.data() + token.size(), v);
-            if (r.ec != std::errc{}) return { false, "expected uint32" };
-            parsed = CVarValue::UInt32(v);
-            break;
-        }
-        case CVarType::Int64:
-        {
-            std::int64_t v = 0;
-            const auto r = std::from_chars(token.data(), token.data() + token.size(), v);
-            if (r.ec != std::errc{}) return { false, "expected int64" };
-            parsed = CVarValue::Int64(v);
-            break;
-        }
-        case CVarType::UInt64:
-        {
-            std::uint64_t v = 0;
-            const auto r = std::from_chars(token.data(), token.data() + token.size(), v);
-            if (r.ec != std::errc{}) return { false, "expected uint64" };
-            parsed = CVarValue::UInt64(v);
-            break;
-        }
-        case CVarType::Float32:
-        {
-            try { parsed = CVarValue::Float32(std::stof(token)); }
-            catch (...) { return { false, "expected float" }; }
-            break;
-        }
-        case CVarType::Float64:
-        {
-            try { parsed = CVarValue::Float64(std::stod(token)); }
-            catch (...) { return { false, "expected double" }; }
-            break;
-        }
-        case CVarType::String:
-            parsed = CVarValue::String(token);
-            break;
-        default:
-            return { false, "type has no accessor" };
-        }
-        const SetResult result = Set(handle, std::move(parsed), by, {}, permission);
+        std::string error;
+        std::optional<CVarValue> parsed = ParseCVarText(token, slot.type, slot.enumNames, error);
+        if (!parsed) return { false, error };
+        const SetResult result = Set(handle, std::move(*parsed), by, {}, permission);
         if (result == SetResult::Denied) return { false, "denied" };
-        if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + name };
+        if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + slot.name };
         if (result != SetResult::Applied) return { false, "rejected" };
-        return { true, name + " set (pending publish)" };
+        return { true, slot.name + " set (pending publish)" };
     }
 
     void CVarRegistry::AddCallback(CVarHandle handle, ChangeFn fn, void* user)
