@@ -101,7 +101,15 @@ namespace Arcane
         std::string text;
     };
 
-    using CommandFn = void (*)(std::string_view args, std::string& out, void* user);
+    // A command's reply (settings spec s4.5): it says whether it succeeded.
+    struct CommandResult
+    {
+        bool        ok = false;
+        std::string text;
+    };
+    using CommandFn = CommandResult (*)(std::string_view args, void* user);
+    // The pre-S1 text-only form. It is still accepted, wrapped, and treated as ok.
+    using LegacyCommandFn = void (*)(std::string_view args, std::string& out, void* user);
 
     // Who asked, for a game's policy and the audit sink (settings spec s3.2, s9).
     // `roles` is a game-defined bitmask; `gameData` is the game's own pointer.
@@ -169,6 +177,8 @@ namespace Arcane
         [[nodiscard]] CVarHandle Register(const CVarDesc& desc);
         [[nodiscard]] bool RegisterCommand(std::string name, CVarFlags flags, std::string help,
                                            std::string module, CommandFn fn, void* user);
+        [[nodiscard]] bool RegisterCommand(std::string name, CVarFlags flags, std::string help,
+                                           std::string module, LegacyCommandFn fn, void* user);
 
         [[nodiscard]] CVarHandle Find(std::string_view name) const;
         // Renames (settings spec s4.7). `oldName` resolves to `newName` in

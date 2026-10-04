@@ -138,8 +138,8 @@ namespace Arcane
             }
         };
 
-        void ListCommand(std::string_view, std::string& out, void* user);
-        void ExplainCommand(std::string_view args, std::string& out, void* user);
+        CommandResult ListCommand(std::string_view, void* user);
+        CommandResult ExplainCommand(std::string_view args, void* user);
     }
 
     struct CVarRegistry::Slot
@@ -177,6 +177,7 @@ namespace Arcane
         std::string module;
         CVarFlags flags = CVarFlags::None;
         CommandFn fn = nullptr;
+        LegacyCommandFn legacy = nullptr;   // exactly one of fn / legacy is set
         void* user = nullptr;
         bool alive = true;
     };
@@ -193,6 +194,27 @@ namespace Arcane
         std::unordered_set<std::string> warnedAliases;  // old names already warned about
         bool publishing = false;
         std::string lastError;
+
+        // Both RegisterCommand overloads land here; exactly one of fn / legacy is set.
+        bool AddCommand(std::string name, CVarFlags flags, std::string help, std::string module,
+                        CommandFn fn, LegacyCommandFn legacy, void* user)
+        {
+            if (name.empty() || (!fn && !legacy)) return false;
+            if (byName.contains(name) || commandByName.contains(name) || aliases.contains(name)) return false;
+            if (HasFlag(flags, CVarFlags::Dev) && !devCvars) return false;
+            const std::uint32_t index = static_cast<std::uint32_t>(commands.size());
+            Command command;
+            command.name = std::move(name);
+            command.help = std::move(help);
+            command.module = std::move(module);
+            command.flags = flags;
+            command.fn = fn;
+            command.legacy = legacy;
+            command.user = user;
+            commands.push_back(std::move(command));
+            commandByName.emplace(commands.back().name, index);
+            return true;
+        }
 
         // The table plus server.cheatsAllowed: outside the editor, the cheats
         // gate can be turned ON only where the host allows cheats at all.
@@ -381,9 +403,10 @@ namespace Arcane
 
     namespace
     {
-        void ListCommand(std::string_view, std::string& out, void* user)
+        CommandResult ListCommand(std::string_view, void* user)
         {
             auto* self = static_cast<CVarRegistry*>(user);
+            std::string out;
             for (const CVarListEntry& e : self->List(tExecutingContext))
             {
                 out += e.name;
@@ -393,9 +416,10 @@ namespace Arcane
                 out += e.help;
                 out += '\n';
             }
+            return { true, std::move(out) };
         }
 
-        void ExplainCommand(std::string_view args, std::string& out, void* user)
+        CommandResult ExplainCommand(std::string_view args, void* user)
         {
             auto* self = static_cast<CVarRegistry*>(user);
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
@@ -409,24 +433,16 @@ namespace Arcane
             const AccessRule table = meta ? DefaultAccess(meta->audience, meta->flags, tExecutingContext, false, false, false)
                                           : AccessRule{ true, false };
             if (table.absent)
-            {
-                out = "unknown cvar '";
-                out += args;
-                out += "'";
-                return;
-            }
+                return { false, "unknown cvar '" + std::string(args) + "'" };
             if (!self->CanRead(handle, tExecutingContext, tExecutingCaller))
             {
                 // The table refuses a read for one reason only (Protected outside
                 // ServerAdmin), and the policy is never asked about that one; any
                 // other refusal is the policy's Deny.
-                out = "denied: '";
-                out += explained->name;
-                out += table.allowed ? "' by the game's policy" : "' is protected";
-                return;
+                return { false, "denied: '" + explained->name + (table.allowed ? "' by the game's policy" : "' is protected") };
             }
             const std::vector<std::string>& enumNames = meta->enumNames;
-            out += explained->name;
+            std::string out = explained->name;
             out += " = ";
             out += FormatCVarValue(explained->published, enumNames);
             out += " [";
@@ -441,6 +457,7 @@ namespace Arcane
                 out += FormatCVarValue(h.value, enumNames);
                 out += '\n';
             }
+            return { true, std::move(out) };
         }
     }
 
@@ -559,13 +576,13 @@ namespace Arcane
     bool CVarRegistry::RegisterCommand(std::string name, CVarFlags flags, std::string help,
                                        std::string module, CommandFn fn, void* user)
     {
-        if (name.empty() || !fn) return false;
-        if (m->byName.contains(name) || m->commandByName.contains(name) || m->aliases.contains(name)) return false;
-        if (HasFlag(flags, CVarFlags::Dev) && !m->devCvars) return false;
-        const std::uint32_t index = static_cast<std::uint32_t>(m->commands.size());
-        m->commands.push_back(Command{ std::move(name), std::move(help), std::move(module), flags, fn, user, true });
-        m->commandByName.emplace(m->commands.back().name, index);
-        return true;
+        return m->AddCommand(std::move(name), flags, std::move(help), std::move(module), fn, nullptr, user);
+    }
+
+    bool CVarRegistry::RegisterCommand(std::string name, CVarFlags flags, std::string help,
+                                       std::string module, LegacyCommandFn fn, void* user)
+    {
+        return m->AddCommand(std::move(name), flags, std::move(help), std::move(module), nullptr, fn, user);
     }
 
     CVarHandle CVarRegistry::Find(std::string_view name) const
@@ -828,13 +845,19 @@ namespace Arcane
             if (!command.alive) return { false, "unknown command '" + name + "'" };
             if (ctx != CVarContext::Editor && HasFlag(command.flags, CVarFlags::Cheat) && !CheatsEnabled())
                 return { false, "denied: '" + name + "' needs server.cheats" };
-            std::string text;
+            // Copied out first: a command may register another and move the vector.
+            const CommandFn fn = command.fn;
+            const LegacyCommandFn legacy = command.legacy;
+            void* const user = command.user;
+            const ExecutingContextScope scope{ ctx, caller };
+            if (fn)
             {
-                const ExecutingContextScope scope{ ctx, caller };
-                command.fn(args, text, command.user);
+                CommandResult result = fn(args, user);
+                return { result.ok, std::move(result.text) };
             }
-            const bool ok = text.rfind("unknown", 0) != 0 && text.rfind("denied", 0) != 0;
-            return { ok, std::move(text) };
+            std::string text;
+            legacy(args, text, user);
+            return { true, std::move(text) };   // the old form cannot report failure (spec s4.5)
         }
 
         const CVarHandle handle = Resolve(name);

@@ -35,6 +35,8 @@
     static const bool ARC_CVAR_CAT(arcCVarAlias_, __LINE__) =                                  \
         ::Arcane::Detail::RegisterDeclaredAlias(oldLit, newLit)
 
+// fn: CommandResult(*)(std::string_view args, void* user) (settings spec s4.5).
 #define ARC_COMMAND(nameLit, flagExpr, helpLit, fn)                                        \
     static const bool ARC_CVAR_CAT(arcCmd_, __LINE__) =                                    \
-        ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit, "engine", fn, nullptr)
+        ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit, "engine", \
+                                                      static_cast<::Arcane::CommandFn>(fn), nullptr)
