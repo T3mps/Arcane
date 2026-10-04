@@ -402,6 +402,13 @@ namespace Arcane
             return msg;
         }
 
+        // A log-safe one-line summary: name, id, a token PREVIEW and the
+        // payload's SIZE. The payload itself is never printed (settings
+        // inventory R4): Login/Register carry a password, the Login response a
+        // session token, others may carry PII, and a per-message deny-list
+        // fails open for every message nobody remembered to mark. Inspect
+        // payloads in a debugger, not in logs. The 8+4 token preview is a
+        // CONSTANT: widening it leaks tokens.
         std::string ToString() const
         {
             std::string name = ProtocolLoader::Instance().GetMessageName(static_cast<int>(type));
@@ -409,8 +416,8 @@ namespace Arcane
             std::string tokenPreview = token.empty() ? "(no token)" :
                 (token.length() < 12 ? token
                                      : token.substr(0, 8) + "..." + token.substr(token.length() - 4));
-            return name + "(" + std::to_string(static_cast<int>(type)) + ") token=" + tokenPreview + ": " +
-                payload.substr(0, 100) + (payload.length() > 100 ? "..." : "");
+            return name + "(" + std::to_string(static_cast<int>(type)) + ") token=" + tokenPreview +
+                   " payload=" + std::to_string(payload.size()) + " bytes";
         }
 
         bool HasToken() const
