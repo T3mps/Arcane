@@ -12,6 +12,7 @@
 #include "Panels/AssetReferenceIndex.hpp"    // AssetReferenceIndex::Node (InvalidateAssetCaches)
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Content/ and Saved/Diagnostics resolve through it (settings spec s11.0)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>   // SaveJson (the live scene's asset list)
 
@@ -103,8 +104,8 @@ namespace Arcane::Editor
     {
         AE::AssetOpFacts f;
         const Arcane::Project* pr = m_runtime->CurrentProject();
-        f.contentDir = pr->Root() / "Content";
-        f.diagDir    = pr->Root() / "Saved" / "Diagnostics";
+        f.contentDir = Arcane::Paths::Resolve(Arcane::Paths::Location::ProjectContent, Arcane::Paths::ForProject(pr->Root()));
+        f.diagDir    = Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(pr->Root()));
         s.registry = pr->Registry().All();
         f.registry = s.registry;
         f.refs     = &m_assetModel.RefIndex();

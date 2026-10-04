@@ -1,6 +1,7 @@
 #include "Project/SceneRecents.hpp"
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Paths::Join(ProjectSaved, ...) (FileFor; settings spec s11.0)
 
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
 
@@ -38,7 +39,7 @@ namespace
 
 std::filesystem::path FileFor(const std::filesystem::path& projectRoot)
 {
-    return projectRoot / "Saved" / "recent_scenes.json";
+    return Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(projectRoot), "recent_scenes.json");
 }
 
 List Parse(const std::string& jsonText)

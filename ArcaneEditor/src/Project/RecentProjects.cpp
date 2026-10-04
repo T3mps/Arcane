@@ -1,5 +1,7 @@
 #include "Project/RecentProjects.hpp"
 
+#include <Arcane/Platform/Paths.hpp>   // Paths::UserRoot -- the Hub's store sits under it (DefaultFile; settings spec s11.0)
+
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
 
 #include <algorithm>
@@ -13,7 +15,6 @@
 
 #if defined(_WIN32)
 #include <process.h>   // _getpid -- the temp-name tag; far lighter than <windows.h>
-#include <cstdlib>     // _wgetenv
 #define ARC_RECENTS_GETPID _getpid
 #else
 #include <unistd.h>
@@ -114,11 +115,11 @@ std::string ProjectDirKey(std::string_view p)
 std::filesystem::path DefaultFile()
 {
 #if defined(_WIN32)
-    // %LOCALAPPDATA%, not %APPDATA%: every path in this file is a
-    // machine-specific absolute path, so the Hub deliberately keeps it
-    // machine-local (paths.rs).
-    if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
-        return std::filesystem::path(localAppData) / L"Arcane" / L"hub" / L"recents.archub";
+    // The Hub's own store (%LOCALAPPDATA%\Arcane\hub\recents.archub; paths.rs):
+    // machine-local, so it sits under Paths' user root. It is read and written
+    // here, never redefined.
+    if (const std::filesystem::path root = Arcane::Paths::UserRoot(); !root.empty())
+        return root / L"hub" / L"recents.archub";
 #endif
     return {};
 }

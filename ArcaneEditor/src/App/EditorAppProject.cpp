@@ -38,6 +38,7 @@
 #include <Arcane/Build/Toolchain.hpp>   // DiscoverSolution (OpenInIde's "which .slnx" question; arcbuild arc)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Intermediate/ and Saved/UndoCache resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -1277,7 +1278,8 @@ namespace Arcane::Editor
         for (const auto& [guid, mountPath] : project->Registry().All())
             liveGuids.insert(guid);
 
-        Arcane::AssetPipeline::ArtifactStore store(project->Root() / "Intermediate");
+        Arcane::AssetPipeline::ArtifactStore store(Arcane::Paths::Resolve(Arcane::Paths::Location::ProjectIntermediate,
+                                                                          Arcane::Paths::ForProject(project->Root())));
         // The in-memory index starts EMPTY every call (a fresh ArtifactStore
         // here) -- SweepOrphans' own header comment: "Call RebuildIndexFromScan
         // first for a sweep grounded in the current disk state."
@@ -2267,8 +2269,11 @@ namespace Arcane::Editor
         std::error_code ec;
         if (const std::filesystem::path& old = m_undo->SpillDirectory(); !old.empty())
             std::filesystem::remove_all(old, ec);
-        const std::filesystem::path dir = project ? project->Root() / "Saved" / "UndoCache"
-                                                  : std::filesystem::path{};
+        // Joined, so an absent location is EMPTY -- never a relative "UndoCache"
+        // that the remove_all below would delete in the working directory.
+        const std::filesystem::path dir = project
+            ? Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(project->Root()), "UndoCache")
+            : std::filesystem::path{};
         if (!dir.empty())
             std::filesystem::remove_all(dir, ec);   // safe: the stack is empty at open, editor.lock keeps one editor per project
         m_undo->SetSpillDirectory(dir);

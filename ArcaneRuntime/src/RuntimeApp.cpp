@@ -20,6 +20,7 @@
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Scan / Tier1Names -- the injected-overlay facts (report + the RenderErrorCount line)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths::Resolve(DiagnosticsDir) -- the "finalize" dump-dir retarget (settings spec s11.0)
 #include <Arcane/Project/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
@@ -387,7 +388,8 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // project, or none, never a partial one.
     Arcane::Diagnostics::RetargetDumpDir(
         m_runtime && m_runtime->CurrentProject()
-            ? m_runtime->CurrentProject()->Root() / "Saved" / "Diagnostics"
+            ? Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir,
+                                     Arcane::Paths::ForProject(m_runtime->CurrentProject()->Root()))
             : std::filesystem::path{});
     return true;
 }

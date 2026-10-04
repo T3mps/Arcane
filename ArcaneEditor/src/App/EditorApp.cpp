@@ -46,6 +46,7 @@
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
 #include "App/PluginLoadFailure.hpp"   // DescribePluginLoadFailure (StagePluginLoad's failure banner)
@@ -78,7 +79,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>   // _wgetenv (RetargetLayoutIni)
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -1014,7 +1014,8 @@ namespace Arcane::Editor
             hs.thumbnailDir = [this]() -> std::filesystem::path
             {
                 const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
-                return p ? (p->Root() / "Saved" / "Thumbnails") : std::filesystem::path{};
+                return p ? Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(p->Root()), "Thumbnails")
+                         : std::filesystem::path{};
             };
             // Task 12a fix (RCA H1): mirror SceneRenderResolver.cpp's
             // MeshCache::Services wiring (meshArtifactFor/cookPending) verbatim,
@@ -1624,7 +1625,8 @@ namespace Arcane::Editor
             if (!pinProj)
                 return;                             // project-less: defaults, and no seed to find
 
-            const std::filesystem::path seed = pinProj->Root() / "Saved" / "verify-layout.ini";
+            const std::filesystem::path seed = Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved,
+                                                                   Arcane::Paths::ForProject(pinProj->Root()), "verify-layout.ini");
             std::error_code seedEc;
             if (std::filesystem::exists(seed, seedEc))
             {
@@ -1646,14 +1648,13 @@ namespace Arcane::Editor
         if (m_editorImguiContext)
             ImGui::SetCurrentContext(m_editorImguiContext);
 
-        // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
-        // for a project-less session) -- the editor's slot under the same
-        // family root the Hub already uses (%LOCALAPPDATA%\Arcane\hub,
-        // RecentProjects.cpp). With LOCALAPPDATA unset or unwritable, ImGui's
-        // exe-dir imgui.ini default stands -- degraded, never broken.
-        std::filesystem::path dir;
-        if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
-            dir = std::filesystem::path(localAppData) / L"Arcane" / L"editor" / L"layouts";
+        // <EditorUserDir>\layouts\<project-guid>.ini ("default" for a project-
+        // less session) -- %LOCALAPPDATA%\Arcane\Editor\layouts, the same folder
+        // as before on Windows (case-insensitive), resolved through Arcane::Paths
+        // (settings spec s11.0). With LOCALAPPDATA unset or the folder unwritable,
+        // ImGui's exe-dir imgui.ini default stands -- degraded, never broken.
+        const std::filesystem::path dir = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
+                                                              Arcane::Paths::Current(), "layouts");
         if (dir.empty())
             return;
         std::error_code ec;
@@ -1715,9 +1716,9 @@ namespace Arcane::Editor
 
     void EditorApp::RetargetDumpDir()
     {
-        // <project>/Saved/Diagnostics: same "Saved/ is per-project, untracked
-        // scratch" precedent WriteAutoScreenshot already uses (proj->Root() /
-        // "Saved" / "AutoScreenshot.png", below) -- a crash/hang report keeps
+        // <project>/Saved/Diagnostics (Paths::DiagnosticsDir): same "Saved/ is
+        // per-project, untracked scratch" precedent WriteAutoScreenshot already
+        // uses (Saved/AutoScreenshot.png, below) -- a crash/hang report keeps
         // company with the project it came from. project-less (boot with no
         // --project, or a failed switch's fallback -- see every call site of
         // this function) converges on an EMPTY path, which
@@ -1726,8 +1727,9 @@ namespace Arcane::Editor
         // "<exe dir>/diagnostics" (Diagnostics.hpp's Config comment), so this
         // never re-derives that fallback itself.
         const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
-        Arcane::Diagnostics::RetargetDumpDir(proj ? proj->Root() / "Saved" / "Diagnostics"
-                                                   : std::filesystem::path{});
+        Arcane::Diagnostics::RetargetDumpDir(
+            proj ? Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(proj->Root()))
+                 : std::filesystem::path{});
     }
 
     bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)
@@ -1885,7 +1887,9 @@ namespace Arcane::Editor
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj) return;
 
-        const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
+        const std::filesystem::path file = Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved,
+                                                               Arcane::Paths::ForProject(proj->Root()), "AutoScreenshot.png");
+        if (file.empty()) return;   // no Saved/ for this project (Dist): nothing to write a cover to
 
         // ===== THE COVER CAPTURE =============================================
         // The vehicle's own capture path, FrameDesc::capture + ReadCapture,
