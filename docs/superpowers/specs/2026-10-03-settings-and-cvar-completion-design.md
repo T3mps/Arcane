@@ -75,27 +75,71 @@ The user's decisions, in order:
 ### 3.1 One store, three ways in
 Every setting is a cvar in the one `CVarRegistry`. The windows, the console, `--set`, the config files and game code all read and write the same values through the same permission checks. No setting has a second store.
 
-### 3.2 Who may touch what: the audience
-Every setting declares exactly one **audience**:
+### 3.2 Who may touch what: audience x context, and the game's policy
 
-| Audience | Lives in | Editor | Player console / game menu | Server admin | Dist build |
-|---|---|---|---|---|---|
-| `Editor` | ArcaneEditor (or an editor plugin) | read/write | absent: never registered in a game | absent | absent |
-| `Game` | engine / game module | read/write | read-only, unless also `PlayerSafe` | read/write if `ServerCanExecute` | present |
-| `PlayerSafe` (a `Game` refinement) | engine / game module | read/write | read/write (persists to the player's config) | read/write | present |
-| `Server` | server-side code | read/write | absent from the player surface | read/write (audited) | present on servers |
+**The audience** (what the setting is) is declared once per setting:
+- `Editor`: the editor's own settings. Declared in ArcaneEditor or an editor plugin, so a shipped game never contains them.
+- `Game`: engine and game-module settings that run in every build.
+- `PlayerSafe`: a `Game` refinement, safe for any player to change (graphics, audio, controls).
+- `Server`: settings of the authoritative simulation and session, Source's `sv_*` (gravity, tick rate, timeouts, match rules).
 
-- `Dev` stays orthogonal: compiled out of Dist, whatever the audience.
-- `Cheat` stays: it needs the cheats gate on any non-editor surface.
-- `Hidden` stays: never listed or completed, still settable by exact name with Editor permission.
-- `PlayerSafe` replaces "remember to OR in `UserSettable`". `Archive` no longer implies player-settable. It means only "persist me". The registry derives today's `UserSettable` bit from `audience == PlayerSafe`, so default-deny holds by construction: a setting nobody marked player-safe cannot be set from a `Player` context.
-- Editor-audience settings never exist in a shipped game, because they are declared in the editor DLL. Players cannot see them at all, not merely because they are hidden.
+**The context** (who is asking right now) comes from the session role, not from which console was used:
+
+| Context | Who | Example |
+|---|---|---|
+| `Editor` | the editor, its console, `--set` in the editor | everything |
+| `LocalHost` | the local player of a single-player game or the HOST of a listen server: their console IS the server's console | Source's local `sv_cheats 1` + `sv_gravity 200` |
+| `ServerAdmin` | a dedicated server's own console, or an authenticated remote admin (s9) | rcon |
+| `Client` | a player connected to someone else's server | |
+
+**The default rules**, before any game policy:
+
+| Audience \ Context | Editor | LocalHost | ServerAdmin | Client |
+|---|---|---|---|---|
+| `Editor` | read/write | absent | absent | absent |
+| `Game` | read/write | read; write only if `Cheat` and cheats on | read; write only if `Cheat` and cheats on | read |
+| `PlayerSafe` | read/write | read/write | read/write | read/write (their own client) |
+| `Server` | read/write | read/write (`Cheat` ones need cheats on) | read/write (`Cheat` ones need cheats on; audited) | read the replicated value; write never (asks the server through a game command, if the game offers one) |
+
+- **The cheats gate** is itself a `Server` setting, `server.cheats` (Source's `sv_cheats`). It is replicated, so a client's own `Cheat` settings are gated by the server it is connected to. Turning it off reverts every `Cheat` setting (s4.5).
+- **Unchanged flags:**
+  - `Dev`: compiled out of Dist, whatever the audience.
+  - `Hidden`: never listed or completed; still settable by exact name in the `Editor` context.
+  - `Protected`: never readable outside `Editor` and `ServerAdmin` (secrets, passwords).
+- **Archive and player-settable split.** `Archive` means only "persist me"; it no longer implies player-settable. Today's `UserSettable` bit is derived from the audience, so default-deny holds by construction: a setting nobody marked `PlayerSafe` or `Server` cannot be set from a `Client`.
+- **Editor-audience settings never exist in a shipped game**, because they are declared in the editor DLL. They are absent, not merely hidden.
+
+**The game's policy: not restrictive by design.** Game developers decide who may change their own settings in their game. A game module can install a `CVarPolicy`:
+```cpp
+// Called for any non-Editor context. Return Allow / Deny, or Default to keep the table above.
+Arcane::SetCVarPolicy([](const CVarInfo& cvar, const CVarRequest& req) -> PolicyVerdict {
+    if (cvar.name.starts_with("match.") && req.caller.IsLobbyOwner()) return PolicyVerdict::Allow;   // private-lobby rules
+    if (req.context == Context::Client && cvar.name == "server.gravity" && req.caller.HasRole("moderator")) return PolicyVerdict::Allow;
+    return PolicyVerdict::Default;
+});
+```
+- **What a policy can do:**
+  - widen access (let lobby owners, moderators or a single-player "mods" menu change any `Game` or `Server` setting);
+  - narrow access (lock settings in ranked play).
+- **What a policy cannot do:**
+  - reach `Editor` settings, which do not exist in a game;
+  - make `Protected` values readable by clients;
+  - bypass `Dev` compile-out.
+- **Engine-level knobs** let a game that wants no policy code still choose its defaults:
+  - `server.allowClientSetServer` (default off): `Client` may set `Server` settings when the server allows it;
+  - `server.cheatsAllowed` (default on for LocalHost, off for dedicated): whether `server.cheats` may be turned on at all.
+- **Audit and replication:** every non-Editor set of a `Server` setting goes to the audit sink (s9) with who, old, new and the verdict source (table or policy). A changed `Server` setting that is `Replicated` is sent to clients by the replication arc.
 
 ### 3.3 Where a value is saved: the home scope
 Every setting has a **home scope**, which picks the window it appears in and the layer its edits write to:
 - `Preferences`: per user. Edits write the user's own rungs (s11.1):
   - machine-wide preferences (theme, fonts, shortcuts, layouts) go to the EditorUser rung;
   - per-project ones (camera feel, undo budget) go to the User rung under the project's `Saved/Config`.
+
+  **Per-project override is one click (user, 2026-10-03).** Every Preferences row has a scope switch, "All projects" or "This project", with an icon showing which one is set:
+  - "This project" writes the User rung for this project, so it beats the machine-wide value.
+  - Switching back to "All projects" clears the project value.
+  - The Modified filter has a "Project overrides" option that lists them all.
 - `Project`: shared and committed. Edits write the Project rung, the project's `Config/<category>.json`. This covers rendering, physics, Astra memory, networking, input, assets and cook, and game settings.
 
 The layer system is unchanged: engine -> plugin -> project -> user -> command line -> code -> console. So a project default can still be overridden locally (the user rung wins), and both windows show that (s6.4).
@@ -305,8 +349,10 @@ Each category below gets a settings struct and appears in Project Settings unles
 
   The ~40 hard-coded `IsKeyPressed`/`Shortcut` checks (8 files) become action lookups. Each action's chord is a `keychord` String cvar: `editor.keys.<action>`, Preferences, Live.
 - **The page:** a searchable table with columns Action, Context, Shortcut and Default. Clicking a shortcut cell listens for the next chord; Esc cancels and Backspace clears.
-- **Conflict detection:**
-  - Two actions in overlapping contexts with the same chord show both rows in red. Saving is still allowed, and the newer binding wins until resolved. (VS does this.)
+- **Conflict detection (user, 2026-10-03):** two actions in overlapping contexts with the same chord are allowed and saved, but:
+  - EVERY row involved shows red, not just the newer binding;
+  - hovering any of them shows a tooltip naming the exact conflict: "Ctrl+D is also bound to Duplicate Node (Graph) and Delete Line (Text)". It lists each other action and its context;
+  - while the conflict stands, the more specific context wins (Graph over Global); between equal contexts, the newer binding wins. The tooltip says which one fires.
   - "Reset all" restores the defaults.
 - **Menus** show the current chord next to each item, so the menus and the page cannot drift.
 - Game input actions are a different thing: the project's `input.json`, edited in the Input Actions document. Project Settings › Input links to that document.
@@ -341,12 +387,16 @@ A change rebuilds the font atlas at the next frame boundary (Live, deferred one 
 - In a **Dist** build, the User rung lives under the per-user OS location, NOT the install folder (which may be read-only): `%LOCALAPPDATA%/<Company>/<Game>/Config` on Windows, and `$XDG_CONFIG_HOME/<company>/<game>` on Linux. The company and game names come from the project.
 
 ### 8.3 The runtime console
-The overlay keeps default-deny: `Player` permission, with only `PlayerSafe` settings settable and Cheat behind the cheats gate. `Dev` settings are compiled out of Dist. Nothing changes here except that the gate now reads the audience.
+The overlay's context is the session role (s3.2):
+- `LocalHost` in single-player and on a listen-server host, so `Server` settings are settable there (and `Cheat` ones once `server.cheats` is on), as in Source;
+- `Client` when connected to someone else's server.
+
+The game's `CVarPolicy` applies on top. `Dev` settings are compiled out of Dist.
 
 ---
 
 ## 9. The server surface (O7)
-- **Engine side**, transport-agnostic: `RemoteCVarService::Handle(request) -> response`, for get/set/list/explain under `Permission::Server`.
+- **Engine side**, transport-agnostic: `RemoteCVarService::Handle(request) -> response`, for get/set/list/explain in the `ServerAdmin` context (s3.2).
   - It honours `Protected` (never readable remotely) and `ServerCanExecute`.
   - Every set is passed to an injected audit sink with who, old, new and when.
 - **ArcaneServer** wires it to its local admin console (stdin) for development.
@@ -390,12 +440,41 @@ The audit's first deliverable is `docs/superpowers/audits/2026-10-xx-settings-in
   - `TextureImportSettings` defaults become `assets.import.texture.*`. Per-asset import overrides stay in the asset's `.meta`.
 - **Every converted constant leaves no shadow copy.** The `constexpr` is deleted, and a grep sweep proves it (the zero-legacy grep method).
 
-### 10.3 After the arc
-The project rule stands, and is now enforced by a test: a new tunable is a setting. A guard test scans changed source for new numeric `constexpr`s outside an allow-list file of reviewed CONSTANT entries, the way the `Arcane::` spelling guard works, and fails on unreviewed ones.
+### 10.3 After the arc (form OPEN, s16.8)
+The project rule stands: a new tunable is a setting. How it is enforced is decided with the user once they have read the inventory's "Should NOT be exposed" findings. Two candidates:
+- **(a) Classification, not conversion.** A new numeric constant must be either a setting or carry an `ARC_CONSTANT("<reason>")` marker (a comment macro), and the guard fails only on unmarked ones. Real constants stay constants, with their reason written down.
+- **(b) Report, not a failure.** The guard lists new unmarked constants in the gate report for review.
 
 ---
 
 ## 11. Persistence details
+
+### 11.0 Well-known locations: the start of Arcane's file-system model
+The user (2026-10-03): "we need to start thinking about the full file system".
+
+Today every subsystem computes its own paths. Examples:
+- `UserCVarDir` (`Runtime.cpp:480`);
+- the diagnostics capture dir;
+- Hub/editor recents;
+- `Saved/UndoCache`, `Saved/Config` and thumbnails;
+- the exe-dir `imgui.ini`.
+
+This arc introduces ONE place that names every location: `Arcane::Paths`, in ArcaneCore. Settings, logs, caches, crash capture and layouts resolve through it, and a path cvar can override any user-writable location.
+
+| Location | Editor / dev | Dist game | Writable |
+|---|---|---|---|
+| `EngineDir` / `EngineData` / `EngineConfig` | the engine checkout or SDK `data/` | the install folder | no |
+| `ProjectDir` / `ProjectConfig` / `ProjectContent` | the project root, `Config/`, `Content/` | packaged with the game | Config: editor only |
+| `ProjectSaved` | `<project>/Saved/` (UndoCache, Config, Layouts, Logs, Thumbnails) | not used | yes |
+| `ProjectIntermediate` / `Cache` | `<project>/Intermediate/`, `Saved/Cache/` (cooked artifacts, DDC-like) | n/a | yes |
+| `EditorUserDir` | `%LOCALAPPDATA%/Arcane/Editor/` (Config = the EditorUser rung, Themes, Layouts, Fonts, recents) | n/a | yes |
+| `GameUserDir` | `<project>/Saved/` (dev runs) | `%LOCALAPPDATA%/<Company>/<Game>/` or `$XDG_CONFIG_HOME/<company>/<game>/` (Config, Saves, Logs, Screenshots) | yes |
+| `DiagnosticsDir` | `<exe dir>/diagnostics` today; moves under `ProjectSaved/Diagnostics` or `GameUserDir/Diagnostics` | `GameUserDir/Diagnostics` | yes |
+| `TempDir` | the OS temp `/Arcane/<pid>` | the same | yes |
+
+- **Linux paths** follow XDG (`$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, `$XDG_CACHE_HOME`) and are named now, so the Linux port inherits them.
+- **Migration:** each subsystem that computes a path today moves to `Paths` in the S1/S2 tranches, with tests pinning every location per build type.
+- **Packaging stays out of scope:** a full virtual file system (mount points, pak archives, content streaming) needs its own spec. `Paths` is the foundation it will build on, and the asset system's existing mounts stay as they are.
 
 ### 11.1 Rung locations
 | Rung | Editor / dev | Dist game |
@@ -443,7 +522,11 @@ Editor Preferences values are per user and per project (`<project>/Saved/Config`
   - a static_assert on unmappable fields (a compile-fail test in the build guard);
   - `Settings<T>()` returns the published values;
   - the bindings: Astra and Manifold2D field-by-field `ToXConfig` tests.
-- **Audience and default-deny:** a matrix test of every audience against every permission against Dist/Dev (Dist simulated through the existing `devCvars` switch).
+- **Audience, context and policy:**
+  - a matrix test of every audience x context (Editor/LocalHost/ServerAdmin/Client) x cheats on/off x Dist/Dev (Dist simulated through the existing `devCvars` switch);
+  - policy tests: Allow, Deny and Default; a policy can widen `Game`/`Server` but never reach `Protected` reads or `Dev` in Dist;
+  - the `server.cheats` revert;
+  - audit-sink records for every non-Editor `Server` set.
 - **Windows (headless ImGui harness, as with the existing panel harnesses):**
   - the tree from category paths;
   - search hits and the Modified/Overridden filters;
@@ -471,7 +554,7 @@ Editor Preferences values are per user and per project (`<project>/Saved/Config`
 2. **S2 Settings structs and bindings:** `ARC_SETTINGS` over reflection, the new attributes, `Settings<T>()`, the EditorUser rung, the Astra and Manifold2D bindings (fixtures unchanged), and the jobs/render/log bindings for what already exists. Gate.
 3. **S3 The windows:** the tree, search and filters, rows, provenance, window undo, the Restart flow, custom-page registration, Preferences wired to the menu, and Project Settings replacing the read-out. Gate (desk by automation).
 4. **S4 The rich pages:** theme (presets, preview, contrast), the editor action registry plus the shortcuts page (the 40 key checks routed), fonts and scale, and layouts. Gate.
-5. **S5 The audit:** the inventory document. **User review point:** the user skims the SETTING list before the conversion starts (s16).
+5. **S5 The audit:** finalize the inventory (first run read-only on 2026-10-03) with the user's corrections. **User review point** before S6 (s16.3).
 6. **S6 The sweep:** conversions by subsystem (render, physics/sim, assets/cook, net, input, editor UX, host and diagnostics), each a task with "defaults identical" proven; the stray stores migrated; and the guard test. Gate (full suite, goldens and trajectory unchanged).
 7. **S7 Players and server:** `PlayerSettings` List/Set, the Dist user directory, `RemoteCVarService` plus the ArcaneServer console, and the Aphelyon services wiring plus the audit sink (Aphelyon commit). Gate. Close.
 
@@ -495,15 +578,16 @@ Push; `git add -A`; touch the user's untracked files; SendInput or focus stealin
 - **Shortcut migration.** Moving 40 key checks risks regressions in focus and context handling (text fields must swallow keys). *Mitigation:* each context has a `WantsKeyboard` gate, as today, plus a test per migrated action.
 - **The EditorUser rung** is a new rung in the ladder. *Mitigation:* numbered between Project (30) and User (40), at 35; the ladder had gaps for exactly this.
 
-## 16. Decisions for the user (asked at the spec review)
-1. **Machine-wide editor preferences (s11.1):** theme, fonts, shortcuts and layouts follow the user across projects (a new EditorUser rung), and project-specific overrides are still possible. *Recommended: yes.*
-2. **Dist save location (s8.2):** the per-user OS config dir, not the install folder. *Recommended: yes.*
-3. **The audit review point (S5):** you skim the SETTING list before the conversion, or the classification rules (s10.1) decide alone. *Recommended: you skim it; it is a long but simple table.*
-4. **The theme presets:** ship Light and High Contrast authored by us, plus Dark (today). *Recommended: yes; the contrast checker keeps them honest.*
-5. **The shortcut conflict policy (s7.2):** allow saving a conflict and show it red (VS), or refuse it until resolved. *Recommended: allow + red.*
-6. **The server surface (s9):** the engine seam plus the ArcaneServer console in this arc, and the Aphelyon services wiring in S7 too. *Recommended: yes, both.*
-7. **The project identity fields** (name, GUID, ABI, game module, boot scene) stay in `.arcproj`, shown and edited on Project Settings' "Project" page. They do not become cvars, because the Hub and the ABI gate read `.arcproj`. *Recommended: yes.*
-8. **The guard test** that fails on new unreviewed numeric `constexpr`s (s10.3). *Recommended: yes; it is what keeps "everything exposed" true later.*
+## 16. Decisions (the user, 2026-10-03, at the spec review)
+1. **Machine-wide editor preferences:** yes, via the EditorUser rung. Per-project overrides must be EASY: a one-click "All projects / This project" switch on every Preferences row (s3.3).
+2. **Dist save location:** yes, the per-user OS dir. "We need to start thinking about the full file system", so `Arcane::Paths` was added (s11.0).
+3. **The audit review:** yes, the user reviews the SETTING list. The inventory was run early, read-only, on 2026-10-03 (`docs/superpowers/audits/2026-10-03-settings-inventory.md`), and S5 becomes "finalize the inventory with the user's corrections".
+4. **Theme presets:** yes: Dark, Light and High Contrast.
+5. **Shortcut conflicts:** allowed and shown red on BOTH (every) conflicting row, with a tooltip naming the exact conflict (s7.2).
+6. **Server surface:** yes, both: the engine seam plus the ArcaneServer console, and Aphelyon's services wiring in S7.
+7. **Project identity fields** stay in `.arcproj` (the Project page).
+8. **OPEN: the new-constant guard (s10.3).** The user asked: "Is there anything today that shouldn't be exposed? If yes, we shouldn't error on every new number constant." The inventory's "Should NOT be exposed" sections answer the first part, and the guard's form is decided after the user reads them.
+9. **Server settings in player contexts (user question, 2026-10-03):** the original draft was too restrictive (`Server` was absent from every player surface). It is replaced by audience x context with a game-installable `CVarPolicy` (s3.2): a single-player game or listen-server host sets `Server` settings like Source's local `sv_*`, cheat ones behind `server.cheats`, and games widen or narrow access themselves.
 
 ## 17. Out of scope
 - A remote console UI.
