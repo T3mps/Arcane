@@ -1,8 +1,8 @@
 #pragma once
 
-// Cvar vocabulary (docs/specs/2026-09-02-cvar-system-design.md §3, decision 18).
-// The enum is the contract games declare against. Color and the vectors are
-// named so a later accessor does not renumber anything; they have no storage.
+// Cvar vocabulary (docs/specs/2026-09-02-cvar-system-design.md s3, decision
+// 18; settings spec 2026-10-03 s4.1). The enum is the contract games declare
+// against: new types are APPENDED, never inserted, so no ordinal moves.
 
 #include <cstdint>
 #include <optional>
@@ -21,11 +21,19 @@ namespace Arcane
         Float32,
         Float64,
         String,
-        Color,    // reserved: no accessor in v1
-        Vec2,     // reserved
-        Vec3,     // reserved
-        Vec4,     // reserved
+        Color,    // CVarColor: linear RGBA floats
+        Vec2,     // CVarVec2
+        Vec3,     // CVarVec3
+        Vec4,     // CVarVec4
+        Enum,     // an Int32 ORDINAL into the cvar's declared names (= 12)
     };
+
+    struct CVarVec2 { float x = 0, y = 0; bool operator==(const CVarVec2&) const = default; };
+    struct CVarVec3 { float x = 0, y = 0, z = 0; bool operator==(const CVarVec3&) const = default; };
+    struct CVarVec4 { float x = 0, y = 0, z = 0, w = 0; bool operator==(const CVarVec4&) const = default; };
+    // Linear floats. Files and the console spell it "#RRGGBBAA", sRGB-encoded
+    // (CVarFormat.hpp); the JSON read also takes [r,g,b(,a)] linear.
+    struct CVarColor { float r = 0, g = 0, b = 0, a = 1; bool operator==(const CVarColor&) const = default; };
 
     enum class CVarFlags : std::uint32_t
     {
@@ -88,8 +96,8 @@ namespace Arcane
         Server,
     };
 
-    // The eight v1 types. Color and Vec* are not members: a declaration of
-    // those types is refused at registration rather than stored half-formed.
+    // The thirteen value types. Enum shares Int32's storage; the type tag
+    // keeps them apart, so an Enum never equals an Int32.
     class CVarValue
     {
     public:
@@ -101,6 +109,11 @@ namespace Arcane
         static CVarValue Float32(float v)    { return CVarValue(CVarType::Float32, v); }
         static CVarValue Float64(double v)   { return CVarValue(CVarType::Float64, v); }
         static CVarValue String(std::string v) { return CVarValue(CVarType::String, std::move(v)); }
+        static CVarValue Color(CVarColor v)  { return CVarValue(CVarType::Color, v); }
+        static CVarValue Vec2(CVarVec2 v)    { return CVarValue(CVarType::Vec2, v); }
+        static CVarValue Vec3(CVarVec3 v)    { return CVarValue(CVarType::Vec3, v); }
+        static CVarValue Vec4(CVarVec4 v)    { return CVarValue(CVarType::Vec4, v); }
+        static CVarValue Enum(std::int32_t ordinal) { return CVarValue(CVarType::Enum, ordinal); }
 
         CVarType type = CVarType::Bool;
 
@@ -112,6 +125,11 @@ namespace Arcane
         float AsFloat32() const { return std::get<float>(m_storage); }
         double AsFloat64() const { return std::get<double>(m_storage); }
         const std::string& AsString() const { return std::get<std::string>(m_storage); }
+        CVarColor AsColor() const { return std::get<CVarColor>(m_storage); }
+        CVarVec2 AsVec2() const { return std::get<CVarVec2>(m_storage); }
+        CVarVec3 AsVec3() const { return std::get<CVarVec3>(m_storage); }
+        CVarVec4 AsVec4() const { return std::get<CVarVec4>(m_storage); }
+        std::int32_t AsEnum() const { return std::get<std::int32_t>(m_storage); }
 
         bool operator==(const CVarValue& o) const
         {
@@ -120,7 +138,8 @@ namespace Arcane
 
     private:
         using Storage = std::variant<bool, std::int32_t, std::uint32_t, std::int64_t,
-                                      std::uint64_t, float, double, std::string>;
+                                      std::uint64_t, float, double, std::string,
+                                      CVarColor, CVarVec2, CVarVec3, CVarVec4>;
 
         template <typename T>
         CVarValue(CVarType t, T v) : type(t), m_storage(std::move(v)) {}
@@ -128,9 +147,16 @@ namespace Arcane
         Storage m_storage{ false };
     };
 
-    // Clamp a numeric value into [min, max] when both bounds are present and
-    // the same type. Strings and bools are returned unchanged. A mismatched
-    // bound is ignored rather than applied as a different type.
+    namespace Detail
+    {
+        constexpr float ClampLow(float v, float lo) noexcept { return v < lo ? lo : v; }
+        constexpr float ClampHigh(float v, float hi) noexcept { return v > hi ? hi : v; }
+    }
+
+    // Clamp a value into [min, max] when a bound is present and the same
+    // type: numbers whole, Color and Vec* per component. Strings, bools and
+    // Enums are returned unchanged. A mismatched bound is ignored rather
+    // than applied as a different type.
     inline CVarValue Clamp(CVarValue value, const std::optional<CVarValue>& min,
                            const std::optional<CVarValue>& max)
     {
@@ -177,6 +203,66 @@ namespace Arcane
             if (min && min->type == CVarType::Float64 && v < min->AsFloat64()) v = min->AsFloat64();
             if (max && max->type == CVarType::Float64 && v > max->AsFloat64()) v = max->AsFloat64();
             return CVarValue::Float64(v);
+        }
+        case CVarType::Color:
+        {
+            CVarColor v = value.AsColor();
+            if (min && min->type == CVarType::Color)
+            {
+                const CVarColor lo = min->AsColor();
+                v = { Detail::ClampLow(v.r, lo.r), Detail::ClampLow(v.g, lo.g), Detail::ClampLow(v.b, lo.b), Detail::ClampLow(v.a, lo.a) };
+            }
+            if (max && max->type == CVarType::Color)
+            {
+                const CVarColor hi = max->AsColor();
+                v = { Detail::ClampHigh(v.r, hi.r), Detail::ClampHigh(v.g, hi.g), Detail::ClampHigh(v.b, hi.b), Detail::ClampHigh(v.a, hi.a) };
+            }
+            return CVarValue::Color(v);
+        }
+        case CVarType::Vec2:
+        {
+            CVarVec2 v = value.AsVec2();
+            if (min && min->type == CVarType::Vec2)
+            {
+                const CVarVec2 lo = min->AsVec2();
+                v = { Detail::ClampLow(v.x, lo.x), Detail::ClampLow(v.y, lo.y) };
+            }
+            if (max && max->type == CVarType::Vec2)
+            {
+                const CVarVec2 hi = max->AsVec2();
+                v = { Detail::ClampHigh(v.x, hi.x), Detail::ClampHigh(v.y, hi.y) };
+            }
+            return CVarValue::Vec2(v);
+        }
+        case CVarType::Vec3:
+        {
+            CVarVec3 v = value.AsVec3();
+            if (min && min->type == CVarType::Vec3)
+            {
+                const CVarVec3 lo = min->AsVec3();
+                v = { Detail::ClampLow(v.x, lo.x), Detail::ClampLow(v.y, lo.y), Detail::ClampLow(v.z, lo.z) };
+            }
+            if (max && max->type == CVarType::Vec3)
+            {
+                const CVarVec3 hi = max->AsVec3();
+                v = { Detail::ClampHigh(v.x, hi.x), Detail::ClampHigh(v.y, hi.y), Detail::ClampHigh(v.z, hi.z) };
+            }
+            return CVarValue::Vec3(v);
+        }
+        case CVarType::Vec4:
+        {
+            CVarVec4 v = value.AsVec4();
+            if (min && min->type == CVarType::Vec4)
+            {
+                const CVarVec4 lo = min->AsVec4();
+                v = { Detail::ClampLow(v.x, lo.x), Detail::ClampLow(v.y, lo.y), Detail::ClampLow(v.z, lo.z), Detail::ClampLow(v.w, lo.w) };
+            }
+            if (max && max->type == CVarType::Vec4)
+            {
+                const CVarVec4 hi = max->AsVec4();
+                v = { Detail::ClampHigh(v.x, hi.x), Detail::ClampHigh(v.y, hi.y), Detail::ClampHigh(v.z, hi.z), Detail::ClampHigh(v.w, hi.w) };
+            }
+            return CVarValue::Vec4(v);
         }
         default:
             return value;
