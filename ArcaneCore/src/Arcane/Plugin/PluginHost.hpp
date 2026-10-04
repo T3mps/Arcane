@@ -38,7 +38,7 @@ namespace Arcane
     //
     // A PluginHost must NOT outlive its ProcessContext or any attached Runtime (the
     // dtor calls into them); DetachRuntime is the seam for a world that dies first.
-    class ARCANE_CORE_API PluginHost
+    class ARC_CORE_API PluginHost
     {
     public:
         // sourceDllPath is the PRIMARY game module (watched + hot-reloaded). Pass an EMPTY

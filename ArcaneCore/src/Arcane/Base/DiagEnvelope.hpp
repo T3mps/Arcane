@@ -104,20 +104,20 @@ namespace Arcane::Diag
 
     // Envelope -> JSON text (2-space indent, UTF-8; invalid-UTF-8 field text
     // degrades to U+FFFD rather than throw). Always succeeds -- no IO here.
-    ARCANE_CORE_API std::string Serialize(const Envelope& envelope);
+    ARC_CORE_API std::string Serialize(const Envelope& envelope);
 
     // JSON text -> Envelope. nullopt if the text doesn't parse as a JSON
     // object, if "formatVersion" is missing/wrong-typed/unsupported, or if
     // "guid" is missing/unparsable/nil. Every other field is best-effort:
     // an absent or wrong-typed optional field defaults empty, and unknown
     // extra keys are silently ignored (forward compat).
-    ARCANE_CORE_API std::optional<Envelope> Parse(std::string_view json);
+    ARC_CORE_API std::optional<Envelope> Parse(std::string_view json);
 
     // Serialize(envelope) written to `path` as UTF-8 with no BOM (trailing
     // newline, same convention as SaveMaterialAsset). False on IO failure.
-    ARCANE_CORE_API bool WriteFile(const Envelope& envelope, const std::filesystem::path& path);
+    ARC_CORE_API bool WriteFile(const Envelope& envelope, const std::filesystem::path& path);
 
     // Read `path` in full and Parse it. nullopt on IO failure, on read, or
     // on an invalid envelope.
-    ARCANE_CORE_API std::optional<Envelope> ReadFile(const std::filesystem::path& path);
+    ARC_CORE_API std::optional<Envelope> ReadFile(const std::filesystem::path& path);
 }

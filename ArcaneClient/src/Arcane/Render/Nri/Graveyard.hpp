@@ -45,7 +45,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API Graveyard
+    class ARC_API Graveyard
     {
     public:
         using Destroyer = std::function<void()>;

@@ -73,7 +73,7 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
     host.Unload();
 }
 
-// The GameModule hook-order probe (spec 2026-09-13 s7): ARCANE_GAME_MODULE's
+// The GameModule hook-order probe (spec 2026-09-13 s7): ARC_GAME_MODULE's
 // Shutdown calls OnShutdown BEFORE it closes the module's ComponentModule
 // handle (the instance goes first so a module can still touch its own
 // components). HotReloadPlugin's OnShutdown logs whether its Components()

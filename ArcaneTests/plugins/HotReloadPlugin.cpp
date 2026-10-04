@@ -9,9 +9,9 @@
 //        module's registrations before the host has to unwind them -- the fixture
 //        for PluginHost's secondary-init-failure teardown (final-review fix wave,
 //        C1: the factories must be ClearOwner'ed before the image unmaps).
-// Built ON the SDK's ARCANE_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
+// Built ON the SDK's ARC_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
 // [hotreload] suite is the macro's plugin test: the prologue (Pulse arrives
-// through the ARCANE_COMPONENT drain), the base Save/LoadState round-trip plus
+// through the ARC_COMPONENT drain), the base Save/LoadState round-trip plus
 // this module's extras, the Shutdown order (the OnShutdown log line below),
 // and the ABI-override seam the Bad build exists to trip.
 
@@ -32,13 +32,13 @@
 
 // One reflected component (shared header), registered through the drain the
 // macro's Init performs -- the same path a wizard-made component takes.
-ARCANE_COMPONENT(Arcane::HotReloadTest::Pulse)
-ARCANE_COMPONENT(Arcane::HotReloadTest::RoleCounters)
+ARC_COMPONENT(Arcane::HotReloadTest::Pulse)
+ARC_COMPONENT(Arcane::HotReloadTest::RoleCounters)
 
 // Deliberately pair the automatic path with ClientOnlyTick's manual OnInit
 // path below. The same DLL therefore proves that both produce owned factories
 // with identical role, reload, and teardown behavior.
-ARCANE_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
+ARC_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
               Arcane::RoleMask::Server,
               Arcane::SystemPhase::FixedUpdate)
 
@@ -74,7 +74,7 @@ namespace Arcane::HotReloadTest
             CacheHandle();
             // The s4 contract: factories register ONCE per DLL load, with an
             // explicit mask; each Runtime instantiates what its NetMode matches.
-            // ServerOnlyTick arrived through ARCANE_SYSTEM before OnInit;
+            // ServerOnlyTick arrived through ARC_SYSTEM before OnInit;
             // ClientOnlyTick stays manual as the constructor-aware control path.
             RegisterSystem<ClientOnlyTick>(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate);
 #ifdef HOTRELOAD_INIT_FAIL
@@ -125,5 +125,5 @@ namespace Arcane::HotReloadTest
     };
 }
 
-ARCANE_GAME_MODULE_ABI(Arcane::HotReloadTest::Module,
+ARC_GAME_MODULE_ABI(Arcane::HotReloadTest::Module,
                        ::Arcane::kGamePluginABIVersion + (HOTRELOAD_ABI_OFFSET))

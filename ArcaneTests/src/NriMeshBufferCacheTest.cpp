@@ -140,7 +140,7 @@ namespace
         GpuVehicle v;
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;

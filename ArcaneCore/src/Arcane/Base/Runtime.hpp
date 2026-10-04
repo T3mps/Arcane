@@ -3,7 +3,7 @@
 // Runtime: the engine facade handed to plugins via EngineContext. Owns the substrate
 // that MUST outlive plugin reloads -- the shared TypeContext (installed in THIS module,
 // ArcaneCore.dll), the persistent ComponentRegistry, the (swappable) Registry, the
-// per-phase schedulers, the RunLoop, and the JobSystem. ARCANE_CORE_API: the plugin and
+// per-phase schedulers, the RunLoop, and the JobSystem. ARC_CORE_API: the plugin and
 // the host both call it.
 //
 // HEADLESS (Core-DLL split, spec docs/specs/2026-09-15-core-dll-split-design.md s2,
@@ -54,7 +54,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API Runtime
+    class ARC_CORE_API Runtime
     {
     public:
         // Every Runtime is built on the process's ONE ProcessContext (spec 2026-09-15

@@ -467,7 +467,7 @@ namespace Arcane::Editor
                     ImGui::SetTooltip(ideState == IdeMenuState::NoProject
                                           ? "Open a project first"
                                           : "No Visual Studio install found (vswhere found no devenv.exe)");
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
                 // GPU crash diagnostics arc, Task 11: the desk battery's
                 // trigger. Build is the developer-actions menu (it already owns
                 // Rebuild Game Module) and this arc ratified no new top-level

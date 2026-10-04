@@ -435,7 +435,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 {
     Arcane::NriGraphContext::FrameDesc graphFrame;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --crash-gpu N. Fires exactly once, and the latch is set FIRST -- a
     // failed build must not retry the injection every frame.
     //
@@ -531,7 +531,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         io.perf.Add(io.perf.accRec, t0, io.perf.Now());
     }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --pick-probe. THE ONE PLACE the entity ids
     // are produced: CollectPickables is a pure walk of the registry and
     // the k-th drawable it appends IS hit-proxy id k+1, which is what
@@ -570,7 +570,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 #endif
 
     // ---- pick@x,y probes (Task 9), driven through FrameDesc::pickPixel --
-    // NOT the --pick-probe flag above, and deliberately NOT ARCANE_DIST-gated
+    // NOT the --pick-probe flag above, and deliberately NOT ARC_BUILD_DIST-gated
     // like it: this is the report's pick channel (VerifyReport's `pick@x,y`
     // probe kind), not a dev-only exit-code check, so it must exist in every
     // build configuration the same way every other probe kind does.

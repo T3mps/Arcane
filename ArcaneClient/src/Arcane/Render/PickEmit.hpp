@@ -103,12 +103,12 @@ namespace Arcane
     // over an underlying sprite), then the meshes draw depth-tested against a
     // cleared depth -- so a mesh always owns a pixel it shares with a sprite,
     // and meshes resolve among themselves by depth: the main pass's order.
-    ARCANE_API void CollectPickables(Astra::Registry& registry, std::vector<PickDrawable>& out);
+    ARC_API void CollectPickables(Astra::Registry& registry, std::vector<PickDrawable>& out);
 
     // The pass id assigned to `e` under the k+1 convention CollectPickables emits
     // (the k-th entity in `ordered` gets id k+1; 0 = background). Reverse of the
     // read-back mapping in Pick(). 0 if `e` is absent or Astra::Entity::Invalid().
-    ARCANE_API uint32_t PickPassId(const std::vector<Astra::Entity>& ordered, Astra::Entity e);
+    ARC_API uint32_t PickPassId(const std::vector<Astra::Entity>& ordered, Astra::Entity e);
 
     // id 0 -> background (invalid entity). id k (k>=1) -> drawables[k-1].entity.
     // Out-of-range k -> invalid entity. Astra::Entity{} is the invalid sentinel
@@ -159,7 +159,7 @@ namespace Arcane
 
     // The id-buffer texel to sample for a 1x viewport click at `pixel1x` when the
     // id buffer is supersampled by `ss` (center subsample), clamped to [0, dim).
-    ARCANE_API glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH);
+    ARC_API glm::ivec2 PickSampleTexel(glm::vec2 pixel1x, uint32_t ss, uint32_t idW, uint32_t idH);
 
     // THE VIEWPORT ID PASS'S SUPERSAMPLE FACTOR -- ONE number, read by
     // everything that depends on it. The id target is sized ss*width x ss*height while the
@@ -214,14 +214,14 @@ namespace Arcane
     // kind -> the shader code entity_id.hlsl's PS switches on. Mesh -> 4 is
     // never emitted to the 2D path (BuildPickIdGeometry skips the kind); the
     // code exists so the switch is total.
-    ARCANE_API uint32_t PickKindCode(PickDrawable::Kind kind);
+    ARC_API uint32_t PickKindCode(PickDrawable::Kind kind);
 
     // Bounding half-extents (metres) of a drawable's silhouette: the quad the
     // id pass rasterizes. The PS analytically discards fragments outside
     // circle/capsule shapes; Box fills the whole bound. A Quad's bound is half
     // its edge lengths (its corners ARE its geometry); a Mesh has no 2D bound
     // and reports zero.
-    ARCANE_API glm::vec2 PickBoundHalfExtents(const PickDrawable& drawable);
+    ARC_API glm::vec2 PickBoundHalfExtents(const PickDrawable& drawable);
 
     // Build the id-pass vertex + index arrays from `drawables` (both vectors are
     // CLEARED first). One quad (4 verts / 6 indices) per 2D drawable, NONE per
@@ -230,7 +230,7 @@ namespace Arcane
     // last (the 2D half draws depth-off, so the output merger's primitive
     // order decides a contested pixel among the 2D silhouettes; the meshes
     // that follow are depth-tested -- see CollectPickables' ORDER RULE).
-    ARCANE_API void BuildPickIdGeometry(std::span<const PickDrawable> drawables,
+    ARC_API void BuildPickIdGeometry(std::span<const PickDrawable> drawables,
                                         std::vector<PickIdVertex>& outVertices,
                                         std::vector<uint32_t>& outIndices);
 }

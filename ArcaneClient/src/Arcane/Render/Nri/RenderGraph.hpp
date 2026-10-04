@@ -155,7 +155,7 @@ namespace Arcane
     // storage. SetColorAttachments/SetDepthAttachment live on RenderGraph
     // itself (below), not here: reach them from within Setup by capturing
     // the RenderGraph by reference (see AddNode()'s comment).
-    class ARCANE_API RenderGraphBuilder
+    class ARC_API RenderGraphBuilder
     {
     public:
         RgTexture CreateTexture(const char* name, const RgTextureDesc& desc);               // transient
@@ -213,12 +213,12 @@ namespace Arcane
     // returns: an exec fn must NOT begin/end rendering itself, and must not
     // emit barriers (the executor is the only CmdBarrier call site on the
     // graph path -- see RgCompiled's contract block below).
-    // ARCANE_API: Resolve/ColorView are DEFINED in RenderGraphExec.cpp inside
+    // ARC_API: Resolve/ColorView are DEFINED in RenderGraphExec.cpp inside
     // ArcaneClient.dll and CALLED from node exec fns that live wherever the
     // frame driver does -- the test exe today, a game module tomorrow. An
     // unexported struct here linked fine until a node actually resolved a
     // handle, and then failed at link time in the consumer, not here.
-    struct ARCANE_API RenderGraphNodeContext
+    struct ARC_API RenderGraphNodeContext
     {
         nri::CommandBuffer&       cmd;
         const nri::CoreInterface& core;
@@ -488,7 +488,7 @@ namespace Arcane
         std::uint32_t              poolSlotCount = 0;    // distinct pool slots Task 6 must realize
     };
 
-    class ARCANE_API RenderGraph
+    class ARC_API RenderGraph
     {
     public:
         using Setup = std::function<void(RenderGraphBuilder&)>;

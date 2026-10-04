@@ -81,7 +81,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD
 #endif
-    class ARCANE_API PostChainCache
+    class ARC_API PostChainCache
     {
     public:
         using ResolveAssetFn =

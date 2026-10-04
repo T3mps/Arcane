@@ -22,7 +22,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API JobSystem
+    class ARC_CORE_API JobSystem
     {
     public:
         // threads == 0 -> enkiTS hardware default (GetNumHardwareThreads()).

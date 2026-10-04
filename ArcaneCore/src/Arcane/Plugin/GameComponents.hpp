@@ -5,13 +5,13 @@
 //   // Health.cpp
 //   #include "Health.hpp"
 //   #include <Arcane/Plugin/GameComponents.hpp>
-//   ARCANE_COMPONENT(MyGame::Health)
+//   ARC_COMPONENT(MyGame::Health)
 //
-//   // ARCANE_GAME_MODULE(MyGame::Module) -- Arcane/Plugin/GameModule.hpp -- does
+//   // ARC_GAME_MODULE(MyGame::Module) -- Arcane/Plugin/GameModule.hpp -- does
 //   // the rest: its Init opens this module's ComponentModule and drains the
 //   // registrar into it (Arcane::Game::RegisterComponents).
 //
-// Each ARCANE_COMPONENT line links one registrar node into a MODULE-LOCAL list
+// Each ARC_COMPONENT line links one registrar node into a MODULE-LOCAL list
 // at DLL load; RegisterComponents drains that list into the module's own
 // Arcane::ComponentModule. This is what lets Assets -> Create -> C++ Class
 // produce a component that is live after one Rebuild Game Module with no hand
@@ -47,7 +47,7 @@ namespace Arcane::Game
     struct ComponentRegistrar
     {
         void (*registerFn)(Arcane::ComponentModule&);
-        const char*         typeName;   // the ARCANE_COMPONENT argument, stringified
+        const char*         typeName;   // the ARC_COMPONENT argument, stringified
         ComponentRegistrar* next;
     };
 
@@ -61,7 +61,7 @@ namespace Arcane::Game
     }
 
     // Link `node` at the head of this module's list. Called from the dynamic
-    // initialiser ARCANE_COMPONENT plants; returns true only so it can sit in
+    // initialiser ARC_COMPONENT plants; returns true only so it can sit in
     // a static bool's initialiser. Order among nodes is static-init order --
     // unspecified across TUs, and irrelevant (see the header comment).
     inline bool LinkComponentRegistrar(ComponentRegistrar& node)
@@ -79,7 +79,7 @@ namespace Arcane::Game
         return Detail::RegistrarHead();
     }
 
-    // Drain the list into `module`: every ARCANE_COMPONENT type of THIS module
+    // Drain the list into `module`: every ARC_COMPONENT type of THIS module
     // is registered through the module's own handle, so the descriptors and
     // meta are owned by (and torn down with) that handle exactly as a hand-
     // written Register<T>() would be. Returns how many were registered. Call
@@ -97,14 +97,14 @@ namespace Arcane::Game
     }
 }
 
-// Declare T (a reflected component type -- ARCANE_REFLECT_TYPE'd) as one of this
+// Declare T (a reflected component type -- ARC_REFLECT_TYPE'd) as one of this
 // module's components. Namespace scope, in exactly ONE .cpp per type: it
 // defines statics, so a header would register T once per including TU. T may
 // be namespace-qualified ("MyGame::Health") -- nothing here token-pastes it;
 // uniqueness comes from __COUNTER__ inside an anonymous namespace.
-#define ARCANE_COMPONENT(T) ARCANE_COMPONENT_IMPL_(T, __COUNTER__)
-#define ARCANE_COMPONENT_IMPL_(T, N) ARCANE_COMPONENT_IMPL2_(T, N)
-#define ARCANE_COMPONENT_IMPL2_(T, N)                                                        \
+#define ARC_COMPONENT(T) ARC_COMPONENT_IMPL_(T, __COUNTER__)
+#define ARC_COMPONENT_IMPL_(T, N) ARC_COMPONENT_IMPL2_(T, N)
+#define ARC_COMPONENT_IMPL2_(T, N)                                                        \
     namespace                                                                               \
     {                                                                                       \
         ::Arcane::Game::ComponentRegistrar arcaneComponentRegistrar_##N{                    \

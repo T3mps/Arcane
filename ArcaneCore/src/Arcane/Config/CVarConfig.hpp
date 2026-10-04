@@ -24,12 +24,12 @@ namespace Arcane
     // `category` is the file stem. Keys in `doc` become `<category>.<key>`.
     // Nested objects join with further dots. Document-shaped categories record
     // nothing and set nothing.
-    ARCANE_CORE_API CVarApplyReport ApplyCVarCategory(CVarRegistry& registry, std::string_view category,
+    ARC_CORE_API CVarApplyReport ApplyCVarCategory(CVarRegistry& registry, std::string_view category,
                                                       const nlohmann::json& doc, SetBy by, bool documentShaped,
                                                       std::string_view sourceModule);
 
     // Every *.json in dir. "input" is document-shaped; the rest are cvars.
-    ARCANE_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
+    ARC_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
                                                        SetBy by, std::string_view sourceModule);
 
     // The user layer's write half (T3-D2): one <category>.json per category
@@ -46,9 +46,9 @@ namespace Arcane
     // replaced. Each file goes to <category>.json.tmp first and is renamed
     // over the old one, so a crash mid-write never leaves a torn file; an
     // unchanged file is not rewritten.
-    ARCANE_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
+    ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
 
     // `--set name=value`, repeated. CommandLine rung. Does not publish.
-    ARCANE_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
+    ARC_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
                                               Permission permission);
 }

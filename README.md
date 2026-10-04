@@ -196,10 +196,10 @@ A **component** is reflected plain data:
 #include <Arcane/Reflection.hpp>
 
 struct Health { float current = 100.0f; };
-ARCANE_REFLECT_TYPE(Health)
-    ARCANE_REFLECT_FIELD(Health, current)
-        ARCANE_REFLECT_ATTR(Range, 0.0f, 100.0f)
-ARCANE_END_REFLECT_TYPE()
+ARC_REFLECT_TYPE(Health)
+    ARC_REFLECT_FIELD(Health, current)
+        ARC_REFLECT_ATTR(Range, 0.0f, 100.0f)
+ARC_END_REFLECT_TYPE()
 ```
 
 A **system** declares what it touches as parameters -- component views and
@@ -230,7 +230,7 @@ struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
 ```
 
 and is registered with one line in its `.cpp`:
-`ARCANE_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
+`ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
 
 - **Resources:** `Time` is present in every world. `GameInput` is present in every client world, and a server world has none. A system whose resource is missing is skipped with one log line.
 - **Code outside a system** (a module's `OnUpdate`/`OnDrawUI`) reads the same data with `Registry().GetResource<Arcane::Time>()`. There are no global accessors: one process can hold several worlds (edit, Play, an embedded server, tests).

@@ -57,7 +57,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API GpuScene
+    class ARC_API GpuScene
     {
     public:
         static constexpr std::uint32_t kInitialRows = 256;
@@ -343,7 +343,7 @@ namespace Arcane
     // no device scene; the visibility ring's arming call; and the most
     // recently completed GPU-visible row count, nullopt while none has landed.
     // Exported from ArcaneClient.dll.
-    ARCANE_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
-    ARCANE_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
-    [[nodiscard]] ARCANE_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
+    ARC_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
+    ARC_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
+    [[nodiscard]] ARC_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
 }

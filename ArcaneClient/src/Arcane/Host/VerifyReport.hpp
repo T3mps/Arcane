@@ -94,7 +94,7 @@ namespace Arcane
     // Coordinates are unsigned on purpose, matching --pick-probe's own parse
     // (HostConfig.cpp): a NEGATIVE probe pixel is not a coordinate, it is a
     // typo, and evaluating it would report a fact about the wrong question.
-    [[nodiscard]] ARCANE_API std::optional<ProbeSpec> ParseProbe(std::string_view text, std::string& error);
+    [[nodiscard]] ARC_API std::optional<ProbeSpec> ParseProbe(std::string_view text, std::string& error);
 
     // The FIRST `pick@x,y` spec among `probes` (HostConfig::probes, raw and
     // unparsed, in command-line order), or nullopt if none is present. ONE
@@ -111,7 +111,7 @@ namespace Arcane
     // error is reported once, later, by the real parse-and-log pass
     // (RuntimeApp.cpp's ShutdownGraphPath); this helper only answers "is
     // there a pick request", and must not double that log just to answer it.
-    [[nodiscard]] ARCANE_API std::optional<ProbeSpec> FirstPickProbe(const std::vector<std::string>& probes);
+    [[nodiscard]] ARC_API std::optional<ProbeSpec> FirstPickProbe(const std::vector<std::string>& probes);
 
     // Whether canvas pixel (x, y) is inside a `width`x`height` surface (fix
     // round 1, item 2). Pulled out as its own pure, testable predicate
@@ -127,7 +127,7 @@ namespace Arcane
     // all. Negative coordinates never happen in practice (ParseProbe only
     // accepts non-negative ones), but are refused here too for a caller that
     // has not gone through that parse.
-    [[nodiscard]] ARCANE_API bool PickPixelInRange(std::int32_t x, std::int32_t y,
+    [[nodiscard]] ARC_API bool PickPixelInRange(std::int32_t x, std::int32_t y,
                                                     std::uint32_t width, std::uint32_t height) noexcept;
 
     // ONE WORLD a host was running when it wrote its report (schemaVersion 6,
@@ -165,7 +165,7 @@ namespace Arcane
     // which reads back whatever SetCapture/AddCensus have been given so far
     // -- call them BEFORE Evaluate, not after, or a probe that needed that
     // data reports "not set" rather than picking up a later call.
-    class ARCANE_API VerifyReport
+    class ARC_API VerifyReport
     {
     public:
         // The report's own compatibility promise across the Servitor boundary.

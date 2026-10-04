@@ -64,7 +64,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API NriMeshBufferCache
+    class ARC_API NriMeshBufferCache
     {
     public:
         // Guid -> resolved CPU geometry, or a state saying why not. In production this

@@ -79,7 +79,7 @@ namespace Arcane::ForeignModules
     };
 
     // The whole table, for a schema check or a listing. Never mutated.
-    [[nodiscard]] ARCANE_CORE_API std::span<const Entry> Table() noexcept;
+    [[nodiscard]] ARC_CORE_API std::span<const Entry> Table() noexcept;
 
     // A module the process was found to carry. `module` is the base name AS
     // THE LOADER REPORTS IT (original case), so a log line names what the
@@ -99,19 +99,19 @@ namespace Arcane::ForeignModules
     // Table lookup by base name, case-insensitive and EXACT: "NahimicOSD.dll"
     // matches, "MyNahimicOSD.dll" and "NahimicOSD.dll.bak" do not. nullopt
     // for anything the table does not know. Pure; `path` is left empty.
-    [[nodiscard]] ARCANE_CORE_API std::optional<Match> Classify(std::string_view moduleBaseName);
+    [[nodiscard]] ARC_CORE_API std::optional<Match> Classify(std::string_view moduleBaseName);
 
     // The one gate. Returns the match for GTIII-OSD64-VK.dll when that base
     // name is in the list (case-insensitive, exact), else nullopt. The D3D12
     // and GL siblings are not blockers: their damage is the device
     // over-release the reference armor absorbs. Pure; does not enumerate.
-    [[nodiscard]] ARCANE_CORE_API std::optional<Match>
+    [[nodiscard]] ARC_CORE_API std::optional<Match>
         WindowedVulkanBlocker(std::span<const std::string> moduleBaseNames);
 
     // Every TABLE hit in `moduleBaseNames`, in the input's order, each module
     // reported ONCE however many times the list names it. Pure, name-only:
     // the origin-aware overload below is what the scan uses.
-    [[nodiscard]] ARCANE_CORE_API std::vector<Match> MatchAll(std::span<const std::string> moduleBaseNames);
+    [[nodiscard]] ARC_CORE_API std::vector<Match> MatchAll(std::span<const std::string> moduleBaseNames);
 
     // ---- origin -----------------------------------------------------------
 
@@ -136,7 +136,7 @@ namespace Arcane::ForeignModules
     // insensitive, and a TREE test rather than a prefix test ("C:\Windows2"
     // is not under "C:\Windows"). Pure: the roots are parameters so the rule
     // is testable without this process's own directories.
-    [[nodiscard]] ARCANE_CORE_API Origin OriginOf(std::string_view path,
+    [[nodiscard]] ARC_CORE_API Origin OriginOf(std::string_view path,
                                                   std::span<const std::string> ownedRoots,
                                                   std::string_view systemRoot);
 
@@ -144,36 +144,36 @@ namespace Arcane::ForeignModules
     // outranks the path), plus every remaining Origin::Foreign module as
     // Tier 3; nothing for Owned, System or Unknown. Input order, one row per
     // module. Pure, for the same reason as OriginOf.
-    [[nodiscard]] ARCANE_CORE_API std::vector<Match> MatchAll(std::span<const LoadedModule> modules,
+    [[nodiscard]] ARC_CORE_API std::vector<Match> MatchAll(std::span<const LoadedModule> modules,
                                                               std::span<const std::string> ownedRoots,
                                                               std::string_view systemRoot);
 
     // The Tier 1 module names of `matches`, joined ", " in order; empty when
     // none. What the hosts append to their RenderErrorCount summary line so
     // "our error" and "the overlay's error" are told apart at a glance.
-    [[nodiscard]] ARCANE_CORE_API std::string Tier1Names(std::span<const Match> matches);
+    [[nodiscard]] ARC_CORE_API std::string Tier1Names(std::span<const Match> matches);
 
     // ---- this process ------------------------------------------------------
 
     // The trees that count as OURS: the exe's own directory always, plus the
     // directory of everything NoteOwned has been told about. Read-only copy.
-    [[nodiscard]] ARCANE_CORE_API std::vector<std::string> OwnedRoots();
+    [[nodiscard]] ARC_CORE_API std::vector<std::string> OwnedRoots();
 
     // "We loaded this ourselves": Module::Load's hook, called with the path
     // it just loaded. Its DIRECTORY joins the owned roots (once, whatever
     // the spelling), so a game module under <project>/Binaries or a plugin
     // in its own folder is ours and never a Tier 3 row.
-    ARCANE_CORE_API void NoteOwned(std::string_view modulePath);
+    ARC_CORE_API void NoteOwned(std::string_view modulePath);
 
     // The Windows directory (GetWindowsDirectory), the OS's tree. Empty off
     // Windows.
-    [[nodiscard]] ARCANE_CORE_API std::string SystemRoot();
+    [[nodiscard]] ARC_CORE_API std::string SystemRoot();
 
     // Every module loaded in this process right now, name + full path
     // (EnumProcessModulesEx + GetModuleFileNameExW on Windows; empty
     // elsewhere). Takes the loader lock -- never call it from an exception
     // filter.
-    [[nodiscard]] ARCANE_CORE_API std::vector<LoadedModule> EnumerateProcessModules();
+    [[nodiscard]] ARC_CORE_API std::vector<LoadedModule> EnumerateProcessModules();
 
     // ONE scan: EnumerateProcessModules through the origin-aware MatchAll
     // against this process's roots, REMEMBERED for LastScan. Cheap
@@ -181,13 +181,13 @@ namespace Arcane::ForeignModules
     // (through Report) and again when they write their verify report, so a
     // module that injected between the two is still on record. Never per
     // frame.
-    ARCANE_CORE_API std::vector<Match> Scan();
+    ARC_CORE_API std::vector<Match> Scan();
 
     // What the most recent Scan found, without enumerating again -- nullopt
     // if no scan has run in this process. This is what a crash/hang report
     // reads: inside an exception filter the loader lock is off limits, and
     // "not scanned" is an honest answer there where a fresh scan is a hazard.
-    [[nodiscard]] ARCANE_CORE_API std::optional<std::vector<Match>> LastScan();
+    [[nodiscard]] ARC_CORE_API std::optional<std::vector<Match>> LastScan();
 
     // Scan, then say each module ONCE per process: ARC_WARN per Tier 1 hit
     // (product, consequence, remedy), ARC_INFO per Tier 2 (product) and per
@@ -195,5 +195,5 @@ namespace Arcane::ForeignModules
     // first time, so a second call in the same process returns nothing -- a
     // second device, a project switch or a test creating twenty devices
     // never repeats a line. Never a modal.
-    ARCANE_CORE_API std::vector<Match> Report();
+    ARC_CORE_API std::vector<Match> Report();
 }

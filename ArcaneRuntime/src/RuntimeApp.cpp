@@ -770,7 +770,7 @@ void RuntimeApp::MainLoop()
         .compareOptions        = compareOptions,
         .compareResult         = m_compareResult,
         .compareEvaluated      = m_compareEvaluated,
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
         .hangMainFired   = m_hangMainFired,
 #endif
@@ -889,7 +889,7 @@ void RuntimeApp::ShutdownGraphPath()
     if (!graph)
         return;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --pick-probe's ANSWER, read while the vehicle is still alive (the reset
     // below takes the readback buffer with it) and reported as an exit code so
     // a desk battery item is one scriptable line.
@@ -931,7 +931,7 @@ void RuntimeApp::ShutdownGraphPath()
 
     // ---- pick@x,y readback (Task 9), read BEFORE the vehicle resets -----
     // (same reason the --pick-probe block above reads early: ProbeId() reads
-    // state that dies with the vehicle). NOT ARCANE_DIST-gated, unlike that
+    // state that dies with the vehicle). NOT ARC_BUILD_DIST-gated, unlike that
     // block: this is the report's pick channel, not a dev-only exit-code
     // check, so it exists in every build configuration. Uses the SAME
     // Arcane::FirstPickProbe lookup RuntimeFrame.cpp's RenderGraph used to

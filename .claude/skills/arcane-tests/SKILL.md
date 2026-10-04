@@ -45,7 +45,7 @@ cd ..\..\..
 powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath %TEMP%\arcane.json -Configuration <Cfg> -Invocation "~[gpu]"
 ```
 
-Dist legitimately runs 6 cases / 68 assertions fewer than Debug and Release (`#if !defined(ARCANE_DIST)`
+Dist legitimately runs 6 cases / 68 assertions fewer than Debug and Release (`#if !defined(ARC_BUILD_DIST)`
 guards); that is not a drop.
 
 ## What counts as a failure

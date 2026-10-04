@@ -49,7 +49,7 @@ namespace Arcane
     // `file:line:col: {note|warning|error|fatal error}: message`, optionally
     // followed by the echoed source line and a caret line. Location-less
     // `error: message` lines are captured too.
-    ARCANE_API std::vector<ShaderDiag> ParseDxcDiagnostics(std::string_view text);
+    ARC_API std::vector<ShaderDiag> ParseDxcDiagnostics(std::string_view text);
 
     struct ShaderCompileRequest
     {
@@ -95,7 +95,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API ShaderCompiler
+    class ARC_API ShaderCompiler
     {
     public:
         ShaderCompiler();

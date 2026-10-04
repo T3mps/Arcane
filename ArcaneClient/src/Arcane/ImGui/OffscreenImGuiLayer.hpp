@@ -37,7 +37,7 @@ struct ImDrawData;
 
 namespace Arcane
 {
-    class ARCANE_API OffscreenImGuiLayer
+    class ARC_API OffscreenImGuiLayer
     {
     public:
         static std::unique_ptr<OffscreenImGuiLayer> Create();

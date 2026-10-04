@@ -23,7 +23,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)
 #endif
-    class ARCANE_CORE_API ConsoleModel
+    class ARC_CORE_API ConsoleModel
     {
     public:
         void Submit(CVarRegistry& registry, Permission permission);

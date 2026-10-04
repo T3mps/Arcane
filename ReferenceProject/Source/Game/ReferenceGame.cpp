@@ -23,4 +23,4 @@ namespace ReferenceGame
     };
 }
 
-ARCANE_GAME_MODULE(ReferenceGame::Module)
+ARC_GAME_MODULE(ReferenceGame::Module)

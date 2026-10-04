@@ -75,7 +75,7 @@ namespace Arcane
     // and hands out no texture object: PixelsFor(Guid) below is the
     // device-free supply, and the graph path's NriTextureCache is what puts
     // those pixels on a device.
-    class ARCANE_CORE_API Assets
+    class ARC_CORE_API Assets
     {
     public:
         static std::unique_ptr<Assets> Create(const AssetsDesc& desc = {});
@@ -441,7 +441,7 @@ namespace Arcane
     // both main-thread-only by their own contracts), but the install/read is
     // still mutex-guarded rather than relying on that.
     using ArtifactRefusalObserver = void (*)(const Guid& id, const char* kind, void* user);
-    ARCANE_CORE_API void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user);
+    ARC_CORE_API void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user);
 
     // -----------------------------------------------------------------
     // The process-wide content-artifact-refusal latch
@@ -462,13 +462,13 @@ namespace Arcane
     // does NOT poll it: Task 12 publishes the SAME refusals to the Problems pane instead
     // of exiting, so an artifact refusal never takes down an editing session the way it
     // takes down a game host.
-    [[nodiscard]] ARCANE_CORE_API bool ContentArtifactRefusalObserved() noexcept;
+    [[nodiscard]] ARC_CORE_API bool ContentArtifactRefusalObserved() noexcept;
 
     // The first refusal's own description -- "<refusal kind>: <guid>", e.g.
     // "HashMismatch: 11111111-2222-4333-8444-555555555555" -- naming the refusal is Step
     // 3's contract ("exits nonzero with the refusal named"). Empty when
     // ContentArtifactRefusalObserved() is false.
-    [[nodiscard]] ARCANE_CORE_API std::string ContentArtifactRefusalDetail();
+    [[nodiscard]] ARC_CORE_API std::string ContentArtifactRefusalDetail();
 
     // TEST-ONLY reset -- clears the latch (and its detail string) back to the never-fired
     // state. Unlike GpuInstrumentation.hpp's ResetGpuDeviceLost (which pairs with a real
@@ -479,7 +479,7 @@ namespace Arcane
     // construction. Exists purely so ArcaneTests' [assets]/[artifact] cases can prove their
     // OWN refusal fired without inheriting an earlier, unrelated case's latch from the same
     // process (Catch2 runs every TEST_CASE in one process, random order).
-    ARCANE_CORE_API void ResetContentArtifactRefusal() noexcept;
+    ARC_CORE_API void ResetContentArtifactRefusal() noexcept;
 
     // NOTHING BELOW TAKES A DEVICE OR A TEXTURE OBJECT. Reading a rendered
     // image back is NriGraphContext::ReadCapture's job; everything here is
@@ -500,7 +500,7 @@ namespace Arcane
     // tests' RenderErrorCount()==0 gate). maxSize (0 = off) caps the LARGER
     // dimension, aspect preserved -- the loader's rule, not the thumbnail
     // writer's width cap.
-    ARCANE_CORE_API bool LoadDisplayPixels(
+    ARC_CORE_API bool LoadDisplayPixels(
         const std::filesystem::path& path, uint32_t maxSize, PixelData& out);
 
     // Repack mapped staging rows (rowPitch may exceed w*4) into a tight RGBA
@@ -510,7 +510,7 @@ namespace Arcane
     // alpha channel must not punch holes in it. Exported so that byte-order
     // contract is unit-testable without a device, which is now the only way it
     // is exercised: ReadTexturePixels, its one caller, went at ABI v15.
-    ARCANE_CORE_API void RepackStagingToRgba(
+    ARC_CORE_API void RepackStagingToRgba(
         const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
         bool bgraSource, std::vector<unsigned char>& out);
 
@@ -527,7 +527,7 @@ namespace Arcane
     // is a viewport whose aspect the user chose. Alpha is forced OPAQUE, the
     // same rule and the same reason RepackStagingToRgba states. Parent
     // directories are created. False on failure, logged as WARN, never ERROR.
-    ARCANE_CORE_API bool WriteThumbnailPngRgba(
+    ARC_CORE_API bool WriteThumbnailPngRgba(
         const std::filesystem::path& path, std::uint32_t width, std::uint32_t height,
         std::vector<unsigned char> rgba, uint32_t maxWidth = 0);
 }

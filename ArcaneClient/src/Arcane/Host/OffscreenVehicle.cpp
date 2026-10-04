@@ -22,7 +22,7 @@ namespace Arcane
 
         RenderDeviceDesc desc;
         desc.backend = cfg.backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // Mirror NriGraphContext.cpp's windowed creation half EXACTLY (same
         // three flags, same Debug-only gate). An offscreen run's
         // RenderErrorCount is the WHOLE verdict an agent gets -- there is no

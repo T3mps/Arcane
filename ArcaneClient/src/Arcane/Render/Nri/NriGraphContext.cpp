@@ -172,7 +172,7 @@ namespace Arcane
         // -------------------------------------------------------------
         RenderDeviceDesc dd;
         dd.backend = config.backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         dd.enableValidation      = true;
         dd.enableD3D12DebugLayer = true;
         dd.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
@@ -509,7 +509,7 @@ namespace Arcane
         // (the FLAG), because the out-of-range latch, ProbeX/ProbeY and the log
         // line below all describe the flag rather than the nodes.
         // ---------------------------------------------------------------
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // ...AND ONLY A HOST-WINDOW CONTEXT MAY INHERIT THE FLAG (whole-branch
         // review, I4's ledgered half). --pick-probe is a RUNTIME desk item: one
         // fixed canvas pixel, reported once as an exit code. The editor's

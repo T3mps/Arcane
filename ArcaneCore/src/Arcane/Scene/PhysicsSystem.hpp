@@ -92,9 +92,9 @@ namespace Arcane
     // Physics types were lifted to the standalone Manifold2D library (Phase 2).
     // Alias so the system code below reads Phys:: for the Manifold2D::Physics types
     // (the same alias PhysicsComponents.hpp declares: the Manifold2D facade).
-    // ARCANE_INTERNAL_BEGIN: the Manifold2D facade alias names the library once, here
+    // ARC_INTERNAL_BEGIN: the Manifold2D facade alias names the library once, here
     namespace Phys = Manifold2D::Physics;
-    // ARCANE_INTERNAL_END
+    // ARC_INTERNAL_END
 
     // What a controller reads back from its body (input-seam spec s5.3).
     // Before the body is minted, velocity comes from RigidBody2D and
@@ -147,10 +147,10 @@ namespace Arcane
         // comes from entityToBody (never PhysicsBodyRef: a game's view need not
         // name it, and before the first fixed step it does not exist yet).
         // Read the live dynamic body's velocity and floor support.
-        ARCANE_CORE_API BodyMotion2D Motion(Arcane::Entity entity, const RigidBody2D& body) const;
+        ARC_CORE_API BodyMotion2D Motion(Arcane::Entity entity, const RigidBody2D& body) const;
         // Set both axes on the live body, or the authored mint velocity before it
         // exists. Non-finite input and non-dynamic bodies are ignored.
-        ARCANE_CORE_API void SetVelocity(Arcane::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
+        ARC_CORE_API void SetVelocity(Arcane::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
 
         // Transient: Registry::Save never writes it, so a restored registry
         // has no PhysicsResource and the next EnsurePhysics mints a fresh one
@@ -309,7 +309,7 @@ namespace Arcane
 
         void operator()(Arcane::Registry& reg)
         {
-            // ARCANE_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
+            // ARC_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
             PhysicsResource* res = reg.GetResource<PhysicsResource>();
             if (!res || !res->world) return;
 
@@ -690,7 +690,7 @@ namespace Arcane
             res->lastReconcile = reg.CurrentTick();
             reg.AdvanceTick();
         }
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
 
     private:
         float m_fixedDt;    // fixed 60 Hz timestep; determinism contract: constant per run

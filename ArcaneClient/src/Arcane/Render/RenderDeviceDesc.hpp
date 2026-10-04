@@ -17,7 +17,7 @@ namespace Arcane
     struct RenderDeviceDesc
     {
         GraphicsBackend backend = GraphicsBackend::D3D12;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         bool enableValidation = true;   // NRI validation layer + VK validation
 #else
         bool enableValidation = false;

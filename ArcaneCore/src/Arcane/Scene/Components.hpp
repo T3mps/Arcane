@@ -1,7 +1,7 @@
 #pragma once
 
 // Scene components: plain reflected data. Every engine component is
-// ARCANE_REFLECT-annotated from day one (design rule) so the editor/JSON/server
+// ARC_REFLECT-annotated from day one (design rule) so the editor/JSON/server
 // path stays open at ~zero cost via the Astra 3.2 visitFields seam. Header-only;
 // reflect blocks at namespace scope register once per module (MetaRegistry is
 // idempotent), and the simulation Registry is owned by the host module.
@@ -57,7 +57,7 @@ namespace Arcane
         // tracked (F3 plan 1 T2): WorldTransform, MeshRenderer and WorldBounds
         // -- BoundsSystem and GpuSceneSync re-walk only the rows that moved.
         // Hidden is a tag and has no column to track.
-        ARCANE_CHANGE_TRACKED
+        ARC_CHANGE_TRACKED
 
         glm::vec3 position{0.0f, 0.0f, 0.0f};
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};   // identity; glm's ctor is (w, x, y, z)
@@ -86,7 +86,7 @@ namespace Arcane
 
     struct WorldTransform
     {
-        ARCANE_CHANGE_TRACKED   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
+        ARC_CHANGE_TRACKED   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
         glm::mat4 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
     };
 
@@ -98,7 +98,7 @@ namespace Arcane
     // CPU visible set, the GPU scene rows, the editor's framing.
     struct WorldBounds
     {
-        ARCANE_CHANGE_TRACKED   // exact per entity: the GPU scene re-uploads exactly the moved rows
+        ARC_CHANGE_TRACKED   // exact per entity: the GPU scene re-uploads exactly the moved rows
         Aabb box;
     };
 
@@ -172,7 +172,7 @@ namespace Arcane
     // which is the two-spellings defect the unit rule exists to prevent.
     struct MeshRenderer
     {
-        ARCANE_CHANGE_TRACKED   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
+        ARC_CHANGE_TRACKED   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
 
         // The .arcmesh asset drawn. Nil (the default) or unresolved -> draws
         // NOTHING. That is not an error: a scene may legitimately carry a slot
@@ -313,9 +313,9 @@ namespace Arcane
     // category renders as "Transform > Transform > fields" -- a click and an
     // indent that separate nothing from anything. Categories earn their keep
     // where a component has several groups; SpriteRenderer below is that case.
-    ARCANE_REFLECT_TYPE(Transform)
-        ARCANE_REFLECT_FIELD(Transform, position)
-            ARCANE_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). +Y is UP: the 2D plane is XY viewed down -Z, the same convention as the 3D camera.")
+    ARC_REFLECT_TYPE(Transform)
+        ARC_REFLECT_FIELD(Transform, position)
+            ARC_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). +Y is UP: the 2D plane is XY viewed down -Z, the same convention as the 3D camera.")
         // AngleFormat is EXPLICIT (not omitted) so this row's unit is
         // readable at the reflect block itself, without a trip to
         // AngleUnitForField's default (InspectorMeta.cpp) to confirm it.
@@ -327,50 +327,50 @@ namespace Arcane
         // SyncQuatEulerViewDegrees/ApplyQuatEulerEditDegrees, which cache the
         // displayed triple in degrees so an untouched axis is never carried
         // through a unit conversion at all.
-        ARCANE_REFLECT_FIELD(Transform, rotation)
-            ARCANE_REFLECT_ATTR(AngleFormat, Arcane::Attr::AngleFormat::Unit::Degrees)
-            ARCANE_REFLECT_ATTR(Tooltip, "Orientation, stored as a quaternion and edited as Euler angles about X/Y/Z. A 2D scene turns about Z only.")
-        ARCANE_REFLECT_FIELD(Transform, scale)
-    ARCANE_END_REFLECT_TYPE()
+        ARC_REFLECT_FIELD(Transform, rotation)
+            ARC_REFLECT_ATTR(AngleFormat, Arcane::Attr::AngleFormat::Unit::Degrees)
+            ARC_REFLECT_ATTR(Tooltip, "Orientation, stored as a quaternion and edited as Euler angles about X/Y/Z. A 2D scene turns about Z only.")
+        ARC_REFLECT_FIELD(Transform, scale)
+    ARC_END_REFLECT_TYPE()
 
     // Hidden as well as Serializable(false): these are runtime-derived caches
     // (recomputed every frame / every fixed step), and the Inspector used to
     // advertise them as "unsupported" rows -- noise about state nobody authors.
     // Unity and UE both hide derived caches outright.
-    ARCANE_REFLECT_TYPE(WorldTransform)
-        ARCANE_REFLECT_FIELD(WorldTransform, matrix)
-            ARCANE_REFLECT_ATTR(Serializable, false)
-            ARCANE_REFLECT_ATTR(Hidden)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(WorldTransform)
+        ARC_REFLECT_FIELD(WorldTransform, matrix)
+            ARC_REFLECT_ATTR(Serializable, false)
+            ARC_REFLECT_ATTR(Hidden)
+    ARC_END_REFLECT_TYPE()
 
     // Same shape as WorldTransform: engine-written by BoundsSystem, never
     // authored, never serialized (F3 plan 1 T2).
-    ARCANE_REFLECT_TYPE(WorldBounds)
-        ARCANE_REFLECT_FIELD(WorldBounds, box)
-            ARCANE_REFLECT_ATTR(Serializable, false)
-            ARCANE_REFLECT_ATTR(Hidden)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(WorldBounds)
+        ARC_REFLECT_FIELD(WorldBounds, box)
+            ARC_REFLECT_ATTR(Serializable, false)
+            ARC_REFLECT_ATTR(Hidden)
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_ENUM(SpriteShape)
-        ARCANE_REFLECT_ENUM_VALUE(SpriteShape, Rect)
-        ARCANE_REFLECT_ENUM_VALUE(SpriteShape, Circle)
-        ARCANE_REFLECT_ENUM_VALUE(SpriteShape, Capsule)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(SpriteShape)
+        ARC_REFLECT_ENUM_VALUE(SpriteShape, Rect)
+        ARC_REFLECT_ENUM_VALUE(SpriteShape, Circle)
+        ARC_REFLECT_ENUM_VALUE(SpriteShape, Capsule)
+    ARC_END_REFLECT_ENUM()
 
     // Guid reflects as a nested struct (hi/lo scalars) so the reflection->JSON
     // path round-trips component asset references (SpriteRenderer::material).
     // Registered here, NOT in Core -- Core stays Astra-free.
-    ARCANE_REFLECT_TYPE(Guid)
-        ARCANE_REFLECT_FIELD(Guid, hi)
-        ARCANE_REFLECT_FIELD(Guid, lo)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Guid)
+        ARC_REFLECT_FIELD(Guid, hi)
+        ARC_REFLECT_FIELD(Guid, lo)
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_TYPE(SpriteRenderer)
-        ARCANE_REFLECT_FIELD(SpriteRenderer, sprite)
-            ARCANE_REFLECT_ATTR(Category, "Appearance")
-            ARCANE_REFLECT_ATTR(Tooltip, "The .arcsprite asset this renderer draws. Nil renders an untextured 1x1 m tint quad scaled by the Transform.")
-        ARCANE_REFLECT_FIELD(SpriteRenderer, tint)
-            ARCANE_REFLECT_ATTR(Category, "Appearance")
+    ARC_REFLECT_TYPE(SpriteRenderer)
+        ARC_REFLECT_FIELD(SpriteRenderer, sprite)
+            ARC_REFLECT_ATTR(Category, "Appearance")
+            ARC_REFLECT_ATTR(Tooltip, "The .arcsprite asset this renderer draws. Nil renders an untextured 1x1 m tint quad scaled by the Transform.")
+        ARC_REFLECT_FIELD(SpriteRenderer, tint)
+            ARC_REFLECT_ATTR(Category, "Appearance")
         // Both are int32_t here but reach the batcher through
         // static_cast<uint16_t> (RenderSystems.hpp:104-105), which WRAPS rather
         // than clamps -- an authored -1 would sort as 65535, in front of
@@ -378,47 +378,47 @@ namespace Arcane
         // clamps to it on every path that writes these fields (drag, Ctrl+click
         // entry, and the multi-selection box), so an out-of-range value has to
         // come from somewhere other than the property panel.
-        ARCANE_REFLECT_FIELD(SpriteRenderer, sortingLayer)
-            ARCANE_REFLECT_ATTR(Category, "Sorting")
-            ARCANE_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
-        ARCANE_REFLECT_FIELD(SpriteRenderer, orderInLayer)
-            ARCANE_REFLECT_ATTR(Category, "Sorting")
-            ARCANE_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
-        ARCANE_REFLECT_FIELD(SpriteRenderer, shape)
-            ARCANE_REFLECT_ATTR(Category, "Shape")
-        ARCANE_REFLECT_FIELD(SpriteRenderer, material)
-            ARCANE_REFLECT_ATTR(Category, "Appearance")
-    ARCANE_END_REFLECT_TYPE()
+        ARC_REFLECT_FIELD(SpriteRenderer, sortingLayer)
+            ARC_REFLECT_ATTR(Category, "Sorting")
+            ARC_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
+        ARC_REFLECT_FIELD(SpriteRenderer, orderInLayer)
+            ARC_REFLECT_ATTR(Category, "Sorting")
+            ARC_REFLECT_ATTR(Range, 0.0, 65535.0, 1.0)
+        ARC_REFLECT_FIELD(SpriteRenderer, shape)
+            ARC_REFLECT_ATTR(Category, "Shape")
+        ARC_REFLECT_FIELD(SpriteRenderer, material)
+            ARC_REFLECT_ATTR(Category, "Appearance")
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_TYPE(MeshRenderer)
-        ARCANE_REFLECT_FIELD(MeshRenderer, mesh)
-            ARCANE_REFLECT_ATTR(Category, "Appearance")
-            ARCANE_REFLECT_ATTR(Tooltip, "The .arcmesh asset this renderer draws. Nil draws nothing. Size and orientation come from the Transform.")
-        ARCANE_REFLECT_FIELD(MeshRenderer, materialOverride)
-            ARCANE_REFLECT_ATTR(Category, "Appearance")
-            ARCANE_REFLECT_ATTR(Tooltip, "Overrides the mesh asset's own material for this entity only. Nil uses the mesh's default.")
-        ARCANE_REFLECT_FIELD(MeshRenderer, translucencyRenderOrder)
-            ARCANE_REFLECT_ATTR(Category, "Translucency")
-            ARCANE_REFLECT_ATTR(Tooltip, "Transparent draw priority. Higher values draw later.")
-        ARCANE_REFLECT_FIELD(MeshRenderer, translucencyDepthSortBias)
-            ARCANE_REFLECT_ATTR(Category, "Translucency")
-            ARCANE_REFLECT_ATTR(Tooltip, "Bias added to transparent projected depth, in meters.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(MeshRenderer)
+        ARC_REFLECT_FIELD(MeshRenderer, mesh)
+            ARC_REFLECT_ATTR(Category, "Appearance")
+            ARC_REFLECT_ATTR(Tooltip, "The .arcmesh asset this renderer draws. Nil draws nothing. Size and orientation come from the Transform.")
+        ARC_REFLECT_FIELD(MeshRenderer, materialOverride)
+            ARC_REFLECT_ATTR(Category, "Appearance")
+            ARC_REFLECT_ATTR(Tooltip, "Overrides the mesh asset's own material for this entity only. Nil uses the mesh's default.")
+        ARC_REFLECT_FIELD(MeshRenderer, translucencyRenderOrder)
+            ARC_REFLECT_ATTR(Category, "Translucency")
+            ARC_REFLECT_ATTR(Tooltip, "Transparent draw priority. Higher values draw later.")
+        ARC_REFLECT_FIELD(MeshRenderer, translucencyDepthSortBias)
+            ARC_REFLECT_ATTR(Category, "Translucency")
+            ARC_REFLECT_ATTR(Tooltip, "Bias added to transparent projected depth, in meters.")
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_TYPE(PhysicsSettings)
-        ARCANE_REFLECT_FIELD(PhysicsSettings, gravity)
-            ARCANE_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics block while present.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(PhysicsSettings)
+        ARC_REFLECT_FIELD(PhysicsSettings, gravity)
+            ARC_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics block while present.")
+    ARC_END_REFLECT_TYPE()
 
     // One field, so no Category -- see Transform above.
-    ARCANE_REFLECT_TYPE(PostProcess)
-        ARCANE_REFLECT_FIELD(PostProcess, material)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(PostProcess)
+        ARC_REFLECT_FIELD(PostProcess, material)
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_ENUM(CameraProjection)
-        ARCANE_REFLECT_ENUM_VALUE(CameraProjection, Orthographic)
-        ARCANE_REFLECT_ENUM_VALUE(CameraProjection, Perspective)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(CameraProjection)
+        ARC_REFLECT_ENUM_VALUE(CameraProjection, Orthographic)
+        ARC_REFLECT_ENUM_VALUE(CameraProjection, Perspective)
+    ARC_END_REFLECT_ENUM()
 
     // The Range floor on orthographicSize is deliberately above zero: a zero or
     // negative half-height has no view to derive, and ActiveSceneCamera treats
@@ -429,36 +429,36 @@ namespace Arcane
     // either lens), and each model's own fields group together so the
     // Inspector doesn't interleave a Perspective-only field between two
     // Orthographic-only ones.
-    ARCANE_REFLECT_TYPE(Camera)
-        ARCANE_REFLECT_FIELD(Camera, orthographicSize)
-            ARCANE_REFLECT_ATTR(Category, "Orthographic")
-            ARCANE_REFLECT_ATTR(Tooltip, "Half-height of the visible world, in meters. Resolution-independent: each host derives its zoom from the viewport height, so the framing holds at any window size.")
-            ARCANE_REFLECT_ATTR(Range, 0.01, 10000.0, 0.1)
-        ARCANE_REFLECT_FIELD(Camera, active)
-            ARCANE_REFLECT_ATTR(Tooltip, "Only active cameras are considered; the first one found renders the scene.")
-        ARCANE_REFLECT_FIELD(Camera, projection)
-            ARCANE_REFLECT_ATTR(Tooltip, "Orthographic (the default) preserves every 2D scene. Perspective is the 3D lens (Phase 4's mesh slice).")
-        ARCANE_REFLECT_FIELD(Camera, fovYDegrees)
-            ARCANE_REFLECT_ATTR(Category, "Perspective")
-            ARCANE_REFLECT_ATTR(Tooltip, "Vertical field of view, in degrees.")
-            ARCANE_REFLECT_ATTR(Range, 1.0, 179.0, 1.0)
-        ARCANE_REFLECT_FIELD(Camera, nearZ)
-            ARCANE_REFLECT_ATTR(Category, "Perspective")
-            ARCANE_REFLECT_ATTR(Tooltip, "Near clip plane distance, in meters (MKS).")
-            ARCANE_REFLECT_ATTR(Range, 0.001, 10000.0, 0.01)
-        ARCANE_REFLECT_FIELD(Camera, farZ)
-            ARCANE_REFLECT_ATTR(Category, "Perspective")
-            ARCANE_REFLECT_ATTR(Tooltip, "Far clip plane distance, in meters (MKS).")
-            ARCANE_REFLECT_ATTR(Range, 0.01, 1000000.0, 1.0)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Camera)
+        ARC_REFLECT_FIELD(Camera, orthographicSize)
+            ARC_REFLECT_ATTR(Category, "Orthographic")
+            ARC_REFLECT_ATTR(Tooltip, "Half-height of the visible world, in meters. Resolution-independent: each host derives its zoom from the viewport height, so the framing holds at any window size.")
+            ARC_REFLECT_ATTR(Range, 0.01, 10000.0, 0.1)
+        ARC_REFLECT_FIELD(Camera, active)
+            ARC_REFLECT_ATTR(Tooltip, "Only active cameras are considered; the first one found renders the scene.")
+        ARC_REFLECT_FIELD(Camera, projection)
+            ARC_REFLECT_ATTR(Tooltip, "Orthographic (the default) preserves every 2D scene. Perspective is the 3D lens (Phase 4's mesh slice).")
+        ARC_REFLECT_FIELD(Camera, fovYDegrees)
+            ARC_REFLECT_ATTR(Category, "Perspective")
+            ARC_REFLECT_ATTR(Tooltip, "Vertical field of view, in degrees.")
+            ARC_REFLECT_ATTR(Range, 1.0, 179.0, 1.0)
+        ARC_REFLECT_FIELD(Camera, nearZ)
+            ARC_REFLECT_ATTR(Category, "Perspective")
+            ARC_REFLECT_ATTR(Tooltip, "Near clip plane distance, in meters (MKS).")
+            ARC_REFLECT_ATTR(Range, 0.001, 10000.0, 0.01)
+        ARC_REFLECT_FIELD(Camera, farZ)
+            ARC_REFLECT_ATTR(Category, "Perspective")
+            ARC_REFLECT_ATTR(Tooltip, "Far clip plane distance, in meters (MKS).")
+            ARC_REFLECT_ATTR(Range, 0.01, 1000000.0, 1.0)
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_TYPE(Identity)
-        ARCANE_REFLECT_FIELD(Identity, id)
-            ARCANE_REFLECT_ATTR(ReadOnly)
-        ARCANE_REFLECT_FIELD(Identity, name)
-            ARCANE_REFLECT_ATTR(Tooltip, "The Outliner display name for this entity. If empty, the Outliner shows \"Entity <id>\" instead.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Identity)
+        ARC_REFLECT_FIELD(Identity, id)
+            ARC_REFLECT_ATTR(ReadOnly)
+        ARC_REFLECT_FIELD(Identity, name)
+            ARC_REFLECT_ATTR(Tooltip, "The Outliner display name for this entity. If empty, the Outliner shows \"Entity <id>\" instead.")
+    ARC_END_REFLECT_TYPE()
 
-    ARCANE_REFLECT_TYPE(Hidden)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Hidden)
+    ARC_END_REFLECT_TYPE()
 }

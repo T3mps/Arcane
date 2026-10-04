@@ -46,7 +46,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API BindlessTable
+    class ARC_API BindlessTable
     {
     public:
         static constexpr std::uint32_t kInvalidSlot = 0xFFFFFFFFu;

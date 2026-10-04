@@ -15,11 +15,11 @@
 
 namespace Arcane::Assert
 {
-    // ARCANE_INTERNAL_BEGIN: the Mosaic assert-handler seam is the library's own install point
-    ARCANE_CORE_API Mosaic::AssertHandler MosaicHandler() noexcept;
+    // ARC_INTERNAL_BEGIN: the Mosaic assert-handler seam is the library's own install point
+    ARC_CORE_API Mosaic::AssertHandler MosaicHandler() noexcept;
 
     inline void InstallMosaicHandler() noexcept { Mosaic::SetAssertHandler(MosaicHandler(), nullptr); }
-    // ARCANE_INTERNAL_END
+    // ARC_INTERNAL_END
 
     // THE ENSURE/ASSERT DISCRIMINATOR. Mosaic hands a failing guard to the
     // handler through one AssertContext with no fatal/recoverable flag in it
@@ -38,7 +38,7 @@ namespace Arcane::Assert
     // in Assert.cpp, is what makes the depth mean the same thing on both
     // sides of the boundary. Still thread-local: two threads' guards must not
     // see each other's depth.
-    ARCANE_CORE_API int& EnsureDepth() noexcept;
+    ARC_CORE_API int& EnsureDepth() noexcept;
 
     // Raises EnsureDepth() around ONE ensure's FAILURE REPORT -- not around
     // its condition (see ARC_ENSURE below, and R22). Nested (a depth, not a

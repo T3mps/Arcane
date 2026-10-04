@@ -92,7 +92,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API NriPipelineCache
+    class ARC_API NriPipelineCache
     {
     public:
         // Max colour attachments a single graphics pipeline can name here.

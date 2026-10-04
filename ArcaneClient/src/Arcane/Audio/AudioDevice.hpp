@@ -24,7 +24,7 @@ namespace Arcane::Audio
 	// call these from JobSystem workers. (The per-voice/per-bus Set* and master
 	// volume controls forward straight to miniaudio's thread-safe atomics and are
 	// not gated, but treating the whole device as main-thread-only is simplest.)
-	class ARCANE_API AudioDevice
+	class ARC_API AudioDevice
 	{
 	public:
 		AudioDevice();

@@ -29,7 +29,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::unique_ptr<Impl> on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API BootSplashWindow
+    class ARC_API BootSplashWindow
     {
     public:
         // Never throws. IsOpen() reflects ONLY whether the OS window itself was
@@ -134,7 +134,7 @@ namespace Arcane
     // presenter there is. Both hosts reveal their window from the render
     // vehicle's creation instead.
     //
-    // Header-only and deliberately NOT ARCANE_API: it derives from the
+    // Header-only and deliberately NOT ARC_API: it derives from the
     // exported IBootPresenter interface but is compiled straight into each
     // host's own TU (EditorApp.cpp / RuntimeApp.cpp), which is what gives each
     // one stable IBootPresenter& for the whole Run() call.

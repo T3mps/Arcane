@@ -90,7 +90,7 @@ namespace Arcane
 {
     class Window;
 
-    class ARCANE_API NriSwapChain
+    class ARC_API NriSwapChain
     {
     public:
         // `device` and `window` must outlive this object.

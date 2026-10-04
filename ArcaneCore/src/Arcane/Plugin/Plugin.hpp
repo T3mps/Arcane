@@ -38,7 +38,7 @@ namespace Arcane
         bool hostDebugCrt   = false;       // Kind::CrtFlavorMismatch: this host's CRT family
     };
 
-    class ARCANE_CORE_API Plugin
+    class ARC_CORE_API Plugin
     {
     public:
         Plugin(Plugin&&) noexcept = default;

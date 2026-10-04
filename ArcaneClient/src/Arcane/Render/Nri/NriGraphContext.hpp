@@ -296,7 +296,7 @@ namespace Arcane
     // driver hands us: nothing here is free to pick a channel order.
     inline constexpr nri::Format kGraphOffscreenFormat = nri::Format::BGRA8_UNORM;
 
-    class ARCANE_API NriGraphContext
+    class ARC_API NriGraphContext
     {
     public:
         // Which of the two ways this vehicle was created -- see OFFSCREEN MODE
@@ -1754,6 +1754,6 @@ namespace Arcane
         RgTexture depth{};
     };
 
-    ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
+    ARC_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
                                                  NriGraphContext* context);
 }

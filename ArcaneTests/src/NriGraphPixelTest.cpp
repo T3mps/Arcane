@@ -40,7 +40,7 @@
 // EVERYTHING GOES THROUGH EXPORTED Arcane CLASSES, never a raw nri* call. This
 // exe links its OWN static copy of NRI, so a bare nri* function here would run
 // against a different function table than the device it was handed. Both
-// NativeDeviceOwner and NriDevice are ARCANE_API, so `Wrap` executes inside
+// NativeDeviceOwner and NriDevice are ARC_API, so `Wrap` executes inside
 // ArcaneClient.dll and the device that comes back is the DLL's -- which is the
 // one CreateOffscreen must be given. NriSubstrateTest.cpp's wrap smoke carries
 // the same rule for the same reason.
@@ -164,7 +164,7 @@ namespace
 
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // Mirror OffscreenVehicle::Create / NriGraphContext.cpp's windowed
         // creation half EXACTLY (same three flags, same Debug-only gate).
         // These [gpu][pixel] cases are node-level frame-graph tests -- they

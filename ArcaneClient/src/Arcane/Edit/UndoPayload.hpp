@@ -30,7 +30,7 @@ namespace Arcane
 #endif
     namespace Detail
     {
-        struct ARCANE_API UndoSpillFile
+        struct ARC_API UndoSpillFile
         {
             explicit UndoSpillFile(std::filesystem::path p) : path(std::move(p)) {}
             ~UndoSpillFile();   // removes the file
@@ -46,7 +46,7 @@ namespace Arcane
         };
     }
 
-    class ARCANE_API UndoPayload
+    class ARC_API UndoPayload
     {
     public:
         UndoPayload() = default;

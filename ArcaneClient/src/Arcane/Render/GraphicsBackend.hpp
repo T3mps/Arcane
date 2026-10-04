@@ -27,5 +27,5 @@ namespace Arcane
         Vulkan,
     };
 
-    ARCANE_API const char* ToString(GraphicsBackend backend);
+    ARC_API const char* ToString(GraphicsBackend backend);
 }

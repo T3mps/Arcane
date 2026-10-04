@@ -37,19 +37,19 @@ namespace Arcane
     // a Uint8Array, which TRUNCATES toward zero. Callers that need a byte must
     // static_cast, never round, or the diff image and the padded channels both
     // drift one level from upstream.
-    [[nodiscard]] ARCANE_CORE_API double BlendWithWhite(double c, double a) noexcept;
+    [[nodiscard]] ARC_CORE_API double BlendWithWhite(double c, double a) noexcept;
 
     // (77*r + 150*g + 29*b + 128) >> 8 -- the exact integer formula from
     // SSIM.js, used only to tint unchanged pixels in the diff image.
-    [[nodiscard]] ARCANE_CORE_API int Rgb2Gray(int r, int g, int b) noexcept;
+    [[nodiscard]] ARC_CORE_API int Rgb2Gray(int r, int g, int b) noexcept;
 
     // sRGB (0..255 per channel) -> 1-normalised CIE XYZ, D65. Applies the real
     // sRGB transfer function including its linear segment below 0.04045 -- a
     // plain pow(c, 2.2) is wrong in the shadows and would fail conformance.
-    ARCANE_CORE_API void Srgb2Xyz(const double rgb[3], double xyz[3]) noexcept;
+    ARC_CORE_API void Srgb2Xyz(const double rgb[3], double xyz[3]) noexcept;
 
     // 1-normalised CIE XYZ (D65) -> L*a*b*.
-    ARCANE_CORE_API void Xyz2Lab(const double xyz[3], double lab[3]) noexcept;
+    ARC_CORE_API void Xyz2Lab(const double xyz[3], double lab[3]) noexcept;
 
     // CIE94 perceived colour difference, "graphic arts" weights
     // (k1=0.045, k2=0.015, kL=kC=kH=1). 1.0 is the just-noticeable-difference.
@@ -57,13 +57,13 @@ namespace Arcane
     // ASYMMETRIC: sC and sH are built from rgb1's chroma alone, so
     // ColorDeltaE94(a, b) != ColorDeltaE94(b, a) in general. rgb1 is always the
     // EXPECTED image. Do not "fix" this into a symmetric formula.
-    [[nodiscard]] ARCANE_CORE_API double ColorDeltaE94(const double rgb1[3], const double rgb2[3]) noexcept;
+    [[nodiscard]] ARC_CORE_API double ColorDeltaE94(const double rgb1[3], const double rgb2[3]) noexcept;
 
     // ---- channels (imageChannel.ts) --------------------------------------
 
     // One 8-bit plane of an image, optionally surrounded by padding so that a
     // window centred on a real pixel never runs off the end.
-    struct ARCANE_CORE_API ImageChannel
+    struct ARC_CORE_API ImageChannel
     {
         std::uint32_t width = 0, height = 0;
         std::vector<unsigned char> data;
@@ -102,7 +102,7 @@ namespace Arcane
     // so the blend is a no-op on them -- but size-mismatch padding is
     // transparent black, which must read as white, and the conformance corpus
     // contains genuinely translucent fixtures.
-    ARCANE_CORE_API void IntoRgb(std::uint32_t width, std::uint32_t height,
+    ARC_CORE_API void IntoRgb(std::uint32_t width, std::uint32_t height,
                             const unsigned char* rgba, const PaddingOptions& options,
                             ImageChannel& r, ImageChannel& g, ImageChannel& b);
 
@@ -122,7 +122,7 @@ namespace Arcane
     // double rounds. Exact integer arithmetic would produce a slightly
     // different variance and break the bit-parity ImageCompareConformanceTest
     // asserts. The rounding is inherited deliberately.
-    class ARCANE_CORE_API FastStats
+    class ARC_CORE_API FastStats
     {
     public:
         // Both planes must have identical dimensions.
@@ -154,7 +154,7 @@ namespace Arcane
     // ONE channel. compare() averages the three itself. Stabilising constants
     // are (0.01 * 255)^2 and (0.03 * 255)^2, the standard SSIM choices for an
     // 8-bit dynamic range.
-    [[nodiscard]] ARCANE_CORE_API double Ssim(const FastStats& stats,
+    [[nodiscard]] ARC_CORE_API double Ssim(const FastStats& stats,
                                          std::uint32_t x1, std::uint32_t y1,
                                          std::uint32_t x2, std::uint32_t y2) noexcept;
 
@@ -190,7 +190,7 @@ namespace Arcane
     // (dy/blockH)*10 + (dx/blockW), block size ceil(extent/10)). Supplied by
     // CompareImages to derive maxLocalDifference; a direct caller that only
     // wants the aggregate count leaves it null.
-    [[nodiscard]] ARCANE_CORE_API std::uint64_t Compare(
+    [[nodiscard]] ARC_CORE_API std::uint64_t Compare(
         const unsigned char* expected, const unsigned char* actual,
         unsigned char* diff,
         std::uint32_t width, std::uint32_t height,
@@ -201,7 +201,7 @@ namespace Arcane
     //
     // CompareImages is the entry point this header is FOR -- the one call an
     // outside consumer should make. Everything above (ImageChannel, FastStats,
-    // Compare, ...) is ARCANE_CORE_API-exported only so ArcaneTests can exercise
+    // Compare, ...) is ARC_CORE_API-exported only so ArcaneTests can exercise
     // the cascade's internals directly across the DLL boundary; it is test
     // surface, not a menu of public API to build against.
 
@@ -269,7 +269,7 @@ namespace Arcane
     // top-left (which the channel split then composites to white), the
     // comparison still runs, and the mismatch is reported as its own named
     // fact beside the pixel count. Never rescales, never throws.
-    [[nodiscard]] ARCANE_CORE_API ImageCompareResult CompareImages(
+    [[nodiscard]] ARC_CORE_API ImageCompareResult CompareImages(
         const PixelData& expected, const PixelData& actual,
         const ImageCompareOptions& options = {});
 }

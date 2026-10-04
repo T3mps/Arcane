@@ -2142,7 +2142,7 @@ namespace Arcane::Editor
         // outlives the modal's OK button.
         std::vector<Arcane::Diagnostic>    m_createDiagnostics;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // ---- Deliberate GPU fault (GPU crash diagnostics arc, Task 11) ------
         // The desk battery's trigger: Build -> Diagnostics -> Crash GPU
         // (diagnostics test) raises MenuRequests::crashGpu, ConsumeMenuRequests

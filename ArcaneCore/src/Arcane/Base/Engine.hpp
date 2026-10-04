@@ -8,7 +8,7 @@ namespace Arcane
 {
     // Version + build flavor of the loaded engine DLL. Doubles as the
     // simplest possible export for proving the DLL boundary works.
-    ARCANE_CORE_API const char* BuildInfo();
+    ARC_CORE_API const char* BuildInfo();
 
     // Absolute path of the running executable, UTF-8, forward-slashed. Empty if
     // the OS could not report it.
@@ -21,5 +21,5 @@ namespace Arcane
     // valid UTF-8 -- feeding them to a strict-UTF-8 JSON writer throws. This
     // resolves the WIDE path from the OS and converts it explicitly to UTF-8, so
     // callers get well-formed bytes regardless of the active codepage.
-    ARCANE_CORE_API std::string ExecutablePathUtf8();
+    ARC_CORE_API std::string ExecutablePathUtf8();
 }

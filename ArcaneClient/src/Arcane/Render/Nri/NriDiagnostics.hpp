@@ -77,7 +77,7 @@ namespace Arcane
         //
         // `device` must outlive the arming, i.e. Disarm() must run before it
         // is destroyed. NriGraphContext owns both calls.
-        ARCANE_API bool Arm(NriDevice& device);
+        ARC_API bool Arm(NriDevice& device);
 
         // Empties exactly what Arm() installed, and only if Arm() installed
         // it -- the active-backend slot clears CONDITIONALLY
@@ -85,19 +85,19 @@ namespace Arcane
         // after us keeps its registration. Fences reports before the backend
         // object is destroyed, the same ordering ~DeviceD3D12 owed
         // (Diagnostics::FenceReports). Idempotent; a no-op when not armed.
-        ARCANE_API void Disarm() noexcept;
+        ARC_API void Disarm() noexcept;
 
         // Whether Arm() currently holds the chain. False when something else
         // holds it even though the chain IS armed -- which is the honest
         // answer to "did THIS installer arm it". That was the two-device
         // topology's normal state; since Task 8b it is a test-only shape.
-        [[nodiscard]] ARCANE_API bool IsArmed() noexcept;
+        [[nodiscard]] ARC_API bool IsArmed() noexcept;
 
         // The backend Arm() installed, or null when not armed. Exposed so a
         // device-less case can state the slot-identity property
         // (ActiveGpuCrashBackend() == ArmedBackend()) rather than merely
         // "something is installed".
-        [[nodiscard]] ARCANE_API IGpuCrashBackend* ArmedBackend() noexcept;
+        [[nodiscard]] ARC_API IGpuCrashBackend* ArmedBackend() noexcept;
 
         // "The GPU is still retiring work", published from the graph path.
         //
@@ -113,9 +113,9 @@ namespace Arcane
         // decision and it lives at the two ends (the swapchain's fence, the
         // watchdog's rule). Having the seam named here anyway is what lets the
         // graph path's publisher be found, tested and moved as one thing.
-        ARCANE_API void PublishHeartbeat(std::uint64_t completedFenceValue) noexcept;
+        ARC_API void PublishHeartbeat(std::uint64_t completedFenceValue) noexcept;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // THE FAULT INJECTOR TWIN (`--crash-gpu N` on the graph path).
         //
         // Dispatches data/shaders/gpu_fault.hlsl -- the TDR-loop shader --
@@ -140,7 +140,7 @@ namespace Arcane
         //
         // THE ONE HAND-WRITTEN BARRIER IN THE NRI TREE lives inside this call.
         // See the .cpp for the exemption's terms.
-        ARCANE_API bool FireFault(NriDevice& device, nri::Queue& queue);
+        ARC_API bool FireFault(NriDevice& device, nri::Queue& queue);
 #endif
     }
 }

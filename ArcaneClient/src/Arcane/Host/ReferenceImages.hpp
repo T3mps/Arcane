@@ -38,7 +38,7 @@ namespace Arcane
     // and a second, independently-drifting copy of this predicate is exactly
     // how the two validators would end up disagreeing about what "unsafe"
     // means.
-    [[nodiscard]] ARCANE_API bool ReferenceNameIsSafe(const std::string& name) noexcept;
+    [[nodiscard]] ARC_API bool ReferenceNameIsSafe(const std::string& name) noexcept;
 
     enum class ReferenceLevel : std::uint8_t
     {
@@ -68,13 +68,13 @@ namespace Arcane
     // blessTarget empty) rather than resolved: it arrives from a command line,
     // and blessing writes files. `backend` is guarded the same way -- it is
     // also command-line-sourced (Task 8 reads it from the host), not a literal.
-    [[nodiscard]] ARCANE_API ReferenceResolution ResolveReference(
+    [[nodiscard]] ARC_API ReferenceResolution ResolveReference(
         const std::filesystem::path& projectRoot,
         const std::string& name, const std::string& backend);
 
     // Write `rgba` (tight RGBA8) to resolution.blessTarget, creating parents.
     // False on a refused name (blessTarget empty) or any IO failure.
-    [[nodiscard]] ARCANE_API bool BlessReference(
+    [[nodiscard]] ARC_API bool BlessReference(
         const ReferenceResolution& resolution,
         std::uint32_t width, std::uint32_t height, const unsigned char* rgba);
 
@@ -88,7 +88,7 @@ namespace Arcane
     // Task 8 WRITES to the result on a comparison failure. An EMPTY return
     // means the name or backend was refused -- the caller must not write
     // anything in that case.
-    [[nodiscard]] ARCANE_API std::filesystem::path DiffArtifactPath(
+    [[nodiscard]] ARC_API std::filesystem::path DiffArtifactPath(
         const std::filesystem::path& projectRoot,
         const std::string& name, const std::string& backend);
 }

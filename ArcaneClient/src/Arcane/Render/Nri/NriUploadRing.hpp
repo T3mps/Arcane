@@ -56,7 +56,7 @@ namespace Arcane
     // these; nothing else needs to, but nothing stops a caller from using
     // one standalone (which is exactly what the device-less tests do).
     // -----------------------------------------------------------------
-    class ARCANE_API RingLayout
+    class ARC_API RingLayout
     {
     public:
         struct AllocResult
@@ -114,7 +114,7 @@ namespace Arcane
     // NONE-backend / [gpu] caveat: nothing below has ever executed in this
     // tree -- it is a desk-verify item for Task 8+'s integration.
     // -----------------------------------------------------------------
-    class ARCANE_API NriUploadRing
+    class ARC_API NriUploadRing
     {
     public:
         struct Alloc

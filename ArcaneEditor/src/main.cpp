@@ -461,9 +461,9 @@ int main(int argc, char** argv)
             "  --compare <name> [--bless] for a composited editor capture and verification.\n");
         return 2;
     }
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --pick-probe: DEV-ONLY, matching HostConfig.hpp/.cpp's own
-    // #if !defined(ARCANE_DIST) guard around the pickProbe member and its Cli
+    // #if !defined(ARC_BUILD_DIST) guard around the pickProbe member and its Cli
     // registration -- the member does not exist on a Dist build, so reading
     // parsed.config->pickProbe unguarded would fail to COMPILE there, not just
     // misbehave (confirmed by building Dist below). Same reasoning and same

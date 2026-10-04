@@ -186,7 +186,7 @@ namespace Arcane
         [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }
     };
 
-    class ARCANE_API Batcher2D
+    class ARC_API Batcher2D
     {
     public:
         // Never returns null. A Batcher2D IS DEVICE-LESS: it takes no

@@ -37,7 +37,7 @@ namespace Arcane
     // The mirror generation the device last synced (GpuScene::Apply stamps it
     // on success); 0 for a null device, which GpuSceneSync reads as "never
     // synced" -> full rebuild. Re-declared identically in GpuScene.hpp.
-    [[nodiscard]] ARCANE_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
+    [[nodiscard]] ARC_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
 
     // THE VISIBILITY OBSERVABILITY SEAM (F3 plan 2 T5), NRI-free for the same
     // reason the generation above is: the hosts read it, and neither
@@ -65,8 +65,8 @@ namespace Arcane
     // THE HONEST ANSWER and must never be replaced by a CPU count: "the GPU
     // emitted N" and "the CPU expected N" are different facts, and a report
     // that conflates them tells a witness the cull ran when it may not have.
-    ARCANE_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
-    [[nodiscard]] ARCANE_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
+    ARC_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
+    [[nodiscard]] ARC_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
 
     [[nodiscard]] inline bool SameView(const ViewTransform& a, const ViewTransform& b) noexcept
     {

@@ -14,7 +14,7 @@
 #include <Arcane/EcsFwd.hpp>
 #include <Arcane/Sim/Time.hpp>
 
-// ARCANE_INTERNAL_BEGIN: the facade's library side
+// ARC_INTERNAL_BEGIN: the facade's library side
 #include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Core/Result.hpp>
 #include <Astra/Core/Tick.hpp>
@@ -64,4 +64,4 @@ namespace Arcane
     template<typename T, typename E> using Result = Astra::Result<T, E>;
     using SerializationError = Astra::SerializationError;
 }
-// ARCANE_INTERNAL_END
+// ARC_INTERNAL_END

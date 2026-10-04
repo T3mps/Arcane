@@ -137,7 +137,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API ImGuiNri
+    class ARC_API ImGuiNri
     {
     public:
         ImGuiNri() = default;

@@ -55,7 +55,7 @@ namespace Arcane
     class Graveyard;
     class NriGraphContext;
 
-    class ARCANE_API ImGuiNriNode
+    class ARC_API ImGuiNriNode
     {
     public:
         // Loads imgui_vs/imgui_ps through the vehicle and builds the backend's
@@ -167,6 +167,6 @@ namespace Arcane
     // context is the device-less declaration-shape drive the [nri] frame-shape
     // cases use, where every declaration is identical and only the exec fn is
     // inert.
-    ARCANE_API void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target,
+    ARC_API void AddImGuiNode(RenderGraph& graph, NriGraphContext* context, RgTexture target,
                                  ImGuiNodeSlot slot = ImGuiNodeSlot::HostHud);
 }

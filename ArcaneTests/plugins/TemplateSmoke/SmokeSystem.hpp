@@ -11,7 +11,7 @@
 // Fixed-update systems run before transform propagation by default so gameplay
 // can move local transforms first. Registrar discovery order is irrelevant:
 // scheduler order is expressed only through Before<> and After<> traits.
-// The ARCANE_SYSTEM declaration that selects phase and network role is in
+// The ARC_SYSTEM declaration that selects phase and network role is in
 // SmokeSystem.cpp.
 
 #include <Arcane/Ecs.hpp>

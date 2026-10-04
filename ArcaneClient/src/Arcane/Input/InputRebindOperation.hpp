@@ -18,7 +18,7 @@ namespace Arcane
         std::string replacementPath;
     };
 
-    class ARCANE_API InputRebindOperation
+    class ARC_API InputRebindOperation
     {
     public:
         void Begin(const Guid& bindingId, std::optional<InputDevice> eligibleDevice,

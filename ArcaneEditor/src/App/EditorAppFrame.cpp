@@ -391,7 +391,7 @@ namespace Arcane::Editor
             // EditorApp.hpp's Report-written notify section.
             PollDiagnosticReports();
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
             // --crash-gpu N: the same deliberate fault Build -> Diagnostics ->
             // Crash GPU fires, on a schedule, so the desk battery's editor items
             // can be SCRIPTED rather than clicked -- and so a flag both hosts
@@ -2688,7 +2688,7 @@ namespace Arcane::Editor
         // fire-and-forget.
         if (menuReq.openIde)
             OpenInIde({});
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // Build -> Diagnostics -> Crash GPU: fired RIGHT HERE, mid-ImGui-pass,
         // rather than deferred to a frame boundary the way the scene/project
         // requests above are. It needs no teardown and no dialog, and this

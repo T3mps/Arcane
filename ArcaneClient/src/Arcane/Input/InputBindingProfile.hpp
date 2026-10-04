@@ -19,7 +19,7 @@ namespace Arcane
         std::vector<std::string> diagnostics;
     };
 
-    class ARCANE_API InputBindingProfile
+    class ARC_API InputBindingProfile
     {
     public:
         [[nodiscard]] ProfileLoadResult Load(const std::filesystem::path& path,

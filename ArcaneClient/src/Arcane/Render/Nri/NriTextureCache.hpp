@@ -61,7 +61,7 @@ namespace Arcane
     struct PixelData;
     struct LoadedClientArtifact;
 
-    class ARCANE_API NriTextureCache
+    class ARC_API NriTextureCache
     {
     public:
         // Guid -> decoded RGBA8 pixels, or null when the id names nothing this

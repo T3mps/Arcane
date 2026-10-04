@@ -19,7 +19,7 @@
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     #include <Arcane/Render/GpuFaultInjector.hpp>   // kPassName -- ONE spelling of the breadcrumb both arms produce
     #include <Arcane/Render/ShaderConventions.hpp>  // kCsEntry -- the entry name the artifact was compiled with
     #include <Arcane/Render/ShaderPaths.hpp>        // ResolveFlavorDir -- the ONE artifact directory every shader loader resolves through
@@ -339,7 +339,7 @@ namespace Arcane
     }
 }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
 
 namespace Arcane
 {
@@ -826,7 +826,7 @@ namespace Arcane
             // The budget is generous on purpose (observed 15.9 s here; TdrDelay
             // is machine-configurable) and bounded on purpose (a `--crash-gpu`
             // that somehow did NOT kill the device must not wedge the host).
-            // This whole function is `#if !defined(ARCANE_DIST)` and only runs
+            // This whole function is `#if !defined(ARC_BUILD_DIST)` and only runs
             // under an explicit `--crash-gpu`, so a multi-second poll costs
             // nothing anyone ships. The hang watchdog WILL file a report while
             // we sit here -- vulkan's arm already does exactly that at ~12 s
@@ -881,4 +881,4 @@ namespace Arcane
     }
 }
 
-#endif   // !ARCANE_DIST
+#endif   // !ARC_BUILD_DIST

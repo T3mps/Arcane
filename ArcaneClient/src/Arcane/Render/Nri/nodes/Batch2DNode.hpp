@@ -142,7 +142,7 @@ namespace Arcane
     // the layout outright -- and the test that asserts those counts are zero is
     // the cheap way to find that out, rather than a desk run on a device.
     // =====================================================================
-    struct ARCANE_API SpriteMaterialLayout
+    struct ARC_API SpriteMaterialLayout
     {
         // Fills everything for a material whose template has `cbSize` bytes of
         // numeric params (0 == none, and then there is no b1 range at all) and
@@ -170,7 +170,7 @@ namespace Arcane
         SpriteMaterialLayout& operator=(const SpriteMaterialLayout&) = delete;
     };
 
-    class ARCANE_API Batch2DNode
+    class ARC_API Batch2DNode
     {
     public:
         // Loads the six built-in shader bins through the vehicle, creates the
@@ -534,6 +534,6 @@ namespace Arcane
     // device: with a null context every declaration is identical and the exec
     // fn does nothing, which is exactly what makes that test able to fail when
     // this function's DECLARATIONS change.
-    ARCANE_API RgTexture AddBatch2DNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddBatch2DNode(RenderGraph& graph, NriGraphContext* context,
                                         std::uint32_t width, std::uint32_t height);
 }

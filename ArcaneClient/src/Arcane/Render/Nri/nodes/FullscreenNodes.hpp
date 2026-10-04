@@ -122,7 +122,7 @@ namespace Arcane
     // sampler (the D3D12 table merge), and every range visible to BOTH stages
     // (a template's %{VERTEX_BODY} may read params and sample textures).
     // =====================================================================
-    struct ARCANE_API FullscreenMaterialLayout
+    struct ARC_API FullscreenMaterialLayout
     {
         // Fills everything for a material whose merged template has `cbSize`
         // bytes of numeric params (0 == none, and then there is no b0 range at
@@ -196,7 +196,7 @@ namespace Arcane
     // has retired before this frame records into it (the pacing wait inside
     // NriSwapChain::AcquireNextTexture).
     // =====================================================================
-    class ARCANE_API PostChainNode
+    class ARC_API PostChainNode
     {
     public:
         // Builds the fallback texels, the sampler, the pool and the arena.
@@ -412,7 +412,7 @@ namespace Arcane
         bool m_warnedViewChurn = false;
     };
 
-    class ARCANE_API TonemapNode
+    class ARC_API TonemapNode
     {
     public:
         // Loads tonemap_vs/ps through the vehicle and builds the sampler,
@@ -514,7 +514,7 @@ namespace Arcane
     // and values were already consumed by PostChainNode::PrepareChain, which
     // is also what decided `passCount`. `context` may be null -- see
     // AddBatch2DNode's signature note.
-    ARCANE_API RgTexture AddPostChainNodes(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddPostChainNodes(RenderGraph& graph, NriGraphContext* context,
                                            RgTexture scene, const PostChainDesc& desc,
                                            std::uint32_t passCount,
                                            std::uint32_t width, std::uint32_t height);
@@ -538,7 +538,7 @@ namespace Arcane
     //     well as frame N) and a SHADER_RESOURCE exit, so the frame ends with
     //     the texture in a state a sampler can read. NOTHING is presented.
     // The pointer is recorded, never dereferenced here.
-    ARCANE_API RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context,
                                         RgTexture source,
                                         nri::Texture* offscreenOutput = nullptr);
 }

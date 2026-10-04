@@ -66,7 +66,7 @@ namespace Arcane::HostBoot
         std::string diagnostic;
     };
 
-    [[nodiscard]] ARCANE_API GameplayInputLoadResult LoadGameplayInput(
+    [[nodiscard]] ARC_API GameplayInputLoadResult LoadGameplayInput(
         ClientRuntime& runtime, const Project& project);
 
     // VerifySharedTypeContext moved to Arcane::ProjectHost (ArcaneCore.dll,
@@ -249,17 +249,17 @@ namespace Arcane::HostBoot
     // BootStageParityTest fails if a host's id list drops one, and the
     // sentinel fails loudly if a host's id list keeps it but never patches
     // (or renames/typos) it.
-    [[nodiscard]] ARCANE_API std::vector<BootStage> CoreStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> CoreStages(BootContext& ctx);
 
     // Ids only -- no context needed, so tests and tooling can ask "what is the
     // canonical list?" without constructing a host.
-    [[nodiscard]] ARCANE_API std::vector<std::string> CoreStageIds();
+    [[nodiscard]] ARC_API std::vector<std::string> CoreStageIds();
 
     // Exactly what each host builds, exposed for BootStageParityTest. These must
     // be the SAME functions the hosts call, not reimplementations -- a parallel
     // copy would test itself and prove nothing.
-    [[nodiscard]] ARCANE_API std::vector<BootStage> EditorStages(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<BootStage> RuntimeStages(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<std::string> EditorStageIdsForTest(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<std::string> RuntimeStageIdsForTest(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> EditorStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> RuntimeStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<std::string> EditorStageIdsForTest(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<std::string> RuntimeStageIdsForTest(BootContext& ctx);
 }

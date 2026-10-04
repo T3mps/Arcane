@@ -72,7 +72,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)
 #endif
-    class ARCANE_CORE_API CVarRegistry
+    class ARC_CORE_API CVarRegistry
     {
     public:
         CVarRegistry();

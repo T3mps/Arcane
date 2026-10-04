@@ -378,7 +378,7 @@ namespace Arcane
         nri::CullMode                            cullMode   = nri::CullMode::BACK;
     };
 
-    class ARCANE_API MeshNode
+    class ARC_API MeshNode
     {
     public:
         // Loads mesh_vs/mesh_ps through the vehicle, creates the bindless
@@ -803,7 +803,7 @@ namespace Arcane
     // ad-hoc rows Prepare built (MeshNode::AdHocRows) for its scratch
     // region, and Record draws both halves -- the batches indirect, the
     // ad-hoc rows direct -- with the context's GpuScene passed in.
-    ARCANE_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
                                       RgTexture canvas, nri::Format canvasFormat,
                                       const MeshSceneDesc& scene,
                                       std::uint32_t width, std::uint32_t height);

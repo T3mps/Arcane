@@ -101,7 +101,7 @@ namespace Arcane::Editor
         bool copyAssetPath = false;    // Assets -> Copy Path        (on the browser's tracked row)
         bool openAssetAsText = false;  // Assets -> Open as text     (on the browser's tracked row)
         bool togglePhysicsOverlay = false;   // View -> Physics Overlay
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // Build -> Diagnostics -> Crash GPU (diagnostics test). Dev-only, and
         // the only menu request whose SUCCESS is this process dying: it
         // dispatches Arcane::GpuFaultInjector and the device is expected to be

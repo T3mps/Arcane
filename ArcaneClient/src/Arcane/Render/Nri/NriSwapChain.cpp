@@ -246,7 +246,7 @@ namespace Arcane
         // unconditional ARC_WARN on the release path so the violation is
         // never silent in ANY config, matching Graveyard's own
         // debug-fatal/release-warn idiom (Graveyard.cpp's ~Graveyard()).
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         ARC_ASSERT(!m_acquired,
                     "NriSwapChain::Resize: called with an outstanding un-Presented "
                     "AcquireNextTexture() -- sequence Resize() at frame boundaries only");

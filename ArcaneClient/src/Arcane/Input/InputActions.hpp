@@ -109,7 +109,7 @@ namespace Arcane
     inline constexpr float kDefaultHoldSeconds = 0.4f;
     inline constexpr float kDefaultTapSeconds = 0.2f;
 
-    class ARCANE_API InputActions
+    class ARC_API InputActions
     {
     public:
         static std::unique_ptr<InputActions> Create();

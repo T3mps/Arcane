@@ -94,9 +94,9 @@ namespace Arcane
         // PhysicsResource::entityToBody in the same pass that fills `prev`, so the
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
-        // ARCANE_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
+        // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
         Astra::FlatMap<Arcane::Entity, InterpSlot> slotOf;
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
         bool                    captured = false;   // false until the first capture
 
         template<typename Archive>

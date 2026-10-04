@@ -177,7 +177,7 @@ namespace Arcane
         Utility,      // designer escapes and canvas furniture
     };
 
-    [[nodiscard]] ARCANE_CORE_API const char* GraphNodeCategoryName(GraphNodeCategory c) noexcept;
+    [[nodiscard]] ARC_CORE_API const char* GraphNodeCategoryName(GraphNodeCategory c) noexcept;
 
     // Static per-type description -- THE node table (SG lesson: ~90% of a node
     // library is data, not code). Codegen, the canvas (labels, pin colors,
@@ -207,9 +207,9 @@ namespace Arcane
         const char*   description;
     };
 
-    [[nodiscard]] ARCANE_CORE_API const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept;
-    [[nodiscard]] ARCANE_CORE_API std::span<const GraphNodeTypeInfo> AllGraphNodeInfos() noexcept;
-    [[nodiscard]] ARCANE_CORE_API bool GraphNodeTypeFromToken(std::string_view token,
+    [[nodiscard]] ARC_CORE_API const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept;
+    [[nodiscard]] ARC_CORE_API std::span<const GraphNodeTypeInfo> AllGraphNodeInfos() noexcept;
+    [[nodiscard]] ARC_CORE_API bool GraphNodeTypeFromToken(std::string_view token,
                                                          GraphNodeType& out) noexcept;
 
     // A Custom node's user-authored input pin (name doubles as the function
@@ -382,11 +382,11 @@ namespace Arcane
     // (Custom nodes carry their own pin list; every other type reads the
     // static table). Returned GraphPinDesc.name points into the node for
     // Custom pins -- transient use only.
-    [[nodiscard]] ARCANE_CORE_API std::uint32_t GraphNodeInputCount(const GraphNode& n) noexcept;
-    [[nodiscard]] ARCANE_CORE_API std::uint32_t GraphNodeOutputCount(const GraphNode& n) noexcept;
-    [[nodiscard]] ARCANE_CORE_API GraphPinDesc GraphNodeInputPin(const GraphNode& n,
+    [[nodiscard]] ARC_CORE_API std::uint32_t GraphNodeInputCount(const GraphNode& n) noexcept;
+    [[nodiscard]] ARC_CORE_API std::uint32_t GraphNodeOutputCount(const GraphNode& n) noexcept;
+    [[nodiscard]] ARC_CORE_API GraphPinDesc GraphNodeInputPin(const GraphNode& n,
                                                             std::uint32_t pin) noexcept;
-    [[nodiscard]] ARCANE_CORE_API GraphPinDesc GraphNodeOutputPin(const GraphNode& n,
+    [[nodiscard]] ARC_CORE_API GraphPinDesc GraphNodeOutputPin(const GraphNode& n,
                                                              std::uint32_t pin) noexcept;
 
     // Does a literal on `pin` actually REACH codegen? Only pins emitted
@@ -398,7 +398,7 @@ namespace Arcane
     // emission switch it mirrors (MaterialGraph.cpp) so the two move together,
     // with MaterialGraphTest.cpp's explicit truth table as the tripwire when
     // they do not.
-    [[nodiscard]] ARCANE_CORE_API bool GraphPinAcceptsLiteral(const GraphNode& n,
+    [[nodiscard]] ARC_CORE_API bool GraphPinAcceptsLiteral(const GraphNode& n,
                                                     std::uint32_t pin) noexcept;
 
     // What an UNWIRED, literal-free input pin reads -- codegen's NEUTRAL, the
@@ -417,7 +417,7 @@ namespace Arcane
         float               v[4]  = {};
         const char*         hlsl  = "0.0";
     };
-    [[nodiscard]] ARCANE_CORE_API GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n,
+    [[nodiscard]] ARC_CORE_API GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n,
                                                                          std::uint32_t pin) noexcept;
 
     // How many lanes a literal stores for a pin of `declaredWidth` (the
@@ -426,7 +426,7 @@ namespace Arcane
     // Codegen, the serializer and the editor's drag widget all read this ONE
     // rule; a widget that edits more lanes than the file stores would show
     // values that never survive a save.
-    [[nodiscard]] ARCANE_CORE_API int GraphPinLiteralLanes(int declaredWidth) noexcept;
+    [[nodiscard]] ARC_CORE_API int GraphPinLiteralLanes(int declaredWidth) noexcept;
 
     // What a node's DYNAMIC (width-0) pins resolve to on this graph -- the
     // width rule at GraphPinDesc above, as one function. Codegen reads it
@@ -455,7 +455,7 @@ namespace Arcane
     // included (the canvas draws them). Best effort on a graph codegen would
     // refuse: links to a missing node or pin are ignored, the first of two
     // duplicate ids wins, and an edge that closes a cycle contributes nothing.
-    [[nodiscard]] ARCANE_CORE_API std::unordered_map<std::uint32_t, GraphNodeWidths>
+    [[nodiscard]] ARC_CORE_API std::unordered_map<std::uint32_t, GraphNodeWidths>
     ResolveGraphNodeWidths(const MaterialGraph& graph);
 
     // Structured codegen diagnostics: the canvas badges the offending node (SG:
@@ -509,7 +509,7 @@ namespace Arcane
     // makes them invalid anywhere without wired inputs). `passGraph` marks an
     // EXTRA pass's graph: Vertex Output is barred there (the vertex stage
     // belongs to the base).
-    [[nodiscard]] ARCANE_CORE_API GraphCodegenResult GenerateGraphSnippet(
+    [[nodiscard]] ARC_CORE_API GraphCodegenResult GenerateGraphSnippet(
         const MaterialGraph& graph,
         MaterialSurface surface = MaterialSurface::Fullscreen,
         std::uint32_t availableInputs = 0,
@@ -530,7 +530,7 @@ namespace Arcane
     // `availableInputs` follows GenerateGraphSnippet's pass-context contract.
     // Errors: nodeId missing / previewless (no output pins) / whatever the
     // underlying codegen refuses.
-    [[nodiscard]] ARCANE_CORE_API GraphCodegenResult GenerateNodePreviewSnippet(
+    [[nodiscard]] ARC_CORE_API GraphCodegenResult GenerateNodePreviewSnippet(
         const MaterialGraph& graph,
         std::uint32_t nodeId,
         std::uint32_t availableInputs = 0);
@@ -540,8 +540,8 @@ namespace Arcane
     // stability (SG sorts on save for the same reason). FromJson returns
     // nullopt on shape violations (unknown node types, non-numeric ids,
     // duplicate ids) rather than guessing.
-    [[nodiscard]] ARCANE_CORE_API nlohmann::json GraphToJson(const MaterialGraph& graph);
-    [[nodiscard]] ARCANE_CORE_API std::optional<MaterialGraph> GraphFromJson(const nlohmann::json& j);
+    [[nodiscard]] ARC_CORE_API nlohmann::json GraphToJson(const MaterialGraph& graph);
+    [[nodiscard]] ARC_CORE_API std::optional<MaterialGraph> GraphFromJson(const nlohmann::json& j);
 
 #if defined(_MSC_VER)
 #pragma warning(pop)

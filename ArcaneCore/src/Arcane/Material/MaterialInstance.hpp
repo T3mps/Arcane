@@ -28,7 +28,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API MaterialInstance
+    class ARC_CORE_API MaterialInstance
     {
     public:
         // Root instance: parented directly on the template.

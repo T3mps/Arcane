@@ -103,7 +103,7 @@ namespace Arcane::Diag
     // backend with no marker layer at all can call this unconditionally. A
     // backend that has a DIFFERENT fallback (Vulkan's fence correlation) must
     // instead guard the call and emit its own key.
-    ARCANE_API void ReplayMarkerBuffer(GpuBreadcrumbs& breadcrumbs,
+    ARC_API void ReplayMarkerBuffer(GpuBreadcrumbs& breadcrumbs,
                                        GpuDumpWriter&  raw,
                                        Envelope&       envelope,
                                        const void*     markerMemory,
@@ -113,7 +113,7 @@ namespace Arcane::Diag
     // Envelope::Queue named `queueName` (the machine-readable .arcdiag field)
     // and as the report's human-readable "queue <name>" block appended to
     // `humanText`. Never throws; an empty ring yields "<none>" for both lines.
-    ARCANE_API void EmitQueueSnapshot(const GpuBreadcrumbs& breadcrumbs,
+    ARC_API void EmitQueueSnapshot(const GpuBreadcrumbs& breadcrumbs,
                                       std::string_view      queueName,
                                       Envelope&             envelope,
                                       std::string&          humanText);
@@ -124,7 +124,7 @@ namespace Arcane::Diag
     // backends' FillReport after CollectFault, so the rule lands ONCE (this
     // header's charter). A gpu-stall on a live device must NOT freeze: the
     // device is still executing and the ring should keep recording.
-    ARCANE_API void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs,
+    ARC_API void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs,
                                                   const Envelope& envelope);
 
     // Writes `raw` to `<reportStem>.gpudump` and records the sibling.
@@ -137,7 +137,7 @@ namespace Arcane::Diag
     //
     // `envelope.siblingGpuDump` is set ONLY when the file actually landed: a
     // report must never name a sibling it did not write.
-    ARCANE_API void EmitGpuDumpSibling(const GpuDumpWriter&         raw,
+    ARC_API void EmitGpuDumpSibling(const GpuDumpWriter&         raw,
                                        Envelope&                    envelope,
                                        std::string&                 humanText,
                                        const std::filesystem::path& reportStem);

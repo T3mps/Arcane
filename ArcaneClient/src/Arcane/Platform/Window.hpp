@@ -31,7 +31,7 @@ namespace Arcane
         uint32_t height    = 0;
     };
 
-    class ARCANE_API Window
+    class ARC_API Window
     {
     public:
         Window() = default;

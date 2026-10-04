@@ -109,7 +109,7 @@ namespace
         CullVehicle v;
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // The same validation set the [gpu][pixel] vehicle turns on: this case
         // adds a copy node reading the args buffer the mesh pass consumed as
         // indirect arguments, which is exactly the barrier-placement class

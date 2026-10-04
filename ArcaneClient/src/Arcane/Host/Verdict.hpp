@@ -51,19 +51,19 @@ namespace Arcane
     };
 
     // The canonical wire spelling. Never localised, never lower-cased.
-    [[nodiscard]] ARCANE_API const char* ToString(Verdict v) noexcept;
+    [[nodiscard]] ARC_API const char* ToString(Verdict v) noexcept;
 
     // Exact, case-SENSITIVE match against ToString's output; nullopt otherwise.
     // The old vocabulary's "PASS"/"FAIL" therefore do NOT resolve -- a consumer
     // still speaking schemaVersion 1 gets a refusal rather than a wrong answer.
-    [[nodiscard]] ARCANE_API std::optional<Verdict> FromString(std::string_view s) noexcept;
+    [[nodiscard]] ARC_API std::optional<Verdict> FromString(std::string_view s) noexcept;
 
     // Whether this verdict SATISFIES a gate. Skipped is not green: it does not
     // fail a gate but must not count toward "at least one lane passed" either,
     // or an all-skipped run reports success having verified nothing.
-    [[nodiscard]] ARCANE_API bool IsGreen(Verdict v) noexcept;
+    [[nodiscard]] ARC_API bool IsGreen(Verdict v) noexcept;
 
     // Every value, in declaration order. The list a consumer enumerates rather
     // than hand-maintaining a parallel copy of.
-    [[nodiscard]] ARCANE_API std::span<const Verdict> AllVerdicts() noexcept;
+    [[nodiscard]] ARC_API std::span<const Verdict> AllVerdicts() noexcept;
 }

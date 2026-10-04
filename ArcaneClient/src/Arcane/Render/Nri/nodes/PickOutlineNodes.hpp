@@ -168,12 +168,12 @@ namespace Arcane
     // Cost: 7 fullscreen triangles over the viewport, once per editor frame
     // that has a selection -- fewer than an extent-derived count, because the
     // schedule starts at 32 rather than at the surface's long edge.
-    [[nodiscard]] ARCANE_API std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept;
+    [[nodiscard]] ARC_API std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept;
 
     // The jump for step `step` of a `steps`-step schedule: 2^(steps-2-step)
     // down to 1, then 1 again for the trailing step. Byte-for-byte
     // SelectionOutline::Render's `jc.jump` for the same iteration.
-    [[nodiscard]] ARCANE_API std::int32_t OutlineJfaJump(std::uint32_t step,
+    [[nodiscard]] ARC_API std::int32_t OutlineJfaJump(std::uint32_t step,
                                                          std::uint32_t steps) noexcept;
 
     // =====================================================================
@@ -198,7 +198,7 @@ namespace Arcane
     // The pass's colour target AND its own depth transient (RgPickHandles) are
     // graph resources, minted by AddPickNodes.
     // =====================================================================
-    class ARCANE_API PickNode
+    class ARC_API PickNode
     {
     public:
         // Loads entity_id_vs/ps and entity_id_mesh_vs/ps through the vehicle,
@@ -423,7 +423,7 @@ namespace Arcane
     //   * the cached SHADER_RESOURCE views over the graph transients each pass
     //     samples, under the POOL EPOCH discipline.
     // =====================================================================
-    class ARCANE_API OutlineNode
+    class ARC_API OutlineNode
     {
     public:
         // Loads the six outline bins through the vehicle and builds the layout,
@@ -625,7 +625,7 @@ namespace Arcane
     // PickNode::kSuperSample times that; the id target is read by both the
     // readback and the outline seed (which are told the factor rather than
     // left to infer it), the depth by nothing outside the pass.
-    ARCANE_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
                                           std::uint32_t width, std::uint32_t height);
 
     // Declares "outlineseed" plus OutlineJfaStepCount(kOutlineMaxThicknessPx)
@@ -634,7 +634,7 @@ namespace Arcane
     // the 1x extent; the two-physical-texture ping-pong is the transient pool
     // allocator's answer to their lifetimes, exactly as it is for the post
     // chain (FullscreenNodes.hpp, THE PING-PONG IS DERIVED).
-    ARCANE_API RgTexture AddOutlineNodes(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddOutlineNodes(RenderGraph& graph, NriGraphContext* context,
                                          RgTexture ids,
                                          std::uint32_t width, std::uint32_t height);
 
@@ -643,7 +643,7 @@ namespace Arcane
     // tonemap and BEFORE the capture node, which is the editor's own
     // compositing order (its phase 12 runs after the scene render and before
     // the ImGui pass).
-    ARCANE_API void AddOutlineCompositeNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddOutlineCompositeNode(RenderGraph& graph, NriGraphContext* context,
                                             RgTexture field, RgTexture target,
                                             std::uint32_t width, std::uint32_t height);
 }

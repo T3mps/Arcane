@@ -40,7 +40,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD
 #endif
-    class ARCANE_API RegistryStateCommand final : public ICommand
+    class ARC_API RegistryStateCommand final : public ICommand
     {
     public:
         // empty = failed; unambiguous, since a successful Registry::Save
@@ -95,7 +95,7 @@ namespace Arcane
     // so only the call site can name them). A POINTER read AFTER mutate()
     // returns, so a mutate that CREATES entities can append the new ids to
     // the same vector from inside its lambda. Null = tags nothing.
-    ARCANE_API bool ApplyRegistryMutation(CommandStack& stack, std::string label,
+    ARC_API bool ApplyRegistryMutation(CommandStack& stack, std::string label,
                                           const RegistryStateCommand::SnapshotFn& snapshot,
                                           const RegistryStateCommand::RestoreFn& restore,
                                           FunctionRef<bool()> mutate,

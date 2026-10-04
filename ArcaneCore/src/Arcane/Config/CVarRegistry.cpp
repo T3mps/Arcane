@@ -132,7 +132,7 @@ namespace Arcane
 
     CVarRegistry& CVarRegistry::Get()
     {
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
         static CVarRegistry registry{ false };
 #else
         static CVarRegistry registry{ true };

@@ -6,7 +6,7 @@
 // SystemFactory.hpp). Game code includes <Arcane/Ecs.hpp> instead.
 // Aliases, so the SAME types: no ABI or serialization change.
 
-// ARCANE_INTERNAL_BEGIN: the facade's library side
+// ARC_INTERNAL_BEGIN: the facade's library side
 namespace Astra
 {
     class Registry;
@@ -30,4 +30,4 @@ namespace Arcane
     using SystemScheduler   = Astra::SystemScheduler;
     using IWorkScheduler    = Mosaic::IWorkScheduler;
 }
-// ARCANE_INTERNAL_END
+// ARC_INTERNAL_END

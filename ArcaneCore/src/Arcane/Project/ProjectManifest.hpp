@@ -108,7 +108,7 @@ namespace Arcane
         PhysicsConfig          physics;
 
         // Parse + validate a JSON document. nullopt on schema violation.
-        static ARCANE_CORE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);
+        static ARC_CORE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);
 
         // Read + parse + validate a .arcproj file. nullopt on IO/parse/schema failure.
         //
@@ -122,7 +122,7 @@ namespace Arcane
         // later publish under the same key). See Project::Open's plugin-
         // descriptor validation loop (Project.cpp) for the caller that needs
         // this. `outDiag` is left untouched on success.
-        static ARCANE_CORE_API std::optional<ProjectManifest> LoadFile(const std::filesystem::path& file,
+        static ARC_CORE_API std::optional<ProjectManifest> LoadFile(const std::filesystem::path& file,
                                                                    Diagnostic* outDiag = nullptr);
     };
 }

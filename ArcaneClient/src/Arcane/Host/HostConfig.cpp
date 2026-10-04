@@ -170,7 +170,7 @@ namespace Arcane
         cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
                                      "the only render path. Kept so existing scripts and saved "
                                      "launch args do not fail to boot.");
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
         cli.Option("hang-main", "0", "DEV: on frame N block the main thread for 15 s without "
@@ -251,7 +251,7 @@ namespace Arcane
         // above (unconditionally) purely so a command line that still passes
         // it does not fail to parse. There is nothing left to store -- the
         // graph path it used to opt into is now the only one.
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
         cfg.hangMainFrame = r.GetAs<std::uint64_t>("hang-main");
 #endif
@@ -535,7 +535,7 @@ namespace Arcane
             return { std::nullopt, 2 };
         }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // --pick-probe x,y. Parsed HERE rather than at
         // the use site, and refused rather than clamped, because the whole
         // value of the flag is being scriptable: a probe whose coordinate was

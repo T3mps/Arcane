@@ -182,7 +182,7 @@ namespace Arcane
     //   * drawVelocities   -> a velocity ray (COM along linear velocity, arrow).
     //   * drawComMarkers   -> a small cross at each dynamic body's world COM.
     //   * drawOrientations -> a short tick along the body's local +x (rotation).
-    ARCANE_API void DrawPhysicsDebug(
+    ARC_API void DrawPhysicsDebug(
         const Manifold2D::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
         const PhysicsDebugDrawOptions& opts = {});
@@ -208,7 +208,7 @@ namespace Arcane
     // `stepIndex` selects the per-iteration snapshot to emphasize for stepped kinds
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
     // emphasis. The caller brackets batcher.Begin()..Drain() (this only submits primitives).
-    ARCANE_API void DrawNarrowphaseWorldOverlay(
+    ARC_API void DrawNarrowphaseWorldOverlay(
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,
         Batcher2D& batcher,

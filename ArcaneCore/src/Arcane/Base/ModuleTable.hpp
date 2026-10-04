@@ -52,7 +52,7 @@ namespace Arcane::Diagnostics
     // One loaded module, fixed-size so the crash path never touches the
     // heap. `name` is the base name (e.g. "ArcaneCore.dll"), NUL-terminated,
     // truncated at 63 characters if the real name is longer. A namespace-
-    // level POD with no out-of-line members -- it needs no ARCANE_CORE_API
+    // level POD with no out-of-line members -- it needs no ARC_CORE_API
     // (MSVC does not propagate dllexport to nested classes, but this is not
     // one, and there is nothing out-of-line to export either way).
     struct ModuleEntry
@@ -65,7 +65,7 @@ namespace Arcane::Diagnostics
     // Spec S5.2 step 1. See the file header for the double-buffering
     // discipline that makes Find() lock-free and crash-filter-safe, and for
     // why a report additionally freezes the table.
-    class ARCANE_CORE_API ModuleTable
+    class ARC_CORE_API ModuleTable
     {
     public:
         static constexpr std::size_t kMax = 512;

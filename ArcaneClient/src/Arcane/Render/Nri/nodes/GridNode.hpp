@@ -136,7 +136,7 @@ namespace Arcane
         }
     };
 
-    class ARCANE_API GridNode
+    class ARC_API GridNode
     {
     public:
         // Loads grid_vs/grid_ps through the vehicle, registers the layout,
@@ -259,7 +259,7 @@ namespace Arcane
     // declaration time and COPIED into the exec fn (it is small: one
     // ViewTransform and a handful of floats), so the caller's object need
     // only outlive the RenderFrame call -- which FrameDesc already requires.
-    ARCANE_API void AddGridNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddGridNode(RenderGraph& graph, NriGraphContext* context,
                                 RgTexture canvas, nri::Format canvasFormat,
                                 RgTexture depth, const GridSceneDesc& scene,
                                 std::uint32_t width, std::uint32_t height);

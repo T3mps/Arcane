@@ -226,20 +226,20 @@ namespace Arcane::Diagnostics
     //
     // Safe with Diagnostics not installed: nothing is written, and the call
     // still terminates when `exitCode` is non-zero rather than deadlocking.
-    ARCANE_CORE_API void SubmitReport(const ReportRequest& request) noexcept;
+    ARC_CORE_API void SubmitReport(const ReportRequest& request) noexcept;
 
     // The last report's sibling stem -- the base path with NO extension, which
     // "<stem>.txt", "<stem>.dmp", "<stem>.arcdiag" and "<stem>.log.txt" all
     // hang off. Empty until a report has been written. A test seam and a host
     // convenience; never called from the crash path itself (it allocates).
-    [[nodiscard]] ARCANE_CORE_API std::string LastReportStem();
+    [[nodiscard]] ARC_CORE_API std::string LastReportStem();
 
     // Copies ForeignModules' latest scan into fixed storage the crash thread
     // can read with no lock, no heap and no loader lock (controller note R14).
     // ForeignModules::Scan() calls this beside its ModuleTable::Refresh, and
     // Install() seeds it from LastScan(); the crash path reads ONLY the
     // snapshot, never LastScan() (which returns a heap copy under a mutex).
-    ARCANE_CORE_API void SnapshotInjectedModules(std::span<const ForeignModules::Match> matches) noexcept;
+    ARC_CORE_API void SnapshotInjectedModules(std::span<const ForeignModules::Match> matches) noexcept;
 
     // Registers the CALLING thread as the main thread and arms both triggers.
     // Call once, early in main(), beside Log::Init(). Idempotent.
@@ -254,7 +254,7 @@ namespace Arcane::Diagnostics
     // Install-then-return-from-main() safe: the watchdog is a RAW thread so
     // that it can outlive a host that never reaches Shutdown() (spec S5.7),
     // and something has to stop it when main() simply returns.
-    ARCANE_CORE_API void Install(const Config& cfg);
+    ARC_CORE_API void Install(const Config& cfg);
 
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
     // its first statement (crash window plan 1, R23). Install already does this
@@ -268,7 +268,7 @@ namespace Arcane::Diagnostics
     // Call sites: the enkiTS worker entry (Jobs/JobSystem.cpp, through the
     // scheduler's threadStart callback) and ServiceThread's thread body
     // (Base/ServiceThread.cpp). Idempotent, cheap, and a no-op off Windows.
-    ARCANE_CORE_API void GuaranteeStackForThisThread() noexcept;
+    ARC_CORE_API void GuaranteeStackForThisThread() noexcept;
 
     // Disarms both triggers, stops the watchdog (a bounded wait on its raw
     // thread handle, which is then closed), restores the previous
@@ -289,7 +289,7 @@ namespace Arcane::Diagnostics
     // a dumpDir retargeted live (RetargetDumpDir, below) is host state, not
     // arming state, and must survive a Shutdown/Install cycle the same way
     // appName does.
-    ARCANE_CORE_API void Shutdown() noexcept;
+    ARC_CORE_API void Shutdown() noexcept;
 
     // Switches WHERE reports land, live -- no Shutdown()/Install() cycle
     // needed (GPU crash diagnostics arc, Task 8; F-6 in the seam-facts
@@ -313,7 +313,7 @@ namespace Arcane::Diagnostics
     // derived case): the file sink is re-attached at "<dir>/../Logs/<appName>.log"
     // so a project's log lands beside that project's reports. An explicitly
     // configured logDir is never retargeted.
-    ARCANE_CORE_API void RetargetDumpDir(const std::filesystem::path& dir);
+    ARC_CORE_API void RetargetDumpDir(const std::filesystem::path& dir);
 
     // -------------------------------------------------------------------
     // Exit sentinel and clean-exit handlers (crash window plan 1, task 8;
@@ -354,7 +354,7 @@ namespace Arcane::Diagnostics
     // event instead and Windows terminates the process exactly as it always
     // did. Console close/logoff/shutdown are not affected -- those end the
     // process whatever we return.
-    ARCANE_CORE_API void SetCleanExitHook(CleanExitHook hook, void* user) noexcept;
+    ARC_CORE_API void SetCleanExitHook(CleanExitHook hook, void* user) noexcept;
 
     // "The host has been asked to quit." Arms the exit deadline and calls the
     // hook EXACTLY ONCE, however many paths request the same exit (a Ctrl-C
@@ -363,7 +363,7 @@ namespace Arcane::Diagnostics
     // the sentinel exists to name.
     //
     // Safe to call with Diagnostics not installed, and safe from any thread.
-    ARCANE_CORE_API void RequestCleanExit() noexcept;
+    ARC_CORE_API void RequestCleanExit() noexcept;
 
     // Test seam: runs the console control handler's rule for `ctrlType`
     // (CTRL_C_EVENT = 0, CTRL_BREAK_EVENT = 1, CTRL_CLOSE_EVENT = 2, ...) and
@@ -374,19 +374,19 @@ namespace Arcane::Diagnostics
     // Config::installCrashHandler) and with the watchdog not running: the
     // console rule depends on none of the three. False for a Ctrl-C with no
     // clean-exit hook installed -- see SetCleanExitHook.
-    [[nodiscard]] ARCANE_CORE_API bool SimulateConsoleCtrl(unsigned long ctrlType) noexcept;
+    [[nodiscard]] ARC_CORE_API bool SimulateConsoleCtrl(unsigned long ctrlType) noexcept;
 
     // "The main thread is alive." One relaxed atomic store -- cheap enough for
     // every frame, which is where it belongs. A hang is DEFINED as this not
     // being called, so it must sit on every path the main thread loops through:
     // the frame loop AND the boot/project-switch pump.
-    ARCANE_CORE_API void Heartbeat() noexcept;
+    ARC_CORE_API void Heartbeat() noexcept;
 
     // Optional label for what the main thread is currently doing (a boot stage
     // id, say). Reproduced verbatim at the top of a report -- it turns "it hung"
     // into "it hung in switch_plugin_load". Cheap but not free (takes a lock);
     // call it per phase, never per frame.
-    ARCANE_CORE_API void SetPhase(std::string phase);
+    ARC_CORE_API void SetPhase(std::string phase);
 
     // Writes a SURVIVABLE report immediately, whatever the process state, and
     // returns the .txt path (empty if nothing could be written). Exactly
@@ -395,7 +395,7 @@ namespace Arcane::Diagnostics
     // observer need (spec S5.4). Public because a manual trigger is useful,
     // and because it is how the self-test proves the capture path works BEFORE
     // an intermittent bug depends on it.
-    ARCANE_CORE_API std::string WriteReport(const char* reason);
+    ARC_CORE_API std::string WriteReport(const char* reason);
 
     // The .arcdiag `kind` for a report reason. The reason's PREFIX -- what
     // stands before the first ':' or space -- is matched against the kind
@@ -406,7 +406,7 @@ namespace Arcane::Diagnostics
     // ("ensure: gpu != nullptr" is an ensure, not a gpu-crash). Only a reason
     // with no recognised prefix falls back to the older substring rule, for
     // the free-form legacy wordings ("hang (main thread ...)").
-    [[nodiscard]] ARCANE_CORE_API std::string DeriveReportKind(const char* reason);
+    [[nodiscard]] ARC_CORE_API std::string DeriveReportKind(const char* reason);
 
     // printf-formats a fail-fast reason into a per-thread 1 KiB buffer (the
     // same size as the pending report's reason field) and returns it. This
@@ -418,10 +418,10 @@ namespace Arcane::Diagnostics
     // returned pointer stays valid until the SAME thread formats another
     // reason -- which is exactly long enough, because SubmitReport copies the
     // reason into fixed storage on the calling thread (R3).
-    [[nodiscard]] ARCANE_CORE_API const char* FormatReason(const char* fmt, ...) noexcept;
+    [[nodiscard]] ARC_CORE_API const char* FormatReason(const char* fmt, ...) noexcept;
 
     // Reports written this process. The observable the watchdog test asserts on.
-    [[nodiscard]] ARCANE_CORE_API std::uint32_t ReportCount() noexcept;
+    [[nodiscard]] ARC_CORE_API std::uint32_t ReportCount() noexcept;
 
     // "The GPU device is confirmed gone." Told to this module by the render
     // layer's own latch -- Arcane::NoteGpuDeviceLost (Render/
@@ -439,11 +439,11 @@ namespace Arcane::Diagnostics
     //
     // Idempotent, never cleared, safe from any thread and from inside a
     // crash handler.
-    ARCANE_CORE_API void NoteGpuDeviceLost() noexcept;
+    ARC_CORE_API void NoteGpuDeviceLost() noexcept;
 
     // What NoteGpuDeviceLost last stored. Exists so the classification rule
     // above is testable without a GPU, a device, or an exception.
-    [[nodiscard]] ARCANE_CORE_API bool GpuDeviceLostNoted() noexcept;
+    [[nodiscard]] ARC_CORE_API bool GpuDeviceLostNoted() noexcept;
 
     // -------------------------------------------------------------------
     // GPU-progress watchdog (GPU crash diagnostics arc, Task 7)
@@ -463,7 +463,7 @@ namespace Arcane::Diagnostics
     // for. Like Heartbeat(), the FIRST call arms the trigger -- a host that
     // never renders (a test, a headless tool) gets silence, not a spurious
     // report gpuStallSeconds after boot.
-    ARCANE_CORE_API void GpuHeartbeat(std::uint64_t fenceValue) noexcept;
+    ARC_CORE_API void GpuHeartbeat(std::uint64_t fenceValue) noexcept;
 
     // "The render path is still alive and still watching the SAME counter."
     // Refreshes the freshness stamp GpuHeartbeat sets, without changing the
@@ -476,7 +476,7 @@ namespace Arcane::Diagnostics
     // would look identical to a minimized host (frozen counter, no publisher)
     // and the GPU rule would disarm on the one case it exists to catch. See
     // Render/GpuInstrumentation.hpp, GpuFrameSlot::WaitAndReset.
-    ARCANE_CORE_API void GpuHeartbeatRefresh() noexcept;
+    ARC_CORE_API void GpuHeartbeatRefresh() noexcept;
 
     // The pure staleness rule the GPU watchdog runs, extracted so the part
     // that can actually be WRONG -- one report per stall, re-armed on progress
@@ -486,7 +486,7 @@ namespace Arcane::Diagnostics
     //
     // Not thread-safe and not meant to be: one instance lives on the watchdog
     // thread and is polled only from there.
-    class ARCANE_CORE_API ProgressStallRule
+    class ARC_CORE_API ProgressStallRule
     {
     public:
         // `stallSeconds` -- how long the counter must sit unchanged before the
@@ -548,10 +548,10 @@ namespace Arcane::Diagnostics
 
     // Install (or replace) the process-wide GPU-section provider. Last
     // writer wins, mirroring the structured-diagnostics Sink slot below.
-    ARCANE_CORE_API void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept;
+    ARC_CORE_API void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept;
 
     // Uninstall it. Idempotent; safe to call with none installed.
-    ARCANE_CORE_API void ClearGpuSectionProvider() noexcept;
+    ARC_CORE_API void ClearGpuSectionProvider() noexcept;
 
     // Teardown fence: returns only after any WriteReport already in flight
     // (watchdog thread or crash filter) has finished. WriteReportImpl holds
@@ -566,7 +566,7 @@ namespace Arcane::Diagnostics
     // shutdown). Call this immediately after clearing the provider slot and
     // BEFORE destroying anything the provider touches -- see
     // DeviceD3D12::~DeviceD3D12 / DeviceVulkan::~DeviceVulkan.
-    ARCANE_CORE_API void FenceReports() noexcept;
+    ARC_CORE_API void FenceReports() noexcept;
 
     // -------------------------------------------------------------------
     // Report-written hook (GPU crash diagnostics arc, Task 9)
@@ -598,10 +598,10 @@ namespace Arcane::Diagnostics
     // Install (or replace) the process-wide report-written hook. Last
     // writer wins, mirroring GpuSectionProvider -- one call per host
     // lifetime is the expected shape.
-    ARCANE_CORE_API void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept;
+    ARC_CORE_API void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept;
 
     // Uninstall it. Idempotent; safe to call with none installed.
-    ARCANE_CORE_API void ClearReportWrittenHook() noexcept;
+    ARC_CORE_API void ClearReportWrittenHook() noexcept;
 }
 
 // =============================================================================
@@ -686,7 +686,7 @@ namespace Arcane
         using Sink = void (*)(std::string_view key, std::span<const Diagnostic> diags, void* user);
 
         // Install (or clear, with nullptr) the process-wide sink. Last writer wins.
-        ARCANE_CORE_API void SetSink(Sink sink, void* user) noexcept;
+        ARC_CORE_API void SetSink(Sink sink, void* user) noexcept;
 
         // Clear the slot ONLY if it still holds exactly (sink, user); returns
         // whether it cleared. A stale consumer's teardown must not silently
@@ -695,12 +695,12 @@ namespace Arcane
         // an old owner's destructor would disconnect a live, unrelated one
         // (same stale-registration hazard as a dangling plugin descriptor).
         // Prefer this over SetSink(nullptr, nullptr) in any owner's teardown path.
-        [[nodiscard]] ARCANE_CORE_API bool ClearSinkIfCurrent(Sink sink, void* user) noexcept;
+        [[nodiscard]] ARC_CORE_API bool ClearSinkIfCurrent(Sink sink, void* user) noexcept;
 
         // Replace `key`'s entire diagnostic set. Safe with no sink installed.
-        ARCANE_CORE_API void Publish(std::string_view key, std::span<const Diagnostic> diags);
+        ARC_CORE_API void Publish(std::string_view key, std::span<const Diagnostic> diags);
 
         // Retract everything under `key`. Exactly Publish(key, {}).
-        ARCANE_CORE_API void Clear(std::string_view key);
+        ARC_CORE_API void Clear(std::string_view key);
     }
 }

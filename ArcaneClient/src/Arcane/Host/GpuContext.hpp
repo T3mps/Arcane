@@ -36,7 +36,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API GpuContext
+    class ARC_API GpuContext
     {
     public:
         // Runs the ordered boot into the members. Returns null (with ARC_ERROR on

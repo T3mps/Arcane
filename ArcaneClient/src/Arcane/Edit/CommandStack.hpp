@@ -3,7 +3,7 @@
 // Arcane/Edit: undo/redo history. The undo unit is a Transaction of 1..N
 // ComponentEditCommands (Unreal FTransaction model). Begin/SnapshotComponent
 // (idempotent snapshot-on-first-touch)/Commit/Cancel groups a gesture into one
-// step. ARCANE_API; Arcane Editor owns one and brackets its Inspector edits.
+// step. ARC_API; Arcane Editor owns one and brackets its Inspector edits.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>
@@ -46,7 +46,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::function/deque/vector/string members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API CommandStack
+    class ARC_API CommandStack
     {
     public:
         // `resolve` returns the CURRENT live registry each call (see
@@ -254,7 +254,7 @@ namespace Arcane
     // cancels, leaving that to the owner. NOT for a gesture that spans frames
     // (an Inspector field drag): the token has to outlive the scope, so those
     // use explicit Begin/Commit with the token parked in persistent state.
-    class ARCANE_API ScopedTransaction
+    class ARC_API ScopedTransaction
     {
     public:
         ScopedTransaction(CommandStack& stack, std::string label);

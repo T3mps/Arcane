@@ -28,7 +28,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API ServiceThread
+    class ARC_CORE_API ServiceThread
     {
     public:
         // `main` runs once, on the new thread; a service loops inside it until

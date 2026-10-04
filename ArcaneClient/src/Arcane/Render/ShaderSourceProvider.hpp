@@ -24,7 +24,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API ShaderSourceProvider
+    class ARC_API ShaderSourceProvider
     {
     public:
         // Register a directory sources resolve under; search order = add order.

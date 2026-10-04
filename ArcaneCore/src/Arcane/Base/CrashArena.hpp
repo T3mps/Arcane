@@ -40,7 +40,7 @@ namespace Arcane::Diagnostics
 {
     // Spec §5.5. One static 256 KiB block, bump-allocated by the crash path
     // only. Never a general allocator.
-    class ARCANE_CORE_API CrashArena
+    class ARC_CORE_API CrashArena
     {
     public:
         static constexpr std::size_t kCapacity = 256 * 1024;
@@ -73,7 +73,7 @@ namespace Arcane::Diagnostics
         // A nested class does not inherit the outer class's dllexport --
         // mark it explicitly (Core-DLL split, spec 2026-09-15 s8; see
         // Cli.hpp's Result for the same fix).
-        struct ARCANE_CORE_API Builder
+        struct ARC_CORE_API Builder
         {
             char* begin;
             char* cursor;

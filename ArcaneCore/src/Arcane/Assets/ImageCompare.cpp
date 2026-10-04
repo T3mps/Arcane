@@ -556,7 +556,7 @@ namespace Arcane
         // stays a plain cast deliberately: a guard here would have to invent a
         // policy (clamp? zero? pass?) for a value the boundary has already ruled
         // out, and every one of those is the silent-wrong-answer shape that
-        // refusal exists to avoid. ImageCompareOptions is ARCANE_CORE_API-exported,
+        // refusal exists to avoid. ImageCompareOptions is ARC_CORE_API-exported,
         // so a direct in-process caller (ArcaneTests) owns the same
         // precondition.
         std::optional<std::uint64_t> fromRatio;

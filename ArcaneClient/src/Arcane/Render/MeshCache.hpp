@@ -59,7 +59,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API MeshCache
+    class ARC_API MeshCache
     {
     public:
         // Guid-shaped, matching SpriteCache/SpriteMaterialCache/PostChainCache

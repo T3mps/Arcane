@@ -457,7 +457,7 @@ TEST_CASE("log.level exists with range 0..6 and its publish drives the engine lo
     Arcane::Log::Init();
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("log.level");
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     if (h.IsStale()) return;   // Dist compiles the Dev cvar out
 #endif
     REQUIRE_FALSE(h.IsStale());   // Debug/Release: the pre-implementation run FAILS here

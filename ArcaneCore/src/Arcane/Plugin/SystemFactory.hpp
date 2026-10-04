@@ -89,7 +89,7 @@ namespace Arcane
         return (mask & RolesOf(m)) != 0;
     }
 
-    [[nodiscard]] ARCANE_CORE_API const char* ToString(NetMode m) noexcept;
+    [[nodiscard]] ARC_CORE_API const char* ToString(NetMode m) noexcept;
 
     struct SystemFactoryEntry
     {
@@ -104,7 +104,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::vector/std::string members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API SystemFactoryTable
+    class ARC_CORE_API SystemFactoryTable
     {
     public:
         SystemFactoryTable() = default;

@@ -78,7 +78,7 @@ namespace Arcane::Editor
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
-    inline constexpr const char* kAssetDragType = "ARCANE_ASSET";
+    inline constexpr const char* kAssetDragType = "ARC_ASSET";
     struct AssetDragPayload
     {
         Arcane::Guid guid;

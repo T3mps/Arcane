@@ -26,7 +26,7 @@ namespace Arcane
 {
     enum class CliType : std::uint8_t { String, Int, Uint, Double };
 
-    class ARCANE_CORE_API Cli
+    class ARC_CORE_API Cli
     {
     public:
         Cli(std::string prog, std::string desc) : m_prog(std::move(prog)), m_desc(std::move(desc)) {}
@@ -48,7 +48,7 @@ namespace Arcane
 
         // A nested class does not inherit the outer class's dllexport -- mark it
         // explicitly (Core-DLL split, spec 2026-09-15 s8).
-        struct ARCANE_CORE_API Result
+        struct ARC_CORE_API Result
         {
             bool ok = false;
             bool helpRequested = false;

@@ -21,7 +21,7 @@ namespace Arcane
     // never treat it as a mismatch.
     enum class CrtFlavor : std::uint8_t { Unknown, Release, Debug };
 
-    class ARCANE_CORE_API Module
+    class ARC_CORE_API Module
     {
     public:
         Module() = default;

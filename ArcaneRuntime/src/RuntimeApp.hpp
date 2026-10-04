@@ -278,7 +278,7 @@ private:
     // refused/absent name as "the run simply never converged".
     bool                                  m_compareMissingFatal  = false;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --crash-gpu N (GPU crash diagnostics arc, Task 11): the desk battery's
     // item-2 trigger -- the same deliberate fault the editor's Build ->
     // Diagnostics menu item fires, on the host that has no menu.

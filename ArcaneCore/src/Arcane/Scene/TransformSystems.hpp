@@ -85,9 +85,9 @@ namespace Arcane
         // entity). THE bridge between Astra's entity-keyed Changed<Transform>
         // yield and this cache's row-indexed arrays. An entity absent here is
         // outside the scene root's subtree and is never written by the pass.
-        // ARCANE_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side propagation cache)
+        // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side propagation cache)
         Astra::FlatMap<Arcane::Entity, std::uint32_t> rowOf;
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
 
         // ---- per-row value state, parallel to `order` ----
         // `moved` is the change detector (Astra adoption 2026-09-11, spec s6.3):
@@ -124,9 +124,9 @@ namespace Arcane
 
         // Scratch, kept here so a steady frame allocates nothing at all.
         std::vector<Arcane::Entity>    needsWorld;
-        // ARCANE_INTERNAL_BEGIN: Astra's FlatSet container has no facade alias (engine-side propagation cache)
+        // ARC_INTERNAL_BEGIN: Astra's FlatSet container has no facade alias (engine-side propagation cache)
         Astra::FlatSet<Arcane::Entity> visited;   // Rebuild's cycle guard
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
 
         // ---- invalidation keys ----
         Arcane::Entity root{};
@@ -197,7 +197,7 @@ namespace Arcane
         // only ever compared, and no other system can be mid-stamp when it moves.
         void operator()(Arcane::Registry& reg)
         {
-            // ARCANE_INTERNAL_BEGIN: the system body drives Astra's registry, relationship graph and tick API directly
+            // ARC_INTERNAL_BEGIN: the system body drives Astra's registry, relationship graph and tick API directly
             const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
             if (!sceneRoot) return;
             const Astra::Entity root = sceneRoot->entity;
@@ -399,6 +399,6 @@ namespace Arcane
                 ++c.composed;
             }
         }
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
     };
 }

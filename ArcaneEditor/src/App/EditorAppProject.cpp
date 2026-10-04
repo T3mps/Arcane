@@ -3344,7 +3344,7 @@ namespace Arcane::Editor
             Arcane::Diagnostics::Publish("diagnostics:reports", m_reportDiagnostics);
     }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // Build -> Diagnostics -> Crash GPU (diagnostics test). Task 11: the desk
     // battery's trigger, and the ONLY thing in this arc that causes a fault
     // rather than reacting to one.

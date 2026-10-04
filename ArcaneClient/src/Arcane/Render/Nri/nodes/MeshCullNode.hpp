@@ -25,7 +25,7 @@ namespace Arcane
 
     inline constexpr bool kMeshCullEnabled = true; // declaration default of render.meshCull
     // Published snapshot. Missing (Dev, compiled out) means the default: on.
-    [[nodiscard]] ARCANE_API bool MeshCullFrustumEnabled();
+    [[nodiscard]] ARC_API bool MeshCullFrustumEnabled();
     inline constexpr std::uint32_t kMeshCullThreads = 64;
     [[nodiscard]] constexpr std::uint32_t MeshCullDispatchGroups(std::uint32_t rowCount) noexcept
     {
@@ -41,7 +41,7 @@ namespace Arcane
         return readiness.registryReady && frame && frame->rowCount != 0;
     }
 
-    class ARCANE_API MeshCullNode
+    class ARC_API MeshCullNode
     {
     public:
         static std::unique_ptr<MeshCullNode> Create(NriGraphContext& context);
@@ -70,6 +70,6 @@ namespace Arcane
         nri::Pipeline* m_pipeline = nullptr;
     };
 
-    ARCANE_API void AddMeshCullNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddMeshCullNode(RenderGraph& graph, NriGraphContext* context,
                                     const GpuSceneNodeInputs& inputs, const GpuSceneFrame* frame);
 }

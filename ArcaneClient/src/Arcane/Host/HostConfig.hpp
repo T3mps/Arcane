@@ -11,7 +11,7 @@
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
 {
-    struct ARCANE_API HostConfig
+    struct ARC_API HostConfig
     {
         GraphicsBackend backend   = GraphicsBackend::D3D12;
         std::uint64_t   maxFrames = 0;             // 0 = run until quit
@@ -305,7 +305,7 @@ namespace Arcane
         std::uint32_t   windowWidth  = 0;
         std::uint32_t   windowHeight = 0;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have
         // completed -- `--crash-gpu 30` faults during frame 31, which is the
@@ -380,7 +380,7 @@ namespace Arcane
 
     struct HostConfig::ParseOutcome { std::optional<HostConfig> config; int exitCode = 0; };
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // DEV ONLY (crash window plan 2, D10): the duration --hang-main blocks the
     // main thread for. 15 s clears Diagnostics::Config::hangSeconds' 12 s
     // default by 3 s, so the watchdog's hang report is reliably provoked.
@@ -409,5 +409,5 @@ namespace Arcane
     // --backend, the editor-only seeds), and an argument containing a space is
     // quoted. Pure: no host state, no parse, no side effects -- which is what
     // makes it unit-testable (ArcaneTests/src/HostConfigTest.cpp, "[host]").
-    [[nodiscard]] ARCANE_API std::string SanitizeRelaunchLine(std::span<const std::string> argv);
+    [[nodiscard]] ARC_API std::string SanitizeRelaunchLine(std::span<const std::string> argv);
 }

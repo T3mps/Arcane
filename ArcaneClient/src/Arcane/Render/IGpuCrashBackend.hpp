@@ -239,7 +239,7 @@ namespace Arcane
 {
     class GpuBreadcrumbs; // <Arcane/Render/GpuBreadcrumbs.hpp>
 
-    class ARCANE_API IGpuCrashBackend
+    class ARC_API IGpuCrashBackend
     {
     public:
         virtual ~IGpuCrashBackend() = default;
@@ -327,7 +327,7 @@ namespace Arcane
     // native NRI marker layer lands (F-2c-bis) -- in that order, and only in
     // that order. The Dist arm still differs in one respect:
     // SetPageFaultEnablement(FORCED_OFF).
-    ARCANE_API void EnableD3D12Dred();
+    ARC_API void EnableD3D12Dred();
 
     // The DRED tier EnableD3D12Dred() actually selected (e.g. "dred:full",
     // "dred:markers-only" -- reserved, unreachable in all three configs;
@@ -336,7 +336,7 @@ namespace Arcane
     // only observable in a log line. Exposed so tests can pin the
     // build-config policy tier (F-2c-bis) rather than trusting it by
     // inspection. "dred:off" before EnableD3D12Dred() has run.
-    ARCANE_API const char* DredTier();
+    ARC_API const char* DredTier();
 
     // THERE IS NO GPU-API CRASH BACKEND IN THE TREE, and the gap is named
     // rather than left to be discovered: nothing reads DRED breadcrumbs or

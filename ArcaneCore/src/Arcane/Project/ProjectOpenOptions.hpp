@@ -17,7 +17,7 @@
 // purpose, not a bool wearing a struct's clothes.
 //
 // BEFORE ADDING THE FIRST NON-TRIVIALLY-COPYABLE FIELD, REVISIT THE BY-VALUE
-// SIGNATURES. This struct crosses the ARCANE_CORE_API DLL boundary BY VALUE --
+// SIGNATURES. This struct crosses the ARC_CORE_API DLL boundary BY VALUE --
 // Project::Open and Runtime::OpenProject both take `ProjectOpenOptions opts`
 // (Project.hpp, Runtime.hpp), and both are exported. That is free today and
 // deliberately so: one bool, trivially copyable, no allocation, so the copy is

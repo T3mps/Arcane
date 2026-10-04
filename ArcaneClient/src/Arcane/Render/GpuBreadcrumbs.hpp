@@ -27,7 +27,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API GpuBreadcrumbs
+    class ARC_API GpuBreadcrumbs
     {
     public:
         // Most recent scopes kept per queue. A BeginScope past this evicts
