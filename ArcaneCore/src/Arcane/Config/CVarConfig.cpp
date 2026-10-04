@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <system_error>
+#include <tuple>
 #include <utility>
 
 namespace Arcane
@@ -323,13 +324,24 @@ namespace Arcane
         return issues;
     }
 
-    void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues)
+    void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues, CVarConfigLog log)
     {
+        // The last LOGGED set, keyed (kind, file, key). Main thread only, like
+        // every publish site (OpenProject, CloseProject, a module (re)load).
+        // The rows always carry the whole set; the log is a DELTA against this,
+        // so an issue a file keeps across hot reloads warns once, a key fixed
+        // and then broken again warns again, and a shrinking set (a close, a
+        // module whose keys just became known) logs nothing.
+        using LoggedKey = std::tuple<CVarConfigIssue::Kind, std::string, std::string>;
+        static std::set<LoggedKey> logged;
+
         std::vector<Diagnostic> rows;
         rows.reserve(issues.size());
+        std::set<LoggedKey> loggedNow;
         for (const CVarConfigIssue& issue : issues)
         {
             const std::string fileName = issue.file.filename().string();
+            const std::string path     = issue.file.generic_string();
             Diagnostic d;
             d.scope = DiagScope::Project;
             if (issue.kind == CVarConfigIssue::Kind::UnknownKey)
@@ -346,10 +358,20 @@ namespace Arcane
                 d.message  = "Setting '" + issue.key + "' in " + fileName + " has the wrong type.";
                 d.detail   = "The value was refused; the setting keeps the value of the rungs below it.";
             }
-            d.locator = DiagLocator::File(issue.file.generic_string(), issue.line);
-            ARC_WARN("cvar config: {} '{}' at {}:{}", d.code, issue.key, issue.file.generic_string(), issue.line);
+            d.locator = DiagLocator::File(path, issue.line);
+            if (log == CVarConfigLog::Now)
+            {
+                LoggedKey id{ issue.kind, path, issue.key };
+                if (!logged.contains(id))
+                    ARC_WARN("cvar config: {} '{}' at {}:{}", d.code, issue.key, path, issue.line);
+                loggedNow.insert(std::move(id));
+            }
             rows.push_back(std::move(d));
         }
+        // Deferred leaves the logged set alone: the publish that follows the
+        // module load is then the first to log, and names only what survived.
+        if (log == CVarConfigLog::Now)
+            logged = std::move(loggedNow);
         Diagnostics::Publish("config.cvars", rows);
     }
 

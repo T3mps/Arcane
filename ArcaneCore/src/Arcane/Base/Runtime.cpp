@@ -580,7 +580,16 @@ namespace Arcane
         cvars.Publish();
         // Unknown keys and type mismatches in any rung's files go to the
         // Problems panel (settings spec s4.8, s12); the whole set is replaced.
-        PublishCVarConfigDiagnostics(ValidateCVarLayers(cvars, layers));
+        // The LOG is deferred when the manifest declares a game module or
+        // enabled plugins: both hosts load them synchronously after this call
+        // (EditorAppProject, RuntimeApp), so their keys look unknown until
+        // LayerModuleCVars republishes -- that publish is the first to log, and
+        // names only what survived. A project declaring none logs now (nothing
+        // would later).
+        const bool modulesLoadLater = !m_impl->project->Manifest().gameModule.empty()
+                                   || !m_impl->project->ActivePluginRoots().empty();
+        PublishCVarConfigDiagnostics(ValidateCVarLayers(cvars, layers),
+                                     modulesLoadLater ? CVarConfigLog::Deferred : CVarConfigLog::Now);
         return true;
     }
 
@@ -612,8 +621,9 @@ namespace Arcane
         // project/user layers entirely rather than leaving them shadowed by
         // nothing once nothing re-layers over them.
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
-        // The project's config rows go away with it; only the engine rung remains.
-        PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()));
+        // The project's config rows go away with it; only the engine rung remains
+        // (a shrinking set logs nothing: the log is a delta against the last logged set).
+        PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()), CVarConfigLog::Now);
     }
 
     void Runtime::SetUserCVarArchiving(bool enabled) noexcept

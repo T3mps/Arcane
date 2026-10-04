@@ -38,10 +38,22 @@ namespace Arcane
     // then file name.
     ARC_CORE_API std::vector<CVarConfigIssue> ValidateCVarLayers(CVarRegistry& registry, const LayerSources& layers);
 
+    // Whether a publish logs. The Problems rows are ALWAYS published; the log
+    // line (the only surface a headless host has) is a DELTA against the last
+    // logged set, so an issue a file keeps across hot reloads warns once.
+    // Deferred publishes the rows and logs nothing, leaving that set untouched:
+    // for a set known to be transient -- OpenProject of a project whose game
+    // module or plugins load AFTER it, whose keys look unknown until then. The
+    // module-load republish (Now) is then the first to log, and names only what
+    // survived. A host that opens such a project and never loads its module
+    // keeps the rows, and may call this with Now itself.
+    enum class CVarConfigLog : std::uint8_t { Now, Deferred };
+
     // Replace the Problems set "config.cvars" with one row per issue: the File
     // locator is the file at the key's line, and the message names the key.
-    // Logs one warning per issue for headless runs.
-    ARC_CORE_API void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues);
+    // With Now, logs one warning per issue absent from the last logged set.
+    ARC_CORE_API void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues,
+                                                   CVarConfigLog log = CVarConfigLog::Now);
 
     // `category` is the file stem. Keys in `doc` become `<category>.<key>`.
     // Nested objects join with further dots. Document-shaped categories record

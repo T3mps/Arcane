@@ -339,8 +339,9 @@ namespace Arcane
             if (runtimes.empty() || p.CVarModule().empty()) return;
             const LayerSources layers = Primary().CVarLayerSources();
             CVarRegistry::Get().ApplyLayersFor(p.CVarModule(), layers);
-            // The module's keys are known now: republish the whole set.
-            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), layers));
+            // The module's keys are known now: republish the whole set, and log
+            // (once per surviving issue -- OpenProject deferred its log to here).
+            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), layers), CVarConfigLog::Now);
         }
 
         // Give every attached world the module's matching systems. Idempotent (Astra

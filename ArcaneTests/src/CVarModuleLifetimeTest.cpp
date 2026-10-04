@@ -5,10 +5,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Project/Project.hpp>
 
@@ -23,8 +25,11 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -283,4 +288,101 @@ TEST_CASE("a User value survives a hot reload: flushed before the unload, re-app
     RestoreV1();
     rt.CloseProject();
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    // A Problems sink that records every publish. RAII, so a failed REQUIRE
+    // cannot leave a dangling sink behind for the next case.
+    struct DiagCapture
+    {
+        std::vector<std::pair<std::string, std::vector<Arcane::Diagnostic>>> calls;
+        DiagCapture() { Arcane::Diagnostics::SetSink(&Sink, this); }
+        ~DiagCapture() { (void)Arcane::Diagnostics::ClearSinkIfCurrent(&Sink, this); }
+        static void Sink(std::string_view key, std::span<const Arcane::Diagnostic> diags, void* user)
+        {
+            static_cast<DiagCapture*>(user)->calls.emplace_back(std::string(key),
+                                                                std::vector<Arcane::Diagnostic>(diags.begin(), diags.end()));
+        }
+        // The newest publish under `key`; nullptr when there was none.
+        const std::vector<Arcane::Diagnostic>* Last(std::string_view key) const
+        {
+            for (auto it = calls.rbegin(); it != calls.rend(); ++it)
+                if (it->first == key) return &it->second;
+            return nullptr;
+        }
+    };
+
+    bool NamesKey(const std::vector<Arcane::Diagnostic>& rows, std::string_view key)
+    {
+        return std::any_of(rows.begin(), rows.end(),
+                           [&](const Arcane::Diagnostic& d) { return d.message.find(key) != std::string::npos; });
+    }
+}
+
+TEST_CASE("a module project's keys are not logged as unknown at OpenProject: the log waits for the module load, then names each surviving issue once", "[cvar][hotreload][diagnostics]")
+{
+    // S1-30 ruling: the Problems rows are published at OpenProject as the plan
+    // says, but the LOG is deferred when the manifest declares a game module --
+    // the host loads it AFTER OpenProject, so its keys look unknown until
+    // LayerModuleCVars republishes. That publish logs a delta against the last
+    // logged set: each surviving issue once, a hot reload nothing.
+    RestoreV1();
+    const fs::path dir = fs::temp_directory_path() / "arcane_s1_lifetime_diaglog";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "P" / "Config", ec);
+    fs::create_directories(dir / "P" / "Content", ec);
+    {
+        // RuntimeProjectTest's manifest shape, declaring the fixture as the module.
+        std::ofstream(dir / "P" / "P.arcproj", std::ios::binary)
+            << R"({"formatVersion":)" << Arcane::ProjectManifest::kFormatVersion
+            << R"(,"name":"P","engine":{"abi":)" << static_cast<int>(Arcane::kGamePluginABIVersion)
+            << R"(},"gameModule":"HotReloadPluginV1.dll","plugins":[],"bootScene":""})";
+        std::ofstream(dir / "P" / "Config" / "hotreload.json", std::ios::binary) << R"({ "step": 42 })";
+        std::ofstream(dir / "P" / "Config" / "cvardiagtest.json", std::ios::binary) << R"({ "bogus": 1 })";
+    }
+
+    DiagCapture cap;
+    LogCapture log;
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    REQUIRE(rt.OpenProject(dir / "P"));                       // hotreload.step does not exist yet
+    {
+        const std::vector<Arcane::Diagnostic>* rows = cap.Last("config.cvars");
+        REQUIRE(rows);
+        CHECK(rows->size() == 2);                              // the rows are published now ...
+        CHECK(NamesKey(*rows, "hotreload.step"));
+        CHECK(NamesKey(*rows, "cvardiagtest.bogus"));
+        CHECK(log.text.find("cvar config:") == std::string::npos);   // ... the log waits for the module
+    }
+
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 42);   // the deferral changed nothing about layering
+    {
+        const std::vector<Arcane::Diagnostic>* rows = cap.Last("config.cvars");
+        REQUIRE(rows);
+        REQUIRE(rows->size() == 1);                            // hotreload.step is declared now
+        CHECK(NamesKey(*rows, "cvardiagtest.bogus"));
+        CHECK(CountOf(log.text, "config.cvar.unknown-key 'cvardiagtest.bogus'") == 1);
+        CHECK(CountOf(log.text, "config.cvar.unknown-key 'hotreload.step'") == 0);
+    }
+
+    fs::copy_file("HotReloadPluginV2.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    REQUIRE(host.ForceReload());                               // a second load republishes the same set ...
+    {
+        const std::vector<Arcane::Diagnostic>* rows = cap.Last("config.cvars");
+        REQUIRE(rows);
+        CHECK(rows->size() == 1);
+        CHECK(CountOf(log.text, "config.cvar.unknown-key 'cvardiagtest.bogus'") == 1);   // ... and logs nothing new
+        CHECK(CountOf(log.text, "config.cvar.unknown-key 'hotreload.step'") == 0);
+    }
+
+    host.Unload();
+    RestoreV1();
+    rt.CloseProject();
+    fs::remove_all(dir, ec);
 }
