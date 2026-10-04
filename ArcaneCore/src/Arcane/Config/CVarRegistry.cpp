@@ -5,6 +5,7 @@
 #include <Arcane/Config/CVarRef.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <sstream>
 #include <unordered_map>
@@ -193,6 +194,55 @@ namespace Arcane
                 && !PublishedBool(self, "server.cheatsAllowed", true))
                 rule.allowed = false;
             return rule;
+        }
+
+        CVarPolicyFn policy = nullptr;
+        void*        policyUser = nullptr;
+        std::string  policyModule;
+        CVarAuditFn  audit = nullptr;
+        void*        auditUser = nullptr;
+
+        struct Decision
+        {
+            bool          absent = false;
+            bool          allowed = false;
+            PolicyVerdict verdict = PolicyVerdict::Default;
+        };
+
+        // The table, then the game's policy (settings spec s3.2). The policy
+        // is never asked in the Editor context, about an absent setting (it
+        // cannot reach Editor or Hidden), or about a Protected read outside
+        // ServerAdmin (it cannot make one readable).
+        Decision Decide(const CVarRegistry& self, const Slot& slot, CVarContext ctx, const CVarCaller* caller,
+                        bool write, const CVarValue* value) const
+        {
+            if (ctx == CVarContext::Editor) return { false, true, PolicyVerdict::Default };
+            const AccessRule rule = Access(self, slot, ctx, write, value);
+            if (rule.absent) return { true, false, PolicyVerdict::Default };   // the policy cannot reach it
+            const bool protectedRead = !write && HasFlag(slot.flags, CVarFlags::Protected) && ctx != CVarContext::ServerAdmin;
+            if (!policy || protectedRead) return { false, rule.allowed, PolicyVerdict::Default };
+            const CVarInfo info{ slot.name, slot.type, slot.flags, slot.audience };
+            const CVarRequest request{ ctx, caller, write };
+            const PolicyVerdict verdict = policy(info, request, policyUser);
+            if (verdict == PolicyVerdict::Allow) return { false, true, verdict };
+            if (verdict == PolicyVerdict::Deny) return { false, false, verdict };
+            return { false, rule.allowed, PolicyVerdict::Default };
+        }
+
+        void Audit(const std::string& name, const CVarCaller* caller, CVarContext ctx, PolicyVerdict verdict,
+                   std::string oldValue, std::string newValue) const
+        {
+            if (!audit) return;
+            CVarAuditRecord record;
+            record.name = name;
+            record.callerId = caller ? std::string(caller->id) : std::string();
+            record.oldValue = std::move(oldValue);
+            record.newValue = std::move(newValue);
+            record.context = ctx;
+            record.verdict = verdict;
+            record.unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            audit(record, auditUser);
         }
     };
 
@@ -485,20 +535,33 @@ namespace Arcane
     }
 
     SetResult CVarRegistry::Set(CVarHandle handle, CVarValue value, SetBy by,
-                                std::string_view sourceModule, CVarContext ctx, const CVarCaller* /*caller*/)
+                                std::string_view sourceModule, CVarContext ctx, const CVarCaller* caller)
     {
         if (handle.index >= m->slots.size()) return SetResult::Stale;
-        Slot& slot = m->slots[handle.index];
-        if (!slot.alive || slot.generation != handle.generation) return SetResult::Stale;
-        if (value.type != slot.type) return SetResult::TypeMismatch;
-        if (slot.type == CVarType::Enum &&
-            (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
+        if (!m->slots[handle.index].alive || m->slots[handle.index].generation != handle.generation) return SetResult::Stale;
+        if (value.type != m->slots[handle.index].type) return SetResult::TypeMismatch;
+        if (m->slots[handle.index].type == CVarType::Enum &&
+            (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= m->slots[handle.index].enumNames.size()))
             return SetResult::TypeMismatch;   // an ordinal outside the declared names
 
-        if (ctx != CVarContext::Editor && !m->Access(*this, slot, ctx, true, &value).allowed)
+        const Impl::Decision decision = m->Decide(*this, m->slots[handle.index], ctx, caller, true, &value);
+        // The policy is game code. It may register a cvar and move the slot
+        // array, so the slot is looked up again only after it has run.
+        Slot& slot = m->slots[handle.index];
+        // Every non-Editor change of a Server setting, and every policy denial
+        // of one, reaches the audit sink (s3.2, s9). A table denial is neither.
+        const bool audited = ctx != CVarContext::Editor && slot.audience == Audience::Server;
+        if (!decision.allowed)
+        {
+            if (audited && decision.verdict == PolicyVerdict::Deny)
+                m->Audit(slot.name, caller, ctx, decision.verdict,
+                         FormatCVarValue(slot.history.back().value, slot.enumNames), FormatCVarValue(value, slot.enumNames));
             return SetResult::Denied;
+        }
 
         value = Clamp(std::move(value), slot.min, slot.max);
+        const std::string before = audited ? FormatCVarValue(slot.history.back().value, slot.enumNames) : std::string();
+        const std::string after = audited ? FormatCVarValue(value, slot.enumNames) : std::string();
         // ONE record per (rung, source) (settings spec s4.5, O3): a repeat
         // replaces its own record, so re-opening a project or re-applying a
         // layer never grows the history. Records stay ordered weakest rung
@@ -512,6 +575,8 @@ namespace Arcane
         const bool wins = at == slot.history.end();
         slot.history.insert(at, CVarHistoryRecord{ by, std::move(value), std::string(sourceModule) });
         slot.dirty = true;
+        if (audited)
+            m->Audit(slot.name, caller, ctx, decision.verdict, before, after);
         return wins ? SetResult::Applied : SetResult::RefusedWeaker;
     }
 
@@ -553,6 +618,9 @@ namespace Arcane
                 command.alive = false;
             }
         }
+        // The module's policy leaves with it: never call into an unloaded image.
+        if (m->policy && m->policyModule == module)
+            SetPolicy(nullptr, nullptr, {});
     }
 
     void CVarRegistry::RevertCheats()
@@ -581,6 +649,19 @@ namespace Arcane
             if (slot.history.empty())
                 slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         }
+    }
+
+    void CVarRegistry::SetPolicy(CVarPolicyFn fn, void* user, std::string_view module)
+    {
+        m->policy = fn;
+        m->policyUser = fn ? user : nullptr;
+        m->policyModule = fn ? std::string(module) : std::string();
+    }
+
+    void CVarRegistry::SetAuditSink(CVarAuditFn fn, void* user)
+    {
+        m->audit = fn;
+        m->auditUser = fn ? user : nullptr;
     }
 
     void CVarRegistry::Publish()
@@ -694,13 +775,23 @@ namespace Arcane
 
         const CVarHandle handle = Resolve(name);
         if (handle.IsStale()) return { false, "unknown '" + name + "'" };
-        const Slot& slot = m->slots[handle.index];
         if (ctx != CVarContext::Editor)
         {
-            const AccessRule read = m->Access(*this, slot, ctx, false, nullptr);
-            if (read.absent) return { false, "unknown '" + name + "'" };
-            if (args.empty() && !read.allowed) return { false, "denied: '" + name + "' is protected" };
+            if (m->Access(*this, m->slots[handle.index], ctx, false, nullptr).absent)
+                return { false, "unknown '" + name + "'" };
+            // A plain read asks the policy here; a write line is ONE write,
+            // asked once, by Set. A read is refused for exactly two reasons:
+            // the table (Protected outside ServerAdmin) or the policy's Deny.
+            if (args.empty())
+            {
+                const Impl::Decision read = m->Decide(*this, m->slots[handle.index], ctx, caller, false, nullptr);
+                if (!read.allowed)
+                    return { false, read.verdict == PolicyVerdict::Deny ? "denied: '" + name + "' by the game's policy"
+                                                                        : "denied: '" + name + "' is protected" };
+            }
         }
+        // After the policy (game code) has run: it may have moved the slot array.
+        const Slot& slot = m->slots[handle.index];
         if (args.empty())
             return { true, slot.name + " = " + FormatCVarValue(slot.published, slot.enumNames) };
         // The console and --set (ApplyCVarCommandLine) parse every type the same way.

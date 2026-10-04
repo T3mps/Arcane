@@ -10,6 +10,7 @@
 #include "Helpers/CVarTestDesc.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -235,4 +236,94 @@ TEST_CASE("--set runs in the Editor context in a Debug/Release build and as the 
     CHECK(reg.Get(cull)->AsBool() == false);
     CHECK(reg.Explain("render.meshCull")->setBy == SetBy::CommandLine);
 #endif
+}
+
+namespace
+{
+    struct PolicyProbe { int asked = 0; };
+    constexpr std::uint64_t kModerator = 1;
+
+    PolicyVerdict LobbyPolicy(const CVarInfo& cvar, const CVarRequest& req, void* user)
+    {
+        ++static_cast<PolicyProbe*>(user)->asked;
+        const bool moderator = req.caller && (req.caller->roles & kModerator) != 0;
+        if (cvar.name.starts_with("match.") && moderator) return PolicyVerdict::Allow;              // widen a Game setting
+        if (cvar.name == "server.gravity" && req.context == CVarContext::Client && moderator) return PolicyVerdict::Allow;
+        if (cvar.name == "render.quality" && req.write) return PolicyVerdict::Deny;                // narrow: a ranked lock
+        if (cvar.name.starts_with("net.") || cvar.name.starts_with("editor.") || cvar.name.starts_with("game.hidden"))
+            return PolicyVerdict::Allow;                                                            // reaches for what it may not
+        return PolicyVerdict::Default;
+    }
+}
+
+TEST_CASE("CVarPolicy: Allow widens, Deny narrows, Default keeps the table; it never reaches Editor, Hidden or Protected reads; module unload clears it", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle rounds  = reg.Register(Test::Desc("match.rounds", CVarValue::Int32(3), Audience::Game));
+    const CVarHandle gravity = reg.Register(Test::Desc("server.gravity", CVarValue::Float32(-9.81f), Audience::Server));
+    const CVarHandle quality = reg.Register(Test::Desc("render.quality", CVarValue::Int32(2), Audience::PlayerSafe));
+    REQUIRE_FALSE(reg.Register(Test::Desc("net.secret", CVarValue::String("hunter2"), Audience::Server, CVarFlags::Protected)).IsStale());
+    const CVarHandle editorKnob = reg.Register(Test::Desc("editor.knob", CVarValue::Int32(0), Audience::Editor));
+    REQUIRE_FALSE(reg.Register(Test::Desc("game.hiddenKnob", CVarValue::Int32(0), Audience::PlayerSafe, CVarFlags::Hidden)).IsStale());
+
+    PolicyProbe probe;
+    reg.SetPolicy(&LobbyPolicy, &probe, "game");
+    const CVarCaller moderator{ "mod-7", kModerator, nullptr };
+    const CVarCaller player{ "player-3", 0, nullptr };
+
+    CHECK(reg.Set(rounds, CVarValue::Int32(5), SetBy::Console, {}, CVarContext::Client, &moderator) == SetResult::Applied);
+    CHECK(reg.Set(rounds, CVarValue::Int32(6), SetBy::Console, {}, CVarContext::Client, &player) == SetResult::Denied);
+    CHECK(reg.Set(gravity, CVarValue::Float32(-1.0f), SetBy::Console, {}, CVarContext::Client, &moderator) == SetResult::Applied);
+    CHECK(reg.Set(gravity, CVarValue::Float32(-2.0f), SetBy::Console, {}, CVarContext::Client, &player) == SetResult::Denied);
+    CHECK(reg.Set(quality, CVarValue::Int32(1), SetBy::Console, {}, CVarContext::LocalHost, &player) == SetResult::Denied);
+    CHECK(reg.Execute("render.quality", CVarContext::LocalHost, SetBy::Console, &player).ok);   // the lock is on writes only
+    CHECK_FALSE(reg.Execute("net.secret", CVarContext::Client, SetBy::Console, &moderator).ok);  // Protected read: Allow ignored
+    CHECK(reg.Execute("editor.knob 1", CVarContext::Client, SetBy::Console, &moderator).text.find("unknown") != std::string::npos);
+    CHECK(reg.Execute("game.hiddenKnob 1", CVarContext::LocalHost, SetBy::Console, &moderator).text.find("unknown") != std::string::npos);
+
+    const int asked = probe.asked;
+    CHECK(reg.Set(editorKnob, CVarValue::Int32(1), SetBy::Console, {}, CVarContext::Editor) == SetResult::Applied);
+    CHECK(probe.asked == asked);                                   // the editor never consults the policy
+
+    reg.UnregisterModule("game");                                  // the game module unloaded
+    CHECK(reg.Set(rounds, CVarValue::Int32(7), SetBy::Console, {}, CVarContext::Client, &moderator) == SetResult::Denied);
+}
+
+TEST_CASE("cvar audit sink: every non-Editor change of a Server setting, and every policy denial of one, is recorded with caller, old, new and verdict", "[cvar]")
+{
+    CVarRegistry reg;
+    std::vector<CVarAuditRecord> records;
+    reg.SetAuditSink([](const CVarAuditRecord& r, void* u) { static_cast<std::vector<CVarAuditRecord>*>(u)->push_back(r); }, &records);
+    const CVarHandle tick = reg.Register(Test::Desc("server.tickHz", CVarValue::Int32(60), Audience::Server));
+    const CVarHandle speed = reg.Register(Test::Desc("game.speed", CVarValue::Int32(1), Audience::PlayerSafe));
+    const CVarCaller admin{ "admin-1", 0, nullptr };
+
+    REQUIRE(reg.Set(tick, CVarValue::Int32(30), SetBy::Console, {}, CVarContext::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(speed, CVarValue::Int32(2), SetBy::Console, {}, CVarContext::LocalHost, &admin) == SetResult::Applied);
+    CHECK(records.empty());                                        // Editor context, and a non-Server setting: not audited
+
+    REQUIRE(reg.Set(tick, CVarValue::Int32(90), SetBy::Console, {}, CVarContext::ServerAdmin, &admin) == SetResult::Applied);
+    REQUIRE(records.size() == 1);
+    CHECK(records[0].name == "server.tickHz");
+    CHECK(records[0].callerId == "admin-1");
+    CHECK(records[0].oldValue == "30");
+    CHECK(records[0].newValue == "90");
+    CHECK(records[0].context == CVarContext::ServerAdmin);
+    CHECK(records[0].verdict == PolicyVerdict::Default);
+    CHECK(records[0].unixMs > 0);
+
+    REQUIRE(reg.Set(tick, CVarValue::Int32(10), SetBy::Console, {}, CVarContext::Client, &admin) == SetResult::Denied);
+    CHECK(records.size() == 1);                                    // a table denial is not a change
+
+    reg.SetPolicy([](const CVarInfo&, const CVarRequest& r, void*) { return r.context == CVarContext::LocalHost ? PolicyVerdict::Deny : PolicyVerdict::Allow; },
+                  nullptr, "game");
+    REQUIRE(reg.Set(tick, CVarValue::Int32(20), SetBy::Console, {}, CVarContext::LocalHost, &admin) == SetResult::Denied);
+    REQUIRE(records.size() == 2);
+    CHECK(records[1].verdict == PolicyVerdict::Deny);
+    CHECK(records[1].oldValue == "90");
+    CHECK(records[1].newValue == "20");
+    REQUIRE(reg.Set(tick, CVarValue::Int32(15), SetBy::Console, {}, CVarContext::Client, &admin) == SetResult::Applied);
+    REQUIRE(records.size() == 3);
+    CHECK(records[2].verdict == PolicyVerdict::Allow);
+    reg.SetAuditSink(nullptr, nullptr);
 }

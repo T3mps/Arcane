@@ -112,6 +112,39 @@ namespace Arcane
         void*            gameData = nullptr;
     };
 
+    enum class PolicyVerdict : std::uint8_t { Default, Allow, Deny };
+
+    struct CVarInfo
+    {
+        std::string_view name;
+        CVarType         type = CVarType::Bool;
+        CVarFlags        flags = CVarFlags::None;
+        Audience         audience = Audience::Game;
+    };
+
+    struct CVarRequest
+    {
+        CVarContext       context = CVarContext::Editor;
+        const CVarCaller* caller = nullptr;
+        bool              write = false;
+    };
+
+    // A game's access policy (settings spec s3.2). It is asked about every
+    // non-Editor read and write; Default keeps the engine table. It cannot:
+    //   - reach an Editor or Hidden setting;
+    //   - make a Protected value readable outside ServerAdmin;
+    //   - bring back a Dev setting that a Dist build compiled out.
+    using CVarPolicyFn = PolicyVerdict (*)(const CVarInfo&, const CVarRequest&, void* user);
+
+    struct CVarAuditRecord
+    {
+        std::string   name, callerId, oldValue, newValue;
+        CVarContext   context = CVarContext::Editor;
+        PolicyVerdict verdict = PolicyVerdict::Default;   // Default: the engine table decided
+        std::int64_t  unixMs = 0;
+    };
+    using CVarAuditFn = void (*)(const CVarAuditRecord&, void* user);
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)
@@ -159,7 +192,9 @@ namespace Arcane
 
         // sourceModule tags the history record so UnregisterModule can pop it.
         // Outside the Editor context the write goes through the audience x
-        // context table (settings spec s3.2): Denied when the table refuses.
+        // context table, then the game's policy (SetPolicy; settings spec
+        // s3.2): Denied when they refuse. A Server setting's change, or its
+        // policy denial, reaches the audit sink (SetAuditSink).
         SetResult Set(CVarHandle handle, CVarValue value, SetBy by,
                       std::string_view sourceModule = {},
                       CVarContext ctx = CVarContext::Editor,
@@ -186,6 +221,13 @@ namespace Arcane
         // hold. Runtime drops a closing project's User layer this way, so the
         // next project's archive cannot inherit it (T3-D2).
         void RevertLayer(SetBy by);
+
+        // The game's policy: one per process. `module` is the module that
+        // installed it, and UnregisterModule(module) clears it. A null fn clears it now.
+        void SetPolicy(CVarPolicyFn fn, void* user, std::string_view module);
+        // Receives every non-Editor change of a Server setting, and every
+        // policy denial of one (settings spec s3.2, s9). A null fn uninstalls it.
+        void SetAuditSink(CVarAuditFn fn, void* user);
 
         [[nodiscard]] std::optional<CVarExplain> Explain(std::string_view name) const;
         // Skips Hidden; skips Dev if compiled out. The Editor view (the
