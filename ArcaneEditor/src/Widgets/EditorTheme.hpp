@@ -285,14 +285,14 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
         c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
 
-        // The first of FIVE metrics this theme changes (FrameBorderSize,
+        // The first of SIX metrics this theme changes (FrameBorderSize,
         // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha,
-        // TabRounding). Default
+        // TabRounding, WindowPadding). Default
         // is 0 (imgui.cpp:1533): with no frame border a near-black well on a dark
         // panel has only its fill to separate it, and small fields lose their
         // edge entirely. One pixel of kBorder (darker than both) is the inset
         // line the reference shows around every field. Everything else --
-        // FrameRounding 0, GrabRounding 0, the paddings -- is left at ImGui's
+        // FrameRounding 0, GrabRounding 0, the frame/item paddings -- is left at ImGui's
         // default, which is already the near-square shape the reference wants.
         style.FrameBorderSize = 1.0f;
 
@@ -324,5 +324,13 @@ namespace Arcane::Editor
         // reads closer to the near-square frames. ScaleAllSizes DPI-scales it
         // (imgui.cpp:1631).
         style.TabRounding = 2.0f;
+
+        // The sixth: WindowPadding 8 -> 4 (user, 2026-10-04: "less than it was,
+        // maybe 4px"). ImGui's stock (8,8) (imgui.cpp:1520) insets every panel's
+        // content by a visible margin; Unreal's dock tab content area pads 0
+        // (SDockTab ContentPadding, SDockTab.h:97) and each panel insets itself by
+        // a few px, so 4 everywhere -- panels, popups, menus, tooltips -- is the
+        // nearest single value. ScaleAllSizes DPI-scales it.
+        style.WindowPadding = ImVec2(4.0f, 4.0f);
     }
 }

@@ -468,7 +468,7 @@ TEST_CASE("DrawAssetPage: a texture with a derived child fits the 1080p ##page c
 {
     AssetPageProject p("arcane_asset_page_fit1080_test", "brick.png", /*derived*/ true);
     AssetPageUi ui;
-    ApplyEditorTheme(ImGui::GetStyle());                             // the editor's metrics (stock paddings + FrameBorderSize 1)
+    ApplyEditorTheme(ImGui::GetStyle());                             // the editor's metrics (4 px WindowPadding, stock frame paddings, FrameBorderSize 1)
     ImGui::GetStyle().FontSizeBase = 16.0f;                          // InstallEditorFonts' default size: 16 px lines, 22 px frames
     AssetPanelServices services;
     AssetPanelActions actions;
@@ -477,7 +477,8 @@ TEST_CASE("DrawAssetPage: a texture with a derived child fits the 1080p ##page c
         ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(392.0f, 297.0f), ImGuiCond_Always);   // 8 px padding: the desk's 376x281 child
+        const ImVec2 pad = ImGui::GetStyle().WindowPadding;             // the theme's, so the child is the desk's 376x281
+        ImGui::SetNextWindowSize(ImVec2(376.0f + 2.0f * pad.x, 281.0f + 2.0f * pad.y), ImGuiCond_Always);
         ImGui::Begin("t", nullptr, ImGuiWindowFlags_NoTitleBar);
         (void)ImGui::BeginChild("##page", ImVec2(0.0f, 0.0f), ImGuiChildFlags_NavFlattened);   // InspectorWindows.cpp's flags
         Arcane::Editor::PropertyGrid g(ui.grid);
