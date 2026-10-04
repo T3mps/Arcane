@@ -2064,7 +2064,7 @@ namespace Arcane::Editor
         // host uses (HostBoot::OpenOptionsFor), never a second copy.
         m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
         m_bootCtx.hostConfig = &m_config;
-        m_bootCtx.cvarPermission = Arcane::Permission::Editor;
+        m_bootCtx.cvarContext = Arcane::CVarContext::Editor;
 
         // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
         // opened project's manifest (project_open's shared CoreStages body

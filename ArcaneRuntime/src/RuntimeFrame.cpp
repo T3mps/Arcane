@@ -357,7 +357,7 @@ void BuildHud(FrameIo& io)
             {
                 for (const Arcane::ConsoleLine& line : console.Lines())
                     ImGui::TextUnformatted(line.text.c_str());
-                (void)Arcane::DrawConsoleInputLine("##cvar", console, Arcane::CVarRegistry::Get(), Arcane::Permission::Player);
+                (void)Arcane::DrawConsoleInputLine("##cvar", console, Arcane::CVarRegistry::Get(), Arcane::CVarContext::LocalHost);
             }
             ImGui::End();
             g_runtimeConsoleOpen = open;

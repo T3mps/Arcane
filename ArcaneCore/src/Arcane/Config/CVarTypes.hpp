@@ -89,12 +89,13 @@ namespace Arcane
     constexpr bool operator<=(SetBy a, SetBy b) noexcept { return !(b < a); }
     constexpr bool operator>=(SetBy a, SetBy b) noexcept { return !(a < b); }
 
-    enum class Permission : std::uint8_t
-    {
-        Editor,
-        Player,
-        Server,
-    };
+    // Who is asking right now (settings spec s3.2): the session role, not which
+    // console was used. It replaces the v1 Permission:
+    //   - the editor, its console and its --set are Editor;
+    //   - a single-player game or a listen-server host is LocalHost;
+    //   - a dedicated server's own console or an authenticated remote admin is ServerAdmin;
+    //   - a player connected to someone else's server is Client.
+    enum class CVarContext : std::uint8_t { Editor, LocalHost, ServerAdmin, Client };
 
     // Who a setting is for (settings spec 2026-10-03 s3.2), declared once per
     // setting. Editor settings live in the editor DLL, so a game never has them.

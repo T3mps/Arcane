@@ -381,7 +381,7 @@ namespace Arcane
     }
 
     SetResult CVarRegistry::Set(CVarHandle handle, CVarValue value, SetBy by,
-                                std::string_view sourceModule, Permission permission)
+                                std::string_view sourceModule, CVarContext ctx)
     {
         if (handle.index >= m->slots.size()) return SetResult::Stale;
         Slot& slot = m->slots[handle.index];
@@ -391,7 +391,7 @@ namespace Arcane
             (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
             return SetResult::TypeMismatch;   // an ordinal outside the declared names
 
-        const bool editor = permission == Permission::Editor;
+        const bool editor = ctx == CVarContext::Editor;
         if (!editor)
         {
             if (!HasFlag(slot.flags, CVarFlags::UserSettable)) return SetResult::Denied;
@@ -559,7 +559,7 @@ namespace Arcane
         return out;
     }
 
-    ExecResult CVarRegistry::Execute(std::string_view line, Permission permission, SetBy by)
+    ExecResult CVarRegistry::Execute(std::string_view line, CVarContext ctx, SetBy by)
     {
         while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
         if (line.empty()) return { false, "empty" };
@@ -588,7 +588,7 @@ namespace Arcane
         std::string error;
         std::optional<CVarValue> parsed = ParseCVarText(token, slot.type, slot.enumNames, error);
         if (!parsed) return { false, error };
-        const SetResult result = Set(handle, std::move(*parsed), by, {}, permission);
+        const SetResult result = Set(handle, std::move(*parsed), by, {}, ctx);
         if (result == SetResult::Denied) return { false, "denied" };
         if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + slot.name };
         if (result != SetResult::Applied) return { false, "rejected" };

@@ -26,7 +26,7 @@ namespace Arcane
     class ARC_CORE_API ConsoleModel
     {
     public:
-        void Submit(CVarRegistry& registry, Permission permission);
+        void Submit(CVarRegistry& registry, CVarContext ctx);
         void SetInput(std::string text) { m_input = std::move(text); }
         [[nodiscard]] const std::string& Input() const { return m_input; }
         [[nodiscard]] const std::vector<ConsoleLine>& Lines() const { return m_lines; }

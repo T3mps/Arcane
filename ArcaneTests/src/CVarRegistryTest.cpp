@@ -120,7 +120,7 @@ TEST_CASE("cvarlist hides Hidden and cvar_explain names the winning layer", "[cv
     REQUIRE_FALSE(sawSecret);
     REQUIRE(sawKnob);
 
-    const ExecResult explained = reg.Execute("cvar_explain visible.knob", Permission::Editor);
+    const ExecResult explained = reg.Execute("cvar_explain visible.knob", CVarContext::Editor);
     REQUIRE(explained.ok);
     REQUIRE(explained.text.find("Default") != std::string::npos);
     REQUIRE(explained.text.find("visible.knob") != std::string::npos);
@@ -130,26 +130,26 @@ TEST_CASE("default-deny and cheat revert", "[cvar]") {
     CVarRegistry reg;
     const CVarHandle plain = reg.Register(CVarDesc{
         "game.speed", CVarType::Float32, CVarValue::Float32(1.f), {}, {}, {}, "test cvar", "engine" });
-    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, Permission::Player) == SetResult::Denied);
-    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, Permission::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, CVarContext::Client) == SetResult::Denied);
+    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, CVarContext::Editor) == SetResult::Applied);
 
     const CVarHandle cheat = reg.Register(CVarDesc{
         "game.noclip", CVarType::Bool, CVarValue::Bool(false), {}, {},
         CVarFlags::Cheat | CVarFlags::UserSettable, "test cvar", "engine" });
     REQUIRE(reg.Set(cheat, CVarValue::Bool(false), SetBy::Project, "project") == SetResult::Applied);
     reg.Publish();
-    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", Permission::Player) == SetResult::Denied);
+    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", CVarContext::Client) == SetResult::Denied);
 
     const CVarHandle gate = reg.Register(CVarDesc{
         "cheats", CVarType::Bool, CVarValue::Bool(false), {}, {}, {}, "test cvar", "engine" });
-    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Console, {}, Permission::Player) == SetResult::Denied);
-    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Code, "editor", Permission::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Console, {}, CVarContext::Client) == SetResult::Denied);
+    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Code, "editor", CVarContext::Editor) == SetResult::Applied);
     reg.Publish();
-    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", Permission::Player) == SetResult::Applied);
+    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", CVarContext::Client) == SetResult::Applied);
     reg.Publish();
     REQUIRE(reg.Get(cheat)->AsBool() == true);
 
-    REQUIRE(reg.Set(gate, CVarValue::Bool(false), SetBy::Code, "editor", Permission::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(gate, CVarValue::Bool(false), SetBy::Code, "editor", CVarContext::Editor) == SetResult::Applied);
     reg.Publish();
     REQUIRE(reg.Get(cheat)->AsBool() == false);
     REQUIRE(reg.Explain("game.noclip")->setBy == SetBy::Project);
@@ -357,9 +357,9 @@ TEST_CASE("command line set beats user and loses to code", "[cvar]") {
     const CVarHandle h = reg.Register(CVarDesc{
         "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, CVarFlags::UserSettable, "test cvar", "engine" });
     REQUIRE(reg.Set(h, CVarValue::Int32(2), SetBy::User) == SetResult::Applied);
-    ApplyCVarCommandLine(reg, { "game.speed=4" }, Permission::Player);
+    ApplyCVarCommandLine(reg, { "game.speed=4" }, CVarContext::Client);
     REQUIRE(reg.Set(h, CVarValue::Int32(9), SetBy::Code) == SetResult::Applied);
-    ApplyCVarCommandLine(reg, { "game.speed=5" }, Permission::Player);
+    ApplyCVarCommandLine(reg, { "game.speed=5" }, CVarContext::Client);
     reg.Publish();
     REQUIRE(reg.Get(h)->AsInt32() == 9);
     REQUIRE(reg.Explain("game.speed")->setBy == SetBy::Code);
@@ -384,11 +384,11 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
     REQUIRE(matches.size() == 1);
     REQUIRE(matches[0] == "diagnostics.drawMarkers");
     model.SetInput("cvar_explain diagnostics.drawMarkers");
-    model.Submit(reg, Permission::Editor);
+    model.Submit(reg, CVarContext::Editor);
     REQUIRE(model.Lines().size() == 2);
     REQUIRE(model.Lines().back().text.find("Default") != std::string::npos);
     model.SetInput("game.speed 3");
-    model.Submit(reg, Permission::Player);
+    model.Submit(reg, CVarContext::Client);
     REQUIRE_FALSE(model.Lines().back().ok);
     REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
 
@@ -396,7 +396,7 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
     // any other, and only the frame driver's Publish makes it visible
     // (spec 6.4 -- read-your-own-writes is deliberately not provided).
     model.SetInput("game.speed 3");
-    model.Submit(reg, Permission::Editor);
+    model.Submit(reg, CVarContext::Editor);
     REQUIRE(model.Lines().back().ok);
     REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
     reg.Publish();
@@ -516,7 +516,7 @@ TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplica
     for (const char* line : { "cvarlist", "cvarlist", "cvar_explain cheats" })
     {
         model.SetInput(line);
-        model.Submit(reg, Permission::Editor);
+        model.Submit(reg, CVarContext::Editor);
     }
     REQUIRE(model.History().size() == 2);        // the duplicate was skipped
     model.SetInput("dra");
@@ -532,9 +532,9 @@ TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplica
 
     REQUIRE(reg.Set(cap, CVarValue::Int32(2), SetBy::Code) == SetResult::Applied);
     reg.Publish();
-    for (const char* line : { "a", "b", "c" }) { model.SetInput(line); model.Submit(reg, Permission::Editor); }
+    for (const char* line : { "a", "b", "c" }) { model.SetInput(line); model.Submit(reg, CVarContext::Editor); }
     REQUIRE(model.History() == std::deque<std::string>{ "b", "c" });
     model.SetInput("");
-    model.Submit(reg, Permission::Editor);       // empty: not recorded
+    model.Submit(reg, CVarContext::Editor);       // empty: not recorded
     REQUIRE(model.History().size() == 2);
 }

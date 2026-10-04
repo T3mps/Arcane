@@ -33,21 +33,21 @@ namespace Arcane
         }
     }
 
-    bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry, Permission permission)
+    bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry, CVarContext ctx)
     {
         char buffer[512];
         std::snprintf(buffer, sizeof(buffer), "%s", model.Input().c_str());
-        LineContext ctx{ &model, &registry };
+        LineContext lineCtx{ &model, &registry };
         const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
                                           ImGuiInputTextFlags_CallbackCompletion |
                                           ImGuiInputTextFlags_CallbackHistory;
         ImGui::SetNextItemWidth(-1.0f);
         const bool entered = ImGui::InputTextWithHint(id, "cvar or command -- Tab completes, Up/Down history",
-                                                      buffer, sizeof(buffer), flags, &ConsoleLineCallback, &ctx);
+                                                      buffer, sizeof(buffer), flags, &ConsoleLineCallback, &lineCtx);
         model.SetInput(buffer);
         if (!entered)
             return false;
-        model.Submit(registry, permission);
+        model.Submit(registry, ctx);
         ImGui::SetKeyboardFocusHere(-1);   // keep typing: re-focus the line just submitted
         return true;
     }

@@ -151,7 +151,7 @@ namespace Arcane
         // sourceModule tags the history record so UnregisterModule can pop it.
         SetResult Set(CVarHandle handle, CVarValue value, SetBy by,
                       std::string_view sourceModule = {},
-                      Permission permission = Permission::Editor);
+                      CVarContext ctx = CVarContext::Editor);
 
         void UnregisterModule(std::string_view module);
 
@@ -180,7 +180,7 @@ namespace Arcane
         // Live commands, with List()'s rule (skips Hidden; skips Dev when
         // compiled out). `type` is meaningless for a command (left Bool).
         [[nodiscard]] std::vector<CVarListEntry> ListCommands() const;
-        [[nodiscard]] ExecResult Execute(std::string_view line, Permission permission,
+        [[nodiscard]] ExecResult Execute(std::string_view line, CVarContext ctx,
                                         SetBy by = SetBy::Console);
 
         // The published bool of the cvar named "cheats". False when absent.

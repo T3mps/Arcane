@@ -131,12 +131,12 @@ namespace Arcane::HostBoot
     // PIX/RenderDoc open. PASS-level scopes are unconditional and are NOT
     // configurable: they are what a crash report is built from, so a config file
     // must never be able to turn the diagnostics off.
-    inline void ApplyDiagnosticsConfig(const Arcane::Config&, Permission permission,
+    inline void ApplyDiagnosticsConfig(const Arcane::Config&, CVarContext ctx,
                                        const std::vector<std::string>& sets)
     {
         // Config layers were applied when the project opened (Runtime::OpenProject).
         // This stage only adds the command line, which outranks those layers.
-        ApplyCVarCommandLine(CVarRegistry::Get(), sets, permission);
+        ApplyCVarCommandLine(CVarRegistry::Get(), sets, ctx);
         CVarRegistry::Get().Publish();
     }
 
@@ -201,10 +201,11 @@ namespace Arcane::HostBoot
         // without one (the parity tests) behaves exactly as before.
         ProjectOpenOptions openOptions{};
 
-        // `--set` permission. The editor sets Editor; the runtime sets Player.
+        // `--set` context (settings spec s3.2). The editor sets Editor; the
+        // runtime is the local host of its own session (spec s8.3).
         // Null hostConfig means there is no command line (parity tests).
         const HostConfig* hostConfig = nullptr;
-        Permission cvarPermission = Permission::Player;
+        CVarContext cvarContext = CVarContext::LocalHost;
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this LIST whole: the ids,

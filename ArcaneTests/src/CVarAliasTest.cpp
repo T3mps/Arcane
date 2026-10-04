@@ -69,12 +69,12 @@ TEST_CASE("an alias resolves for the console, warning once, while Find stays exa
 
     LogCapture log;
     CHECK(reg.Resolve("render.oldName") == reg.Find("render.newName"));
-    const ExecResult set = reg.Execute("render.oldName 7", Permission::Editor);
+    const ExecResult set = reg.Execute("render.oldName 7", CVarContext::Editor);
     CHECK(set.ok);
     CHECK(set.text == "render.newName set (pending publish)");
     reg.Publish();
     CHECK(reg.Get(reg.Find("render.newName"))->AsInt32() == 7);
-    CHECK(reg.Execute("render.oldName", Permission::Editor).text == "render.newName = 7");
+    CHECK(reg.Execute("render.oldName", CVarContext::Editor).text == "render.newName = 7");
     CHECK(reg.Explain("render.oldName")->name == "render.newName");
     CHECK(log.count == 1);
     CHECK(log.last.find("render.oldName") != std::string::npos);
@@ -86,7 +86,7 @@ TEST_CASE("an alias resolves for --set", "[cvar]")
     CVarRegistry cli;
     WithRenamed(cli);
     LogCapture log;
-    ApplyCVarCommandLine(cli, { "render.oldName=9" }, Permission::Editor);
+    ApplyCVarCommandLine(cli, { "render.oldName=9" }, CVarContext::Editor);
     cli.Publish();
     CHECK(cli.Get(cli.Find("render.newName"))->AsInt32() == 9);
     CHECK(cli.Explain("render.newName")->setBy == SetBy::CommandLine);

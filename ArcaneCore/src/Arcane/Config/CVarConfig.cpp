@@ -221,7 +221,7 @@ namespace Arcane
                 if (numericEnum)
                     ARC_WARN("cvar: '{}' gives an Enum as the number {}; write \"{}\" -- the next archive write saves the name",
                              name, *numericEnum, enumNames[static_cast<std::size_t>(*numericEnum)]);
-                registry.Set(handle, std::move(*value), by, sourceModule, Permission::Editor);
+                registry.Set(handle, std::move(*value), by, sourceModule, CVarContext::Editor);
             }
         }
     }
@@ -364,7 +364,7 @@ namespace Arcane
         }
     }
 
-    void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets, Permission permission)
+    void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets, CVarContext ctx)
     {
         for (const std::string& item : sets)
         {
@@ -376,7 +376,7 @@ namespace Arcane
             }
             const std::string name = item.substr(0, eq);
             const std::string value = item.substr(eq + 1);
-            const ExecResult result = registry.Execute(name + " " + value, permission, SetBy::CommandLine);
+            const ExecResult result = registry.Execute(name + " " + value, ctx, SetBy::CommandLine);
             if (!result.ok) ARC_WARN("cvar: --set {}: {}", name, result.text);
         }
     }

@@ -1348,7 +1348,7 @@ namespace Arcane::Editor
                 else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
             }
         }
-        (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
+        (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::CVarContext::Editor);
         ImGui::End();
     }
 

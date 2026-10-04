@@ -35,7 +35,7 @@ namespace
             ImGui::SetNextWindowSize(ImVec2(640, 200));
             ImGui::Begin("ConsoleLineTest");
             if (focusNext) { ImGui::SetKeyboardFocusHere(); focusNext = false; }
-            submitted = Arcane::DrawConsoleInputLine("##line", model, reg, Arcane::Permission::Editor) || submitted;
+            submitted = Arcane::DrawConsoleInputLine("##line", model, reg, Arcane::CVarContext::Editor) || submitted;
             ImGui::End();
             ImGui::Render();
         }

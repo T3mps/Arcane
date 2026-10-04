@@ -1565,7 +1565,7 @@ int RuntimeApp::Run()
     // cannot drift on when a verify run declines the diag:// mount.
     ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
     ctx.hostConfig = &m_config;
-    ctx.cvarPermission = Arcane::Permission::Player;
+    ctx.cvarContext = Arcane::CVarContext::LocalHost;
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp

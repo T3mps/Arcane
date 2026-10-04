@@ -11,7 +11,7 @@
 
 namespace Arcane
 {
-    // True on submit (the model already ran Submit with `permission`).
+    // True on submit (the model already ran Submit with `ctx`).
     ARC_API bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry,
-                                         Permission permission);
+                                         CVarContext ctx);
 }

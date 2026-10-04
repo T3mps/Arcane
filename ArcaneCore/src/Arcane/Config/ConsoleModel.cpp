@@ -4,7 +4,7 @@
 
 namespace Arcane
 {
-    void ConsoleModel::Submit(CVarRegistry& registry, Permission permission)
+    void ConsoleModel::Submit(CVarRegistry& registry, CVarContext ctx)
     {
         if (m_input.empty()) return;
         std::size_t cap = 64;
@@ -18,7 +18,7 @@ namespace Arcane
         // NO Publish here: the console is a writer like any other, and the
         // frame driver's barrier is what makes an accepted set visible to
         // every reader of the next frame at once (spec 6.4).
-        const ExecResult result = registry.Execute(m_input, permission);
+        const ExecResult result = registry.Execute(m_input, ctx);
         m_lines.push_back(ConsoleLine{ result.text, result.ok });
         m_input.clear();
     }

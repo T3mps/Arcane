@@ -50,7 +50,8 @@ namespace Arcane
     // unchanged file is not rewritten.
     ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
 
-    // `--set name=value`, repeated. CommandLine rung. Does not publish.
+    // `--set name=value`, repeated. CommandLine rung, in `ctx` (the editor:
+    // Editor; ArcaneRuntime: LocalHost). Does not publish.
     ARC_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
-                                              Permission permission);
+                                              CVarContext ctx);
 }

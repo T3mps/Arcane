@@ -264,7 +264,7 @@ namespace Arcane::HostBoot
             // project's Config/diagnostics.json takes effect exactly the way its
             // input map does), and a whole BootStage for one bool would be
             // ceremony. See HostBoot::ApplyDiagnosticsConfig.
-            ApplyDiagnosticsConfig(ctx.runtime->Configuration(), ctx.cvarPermission,
+            ApplyDiagnosticsConfig(ctx.runtime->Configuration(), ctx.cvarContext,
                                    ctx.hostConfig ? ctx.hostConfig->cvarSets : std::vector<std::string>{});
             return true;
         }));
