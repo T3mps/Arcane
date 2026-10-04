@@ -17,6 +17,7 @@
 // Dev-flagged cvars still declare here; Dist's process registry refuses them
 // and the handle reads the declared default.
 
+#include <Arcane/Config/CVarModule.hpp>
 #include <Arcane/Config/CVarRef.hpp>
 
 #define ARC_CVAR_CAT2(a, b) a##b
@@ -36,7 +37,9 @@
         ::Arcane::Detail::RegisterDeclaredAlias(oldLit, newLit)
 
 // fn: CommandResult(*)(std::string_view args, void* user) (settings spec s4.5).
+// The command belongs to the declaring module (Detail::CallerModule, s4.3).
 #define ARC_COMMAND(nameLit, flagExpr, helpLit, fn)                                        \
     static const bool ARC_CVAR_CAT(arcCmd_, __LINE__) =                                    \
-        ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit, "engine", \
+        ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit,          \
+                                                      std::string(::Arcane::Detail::CallerModule()), \
                                                       static_cast<::Arcane::CommandFn>(fn), nullptr)

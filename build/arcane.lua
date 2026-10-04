@@ -207,6 +207,7 @@ function arcane_game_module(name)
 
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARC_GAME_MODULE needs no define
+            "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3)
             "IMGUI_API=__declspec(dllimport)",        -- adopt ArcaneClient.dll's single GImGui
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
@@ -322,6 +323,10 @@ function arcane_core_consumer()
         ARCANE_TP .. "/Manifold2D/include",
         ARCANE_TP .. "/Mosaic/include",
     }
+
+    -- The cvar module a consumer's ARC_CVAR/ARC_COMMAND declarations name
+    -- (Arcane/Config/CVarModule.hpp; settings spec s4.3): its own project.
+    defines { "ARC_MODULE_NAME=%{prj.name}" }
 
     libdirs { ARCANE_BIN .. "/ArcaneCore" }
     links   { "ArcaneCore" }

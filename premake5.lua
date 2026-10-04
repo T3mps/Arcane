@@ -38,6 +38,13 @@ workspace "Arcane"
     -- disabled engine-wide for the same reason.
     disablewarnings { "4251" }
 
+    -- Each module's own name, for the cvar registry's module capture (settings
+    -- spec s4.3/s4.4, O1): Arcane/Config/CVarModule.hpp stringizes it, so an
+    -- ARC_CVAR/ARC_COMMAND outside a plugin host's CVarModuleScope names the
+    -- module that declared it. Workspace scope, so every project -- engine,
+    -- hosts, tests, test plugins -- gets its own project name.
+    defines { "ARC_MODULE_NAME=%{prj.name}" }
+
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
     -- bin/ under its own dir) separate from the static-CRT flavors the
     -- Server workspace builds from the same wrapper scripts.
@@ -1069,7 +1076,7 @@ project "ArcaneEditor"
     if os.target() == "windows" then
         dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
     end
-    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)", "ARC_MODULE_NAME=editor" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
         -- shape as ArcaneRuntime's matching comment above (safe under /m: idempotent by
@@ -1822,9 +1829,6 @@ project "ArcaneTests"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-        -- settings S1-7: the module the test exe's static cvar declarations
-        -- belong to (Detail::DeclaringModule, CVarRef.hpp). A bare token.
-        "ARC_MODULE_NAME=tests",
         -- imgui is exported from ArcaneClient.dll; this exe imports it (matches the
         -- DLL's dllexport so <imgui.h> here resolves to the DLL's symbols).
         "IMGUI_API=__declspec(dllimport)",

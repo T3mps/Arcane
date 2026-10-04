@@ -264,7 +264,6 @@ namespace Arcane::Log
             desc.flags = Arcane::CVarFlags::Archive | Arcane::CVarFlags::Dev;
             desc.help = "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
                         "Gates stderr, the log file and the Console.";
-            desc.module = "engine";
             desc.audience = Arcane::Audience::Game;
             desc.scope = Arcane::SettingScope::PreferencesProject;   // inventory R1
             desc.apply = Arcane::ApplyMode::Live;

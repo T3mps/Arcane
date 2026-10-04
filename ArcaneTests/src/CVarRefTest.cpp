@@ -68,7 +68,7 @@ TEST_CASE("CVarRef reads its value by handle and carries the declared metadata a
     CHECK(meta->order == 4);
     CHECK(meta->displayName == "Int");
     CHECK(meta->categoryPath == "Tests/Ref");
-    CHECK(meta->module == "tests");                               // ArcaneTests' ARC_MODULE_NAME token
+    CHECK(meta->module == "ArcaneTests");                         // this exe's ARC_MODULE_NAME (the premake project name)
 }
 
 TEST_CASE("CVarRef covers float, Color, Vec3 and string, with per-component clamping", "[cvar]")

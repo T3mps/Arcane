@@ -177,6 +177,20 @@ namespace Arcane
         }
     };
 
+    // RAII. While one is alive on this thread, cvar and command registrations
+    // and callbacks are attributed to `module` (settings spec s4.3/s4.4). The
+    // plugin host opens one around a module's load (its statics run inside
+    // LoadLibrary, on this thread) and around its Init. Scopes nest; the
+    // innermost one wins.
+    class ARC_CORE_API CVarModuleScope
+    {
+    public:
+        explicit CVarModuleScope(std::string_view module);
+        ~CVarModuleScope();
+        CVarModuleScope(const CVarModuleScope&) = delete;
+        CVarModuleScope& operator=(const CVarModuleScope&) = delete;
+    };
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)
@@ -198,6 +212,7 @@ namespace Arcane
         // Set when Register fails. Empty after a successful register.
         [[nodiscard]] const std::string& LastError() const;
 
+        // An empty desc.module is filled from CurrentModule() (settings spec s4.3).
         [[nodiscard]] CVarHandle Register(const CVarDesc& desc);
         [[nodiscard]] bool RegisterCommand(std::string name, CVarFlags flags, std::string help,
                                            std::string module, CommandFn fn, void* user);
@@ -242,6 +257,15 @@ namespace Arcane
                       const CVarCaller* caller = nullptr);
 
         void UnregisterModule(std::string_view module);
+
+        // The innermost CVarModuleScope on this thread, else empty.
+        [[nodiscard]] static std::string_view ScopedModule() noexcept;
+        // ScopedModule(), else ArcaneCore's own ARC_MODULE_NAME ("ArcaneCore").
+        // Code in another module names ITSELF through Detail::CallerModule()
+        // (CVarModule.hpp), which falls back to that module's own define.
+        [[nodiscard]] static std::string_view CurrentModule() noexcept;
+        // The module that declared the cvar; empty for a stale handle.
+        [[nodiscard]] std::string ModuleOf(CVarHandle handle) const;
 
         // Snapshot readers. No-op when nothing is pending. Callbacks run after
         // the swap, on this thread, and a Set from a callback waits for the

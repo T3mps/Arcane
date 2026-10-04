@@ -1,6 +1,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Config/CVarModule.hpp>
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRef.hpp>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -170,7 +172,7 @@ namespace Arcane
         CVarValue published = CVarValue::Bool(false);
         std::vector<CVarHistoryRecord> history;
         bool dirty = false;
-        struct Callback { ChangeFn fn = nullptr; void* user = nullptr; };
+        struct Callback { ChangeFn fn = nullptr; void* user = nullptr; std::string module; };   // module: the ScopedModule at AddCallback
         std::vector<Callback> callbacks;
     };
 
@@ -184,6 +186,7 @@ namespace Arcane
         LegacyCommandFn legacy = nullptr;   // exactly one of fn / legacy is set
         void* user = nullptr;
         bool alive = true;
+        bool builtin = false;               // the registry's own (cvarlist, cvar_explain): survives every UnregisterModule
     };
 
     struct CVarRegistry::Impl
@@ -361,25 +364,60 @@ namespace Arcane
         }
     };
 
+    namespace
+    {
+        // The CVarModuleScope stack of this thread (settings spec s4.3). A
+        // deque, so pushing an inner scope never moves an outer scope's string.
+        thread_local std::deque<std::string> t_moduleScopes;
+    }
+
+    CVarModuleScope::CVarModuleScope(std::string_view module) { t_moduleScopes.emplace_back(module); }
+    CVarModuleScope::~CVarModuleScope() { if (!t_moduleScopes.empty()) t_moduleScopes.pop_back(); }
+
+    std::string_view CVarRegistry::ScopedModule() noexcept
+    {
+        return t_moduleScopes.empty() ? std::string_view{} : std::string_view(t_moduleScopes.back());
+    }
+
+    std::string_view CVarRegistry::CurrentModule() noexcept
+    {
+        const std::string_view scoped = ScopedModule();
+        return scoped.empty() ? std::string_view(ARC_MODULE_NAME_STRING) : scoped;
+    }
+
+    std::string CVarRegistry::ModuleOf(CVarHandle handle) const
+    {
+        if (handle.index >= m->slots.size()) return {};
+        const Slot& slot = m->slots[handle.index];
+        if (!slot.alive || slot.generation != handle.generation) return {};
+        return slot.declaredBy;
+    }
+
     CVarRegistry::CVarRegistry() : CVarRegistry(true) {}
 
     CVarRegistry::CVarRegistry(bool devCvars) : m(new Impl)
     {
         m->devCvars = devCvars;
         m->RebuildSnapshot();   // readers never see a null snapshot
-        const bool listed = RegisterCommand("cvarlist", CVarFlags::None, "List registered cvars.", "engine", &ListCommand, this);
-        const bool explained = RegisterCommand("cvar_explain", CVarFlags::None, "Show who set a cvar and the history under it.", "engine",
-                                               &ExplainCommand, this);
+        // The registry's own: declared by the module it lives in (ArcaneCore)
+        // and, as built-ins, kept through every UnregisterModule.
+        const bool listed = RegisterCommand("cvarlist", CVarFlags::None, "List registered cvars.",
+                                            std::string(CurrentModule()), &ListCommand, this);
+        const bool explained = RegisterCommand("cvar_explain", CVarFlags::None, "Show who set a cvar and the history under it.",
+                                               std::string(CurrentModule()), &ExplainCommand, this);
         (void)listed;
         (void)explained;
+        m->commands[m->commandByName.at("cvarlist")].builtin = true;
+        m->commands[m->commandByName.at("cvar_explain")].builtin = true;
         // node-page phase s8.2: the command line's history depth. Registered on
         // EVERY registry (test registries included), so through CVarDesc rather
         // than ARC_CVAR (which targets Get() only). ConsoleModel reads it.
-        // Game / Pref-P per the inventory's R1: it serves both consoles.
+        // Game / Pref-P per the inventory's R1: it serves both consoles. The
+        // module is left empty here and below: Register fills CurrentModule().
         const CVarHandle history = Register(CVarDesc{
             .name = "console.historySize", .type = CVarType::Int32, .defaultValue = CVarValue::Int32(64),
             .min = CVarValue::Int32(1), .max = CVarValue::Int32(1024), .flags = CVarFlags::Archive,
-            .help = "Command-line history depth.", .module = "engine",
+            .help = "Command-line history depth.",
             .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
         (void)history;
         // Settings spec s3.2: the cheats gate and the two engine knobs, on EVERY
@@ -394,7 +432,6 @@ namespace Arcane
             desc.defaultValue = CVarValue::Bool(def);
             desc.flags = flags;
             desc.help = help;
-            desc.module = "engine";
             desc.audience = Audience::Server;
             desc.scope = SettingScope::Project;
             desc.apply = ApplyMode::Live;
@@ -486,6 +523,7 @@ namespace Arcane
     CVarHandle CVarRegistry::Register(const CVarDesc& desc)
     {
         m->lastError.clear();
+        const std::string module = desc.module.empty() ? std::string(CurrentModule()) : std::string(desc.module);
         const std::string name{ desc.name };
         const auto refuse = [&](const std::string& why) {
             m->lastError = "cvar '" + name + "' " + why;
@@ -542,7 +580,7 @@ namespace Arcane
             return refuse("is Dev and this build compiled it out");
         if (const auto existing = m->byName.find(name); existing != m->byName.end())
             return refuse("already registered by module '" + m->slots[existing->second].declaredBy +
-                          "', refused from '" + std::string(desc.module) + "'");
+                          "', refused from '" + module + "'");
         if (m->commandByName.contains(name))
             return refuse("collides with a command");
         if (const auto alias = m->aliases.find(name); alias != m->aliases.end())
@@ -576,7 +614,7 @@ namespace Arcane
             slot.flags = slot.flags | CVarFlags::UserSettable;
         slot.name = desc.name;
         slot.help = desc.help;
-        slot.declaredBy = desc.module;
+        slot.declaredBy = module;
         slot.min = desc.min;
         slot.max = desc.max;
         slot.published = Clamp(desc.defaultValue, slot.min, slot.max);
@@ -721,6 +759,8 @@ namespace Arcane
                 kill.push_back(i);
                 continue;
             }
+            // The module's callbacks into its own image leave with it (spec s4.4).
+            std::erase_if(slot.callbacks, [&](const Slot::Callback& c) { return c.module == module; });
             const auto before = slot.history.size();
             std::erase_if(slot.history, [&](const CVarHistoryRecord& h) { return h.module == module; });
             if (slot.history.size() != before) slot.dirty = true;
@@ -741,7 +781,7 @@ namespace Arcane
         }
         for (Command& command : m->commands)
         {
-            if (command.alive && command.module == module && command.module != "engine")
+            if (command.alive && !command.builtin && command.module == module)
             {
                 m->commandByName.erase(command.name);
                 command.alive = false;
@@ -949,7 +989,7 @@ namespace Arcane
         if (handle.index >= m->slots.size()) return;
         Slot& slot = m->slots[handle.index];
         if (!slot.alive || slot.generation != handle.generation || !fn) return;
-        slot.callbacks.push_back(Slot::Callback{ fn, user });
+        slot.callbacks.push_back(Slot::Callback{ fn, user, std::string(ScopedModule()) });
     }
 
     bool CVarRegistry::CheatsEnabled() const

@@ -454,7 +454,7 @@ TEST_CASE("ARC_CVAR registers its range and its module", "[cvar]") {
         "tests.rangedProbe", CVarType::Int32, CVarValue::Int32(5),
         std::nullopt, std::nullopt, CVarFlags::None, "test cvar", "engine" });
     CHECK(dup.IsStale());
-    CHECK(reg.LastError().find("module 'tests'") != std::string::npos);   // declared by the macro's module
+    CHECK(reg.LastError().find("module 'ArcaneTests'") != std::string::npos);   // declared by the macro's module
 
     reg.Set(h, CVarValue::Int32(5), SetBy::Console);
     reg.Publish();

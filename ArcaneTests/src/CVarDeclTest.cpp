@@ -38,7 +38,7 @@ TEST_CASE("ARC_CVAR defines a nameable handle with its range, metadata and modul
     CHECK(Test::cvar_declProbe.Name() == "tests.decl.probe");
     const auto meta = CVarRegistry::Get().Metadata(Test::cvar_declProbe.Handle());
     REQUIRE(meta.has_value());
-    CHECK(meta->module == "tests");
+    CHECK(meta->module == "ArcaneTests");   // this exe's ARC_MODULE_NAME (the premake project name)
     REQUIRE(meta->max.has_value());
     CHECK(*meta->max == CVarValue::Int32(20));
     CHECK(meta->audience == Audience::Editor);
@@ -51,19 +51,19 @@ TEST_CASE("every migrated Archive declaration keeps type, default, range and fla
     const Audience ed = Audience::Editor;
     const SettingScope prefM = SettingScope::PreferencesMachine;
     const SettingScope prefP = SettingScope::PreferencesProject;
-    // The editor sources compile into this exe, so their module is "tests" here ("editor" in ArcaneEditor).
+    // The editor sources compile into this exe, so their module is "ArcaneTests" here ("ArcaneEditor" in the editor).
     const Migrated rows[] = {
-        { "editor.graph.fitMaxZoom", CVarValue::Float32(1.0f), CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), ed, prefM, "tests" },
-        { "editor.graph.fitMinZoom", CVarValue::Float32(0.5f), CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), ed, prefM, "tests" },
-        { "editor.graph.showPinLegend", CVarValue::Bool(true), std::nullopt, std::nullopt, ed, prefM, "tests" },
-        { "editor.inspector.materialPreviewFraction", CVarValue::Float32(0.45f), CVarValue::Float32(0.2f), CVarValue::Float32(0.8f), ed, prefM, "tests" },
-        { "editor.inspector.nodePageMinTextRun", CVarValue::Int32(16), CVarValue::Int32(0), CVarValue::Int32(256), ed, prefM, "tests" },
-        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(140), ed, prefM, "tests" },
-        { "editor.inspector.assetThumbHeightFraction", CVarValue::Float32(0.30f), CVarValue::Float32(0.1f), CVarValue::Float32(0.6f), ed, prefM, "tests" },
-        { "editor.undo.maxSteps", CVarValue::Int32(100), CVarValue::Int32(1), CVarValue::Int32(10000), ed, prefP, "tests" },
-        { "editor.undo.byteBudgetMB", CVarValue::Int32(512), CVarValue::Int32(16), CVarValue::Int32(65536), ed, prefP, "tests" },
-        { "editor.undo.spillThresholdKB", CVarValue::Int32(256), CVarValue::Int32(16), CVarValue::Int32(1048576), ed, prefP, "tests" },
-        { "console.historySize", CVarValue::Int32(64), CVarValue::Int32(1), CVarValue::Int32(1024), Audience::Game, prefP, "engine" },
+        { "editor.graph.fitMaxZoom", CVarValue::Float32(1.0f), CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), ed, prefM, "ArcaneTests" },
+        { "editor.graph.fitMinZoom", CVarValue::Float32(0.5f), CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), ed, prefM, "ArcaneTests" },
+        { "editor.graph.showPinLegend", CVarValue::Bool(true), std::nullopt, std::nullopt, ed, prefM, "ArcaneTests" },
+        { "editor.inspector.materialPreviewFraction", CVarValue::Float32(0.45f), CVarValue::Float32(0.2f), CVarValue::Float32(0.8f), ed, prefM, "ArcaneTests" },
+        { "editor.inspector.nodePageMinTextRun", CVarValue::Int32(16), CVarValue::Int32(0), CVarValue::Int32(256), ed, prefM, "ArcaneTests" },
+        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(140), ed, prefM, "ArcaneTests" },
+        { "editor.inspector.assetThumbHeightFraction", CVarValue::Float32(0.30f), CVarValue::Float32(0.1f), CVarValue::Float32(0.6f), ed, prefM, "ArcaneTests" },
+        { "editor.undo.maxSteps", CVarValue::Int32(100), CVarValue::Int32(1), CVarValue::Int32(10000), ed, prefP, "ArcaneTests" },
+        { "editor.undo.byteBudgetMB", CVarValue::Int32(512), CVarValue::Int32(16), CVarValue::Int32(65536), ed, prefP, "ArcaneTests" },
+        { "editor.undo.spillThresholdKB", CVarValue::Int32(256), CVarValue::Int32(16), CVarValue::Int32(1048576), ed, prefP, "ArcaneTests" },
+        { "console.historySize", CVarValue::Int32(64), CVarValue::Int32(1), CVarValue::Int32(1024), Audience::Game, prefP, "ArcaneCore" },
     };
     CVarRegistry& reg = CVarRegistry::Get();
     for (const Migrated& row : rows)
@@ -101,7 +101,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     REQUIRE(meta.has_value());
     CHECK(meta->defaultValue == CVarValue::Bool(false));
     CHECK(meta->flags == CVarFlags::Dev);
-    CHECK(meta->module == "engine");
+    CHECK(meta->module == "ArcaneClient");   // declared in Render/GpuInstrumentation.cpp, inside ArcaneClient.dll
     CHECK(meta->scope == SettingScope::Project);
     CHECK_FALSE(GpuDrawMarkersEnabled());
     REQUIRE(reg.Set(markers, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);

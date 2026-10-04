@@ -10,6 +10,7 @@
 // out of Dist, or a refused declaration -- reads the DECLARED default, so a
 // consumer never needs a shadow fallback of its own.
 
+#include <Arcane/Config/CVarModule.hpp>   // Detail::CallerModule: the declaring module (RegisterCVar)
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Reflection.hpp>   // a reflected enum's names, via Astra's MetaFactory (RegisterCVar)
 
@@ -21,9 +22,6 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-
-#define ARC_CVAR_STRINGIZE_IMPL(x) #x
-#define ARC_CVAR_STRINGIZE(x) ARC_CVAR_STRINGIZE_IMPL(x)
 
 namespace Arcane
 {
@@ -107,19 +105,6 @@ namespace Arcane
 
         // ARC_CVAR_ALIAS: register on CVarRegistry::Get() and log a refusal.
         ARC_CORE_API bool RegisterDeclaredAlias(std::string_view oldName, std::string_view newName);
-
-        // The module a static declaration in THIS binary belongs to (O1):
-        // the project's ARC_MODULE_NAME define (a bare token, e.g.
-        // ARC_MODULE_NAME=editor), else "engine". Inline in the header on
-        // purpose: it must expand in the DECLARING binary, not in ArcaneCore.
-        inline std::string_view DeclaringModule() noexcept
-        {
-#if defined(ARC_MODULE_NAME)
-            return ARC_CVAR_STRINGIZE(ARC_MODULE_NAME);
-#else
-            return "engine";
-#endif
-        }
     }
 
     template <class T>
@@ -173,7 +158,7 @@ namespace Arcane
             desc.name = name;
             desc.flags = spec.flags;
             desc.help = spec.help;
-            desc.module = DeclaringModule();
+            desc.module = ::Arcane::Detail::CallerModule();   // the scope, else THIS binary's ARC_MODULE_NAME (O1)
             desc.displayName = spec.displayName;
             desc.keywords = spec.keywords;
             desc.widget = spec.widget;
