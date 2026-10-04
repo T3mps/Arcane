@@ -1,0 +1,513 @@
+# Settings and cvar completion -- design
+
+**Status:** Draft, 2026-10-03, written from the brainstorm with the user. Awaiting the user's review.
+**Supersedes for scope:**
+- the cvar plan's "Hygiene pass 2026-09-28: what the review found owed" list (`docs/plans/2026-09-24-cvar-system-plan.md`);
+- the never-built v1 items of `docs/specs/2026-09-02-cvar-system-design.md` (the server surface, `ARC_CVAR_ALIAS`);
+- the "configuration pass" memory note.
+
+**Keeps:** the 2026-09-02 cvar spec's model. That means typed values, `SetBy` provenance, the publish barrier, default-deny, names over GUIDs, and Config file stems as categories. This spec extends that model; it does not replace it.
+
+---
+
+## 1. What the user asked for (2026-10-03)
+
+> "Finish the cvar system, alongside a full settings UI for the editor. These would obviously control the same values... We want to also ensure we're exposing literally everything to the end user. We want this to be a highly customizable engine."
+
+The user's decisions, in order:
+1. **Audience = developers AND players.**
+   - There are two editor windows, like Unreal: **Editor Preferences** (personal) and **Project Settings** (shared, committed).
+   - Games can also expose any player-safe setting in their own runtime menus.
+   - "Also the Source 2 model, where the cvars access all settings, too": every setting is reachable as a cvar from the console, `--set` and the config files.
+   - The settings players can reach must exclude "pointless editor things, or ones we don't want/need players messing with".
+2. **Sweep scope = full audited sweep.** Every hard-coded tunable in the engine and editor is inventoried and classified, and every real setting becomes a cvar in this arc. Defaults stay identical.
+3. **Rich settings:**
+   - the theme editor, keyboard shortcuts, fonts and scale, and layouts and panels;
+   - "everything that makes sense": Astra memory settings, Manifold2D physics settings, network settings, "the whole shabang";
+   - "making it trivial to extend in the future".
+4. **Architecture = C, the hybrid.**
+   - cvars are the one store.
+   - A setting is declared either as a one-off `ARC_CVAR` or as part of a reflected **settings struct**, Unreal `UDeveloperSettings` style. The struct's fields become cvars, and code reads them as a typed snapshot.
+   - Both windows are generated from metadata, plus custom pages.
+
+## 2. Where it stands (verified in code, 2026-10-03, main 2ea5bc9e)
+
+**Built:**
+- the typed registry (8 value types), the `SetBy` ladder with history, `Publish()` once per frame, and default-deny;
+- `--set`, and the config layers (engine -> plugin -> project -> user; `Runtime.cpp:546-551`);
+- `cvar_explain` and `cvarlist`;
+- `ARC_CVAR_RANGED` (min/max + declaring module; `CVarDecl.hpp:28`), and Archive write-back to `<project>/Saved/Config` (3df4360d);
+- the editor Console (completion, history) and the runtime overlay;
+- about 15 cvars: `editor.undo.*`, `editor.graph.*`, `editor.inspector.*`, `render.meshCull`, `diagnostics.drawMarkers`, `log.level` and `console.historySize`.
+
+**Still open** (the 2026-09-28 owed list, each re-verified):
+- **O1.** `ARC_CVAR` and `ARC_COMMAND` hard-code module `"engine"` (`CVarDecl.hpp:21`, `:44`). `CVarRegistry::UnregisterModule` (`CVarRegistry.cpp:300`) has no caller. As a result, a rebuilt game module's cvars collide as duplicates, and stale function pointers stay live.
+- **O2.** Config layers are applied in `OpenProject` (`Runtime.cpp:546-551`), BEFORE the game module's statics register. Game-module cvars therefore never receive their config values, and nothing re-applies them on a reload.
+- **O3.** `Set` appends a history record on every call (`CVarRegistry.cpp:294`), so equal-rung repeats and every project open grow the history.
+- **O4.** Four smaller defects:
+  - `Register` does not check that `defaultValue.type == type`;
+  - the cheat revert updates values without firing callbacks (`:395-400`);
+  - callback dispatch iterates a vector that a callback can grow;
+  - command success is inferred from the reply text (`:462`).
+- **O5.** The spec's "workers read an immutable snapshot" has no implementation.
+- **O6.** Missing pieces:
+  - handles cannot be named in code (reads go by string);
+  - there is no `PublishImmediate()`;
+  - the eight-type round-trip test and the `GpuDrawMarkersEnabled` test are missing;
+  - `Color` and `Vec2/3/4` are reserved without storage (`CVarTypes.hpp:22-25`).
+- **O7.** Never built: the server surface (spec s7.3) and `ARC_CVAR_ALIAS` (spec s10).
+
+**Settings that live outside the registry today:**
+- `ViewportSettings` (camera mode, speed, grid, gizmo size), stored in `imgui.ini`;
+- `UndoSettings` and `TextureImportSettings`;
+- 31 theme colour tokens (`EditorTheme.hpp`, `inline constexpr ImVec4`);
+- about 40 hard-coded editor key checks (`IsKeyPressed`, `Shortcut`) across 8 files;
+- about 575 numeric `constexpr`s across ArcaneCore, ArcaneClient, ArcaneEditor, ArcaneRuntime and ArcaneServer. Many are true constants and many are tunables.
+
+**Library configs Arcane fills today with defaults:**
+- Astra `Registry::Config` (`EntityManager::Config`, `ArchetypeChunkPool::Config`: chunkSize, chunksPerBlock, maxChunks, initialBlocks, useHugePages, min/maxChunkBytes; `ResourceStorage::Config`);
+- Manifold2D `PhysicsWorld` world definition (broadphase kind, hashCellSize, gravity, substepCount, contactHertz, contactDampingRatio, restitutionThreshold, ...).
+
+---
+
+## 3. The model
+
+### 3.1 One store, three ways in
+Every setting is a cvar in the one `CVarRegistry`. The windows, the console, `--set`, the config files and game code all read and write the same values through the same permission checks. No setting has a second store.
+
+### 3.2 Who may touch what: the audience
+Every setting declares exactly one **audience**:
+
+| Audience | Lives in | Editor | Player console / game menu | Server admin | Dist build |
+|---|---|---|---|---|---|
+| `Editor` | ArcaneEditor (or an editor plugin) | read/write | absent: never registered in a game | absent | absent |
+| `Game` | engine / game module | read/write | read-only, unless also `PlayerSafe` | read/write if `ServerCanExecute` | present |
+| `PlayerSafe` (a `Game` refinement) | engine / game module | read/write | read/write (persists to the player's config) | read/write | present |
+| `Server` | server-side code | read/write | absent from the player surface | read/write (audited) | present on servers |
+
+- `Dev` stays orthogonal: compiled out of Dist, whatever the audience.
+- `Cheat` stays: it needs the cheats gate on any non-editor surface.
+- `Hidden` stays: never listed or completed, still settable by exact name with Editor permission.
+- `PlayerSafe` replaces "remember to OR in `UserSettable`". `Archive` no longer implies player-settable. It means only "persist me". The registry derives today's `UserSettable` bit from `audience == PlayerSafe`, so default-deny holds by construction: a setting nobody marked player-safe cannot be set from a `Player` context.
+- Editor-audience settings never exist in a shipped game, because they are declared in the editor DLL. Players cannot see them at all, not merely because they are hidden.
+
+### 3.3 Where a value is saved: the home scope
+Every setting has a **home scope**, which picks the window it appears in and the layer its edits write to:
+- `Preferences`: per user. Edits write the user's own rungs (s11.1):
+  - machine-wide preferences (theme, fonts, shortcuts, layouts) go to the EditorUser rung;
+  - per-project ones (camera feel, undo budget) go to the User rung under the project's `Saved/Config`.
+- `Project`: shared and committed. Edits write the Project rung, the project's `Config/<category>.json`. This covers rendering, physics, Astra memory, networking, input, assets and cook, and game settings.
+
+The layer system is unchanged: engine -> plugin -> project -> user -> command line -> code -> console. So a project default can still be overridden locally (the user rung wins), and both windows show that (s6.4).
+
+### 3.4 When a change applies
+Every setting declares one apply mode:
+- `Live`: takes effect at the next `Publish()`. Callbacks and snapshots update.
+- `NextWorld`: read when a world, registry or physics world is created. Shows the badge "applies on next world load" (Play-in-editor restart, scene reopen).
+- `Restart`: read once at boot (device, backend, thread counts). Shows the badge "restart required", and the window offers "Restart editor".
+
+These are statements about the consumer, so the binding that reads the value declares them. Tests pin each binding's mode (s13).
+
+### 3.5 Determinism and replication
+Settings that change a simulation's outcome carry `Deterministic`: physics solver settings, the fixed step, and anything the bit-exact trajectory fixture depends on. `Replicated` and `ServerOnly` stay reserved until the replication arc enforces them. The windows show a "simulation" badge on `Deterministic` rows, because changing one changes replays and goldens.
+
+---
+
+## 4. The cvar core: completion
+
+### 4.1 Value types
+- `Color` (RGBA float; JSON `"#RRGGBBAA"`, or `[r,g,b,a]` on read) and `Vec2`, `Vec3`, `Vec4` (JSON arrays) gain storage, accessors, clamping (per component, against `Vec` min/max) and console parsing (`1 2 3`, `#ff8800`).
+- **New `Enum` type:**
+  - storage is an `Int32` value plus the declared ordered list of names, taken from a reflected enum or an explicit list;
+  - JSON and the console accept the name (`"Perspective"`); the number is accepted on read with a warning;
+  - the widget is a combo.
+- Strings with a widget hint cover the rest:
+  - `asset:<kind>` (an asset GUID string; picker);
+  - `path:file` and `path:dir`;
+  - `keychord` (s7.2);
+  - `font` (s7.3).
+
+The CVarValue variant grows. That is an ABI change (s14.3).
+
+### 4.2 Metadata
+`CVarDesc` gains:
+- `displayName`;
+- `keywords`;
+- `widget` (the hint string);
+- `audience`;
+- `scope`;
+- `apply`;
+- `order` (a stable sort within a category);
+- `categoryPath`. The default is derived from the dotted name (`physics.solver.substeps` -> Engine / Physics / Solver); it can be overridden for display only, and the name stays the address.
+
+Help text is required for every non-`Hidden` setting. Registration refuses an empty help string, which a test pins.
+
+### 4.3 Declaring settings
+**One-off:**
+```cpp
+ARC_CVAR(cvar_graphFitMinZoom, "editor.graph.fitMinZoom", Float32, 0.5f,
+         Arcane::Range(0.1f, 2.0f), Audience::Editor, Scope::Preferences, Apply::Live,
+         "Smallest zoom a graph's frame-to-fit may pick.");
+```
+The first argument is the handle's C++ identifier: the preprocessor cannot derive an identifier from a dotted string.
+- The macro gets an overload set: the old positional forms keep compiling and map to `Audience::Game`, `Scope::Project`, `Apply::Live`, with the flags as given. `ARC_CVAR_RANGED` folds into it.
+- The declaring module is captured automatically. Each module's statics run under a "current module" scope that the plugin host sets, the same pattern `Astra::ModuleScope` uses for components. The `"engine"` literal disappears (fixes O1).
+- The macro defines a nameable handle: `ARC_CVAR(...)` expands to `inline const CVarRef<float> cvar_graphFitMinZoom = ...`, so code reads `cvar_graphFitMinZoom.Get()` with no string lookup (fixes O6, unnameable handles). A header can declare it with `ARC_CVAR_EXTERN` for use from other translation units.
+
+**A system's group, as a settings struct:**
+```cpp
+struct PhysicsSettings
+{
+    std::uint32_t substeps = 4;
+    float contactHertz = 30.0f;
+    PhysicsBroadphase broadphase = PhysicsBroadphase::Tree;
+};
+ARCANE_REFLECT_TYPE(PhysicsSettings)
+    ARCANE_REFLECT_TYPE_ATTR(Settings, "physics", Scope::Project, Apply::NextWorld, Audience::Game)
+    ARCANE_REFLECT_FIELD(PhysicsSettings, substeps)     ARCANE_REFLECT_ATTR(Range, 1, 16)  ARCANE_REFLECT_ATTR(Tooltip, "Solver substeps per fixed step") ARCANE_REFLECT_ATTR(Deterministic)
+    ARCANE_REFLECT_FIELD(PhysicsSettings, contactHertz) ARCANE_REFLECT_ATTR(Range, 1.0f, 240.0f) ARCANE_REFLECT_ATTR(Tooltip, "...")
+    ARCANE_REFLECT_FIELD(PhysicsSettings, broadphase)   ARCANE_REFLECT_ATTR(Tooltip, "...")
+ARCANE_REFLECT_TYPE_END(PhysicsSettings)
+ARC_SETTINGS(PhysicsSettings);   // registers one cvar per reflected field: physics.substeps, ...
+
+const PhysicsSettings& s = Arcane::Settings<PhysicsSettings>();   // typed snapshot (s4.6)
+```
+- It reuses the reflection Arcane already has (`Reflection.hpp`: `Range`, `Tooltip`, `DisplayName`, `Category`, `ColorFormat`, `FilePath`, `AliasName`, `Precision`, `Deprecated`, `Hidden`).
+- New Arcane-side attributes: `Settings` (type), `Keywords`, `Widget`, `Deterministic`, `PlayerSafe`, `Apply`, `Scope`. Any of them on a field overrides the type default.
+- Field types map onto cvar types, with enums becoming `Enum` and `Color`/`Vec*` mapping directly. An unmappable field fails the build with a static_assert that names it.
+- The struct's default member initializers ARE the defaults, so there is one source of truth.
+- "Trivial to extend" means this: an engine system, a plugin or a game module adds a field (or a struct plus `ARC_SETTINGS`), and the setting appears in the console, the config files and the right window with no other edit.
+
+### 4.4 Module lifetime and reload (fixes O1, O2)
+- Every registration records the declaring module, captured as described in s4.3.
+- Unloading a plugin or game module calls `CVarRegistry::UnregisterModule(module)` from `PluginHost`'s unload path, next to `UnregisterModuleRange`. That drops the module's cvars, settings structs, commands and callbacks, and every history record the module sourced. Handles into it go stale (the generation bump), and the registry never calls into the unloaded module again.
+- When a module (re)loads and its statics have registered, the host calls `ApplyLayersFor(module)`. That re-applies every config rung (engine, plugin, project, user, command line) to just the cvars that module declared, then publishes. A reloaded module therefore gets exactly the values a cold boot would give it.
+- A game module's Archive values written by the user survive a hot reload: the User rung is applied again from disk, and unsaved edits are flushed to disk before the unload.
+
+### 4.5 History and correctness (fixes O3, O4)
+- **History holds one record per (rung, source).** A `Set` at a rung that already has a record from the same source replaces it. Re-opening a project replaces its rungs. `CloseProject` pops the project and user rungs it pushed.
+- `Register` refuses a default of the wrong type, a min > max range, empty help (non-`Hidden`), and an `Enum` with no names.
+- The cheat revert routes through the normal publish path, so callbacks fire and snapshots refresh.
+- Callback dispatch takes a copy of each slot's callback list before invoking it. A callback added during dispatch first fires on the next change.
+- **Commands** return `CommandResult { bool ok; std::string text; }`. `ARC_COMMAND` gains that signature; the old text-returning form is wrapped and treated as ok.
+
+### 4.6 Threading: the published snapshot (fixes O5)
+- The main thread writes. `Publish()` builds an immutable `CVarSnapshot`: a flat value array indexed by slot, plus one block per settings struct holding its typed copy.
+- `Publish()` swaps the snapshot in through an atomic shared pointer (`std::atomic<std::shared_ptr<const CVarSnapshot>>`).
+- Worker threads (jobs, render, physics substeps) read only `CVarRegistry::Snapshot()` or `Settings<T>()`. Both are wait-free reads of the current snapshot, and a reader keeps its copy alive for as long as it holds it.
+- `Settings<T>()` on the main thread returns the same snapshot block, so there is no second code path.
+- `PublishImmediate()` exists for tools and tests: it publishes and swaps outside the frame boundary. It asserts that it runs on the main thread.
+
+### 4.7 Renames (fixes O7, alias)
+- `ARC_CVAR_ALIAS("old.name", "new.name")`, or the `AliasName` attribute on a settings field, resolves the old name in config files, `--set` and the console. Each use logs a one-time warning naming the new name.
+- `WriteCVarArchive` writes only new names, so the next save migrates a user's file.
+
+### 4.8 Persistence formats
+- One JSON file per category (unchanged). `Enum` values are written as names, `Color` as `"#RRGGBBAA"`, and `Vec*` as arrays.
+- An unknown key is reported, not applied (unchanged). It now also surfaces in the Problems panel, with the file and key as a locator, instead of only being returned in `CVarApplyReport`.
+
+---
+
+## 5. Settings for systems and libraries (bindings)
+
+### 5.1 The binding rule
+- Vendored libraries (Astra, Manifold2D, Mosaic) never include Arcane headers. Arcane owns a settings struct per library, and **binds** it to the library's own config struct at the point where Arcane creates the library object.
+- A binding is a small, pure function such as `ToAstraConfig(const AstraMemorySettings&) -> Astra::Registry::Config`. Tests pin it field by field, so a library upgrade that renames a field breaks the build, not the behaviour.
+- Live-capable fields (a library setter exists, e.g. Manifold2D gravity) are applied through a cvar callback.
+- Everything else is `NextWorld` or `Restart`, as s3.4 describes.
+
+### 5.2 The initial binding set
+Each category below gets a settings struct and appears in Project Settings unless marked otherwise. Field lists are illustrative; the s10 audit decides the final fields.
+
+| Category | Library / system | Examples | Apply |
+|---|---|---|---|
+| `astra.memory` | Astra `Registry::Config` | chunkSize, chunksPerBlock, maxChunks, initialBlocks, useHugePages, min/maxChunkBytes; ResourceStorage limits | NextWorld |
+| `physics` (2D) | Manifold2D world definition | broadphase, hashCellSize, gravity, substepCount, contactHertz, contactDampingRatio, restitutionThreshold, sleep thresholds; the fixed step (`sim.fixedHz`) | gravity Live; the rest NextWorld; all `Deterministic` |
+| `render` | the renderer and NRI | backend (D3D12/Vulkan), vsync, frames in flight, mesh cull, selection-outline width, MSAA/AA, gamma, debug markers | mixed; backend Restart |
+| `jobs` | enkiTS / job system | worker threads, pin main thread | Restart |
+| `net` | Arcane `Net` (TcpSocket, RateLimiter, Protocol), host ports | timeouts, rate-limit buckets, buffer sizes, server port defaults | Restart / Live per field |
+| `assets` / `cook` | asset manager and cook | watch interval, cook threads, thumbnail size, mesh light triple | mixed |
+| `input` | input system (non-document parts) | dead zones, repeat delay; action maps stay document-shaped in `input.json` | Live |
+| `log` / `diagnostics` | logging and crash capture | log level, sinks, capture-on-hang timeout, minidump kind | Live / Restart |
+| `editor.*` | ArcaneEditor (Preferences) | undo, graph, inspector, viewport camera and grid, autosave, theme, fonts, shortcuts, layouts | mostly Live |
+
+- Two existing defaults move the thumbnail golden set if they ever change: thumbnail size and the mesh light triple (the cvar plan's exclusion). They become cvars with IDENTICAL defaults, and only a deliberate change re-blesses.
+- The replication arc adds `net.replication.*` through the same declarations. There is no separate design.
+
+---
+
+## 6. The two windows
+
+### 6.1 Placement
+- `Edit > Preferences...` opens **Editor Preferences**. That is today's disabled placeholder (`EditorPanels.cpp:318`).
+- `Edit > Project Settings...` opens **Project Settings**, replacing today's read-out (`DrawProjectSettings`, `EditorPanels.cpp:2975`). The read-out's content (name, GUID, ABI, game module, mounts) becomes the "Project" page (s6.6).
+- Both are dockable editor windows, so they persist in the layout like other panels and can float or dock.
+
+### 6.2 Layout
+- **Left:** a category tree, built from `categoryPath`, with settings structs as nodes. Plugin and game-module categories sit under "Plugins › <name>" and "Game › <module>".
+- **Top:**
+  - a search field that matches names, display names, help and keywords, and filters the tree to the categories with hits;
+  - a **Modified** filter (value != default) and an **Overridden** filter (a higher rung wins);
+  - a **Show advanced** toggle that reveals `Dev` and `Hidden` rows.
+- **Right:** the selected category's rows, grouped by `Category` attribute sub-headers, using the existing property-grid widgets (`PropertyGrid`, `SliderRow`/`FloatRow`, colour picker, asset picker, enum combo).
+- **Each row** shows:
+  - a label (display name), with the help text as a tooltip;
+  - the widget;
+  - a reset arrow when the value differs from the default;
+  - badges for `NextWorld`, `Restart` and `Deterministic`;
+  - a provenance marker when a higher rung wins (s6.4);
+  - the cvar name (dim, copyable) on hover, so the console spelling is always discoverable.
+
+### 6.3 Editing
+- An edit is `Set(value, rung = the window's scope)` plus `Publish()`.
+- The archive for that rung is written debounced (500 ms; `editor.settings.saveDebounceMs`) and always on window close and editor exit. The write is atomic, as today.
+- Edits are undoable inside the window: a window-local undo stack, separate from the scene undo, because settings are not scene state. Ctrl+Z works when the window is focused.
+- Dragging a slider is one undo step, using the existing `EditGesture`.
+- Project Settings edits mark the project's `Config/` files dirty in the source-control sense only. There is no save prompt.
+
+### 6.4 Provenance and overrides
+- When a rung above the window's scope wins (a user override shown in Project Settings, or `--set`, Code or Console), the row shows the winning value with a marker: "Overridden by User / Command line / Console". It offers **Clear override**, which pops that rung for this cvar.
+- The row's context menu offers **Explain**, which shows the `cvar_explain` history inline.
+
+### 6.5 Restart and next-world flow
+- After any edit to a `Restart` setting, the window shows a bar: "N settings need a restart -- Restart editor". The restart reopens the same project.
+- `NextWorld` settings show "Applies on next Play or scene reopen". There is no forced action.
+
+### 6.6 Custom pages
+- `RegisterSettingsPage(scope, categoryPath, DrawFn)` lets any module add a page.
+- The rich pages (s7) and the "Project" identity page use it.
+- Custom pages still read and write cvars, with the same provenance and undo helpers. A page that edits non-cvar data must say so in its header, as the Project identity page and the layout files do.
+
+---
+
+## 7. The rich pages
+
+### 7.1 Theme (Preferences › Appearance › Theme)
+- Each of the 31 theme tokens (`EditorTheme.hpp`) becomes a `Color` cvar in an `EditorThemeSettings` struct (`editor.theme.accent`, ...). `ApplyEditorTheme` reads the snapshot, and a change re-applies the ImGui style at the next frame (Live).
+- The page shows:
+  - grouped swatches;
+  - a live preview pane with sample widgets (a button, a toggle, a selected tab with its overline, a text field, a warning/error row);
+  - the contrast ratio, from the existing `Theme::ContrastRatio`, next to each text/background pair, with a warning under 4.5:1 (3:1 for large text and icons).
+- **Presets:**
+  - Dark (today's values, the default);
+  - Light;
+  - High Contrast.
+
+  Presets are JSON theme files shipped in `data/EditorThemes/`. Applying a preset sets the User rung for every theme cvar.
+- **Import/Export** read and write a `.arctheme` JSON with the same keys.
+- The contrast tests in `EditorThemeContrastTest.cpp` keep pinning the Dark preset's values.
+
+### 7.2 Keyboard shortcuts (Preferences › Keyboard)
+- **An editor action registry.** Every editor command becomes a named action (`editor.view.frameAll`, `edit.undo`, `graph.delete`, ...), with:
+  - a display name and context (Global, Viewport, Graph, Asset Browser, Text, Inspector, ...);
+  - a default chord;
+  - a callback.
+
+  The ~40 hard-coded `IsKeyPressed`/`Shortcut` checks (8 files) become action lookups. Each action's chord is a `keychord` String cvar: `editor.keys.<action>`, Preferences, Live.
+- **The page:** a searchable table with columns Action, Context, Shortcut and Default. Clicking a shortcut cell listens for the next chord; Esc cancels and Backspace clears.
+- **Conflict detection:**
+  - Two actions in overlapping contexts with the same chord show both rows in red. Saving is still allowed, and the newer binding wins until resolved. (VS does this.)
+  - "Reset all" restores the defaults.
+- **Menus** show the current chord next to each item, so the menus and the page cannot drift.
+- Game input actions are a different thing: the project's `input.json`, edited in the Input Actions document. Project Settings › Input links to that document.
+
+### 7.3 Fonts and scale (Preferences › Appearance)
+- `editor.ui.fontFamily` (`font` hint; the bundled families plus any `.ttf` under the user's fonts folder);
+- `editor.ui.fontSize` (default 16, today's `InstallEditorFonts(16)`);
+- `editor.ui.monoFontFamily`;
+- `editor.ui.scale` (0.75-2.0, default 1.0; multiplies the style metrics and the font size, and follows the monitor DPI when `editor.ui.followDpi` is on).
+
+A change rebuilds the font atlas at the next frame boundary (Live, deferred one frame). The NRI ImGui backend already re-uploads atlas textures.
+
+### 7.4 Layouts and panels (Preferences › Layout)
+- **Named layouts** are saved as files under the user's `Saved/Layouts/<name>.ini`: an ImGui dock layout plus panel visibility. The page offers Save Current As, Load, Delete, Set As Default and Reset To Factory.
+- **Settings:**
+  - `editor.layout.default` (String, the name);
+  - `editor.layout.openPanelsAtStart` (a list in a String, using the panel-visibility vocabulary).
+- Layout files are document-shaped, like `input.json`. They are not cvar values, so the page header says "Layouts are files" (s6.6).
+- The rule "imgui.ini vetoes authored UI changes" stays true for the CURRENT layout. Factory reset and named layouts give the user an explicit way out.
+
+---
+
+## 8. Players and runtime
+
+### 8.1 The game-facing settings API
+- `Arcane::PlayerSettings::List(categoryPrefix)` returns descriptors for `PlayerSafe` settings only: name, display name, help, type, range, enum names and apply mode.
+- `Arcane::PlayerSettings::Set(name, value)` goes through `Permission::Player` and the same default-deny check.
+- A game's own settings menu (graphics, audio, controls) is built from these lists, so adding a `PlayerSafe` field to a settings struct adds it to the game's menu with no UI code.
+
+### 8.2 Where a shipped game saves the player's settings
+- In the editor and dev builds: unchanged (`<project>/Saved/Config`, the User rung).
+- In a **Dist** build, the User rung lives under the per-user OS location, NOT the install folder (which may be read-only): `%LOCALAPPDATA%/<Company>/<Game>/Config` on Windows, and `$XDG_CONFIG_HOME/<company>/<game>` on Linux. The company and game names come from the project.
+
+### 8.3 The runtime console
+The overlay keeps default-deny: `Player` permission, with only `PlayerSafe` settings settable and Cheat behind the cheats gate. `Dev` settings are compiled out of Dist. Nothing changes here except that the gate now reads the audience.
+
+---
+
+## 9. The server surface (O7)
+- **Engine side**, transport-agnostic: `RemoteCVarService::Handle(request) -> response`, for get/set/list/explain under `Permission::Server`.
+  - It honours `Protected` (never readable remotely) and `ServerCanExecute`.
+  - Every set is passed to an injected audit sink with who, old, new and when.
+- **ArcaneServer** wires it to its local admin console (stdin) for development.
+- **Aphelyon's services** wire it to the existing HMAC-signed internal RPC (`ServiceEndpoint`), with the audit sink writing the existing `audit_log`. That is an Aphelyon-side task in the plan's last tranche.
+- There is no remote UI. A remote UI is out of scope, as in the cvar spec's s10.
+
+---
+
+## 10. The audit sweep
+
+### 10.1 The inventory
+The audit's first deliverable is `docs/superpowers/audits/2026-10-xx-settings-inventory.md`: every hard-coded tunable candidate, with:
+- `file:line`;
+- the current value and unit;
+- a verdict: **SETTING**, **CONSTANT** (a true invariant, format constant, protocol number or math identity) or **DERIVED** (computed from other settings);
+- for SETTING rows: the proposed name, category, struct, audience, scope, apply mode, range, and whether it is `Deterministic`.
+
+**Sources:**
+- all ~575 numeric `constexpr`s in ArcaneCore, ArcaneClient, ArcaneEditor, ArcaneRuntime and ArcaneServer;
+- the 31 theme tokens;
+- the ~40 key checks;
+- `ViewportSettings`, `UndoSettings` and `TextureImportSettings`;
+- `HostConfig` fields;
+- library config structs (Astra, Manifold2D, Mosaic, NRI device creation, enkiTS).
+
+**Classification rules** (so the audit is mechanical, not taste):
+- **CONSTANT:**
+  - a value fixed by a file format, wire protocol, shader contract, ABI or the hardware;
+  - a mathematical identity;
+  - a test-only value;
+  - a value whose change would be a bug, not a preference.
+- **SETTING:** a value a reasonable developer or player might want different, including budgets, caps, timeouts, sizes, speeds, colours, thresholds, counts and toggles.
+- **When in doubt: SETTING with `Dev`**, so it is reachable in development and not shown to players.
+
+### 10.2 Conversion rules
+- **Defaults are byte-identical**, so a converted value has the same type and value. The whole suite, the goldens and the trajectory fixture must be unchanged by the sweep. A golden diff during the sweep is a conversion bug, not a re-bless.
+- **Consumers read from snapshots:** a hot path reads `Settings<T>()` or a `CVarRef` once per frame or step, never a string lookup.
+- **The stray stores migrate:**
+  - `ViewportSettings` moves out of `imgui.ini` into `editor.viewport.*` cvars. On first run it imports the old `[EditorViewport][Camera]` block once and then stops writing it. The camera pose stays layout-like state in the ini; the preferences move.
+  - `UndoSettings` folds into the existing `editor.undo.*`.
+  - `TextureImportSettings` defaults become `assets.import.texture.*`. Per-asset import overrides stay in the asset's `.meta`.
+- **Every converted constant leaves no shadow copy.** The `constexpr` is deleted, and a grep sweep proves it (the zero-legacy grep method).
+
+### 10.3 After the arc
+The project rule stands, and is now enforced by a test: a new tunable is a setting. A guard test scans changed source for new numeric `constexpr`s outside an allow-list file of reviewed CONSTANT entries, the way the `Arcane::` spelling guard works, and fails on unreviewed ones.
+
+---
+
+## 11. Persistence details
+
+### 11.1 Rung locations
+| Rung | Editor / dev | Dist game |
+|---|---|---|
+| Engine | `data/EngineConfig/*.json` | the same, shipped |
+| Plugin | `<plugin>/Config/*.json` | the same |
+| Project | `<project>/Config/*.json` (committed) | shipped with the game |
+| User | `<project>/Saved/Config/*.json` | per-user OS dir (s8.2) |
+| Command line / Code / Console | not persisted | not persisted |
+
+Editor Preferences values are per user and per project (`<project>/Saved/Config`). Machine-wide preferences, shared by every project on the machine, live under a new **EditorUser** rung between Project and User: `%LOCALAPPDATA%/Arcane/Editor/Config`. Theme, fonts, shortcuts and layouts default to EditorUser, so they follow the user across projects. A project-specific user value still overrides them through the User rung.
+
+### 11.2 Migration
+- Old names resolve through aliases (s4.7).
+- An `Enum` file value given as a number is accepted and rewritten as its name on the next save.
+- A corrupt file is kept aside as `.bad`. That behaviour is unchanged (5b6bc440).
+
+---
+
+## 12. Errors and edge cases
+- **An out-of-range value** from a file, the console or the window is clamped, and a warning names the setting, the value and the range. The window cannot produce one.
+- **A type mismatch** (`"substeps": "four"`) is refused for that key, and a Problems entry names the file:key.
+- **A Restart setting edited, then reverted before restarting:** the bar disappears, because the window compares against the value captured at boot, not against "was edited".
+- **A game module unloads while its category is open in the window:** the page shows "Module unloaded", then repopulates on reload (s4.4).
+- **Two windows editing the same cvar** (Preferences and Project) is impossible, because a cvar has one home scope. Overrides are shown, not edited, in the other window (s6.4).
+- **A theme preset leaves text below 4.5:1 contrast:** allowed (the user's choice), with a warning on the theme page.
+- **A shortcut chord that the OS or ImGui reserves** (Alt+F4, Ctrl+Tab for window switching) is refused with a reason.
+- **A Dist build** sees a `Dev` setting in a user file: it is ignored silently, because Dev is compiled out, and nothing is written back.
+
+---
+
+## 13. Testing
+- **Core:**
+  - a round-trip of all types, including `Enum`, `Color` and `Vec*`, through JSON, the console and `--set`;
+  - history replacement per (rung, source);
+  - `Register` refusals;
+  - the cheat revert firing callbacks;
+  - re-entrant callback dispatch;
+  - `CommandResult`;
+  - aliases (an old name resolves and warns once, and a save writes the new name);
+  - snapshot reads from N worker threads during publish (TSan-style stress under the jobs system, with no torn values).
+- **Module lifetime:** with the HotReloadPlugin fixtures, a module's cvars are registered, then unregistered on unload (handles stale, callbacks gone), then re-registered on reload with config values re-applied, and a user value survives a hot reload.
+- **Settings structs:**
+  - field -> cvar mapping and attribute -> metadata;
+  - a static_assert on unmappable fields (a compile-fail test in the build guard);
+  - `Settings<T>()` returns the published values;
+  - the bindings: Astra and Manifold2D field-by-field `ToXConfig` tests.
+- **Audience and default-deny:** a matrix test of every audience against every permission against Dist/Dev (Dist simulated through the existing `devCvars` switch).
+- **Windows (headless ImGui harness, as with the existing panel harnesses):**
+  - the tree from category paths;
+  - search hits and the Modified/Overridden filters;
+  - the reset arrow;
+  - the provenance marker plus Clear override;
+  - window undo;
+  - the Restart bar.
+- **Rich pages:**
+  - theme preset apply and export/import round-trip, with the contrast warning;
+  - shortcut listen/cancel/clear, conflict detection, and menu chord text following the binding;
+  - the font/scale change rebuilding the atlas once;
+  - named layout save/load/default.
+- **Sweep:**
+  - the full suite, the goldens and the `[trajectory]` fixture are unchanged after every sweep tranche;
+  - a grep guard shows no deleted constant reappears;
+  - the new-constexpr guard (s10.3).
+- **Desk by automation** (screenshots plus a PASS/FIXED/OPEN table, no SendInput): both windows at 1920x1080, the theme presets, and the shortcuts page with a conflict.
+
+---
+
+## 14. How it lands
+
+### 14.1 Tranches (gated, subagent-driven, as in the node-page phase)
+1. **S1 Core:** types (`Enum`, `Color`, `Vec*`), metadata, audience/scope/apply, declaration overloads plus nameable handles, module capture, `UnregisterModule` wiring plus `ApplyLayersFor`, history per (rung, source), the O4 fixes, `CommandResult`, the snapshot plus `PublishImmediate`, aliases, and the Problems surfacing of unknown keys. Gate.
+2. **S2 Settings structs and bindings:** `ARC_SETTINGS` over reflection, the new attributes, `Settings<T>()`, the EditorUser rung, the Astra and Manifold2D bindings (fixtures unchanged), and the jobs/render/log bindings for what already exists. Gate.
+3. **S3 The windows:** the tree, search and filters, rows, provenance, window undo, the Restart flow, custom-page registration, Preferences wired to the menu, and Project Settings replacing the read-out. Gate (desk by automation).
+4. **S4 The rich pages:** theme (presets, preview, contrast), the editor action registry plus the shortcuts page (the 40 key checks routed), fonts and scale, and layouts. Gate.
+5. **S5 The audit:** the inventory document. **User review point:** the user skims the SETTING list before the conversion starts (s16).
+6. **S6 The sweep:** conversions by subsystem (render, physics/sim, assets/cook, net, input, editor UX, host and diagnostics), each a task with "defaults identical" proven; the stray stores migrated; and the guard test. Gate (full suite, goldens and trajectory unchanged).
+7. **S7 Players and server:** `PlayerSettings` List/Set, the Dist user directory, `RemoteCVarService` plus the ArcaneServer console, and the Aphelyon services wiring plus the audit sink (Aphelyon commit). Gate. Close.
+
+### 14.2 Order and parallelism
+S1 -> S2 -> (S3 || S5) -> S4 -> S6 -> S7. The audit (S5) needs only S1-S2's vocabulary, so it can run beside the window work.
+
+### 14.3 ABI
+- S1 changes `CVarValue`, `CVarDesc`, the macros and exported registry signatures. That is one bump at the S1 gate (51 -> 52).
+- S2 adds the settings exports, which is a bump at the S2 gate unless it folds into S1's.
+- Later tranches bump only if a gate finds a layout change. ReferenceProject and Aphelyon are restamped at each bump.
+
+### 14.4 Never
+Push; `git add -A`; touch the user's untracked files; SendInput or focus stealing during desk checks; re-bless a golden during the sweep.
+
+---
+
+## 15. Risks
+- **The sweep's size.** Hundreds of conversions risk behaviour drift. *Mitigation:* identical defaults, per-subsystem tasks, and goldens plus trajectory as the oracle after each task.
+- **Hot-path cost.** A careless conversion could do a string lookup per entity. *Mitigation:* `CVarRef`/`Settings<T>()` only, and a review-checklist item; a micro-benchmark on the physics step and render submission.
+- **Reflection coupling.** Settings structs depend on Astra reflection. *Mitigation:* Astra stays the reflection provider (the binding direction is unchanged); Arcane-only attributes live in Arcane.
+- **Shortcut migration.** Moving 40 key checks risks regressions in focus and context handling (text fields must swallow keys). *Mitigation:* each context has a `WantsKeyboard` gate, as today, plus a test per migrated action.
+- **The EditorUser rung** is a new rung in the ladder. *Mitigation:* numbered between Project (30) and User (40), at 35; the ladder had gaps for exactly this.
+
+## 16. Decisions for the user (asked at the spec review)
+1. **Machine-wide editor preferences (s11.1):** theme, fonts, shortcuts and layouts follow the user across projects (a new EditorUser rung), and project-specific overrides are still possible. *Recommended: yes.*
+2. **Dist save location (s8.2):** the per-user OS config dir, not the install folder. *Recommended: yes.*
+3. **The audit review point (S5):** you skim the SETTING list before the conversion, or the classification rules (s10.1) decide alone. *Recommended: you skim it; it is a long but simple table.*
+4. **The theme presets:** ship Light and High Contrast authored by us, plus Dark (today). *Recommended: yes; the contrast checker keeps them honest.*
+5. **The shortcut conflict policy (s7.2):** allow saving a conflict and show it red (VS), or refuse it until resolved. *Recommended: allow + red.*
+6. **The server surface (s9):** the engine seam plus the ArcaneServer console in this arc, and the Aphelyon services wiring in S7 too. *Recommended: yes, both.*
+7. **The project identity fields** (name, GUID, ABI, game module, boot scene) stay in `.arcproj`, shown and edited on Project Settings' "Project" page. They do not become cvars, because the Hub and the ABI gate read `.arcproj`. *Recommended: yes.*
+8. **The guard test** that fails on new unreviewed numeric `constexpr`s (s10.3). *Recommended: yes; it is what keeps "everything exposed" true later.*
+
+## 17. Out of scope
+- A remote console UI.
+- `exec`.
+- Scalability groups and device profiles. These are a later layer: named bundles of `PlayerSafe` render settings, built on this system, with no new store.
+- Per-platform overrides. The rung ladder makes them a later insertion, not a redesign.
+- A settings asset referenced from content, the spec's GUID revisit trigger. It is not triggered here: windows bind by name.
