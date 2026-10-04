@@ -36,7 +36,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR_RANGED (s2.4)
+#include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR (settings spec s4.3)
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -70,10 +70,10 @@ namespace Arcane::Editor
     namespace
     {
         // s5.3 (9.28 #25): the preview square's height cap, as a share of the page.
-        ARC_CVAR_RANGED("editor.inspector.materialPreviewFraction", "editor", Float32,
-                        ::Arcane::CVarValue::Float32(0.45f), ::Arcane::CVarValue::Float32(0.2f),
-                        ::Arcane::CVarValue::Float32(0.8f), ::Arcane::CVarFlags::Archive,
-                        "Largest share of the Inspector's height the material page's preview square may take");
+        ARC_CVAR(cvar_materialPreviewFraction, "editor.inspector.materialPreviewFraction", float, 0.45f,
+                 .min = 0.2f, .max = 0.8f, .flags = ::Arcane::CVarFlags::Archive,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+                 .help = "Largest share of the Inspector's height the material page's preview square may take");
 
         // The mesh-surface preview box's caption (T3-D6): the line that used
         // to BE the whole preview, kept as the honest note under the sphere.
@@ -89,9 +89,7 @@ namespace Arcane::Editor
 
         float MaterialPreviewFraction()
         {
-            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            const auto v = reg.Get(reg.Find("editor.inspector.materialPreviewFraction"));
-            return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.45f;
+            return cvar_materialPreviewFraction.Get();
         }
 
         const AssetRefServices& NoAssetRefServices()
@@ -689,19 +687,17 @@ namespace Arcane::Editor
         // pin can show (PinTypeText over every declared/resolved pair), not the
         // row's own: every row of a page makes the same call, so a page never
         // mixes worded and dot-only rows and its dots stay in one column.
-        ARC_CVAR_RANGED("editor.inspector.nodePageMinTextRun", "editor", Int32,
-                        ::Arcane::CVarValue::Int32(16), ::Arcane::CVarValue::Int32(0),
-                        ::Arcane::CVarValue::Int32(256), ::Arcane::CVarFlags::Archive,
-                        "Characters of a node page pin row's wiring or default text that must stay readable "
-                        "after the widest pin type word (e.g. 'dynamic (unresolved)'); a value cell narrower "
-                        "than dot + that word + this run shows only the pin's dot on every row of the page "
-                        "and moves the type word into the row's hover tooltip");
+        ARC_CVAR(cvar_nodePageMinTextRun, "editor.inspector.nodePageMinTextRun", std::int32_t, 16,
+                 .min = 0, .max = 256, .flags = ::Arcane::CVarFlags::Archive,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+                 .help = "Characters of a node page pin row's wiring or default text that must stay readable "
+                         "after the widest pin type word (e.g. 'dynamic (unresolved)'); a value cell narrower "
+                         "than dot + that word + this run shows only the pin's dot on every row of the page "
+                         "and moves the type word into the row's hover tooltip");
 
         int NodePageMinTextRun()
         {
-            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            const auto v = reg.Get(reg.Find("editor.inspector.nodePageMinTextRun"));
-            return (v && v->type == Arcane::CVarType::Int32) ? v->AsInt32() : 16;
+            return cvar_nodePageMinTextRun.Get();
         }
 
         // The chip's dot slot: it fits a dot WITH its outer ring, ringed or

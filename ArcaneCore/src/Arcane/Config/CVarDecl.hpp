@@ -1,43 +1,32 @@
 #pragma once
 
-// Static registration. The handle lives in the registry, not in the declaring
-// translation unit, so unloading the module that included this header does not
-// free the value. Dev-flagged cvars still register here; Dist's process
-// registry refuses them (CVarRegistry::Get).
+// Static cvar declaration (settings spec 2026-10-03 s4.3). Use ARC_CVAR in a
+// .cpp at namespace scope (an unnamed namespace is fine; a block scope is
+// not). It defines a `const CVarRef<T>` named `ident` that code reads with
+// ident.Get() -- no string lookup. The value lives in the registry, so
+// unloading the declaring module does not free it. A header names the
+// handle for other translation units with ARC_CVAR_EXTERN.
+//
+//   ARC_CVAR(cvar_undoMaxSteps, "editor.undo.maxSteps", std::int32_t, 100,
+//            .min = 1, .max = 10000, .audience = Audience::Editor,
+//            .scope = SettingScope::PreferencesProject, .help = "Undo history depth in steps.");
+//
+// Options are CVarSpec<T>'s fields by designated initializer, in its order
+// (.min .max .flags .audience .scope .apply .help .displayName .keywords
+// .widget .categoryPath .order). .help is required unless .flags has Hidden.
+// Dev-flagged cvars still declare here; Dist's process registry refuses them
+// and the handle reads the declared default.
 
-#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/CVarRef.hpp>
 
 #define ARC_CVAR_CAT2(a, b) a##b
 #define ARC_CVAR_CAT(a, b) ARC_CVAR_CAT2(a, b)
 
-#define ARC_CVAR(nameLit, typeEnum, defaultExpr, flagExpr, helpLit)                         \
-    static const ::Arcane::CVarHandle ARC_CVAR_CAT(arcCVar_, __LINE__) = [] {              \
-        ::Arcane::CVarDesc desc;                                                           \
-        desc.name = nameLit;                                                              \
-        desc.type = ::Arcane::CVarType::typeEnum;                                         \
-        desc.defaultValue = defaultExpr;                                                  \
-        desc.flags = flagExpr;                                                            \
-        desc.help = helpLit;                                                              \
-        desc.module = "engine";                                                           \
-        return ::Arcane::CVarRegistry::Get().Register(desc);                              \
-    }()
+#define ARC_CVAR(ident, nameLit, T, defaultExpr, ...)                                          \
+    extern const ::Arcane::CVarRef<T> ident =                                                  \
+        ::Arcane::Detail::RegisterCVar<T>(nameLit, defaultExpr, ::Arcane::CVarSpec<T>{ __VA_ARGS__ })
 
-// A numeric tunable with its range and its declaring module (spec 2026-09-30
-// s2.4): ARC_CVAR hard-codes "engine" and sets no range. min/max clamp both
-// the default and every Set (CVarRegistry.cpp:232, :286).
-#define ARC_CVAR_RANGED(nameLit, moduleLit, typeEnum, defaultExpr, minExpr, maxExpr, flagExpr, helpLit) \
-    static const ::Arcane::CVarHandle ARC_CVAR_CAT(arcCVar_, __LINE__) = [] {              \
-        ::Arcane::CVarDesc desc;                                                           \
-        desc.name = nameLit;                                                              \
-        desc.type = ::Arcane::CVarType::typeEnum;                                         \
-        desc.defaultValue = defaultExpr;                                                  \
-        desc.min = minExpr;                                                               \
-        desc.max = maxExpr;                                                               \
-        desc.flags = flagExpr;                                                            \
-        desc.help = helpLit;                                                              \
-        desc.module = moduleLit;                                                          \
-        return ::Arcane::CVarRegistry::Get().Register(desc);                              \
-    }()
+#define ARC_CVAR_EXTERN(ident, T) extern const ::Arcane::CVarRef<T> ident
 
 #define ARC_COMMAND(nameLit, flagExpr, helpLit, fn)                                        \
     static const bool ARC_CVAR_CAT(arcCmd_, __LINE__) =                                    \

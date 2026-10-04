@@ -18,13 +18,14 @@
 
 namespace Arcane
 {
-    ARC_CVAR("render.meshCull", Bool, CVarValue::Bool(kMeshCullEnabled), CVarFlags::Dev,
-             "Frustum-cull mesh instances on the GPU.");
+    ARC_CVAR(cvar_meshCull, "render.meshCull", bool, kMeshCullEnabled,
+             .flags = CVarFlags::Dev, .audience = Audience::Game, .scope = SettingScope::Project,
+             .apply = ApplyMode::Live, .help = "Frustum-cull mesh instances on the GPU.");
 
     bool MeshCullFrustumEnabled()
     {
-        const auto value = CVarRegistry::Get().Get(CVarRegistry::Get().Find("render.meshCull"));
-        return !value || value->AsBool();
+        // Missing (Dev, compiled out of Dist) reads the declared default: on.
+        return cvar_meshCull.Get();
     }
 
     namespace

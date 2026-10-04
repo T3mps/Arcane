@@ -1,4 +1,4 @@
-// editor.undo.* (spec 2026-09-30 s2.4): registered via ARC_CVAR_RANGED and
+// editor.undo.* (spec 2026-09-30 s2.4): declared with ARC_CVAR (settings S1-8) and
 // read into the UndoLimits the editor pushes into its CommandStack.
 #include <catch2/catch_test_macros.hpp>
 

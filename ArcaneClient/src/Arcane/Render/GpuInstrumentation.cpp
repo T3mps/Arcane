@@ -24,8 +24,9 @@ namespace Arcane
         // write it, the frame driver's Publish makes it visible, and
         // GpuDrawMarkersEnabled reads the published value. There is no
         // draw-granular marker scope to read it yet -- see the header's banner.
-        ARC_CVAR("diagnostics.drawMarkers", Bool, CVarValue::Bool(false), CVarFlags::Dev,
-                 "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
+        ARC_CVAR(cvar_drawMarkers, "diagnostics.drawMarkers", bool, false,
+                 .flags = CVarFlags::Dev, .audience = Audience::Game, .scope = SettingScope::Project,
+                 .help = "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
 
         // The device-lost latch (see the header). Written by the device layer
         // after the gpu-crash report lands; read once per host frame.
@@ -95,8 +96,7 @@ namespace Arcane
 
     bool GpuDrawMarkersEnabled() noexcept
     {
-        const auto value = CVarRegistry::Get().Get(CVarRegistry::Get().Find("diagnostics.drawMarkers"));
-        return value && value->type == CVarType::Bool && value->AsBool();
+        return cvar_drawMarkers.Get();   // missing (Dist) reads the declared default: off
     }
 
     // ---------------------------------------------------------------------

@@ -13,17 +13,16 @@
 #include "Widgets/GraphFit.hpp"
 #include "Widgets/GraphZoomLevels.hpp"    // kZoomLevels[0]: the fit floor
 
-#include <Arcane/Config/CVarDecl.hpp>     // ARC_CVAR_RANGED (s2.4)
+#include <Arcane/Config/CVarDecl.hpp>     // ARC_CVAR (settings spec s4.3)
 
 #include <algorithm>
-#include <optional>
-#include <string_view>
 
 namespace Arcane::Editor
 {
-    ARC_CVAR_RANGED("editor.graph.fitMaxZoom", "editor", Float32, CVarValue::Float32(1.0f),
-                    CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), CVarFlags::Archive,
-                    "Largest zoom a graph's frame-to-fit may pick (1.0 = never magnify).");
+    ARC_CVAR(cvar_graphFitMaxZoom, "editor.graph.fitMaxZoom", float, 1.0f,
+             .min = 0.1f, .max = 2.0f, .flags = ::Arcane::CVarFlags::Archive,
+             .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+             .help = "Largest zoom a graph's frame-to-fit may pick (1.0 = never magnify).");
 
     // FIT-MINZOOM (user, 2026-10-03). Default 0.5: the smallest zoom stop at
     // which a node's title and pin labels still read as text at 1080p. The
@@ -32,27 +31,21 @@ namespace Arcane::Editor
     // GraphNodeLod.hpp) only opens at 0.375 (a 6 px em, unreadable), and the
     // 1080p logo_showcase captures (FIT-MINZOOM report) put 0.5 as the first
     // stop whose titles and labels are legible. Range = the zoom table's.
-    ARC_CVAR_RANGED("editor.graph.fitMinZoom", "editor", Float32, CVarValue::Float32(0.5f),
-                    CVarValue::Float32(0.1f), CVarValue::Float32(2.0f), CVarFlags::Archive,
-                    "Smallest zoom a graph's frame-to-fit may pick; a graph too big for it frames its "
-                    "centre (0.1 = the zoom table's floor, no extra limit).");
+    ARC_CVAR(cvar_graphFitMinZoom, "editor.graph.fitMinZoom", float, 0.5f,
+             .min = 0.1f, .max = 2.0f, .flags = ::Arcane::CVarFlags::Archive,
+             .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+             .help = "Smallest zoom a graph's frame-to-fit may pick; a graph too big for it frames its "
+                     "centre (0.1 = the zoom table's floor, no extra limit).");
 
     namespace
     {
         // Mirrors the vendored c_NavigationZoomMargin (imgui_node_editor.cpp:144,
         // file-static there): a fact of the library, not a tunable.
         constexpr float kNavigationZoomMargin = 0.1f;
-
-        float ReadFloatCVar(std::string_view name, float fallback)
-        {
-            const CVarRegistry& reg = CVarRegistry::Get();
-            const std::optional<CVarValue> v = reg.Get(reg.Find(name));
-            return (v && v->type == CVarType::Float32) ? v->AsFloat32() : fallback;
-        }
     }
 
-    float GraphFitMaxZoom() { return ReadFloatCVar("editor.graph.fitMaxZoom", 1.0f); }
-    float GraphFitMinZoom() { return ReadFloatCVar("editor.graph.fitMinZoom", 0.5f); }
+    float GraphFitMaxZoom() { return cvar_graphFitMaxZoom.Get(); }
+    float GraphFitMinZoom() { return cvar_graphFitMinZoom.Get(); }
 
     GraphFitZoomRange GraphFitZoomRangeFromCVars()
     {

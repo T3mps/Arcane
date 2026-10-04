@@ -31,6 +31,7 @@
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -1605,28 +1606,18 @@ namespace Arcane::Editor
     // automation switch must never persist into a user's settings.
     namespace
     {
-        constexpr const char* kWindowedFrameCaptureCvar = "editor.automation.windowedFrameCapture";
-        const ::Arcane::CVarHandle kWindowedFrameCaptureHandle = []
-        {
-            ::Arcane::CVarDesc desc;
-            desc.name = kWindowedFrameCaptureCvar;
-            desc.type = ::Arcane::CVarType::Bool;
-            desc.defaultValue = ::Arcane::CVarValue::Bool(false);
-            desc.flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable;
-            desc.help = "Windowed --screenshot captures the composited editor frame (the presented "
-                        "backbuffer: chrome, panels, viewport) instead of the viewport texture";
-            desc.module = "editor";
-            return ::Arcane::CVarRegistry::Get().Register(desc);
-        }();
+        ARC_CVAR(cvar_windowedFrameCapture, "editor.automation.windowedFrameCapture", bool, false,
+                 .flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesProject,
+                 .help = "Windowed --screenshot captures the composited editor frame (the presented "
+                         "backbuffer: chrome, panels, viewport) instead of the viewport texture");
     }
 
     static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
     {
         if (cfg.headless)
             return false;   // --headless already captures the composited frame, offscreen
-        const ::Arcane::CVarRegistry& reg = ::Arcane::CVarRegistry::Get();
-        const auto v = reg.Get(reg.Find(kWindowedFrameCaptureCvar));
-        return v && v->type == ::Arcane::CVarType::Bool && v->AsBool();
+        return cvar_windowedFrameCapture.Get();
     }
 
     void EditorApp::RenderSceneToViewport()

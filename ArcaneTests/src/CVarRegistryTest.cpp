@@ -425,16 +425,17 @@ TEST_CASE("Dev cvars are absent when the registry is built without them", "[cvar
 
 namespace
 {
-    ARC_CVAR_RANGED("tests.rangedProbe", "tests", Int32, CVarValue::Int32(5),
-                    CVarValue::Int32(1), CVarValue::Int32(10), CVarFlags::Archive,
-                    "ARC_CVAR_RANGED probe (CVarRegistryTest).");
+    ARC_CVAR(cvar_rangedProbe, "tests.rangedProbe", std::int32_t, 5,
+             .min = 1, .max = 10, .flags = CVarFlags::Archive,
+             .help = "ARC_CVAR range probe (CVarRegistryTest).");
 }
 
-TEST_CASE("ARC_CVAR_RANGED registers its range and its module", "[cvar]") {
+TEST_CASE("ARC_CVAR registers its range and its module", "[cvar]") {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("tests.rangedProbe");
     REQUIRE_FALSE(h.IsStale());
-    CHECK(reg.Get(h)->AsInt32() == 5);
+    CHECK(h == cvar_rangedProbe.Handle());
+    CHECK(cvar_rangedProbe.Get() == 5);
 
     reg.Set(h, CVarValue::Int32(50), SetBy::Console);
     reg.Publish();

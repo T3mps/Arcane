@@ -7,19 +7,19 @@
 #include "Widgets/GraphLegend.hpp"             // the shared legend box chrome
 #include "Widgets/GraphPinDot.hpp"             // DrawGraphPinDot -- the canvas's own pin painter
 
-#include <Arcane/Config/CVarDecl.hpp>          // ARC_CVAR_RANGED (s2.4)
+#include <Arcane/Config/CVarDecl.hpp>          // ARC_CVAR (settings spec s4.3)
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
 
 namespace Arcane::Editor
 {
     namespace
     {
-        ARC_CVAR_RANGED("editor.graph.showPinLegend", "editor", Bool, ::Arcane::CVarValue::Bool(true),
-                        std::nullopt, std::nullopt, ::Arcane::CVarFlags::Archive,
-                        "Show the shader graph's pin colour legend (false folds it to a ? chip).");
+        ARC_CVAR(cvar_showPinLegend, "editor.graph.showPinLegend", bool, true,
+                 .flags = ::Arcane::CVarFlags::Archive, .audience = ::Arcane::Audience::Editor,
+                 .scope = ::Arcane::SettingScope::PreferencesMachine,
+                 .help = "Show the shader graph's pin colour legend (false folds it to a ? chip).");
 
         // The shader canvas's kPinDotRadius at zoom 1: the key shows the dot at
         // the size the canvas draws it unzoomed.
@@ -83,15 +83,12 @@ namespace Arcane::Editor
 
     bool GraphPinLegendShown()
     {
-        const CVarRegistry& reg = CVarRegistry::Get();
-        const std::optional<CVarValue> v = reg.Get(reg.Find("editor.graph.showPinLegend"));
-        return (v && v->type == CVarType::Bool) ? v->AsBool() : true;
+        return cvar_showPinLegend.Get();
     }
 
     void SetGraphPinLegendShown(bool shown)
     {
-        CVarRegistry& reg = CVarRegistry::Get();
-        (void)reg.Set(reg.Find("editor.graph.showPinLegend"), CVarValue::Bool(shown), SetBy::User, "editor");
+        (void)CVarRegistry::Get().Set(cvar_showPinLegend.Handle(), CVarValue::Bool(shown), SetBy::User, "editor");
     }
 
     ImVec2 GraphPinLegendBoxSize(bool expanded)

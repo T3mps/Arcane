@@ -36,24 +36,22 @@ namespace Arcane::Editor
         // how far it shrinks in a short Inspector is the two cvars below.
         constexpr float kAssetPageThumbSize = 140.0f;
 
-        ARC_CVAR_RANGED("editor.inspector.assetThumbMinPx", "editor", Int32,
-                        ::Arcane::CVarValue::Int32(64), ::Arcane::CVarValue::Int32(32), ::Arcane::CVarValue::Int32(140),
-                        ::Arcane::CVarFlags::Archive, "Smallest the asset page's thumbnail shrinks to in a short Inspector");
-        ARC_CVAR_RANGED("editor.inspector.assetThumbHeightFraction", "editor", Float32,
-                        ::Arcane::CVarValue::Float32(0.30f), ::Arcane::CVarValue::Float32(0.1f), ::Arcane::CVarValue::Float32(0.6f),
-                        ::Arcane::CVarFlags::Archive, "Share of the Inspector's height the asset page's thumbnail may take");
+        ARC_CVAR(cvar_assetThumbMinPx, "editor.inspector.assetThumbMinPx", std::int32_t, 64,
+                 .min = 32, .max = 140, .flags = ::Arcane::CVarFlags::Archive,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+                 .help = "Smallest the asset page's thumbnail shrinks to in a short Inspector");
+        ARC_CVAR(cvar_assetThumbHeightFraction, "editor.inspector.assetThumbHeightFraction", float, 0.30f,
+                 .min = 0.1f, .max = 0.6f, .flags = ::Arcane::CVarFlags::Archive,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
+                 .help = "Share of the Inspector's height the asset page's thumbnail may take");
 
         float ThumbFloor()
         {
-            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            const auto v = reg.Get(reg.Find("editor.inspector.assetThumbMinPx"));
-            return (v && v->type == Arcane::CVarType::Int32) ? static_cast<float>(v->AsInt32()) : 64.0f;
+            return static_cast<float>(cvar_assetThumbMinPx.Get());
         }
         float ThumbHeightFraction()
         {
-            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            const auto v = reg.Get(reg.Find("editor.inspector.assetThumbHeightFraction"));
-            return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.30f;
+            return cvar_assetThumbHeightFraction.Get();
         }
 
         // Compact side-by-side header (spec s6/s17): thumb left, name/pills/

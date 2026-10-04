@@ -142,9 +142,12 @@ namespace Arcane
         // node-page phase s8.2: the command line's history depth. Registered on
         // EVERY registry (test registries included), so through CVarDesc rather
         // than ARC_CVAR (which targets Get() only). ConsoleModel reads it.
-        const CVarHandle history = Register(CVarDesc{ "console.historySize", CVarType::Int32, CVarValue::Int32(64),
-                                                      CVarValue::Int32(1), CVarValue::Int32(1024), CVarFlags::Archive,
-                                                      "Command-line history depth.", "engine" });
+        // Game / Pref-P per the inventory's R1: it serves both consoles.
+        const CVarHandle history = Register(CVarDesc{
+            .name = "console.historySize", .type = CVarType::Int32, .defaultValue = CVarValue::Int32(64),
+            .min = CVarValue::Int32(1), .max = CVarValue::Int32(1024), .flags = CVarFlags::Archive,
+            .help = "Command-line history depth.", .module = "engine",
+            .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
         (void)history;
     }
 
