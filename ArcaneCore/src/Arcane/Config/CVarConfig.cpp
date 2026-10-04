@@ -1,6 +1,7 @@
 #include <Arcane/Config/CVarConfig.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarFormat.hpp>
 
 #include <fstream>
 #include <iterator>
@@ -28,7 +29,7 @@ namespace Arcane
             return nullptr;
         }
 
-        nlohmann::json ArchiveJson(const CVarValue& value)
+        nlohmann::json ArchiveJson(const CVarValue& value, const std::vector<std::string>& enumNames)
         {
             switch (value.type)
             {
@@ -40,8 +41,103 @@ namespace Arcane
             case CVarType::Float32: return value.AsFloat32();
             case CVarType::Float64: return value.AsFloat64();
             case CVarType::String: return value.AsString();
+            case CVarType::Color: return CVarColorToHex(value.AsColor());
+            case CVarType::Vec2: { const CVarVec2 v = value.AsVec2(); return nlohmann::json::array({ v.x, v.y }); }
+            case CVarType::Vec3: { const CVarVec3 v = value.AsVec3(); return nlohmann::json::array({ v.x, v.y, v.z }); }
+            case CVarType::Vec4: { const CVarVec4 v = value.AsVec4(); return nlohmann::json::array({ v.x, v.y, v.z, v.w }); }
+            case CVarType::Enum:
+            {
+                const std::int32_t ordinal = value.AsEnum();
+                if (ordinal >= 0 && static_cast<std::size_t>(ordinal) < enumNames.size())
+                    return enumNames[static_cast<std::size_t>(ordinal)];
+                return ordinal;
+            }
             default: return nullptr;
             }
+        }
+
+        // Exactly `count` numbers from a JSON array.
+        bool JsonFloats(const nlohmann::json& j, float* out, std::size_t count)
+        {
+            if (!j.is_array() || j.size() != count) return false;
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (!j[i].is_number()) return false;
+                out[i] = j[i].get<float>();
+            }
+            return true;
+        }
+
+        // A file value as `type`; nullopt = the wrong shape (spec s12: refused
+        // and reported). `numericEnum` is set when an Enum came as a number.
+        std::optional<CVarValue> ValueFromJson(const nlohmann::json& j, CVarType type, const std::vector<std::string>& enumNames,
+                                               std::optional<std::int32_t>& numericEnum)
+        {
+            switch (type)
+            {
+            case CVarType::Bool:
+                if (!j.is_boolean()) return std::nullopt;
+                return CVarValue::Bool(j.get<bool>());
+            case CVarType::Int32:
+                if (!j.is_number_integer()) return std::nullopt;
+                return CVarValue::Int32(j.get<std::int32_t>());
+            case CVarType::UInt32:
+                if (!j.is_number_unsigned() && !j.is_number_integer()) return std::nullopt;
+                return CVarValue::UInt32(j.get<std::uint32_t>());
+            case CVarType::Int64:
+                if (!j.is_number_integer()) return std::nullopt;
+                return CVarValue::Int64(j.get<std::int64_t>());
+            case CVarType::UInt64:
+                if (!j.is_number_unsigned() && !j.is_number_integer()) return std::nullopt;
+                return CVarValue::UInt64(j.get<std::uint64_t>());
+            case CVarType::Float32:
+                if (!j.is_number()) return std::nullopt;
+                return CVarValue::Float32(j.get<float>());
+            case CVarType::Float64:
+                if (!j.is_number()) return std::nullopt;
+                return CVarValue::Float64(j.get<double>());
+            case CVarType::String:
+                if (!j.is_string()) return std::nullopt;
+                return CVarValue::String(j.get<std::string>());
+            case CVarType::Color:
+            {
+                if (j.is_string())
+                {
+                    if (const auto c = CVarColorFromHex(j.get<std::string>())) return CVarValue::Color(*c);
+                    return std::nullopt;
+                }
+                float f[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+                if (JsonFloats(j, f, 3) || JsonFloats(j, f, 4)) return CVarValue::Color(CVarColor{ f[0], f[1], f[2], f[3] });
+                return std::nullopt;
+            }
+            case CVarType::Vec2: { float f[2] = {}; if (!JsonFloats(j, f, 2)) return std::nullopt; return CVarValue::Vec2(CVarVec2{ f[0], f[1] }); }
+            case CVarType::Vec3: { float f[3] = {}; if (!JsonFloats(j, f, 3)) return std::nullopt; return CVarValue::Vec3(CVarVec3{ f[0], f[1], f[2] }); }
+            case CVarType::Vec4:
+            {
+                float f[4] = {};
+                if (!JsonFloats(j, f, 4)) return std::nullopt;
+                return CVarValue::Vec4(CVarVec4{ f[0], f[1], f[2], f[3] });
+            }
+            case CVarType::Enum:
+            {
+                if (j.is_string())
+                {
+                    if (const auto ordinal = CVarEnumOrdinal(enumNames, j.get<std::string>())) return CVarValue::Enum(*ordinal);
+                    return std::nullopt;
+                }
+                if (j.is_number_integer())
+                {
+                    const std::int64_t n = j.get<std::int64_t>();
+                    if (n >= 0 && n < static_cast<std::int64_t>(enumNames.size()))
+                    {
+                        numericEnum = static_cast<std::int32_t>(n);
+                        return CVarValue::Enum(static_cast<std::int32_t>(n));
+                    }
+                }
+                return std::nullopt;
+            }
+            }
+            return std::nullopt;
         }
 
         // The leaf `key` names in `doc` the way Walk reads it: the flat key
@@ -87,48 +183,22 @@ namespace Arcane
                     unknown.push_back(name);
                     continue;
                 }
-                CVarValue value = CVarValue::Bool(false);
                 const auto current = registry.Get(handle);
                 if (!current) continue;
-                switch (current->type)
+                std::vector<std::string> enumNames;
+                if (current->type == CVarType::Enum)
+                    if (const auto meta = registry.Metadata(handle)) enumNames = meta->enumNames;
+                std::optional<std::int32_t> numericEnum;
+                std::optional<CVarValue> value = ValueFromJson(*it, current->type, enumNames, numericEnum);
+                if (!value)
                 {
-                case CVarType::Bool:
-                    if (!it->is_boolean()) { unknown.push_back(name); continue; }
-                    value = CVarValue::Bool(it->get<bool>());
-                    break;
-                case CVarType::Int32:
-                    if (!it->is_number_integer()) { unknown.push_back(name); continue; }
-                    value = CVarValue::Int32(it->get<std::int32_t>());
-                    break;
-                case CVarType::UInt32:
-                    if (!it->is_number_unsigned() && !it->is_number_integer()) { unknown.push_back(name); continue; }
-                    value = CVarValue::UInt32(it->get<std::uint32_t>());
-                    break;
-                case CVarType::Int64:
-                    if (!it->is_number_integer()) { unknown.push_back(name); continue; }
-                    value = CVarValue::Int64(it->get<std::int64_t>());
-                    break;
-                case CVarType::UInt64:
-                    if (!it->is_number_unsigned() && !it->is_number_integer()) { unknown.push_back(name); continue; }
-                    value = CVarValue::UInt64(it->get<std::uint64_t>());
-                    break;
-                case CVarType::Float32:
-                    if (!it->is_number()) { unknown.push_back(name); continue; }
-                    value = CVarValue::Float32(it->get<float>());
-                    break;
-                case CVarType::Float64:
-                    if (!it->is_number()) { unknown.push_back(name); continue; }
-                    value = CVarValue::Float64(it->get<double>());
-                    break;
-                case CVarType::String:
-                    if (!it->is_string()) { unknown.push_back(name); continue; }
-                    value = CVarValue::String(it->get<std::string>());
-                    break;
-                default:
-                    unknown.push_back(name);
+                    unknown.push_back(name);   // the wrong shape for its type: refused, reported
                     continue;
                 }
-                registry.Set(handle, std::move(value), by, sourceModule, Permission::Editor);
+                if (numericEnum)
+                    ARC_WARN("cvar: '{}' gives an Enum as the number {}; write \"{}\" -- the next archive write saves the name",
+                             name, *numericEnum, enumNames[static_cast<std::size_t>(*numericEnum)]);
+                registry.Set(handle, std::move(*value), by, sourceModule, Permission::Editor);
             }
         }
     }
@@ -179,7 +249,10 @@ namespace Arcane
             if (!explained) continue;
             const CVarValue* value = NewestUserValue(*explained);
             if (!value) continue;
-            nlohmann::json json = ArchiveJson(*value);
+            std::vector<std::string> enumNames;
+            if (entry.type == CVarType::Enum)
+                if (const auto meta = registry.Metadata(registry.Find(entry.name))) enumNames = meta->enumNames;
+            nlohmann::json json = ArchiveJson(*value, enumNames);
             if (json.is_null()) continue;
             owned[std::move(category)].emplace_back(entry.name.substr(dot + 1), std::move(json));
         }

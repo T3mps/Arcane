@@ -21,6 +21,13 @@ namespace Arcane
     ARC_CORE_API std::string CVarColorToHex(const CVarColor& linear);
     // "#RRGGBB" (alpha 1) or "#RRGGBBAA", either case. nullopt otherwise.
     ARC_CORE_API std::optional<CVarColor> CVarColorFromHex(std::string_view text);
+    // Equal within one 8-bit step per channel, in the hex's own encoding
+    // (sRGB for RGB, linear for alpha; outside [0,1] clamps as the hex does).
+    // What "is default" compares with -- the Modified filter and the reset
+    // arrow -- because a linear colour that went through a file's hex is not
+    // bit-identical to the default it was picked at (settings plan Review
+    // Focus 3).
+    ARC_CORE_API bool CVarColorNearlyEqual(const CVarColor& a, const CVarColor& b);
 
     // The console's spelling. Bool "true"/"false"; integers decimal;
     // Float32/Float64 std::to_string (v1's form, unchanged); Vec* components

@@ -177,6 +177,13 @@ namespace Arcane
                           DecodeSrgb(static_cast<float>(bytes[2]) / 255.0f), static_cast<float>(bytes[3]) / 255.0f };
     }
 
+    bool CVarColorNearlyEqual(const CVarColor& a, const CVarColor& b)
+    {
+        const auto oneStep = [](unsigned x, unsigned y) { return (x > y ? x - y : y - x) <= 1u; };
+        return oneStep(ToByte(EncodeSrgb(a.r)), ToByte(EncodeSrgb(b.r))) && oneStep(ToByte(EncodeSrgb(a.g)), ToByte(EncodeSrgb(b.g)))
+            && oneStep(ToByte(EncodeSrgb(a.b)), ToByte(EncodeSrgb(b.b))) && oneStep(ToByte(a.a), ToByte(b.a));
+    }
+
     std::string FormatCVarValue(const CVarValue& v, const std::vector<std::string>& enumNames)
     {
         switch (v.type)
