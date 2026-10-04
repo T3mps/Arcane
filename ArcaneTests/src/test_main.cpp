@@ -7,14 +7,11 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; the proof it took is NRI
-// logging "Using ID3D12Device10+".
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 int main(int argc, char* argv[]) {
     // Install the shared context in the TEST module BEFORE any test computes a

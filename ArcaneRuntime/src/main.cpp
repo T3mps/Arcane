@@ -8,6 +8,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include "RuntimeApp.hpp"
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 
@@ -17,12 +18,8 @@
 #include <string>
 #include <vector>
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; NRI logging "Using
-// ID3D12Device10+" is the confirmation that the redirect took.
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 namespace
 {

@@ -10,6 +10,7 @@
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "App/EditorApp.hpp"
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
@@ -36,12 +37,8 @@
 static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcane";
 #endif
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; the proof it took is NRI
-// logging "Using ID3D12Device10+".
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 // ===== THE EDITOR'S FULL PROCESS EXIT-CODE TABLE ============================
 // Gathered in ONE place. This function's own `return rc;` at the bottom is the
