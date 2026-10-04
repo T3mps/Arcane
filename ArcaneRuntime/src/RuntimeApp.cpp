@@ -9,6 +9,7 @@
 
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Config/CVarConfig.hpp>   // Arcane::CommandLineCVarContext (the --set context, settings plan ruling I3)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
@@ -1565,7 +1566,11 @@ int RuntimeApp::Run()
     // cannot drift on when a verify run declines the diag:// mount.
     ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
     ctx.hostConfig = &m_config;
-    ctx.cvarContext = Arcane::CVarContext::LocalHost;
+    // `--set` runs in the Editor context in a Debug/Release build and as the
+    // local host in Dist (settings plan, integration ruling I3), so the
+    // developer's `--set render.meshCull=false` keeps working here; the runtime's
+    // console overlay keeps its own LocalHost context (RuntimeFrame.cpp).
+    ctx.cvarContext = Arcane::CommandLineCVarContext();
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp

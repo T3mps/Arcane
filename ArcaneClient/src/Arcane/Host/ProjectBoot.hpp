@@ -202,7 +202,9 @@ namespace Arcane::HostBoot
         ProjectOpenOptions openOptions{};
 
         // `--set` context (settings spec s3.2). The editor sets Editor; the
-        // runtime is the local host of its own session (spec s8.3).
+        // runtime passes CommandLineCVarContext() (CVarConfig.hpp): Editor in a
+        // Debug/Release build, the local host of its own session in Dist
+        // (integration ruling I3; spec s8.3).
         // Null hostConfig means there is no command line (parity tests).
         const HostConfig* hostConfig = nullptr;
         CVarContext cvarContext = CVarContext::LocalHost;

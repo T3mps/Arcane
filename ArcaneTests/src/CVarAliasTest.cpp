@@ -140,7 +140,7 @@ TEST_CASE("RegisterAlias refuses names it cannot own and re-points a renamed ren
     REQUIRE(reg.RegisterAlias("a.v2", "a.v3"));                               // v2 renamed again: v1 follows
     CHECK(reg.AliasTarget("a.v1") == "a.v3");
     CHECK(reg.AliasTarget("a.v2") == "a.v3");
-    CHECK(reg.Aliases().size() == 3);
+    CHECK(reg.Aliases().size() == 4);                                         // + the registry's own cheats -> server.cheats
     CHECK(reg.Aliases().front().first == "a.v1");                             // sorted by old name
 }
 

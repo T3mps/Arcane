@@ -47,7 +47,7 @@ TEST_CASE("ARC_CVAR defines a nameable handle with its range, metadata and modul
 TEST_CASE("every migrated Archive declaration keeps type, default, range and flags, and gains its metadata", "[cvar]")
 {
     using namespace Arcane;
-    const CVarFlags archive = CVarFlags::Archive | CVarFlags::UserSettable;   // v1: Archive implies UserSettable
+    const CVarFlags archive = CVarFlags::Archive;   // UserSettable is derived from the audience (PlayerSafe/Server only), never from Archive
     const Audience ed = Audience::Editor;
     const SettingScope prefM = SettingScope::PreferencesMachine;
     const SettingScope prefP = SettingScope::PreferencesProject;
@@ -122,6 +122,6 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     REQUIRE(level.has_value());
     CHECK(level->audience == Audience::Game);
     CHECK(level->scope == SettingScope::PreferencesProject);
-    CHECK(level->flags == (CVarFlags::Archive | CVarFlags::Dev | CVarFlags::UserSettable));
+    CHECK(level->flags == (CVarFlags::Archive | CVarFlags::Dev));   // Game audience: no derived UserSettable
 #endif
 }

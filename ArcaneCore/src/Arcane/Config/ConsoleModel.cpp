@@ -23,11 +23,11 @@ namespace Arcane
         m_input.clear();
     }
 
-    std::vector<std::string> ConsoleModel::Complete(const CVarRegistry& registry) const
+    std::vector<std::string> ConsoleModel::Complete(const CVarRegistry& registry, CVarContext ctx) const
     {
         std::vector<std::string> matches;
         if (m_input.empty()) return matches;
-        for (const CVarListEntry& entry : registry.List())
+        for (const CVarListEntry& entry : registry.List(ctx))
             if (entry.name.rfind(m_input, 0) == 0) matches.push_back(entry.name);
         for (const CVarListEntry& entry : registry.ListCommands())
             if (entry.name.rfind(m_input, 0) == 0) matches.push_back(entry.name);
@@ -36,9 +36,9 @@ namespace Arcane
         return matches;
     }
 
-    bool ConsoleModel::CompleteInput(const CVarRegistry& registry)
+    bool ConsoleModel::CompleteInput(const CVarRegistry& registry, CVarContext ctx)
     {
-        const std::vector<std::string> matches = Complete(registry);
+        const std::vector<std::string> matches = Complete(registry, ctx);
         if (matches.empty()) return false;
         std::string next;
         if (matches.size() == 1)

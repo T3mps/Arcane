@@ -43,7 +43,7 @@ TEST_CASE("Register keeps the declared metadata and derives what was left empty"
     CHECK(meta->help == "Undo history depth in steps.");
     CHECK(meta->module == "editor");
     CHECK(meta->type == CVarType::Int32);
-    CHECK(meta->flags == (CVarFlags::Archive | CVarFlags::UserSettable));   // v1: Archive implies UserSettable
+    CHECK(meta->flags == CVarFlags::Archive);   // Editor audience: UserSettable is derived (PlayerSafe/Server), not implied by Archive
     CHECK(meta->defaultValue == CVarValue::Int32(100));
     REQUIRE(meta->min.has_value());
     CHECK(*meta->min == CVarValue::Int32(1));

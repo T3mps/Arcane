@@ -80,7 +80,7 @@ namespace Arcane
         std::string help;
         std::string module;                  // the declaring module
         CVarType type = CVarType::Bool;
-        CVarFlags flags = CVarFlags::None;   // as stored (Archive adds UserSettable)
+        CVarFlags flags = CVarFlags::None;   // as stored (UserSettable is derived from the audience)
         CVarValue defaultValue = CVarValue::Bool(false);   // after the range clamp
         std::optional<CVarValue> min;
         std::optional<CVarValue> max;
@@ -102,6 +102,15 @@ namespace Arcane
     };
 
     using CommandFn = void (*)(std::string_view args, std::string& out, void* user);
+
+    // Who asked, for a game's policy and the audit sink (settings spec s3.2, s9).
+    // `roles` is a game-defined bitmask; `gameData` is the game's own pointer.
+    struct CVarCaller
+    {
+        std::string_view id;
+        std::uint64_t    roles = 0;
+        void*            gameData = nullptr;
+    };
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -149,9 +158,12 @@ namespace Arcane
         [[nodiscard]] std::optional<CVarMetadata> Metadata(CVarHandle handle) const;
 
         // sourceModule tags the history record so UnregisterModule can pop it.
+        // Outside the Editor context the write goes through the audience x
+        // context table (settings spec s3.2): Denied when the table refuses.
         SetResult Set(CVarHandle handle, CVarValue value, SetBy by,
                       std::string_view sourceModule = {},
-                      CVarContext ctx = CVarContext::Editor);
+                      CVarContext ctx = CVarContext::Editor,
+                      const CVarCaller* caller = nullptr);
 
         void UnregisterModule(std::string_view module);
 
@@ -166,7 +178,7 @@ namespace Arcane
         void AddCallback(CVarHandle handle, ChangeFn fn, void* user);
 
         // Drop Console and Code history on every Cheat cvar and mark them
-        // dirty. Config layers remain. Called when `cheats` publishes false.
+        // dirty. Config layers remain. Called when `server.cheats` publishes false.
         void RevertCheats();
 
         // Drop every history record of rung `by` on every cvar and mark the
@@ -176,14 +188,20 @@ namespace Arcane
         void RevertLayer(SetBy by);
 
         [[nodiscard]] std::optional<CVarExplain> Explain(std::string_view name) const;
-        [[nodiscard]] std::vector<CVarListEntry> List() const;   // skips Hidden; skips Dev if compiled out
+        // Skips Hidden; skips Dev if compiled out. The Editor view (the
+        // default) is everything else: what the archive writes and the settings
+        // windows show. Any other context sees only what it may READ (settings
+        // spec s3.2): no Editor-audience setting, no Protected one outside
+        // ServerAdmin. cvarlist and the console's completion use the caller's.
+        [[nodiscard]] std::vector<CVarListEntry> List(CVarContext ctx = CVarContext::Editor) const;
         // Live commands, with List()'s rule (skips Hidden; skips Dev when
         // compiled out). `type` is meaningless for a command (left Bool).
         [[nodiscard]] std::vector<CVarListEntry> ListCommands() const;
         [[nodiscard]] ExecResult Execute(std::string_view line, CVarContext ctx,
-                                        SetBy by = SetBy::Console);
+                                        SetBy by = SetBy::Console,
+                                        const CVarCaller* caller = nullptr);
 
-        // The published bool of the cvar named "cheats". False when absent.
+        // The published bool of server.cheats (alias "cheats"). False when absent.
         [[nodiscard]] bool CheatsEnabled() const;
 
     private:

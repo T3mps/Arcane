@@ -50,8 +50,23 @@ namespace Arcane
     // unchanged file is not rewritten.
     ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
 
+    // The context a host's `--set` runs in (settings plan, integration ruling
+    // I3): the Editor context in a Debug/Release build, so a developer's
+    // `ArcaneRuntime --set render.meshCull=false` keeps working against a Game
+    // setting; the local host's in Dist, where the command line is the player's.
+    // The editor passes Editor in every build. A console still uses its session's
+    // own context.
+    constexpr CVarContext CommandLineCVarContext() noexcept
+    {
+#if defined(ARC_BUILD_DIST)
+        return CVarContext::LocalHost;
+#else
+        return CVarContext::Editor;
+#endif
+    }
+
     // `--set name=value`, repeated. CommandLine rung, in `ctx` (the editor:
-    // Editor; ArcaneRuntime: LocalHost). Does not publish.
+    // Editor; ArcaneRuntime: CommandLineCVarContext()). Does not publish.
     ARC_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
                                               CVarContext ctx);
 }

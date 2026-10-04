@@ -59,7 +59,7 @@ TEST_CASE("CVarRef reads its value by handle and carries the declared metadata a
     CHECK(meta->type == CVarType::Int32);
     REQUIRE(meta->min.has_value());
     CHECK(*meta->min == CVarValue::Int32(1));
-    CHECK(meta->flags == (CVarFlags::Archive | CVarFlags::UserSettable));
+    CHECK(meta->flags == CVarFlags::Archive);   // Editor audience: no derived UserSettable
     CHECK(meta->audience == Audience::Editor);
     CHECK(meta->scope == SettingScope::PreferencesProject);
     CHECK(meta->apply == ApplyMode::Live);

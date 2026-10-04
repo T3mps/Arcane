@@ -1602,12 +1602,14 @@ namespace Arcane::Editor
     // panels and viewport, the picture --headless captures offscreen -- so an
     // automated desk pass can judge the WINDOWED editor (works-headless/
     // broken-windowed is a bug class) without driving the desktop. Dev (never
-    // in Dist) and UserSettable (the command line's door), NOT Archive: an
-    // automation switch must never persist into a user's settings.
+    // in Dist), NOT Archive: an automation switch must never persist into a
+    // user's settings. The editor's --set runs in the Editor context, which
+    // writes any setting (UserSettable is derived from the audience now, so a
+    // declaration no longer passes it -- settings spec s3.2).
     namespace
     {
         ARC_CVAR(cvar_windowedFrameCapture, "editor.automation.windowedFrameCapture", bool, false,
-                 .flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable,
+                 .flags = ::Arcane::CVarFlags::Dev,
                  .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesProject,
                  .help = "Windowed --screenshot captures the composited editor frame (the presented "
                          "backbuffer: chrome, panels, viewport) instead of the viewport texture");

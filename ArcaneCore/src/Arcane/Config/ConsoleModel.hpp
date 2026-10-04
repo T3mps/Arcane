@@ -30,11 +30,13 @@ namespace Arcane
         void SetInput(std::string text) { m_input = std::move(text); }
         [[nodiscard]] const std::string& Input() const { return m_input; }
         [[nodiscard]] const std::vector<ConsoleLine>& Lines() const { return m_lines; }
-        // Prefix matches over List() + ListCommands(), sorted, de-duplicated.
-        [[nodiscard]] std::vector<std::string> Complete(const CVarRegistry& registry) const;
+        // Prefix matches over List(ctx) + ListCommands(), sorted, de-duplicated:
+        // only names `ctx` may read (settings spec s3.2), so a client's Tab
+        // never shows an Editor, Hidden or Protected name.
+        [[nodiscard]] std::vector<std::string> Complete(const CVarRegistry& registry, CVarContext ctx) const;
         // Tab: one match -> "name "; several -> their longest common prefix and one
         // reply line listing them. Returns whether the input changed.
-        bool CompleteInput(const CVarRegistry& registry);
+        bool CompleteInput(const CVarRegistry& registry, CVarContext ctx);
         // Up/Down. The draft is stashed on the first Up and restored past the newest.
         bool HistoryPrev();
         bool HistoryNext();

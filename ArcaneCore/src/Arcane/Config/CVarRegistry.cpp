@@ -77,6 +77,54 @@ namespace Arcane
             return false;
         }
 
+        // Spec s3.2's default table, before any game policy. `absent`: the
+        // setting does not exist for this caller (an Editor setting, or a
+        // Hidden one, outside the editor), so it is reported as unknown rather
+        // than denied.
+        struct AccessRule
+        {
+            bool absent = false;
+            bool allowed = false;
+        };
+
+        AccessRule DefaultAccess(Audience audience, CVarFlags flags, CVarContext ctx, bool write,
+                                 bool cheatsOn, bool clientMaySetServer)
+        {
+            if (ctx == CVarContext::Editor) return { false, true };
+            if (audience == Audience::Editor || HasFlag(flags, CVarFlags::Hidden)) return { true, false };
+            if (!write)
+                return { false, !HasFlag(flags, CVarFlags::Protected) || ctx == CVarContext::ServerAdmin };
+            const bool cheat = HasFlag(flags, CVarFlags::Cheat);
+            switch (audience)
+            {
+            case Audience::Game:       return { false, cheat && cheatsOn };
+            case Audience::PlayerSafe: return { false, !cheat || cheatsOn };
+            case Audience::Server:
+                if (ctx == CVarContext::Client) return { false, clientMaySetServer && (!cheat || cheatsOn) };
+                return { false, !cheat || cheatsOn };
+            case Audience::Editor:     break;
+            }
+            return { true, false };
+        }
+
+        bool PublishedBool(const CVarRegistry& registry, std::string_view name, bool fallback)
+        {
+            const auto v = registry.Get(registry.Find(name));
+            return v && v->type == CVarType::Bool ? v->AsBool() : fallback;
+        }
+
+        // The context of the Execute that is dispatching the current command.
+        // CommandFn carries none, and the registry's own cvarlist / cvar_explain
+        // must list and print only what that context may read (s3.2).
+        thread_local CVarContext tExecutingContext = CVarContext::Editor;
+
+        struct ExecutingContextScope
+        {
+            CVarContext outer;
+            explicit ExecutingContextScope(CVarContext ctx) : outer(tExecutingContext) { tExecutingContext = ctx; }
+            ~ExecutingContextScope() { tExecutingContext = outer; }
+        };
+
         void ListCommand(std::string_view, std::string& out, void* user);
         void ExplainCommand(std::string_view args, std::string& out, void* user);
     }
@@ -132,6 +180,20 @@ namespace Arcane
         std::unordered_set<std::string> warnedAliases;  // old names already warned about
         bool publishing = false;
         std::string lastError;
+
+        // The table plus server.cheatsAllowed: outside the editor, the cheats
+        // gate can be turned ON only where the host allows cheats at all.
+        AccessRule Access(const CVarRegistry& self, const Slot& slot, CVarContext ctx, bool write,
+                          const CVarValue* value) const
+        {
+            AccessRule rule = DefaultAccess(slot.audience, slot.flags, ctx, write, self.CheatsEnabled(),
+                                            PublishedBool(self, "server.allowClientSetServer", false));
+            if (rule.allowed && write && ctx != CVarContext::Editor && slot.name == "server.cheats"
+                && value && value->type == CVarType::Bool && value->AsBool()
+                && !PublishedBool(self, "server.cheatsAllowed", true))
+                rule.allowed = false;
+            return rule;
+        }
     };
 
     CVarRegistry::CVarRegistry() : CVarRegistry(true) {}
@@ -154,6 +216,31 @@ namespace Arcane
             .help = "Command-line history depth.", .module = "engine",
             .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
         (void)history;
+        // Settings spec s3.2: the cheats gate and the two engine knobs, on EVERY
+        // registry (test registries included), like console.historySize. They
+        // are Server audience: a LocalHost or ServerAdmin console sets them, and
+        // a Client only reads them.
+        const auto serverBool = [this](std::string_view name, bool def, CVarFlags flags, std::string_view help)
+        {
+            CVarDesc desc;
+            desc.name = name;
+            desc.type = CVarType::Bool;
+            desc.defaultValue = CVarValue::Bool(def);
+            desc.flags = flags;
+            desc.help = help;
+            desc.module = "engine";
+            desc.audience = Audience::Server;
+            desc.scope = SettingScope::Project;
+            desc.apply = ApplyMode::Live;
+            (void)Register(desc);
+        };
+        serverBool("server.cheats", false, CVarFlags::Replicated,
+                   "Allow Cheat settings to change (Source's sv_cheats). Turning it off reverts every Cheat setting.");
+        serverBool("server.allowClientSetServer", false, CVarFlags::None,
+                   "Let a connected client change Server settings when the game's policy leaves the decision to the engine.");
+        serverBool("server.cheatsAllowed", true, CVarFlags::None,
+                   "Whether server.cheats may be turned on outside the editor. A dedicated server sets its Project default to false.");
+        (void)RegisterAlias("cheats", "server.cheats");
     }
 
     CVarRegistry::~CVarRegistry() { delete m; }
@@ -175,7 +262,7 @@ namespace Arcane
         void ListCommand(std::string_view, std::string& out, void* user)
         {
             auto* self = static_cast<CVarRegistry*>(user);
-            for (const CVarListEntry& e : self->List())
+            for (const CVarListEntry& e : self->List(tExecutingContext))
             {
                 out += e.name;
                 out += " (";
@@ -191,16 +278,27 @@ namespace Arcane
             auto* self = static_cast<CVarRegistry*>(user);
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             const auto explained = self->Explain(args);
-            if (!explained)
+            const auto meta = explained ? self->Metadata(self->Find(explained->name)) : std::nullopt;
+            // The same read rule as a plain `name` (s3.2): absent outside the
+            // editor reads as unknown; a Protected value never prints where the
+            // plain read is refused.
+            const AccessRule read = meta ? DefaultAccess(meta->audience, meta->flags, tExecutingContext, false, false, false)
+                                         : AccessRule{ true, false };
+            if (read.absent)
             {
                 out = "unknown cvar '";
                 out += args;
                 out += "'";
                 return;
             }
-            std::vector<std::string> enumNames;
-            if (explained->type == CVarType::Enum)
-                if (const auto meta = self->Metadata(self->Find(explained->name))) enumNames = meta->enumNames;
+            if (!read.allowed)
+            {
+                out = "denied: '";
+                out += explained->name;
+                out += "' is protected";
+                return;
+            }
+            const std::vector<std::string>& enumNames = meta->enumNames;
             out += explained->name;
             out += " = ";
             out += FormatCVarValue(explained->published, enumNames);
@@ -303,7 +401,13 @@ namespace Arcane
         slot.alive = true;
         slot.type = desc.type;
         slot.flags = desc.flags;
-        if (HasFlag(slot.flags, CVarFlags::Archive)) slot.flags = slot.flags | CVarFlags::UserSettable;
+        slot.audience = desc.audience;
+        // UserSettable is DERIVED from the audience (settings contract; spec
+        // s3.2): a declaration's own bit is ignored, and Archive never implies it.
+        slot.flags = static_cast<CVarFlags>(static_cast<std::uint32_t>(slot.flags)
+                                            & ~static_cast<std::uint32_t>(CVarFlags::UserSettable));
+        if (slot.audience == Audience::PlayerSafe || slot.audience == Audience::Server)
+            slot.flags = slot.flags | CVarFlags::UserSettable;
         slot.name = desc.name;
         slot.help = desc.help;
         slot.declaredBy = desc.module;
@@ -314,7 +418,6 @@ namespace Arcane
         slot.displayName = desc.displayName.empty() ? DeriveCVarDisplayName(desc.name) : std::string(desc.displayName);
         slot.keywords = desc.keywords;
         slot.widget = desc.widget;
-        slot.audience = desc.audience;
         slot.scope = desc.scope;
         slot.apply = desc.apply;
         slot.order = desc.order;
@@ -382,7 +485,7 @@ namespace Arcane
     }
 
     SetResult CVarRegistry::Set(CVarHandle handle, CVarValue value, SetBy by,
-                                std::string_view sourceModule, CVarContext ctx)
+                                std::string_view sourceModule, CVarContext ctx, const CVarCaller* /*caller*/)
     {
         if (handle.index >= m->slots.size()) return SetResult::Stale;
         Slot& slot = m->slots[handle.index];
@@ -392,12 +495,8 @@ namespace Arcane
             (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
             return SetResult::TypeMismatch;   // an ordinal outside the declared names
 
-        const bool editor = ctx == CVarContext::Editor;
-        if (!editor)
-        {
-            if (!HasFlag(slot.flags, CVarFlags::UserSettable)) return SetResult::Denied;
-            if (HasFlag(slot.flags, CVarFlags::Cheat) && !CheatsEnabled()) return SetResult::Denied;
-        }
+        if (ctx != CVarContext::Editor && !m->Access(*this, slot, ctx, true, &value).allowed)
+            return SetResult::Denied;
 
         value = Clamp(std::move(value), slot.min, slot.max);
         // ONE record per (rung, source) (settings spec s4.5, O3): a repeat
@@ -541,7 +640,7 @@ namespace Arcane
         return out;
     }
 
-    std::vector<CVarListEntry> CVarRegistry::List() const
+    std::vector<CVarListEntry> CVarRegistry::List(CVarContext ctx) const
     {
         std::vector<CVarListEntry> out;
         for (const Slot& slot : m->slots)
@@ -549,6 +648,9 @@ namespace Arcane
             if (!slot.alive) continue;
             if (HasFlag(slot.flags, CVarFlags::Hidden)) continue;
             if (HasFlag(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            // A read, so the cheats gate and the client knob play no part.
+            const AccessRule read = DefaultAccess(slot.audience, slot.flags, ctx, false, false, false);
+            if (read.absent || !read.allowed) continue;
             out.push_back(CVarListEntry{ slot.name, slot.help, slot.type, slot.flags });
         }
         return out;
@@ -567,7 +669,7 @@ namespace Arcane
         return out;
     }
 
-    ExecResult CVarRegistry::Execute(std::string_view line, CVarContext ctx, SetBy by)
+    ExecResult CVarRegistry::Execute(std::string_view line, CVarContext ctx, SetBy by, const CVarCaller* caller)
     {
         while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
         if (line.empty()) return { false, "empty" };
@@ -579,15 +681,26 @@ namespace Arcane
         {
             Command& command = m->commands[cit->second];
             if (!command.alive) return { false, "unknown command '" + name + "'" };
+            if (ctx != CVarContext::Editor && HasFlag(command.flags, CVarFlags::Cheat) && !CheatsEnabled())
+                return { false, "denied: '" + name + "' needs server.cheats" };
             std::string text;
-            command.fn(args, text, command.user);
-            const bool ok = text.rfind("unknown", 0) != 0;
+            {
+                const ExecutingContextScope scope{ ctx };
+                command.fn(args, text, command.user);
+            }
+            const bool ok = text.rfind("unknown", 0) != 0 && text.rfind("denied", 0) != 0;
             return { ok, std::move(text) };
         }
 
         const CVarHandle handle = Resolve(name);
         if (handle.IsStale()) return { false, "unknown '" + name + "'" };
         const Slot& slot = m->slots[handle.index];
+        if (ctx != CVarContext::Editor)
+        {
+            const AccessRule read = m->Access(*this, slot, ctx, false, nullptr);
+            if (read.absent) return { false, "unknown '" + name + "'" };
+            if (args.empty() && !read.allowed) return { false, "denied: '" + name + "' is protected" };
+        }
         if (args.empty())
             return { true, slot.name + " = " + FormatCVarValue(slot.published, slot.enumNames) };
         // The console and --set (ApplyCVarCommandLine) parse every type the same way.
@@ -596,7 +709,7 @@ namespace Arcane
         std::string error;
         std::optional<CVarValue> parsed = ParseCVarText(token, slot.type, slot.enumNames, error);
         if (!parsed) return { false, error };
-        const SetResult result = Set(handle, std::move(*parsed), by, {}, ctx);
+        const SetResult result = Set(handle, std::move(*parsed), by, {}, ctx, caller);
         if (result == SetResult::Denied) return { false, "denied" };
         if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + slot.name };
         if (result != SetResult::Applied) return { false, "rejected" };
@@ -613,7 +726,7 @@ namespace Arcane
 
     bool CVarRegistry::CheatsEnabled() const
     {
-        const CVarHandle handle = Find("cheats");
+        const CVarHandle handle = Find("server.cheats");
         const auto value = Get(handle);
         return value && value->type == CVarType::Bool && value->AsBool();
     }

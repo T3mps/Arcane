@@ -13,6 +13,7 @@ namespace Arcane
         {
             ConsoleModel*       model;
             const CVarRegistry* registry;
+            CVarContext         ctx;   // completion lists only what this context may read
         };
 
         int ConsoleLineCallback(ImGuiInputTextCallbackData* data)
@@ -21,7 +22,7 @@ namespace Arcane
             ctx->model->SetInput(std::string(data->Buf, static_cast<std::size_t>(data->BufTextLen)));
             bool changed = false;
             if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion)
-                changed = ctx->model->CompleteInput(*ctx->registry);
+                changed = ctx->model->CompleteInput(*ctx->registry, ctx->ctx);
             else if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory)
                 changed = data->EventKey == ImGuiKey_UpArrow ? ctx->model->HistoryPrev() : ctx->model->HistoryNext();
             if (changed)
@@ -37,7 +38,7 @@ namespace Arcane
     {
         char buffer[512];
         std::snprintf(buffer, sizeof(buffer), "%s", model.Input().c_str());
-        LineContext lineCtx{ &model, &registry };
+        LineContext lineCtx{ &model, &registry, ctx };
         const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
                                           ImGuiInputTextFlags_CallbackCompletion |
                                           ImGuiInputTextFlags_CallbackHistory;
