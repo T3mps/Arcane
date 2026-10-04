@@ -63,6 +63,15 @@ namespace Arcane
         [[nodiscard]] static CrtFlavor DetectCrtFlavorFromImage(const unsigned char* data, std::size_t size,
                                                                 std::string* matchedImport = nullptr) noexcept;
 
+        // True when an image `path` names is ALREADY mapped in this process --
+        // a bare file name matches by base name, a path by its full path -- so
+        // a Load() of it bumps the loader's reference and runs NO static
+        // initializer. Plugin::Load asks before it loads: a refused image that
+        // was already mapped (an engine DLL named as a plugin by mistake) owns
+        // none of the registrations under its stem, and must not drop the live
+        // owner's. Never throws; false on any failure.
+        [[nodiscard]] static bool IsMapped(const std::filesystem::path& path) noexcept;
+
         void* Symbol(const char* name) const noexcept;
         void Unload() noexcept;
 

@@ -29,6 +29,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/Plugin.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -105,6 +106,30 @@ TEST_CASE("A missing required export is named", "[plugin][diagnostics]")
     CHECK_FALSE(plugin.has_value());
     CHECK(error.kind == Arcane::PluginResolveError::Kind::MissingExport);
     CHECK(error.symbol == std::string(Arcane::PluginEntry::kABIVersion));   // the first checked
+
+    // The refusal must not touch the LIVE ArcaneClient.dll's registrations:
+    // that image was already mapped, so this Load ran none of its statics and
+    // has nothing of its own to drop. (The S1 gate caught the by-name
+    // UnregisterModule("ArcaneClient") here wiping render.meshCull, which made
+    // CVarRegistryTest's meshCull case vacuous under one random order.)
+#if !defined(ARC_BUILD_DIST)   // the Dev cvar is compiled out of a Dist registry
+    const Arcane::CVarHandle meshCull = Arcane::CVarRegistry::Get().Find("render.meshCull");
+    CHECK_FALSE(meshCull.IsStale());
+    CHECK(Arcane::CVarRegistry::Get().ModuleOf(meshCull) == "ArcaneClient");
+#endif
+}
+
+TEST_CASE("Module::IsMapped tells an already-mapped image from one this process has not loaded", "[plugin][diagnostics]")
+{
+    // The query Plugin::Load guards its refused-image UnregisterModule with:
+    // ArcaneClient.dll is mapped (this exe links it), the two fixtures are
+    // not until someone loads them, and a missing file is never mapped.
+    CHECK(Arcane::Module::IsMapped(std::filesystem::path("ArcaneClient.dll")));
+    CHECK_FALSE(Arcane::Module::IsMapped(std::filesystem::path("this-path-does-not-exist-arcane.dll")));
+
+    auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"));
+    REQUIRE_FALSE(plugin.has_value());   // ABI-refused, then unmapped by Plugin::Load itself
+    CHECK_FALSE(Arcane::Module::IsMapped(std::filesystem::path("HotReloadPluginBad.dll")));
 }
 
 TEST_CASE("CRT-flavor scan classifies in-tree binaries without loading them", "[plugin][diagnostics]")

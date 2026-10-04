@@ -308,6 +308,22 @@ namespace Arcane
 #endif
     }
 
+    bool Module::IsMapped(const std::filesystem::path& path) noexcept
+    {
+#if defined(_WIN32)
+        // GetModuleHandle never loads: it only looks the name up among the
+        // modules already mapped (base name for a bare name, full path for a
+        // path) and leaves the reference count alone.
+        return ::GetModuleHandleW(path.c_str()) != nullptr;
+#else
+        void* handle = ::dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);   // NOLOAD: look up, never map
+        if (!handle)
+            return false;
+        ::dlclose(handle);   // RTLD_NOLOAD still took a reference
+        return true;
+#endif
+    }
+
     void Module::Unload() noexcept
     {
         if (!m_handle)

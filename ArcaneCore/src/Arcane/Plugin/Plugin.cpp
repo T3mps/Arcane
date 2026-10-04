@@ -125,6 +125,13 @@ namespace Arcane
         const std::string cvarModule = CVarRegistry::ScopedModule().empty()
             ? path.stem().string()
             : std::string(CVarRegistry::ScopedModule());
+        // An image this process has ALREADY mapped (an engine DLL named as a
+        // plugin by mistake, say ArcaneClient.dll) runs no statics in this
+        // Load: the loader only bumps its reference. Whatever is registered
+        // under its name belongs to the live owner, so a refusal below must
+        // not drop it. UnregisterModule is keyed by NAME, not by image; tagging
+        // registrations by image is Review Focus 2 half (b), owed to S2-3.
+        const bool alreadyMapped = Module::IsMapped(path);
         std::optional<Module> module;
         {
             const CVarModuleScope scope(cvarModule);
@@ -132,7 +139,8 @@ namespace Arcane
         }
         if (!module)
         {
-            CVarRegistry::Get().UnregisterModule(cvarModule);   // a failing DllMain may have run some statics
+            if (!alreadyMapped)
+                CVarRegistry::Get().UnregisterModule(cvarModule);   // a failing DllMain may have run some statics
             return std::nullopt;   // Kind::None; caller reads Module::LastLoadError()
         }
 
@@ -141,7 +149,8 @@ namespace Arcane
         {
             // Refused AFTER its statics ran: drop their registrations before
             // `module` unmaps the code they point into.
-            CVarRegistry::Get().UnregisterModule(cvarModule);
+            if (!alreadyMapped)
+                CVarRegistry::Get().UnregisterModule(cvarModule);
             return std::nullopt;
         }
 

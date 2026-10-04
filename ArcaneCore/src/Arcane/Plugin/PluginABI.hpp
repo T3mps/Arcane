@@ -1058,7 +1058,9 @@ namespace Arcane
     //       ScopedModule and CurrentModule;
     //     - CVarModuleScope, ValidateCVarLayers, PublishCVarConfigDiagnostics;
     //     - Runtime::CVarLayerSources and SetCVarCommandLine;
-    //     - Arcane::Paths.
+    //     - Arcane::Paths;
+    //     - Module::IsMapped (Plugin::Load no longer drops a live module's
+    //       registrations when it refuses an already-mapped image).
     //   - Declarations: the positional ARC_CVAR and ARC_CVAR_RANGED forms are
     //     removed, and every module registers under its own ARC_MODULE_NAME.
     // A v51 module was compiled against the old layouts and signatures; reject
