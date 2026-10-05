@@ -33,8 +33,10 @@ namespace Arcane
     // Flip the switch on a Preferences row.
     // - ThisProject copies the cvar's pending value into the User rung, so the row keeps its value.
     //   On PreferencesProject, also drops the EditorUser record.
-    // - AllProjects drops the User record. When EditorUser held nothing, the
-    //   pending value is promoted there first so the switch sticks.
+    // - AllProjects drops the User record. PreferencesProject also promotes
+    //   pending onto EditorUser first so the switch stays AllProjects (its
+    //   home default is ThisProject). PreferencesMachine never promotes: a
+    //   project override is cleared, not made machine-wide.
     // Returns Stale for an unknown name, and Denied for a Project-scope cvar.
     // Does not publish.
     ARC_CORE_API SetResult SetPreferenceTarget(CVarRegistry& registry, std::string_view name, PreferenceTarget target);

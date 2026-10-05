@@ -60,9 +60,12 @@ namespace Arcane
         if (e->scope == SettingScope::Project) return SetResult::Denied;
         if (target == PreferenceTarget::AllProjects)
         {
-            // Promote first while User may still win: Set records the weaker
-            // EditorUser rung and reports RefusedWeaker until User is cleared.
-            if (!HoldsRung(*e, SetBy::EditorUser) || e->scope == SettingScope::PreferencesProject)
+            // Pref-P home is ThisProject: promote pending onto EditorUser first
+            // (User still wins, so Set may report RefusedWeaker) so the switch
+            // stays AllProjects after User is cleared. Pref-M home is already
+            // AllProjects -- clearing User is enough; copying would make a
+            // project-only value machine-wide.
+            if (e->scope == SettingScope::PreferencesProject)
             {
                 const SetResult promoted = registry.Set(handle, e->pending, SetBy::EditorUser,
                                                         SourceFor(SetBy::EditorUser), CVarContext::Editor);

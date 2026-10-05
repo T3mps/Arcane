@@ -78,6 +78,27 @@ TEST_CASE("All projects / This project moves a machine-wide preference's edits b
     CHECK(ProjectOverrides(reg).empty());
 }
 
+TEST_CASE("All projects on a machine-wide row clears a project override without promoting it", "[settings][cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle h = RegisterPref(reg, "pref.theme", SettingScope::PreferencesMachine, 1);
+    REQUIRE_FALSE(h.IsStale());
+    REQUIRE(SetPreferenceTarget(reg, "pref.theme", PreferenceTarget::ThisProject) == SetResult::Applied);
+    REQUIRE(EditPreference(reg, "pref.theme", CVarValue::Int32(5)) == SetResult::Applied);
+    reg.Publish();
+    CHECK(reg.Explain("pref.theme")->setBy == SetBy::User);
+    CHECK_FALSE(HoldsAt(reg, "pref.theme", SetBy::EditorUser, 5));
+
+    REQUIRE(SetPreferenceTarget(reg, "pref.theme", PreferenceTarget::AllProjects) == SetResult::Applied);
+    reg.Publish();
+    CHECK(reg.Get(h)->AsInt32() == 1);
+    CHECK(reg.Explain("pref.theme")->setBy == SetBy::Default);
+    CHECK(PreferenceTargetOf(reg, "pref.theme") == PreferenceTarget::AllProjects);
+    CHECK_FALSE(HoldsAt(reg, "pref.theme", SetBy::EditorUser, 5));
+    CHECK_FALSE(HoldsAt(reg, "pref.theme", SetBy::User, 5));
+    CHECK(ProjectOverrides(reg).empty());
+}
+
 TEST_CASE("Every Preferences row has the switch; Project rows edit their own rung", "[settings][cvar]")
 {
     CVarRegistry reg;
