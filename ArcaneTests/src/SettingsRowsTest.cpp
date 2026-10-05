@@ -184,3 +184,89 @@ TEST_CASE("A text row commits once on Enter; Escape keeps the old text", "[setti
     Arcane::Test::PressKey(ImGuiKey_Escape, [&] { h.Frame(); });
     CHECK(h.reg.RungValue("app.title", SetBy::Project) == std::optional<CVarValue>(CVarValue::String("Hello")));
 }
+
+TEST_CASE("An overridden row is read-only, names the winning rung, and Clear override pops it undoably", "[settings-ui]")
+{
+    RowHarness h;
+    REQUIRE_FALSE(AddSetting(h.reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE(h.reg.Set(h.reg.Find("render.vsync"), CVarValue::Bool(false), SetBy::Console) == SetResult::Applied);
+    h.reg.Publish();
+    h.names = { "render.vsync" };
+    h.Frame();
+    h.Frame();
+    REQUIRE(h.results.size() == 1);
+    CHECK(h.results[0].overridden);
+    CHECK(h.results[0].readOnly);
+    CHECK(h.imgui.probe.count("Vsync#reset") == 0);
+    h.Click("Vsync#clear");
+    CHECK_FALSE(h.reg.RungValue("render.vsync", SetBy::Console).has_value());
+    h.Frame();
+    CHECK_FALSE(h.results[0].overridden);
+    h.undo.Undo();
+    CHECK(h.reg.RungValue("render.vsync", SetBy::Console) == std::optional<CVarValue>(CVarValue::Bool(false)));
+}
+
+TEST_CASE("A Preferences row's switch moves the value between All projects and This project", "[settings-ui]")
+{
+    RowHarness h;
+    h.window = SettingsWindowKind::Preferences;
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.graph.fitMinZoom", { .type = CVarType::Float32, .def = CVarValue::Float32(0.5f),
+        .scope = SettingScope::PreferencesMachine }).IsStale());
+    h.names = { "editor.graph.fitMinZoom" };
+    h.Frame();
+    h.Frame();
+    h.Click("Fit Min Zoom#scope");                                   // All projects -> This project
+    CHECK(h.reg.RungValue("editor.graph.fitMinZoom", SetBy::User) == std::optional<CVarValue>(CVarValue::Float32(0.5f)));
+    h.Frame();
+    h.Click("Fit Min Zoom#scope");                                   // back: nothing shared yet, so it is promoted
+    CHECK_FALSE(h.reg.RungValue("editor.graph.fitMinZoom", SetBy::User).has_value());
+    CHECK(h.reg.RungValue("editor.graph.fitMinZoom", SetBy::EditorUser) == std::optional<CVarValue>(CVarValue::Float32(0.5f)));
+    CHECK(h.undo.CanUndo());
+}
+
+TEST_CASE("Badges follow the apply mode and the Deterministic flag", "[settings-ui]")
+{
+    CVarDescInfo d;
+    d.apply = ApplyMode::Restart;
+    CHECK((BadgesFor(d) == std::vector<RowBadge>{ RowBadge::Restart }));
+    d.apply = ApplyMode::NextWorld;
+    d.flags = CVarFlags::Deterministic;
+    CHECK((BadgesFor(d) == std::vector<RowBadge>{ RowBadge::NextWorld, RowBadge::Deterministic }));
+    d.apply = ApplyMode::Live;
+    d.flags = CVarFlags::None;
+    CHECK(BadgesFor(d).empty());
+}
+
+TEST_CASE("Hovering a row's label shows its help and cvar name; right-click opens the Copy name / Explain menu", "[settings-ui]")
+{
+    RowHarness h;
+    REQUIRE_FALSE(AddSetting(h.reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true),
+        .help = "Wait for the vertical blank." }).IsStale());
+    h.names = { "render.vsync" };
+    h.Frame();
+    h.Frame();
+    const ImVec2 label = h.At("Vsync#label");
+    ImGui::GetIO().AddMousePosEvent(label.x, label.y);
+    for (int i = 0; i < 40; ++i) h.Frame();                          // past the tooltip delay, mouse still
+    CHECK(h.lastTooltip == "render.vsync");
+    ImGui::GetIO().AddMouseButtonEvent(1, true);
+    h.Frame();
+    ImGui::GetIO().AddMouseButtonEvent(1, false);
+    h.Frame();
+    h.Frame();
+    CHECK(h.lastContextMenu == "render.vsync");
+}
+
+TEST_CASE("With no project open, Project-rung rows are read-only", "[settings-ui]")
+{
+    RowHarness h;
+    h.projectOpen = false;
+    REQUIRE_FALSE(AddSetting(h.reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    h.names = { "render.vsync" };
+    h.Frame();
+    h.Frame();
+    REQUIRE(h.results.size() == 1);
+    CHECK(h.results[0].readOnly);
+    CHECK_FALSE(h.results[0].overridden);
+    CHECK(h.imgui.probe.count("Vsync#reset") == 0);
+}

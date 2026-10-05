@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -29,6 +30,11 @@ namespace Arcane::Editor
     [[nodiscard]] RowWidget RowWidgetFor(const CVarDescInfo& desc) noexcept;
     // "asset:<kind>" -> that AssetKind (KindLabel, case- and space-insensitive); -1 = any / not an asset hint.
     [[nodiscard]] int AssetKindFilterFor(std::string_view widget);
+
+    // A row's badges (spec s6.2): NextWorld "applies on next world load", Restart "restart required",
+    // Deterministic the simulation badge (changing it changes replays and goldens, s3.5).
+    enum class RowBadge : std::uint8_t { NextWorld, Restart, Deterministic };
+    [[nodiscard]] std::vector<RowBadge> BadgesFor(const CVarDescInfo& desc);
 
     // The live gesture's rung as it was at activation: Escape restores it exactly.
     struct SettingsGestureMemo

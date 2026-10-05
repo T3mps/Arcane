@@ -3,7 +3,9 @@
 #include "Panels/AssetPanelModel.hpp"        // AssetKind, KindLabel, kAssetKindCount
 #include "Panels/AssetReferenceField.hpp"    // AssetRefRow
 #include "Settings/SettingsModel.hpp"        // SettingDisplayName
+#include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"         // InputTextString
+#include "Widgets/IconsLucide.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>                  // GetActiveID
@@ -197,6 +199,125 @@ namespace Arcane::Editor
             return std::nullopt;
         }
 
+        struct BadgeStyle { const char* icon; ImVec4 color; const char* tooltip; };
+        BadgeStyle StyleFor(RowBadge b)
+        {
+            switch (b)
+            {
+            case RowBadge::NextWorld:     return { ICON_LC_ROTATE_CW, Theme::kTextDim, "Applies on the next world load (Play or scene reopen)" };
+            case RowBadge::Restart:       return { ICON_LC_POWER, Theme::kWarning, "Restart required: read once at startup" };
+            case RowBadge::Deterministic: return { ICON_LC_ATOM, Theme::kAmber, "Simulation: changing it changes replays and goldens" };
+            }
+            return { "", Theme::kTextDim, "" };
+        }
+
+        // The value cell's lead (RowDecor::lead, drawn BEFORE the value so the
+        // value stays LastItemData): the Preferences scope switch, the badges,
+        // and -- read-only rows -- the provenance marker with Clear override,
+        // or the no-project note; on a path row, Browse.
+        std::string DrawLead(SettingsRowContext& ctx, const CVarDescInfo& d, const RowFacts& f,
+                             const std::string& label, bool needsProject)
+        {
+            bool any = false;
+            const auto gap = [&] { if (any) ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x); any = true; };
+            if (ctx.window == SettingsWindowKind::Preferences)
+            {
+                gap();
+                const bool thisProject = f.mode == PrefMode::ThisProject;
+                // S3-4: SwitchPrefMode refuses an overridden row -- disable the switch.
+                ImGui::BeginDisabled(!ctx.projectOpen || f.overridden);
+                if (ImGui::SmallButton(thisProject ? ICON_LC_FOLDER "##scope" : ICON_LC_GLOBE "##scope"))
+                    Push(ctx, SwitchPrefMode(ctx.registry, d, thisProject ? PrefMode::AllProjects : PrefMode::ThisProject, ctx.sink));
+                ImGui::EndDisabled();
+                ImGui::SetItemTooltip("%s", !ctx.projectOpen ? "Open a project to choose where this value lives"
+                                          : thisProject ? "This project only -- click to use the value shared by all projects"
+                                                        : "All projects -- click to override it for this project only");
+                ctx.grid.ProbeItem((label + "#scope").c_str());
+            }
+            for (const RowBadge b : BadgesFor(d))
+            {
+                gap();
+                const BadgeStyle s = StyleFor(b);
+                ImGui::TextColored(s.color, "%s", s.icon);
+                ImGui::SetItemTooltip("%s", s.tooltip);
+            }
+            if (f.overridden)
+            {
+                gap();
+                ImGui::TextColored(Theme::kAmber, "Overridden by %s", RungLabel(f.winner));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear override##clear"))
+                    Push(ctx, ClearOverride(ctx.registry, d, ctx.window, ctx.sink));
+                ImGui::SetItemTooltip("Remove the %s value; the row shows what is left underneath", RungLabel(f.winner));
+                ctx.grid.ProbeItem((label + "#clear").c_str());
+            }
+            else if (needsProject)
+            {
+                gap();
+                ImGui::TextDisabled("Open a project to edit");
+            }
+            else if (RowWidgetFor(d) == RowWidget::Path && ctx.browsePath)
+            {
+                gap();
+                if (ImGui::SmallButton(ICON_LC_FOLDER_OPEN "##browse")) ctx.browsePath(d.name, d.widget == "path:dir");
+                ImGui::SetItemTooltip("Browse...");
+                ctx.grid.ProbeItem((label + "#browse").c_str());
+            }
+            return {};
+        }
+
+        // RowDecor::label: the label is the last item here. The tooltip carries
+        // the help and the cvar name (dim), so the console spelling is always
+        // one hover away (spec s6.2); the context menu has Copy name, the row
+        // verbs, and Explain -- cvar_explain's history, newest first (s6.4).
+        void LabelHook(SettingsRowContext& ctx, const CVarDescInfo& d, const RowFacts& f,
+                       const std::string& label, bool hovered, bool editable)
+        {
+            ctx.grid.ProbeItem((label + "#label").c_str());   // TEST SEAM: the label's centre
+            if (hovered)
+            {
+                ctx.lastTooltip = d.name;
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(label.c_str());
+                if (!d.help.empty())
+                {
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 32.0f);
+                    ImGui::TextUnformatted(d.help.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+                ImGui::TextDisabled("%s", d.name.c_str());
+                ImGui::TextDisabled("Right-click: copy the name, explain the value");
+                ImGui::EndTooltip();
+            }
+            if (ImGui::BeginPopupContextItem("##settingctx"))
+            {
+                ctx.lastContextMenu = d.name;
+                if (ImGui::MenuItem("Copy name")) ImGui::SetClipboardText(d.name.c_str());
+                if (ImGui::MenuItem("Reset to default", nullptr, false, editable && f.modified))
+                    Push(ctx, ResetSetting(ctx.registry, d, ctx.window, ctx.sink));
+                if (ImGui::MenuItem("Clear override", nullptr, false, f.overridden))
+                    Push(ctx, ClearOverride(ctx.registry, d, ctx.window, ctx.sink));
+                if (ctx.window == SettingsWindowKind::Preferences &&
+                    ImGui::MenuItem(f.mode == PrefMode::ThisProject ? "Use for all projects" : "Override for this project",
+                                    nullptr, false, ctx.projectOpen && !f.overridden))
+                    Push(ctx, SwitchPrefMode(ctx.registry, d, f.mode == PrefMode::ThisProject ? PrefMode::AllProjects
+                                                                                          : PrefMode::ThisProject, ctx.sink));
+                ImGui::Separator();
+                if (ImGui::BeginMenu("Explain"))
+                {
+                    if (const std::optional<CVarExplain> e = ctx.registry.Explain(d.name))
+                        for (auto it = e->history.rbegin(); it != e->history.rend(); ++it)
+                        {
+                            const std::string v = FormatSettingValue(it->value, d.enumNames);
+                            if (it->module.empty()) ImGui::Text("%-24s %s", RungLabel(it->by), v.c_str());
+                            else ImGui::Text("%-24s %s   (%s)", RungLabel(it->by), v.c_str(), it->module.c_str());
+                        }
+                    ImGui::EndMenu();
+                }
+                ImGui::EndPopup();
+            }
+        }
+
         bool DrawValueWidget(SettingsRowContext& ctx, const CVarDescInfo& d, const RowFacts& f, const std::string& label)
         {
             PropertyGrid& g = ctx.grid;
@@ -349,6 +470,15 @@ namespace Arcane::Editor
         return -1;
     }
 
+    std::vector<RowBadge> BadgesFor(const CVarDescInfo& d)
+    {
+        std::vector<RowBadge> out;
+        if (d.apply == ApplyMode::NextWorld) out.push_back(RowBadge::NextWorld);
+        if (d.apply == ApplyMode::Restart) out.push_back(RowBadge::Restart);
+        if (HasFlag(d.flags, CVarFlags::Deterministic)) out.push_back(RowBadge::Deterministic);
+        return out;
+    }
+
     SettingRowResult DrawSettingRow(SettingsRowContext& ctx, std::string_view name)
     {
         SettingRowResult out;
@@ -362,11 +492,16 @@ namespace Arcane::Editor
         out.modified = facts.modified;
         out.readOnly = facts.overridden || needsProject;
         ImGui::PushID(desc->name.c_str());   // the row's id carries its TARGET (PropertyGrid.hpp:45-47)
+        RowDecor decor;
+        decor.label = [&](bool hovered) { LabelHook(ctx, *desc, facts, label, hovered, !out.readOnly); };
+        decor.lead = [&]() -> std::string { return DrawLead(ctx, *desc, facts, label, needsProject); };
         if (out.readOnly)
+        {
+            ctx.grid.SetNextRowDecor(decor);   // ReadOnlyRow takes lead + label (S3-7)
             ctx.grid.ReadOnlyRow(label.c_str(), FormatSettingValue(facts.effective, desc->enumNames));
+        }
         else
         {
-            RowDecor decor;
             decor.reset = true;
             decor.resetActive = facts.modified;
             ctx.grid.SetNextRowDecor(decor);
