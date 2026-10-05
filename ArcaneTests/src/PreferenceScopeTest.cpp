@@ -43,7 +43,7 @@ TEST_CASE("PreferenceRung maps scope x target onto the rung an edit writes", "[s
 {
     CHECK(PreferenceRung(SettingScope::PreferencesMachine, PreferenceTarget::AllProjects) == SetBy::EditorUser);
     CHECK(PreferenceRung(SettingScope::PreferencesMachine, PreferenceTarget::ThisProject) == SetBy::User);
-    CHECK(PreferenceRung(SettingScope::PreferencesProject, PreferenceTarget::AllProjects) == SetBy::User);
+    CHECK(PreferenceRung(SettingScope::PreferencesProject, PreferenceTarget::AllProjects) == SetBy::EditorUser);
     CHECK(PreferenceRung(SettingScope::PreferencesProject, PreferenceTarget::ThisProject) == SetBy::User);
     CHECK(PreferenceRung(SettingScope::Project, PreferenceTarget::AllProjects) == SetBy::Project);
     CHECK(PreferenceRung(SettingScope::Project, PreferenceTarget::ThisProject) == SetBy::Project);
@@ -78,17 +78,36 @@ TEST_CASE("All projects / This project moves a machine-wide preference's edits b
     CHECK(ProjectOverrides(reg).empty());
 }
 
-TEST_CASE("Only machine-wide preferences have the switch; per-project and Project rows edit their own rung", "[settings][cvar]")
+TEST_CASE("Every Preferences row has the switch; Project rows edit their own rung", "[settings][cvar]")
 {
     CVarRegistry reg;
-    REQUIRE_FALSE(RegisterPref(reg, "pref.undo", SettingScope::PreferencesProject, 1).IsStale());
+    const CVarHandle undo = RegisterPref(reg, "pref.undo", SettingScope::PreferencesProject, 1);
+    REQUIRE_FALSE(undo.IsStale());
     REQUIRE_FALSE(RegisterPref(reg, "pref.shared", SettingScope::Project, 1).IsStale());
-    CHECK(SetPreferenceTarget(reg, "pref.undo", PreferenceTarget::ThisProject) == SetResult::Denied);
+    CHECK(PreferenceTargetOf(reg, "pref.undo") == PreferenceTarget::ThisProject);
+    CHECK(SetPreferenceTarget(reg, "pref.undo", PreferenceTarget::ThisProject) == SetResult::Applied);
     REQUIRE(EditPreference(reg, "pref.undo", CVarValue::Int32(9)) == SetResult::Applied);
     REQUIRE(EditPreference(reg, "pref.shared", CVarValue::Int32(3)) == SetResult::Applied);
+    CHECK(SetPreferenceTarget(reg, "pref.shared", PreferenceTarget::ThisProject) == SetResult::Denied);
     reg.Publish();
     CHECK(reg.Explain("pref.undo")->setBy == SetBy::User);
+    CHECK(reg.Get(undo)->AsInt32() == 9);
     CHECK(reg.Explain("pref.shared")->setBy == SetBy::Project);
+
+    REQUIRE(SetPreferenceTarget(reg, "pref.undo", PreferenceTarget::AllProjects) == SetResult::Applied);
+    CHECK(PreferenceTargetOf(reg, "pref.undo") == PreferenceTarget::AllProjects);
+    reg.Publish();
+    CHECK(reg.Get(undo)->AsInt32() == 9);
+    CHECK(reg.Explain("pref.undo")->setBy == SetBy::EditorUser);
+    CHECK_FALSE(HoldsAt(reg, "pref.undo", SetBy::User, 9));
+
+    REQUIRE(SetPreferenceTarget(reg, "pref.undo", PreferenceTarget::ThisProject) == SetResult::Applied);
+    CHECK(PreferenceTargetOf(reg, "pref.undo") == PreferenceTarget::ThisProject);
+    reg.Publish();
+    CHECK(reg.Get(undo)->AsInt32() == 9);
+    CHECK(reg.Explain("pref.undo")->setBy == SetBy::User);
+    CHECK_FALSE(HoldsAt(reg, "pref.undo", SetBy::EditorUser, 9));
+
     CHECK(SetPreferenceTarget(reg, "pref.missing", PreferenceTarget::ThisProject) == SetResult::Stale);
     CHECK(EditPreference(reg, "pref.missing", CVarValue::Int32(1)) == SetResult::Stale);
 }

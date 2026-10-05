@@ -33,9 +33,8 @@ namespace Arcane
         switch (scope)
         {
         case SettingScope::PreferencesMachine:
-            return target == PreferenceTarget::ThisProject ? SetBy::User : SetBy::EditorUser;
         case SettingScope::PreferencesProject:
-            return SetBy::User;
+            return target == PreferenceTarget::ThisProject ? SetBy::User : SetBy::EditorUser;
         case SettingScope::Project:
             return SetBy::Project;
         }
@@ -45,8 +44,12 @@ namespace Arcane
     PreferenceTarget PreferenceTargetOf(const CVarRegistry& registry, std::string_view name)
     {
         const auto e = registry.Explain(name);
-        if (!e || e->scope != SettingScope::PreferencesMachine) return PreferenceTarget::AllProjects;
-        return HoldsRung(*e, SetBy::User) ? PreferenceTarget::ThisProject : PreferenceTarget::AllProjects;
+        if (!e || e->scope == SettingScope::Project) return PreferenceTarget::AllProjects;
+        if (HoldsRung(*e, SetBy::User)) return PreferenceTarget::ThisProject;
+        if (HoldsRung(*e, SetBy::EditorUser)) return PreferenceTarget::AllProjects;
+        return e->scope == SettingScope::PreferencesProject
+                   ? PreferenceTarget::ThisProject
+                   : PreferenceTarget::AllProjects;
     }
 
     SetResult SetPreferenceTarget(CVarRegistry& registry, std::string_view name, PreferenceTarget target)
@@ -54,14 +57,31 @@ namespace Arcane
         const CVarHandle handle = registry.Find(name);
         const auto e = registry.Explain(name);
         if (handle.IsStale() || !e) return SetResult::Stale;
-        if (e->scope != SettingScope::PreferencesMachine) return SetResult::Denied;
+        if (e->scope == SettingScope::Project) return SetResult::Denied;
         if (target == PreferenceTarget::AllProjects)
         {
+            // Promote first while User may still win: Set records the weaker
+            // EditorUser rung and reports RefusedWeaker until User is cleared.
+            if (!HoldsRung(*e, SetBy::EditorUser) || e->scope == SettingScope::PreferencesProject)
+            {
+                const SetResult promoted = registry.Set(handle, e->pending, SetBy::EditorUser,
+                                                        SourceFor(SetBy::EditorUser), CVarContext::Editor);
+                if (promoted != SetResult::Applied && promoted != SetResult::RefusedWeaker)
+                    return promoted;
+            }
             (void)registry.ClearRung(handle, SetBy::User);
             return SetResult::Applied;
         }
-        if (HoldsRung(*e, SetBy::User)) return SetResult::Applied;
-        return registry.Set(handle, e->pending, SetBy::User, SourceFor(SetBy::User), CVarContext::Editor);
+        if (!HoldsRung(*e, SetBy::User))
+        {
+            const SetResult copied = registry.Set(handle, e->pending, SetBy::User,
+                                                  SourceFor(SetBy::User), CVarContext::Editor);
+            if (copied != SetResult::Applied && copied != SetResult::RefusedWeaker)
+                return copied;
+        }
+        if (e->scope == SettingScope::PreferencesProject)
+            (void)registry.ClearRung(handle, SetBy::EditorUser);
+        return SetResult::Applied;
     }
 
     SetResult EditPreference(CVarRegistry& registry, std::string_view name, CVarValue value)
@@ -77,8 +97,12 @@ namespace Arcane
     {
         std::vector<std::string> out;
         for (const CVarListEntry& entry : registry.List())
-            if (PreferenceTargetOf(registry, entry.name) == PreferenceTarget::ThisProject)
+        {
+            const auto e = registry.Explain(entry.name);
+            if (!e || e->scope == SettingScope::Project) continue;
+            if (HoldsRung(*e, SetBy::User))
                 out.push_back(entry.name);
+        }
         std::sort(out.begin(), out.end());
         return out;
     }
