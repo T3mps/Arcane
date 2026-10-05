@@ -40,7 +40,12 @@ namespace
     struct Base { virtual ~Base() { Call(); } virtual void Pure() = 0; void Call() { Pure(); } };
     struct Derived : Base { void Pure() override {} };
     volatile int g_sink = 0;
-    int Recurse(int depth) { volatile char pad[4096]; pad[0] = static_cast<char>(depth); g_sink += pad[0]; return Recurse(depth + 1) + 1; }
+    // The frame ESCAPES (its address is published), so no compiler may turn
+    // this accumulator recursion into a loop -- Clang's tail-recursion
+    // elimination does exactly that to the non-escaping form at -O2, and the
+    // "overflow" then spins forever instead of faulting.
+    volatile char* volatile g_escape = nullptr;
+    int Recurse(int depth) { volatile char pad[4096]; pad[0] = static_cast<char>(depth); g_escape = pad; g_sink += pad[0]; return Recurse(depth + 1) + 1; }
 }
 
 int main(int argc, char** argv)
@@ -88,7 +93,9 @@ int main(int argc, char** argv)
     // unwinding at all. The monitor's log-tail assertion reads it back.
     ARC_WARN("death fixture: mode {}", die);
 
-    if (die == "av")                { int* p = nullptr; *p = 1; }
+    // `volatile`: a store through a CONSTANT null is UB the optimizer may
+    // replace with a trap instruction (SIGILL, not an access violation).
+    if (die == "av")                { int* volatile p = nullptr; *p = 1; }
     else if (die == "assert")       { ARC_ASSERT(false, "fixture assert"); }
     // NOT `return 0` here: an ensure is the one mode that SURVIVES, so it must
     // leave by the ordinary exit below -- which calls Diagnostics::Shutdown().
@@ -103,7 +110,22 @@ int main(int argc, char** argv)
     else if (die == "ensure")       { (void)ARC_ENSURE(false, "fixture ensure"); }
     else if (die == "terminate")    { throw std::runtime_error("fixture terminate"); }
     else if (die == "abort")        { std::abort(); }
+#if defined(_WIN32)
     else if (die == "invalid-parameter") { char buf[4]; strcpy_s(buf, 4, "toolong"); }
+#else
+    // POSIX has no CRT invalid-parameter handler. Its counterpart is a libc
+    // contract check: exactly what _FORTIFY_SOURCE compiles strcpy into,
+    // spelled out so it fires at -O0 too. glibc reports the overflow and
+    // abort()s -- which the crash path files as `terminate`, the honest kind
+    // on this platform (CrashPathTest.cpp's family table says so).
+    else if (die == "invalid-parameter")
+    {
+        char buf[4];
+        const char* volatile src = "toolong";
+        __builtin___strcpy_chk(buf, src, sizeof(buf));
+        g_sink += buf[0];
+    }
+#endif
     else if (die == "purecall")     { Derived d; (void)d; }   // the dtor's virtual call is pure
     else if (die == "stack-overflow") { return Recurse(0); }
 #if defined(_WIN32)
