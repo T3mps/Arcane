@@ -41,6 +41,7 @@ namespace Arcane
         // type-mismatched optional field yields nullopt rather than propagating an
         // exception (same contract as the required-field guards above).
         m.description = doc.value("description", std::string{});
+        m.company     = doc.value("company", std::string{});
         m.gameModule  = doc.value("gameModule", std::string{});
         m.bootScene   = doc.value("bootScene", std::string{});
         m.inputActions = doc.value("inputActions", std::string{});

@@ -13,6 +13,7 @@
 #include <Arcane/Plugin/ClientHooks.hpp>   // IClientHooks -- the ONE Core->Client reach-back (plan 1 P6)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>
 #include <Arcane/Scene/BoundsSystem.hpp>        // BoundsSystem (engine-owned, instantiated IN this module; F3 plan 1 T2)
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/EngineRoster.hpp>        // EngineComponentRoster -- THE roster list (registered below, verified in ProjectHost.hpp)
@@ -79,9 +80,7 @@ namespace Arcane
         {
             Paths::Config paths = Paths::Current();
             if (!paths.projectDir || *paths.projectDir != root) return;
-            paths.projectDir.reset();
-            paths.gameName.clear();
-            Paths::Configure(paths);
+            Paths::Configure(PathsConfigWithoutProject(paths.engineDir, kDistBuild));
         }
 
         // ASCII name for a SerializationError so a Save failure logs a readable
@@ -242,8 +241,7 @@ namespace Arcane
             Paths::Config paths = Paths::Current();
             if (paths.engineDir.empty())
             {
-                paths.engineDir = ExeDir();
-                Paths::Configure(paths);
+                Paths::Configure(PathsConfigWithoutProject(ExeDir(), kDistBuild));
             }
             engineConfigDir = Paths::Get(Paths::Location::EngineConfig);
             config.LoadEngineDefaults(engineConfigDir);
@@ -507,9 +505,10 @@ namespace Arcane
         // the archive (T3-D2). One definition, so the two can never disagree.
         // Resolved through Arcane::Paths (settings spec s11.1): <project>/Saved/
         // Config in dev, byte-identical to before; the per-user OS dir in Dist.
-        std::filesystem::path UserCVarDir(const Project& project)
+        std::filesystem::path UserCVarDir()
         {
-            return Paths::Join(Paths::Location::GameUserDir, Paths::ForProject(project.Root()), "Config");
+            const std::filesystem::path dir = Paths::Get(Paths::Location::GameUserDir);
+            return dir.empty() ? dir : dir / "Config";
         }
 
         // The cvar Project layer's home, resolved through Arcane::Paths the same
@@ -525,11 +524,12 @@ namespace Arcane
         // User layer (archived first when this host archives, T3-D2), its
         // Project layer and its plugins' layers, so the next project starts from
         // its own files and never inherits a key only the old one set.
-        void ReleaseProjectCVarLayers(const Project& outgoing, bool archive)
+        void ReleaseProjectCVarLayers(bool archive)
         {
             CVarRegistry& cvars = CVarRegistry::Get();
-            if (archive)
-                WriteCVarArchive(cvars, UserCVarDir(outgoing));
+            const std::filesystem::path dir = UserCVarDir();
+            if (archive && !dir.empty())
+                WriteCVarArchive(cvars, dir);
             cvars.RevertLayer(SetBy::User);
             cvars.RevertLayer(SetBy::Project);
             cvars.RevertLayer(SetBy::Plugin);
@@ -545,7 +545,7 @@ namespace Arcane
             for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
                 layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
             layers.dirs.push_back(CVarLayerDir{ SetBy::Project, ProjectCVarDir(*m_impl->project), "project" });
-            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
+            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(), "user" });
         }
         layers.commandLine = m_impl->cvarCommandLine;
         layers.commandLineContext = m_impl->cvarCommandLineContext;
@@ -589,12 +589,9 @@ namespace Arcane
         // A switch: the outgoing project's settings are archived (if this host
         // archives) and its rungs dropped before the incoming one layers.
         if (m_impl->project)
-            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(m_impl->archiveUserCVars);
         m_impl->project = std::move(*proj);
-        Paths::Config paths = Paths::Current();
-        paths.projectDir = m_impl->project->Root();
-        paths.gameName = m_impl->project->Manifest().name;
-        Paths::Configure(paths);
+        Paths::Configure(PathsConfigFor(*m_impl->project, ExeDir(), kDistBuild));
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
         // GUID loads resolve through THIS project's registry (Assets AssetId seam).
@@ -609,7 +606,7 @@ namespace Arcane
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
         for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
             m_impl->config.LayerDir(pluginRoot / "Config");
-        m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir(*m_impl->project));
+        m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir());
         // The cvar rungs come from the ONE source a module that loads later is
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
@@ -650,7 +647,7 @@ namespace Arcane
         // EditorUser, command-line, code and console rungs are untouched.
         if (m_impl->project)
         {
-            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(m_impl->archiveUserCVars);
             CVarRegistry::Get().Publish();
             ForgetProjectPaths(m_impl->project->Root());
         }
@@ -676,7 +673,10 @@ namespace Arcane
     {
         if (!m_impl->archiveUserCVars || !m_impl->project)
             return false;
-        WriteCVarArchive(CVarRegistry::Get(), UserCVarDir(*m_impl->project));
+        const std::filesystem::path dir = UserCVarDir();
+        if (dir.empty())
+            return false;
+        WriteCVarArchive(CVarRegistry::Get(), dir);
         return true;
     }
 

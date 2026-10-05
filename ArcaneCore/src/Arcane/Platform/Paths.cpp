@@ -43,17 +43,6 @@ namespace Arcane::Paths
 #endif
         }
 
-        std::filesystem::path LocalConfig()
-        {
-#if defined(_WIN32)
-            return EnvDir("LOCALAPPDATA");
-#else
-            if (std::filesystem::path x = EnvDir("XDG_CONFIG_HOME"); !x.empty()) return x;
-            if (std::filesystem::path h = EnvDir("HOME"); !h.empty()) return h / ".config";
-            return {};
-#endif
-        }
-
         std::string ProcessTag()
         {
 #if defined(_WIN32)
@@ -95,6 +84,58 @@ namespace Arcane::Paths
         return Below(LocalData(), "Arcane");
     }
 
+    std::string SanitizePathSegment(std::string_view name)
+    {
+        std::string out;
+        out.reserve(name.size());
+        for (const char c : name)
+        {
+            const unsigned char u = static_cast<unsigned char>(c);
+            const bool bad = u < 0x20 || c == '<' || c == '>' || c == ':' || c == '"' || c == '/' ||
+                             c == '\\' || c == '|' || c == '?' || c == '*';
+            out.push_back(bad ? '_' : c);
+        }
+        while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+        while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+        if (out == "." || out == "..") out.clear();
+        std::string stem = out.substr(0, out.find('.'));
+        for (char& c : stem) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        static constexpr std::string_view kReserved[] = {
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+        for (const std::string_view r : kReserved)
+            if (stem == r) { out.insert(out.begin(), '_'); break; }
+        return out;
+    }
+
+    std::filesystem::path ResolveGameUserDir(const Config& config, HostPlatform platform, const PlatformDirs& dirs)
+    {
+        if (!config.dist)
+            return config.projectDir ? *config.projectDir / "Saved" : std::filesystem::path{};
+        std::filesystem::path base;
+        if (platform == HostPlatform::Windows)
+            base = dirs.localAppData;
+        else if (dirs.xdgConfigHome.generic_string().starts_with('/'))
+            base = dirs.xdgConfigHome;
+        else if (!dirs.home.empty())
+            base = dirs.home / ".config";
+        if (base.empty()) return {};
+        const std::string company = SanitizePathSegment(config.companyName);
+        std::string game = SanitizePathSegment(config.gameName);
+        if (game.empty()) game = "ArcaneGame";
+        if (!company.empty()) base /= std::filesystem::path(std::u8string(company.begin(), company.end()));
+        return base / std::filesystem::path(std::u8string(game.begin(), game.end()));
+    }
+
+    PlatformDirs CurrentPlatformDirs()
+    {
+        PlatformDirs dirs;
+        dirs.localAppData = EnvDir("LOCALAPPDATA");
+        dirs.xdgConfigHome = EnvDir("XDG_CONFIG_HOME");
+        dirs.home = EnvDir("HOME");
+        return dirs;
+    }
+
     std::filesystem::path Resolve(Location location, const Config& c)
     {
         const bool project = HasProject(c);
@@ -112,14 +153,7 @@ namespace Arcane::Paths
         case Location::ProjectCache:        return c.dist ? std::filesystem::path{} : Below(Below(root, "Saved"), "Cache");
         case Location::EditorUserDir:       return c.dist ? std::filesystem::path{} : Below(UserRoot(), "Editor");
         case Location::GameUserDir:
-        {
-            if (!c.dist) return Below(root, "Saved");
-            const std::filesystem::path base = LocalConfig();
-            if (base.empty() || c.gameName.empty()) return {};
-            std::filesystem::path p = base;
-            if (!c.companyName.empty()) p /= c.companyName;
-            return p / c.gameName;
-        }
+            return ResolveGameUserDir(c, kHostPlatform, CurrentPlatformDirs());
         case Location::DiagnosticsDir:
             if (c.dist) return Below(Resolve(Location::GameUserDir, c), "Diagnostics");
             if (project) return root / "Saved" / "Diagnostics";

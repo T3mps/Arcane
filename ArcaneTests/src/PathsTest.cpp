@@ -117,8 +117,8 @@ TEST_CASE("Paths: a Dist game keeps user data under %LOCALAPPDATA%\\<Company>\\<
     CHECK(Same(Resolve(L::GameUserDir, noCompany), "C:/ArcaneTest/Local/MyGame"));
     Arcane::Paths::Config noGame = c;
     noGame.gameName.clear();
-    CHECK(Resolve(L::GameUserDir, noGame).empty());
-    CHECK(Resolve(L::DiagnosticsDir, noGame).empty());
+    CHECK(Same(Resolve(L::GameUserDir, noGame), "C:/ArcaneTest/Local/Studio/ArcaneGame"));
+    CHECK(Same(Resolve(L::DiagnosticsDir, noGame), "C:/ArcaneTest/Local/Studio/ArcaneGame/Diagnostics"));
 }
 
 TEST_CASE("Paths: with LOCALAPPDATA unset, per-user locations are empty, never relative", "[paths]")

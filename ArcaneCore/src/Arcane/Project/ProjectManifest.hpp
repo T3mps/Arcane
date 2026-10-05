@@ -70,6 +70,8 @@ namespace Arcane
 
         int                    formatVersion = 0;
         std::string            name;
+        // Publisher identity for the per-user directory in a Dist build.
+        std::string            company;
         std::string            description;
         int                    engineAbi = 0;      // "engine": { "abi": N }
         std::string            gameModule;         // may be empty (content-only)

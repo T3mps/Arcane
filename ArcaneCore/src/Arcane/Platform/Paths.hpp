@@ -8,7 +8,7 @@
 //
 // Hosts call Configure at boot and on project open/close. Runtime does both:
 // the engine dir at its first construction, the project on OpenProject and
-// CloseProject. `dist` stays false until the Dist user directory lands (S7).
+// CloseProject. Dist game user data resolves under the OS per-user config dir.
 
 #include <Arcane/Core/Api.hpp>
 
@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Arcane::Paths
 {
@@ -53,6 +54,23 @@ namespace Arcane::Paths
     [[nodiscard]] ARC_CORE_API std::filesystem::path Get(Location location);
     // Get, creating the directory when the location is writable (spec s11.0).
     ARC_CORE_API std::filesystem::path EnsureDir(Location location);
+    enum class HostPlatform : std::uint8_t { Windows, Posix };
+    inline constexpr HostPlatform kHostPlatform =
+#if defined(_WIN32)
+        HostPlatform::Windows;
+#else
+        HostPlatform::Posix;
+#endif
+    struct PlatformDirs
+    {
+        std::filesystem::path localAppData;
+        std::filesystem::path xdgConfigHome;
+        std::filesystem::path home;
+    };
+    [[nodiscard]] ARC_CORE_API std::string SanitizePathSegment(std::string_view name);
+    [[nodiscard]] ARC_CORE_API std::filesystem::path ResolveGameUserDir(const Config& config,
+                                                                          HostPlatform platform, const PlatformDirs& dirs);
+    [[nodiscard]] ARC_CORE_API PlatformDirs CurrentPlatformDirs();
     // %LOCALAPPDATA%\Arcane (Windows), $XDG_DATA_HOME/Arcane or ~/.local/share/Arcane;
     // empty when the base is unset. The Hub's files live under it too.
     [[nodiscard]] ARC_CORE_API std::filesystem::path UserRoot();
