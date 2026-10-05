@@ -294,6 +294,9 @@ project "ArcaneCore"
         -- user32/gdi32: Platform/NativeWindow.cpp (crash window plan 2) --
         -- explicit rather than inherited from the VS default list.
         links { "dbghelp", "user32", "gdi32" }
+        -- The POSIX backend of Diagnostics (signals, the snapshot signal, the
+        -- Breakpad-format minidump) never builds into a PE image.
+        removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
 
     -- ELF: dlopen/dladdr (Module, ForeignModules) and threads; -z defs makes
     -- an unresolved symbol a link error HERE, not at the first exe link.
