@@ -776,6 +776,10 @@ namespace Arcane
 
     void CVarRegistry::UnregisterModule(std::string_view module)
     {
+        // Settings structs the module declared (settings arc S2, spec s4.4).
+        const std::size_t settingsBefore = m->settings.size();
+        std::erase_if(m->settings, [&](const SettingsBinding& b) { return b.module == module; });
+        const bool droppedSettings = m->settings.size() != settingsBefore;
         std::vector<std::uint32_t> kill;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
         {
@@ -818,6 +822,23 @@ namespace Arcane
         if (m->policy && m->policyModule == module)
             SetPolicy(nullptr, nullptr, {});
         m->RebuildSnapshot(*this);
+        if (droppedSettings)
+        {
+            if (const std::shared_ptr<const CVarSnapshot> current = Snapshot())
+            {
+                std::vector<CVarSettingsBlock> keep;
+                for (const SettingsBinding& b : m->settings)
+                    if (const CVarSettingsBlock* entry = current->FindSettingsEntry(b.typeHash))
+                        keep.push_back(*entry);
+                ReplaceSnapshotSettings(std::move(keep));
+            }
+            // The dropped blocks were built by the unloading module, and their
+            // deleters are its code. Release every retired snapshot NOW, while
+            // the image is still mapped (PluginHost calls this before it unmaps).
+            // An outside SettingsShared<T> holder keeps its copy alive; holding
+            // one across a hot reload is the holder's bug.
+            m->retired = {};
+        }
     }
 
     void CVarRegistry::RevertCheats()
