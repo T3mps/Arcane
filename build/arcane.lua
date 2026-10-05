@@ -141,11 +141,16 @@ function arcane_game_module(name)
             -- visibility("default")) leave the module.
             visibility "Hidden"
             inlinesvisibility "Hidden"
+        -- Only when the compiler really is GCC: an external project (arcbuild,
+        -- a game's own premake run) may generate gcc-toolset Makefiles and then
+        -- build them with CXX=clang++, which rejects -fno-gnu-unique outright.
+        if not (os.getenv("CXX") or ""):find("clang") then
         filter { "system:not windows", "toolset:gcc" }
             -- GCC still emits STB_GNU_UNIQUE for a few std:: objects, and ONE such
             -- symbol makes glibc refuse to unmap the module on dlclose; a PE module
             -- is gone after FreeLibrary, and hot reload is built on that.
             buildoptions { "-fno-gnu-unique" }
+        end
         filter {}
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.
