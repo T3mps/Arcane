@@ -127,6 +127,11 @@ function arcane_game_module(name)
         filter {}
 
         targetname(name)
+        -- A LOADED module is Name.so off-Windows, never libName.so: the host
+        -- names it by stem + the platform extension (Arcane/Platform/Platform.hpp).
+        filter "system:not windows"
+            targetprefix ""
+        filter {}
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.
         targetdir "%{wks.location}/Binaries"
@@ -207,7 +212,9 @@ function arcane_game_module(name)
 
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARCANE_GAME_MODULE needs no define
-            "IMGUI_API=__declspec(dllimport)",        -- adopt ArcaneClient.dll's single GImGui
+            -- adopt ArcaneClient.dll's single GImGui. __declspec is PE/COFF-only;
+            -- ELF has no import decoration (default visibility exports it).
+            "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         }
