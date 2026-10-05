@@ -10,7 +10,9 @@ name: Linux
 # ReferenceProject's SDK game module through arcbuild (Binaries/ReferenceGame.so,
 # the module the [witness][server] cases load), THEN the hosts and the test
 # exe, whose postbuild stages ReferenceProject -- Binaries/ included -- beside
-# themselves. ArcaneEditor is not built here (see the port's PR).
+# themselves. ArcaneEditor builds too (E10 spawns it); its Windows-only
+# services (shell open, Recycle Bin, Visual Studio launch) report
+# "unsupported on this platform" on Linux rather than act.
 #
 # Tests run under Xvfb with SDL's x11 video driver, so windows are real
 # native windows (Window::NativeHandle is an X11 Window); Vulkan comes from
@@ -143,14 +145,14 @@ jobs:
             2>&1 | tee logs/build-referencegame.log
           ls -l ReferenceProject/Binaries/
 
-      # The hosts, the test exe and every fixture plugin (ArcaneTests' postbuild
-      # stages them beside itself).
+      # The hosts (editor included), the test exe and every fixture plugin
+      # (ArcaneTests' postbuild stages them beside itself).
       - name: Build hosts + tests
         run: |
           set -o pipefail
           config=$(echo "${{ matrix.config }}" | tr '[:upper:]' '[:lower:]')
           make -j"$MAKE_JOBS" config="$config" \
-            ArcaneServer ArcaneRuntime ArcaneTests 2>&1 | tee logs/build-tests.log
+            ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests 2>&1 | tee logs/build-tests.log
 
       - name: Test (~[gpu] minus scripts/linux-test-exclusions.txt)
         env:
