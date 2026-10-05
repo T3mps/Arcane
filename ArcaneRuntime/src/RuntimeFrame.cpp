@@ -10,6 +10,7 @@
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
@@ -357,7 +358,13 @@ void BuildHud(FrameIo& io)
             {
                 for (const Arcane::ConsoleLine& line : console.Lines())
                     ImGui::TextUnformatted(line.text.c_str());
-                (void)Arcane::DrawConsoleInputLine("##cvar", console, Arcane::CVarRegistry::Get(), Arcane::CVarContext::LocalHost);
+                // The session role decides who is typing (settings spec s8.3): LocalHost
+                // in single-player and on a listen-server host -- Server settings are
+                // settable, Cheat ones once server.cheats is on -- and Client when this
+                // world is connected elsewhere. Read every frame, so a re-role is honoured;
+                // the game's CVarPolicy applies on top inside the registry.
+                const Arcane::CVarContext context = Arcane::CVarContextFor(io.runtime->Core().Mode());
+                (void)Arcane::DrawConsoleInputLine("##cvar", console, Arcane::CVarRegistry::Get(), context);
             }
             ImGui::End();
             g_runtimeConsoleOpen = open;

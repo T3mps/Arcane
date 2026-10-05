@@ -9,7 +9,7 @@
 
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
-#include <Arcane/Config/CVarConfig.hpp>   // Arcane::CommandLineCVarContext (the --set context, settings plan ruling I3)
+#include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
@@ -103,6 +103,11 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
     // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
     m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+    // The player's settings persist (settings spec s8.2): an INTERACTIVE run writes
+    // the User rung's Archive values back to the per-user directory (Paths
+    // GameUserDir/Config) at exit, exactly as the editor does. A scripted --frames
+    // or --headless run reads them but never writes: a verify run must not.
+    m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
     // THIS EXE asks about ITS OWN caches (2026-09-16), for the same reason the
     // editor now does: VerifySharedTypeContext is inline, so ProjectBoot.cpp's
     // type_context_install stage answers for ArcaneClient.dll and no other module.
@@ -1537,6 +1542,11 @@ void RuntimeApp::Shutdown()
     // returned.
     ARC_INFO("ArcaneRuntime exiting after {} frames", m_frameCount);
 
+    // Written while the game module -- and every Archive cvar it declared -- is
+    // still loaded (the member destructors below unload it). A no-op unless this
+    // run archives (StageRuntimeCreate).
+    if (m_runtime) (void)m_runtime->Core().SaveUserCVars();
+
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
     // declaration order -- the load-bearing TEARDOWN CONTRACT:
     //   m_resolver -> ~SceneRenderResolver: un-publishes the registry's sprite
@@ -1568,11 +1578,10 @@ int RuntimeApp::Run()
     // cannot drift on when a verify run declines the diag:// mount.
     ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
     ctx.hostConfig = &m_config;
-    // `--set` runs in the Editor context in a Debug/Release build and as the
-    // local host in Dist (settings plan, integration ruling I3), so the
-    // developer's `--set render.meshCull=false` keeps working here; the runtime's
-    // console overlay keeps its own LocalHost context (RuntimeFrame.cpp).
-    ctx.cvarContext = Arcane::CommandLineCVarContext();
+    // `--set` runs as this host's session (settings spec s8.3): ArcaneRuntime's one
+    // world is Standalone (StageRuntimeCreate builds it with the default NetMode),
+    // so the command line is the local host's, as on a Source listen server.
+    ctx.cvarContext = Arcane::CVarContextFor(Arcane::NetMode::Standalone);
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp
