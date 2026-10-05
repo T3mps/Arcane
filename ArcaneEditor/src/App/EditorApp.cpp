@@ -22,6 +22,7 @@
 //   EditorAppProject.cpp  Open Project, material/instance creation, the watcher.
 
 #include "App/EditorApp.hpp"
+#include <Arcane/Platform/Platform.hpp>
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -1652,8 +1653,16 @@ namespace Arcane::Editor
         // RecentProjects.cpp). With LOCALAPPDATA unset or unwritable, ImGui's
         // exe-dir imgui.ini default stands -- degraded, never broken.
         std::filesystem::path dir;
+#if ARCANE_PLATFORM_WINDOWS
         if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
             dir = std::filesystem::path(localAppData) / L"Arcane" / L"editor" / L"layouts";
+#else
+        // XDG base-directory spec: $XDG_DATA_HOME, else ~/.local/share.
+        if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+            dir = std::filesystem::path(xdg) / "Arcane" / "editor" / "layouts";
+        else if (const char* home = std::getenv("HOME"); home && *home)
+            dir = std::filesystem::path(home) / ".local" / "share" / "Arcane" / "editor" / "layouts";
+#endif
         if (dir.empty())
             return;
         std::error_code ec;

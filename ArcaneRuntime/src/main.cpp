@@ -6,6 +6,7 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Platform.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include "RuntimeApp.hpp"
@@ -21,8 +22,10 @@
 // the EXE to redirect device creation into the vendored D3D12Core.dll under
 // .\D3D12\. Version must match the vendored package; NRI logging "Using
 // ID3D12Device10+" is the confirmation that the redirect took.
+#if ARCANE_PLATFORM_WINDOWS   // Agility SDK: a D3D12 (Windows) loader handshake only
 extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
 extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+#endif
 
 namespace
 {
