@@ -9,6 +9,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Paths::TempDir -- where the versioned plugin images are staged (settings spec s11.0)
 #include <Arcane/Plugin/ClientHooks.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
@@ -266,6 +267,9 @@ namespace Arcane
                 ctx.engine        = nullptr;
                 ctx.client        = nullptr;
                 ctx.netMode       = NetMode::Standalone;
+                // The session players' settings run in (settings spec s8.3): the SAME
+                // role the module reads, so PlayerSettings and EngineContext cannot disagree.
+                PlayerSettings::SetSessionMode(ctx.netMode);
                 return;
             }
             Runtime& primary  = Primary();
@@ -274,6 +278,9 @@ namespace Arcane
             ctx.engine        = &primary;
             ctx.client        = primary.Client();
             ctx.netMode       = primary.Mode();
+            // The session players' settings run in (settings spec s8.3): the SAME
+            // role the module reads, so PlayerSettings and EngineContext cannot disagree.
+            PlayerSettings::SetSessionMode(ctx.netMode);
             if (IClientHooks* h = primary.ClientHooks())
                 h->FillEngineContext(ctx);
         }
