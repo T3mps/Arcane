@@ -1,6 +1,7 @@
 #include <Arcane/Base/Runtime.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/Bindings/AstraBinding.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Config.hpp>
@@ -227,9 +228,7 @@ namespace Arcane
             // same order == same numbering as before.
             RegisterRoster(*engineModule, EngineComponentRoster{});
 
-            Astra::Registry::Config cfg;
-            cfg.workScheduler = sched;
-            registry   = std::make_unique<Astra::Registry>(components, cfg);
+            registry   = std::make_unique<Astra::Registry>(components, ToAstraConfig(Settings<AstraMemorySettings>(), sched));
             schedulers = std::make_unique<SystemSchedulers>(sched);
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
@@ -374,9 +373,8 @@ namespace Arcane
         if (frame.IsErr())
             return false;
 
-        Astra::Registry::Config cfg;
-        cfg.workScheduler = m_impl->sched;
-        auto r = Astra::Registry::Load(frame.GetValue()->registry, m_impl->components, cfg);   // 3.3 Config overload
+        auto r = Astra::Registry::Load(frame.GetValue()->registry, m_impl->components,
+                                       ToAstraConfig(Settings<AstraMemorySettings>(), m_impl->sched));   // 3.3 Config overload
         if (r.IsErr())
             return false;
         std::unique_ptr<Astra::Registry> loaded = std::move(*r.GetValue());
@@ -404,9 +402,8 @@ namespace Arcane
     {
         // Fresh-boot reload: replace the registry with an empty one (same shared
         // ComponentRegistry + scheduler) so the plugin's Init rebuilds its scene.
-        Astra::Registry::Config cfg;
-        cfg.workScheduler = m_impl->sched;
-        m_impl->registry = std::make_unique<Astra::Registry>(m_impl->components, cfg);
+        m_impl->registry = std::make_unique<Astra::Registry>(m_impl->components,
+                                                             ToAstraConfig(Settings<AstraMemorySettings>(), m_impl->sched));
         // Rebind the existing loop (keep the object stable so cached RunLoop* holders
         // do not dangle) -- see RestoreRegistry.
         m_impl->loop->Rebind(*m_impl->registry);
