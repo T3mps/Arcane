@@ -25,7 +25,7 @@ namespace Arcane::Test
         ApplyMode apply = ApplyMode::Live;
         CVarFlags flags = CVarFlags::None;
         std::string_view module = "test";
-        std::string_view displayName, keywords, widget, categoryPath;
+        std::string_view displayName, keywords, widget, categoryPath, group;
         std::optional<CVarValue> min, max;
         std::vector<std::string> enumNames;
         Audience audience = Audience::Game;
@@ -52,6 +52,7 @@ namespace Arcane::Test
         d.apply = s.apply;
         d.order = s.order;
         d.categoryPath = s.categoryPath;
+        d.group = s.group;
         d.enumNames = s.enumNames;
         return reg.Register(d);
     }

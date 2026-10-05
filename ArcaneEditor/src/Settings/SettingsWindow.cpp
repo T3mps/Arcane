@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -63,18 +64,42 @@ namespace Arcane::Editor
         void DrawRows(SettingsRowContext& ctx, SettingsWindowState& st, const SettingsTreeNode& node,
                       const std::unordered_set<std::string>& visible)
         {
+            const auto drawGroup = [&](std::string_view group)
             {
-                const std::string id = "##rows/" + node.path;
+                const std::string id = "##rows/" + node.path + "/" + std::string(group);
                 PropertyGrid::Rows rows(ctx.grid, id.c_str());
                 if (rows)
                     for (const std::string& name : node.cvars)
                     {
                         if (!visible.contains(name)) continue;
+                        const CVarDescInfo* desc = st.model.Desc(name);
+                        if (!desc || desc->group != group) continue;
                         const SettingRowResult r = DrawSettingRow(ctx, name);
                         if (!r.drawn) continue;
                         st.last.rows.push_back(name);
                         if (r.overridden) st.last.overridden.push_back(name);
                     }
+            };
+            drawGroup({});
+            std::vector<std::string_view> groups;
+            for (const std::string& name : node.cvars)
+            {
+                if (!visible.contains(name)) continue;
+                const CVarDescInfo* desc = st.model.Desc(name);
+                if (desc && !desc->group.empty() && std::find(groups.begin(), groups.end(), desc->group) == groups.end())
+                    groups.push_back(desc->group);
+            }
+            for (const std::string_view group : groups)
+            {
+                ImGui::PushID("group");
+                const bool open = ctx.grid.SubSection(group);
+                Probe(st, "group:" + node.path + "/" + std::string(group));
+                if (open)
+                {
+                    drawGroup(group);
+                    ctx.grid.EndSubSection();
+                }
+                ImGui::PopID();
             }
             for (const SettingsTreeNode& child : node.children)
             {

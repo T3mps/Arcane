@@ -107,6 +107,27 @@ TEST_CASE("Settings window: the tree from category paths, a node's rows plus its
     CHECK((h.st.last.rows == std::vector<std::string>{ "editor.graph.wire.thickness" }));
 }
 
+TEST_CASE("Settings window: Category attribute groups are collapsible within a category, not tree nodes", "[settings-ui]")
+{
+    WindowHarness h;
+    REQUIRE_FALSE(AddSetting(h.reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "render.exposure", { .type = CVarType::Float32, .def = CVarValue::Float32(1.0f),
+        .group = "Color" }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "render.gamma", { .type = CVarType::Float32, .def = CVarValue::Float32(2.2f),
+        .group = "Color" }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "render.shadow", { .type = CVarType::Bool, .def = CVarValue::Bool(true),
+        .group = "Lighting" }).IsStale());
+    h.st.selected = "Engine/Render";
+    h.Frame();
+    h.Frame();
+    CHECK_FALSE(h.TreeHas("Engine/Render/Color"));
+    CHECK_FALSE(h.TreeHas("Engine/Render/Lighting"));
+    CHECK((h.st.last.rows == std::vector<std::string>{ "render.vsync", "render.exposure", "render.gamma", "render.shadow" }));
+    h.Click("group:Engine/Render/Color");
+    h.Frame();
+    CHECK((h.st.last.rows == std::vector<std::string>{ "render.vsync", "render.shadow" }));
+}
+
 TEST_CASE("Settings window: Ctrl+Z undoes the window's own last edit, and only while the window has focus", "[settings-ui]")
 {
     WindowHarness h;
