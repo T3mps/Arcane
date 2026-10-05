@@ -92,6 +92,32 @@ TEST_CASE("CVarRegistry::SetRung replaces the rung's record and clamps to the de
                         [](const CVarHistoryRecord& h) { return h.by == SetBy::EditorUser; }) == 1);
 }
 
+TEST_CASE("CVarRegistry::SetRung refuses an Enum ordinal outside enumNames and leaves history", "[cvar]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "look.mode", { .type = CVarType::Enum, .def = CVarValue::Enum(0),
+        .enumNames = { "Off", "Low", "High" } }).IsStale());
+    REQUIRE(reg.SetRung("look.mode", SetBy::Project, CVarValue::Enum(1), "project"));
+    const std::optional<CVarExplain> before = reg.Explain("look.mode");
+    REQUIRE(before.has_value());
+    const std::vector<CVarHistoryRecord> history = before->history;
+
+    CHECK_FALSE(reg.SetRung("look.mode", SetBy::Project, CVarValue::Enum(3), "project"));
+    CHECK_FALSE(reg.SetRung("look.mode", SetBy::User, CVarValue::Enum(-1), "user"));
+
+    const std::optional<CVarExplain> after = reg.Explain("look.mode");
+    REQUIRE(after.has_value());
+    REQUIRE(after->history.size() == history.size());
+    for (std::size_t i = 0; i < history.size(); ++i)
+    {
+        CHECK(after->history[i].by == history[i].by);
+        CHECK(after->history[i].value == history[i].value);
+        CHECK(after->history[i].module == history[i].module);
+    }
+    CHECK(reg.RungValue("look.mode", SetBy::Project) == std::optional<CVarValue>(CVarValue::Enum(1)));
+    CHECK_FALSE(reg.RungValue("look.mode", SetBy::User).has_value());
+}
+
 TEST_CASE("CVarRegistry::Revision moves on Register and UnregisterModule, not on Set or Publish", "[cvar]")
 {
     CVarRegistry reg;

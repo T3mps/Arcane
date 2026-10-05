@@ -459,8 +459,9 @@ namespace Arcane
         [[nodiscard]] std::optional<CVarValue> RungValue(std::string_view name, SetBy by) const;
         // Put ONE record at rung `by` (replacing that rung's records), in rung
         // order -- below a stronger rung if one holds a record, so an edit to a
-        // lower rung lands even while overridden. Clamped; type-checked; marks
-        // the cvar dirty (visible at the next Publish). Refuses SetBy::Default.
+        // lower rung lands even while overridden. Clamped; type-checked (Enum
+        // ordinals outside enumNames fail like Set); marks the cvar dirty
+        // (visible at the next Publish). Refuses SetBy::Default.
         bool SetRung(std::string_view name, SetBy by, CVarValue value, std::string_view sourceModule);
         // Drop every record of rung `by` on ONE cvar (RevertLayer for one row).
         // False when the rung held none, or for SetBy::Default.

@@ -1220,6 +1220,9 @@ namespace Arcane
         if (handle.IsStale()) return false;
         Slot& slot = m->slots[handle.index];
         if (value.type != slot.type) return false;
+        if (slot.type == CVarType::Enum &&
+            (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
+            return false;
         value = Clamp(std::move(value), slot.min, slot.max);
         std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
         // History is in rung order (Set refuses a weaker rung, S1 replaces in place):
