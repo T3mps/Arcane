@@ -293,7 +293,38 @@ namespace
     constexpr std::uint32_t kParityW = 160;
     constexpr std::uint32_t kParityH = 96;
 
-    std::unique_ptr<Arcane::NriGraphContext> MakeParityContext()
+    // The parity vehicle OWNS its device pair, torn down in reverse
+    // (context, wrap, native) when the case's local goes out of scope.
+    //
+    // It used to keep the pair in function-local statics so one case's device
+    // outlived it until the next call reset it. That leaves the LAST case's
+    // device to a static destructor at process exit, which runs after
+    // everything registered later -- and the Vulkan validation layer is
+    // dlopened (its globals registered) only once the first device is
+    // created, so it was gone by then: vkDestroyDevice from __run_exit_handlers
+    // spun forever inside the layer's dispatch lookup (seen on Linux with
+    // VK_LAYER_KHRONOS_validation 1.4.328; the D3D12 debug layer let it pass).
+    struct ParityVehicle
+    {
+        std::unique_ptr<Arcane::NativeDeviceOwner> native;
+        std::unique_ptr<Arcane::NriDevice>         nri;
+        std::unique_ptr<Arcane::NriGraphContext>   ctx;
+
+        ParityVehicle() = default;
+        ParityVehicle(ParityVehicle&&) = default;
+        ParityVehicle& operator=(ParityVehicle&&) = delete;
+        ~ParityVehicle()
+        {
+            ctx.reset();      // WRAP BEFORE OWNER: the context borrows *nri,
+            nri.reset();      // which wraps *native -- releasing the owner first
+            native.reset();   // under a live wrap SIGSEGV'd the next case
+        }
+
+        Arcane::NriGraphContext* operator->() const noexcept { return ctx.get(); }
+        Arcane::NriGraphContext& operator*() const noexcept { return *ctx; }
+    };
+
+    ParityVehicle MakeParityContext()
     {
         Arcane::RenderDeviceDesc desc;
         desc.backend = Arcane::Test::kNativeBackend;
@@ -302,22 +333,16 @@ namespace
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;
 #endif
-        static std::unique_ptr<Arcane::NativeDeviceOwner> native;
-        static std::unique_ptr<Arcane::NriDevice> nri;
-        // The previous case's pair goes first, WRAP BEFORE OWNER: reassigning
-        // `native` alone destroyed the old owner while the old `nri` still
-        // wrapped it, and the second MakeParityContext in a process SIGSEGV'd.
-        nri.reset();
-        native.reset();
-        native = Arcane::NativeDeviceOwner::Create(desc);
-        REQUIRE(native != nullptr);
-        nri = Arcane::NriDevice::Wrap(*native);
-        REQUIRE(nri != nullptr);
+        ParityVehicle v;
+        v.native = Arcane::NativeDeviceOwner::Create(desc);
+        REQUIRE(v.native != nullptr);
+        v.nri = Arcane::NriDevice::Wrap(*v.native);
+        REQUIRE(v.nri != nullptr);
         Arcane::HostConfig cfg;
         cfg.backend = Arcane::Test::kNativeBackend;
-        auto ctx = Arcane::NriGraphContext::CreateOffscreen(cfg, *nri, kParityW, kParityH, {});
-        REQUIRE(ctx != nullptr);
-        return ctx;
+        v.ctx = Arcane::NriGraphContext::CreateOffscreen(cfg, *v.nri, kParityW, kParityH, {});
+        REQUIRE(v.ctx != nullptr);
+        return v;
     }
 
     class ScopedEnvironmentValue
