@@ -158,6 +158,33 @@ TEST_CASE("A publish that touches no field of a settings struct shares its block
     CHECK_FALSE(Settings<SettingsProbe::ProbeSettings>(reg).toggle);
 }
 
+TEST_CASE("Registration and module unload preserve typed settings and retire snapshots", "[settings]")
+{
+    CVarRegistry reg;
+    REQUIRE(RegisterSettings<SettingsProbe::ProbeSettings>(reg, kModule));
+    REQUIRE(reg.Set(reg.Find(Name("count")), CVarValue::Int32(23), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    const void* block = reg.SettingsBlock(kProbeHash);
+    REQUIRE(block != nullptr);
+    std::weak_ptr<const CVarSnapshot> original = reg.Snapshot();
+
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "tests.later.first", CVarType::Bool, CVarValue::Bool(true),
+                                          {}, {}, {}, "First later cvar.", "later-module" }).IsStale());
+    CHECK(reg.SettingsBlock(kProbeHash) == block);
+    CHECK(Settings<SettingsProbe::ProbeSettings>(reg).count == 23);
+    CHECK_FALSE(original.expired());
+
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "tests.later.second", CVarType::Bool, CVarValue::Bool(true),
+                                          {}, {}, {}, "Second later cvar.", "later-module" }).IsStale());
+    CHECK(reg.SettingsBlock(kProbeHash) == block);
+    CHECK_FALSE(original.expired());
+
+    reg.UnregisterModule("later-module");
+    CHECK(reg.SettingsBlock(kProbeHash) == block);
+    CHECK(Settings<SettingsProbe::ProbeSettings>(reg).count == 23);
+    CHECK(original.expired());
+}
+
 TEST_CASE("AliasName on a settings field resolves the old name", "[settings]")
 {
     CVarRegistry reg;

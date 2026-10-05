@@ -227,14 +227,15 @@ namespace Arcane
         // Settings<T>() reference survives two publishes (settings arc S2).
         std::array<std::shared_ptr<const CVarSnapshot>, 2> retired;
 
-        void RebuildSnapshot()
+        void RebuildSnapshot(CVarRegistry& registry)
         {
             auto next = std::make_shared<CVarSnapshot>();
             next->serial = ++serial;
             next->entries.reserve(slots.size());
             for (const Slot& s : slots)
                 next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
-            snapshot.store(std::shared_ptr<const CVarSnapshot>(std::move(next)), std::memory_order_release);
+            registry.FillSettingsBlocks(*next, {});
+            registry.StoreSnapshot(std::move(next));
         }
 
         // Both RegisterCommand overloads land here; exactly one of fn / legacy is set.
@@ -416,7 +417,7 @@ namespace Arcane
     CVarRegistry::CVarRegistry(bool devCvars) : m(new Impl)
     {
         m->devCvars = devCvars;
-        m->RebuildSnapshot();   // readers never see a null snapshot
+        m->RebuildSnapshot(*this);   // readers never see a null snapshot
         // The registry's own: declared by the module it lives in (ArcaneCore)
         // and, as built-ins, kept through every UnregisterModule.
         const bool listed = RegisterCommand("cvarlist", CVarFlags::None, "List registered cvars.",
@@ -651,7 +652,7 @@ namespace Arcane
         slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         slot.dirty = false;
         m->byName.emplace(slot.name, index);
-        m->RebuildSnapshot();
+        m->RebuildSnapshot(*this);
         return CVarHandle{ index, generation };
     }
 
@@ -816,7 +817,7 @@ namespace Arcane
         // The module's policy leaves with it: never call into an unloaded image.
         if (m->policy && m->policyModule == module)
             SetPolicy(nullptr, nullptr, {});
-        m->RebuildSnapshot();
+        m->RebuildSnapshot(*this);
     }
 
     void CVarRegistry::RevertCheats()
