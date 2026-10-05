@@ -86,3 +86,24 @@ TEST_CASE("editor.settings.openAtBoot / openCategory open a window at boot and s
     CHECK_FALSE(none.project);
     CHECK_FALSE(none.preferences);
 }
+
+TEST_CASE("ApplySettingsPathPick: a Browse dialog's result lands on the cvar as an undoable edit; empty or unknown picks are ignored", "[settings-ui]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("editor.settings.openCategory");
+    const std::string before = reg.Get(h)->AsString();
+
+    ApplySettingsPathPick("editor.settings.openCategory", "");              // dialog cancelled: no edit
+    CHECK(reg.Get(h)->AsString() == before);
+    ApplySettingsPathPick("no.such.cvar", "C:/ignored");                    // unknown cvar: no crash, no edit
+    CHECK(reg.Get(h)->AsString() == before);
+
+    ApplySettingsPathPick("editor.settings.openCategory", "C:/picked/folder");
+    reg.Publish();
+    CHECK(reg.Get(h)->AsString() == "C:/picked/folder");
+
+    // Put the process registry back; the archive is never ticked or flushed here, so nothing reaches disk.
+    REQUIRE(reg.RevertRung("editor.settings.openCategory", SetBy::EditorUser));
+    reg.Publish();
+    CHECK(reg.Get(h)->AsString() == before);
+}
