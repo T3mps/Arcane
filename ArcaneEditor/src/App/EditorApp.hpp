@@ -1444,6 +1444,8 @@ namespace Arcane::Editor
         int m_scriptedOpenFocusFrames = 0;
         bool m_projectSettingsOpen = false;
         bool m_preferencesOpen = false;            // Edit > Preferences... (settings arc S3-13)
+        bool m_restartRequested = false;
+        std::filesystem::path m_relaunchRoot;
         bool m_settingsBootOpenConsumed = false;   // editor.settings.openAtBoot read once, on the first UI frame
         std::string m_settingsPathCvar;            // the path row a Browse dialog answers for
         void ConfigureSettings();                  // the settings host's per-project config (OnProjectOpened)

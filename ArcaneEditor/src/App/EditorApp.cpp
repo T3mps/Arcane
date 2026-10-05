@@ -24,6 +24,7 @@
 #include "App/EditorApp.hpp"
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Settings/SettingsHost.hpp"
+#include "Settings/EditorRestart.hpp"
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
@@ -1606,6 +1607,14 @@ namespace Arcane::Editor
         }
         config.assetRefs = &m_assetRefServices;
         config.browsePath = [this](const std::string& cvar, bool folder) { BrowseSettingsPath(cvar, folder); };
+        config.restartEditor = [this] { m_restartRequested = true; };
+        config.restartBlockedReason = [this]() -> std::string
+        {
+            if (InPlayMode()) return "Stop Play first";
+            if (m_undo && m_scene.IsDirty(*m_undo)) return "Save the scene first (File > Save Scene)";
+            if (m_documents.AnyDirty()) return "Save or close the open documents first";
+            return {};
+        };
         Arcane::Editor::ConfigureSettingsHost(std::move(config));
     }
 
@@ -3549,6 +3558,16 @@ namespace Arcane::Editor
             {
                 Arcane::EditorLock::Clear(proj->Root());
             }
+        }
+
+        // Relaunch only after the old editor has released the project lock.
+        if (!m_relaunchRoot.empty())
+        {
+            namespace R = Arcane::Editor::EditorRestart;
+            const std::filesystem::path exe = R::CurrentExe();
+            if (exe.empty() || !R::Spawn(exe, R::Args(m_relaunchRoot)))
+                ARC_ERROR("Restart editor: could not start a new editor for '{}' -- open it again by hand",
+                          m_relaunchRoot.generic_string());
         }
 
         // Asset-manager Plan 3 Task 3: the Asset Graph panel's canvas

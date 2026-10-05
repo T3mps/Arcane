@@ -2603,6 +2603,17 @@ namespace Arcane::Editor
     {
         if (menuReq.showProjectSettings) m_projectSettingsOpen = true;
         if (menuReq.showPreferences) m_preferencesOpen = true;
+        // The Restart bar is enabled only when Play is stopped and edits are
+        // saved. Exit after capturing the project; Shutdown relaunches it.
+        if (m_restartRequested)
+        {
+            m_restartRequested = false;
+            if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            {
+                m_relaunchRoot = proj->Root();
+                ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
+            }
+        }
         // Window > New Inspector -- reopen before create (UE's summon-details
         // rule: reuse an open view, else the first CLOSED slot; never a copy
         // beside a closed one). Instance 0 is the standing follower (spec
