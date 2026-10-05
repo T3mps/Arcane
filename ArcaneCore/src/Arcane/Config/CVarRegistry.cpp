@@ -421,9 +421,9 @@ namespace Arcane
         m->RebuildSnapshot();   // readers never see a null snapshot
         // The registry's own: declared by the module it lives in (ArcaneCore)
         // and, as built-ins, kept through every UnregisterModule.
-        const bool listed = RegisterCommand("cvarlist", CVarFlags::None, "List registered cvars.",
+        const bool listed = RegisterCommand("cvarlist", CVarFlags::ServerCanExecute, "List registered cvars.",
                                             std::string(CurrentModule()), &ListCommand, this);
-        const bool explained = RegisterCommand("cvar_explain", CVarFlags::None, "Show who set a cvar and the history under it.",
+        const bool explained = RegisterCommand("cvar_explain", CVarFlags::ServerCanExecute, "Show who set a cvar and the history under it.",
                                                std::string(CurrentModule()), &ExplainCommand, this);
         (void)listed;
         (void)explained;
