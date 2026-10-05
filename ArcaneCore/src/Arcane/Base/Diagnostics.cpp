@@ -210,6 +210,10 @@ namespace
     // fresh process on the paths that matter (the hosts quit on the latch).
     std::atomic<bool> g_gpuDeviceLost{false};
 
+    // Platform-neutral: FormatReason (outside every _WIN32 block) sizes its
+    // per-thread buffer with this, so it cannot live inside the guard below.
+    constexpr std::size_t kReasonMax  = 1024;
+
 #if defined(_WIN32)
     DWORD  g_mainThreadId = 0;
     LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
@@ -223,7 +227,6 @@ namespace
     // ---- crash thread -----------------------------------------------------
 
     constexpr std::size_t kPathMax    = 1024;   // UTF-8 bytes, generous vs MAX_PATH
-    constexpr std::size_t kReasonMax  = 1024;
     constexpr std::size_t kMaxFrames  = 96;
     constexpr std::size_t kSectionRsv = 32 * 1024;   // the walked thread's text
     constexpr std::size_t kHeaderRsv  = 8 * 1024;    // the .txt header
