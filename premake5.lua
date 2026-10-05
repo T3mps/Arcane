@@ -121,6 +121,14 @@ workspace "Arcane"
     filter "system:not windows"
         pic "On"
         buildoptions { "-ffp-contract=off", "-fno-fast-math" }
+        -- The crash path walks a FOREIGN thread's stack (a faulting thread
+        -- parked in its signal handler, a hung main thread) by its frame-
+        -- pointer chain (Base/PortableStack.cpp): ELF has no PE-style
+        -- RtlVirtualUnwind over an arbitrary context, and a DWARF unwinder
+        -- for one is a libunwind-sized dependency. Kept in every config, as
+        -- Ubuntu 24.04 and Fedora now do distro-wide; the cost is one
+        -- register, low single-digit percent at worst.
+        buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
         -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
         -- beside the exe) must win, exactly as the PE loader searches the exe
         -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy

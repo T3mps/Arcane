@@ -131,6 +131,10 @@ function arcane_game_module(name)
         -- names it by stem + the platform extension (Arcane/Platform/Platform.hpp).
         filter "system:not windows"
             targetprefix ""
+            -- A game module's frames are on the crash path's walk too: the
+            -- POSIX unwinder follows the frame-pointer chain (the engine's own
+            -- premake5.lua sets the same flags; see Base/PortableStack.cpp).
+            buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
             -- ELF: a LOADED module keeps its own copy of every header-defined
             -- static, exactly as a PE DLL does. With default visibility GCC emits
             -- those (Astra's per-type meta factories, the pending-meta queue,

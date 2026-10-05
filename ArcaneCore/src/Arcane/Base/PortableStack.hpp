@@ -10,9 +10,11 @@
 // PE's own unwind metadata instead and take no such lock.
 //
 // Windows: both walks over the Win64 unwind metadata. Linux:
-// CaptureCurrentStack walks .eh_frame via _Unwind_Backtrace;
-// CaptureStackFromContext returns 0 until the Diagnostics crash path is
-// ported. Every other platform: both return 0. FormatStackFrame is portable -- no OS calls -- and lives here
+// CaptureStackFromContext walks the frame-pointer chain of a ucontext_t
+// (every ELF module builds with -fno-omit-frame-pointer), reading through
+// process_vm_readv so a corrupt chain ends the walk instead of faulting;
+// CaptureCurrentStack walks .eh_frame via _Unwind_Backtrace. Every other
+// platform: both return 0. FormatStackFrame is portable -- no OS calls -- and lives here
 // because it is the stack's own presentation, not the module table's.
 
 #include <Arcane/Base/ModuleTable.hpp>
@@ -36,15 +38,16 @@ namespace Arcane::Diagnostics
         const ModuleEntry* module = nullptr;
     };
 
-    // Spec S5.2 step 2. Walks `nativeContext` (a `const CONTEXT*` on
-    // Windows) via RtlLookupFunctionEntry + RtlVirtualUnwind over a COPY of
-    // it -- unwinding mutates the context in place -- resolving each frame
-    // against ModuleTable::Find. Runs inside its own SEH guard: a walk that
-    // itself faults (a corrupted frame, a stack that ran off the end) stops
-    // where it faulted and returns the frames already written, never
-    // propagates the fault. Returns 0 for a null `nativeContext` or an
-    // empty `out`, and on every non-Windows platform.
-    ARCANE_CORE_API std::size_t CaptureStackFromContext(const void* nativeContext /*CONTEXT**/, std::span<StackFrame> out) noexcept;
+    // Spec S5.2 step 2. Walks `nativeContext` -- a `const CONTEXT*` on
+    // Windows, via RtlLookupFunctionEntry + RtlVirtualUnwind over a COPY of
+    // it (unwinding mutates the context in place); a `const ucontext_t*` on
+    // Linux, via its frame-pointer chain -- resolving each frame against
+    // ModuleTable::Find. A walk that itself faults (a corrupted frame, a
+    // stack that ran off the end) stops there and returns the frames already
+    // written, never propagates the fault (Windows: its own SEH guard;
+    // Linux: every read is a checked process_vm_readv). Returns 0 for a null
+    // `nativeContext` or an empty `out`, and on every platform but those two.
+    ARCANE_CORE_API std::size_t CaptureStackFromContext(const void* nativeContext /*CONTEXT* | ucontext_t**/, std::span<StackFrame> out) noexcept;
 
     // RtlCaptureContext for the calling thread, then CaptureStackFromContext
     // over it -- the resulting first frame is this function's own caller.
