@@ -144,6 +144,32 @@ namespace Arcane
             }
         };
 
+        // "maxFrameDeltaSeconds" -> "Max Frame Delta Seconds": the last dotted
+        // segment, a space before each lower->upper boundary, the first letter capitalised.
+        std::string DeriveDisplayName(std::string_view name)
+        {
+            const std::size_t dot = name.rfind('.');
+            const std::string_view leaf = dot == std::string_view::npos ? name : name.substr(dot + 1);
+            std::string out;
+            out.reserve(leaf.size() + 4);
+            for (std::size_t i = 0; i < leaf.size(); ++i)
+            {
+                const char c = leaf[i];
+                const bool upper = c >= 'A' && c <= 'Z';
+                const bool prevUpper = i > 0 && leaf[i - 1] >= 'A' && leaf[i - 1] <= 'Z';
+                if (i > 0 && upper && !prevUpper) out.push_back(' ');
+                out.push_back(i == 0 && c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c);
+            }
+            return out;
+        }
+
+        // "render.window.width" -> "render.window"; a single-segment name has none.
+        std::string DeriveCategoryPath(std::string_view name)
+        {
+            const std::size_t dot = name.rfind('.');
+            return dot == std::string_view::npos ? std::string{} : std::string(name.substr(0, dot));
+        }
+
         CommandResult ListCommand(std::string_view, void* user);
         CommandResult ExplainCommand(std::string_view args, void* user);
     }
@@ -903,6 +929,58 @@ namespace Arcane
             const AccessRule read = DefaultAccess(slot.audience, slot.flags, ctx, false, false, false);
             if (read.absent || !read.allowed) continue;
             out.push_back(CVarListEntry{ slot.name, slot.help, slot.type, slot.flags });
+        }
+        return out;
+    }
+
+    std::vector<CVarListEntryEx> CVarRegistry::ListEx() const
+    {
+        std::vector<CVarListEntryEx> out;
+        for (const Slot& slot : m->slots)
+        {
+            if (!slot.alive) continue;
+            if (HasFlag(slot.flags, CVarFlags::Hidden)) continue;
+            if (HasFlag(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            CVarListEntryEx e;
+            e.name = slot.name;
+            e.displayName = slot.displayName.empty() ? DeriveDisplayName(slot.name) : slot.displayName;
+            e.help = slot.help;
+            // Determine if categoryPath was explicitly set or derived. The registration
+            // code capitalizes derived paths; if the current value matches a case-insensitive
+            // comparison with the raw derivation, use the raw (lowercase) version.
+            {
+                std::string lowercase_derived = DeriveCategoryPath(slot.name);
+                if (slot.categoryPath.size() == lowercase_derived.size() &&
+                    std::equal(slot.categoryPath.begin(), slot.categoryPath.end(),
+                               lowercase_derived.begin(),
+                               [](char a, char b) { return std::tolower(a) == b; }))
+                {
+                    // Likely derived, use lowercase version
+                    e.categoryPath = lowercase_derived;
+                }
+                else
+                {
+                    // Explicitly set, use as-is
+                    e.categoryPath = slot.categoryPath;
+                }
+            }
+            e.widget = slot.widget;
+            e.type = slot.type;
+            e.flags = slot.flags;
+            e.audience = slot.audience;
+            e.scope = slot.scope;
+            e.apply = slot.apply;
+            e.order = slot.order;
+            e.min = slot.min;
+            e.max = slot.max;
+            e.enumNames = slot.enumNames;
+            e.value = slot.published;
+            e.defaultValue = slot.published;
+            for (const CVarHistoryRecord& h : slot.history)
+            {
+                if (h.by == SetBy::Default) { e.defaultValue = h.value; break; }
+            }
+            out.push_back(std::move(e));
         }
         return out;
     }

@@ -74,6 +74,29 @@ namespace Arcane
         CVarFlags flags = CVarFlags::None;
     };
 
+    // The full descriptor of one listed cvar (settings spec s8.1): what a game's
+    // settings menu or the editor windows draw a row from. displayName and
+    // categoryPath are already derived when the declaration left them empty.
+    struct CVarListEntryEx
+    {
+        std::string name;
+        std::string displayName;
+        std::string help;
+        std::string categoryPath;
+        std::string widget;
+        CVarType type = CVarType::Bool;
+        CVarFlags flags = CVarFlags::None;
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
+        std::int32_t order = 0;
+        std::optional<CVarValue> min;
+        std::optional<CVarValue> max;
+        std::vector<std::string> enumNames;
+        CVarValue value = CVarValue::Bool(false);          // the published value
+        CVarValue defaultValue = CVarValue::Bool(false);   // the Default rung's value
+    };
+
     // Everything a declaration said, with the derived display strings filled
     // in (settings spec s4.2). What the settings windows and PlayerSettings read.
     struct CVarMetadata
@@ -334,6 +357,9 @@ namespace Arcane
         // spec s3.2): no Editor-audience setting, no Protected one outside
         // ServerAdmin. cvarlist and the console's completion use the caller's.
         [[nodiscard]] std::vector<CVarListEntry> List(CVarContext ctx = CVarContext::Editor) const;
+        // List()'s rule (skips Hidden; skips Dev when compiled out), with the
+        // whole descriptor. Main thread: it reads the slots, not the snapshot.
+        [[nodiscard]] std::vector<CVarListEntryEx> ListEx() const;
         // Live commands, with List()'s rule (skips Hidden; skips Dev when
         // compiled out). `type` is meaningless for a command (left Bool).
         [[nodiscard]] std::vector<CVarListEntry> ListCommands() const;
