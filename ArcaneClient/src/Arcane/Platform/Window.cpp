@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>   // RequestCleanExit -- the session-end route (crash window plan 1, task 9)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Platform.hpp>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
@@ -9,6 +10,7 @@
 #include <stb_image.h>   // decode the icon file; implementation lives in Assets/StbImpl.cpp (same DLL)
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -377,7 +379,41 @@ namespace Arcane
     void* Window::NativeHandle() const
     {
         if (!m_window) return nullptr;
+#if ARCANE_PLATFORM_WINDOWS
         return SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#else
+        // Linux port: whichever window system SDL's video driver is on. An X11
+        // Window is an integer XID, carried pointer-sized; the "offscreen"
+        // driver has neither, which reads as "no native handle" (nullptr).
+        const SDL_PropertiesID props = SDL_GetWindowProperties(m_window);
+        if (void* surface = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr))
+            return surface;
+        const Sint64 xid = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+        return reinterpret_cast<void*>(static_cast<std::uintptr_t>(xid));
+#endif
+    }
+
+    void* Window::NativeDisplay() const
+    {
+#if ARCANE_PLATFORM_WINDOWS
+        return nullptr;
+#else
+        if (!m_window) return nullptr;
+        const SDL_PropertiesID props = SDL_GetWindowProperties(m_window);
+        if (void* display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr))
+            return display;
+        return SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+#endif
+    }
+
+    bool Window::IsWaylandWindow() const
+    {
+#if ARCANE_PLATFORM_WINDOWS
+        return false;
+#else
+        return m_window && SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
+                                                  SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr) != nullptr;
+#endif
     }
 }

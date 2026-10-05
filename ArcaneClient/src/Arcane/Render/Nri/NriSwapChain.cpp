@@ -14,6 +14,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Platform/Window.hpp>
+#include <Arcane/Platform/Platform.hpp>
 
 #include <SDL3/SDL_timer.h>
 
@@ -118,7 +119,22 @@ namespace Arcane
             return true;   // minimized / not yet sized; AcquireNextTexture skips until Resize() restores it
 
         nri::SwapChainDesc desc = {};
+#if ARCANE_PLATFORM_WINDOWS
         desc.window.windows.hwnd = m_window->NativeHandle();
+#else
+        // Linux port: NRI's VK backend is built with the Xlib + Wayland surface
+        // paths (ThirdParty/NRI/premake5.lua); fill whichever SDL is on.
+        if (m_window->IsWaylandWindow())
+        {
+            desc.window.wayland.display = m_window->NativeDisplay();
+            desc.window.wayland.surface = m_window->NativeHandle();
+        }
+        else
+        {
+            desc.window.x11.dpy    = m_window->NativeDisplay();
+            desc.window.x11.window = static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(m_window->NativeHandle()));
+        }
+#endif
         desc.queue               = m_device->GraphicsQueue();
         desc.width               = (nri::Dim_t)m_width;
         desc.height              = (nri::Dim_t)m_height;

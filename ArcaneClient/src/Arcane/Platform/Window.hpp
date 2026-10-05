@@ -87,7 +87,12 @@ namespace Arcane
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
 
-        void* NativeHandle() const;                       // HWND on Windows
+        void* NativeHandle() const;                       // HWND on Windows; wl_surface* or the X11 Window id (as a pointer-sized value) on Linux
+        // Linux port: the native DISPLAY a swapchain needs alongside the handle --
+        // X11 Display* or wl_display*; nullptr on Windows and on display-less
+        // video drivers (SDL's "offscreen"). IsWaylandWindow says which pair it is.
+        void* NativeDisplay() const;
+        bool  IsWaylandWindow() const;
         SDL_Window* SdlWindow() const { return m_window; }
 
         // Native folder-picker (editor "Open Project"). Async: SDL surfaces the result
