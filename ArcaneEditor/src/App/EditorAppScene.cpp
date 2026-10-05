@@ -117,7 +117,7 @@ namespace Arcane::Editor
     void EditorApp::ShowSceneSaveDialog()
     {
         const std::string dir = SceneDialogDir();
-        m_gpu->Win().ShowSaveFileDialog(&EditorApp::PathPickedThunk,
+        m_gpu->Win().ShowSaveFileDialog(&PathPickedThunk,
             new PathDialogRequest{ &m_dialogs.sceneSave, m_dialogs.sceneSave.Arm() },
             "Arcane Scene", "arcscene",
             dir.empty() ? nullptr : dir.c_str());

@@ -148,6 +148,11 @@ namespace Arcane::Editor
         }
     }
 
+    void SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown verdict)
+    {
+        CloseSettingsHostIfProjectSwitchAccepted(verdict == ProjectSwitchPreTeardown::Accepted);
+    }
+
     void CloseSettingsHostIfProjectSwitchAccepted(bool accepted)
     {
         if (accepted)

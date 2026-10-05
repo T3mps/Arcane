@@ -1752,37 +1752,13 @@ namespace Arcane::Editor
         // async slot at all: it returns its result synchronously, in the same
         // frame, from ImGui. `instanceNew`'s payload struct, its
         // InstanceDialogRequest, and the InstancePickedThunk trampoline that
-        // filled it went with it -- PathPickedThunk is the only trampoline
-        // left, serving the OS file pickers (scene open/save, project open,
-        // the material OPEN path, and settings path:file / path:dir Browse).
-        struct DialogInbox
-        {
-            DialogSlot<std::string>       sceneOpen;
-            DialogSlot<std::string>       sceneSave;
-            DialogSlot<std::string>       projectOpen;
-            DialogSlot<std::string>       materialOpen;
-            DialogSlot<std::string>       settingsPath;
-            void ClearAll()
-            {
-                sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
-                materialOpen.Clear(); settingsPath.Clear();
-            }
-        };
+        // filled it went with it -- PathPickedThunk (DialogSlot.hpp) is the
+        // only trampoline left, serving the OS file pickers (scene open/save,
+        // project open, the material OPEN path, and settings path:file /
+        // path:dir Browse). DialogInbox / PathDialogRequest / PathPickedThunk
+        // live in DialogSlot.hpp so ArcaneTests can fire the same trampoline
+        // the OS picker does.
         DialogInbox m_dialogs;
-
-        // ONE shared trampoline replaces the six per-dialog thunks the old
-        // pending-string scheme used (Task 12 retired the second one along
-        // with the instance save dialog -- see DialogInbox above). SDL's
-        // dialog backend fires the callback exactly once per ShowXFileDialog
-        // (null path on cancel), so the heap-allocated request is single-owner
-        // and freed inside the trampoline. Defined in EditorAppFrame.cpp
-        // beside the launch sites it serves.
-        struct PathDialogRequest
-        {
-            DialogSlot<std::string>* slot;
-            std::uint64_t            epoch;
-        };
-        static void PathPickedThunk(const char* path, void* user);
 
         // Mint a GRAPH-owned .arcmat (UE-model: nodes are the authoring tier)
         // + open its doc. Legacy text-owned files still open via OpenPath.

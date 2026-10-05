@@ -35,11 +35,22 @@ namespace Arcane::Editor
 
     void ConfigureSettingsHost(SettingsHostConfig config);   // boot + every project open; baselines the Restart rows on its first call
     void SettingsHostProjectClosing();                       // before a switch: flush, clear both windows' undo
+    // SwitchProject's every pre-teardown exit goes through this. Accepted is
+    // only the path that has passed rival-lock, invalid-project, dirty
+    // documents, AND the stage-table cherry-pick -- later refusals still
+    // leave the session (and the settings host) untouched.
+    enum class ProjectSwitchPreTeardown : std::uint8_t
+    {
+        RivalLock = 0,
+        InvalidProject,
+        DirtyDocuments,
+        StageTableMismatch,   // PatchHostStages / missing EditorStages ids
+        Accepted
+    };
+    void SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown verdict);
     // SwitchProject's outgoing-project boundary: an accepted switch flushes
     // pending edits into the outgoing folders and clears window-local undo;
-    // a refused switch (rival lock, invalid project, dirty documents) leaves
-    // the host untouched. SwitchProject calls this on every exit of the
-    // pre-teardown gate, including the refusals.
+    // a refused switch leaves the host untouched.
     void CloseSettingsHostIfProjectSwitchAccepted(bool accepted);
     [[nodiscard]] bool SettingsHostArchivePending();         // dirty rungs waiting for debounce / flush
     void TickSettingsHost();                                 // once per frame: the debounced write
@@ -58,6 +69,17 @@ namespace Arcane::Editor
     // Stashes into. The OS picker itself stays in EditorApp (needs a window).
     [[nodiscard]] std::uint64_t BeginSettingsPathBrowse(std::string& cvarSlot, DialogSlot<std::string>& slot,
                                                         const std::string& cvar);
+    // BrowseSettingsPath's production launch: Arm, then hand a PathDialogRequest
+    // to `launch`. EditorApp shows the OS picker; tests fire PathPickedThunk
+    // (the same trampoline SDL invokes).
+    template <typename Launch>
+    std::uint64_t LaunchSettingsPathBrowse(std::string& cvarSlot, DialogSlot<std::string>& slot,
+                                           const std::string& cvar, bool folder, Launch&& launch)
+    {
+        const std::uint64_t epoch = BeginSettingsPathBrowse(cvarSlot, slot, cvar);
+        launch(folder, new PathDialogRequest{ &slot, epoch });
+        return epoch;
+    }
     // The frame consume site (EditorAppFrame): Take the slot and ApplySettingsPathPick.
     void ConsumeSettingsPathPick(std::string& cvarSlot, DialogSlot<std::string>& slot);
 

@@ -3,7 +3,10 @@
 
 #include "Scene/UndoGate.hpp"
 
+#include <Arcane/Edit/Command.hpp>
 #include <Astra/Registry/Registry.hpp>
+
+#include <memory>
 
 using namespace Arcane::Editor;
 
@@ -24,6 +27,37 @@ TEST_CASE("SceneConsumesUndoKeys yields to Play, an open transaction, and a focu
     STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(false, true, false));    // open transaction
     STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(false, false, true));    // settings focused
     STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(true, true, true));      // every bar at once
+}
+
+TEST_CASE("DispatchSceneUndoKeys is HandleUndoRedoAndSceneShortcuts's Ctrl+Z/Y apply", "[editor][undo]")
+{
+    Astra::Registry registry;
+    Arcane::CommandStack scene{[&registry]() -> Astra::Registry& { return registry; }};
+    int n = 1;
+    struct Dummy final : Arcane::ICommand
+    {
+        int* p = nullptr;
+        explicit Dummy(int* x) : p(x) {}
+        void Undo() override { --*p; }
+        void Redo() override { ++*p; }
+        const char* Label() const override { return "Dummy"; }
+    };
+    scene.Push(std::make_unique<Dummy>(&n));
+    REQUIRE(n == 1);
+
+    DispatchSceneUndoKeys(scene, true, false, false, true, true, false);   // settings focused: scene stands down
+    CHECK(n == 1);
+    DispatchSceneUndoKeys(scene, true, true, false, false, true, false);   // Play
+    CHECK(n == 1);
+    DispatchSceneUndoKeys(scene, true, false, true, false, true, false);   // open transaction
+    CHECK(n == 1);
+    DispatchSceneUndoKeys(scene, false, false, false, false, true, false); // shortcuts dead
+    CHECK(n == 1);
+
+    DispatchSceneUndoKeys(scene, true, false, false, false, true, false);  // scene owns Ctrl+Z
+    CHECK(n == 0);
+    DispatchSceneUndoKeys(scene, true, false, false, false, false, true);  // scene owns Ctrl+Y
+    CHECK(n == 1);
 }
 
 TEST_CASE("UndoMenuState: enabled with the step label in Edit mode", "[editor][undo]")

@@ -206,23 +206,8 @@ namespace Arcane::Editor
         }
     }
 
-    // The shared file-dialog completion trampoline (declared in EditorApp.hpp),
-    // replacing the six per-dialog thunks the old pending-string scheme used.
-    // SDL's dialog backend fires the callback exactly once per ShowXFileDialog
-    // (null path on cancel -- see the early return below), so the heap-allocated
-    // request is single-owner and freed here. If a future backend ever skipped
-    // the callback the request would leak (bounded, one small struct per
-    // un-fired dialog) -- acceptable, noted.
-    //
-    // Task 12 retired its twin, InstancePickedThunk: the instance save dialog
-    // it served is gone with every other OS-picker creation path (spec s7's
-    // invariant -- see DialogInbox in EditorApp.hpp).
-    void EditorApp::PathPickedThunk(const char* path, void* user)
-    {
-        std::unique_ptr<PathDialogRequest> req(static_cast<PathDialogRequest*>(user));
-        if (path)
-            req->slot->Stash(req->epoch, path);
-    }
+    // PathPickedThunk lives in DialogSlot.hpp -- the OS picker trampoline
+    // ShowOpen*Dialog registers. Tests fire the same function.
 
     // The frame. Every line here is a phase call, and the ORDER IS THE
     // BEHAVIOUR -- see this file's header comment and each phase's own note.
@@ -916,10 +901,8 @@ namespace Arcane::Editor
         // its window-local undo (spec s6.3); the scene stack stands down.
         // SceneConsumesUndoKeys folds Play (UndoBarred), the open-txn guard,
         // and the settings-window yield into one predicate.
-        const bool sceneOwnsUndo = active && Arcane::Editor::SceneConsumesUndoKeys(
-            InPlayMode(), m_undo->InTransaction(), Arcane::Editor::SettingsWindowFocused());
-        if (sceneOwnsUndo && m_edges.undo.pressed) m_undo->Undo();
-        if (sceneOwnsUndo && m_edges.redo.pressed) m_undo->Redo();
+        Arcane::Editor::DispatchSceneUndoKeys(*m_undo, active, InPlayMode(), m_undo->InTransaction(),
+            Arcane::Editor::SettingsWindowFocused(), m_edges.undo.pressed, m_edges.redo.pressed);
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
@@ -2789,7 +2772,7 @@ namespace Arcane::Editor
             const Arcane::Project* proj = m_runtime->CurrentProject();
             const std::string contentDir =
                 proj ? (proj->Root() / "Content").string() : std::string();
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
                 "Arcane Material", "arcmat",
                 contentDir.empty() ? nullptr : contentDir.c_str());
@@ -2830,7 +2813,7 @@ namespace Arcane::Editor
         if (menuReq.openScene)
         {
             const std::string dir = SceneDialogDir();
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.sceneOpen, m_dialogs.sceneOpen.Arm() },
                 "Arcane Scene", "arcscene",
                 dir.empty() ? nullptr : dir.c_str());
@@ -2849,14 +2832,14 @@ namespace Arcane::Editor
         {
             // Start beside the most recent project; null = the OS default.
             const std::string start = Arcane::Editor::DialogStartDir(m_recents.projects);
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
                 "Arcane Project", "arcproj", start.empty() ? nullptr : start.c_str());
         }
         // Same slot, same thunk: FolderPickedCallback and FilePickedCallback share
         // a signature (Window.hpp:93, 103).
         if (req.openProjectFolder)
-            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFolderDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() });
         // Open Recent lands in the SAME slot the dialogs' callback fills, so it
         // flows through ConsumeProjectDialogResult and inherits every guard (the

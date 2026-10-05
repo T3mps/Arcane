@@ -1611,14 +1611,15 @@ namespace Arcane::Editor
 
     void EditorApp::BrowseSettingsPath(const std::string& cvar, bool folder)
     {
-        const std::uint64_t epoch = Arcane::Editor::BeginSettingsPathBrowse(
-            m_settingsPathCvar, m_dialogs.settingsPath, cvar);
-        if (folder)
-            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
-                new PathDialogRequest{ &m_dialogs.settingsPath, epoch });
-        else
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
-                new PathDialogRequest{ &m_dialogs.settingsPath, epoch }, nullptr, nullptr);
+        Arcane::Editor::LaunchSettingsPathBrowse(
+            m_settingsPathCvar, m_dialogs.settingsPath, cvar, folder,
+            [this](bool folderDialog, PathDialogRequest* req)
+            {
+                if (folderDialog)
+                    m_gpu->Win().ShowOpenFolderDialog(&PathPickedThunk, req);
+                else
+                    m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk, req, nullptr, nullptr);
+            });
     }
 
     void EditorApp::RetargetLayoutIni()

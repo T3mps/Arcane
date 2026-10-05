@@ -2304,7 +2304,8 @@ namespace Arcane::Editor
                                      "' is already open in another Arcane Editor.\n"
                                      "That editor has been brought to the front.");
                 Arcane::EditorLock::FocusWindowOfProcess(*rival);
-                Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
+                Arcane::Editor::SettingsHostOnProjectSwitch(
+                    Arcane::Editor::ProjectSwitchPreTeardown::RivalLock);
                 return;
             }
         }
@@ -2319,7 +2320,8 @@ namespace Arcane::Editor
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
             m_modalErrors.Push("Open Project Failed", "'" + path.generic_string() +
                                  "' is not a valid Arcane project (no readable .arcproj).");
-            Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::InvalidProject);
             return;
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
@@ -2370,12 +2372,10 @@ namespace Arcane::Editor
                       "before switching projects");
             m_modalErrors.Push("Open Project Failed", "There are unsaved material documents.\n"
                                  "Save or close them before switching projects.");
-            Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::DirtyDocuments);
             return;
         }
-        // Settings arc S3-13: the settings windows' pending edits belong to the
-        // OUTGOING project's folders, and their undo stacks to its rungs.
-        Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(true);
         // The OUTGOING project's root, captured before teardown replaces it:
         // its editor lock must be released whichever way the switch ends.
         // `lockedRoot` tracks whichever root WE currently hold the lock for --
@@ -2424,6 +2424,8 @@ namespace Arcane::Editor
             m_modalErrors.Push("Open Project Failed",
                 "Internal error: the host stage table no longer matches EditorStages() "
                 "(see Console). The current session is unchanged.");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::StageTableMismatch);
             return;
         }
 
@@ -2460,8 +2462,18 @@ namespace Arcane::Editor
             m_modalErrors.Push("Open Project Failed",
                 "Internal error: the host stage table no longer matches EditorStages() "
                 "(see Console). The current session is unchanged.");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::StageTableMismatch);
             return;
         }
+
+        // Settings arc S3-13: pending edits belong to the OUTGOING project's
+        // folders, and their undo stacks to its rungs. Called here -- after
+        // every session-untouched refusal, immediately before switch_teardown
+        // is constructed -- so a stage-table mismatch does not flush or clear
+        // window-local undo.
+        Arcane::Editor::SettingsHostOnProjectSwitch(
+            Arcane::Editor::ProjectSwitchPreTeardown::Accepted);
 
         std::vector<Arcane::BootStage> stages;
 

@@ -127,13 +127,6 @@ namespace
         CloseSettingsHostIfProjectSwitchAccepted(true);   // drop leftover dirty/undo; Dev cvar is not archived
     }
 
-    // PathPickedThunk (EditorAppFrame.cpp): a non-null path Stashes; null = cancel.
-    void SupplyPathPick(DialogSlot<std::string>& slot, std::uint64_t epoch, const char* path)
-    {
-        if (path)
-            slot.Stash(epoch, path);
-    }
-
     struct DirtyDoc final : EditorDocument
     {
         std::string title = "dirty.arcmat";
@@ -156,7 +149,7 @@ namespace
     };
 }
 
-TEST_CASE("BrowseSettingsPath: OS picker result lands through the settingsPath slot and the frame consume path",
+TEST_CASE("BrowseSettingsPath: OS picker PathPickedThunk lands on DialogInbox::settingsPath and the frame consume path edits the cvar",
           "[settings-ui]")
 {
     CVarRegistry& reg = CVarRegistry::Get();
@@ -164,29 +157,38 @@ TEST_CASE("BrowseSettingsPath: OS picker result lands through the settingsPath s
     const std::string before = reg.Get(h)->AsString();
     RestoreOpenCategory(reg, before);
 
+    DialogInbox dialogs;
     std::string settingsPathCvar;
-    DialogSlot<std::string> settingsPath;
 
-    // BrowseSettingsPath's non-OS half, then a cancelled picker (null path): no edit.
-    const std::uint64_t cancelledEpoch = BeginSettingsPathBrowse(settingsPathCvar, settingsPath, "editor.settings.openCategory");
+    // EditorApp::BrowseSettingsPath -> OS picker cancels (null path): no edit.
+    LaunchSettingsPathBrowse(settingsPathCvar, dialogs.settingsPath, "editor.settings.openCategory", false,
+        [](bool folder, PathDialogRequest* req)
+        {
+            CHECK_FALSE(folder);
+            PathPickedThunk(nullptr, req);   // SDL cancel
+        });
     CHECK(settingsPathCvar == "editor.settings.openCategory");
-    SupplyPathPick(settingsPath, cancelledEpoch, nullptr);
-    ConsumeSettingsPathPick(settingsPathCvar, settingsPath);
+    ConsumeSettingsPathPick(settingsPathCvar, dialogs.settingsPath);   // EditorAppFrame consume
     CHECK(reg.Get(h)->AsString() == before);
     CHECK_FALSE(SettingsHostArchivePending());
 
-    // Re-browse, supply a pick, consume on the next frame -- the EditorAppFrame path.
-    const std::uint64_t epoch = BeginSettingsPathBrowse(settingsPathCvar, settingsPath, "editor.settings.openCategory");
-    SupplyPathPick(settingsPath, epoch, "C:/picked/from-browse");
-    ConsumeSettingsPathPick(settingsPathCvar, settingsPath);
+    // Browse again: OS picker PathPickedThunk Stashes, next frame ApplySettingsPathPick.
+    LaunchSettingsPathBrowse(settingsPathCvar, dialogs.settingsPath, "editor.settings.openCategory", true,
+        [](bool folder, PathDialogRequest* req)
+        {
+            CHECK(folder);
+            PathPickedThunk("C:/picked/from-os", req);
+        });
+    ConsumeSettingsPathPick(settingsPathCvar, dialogs.settingsPath);
     reg.Publish();
-    CHECK(reg.Get(h)->AsString() == "C:/picked/from-browse");
+    CHECK(reg.Get(h)->AsString() == "C:/picked/from-os");
     CHECK(SettingsHostArchivePending());
 
     RestoreOpenCategory(reg, before);
 }
 
-TEST_CASE("SwitchProject: an accepted switch flushes the settings host; a refused one does not", "[settings-ui]")
+TEST_CASE("SwitchProject: SettingsHostOnProjectSwitch flushes only on Accepted, including later StageTableMismatch refusals",
+          "[settings-ui]")
 {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
@@ -201,15 +203,19 @@ TEST_CASE("SwitchProject: an accepted switch flushes the settings host; a refuse
     DocumentHost docs;
     docs.Add(std::make_unique<DirtyDoc>());
     REQUIRE(docs.AnyDirty());
-    // SwitchProject's dirty-documents (and rival-lock / invalid-project) refusals.
-    CloseSettingsHostIfProjectSwitchAccepted(false);
-    CloseSettingsHostIfProjectSwitchAccepted(!docs.AnyDirty());
+    // SwitchProject's every session-untouched exit, including the two later
+    // stage-table refusals that used to sit AFTER the accepted close.
+    SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown::RivalLock);
+    SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown::InvalidProject);
+    SettingsHostOnProjectSwitch(docs.AnyDirty() ? ProjectSwitchPreTeardown::DirtyDocuments
+                                                : ProjectSwitchPreTeardown::Accepted);
+    SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown::StageTableMismatch);
     CHECK(SettingsHostArchivePending());
     CHECK(reg.Get(h)->AsString() == "C:/pending-outgoing");
 
     docs.CloseAll();
     CHECK_FALSE(docs.AnyDirty());
-    CloseSettingsHostIfProjectSwitchAccepted(!docs.AnyDirty());
+    SettingsHostOnProjectSwitch(ProjectSwitchPreTeardown::Accepted);
     CHECK_FALSE(SettingsHostArchivePending());
     CHECK(reg.Get(h)->AsString() == "C:/pending-outgoing");   // flush keeps the value; undo is gone
 
@@ -236,7 +242,8 @@ TEST_CASE("SwitchProject: an accepted switch flushes the settings host; a refuse
     RestoreOpenCategory(reg, before);
 }
 
-TEST_CASE("a focused settings window consumes Ctrl+Z/Y; the scene undo stack stands down", "[settings-ui]")
+TEST_CASE("HandleUndoRedoAndSceneShortcuts: a focused settings window owns Ctrl+Z/Y via DispatchSceneUndoKeys",
+          "[settings-ui]")
 {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
@@ -275,9 +282,8 @@ TEST_CASE("a focused settings window consumes Ctrl+Z/Y; the scene undo stack sta
     Arcane::Test::ClickAt(ImVec2(w->Pos.x + w->Size.x - 40.0f, w->Pos.y + w->Size.y - 40.0f), frame);
     CHECK(SettingsWindowFocused());
 
-    CHECK_FALSE(SceneConsumesUndoKeys(false, scene.InTransaction(), SettingsWindowFocused()));
-    if (SceneConsumesUndoKeys(false, scene.InTransaction(), SettingsWindowFocused()))
-        scene.Undo();
+    // Production Ctrl+Z/Y path (HandleUndoRedoAndSceneShortcuts -> DispatchSceneUndoKeys).
+    DispatchSceneUndoKeys(scene, true, false, scene.InTransaction(), SettingsWindowFocused(), true, false);
     CHECK(n == 1);
     CHECK(scene.CanUndo());
 
@@ -286,6 +292,8 @@ TEST_CASE("a focused settings window consumes Ctrl+Z/Y; the scene undo stack sta
     CHECK(n == 1);                                           // scene did not
     CHECK(scene.CanUndo());
 
+    DispatchSceneUndoKeys(scene, true, false, scene.InTransaction(), SettingsWindowFocused(), false, true);
+    CHECK(n == 1);
     Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Y, frame);
     CHECK(reg.Get(h)->AsString() == "C:/settings-edit");     // settings redid
     CHECK(n == 1);
@@ -294,20 +302,19 @@ TEST_CASE("a focused settings window consumes Ctrl+Z/Y; the scene undo stack sta
     CHECK_FALSE(SettingsWindowFocused());
     Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, frame);
     CHECK(reg.Get(h)->AsString() == "C:/settings-edit");     // settings stand down
-    CHECK(SceneConsumesUndoKeys(false, scene.InTransaction(), SettingsWindowFocused()));
-    if (SceneConsumesUndoKeys(false, scene.InTransaction(), SettingsWindowFocused()))
-        scene.Undo();
+    DispatchSceneUndoKeys(scene, true, false, scene.InTransaction(), SettingsWindowFocused(), true, false);
     CHECK(n == 0);
     CHECK_FALSE(scene.CanUndo());
     CHECK(scene.CanRedo());
-    if (SceneConsumesUndoKeys(false, scene.InTransaction(), SettingsWindowFocused()))
-        scene.Redo();
+    DispatchSceneUndoKeys(scene, true, false, scene.InTransaction(), SettingsWindowFocused(), false, true);
     CHECK(n == 1);
 
-    CHECK_FALSE(SceneConsumesUndoKeys(true, false, false));             // Play bars the scene
-    CHECK_FALSE(SceneConsumesUndoKeys(false, true, false));             // open transaction
-    CHECK_FALSE(SceneConsumesUndoKeys(false, false, true));             // focused settings
-    CHECK(SceneConsumesUndoKeys(false, false, false));                  // scene owns the keys
+    DispatchSceneUndoKeys(scene, true, true, false, false, true, false);   // Play
+    CHECK(n == 1);
+    DispatchSceneUndoKeys(scene, true, false, true, false, true, false);   // open transaction
+    CHECK(n == 1);
+    DispatchSceneUndoKeys(scene, true, false, false, true, true, false);   // focused settings
+    CHECK(n == 1);
 
     open = false;
     frame();
