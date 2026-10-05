@@ -120,7 +120,7 @@ $l9KeptSetting = @('editor.viewport.fallbackExtent','editor.graph.grid.minorTarg
                    'editor.ui.assetRowThumbPx','editor.ui.assetRefThumbPx',
                    'editor.viewport.grid.fadeInPx','editor.viewport.grid.fadeFullPx','editor.shader.previewCheckerCell',
                    'editor.graph.pinRing.width','editor.graph.pinRing.outerGap','editor.graph.pinRing.outerWidth',
-                   'editor.graph.nodePadding','editor.graph.inlineFieldWidth','editor.graph.constFieldWidths',
+                   'editor.graph.nodePadding','editor.graph.passNameFieldWidth','editor.graph.paramNameFieldWidth','editor.graph.swizzleFieldWidth','editor.graph.constPinNeutralWidth1','editor.graph.constPinNeutralWidth2','editor.graph.constPinNeutralWidth4','editor.graph.constFloatWidth','editor.graph.constFloat2Width','editor.graph.constFloat4Width','editor.graph.constParamRangeWidth',
                    'editor.shader.chainLayout.originX','editor.shader.chainLayout.originY','editor.shader.chainLayout.pitchX',
                    'editor.shader.chainLayout.sceneOffsetX','editor.shader.chainLayout.sceneOffsetY','editor.shader.passThumbPx',
                    'editor.assetGraph.node.minWidth','editor.assetGraph.node.maxWidth','editor.assetGraph.node.headerHeight',
