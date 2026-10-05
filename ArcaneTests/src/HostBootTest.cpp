@@ -136,7 +136,9 @@ TEST_CASE("HostBoot::GameModule returns the manifest gameModule when set", "[hos
         R"("gameModule":"Foo.dll","plugins":[],"bootScene":""})";
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == "Foo.dll");
+    // The authored name, in the running platform's spelling (Foo.so on ELF;
+    // exactly "Foo.dll" on Windows -- Platform::NativeModuleFileName).
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == Arcane::Platform::ModuleFileName("Foo"));
     fs::remove_all(dir, ec);
 }
 
@@ -151,12 +153,12 @@ TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built
         R"("gameModule":"Aphelyon.dll","plugins":[],"bootScene":""})";
     // The project has built its own module -> the host must load THIS copy, not a
     // same-named DLL beside the exe.
-    std::ofstream(dir / "Binaries" / "Aphelyon.dll", std::ios::binary) << "MZ";  // presence is what matters
+    std::ofstream(dir / "Binaries" / Arcane::Platform::ModuleFileName("Aphelyon"), std::ios::binary) << "MZ";  // presence is what matters
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
     REQUIRE(fs::path(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll"))
-            == dir / "Binaries" / "Aphelyon.dll");
+            == dir / "Binaries" / Arcane::Platform::ModuleFileName("Aphelyon"));
 
     // Without the built copy, it stays a bare name (borrowing path, resolved beside exe).
     fs::remove(dir / "Binaries" / "Aphelyon.dll", ec);
