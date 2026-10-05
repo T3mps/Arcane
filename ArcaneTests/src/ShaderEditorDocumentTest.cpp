@@ -1759,10 +1759,10 @@ TEST_CASE("ShaderEditorDocument status: a recompile before the first lands (relo
 
 TEST_CASE("ShaderEditorDocument: the first non-null chromeGraph makes Tick build the preview vehicle exactly once", "[editor][material][preview][gpu]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     using Arcane::Editor::PreviewAvailability;
     Arcane::HostConfig cfg;
-    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.backend  = Arcane::Test::kNativeBackend;
     cfg.headless = true;
     auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
     REQUIRE(chrome != nullptr);
@@ -1792,10 +1792,10 @@ TEST_CASE("ShaderEditorDocument T3-D6: a MESH-surface material builds its previe
     // Before T3-D6 Tick refused a vehicle to every mesh surface ("an image
     // nothing ever draws"); now the tab/page draws it, so the vehicle is built
     // once and the status reports a bound image.
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     using Arcane::Editor::PreviewAvailability;
     Arcane::HostConfig cfg;
-    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.backend  = Arcane::Test::kNativeBackend;
     cfg.headless = true;
     auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
     REQUIRE(chrome != nullptr);

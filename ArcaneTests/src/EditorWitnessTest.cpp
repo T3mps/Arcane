@@ -4,6 +4,7 @@
 // builds a real graphics device even under --headless (the offscreen chrome
 // vehicle), so it belongs with the other [gpu] scenarios and is INVISIBLE to a
 // `~[gpu]` run by design. The unfiltered suite is where it runs.
+#include "Helpers/GpuCapability.hpp"   // kNativeBackendCli: dx12 on Windows, vulkan elsewhere
 #include "Helpers/HostWitness.hpp"
 #include <Arcane/Platform/Platform.hpp>   // ExecutableFileName: .exe on Windows only
 #include "Helpers/ReferenceProjectDir.hpp"
@@ -171,7 +172,7 @@ TEST_CASE("E2: the editor boots into perspective on --view-mode, reports viewMod
     WitnessInvocation inv;
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "60",
                  "--settle", "30", "--report", inv.reportPath.generic_string(),
                  "--view-mode", "perspective", "--compare", "editor-ui-perspective" };
     inv.hardCapMs = 180000;
@@ -233,7 +234,7 @@ TEST_CASE("E3: an opened input document with a scripted selection owns the Inspe
     WitnessInvocation inv;
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "90",
                  "--settle", "10", "--report", inv.reportPath.generic_string(),
                  "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071",
                  "--select-in-document", "Player/Jump", "--compare", "editor-input-doc" };
@@ -279,7 +280,7 @@ TEST_CASE("E4: a selected asset routes the Assets Inspector to its page and matc
     // depends on the frame count, so the witness must render the frame the
     // shared editor-asset-page slot was blessed at (a 90-frame run converges
     // on a picture 4660 px off the golden, all of them the PulseBox).
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "60",
                  "--settle", "30", "--report", inv.reportPath.generic_string(),
                  "--select-asset", "d7f389fd-f687-407d-b9d7-9753eb6b0258",   // textures/uv_marker.png
                  "--compare", "editor-asset-page" };
@@ -319,7 +320,7 @@ TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector 
             WitnessInvocation inv;
             inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
             inv.reportPath = scratch.Dir() / "witness-report.json";
-            inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+            inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "90",
                          "--settle", "10", "--report", inv.reportPath.generic_string(),
                          "--open-asset", d.guid };
             if (d.compare) { inv.args.push_back("--compare"); inv.args.push_back(d.compare); }
@@ -369,7 +370,7 @@ TEST_CASE("E9: --select-in-document on a shader node routes the main Inspector t
     WitnessInvocation inv;
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "90",
                  "--settle", "10", "--report", inv.reportPath.generic_string(),
                  "--open-asset", "7e5a0012-0012-4012-8012-000000000012",
                  "--select-in-document", std::to_string(mulId) };
@@ -404,7 +405,7 @@ TEST_CASE("E3b: an unresolvable --select-in-document is a loud ERROR, the run co
     WitnessInvocation inv;
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "60",
                  "--report", inv.reportPath.generic_string(),
                  "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071",
                  "--select-in-document", "Player/NoSuchAction" };
@@ -440,7 +441,7 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
     const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "60",
                  "--settle", "30", "--report", inv.reportPath.generic_string(),
                  "--dump-layout", dump.generic_string(), "--compare", "editor-ui" };
     inv.hardCapMs = 180000;
@@ -572,7 +573,7 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
     const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "60",
                  "--report", inv.reportPath.generic_string(), "--dump-layout", dump.generic_string() };
     inv.hardCapMs = 180000;
     WitnessRun run = RunWitness(inv);
@@ -619,7 +620,7 @@ TEST_CASE("E8: a mesh opened by --open-asset during boot reaches a ready preview
     WitnessInvocation inv;
     inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "90",
                  "--settle", "10", "--report", inv.reportPath.generic_string(),
                  "--open-asset", "7e5a0011-0011-4011-8011-000000000011" };   // meshes/reference_cube.arcmesh (generated)
     inv.hardCapMs = 180000;

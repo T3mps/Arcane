@@ -296,7 +296,7 @@ namespace
     std::unique_ptr<Arcane::NriGraphContext> MakeParityContext()
     {
         Arcane::RenderDeviceDesc desc;
-        desc.backend = Arcane::GraphicsBackend::D3D12;
+        desc.backend = Arcane::Test::kNativeBackend;
 #if defined(ARCANE_DEBUG)
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
@@ -314,7 +314,7 @@ namespace
         nri = Arcane::NriDevice::Wrap(*native);
         REQUIRE(nri != nullptr);
         Arcane::HostConfig cfg;
-        cfg.backend = Arcane::GraphicsBackend::D3D12;
+        cfg.backend = Arcane::Test::kNativeBackend;
         auto ctx = Arcane::NriGraphContext::CreateOffscreen(cfg, *nri, kParityW, kParityH, {});
         REQUIRE(ctx != nullptr);
         return ctx;
@@ -357,10 +357,10 @@ namespace
 
 TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is missing", "[gpu][meshnode]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
 
     const std::filesystem::path source = Arcane::ShaderPaths::ResolveFlavorDir(
-        Arcane::GraphicsBackend::D3D12, "data/shaders");
+        Arcane::Test::kNativeBackend, "data/shaders");
     REQUIRE_FALSE(source.empty());
 
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "arcane-task3-missing-mesh-artifact";
@@ -371,13 +371,13 @@ TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is 
     REQUIRE(std::filesystem::remove(root / "dxil" / "mesh_masked_ps.bin"));
 
     Arcane::RenderDeviceDesc desc;
-    desc.backend = Arcane::GraphicsBackend::D3D12;
+    desc.backend = Arcane::Test::kNativeBackend;
     auto native = Arcane::NativeDeviceOwner::Create(desc);
     REQUIRE(native != nullptr);
     auto nri = Arcane::NriDevice::Wrap(*native);
     REQUIRE(nri != nullptr);
     Arcane::HostConfig config;
-    config.backend = Arcane::GraphicsBackend::D3D12;
+    config.backend = Arcane::Test::kNativeBackend;
     {
         const ScopedEnvironmentValue shaderDir("ARCANE_SHADER_DIR", root.string());
         CHECK(Arcane::NriGraphContext::CreateOffscreen(config, *nri, 16, 16, {}) == nullptr);
@@ -389,7 +389,7 @@ TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is 
 TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pixels",
           "[gpu][meshnode]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto ctx = MakeParityContext();
@@ -454,7 +454,7 @@ TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pi
 TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare with ONE warn",
           "[gpu][meshnode][mesh][node]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto ctx = MakeParityContext();
@@ -517,7 +517,7 @@ TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare 
 TEST_CASE("pixel: an instance whose mesh is not resident is SKIPPED, not drawn wrong",
           "[gpu][meshnode]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto ctx = MakeParityContext();
@@ -561,7 +561,7 @@ TEST_CASE("pixel: an instance whose mesh is not resident is SKIPPED, not drawn w
 TEST_CASE("pixel: two sections of one mesh draw with distinct base colours",
           "[gpu][meshnode]")
 {
-    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
     auto ctx = MakeParityContext();
 
     // Two 1 m cubes as sections of ONE mesh, offset like NriGraphPixelTest's
