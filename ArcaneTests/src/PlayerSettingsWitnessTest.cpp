@@ -1,8 +1,6 @@
-// Settings arc S7 (spec s8.3): the runtime host is a SESSION, not an editor.
-// Single-player is LocalHost, so --set may change a Server setting (Source's
-// local sv_*) but not a non-cheat Game one. The staged ArcaneRuntime.exe is
-// spawned headless; refusals are logged by ApplyCVarCommandLine ("cvar: --set
-// <name>: ...") on the engine logger (stderr).
+// Integration ruling I3: the staged runtime's --set uses Editor in Debug/Release
+// and LocalHost in Dist. This witness checks the host wiring, beyond the helper
+// contract tested in CVarAccessTest. The interactive overlay uses the session role.
 #include "Helpers/HostWitness.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -31,10 +29,10 @@ namespace
     }
 }
 
-TEST_CASE("PS-W1: the runtime host's --set runs as LocalHost -- a Server setting is accepted, a non-cheat Game setting is refused",
+TEST_CASE("PS-W1: Debug runtime --set accepts Server and Game settings through the command-line context",
           "[witness][gpu]")
 {
-    WitnessScratch scratch(StagedRuntimeDir(), "ps-w1-localhost-set");
+    WitnessScratch scratch(StagedRuntimeDir(), "ps-w1-command-line-set");
     WitnessInvocation inv;
     inv.exePath    = scratch.Dir() / "ArcaneRuntime.exe";
     inv.workingDir = scratch.Dir();
@@ -42,7 +40,8 @@ TEST_CASE("PS-W1: the runtime host's --set runs as LocalHost -- a Server setting
     inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "vulkan",
                  "--frames", "10", "--report", inv.reportPath.generic_string(),
                  "--set", "server.allowClientSetServer=true",
-                 "--set", "console.historySize=8" };
+                 "--set", "console.historySize=8",
+                 "--set", "render.meshCull=false" };
     inv.hardCapMs = 120000;
     WitnessRun run = RunWitness(inv);
     INFO("host stdout: " << run.stdoutPath.string());
@@ -51,6 +50,7 @@ TEST_CASE("PS-W1: the runtime host's --set runs as LocalHost -- a Server setting
     REQUIRE(run.exitCode == 0);
 
     const std::string log = Slurp(run.stdoutPath) + Slurp(run.stderrPath);
-    CHECK(log.find("--set server.allowClientSetServer") == std::string::npos);   // Server: LocalHost writes it
-    CHECK(log.find("--set console.historySize") != std::string::npos);          // Game, not Cheat: refused
+    CHECK(log.find("--set server.allowClientSetServer") == std::string::npos);
+    CHECK(log.find("--set console.historySize") == std::string::npos);
+    CHECK(log.find("--set render.meshCull") == std::string::npos);
 }

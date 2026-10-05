@@ -9,7 +9,7 @@
 
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
-#include <Arcane/Config/PlayerSettings.hpp>
+#include <Arcane/Config/CVarConfig.hpp>  // CommandLineCVarContext (integration ruling I3)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
@@ -1578,10 +1578,9 @@ int RuntimeApp::Run()
     // cannot drift on when a verify run declines the diag:// mount.
     ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
     ctx.hostConfig = &m_config;
-    // `--set` runs as this host's session (settings spec s8.3): ArcaneRuntime's one
-    // world is Standalone (StageRuntimeCreate builds it with the default NetMode),
-    // so the command line is the local host's, as on a Source listen server.
-    ctx.cvarContext = Arcane::CVarContextFor(Arcane::NetMode::Standalone);
+    // The command-line rung is Editor in Debug/Release for developer Game settings,
+    // and LocalHost in Dist. The console overlay uses the live session role.
+    ctx.cvarContext = Arcane::CommandLineCVarContext();
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp
