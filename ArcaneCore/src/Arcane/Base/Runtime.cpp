@@ -636,10 +636,14 @@ namespace Arcane
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
         CVarRegistry& cvars = CVarRegistry::Get();
-        // Drop the in-memory EditorUser records first so a key removed from a
-        // file does not linger; CVarLayerSources then re-reads the folder
+        // Preserve edits made before the first project opens as well as edits
+        // made during a project. Then drop the in-memory EditorUser records so
+        // a key removed from a file does not linger; CVarLayerSources re-reads
+        // the folder
         // between Project and User (S1-30: one rung list for OpenProject,
         // ApplyLayersFor and ValidateCVarLayers).
+        if (m_impl->archiveUserCVars && !m_impl->editorUserConfigDir.empty())
+            WriteCVarArchive(cvars, m_impl->editorUserConfigDir, SetBy::EditorUser);
         cvars.RevertLayer(SetBy::EditorUser);
         const LayerSources layers = CVarLayerSources();
         for (const CVarLayerDir& layer : layers.dirs)

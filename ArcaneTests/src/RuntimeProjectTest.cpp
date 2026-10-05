@@ -383,8 +383,14 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     CHECK(cvars.Get(theme)->AsInt32() == 5);
     CHECK(cvars.Explain("s2eu.theme")->setBy == Arcane::SetBy::EditorUser);
 
+    // A preference edited on the start page must be archived before the first
+    // OpenProject drops and reloads the EditorUser rung from disk.
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(6)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 5);
     REQUIRE(rt.OpenProject(dir / "A"));
-    CHECK(cvars.Get(theme)->AsInt32() == 5);                    // EditorUser (35) beats the project's 3 (30)
+    CHECK(cvars.Get(theme)->AsInt32() == 6);                    // EditorUser (35) beats the project's 3 (30)
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 6);
     CHECK(cvars.Get(undo)->AsInt32() == 30);
 
     REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::ThisProject) == Arcane::SetResult::Applied);
@@ -393,7 +399,7 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     CHECK(cvars.Get(theme)->AsInt32() == 9);
     REQUIRE(rt.SaveUserCVars());
     CHECK(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").at("theme") == 9);   // the override is the project's...
-    CHECK(readJson(machine / "s2eu.json").at("theme") == 5);                           // ...not the machine's
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 6);                           // ...not the machine's
 
     REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::AllProjects) == Arcane::SetResult::Applied);
     REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(7)) == Arcane::SetResult::Applied);
