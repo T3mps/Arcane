@@ -2304,6 +2304,7 @@ namespace Arcane::Editor
                                      "' is already open in another Arcane Editor.\n"
                                      "That editor has been brought to the front.");
                 Arcane::EditorLock::FocusWindowOfProcess(*rival);
+                Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
                 return;
             }
         }
@@ -2318,6 +2319,7 @@ namespace Arcane::Editor
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
             m_modalErrors.Push("Open Project Failed", "'" + path.generic_string() +
                                  "' is not a valid Arcane project (no readable .arcproj).");
+            Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
             return;
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
@@ -2368,11 +2370,12 @@ namespace Arcane::Editor
                       "before switching projects");
             m_modalErrors.Push("Open Project Failed", "There are unsaved material documents.\n"
                                  "Save or close them before switching projects.");
+            Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(false);
             return;
         }
         // Settings arc S3-13: the settings windows' pending edits belong to the
         // OUTGOING project's folders, and their undo stacks to its rungs.
-        Arcane::Editor::SettingsHostProjectClosing();
+        Arcane::Editor::CloseSettingsHostIfProjectSwitchAccepted(true);
         // The OUTGOING project's root, captured before teardown replaces it:
         // its editor lock must be released whichever way the switch ends.
         // `lockedRoot` tracks whichever root WE currently hold the lock for --

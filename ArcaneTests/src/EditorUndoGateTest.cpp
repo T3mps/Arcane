@@ -17,6 +17,15 @@ TEST_CASE("UndoBarred is the Play barrier, and the document resolver obeys it", 
     CHECK(ResolveDocumentUndo(true, &stack) == nullptr);
 }
 
+TEST_CASE("SceneConsumesUndoKeys yields to Play, an open transaction, and a focused settings window", "[editor][undo]")
+{
+    STATIC_REQUIRE(SceneConsumesUndoKeys(false, false, false));
+    STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(true, false, false));    // Play
+    STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(false, true, false));    // open transaction
+    STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(false, false, true));    // settings focused
+    STATIC_REQUIRE_FALSE(SceneConsumesUndoKeys(true, true, true));      // every bar at once
+}
+
 TEST_CASE("UndoMenuState: enabled with the step label in Edit mode", "[editor][undo]")
 {
     const UndoMenuItem u = UndoMenuState(true, false, false, "", "Move");

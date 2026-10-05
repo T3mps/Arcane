@@ -148,6 +148,17 @@ namespace Arcane::Editor
         }
     }
 
+    void CloseSettingsHostIfProjectSwitchAccepted(bool accepted)
+    {
+        if (accepted)
+            SettingsHostProjectClosing();
+    }
+
+    bool SettingsHostArchivePending()
+    {
+        return TheHost().archive.Dirty();
+    }
+
     void TickSettingsHost()
     {
         TheHost().archive.Tick(Now(), cvar_settingsSaveDebounceMs.Get(), &WriteRung);
@@ -204,6 +215,18 @@ namespace Arcane::Editor
                                                                           : SettingsWindowKind::Preferences;
         if (std::unique_ptr<SettingEditCommand> step = EditSetting(reg, *d, kind, CVarValue::String(path), ArchiveSink(&h.archive, &Now)))
             SettingsUndo(StateFor(h, kind)).Push(std::move(step));
+    }
+
+    std::uint64_t BeginSettingsPathBrowse(std::string& cvarSlot, DialogSlot<std::string>& slot, const std::string& cvar)
+    {
+        cvarSlot = cvar;
+        return slot.Arm();
+    }
+
+    void ConsumeSettingsPathPick(std::string& cvarSlot, DialogSlot<std::string>& slot)
+    {
+        if (const auto picked = slot.Take())
+            ApplySettingsPathPick(cvarSlot, *picked);
     }
 
     void RegisterSettingsPage(SettingScope scope, std::string categoryPath, std::string title, SettingsPageDrawFn fn, void* user)

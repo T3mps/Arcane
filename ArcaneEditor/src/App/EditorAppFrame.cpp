@@ -912,13 +912,14 @@ namespace Arcane::Editor
         // later Commit then pushes a transaction whose `before` predates the
         // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
-        const bool noOpenTxn = !m_undo->InTransaction();
-        const bool barred    = Arcane::Editor::UndoBarred(InPlayMode());   // the ONE Play barrier (s3.3b)
         // Settings arc S3-13: a focused settings window owns Ctrl+Z / Ctrl+Y for
         // its window-local undo (spec s6.3); the scene stack stands down.
-        const bool settingsOwnUndo = Arcane::Editor::SettingsWindowFocused();
-        if (active && !barred && noOpenTxn && !settingsOwnUndo && m_edges.undo.pressed) m_undo->Undo();
-        if (active && !barred && noOpenTxn && !settingsOwnUndo && m_edges.redo.pressed) m_undo->Redo();
+        // SceneConsumesUndoKeys folds Play (UndoBarred), the open-txn guard,
+        // and the settings-window yield into one predicate.
+        const bool sceneOwnsUndo = active && Arcane::Editor::SceneConsumesUndoKeys(
+            InPlayMode(), m_undo->InTransaction(), Arcane::Editor::SettingsWindowFocused());
+        if (sceneOwnsUndo && m_edges.undo.pressed) m_undo->Undo();
+        if (sceneOwnsUndo && m_edges.redo.pressed) m_undo->Redo();
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
@@ -2555,8 +2556,7 @@ namespace Arcane::Editor
             m_preferencesOpen = m_preferencesOpen || boot.preferences;
             m_projectSettingsOpen = m_projectSettingsOpen || boot.project;
         }
-        if (const auto picked = m_dialogs.settingsPath.Take())
-            Arcane::Editor::ApplySettingsPathPick(m_settingsPathCvar, *picked);
+        Arcane::Editor::ConsumeSettingsPathPick(m_settingsPathCvar, m_dialogs.settingsPath);
         // Always called: a closed window is a no-op that flushes its archive on its close frame.
         Arcane::Editor::DrawEditorPreferences(&m_preferencesOpen);
         Arcane::Editor::DrawProjectSettings(&m_projectSettingsOpen);
