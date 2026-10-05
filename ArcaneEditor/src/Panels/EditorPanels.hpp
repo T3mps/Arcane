@@ -116,18 +116,6 @@ namespace Arcane::Editor
     inline void FoldEntityClipboardShortcuts(MenuRequests& r, const ClipboardShortcutEdges& s, bool browserOwnsEditKeys)
     { if (browserOwnsEditKeys) return; r.cutSelection |= s.cut; r.copySelection |= s.copy; r.paste |= s.paste; r.duplicateSelection |= s.duplicate; }
 
-    struct ProjectSettingsRequests
-    {
-        Guid selection;
-        bool select = false;
-        bool clear = false;
-        bool open = false;
-        bool create = false;
-    };
-
-    void DrawProjectSettings(const Arcane::Project* project, bool* open,
-                             ProjectSettingsRequests& requests);
-
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
     // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar
     // strip (DrawSimTimeToolbar) into it, then close it with EndDockSpace(); dockable

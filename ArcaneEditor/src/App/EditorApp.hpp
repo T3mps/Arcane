@@ -44,6 +44,7 @@
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Settings/ProjectSettingsPage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
 #include "Panels/LocatorRoute.hpp"           // RouteFacts (MakeRouteFacts, s8.2)
@@ -1442,6 +1443,10 @@ namespace Arcane::Editor
         // contract-preserving way to make the tab stick. 0 = nothing pending.
         int m_scriptedOpenFocusFrames = 0;
         bool m_projectSettingsOpen = false;
+        // Settings arc S3-12: Project Settings' "Project" page (the host draws it; EditorApp applies its requests).
+        static void ProjectPageThunk(void* user);
+        void DrawProjectPage();
+        void ApplyProjectSettingsRequests(const Arcane::Editor::ProjectSettingsRequests& settings);
         // Asset-manager redesign, Plan 1 Task 9 -> panel-split Task 7: the
         // asset panels' session UI state, one struct per WINDOW now that the
         // three lenses are three panels (spec s6). The Asset Status window

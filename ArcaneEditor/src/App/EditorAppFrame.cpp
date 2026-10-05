@@ -13,6 +13,8 @@
 
 #include "App/EditorApp.hpp"
 #include "App/HarnessRules.hpp"   // UnderVerifyHarness: badges + chip stay out of goldens (s8.2)
+#include "Settings/SettingsHost.hpp"
+#include "Settings/SettingsWindow.hpp"
 #include "Panels/ConsoleModel.hpp"   // ProblemsChip (s8.2)
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
@@ -2538,52 +2540,10 @@ namespace Arcane::Editor
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
-        if (m_projectSettingsOpen)
-        {
-            Arcane::Editor::ProjectSettingsRequests settings;
-            Arcane::Editor::DrawProjectSettings(m_runtime->CurrentProject(),
-                                                &m_projectSettingsOpen, settings);
-            if (settings.create)
-            {
-                Arcane::Editor::CreateAssetRequest request;
-                request.kind = Arcane::Editor::CreateAssetKind::InputActions;
-                BeginCreateAsset(request);
-            }
-            if (settings.open)
-            {
-                if (const auto* project = m_runtime->CurrentProject())
-                {
-                    const auto id = Arcane::Guid::FromString(project->Manifest().inputActions);
-                    if (id && id->IsValid())
-                        if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(*id)))
-                            m_documents.OpenPath(*path);
-                }
-            }
-            if (settings.clear || settings.select)
-            {
-                const auto id = settings.clear ? Arcane::Guid::Nil() : settings.selection;
-                if (m_runtime->SetProjectInputActionsAsset(id))
-                {
-                    m_runtime->GameInput().Clear();
-                    if (id.IsValid())
-                    {
-                        if (const auto* project = m_runtime->CurrentProject())
-                        {
-                            if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(id)))
-                            {
-                                std::ifstream file(*path, std::ios::binary);
-                                const std::string raw(std::istreambuf_iterator<char>{file}, {});
-                                const auto json = nlohmann::json::parse(raw, nullptr, false);
-                                const auto asset = Arcane::InputActionAsset::FromJson(json);
-                                const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
-                                if (asset && projectId)
-                                    (void)m_runtime->ConfigureGameInput(*asset, *projectId);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Settings arc S3 (spec s6.1): Project Settings is the generated settings
+        // window; its "Project" page is ProjectPageThunk. Always called: a closed
+        // window is a no-op that flushes its archive on the frame it closes.
+        Arcane::Editor::DrawProjectSettings(&m_projectSettingsOpen);
 
         // --open-asset: keep re-requesting focus for the scripted document
         // over its first frames (the member's comment says why); OpenPath on
@@ -2886,6 +2846,65 @@ namespace Arcane::Editor
         // unsaved-scene confirm, the rival-editor lock, the ABI gate, the failure modal).
         if (!req.openRecentPath.empty())
             m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), req.openRecentPath);
+    }
+
+    void EditorApp::ProjectPageThunk(void* user)
+    {
+        static_cast<EditorApp*>(user)->DrawProjectPage();
+    }
+
+    void EditorApp::DrawProjectPage()
+    {
+        Arcane::Editor::ProjectSettingsRequests requests;
+        Arcane::Editor::DrawProjectIdentityPage(m_runtime->CurrentProject(), Arcane::Editor::CurrentSettingsGrid(),
+                                                &m_assetRefServices, requests);
+        ApplyProjectSettingsRequests(requests);
+    }
+
+    void EditorApp::ApplyProjectSettingsRequests(const Arcane::Editor::ProjectSettingsRequests& settings)
+    {
+        if (settings.create)
+        {
+            Arcane::Editor::CreateAssetRequest request;
+            request.kind = Arcane::Editor::CreateAssetKind::InputActions;
+            BeginCreateAsset(request);
+        }
+        if (settings.open)
+        {
+            if (const auto* project = m_runtime->CurrentProject())
+            {
+                const auto id = Arcane::Guid::FromString(project->Manifest().inputActions);
+                if (id && id->IsValid())
+                    if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(*id)))
+                        m_documents.OpenPath(*path);
+            }
+        }
+        if (settings.clear || settings.select)
+        {
+            const auto id = settings.clear ? Arcane::Guid::Nil() : settings.selection;
+            if (m_runtime->SetProjectInputActionsAsset(id))
+            {
+                m_runtime->GameInput().Clear();
+                if (id.IsValid())
+                {
+                    if (const auto* project = m_runtime->CurrentProject())
+                    {
+                        if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(id)))
+                        {
+                            std::ifstream file(*path, std::ios::binary);
+                            const std::string raw(std::istreambuf_iterator<char>{file}, {});
+                            const auto json = nlohmann::json::parse(raw, nullptr, false);
+                            const auto asset = Arcane::InputActionAsset::FromJson(json);
+                            const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
+                            if (asset && projectId)
+                                (void)m_runtime->ConfigureGameInput(*asset, *projectId);
+                        }
+                    }
+                }
+            }
+        }
+        if (settings.bootScene && !m_runtime->SetProjectBootScene(*settings.bootScene))
+            ARC_WARN("Project Settings: the boot scene could not be written to the .arcproj (see the line above)");
     }
 
     void EditorApp::DrawStartPage(Arcane::Editor::MenuRequests& req)

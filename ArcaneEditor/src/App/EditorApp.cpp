@@ -23,6 +23,7 @@
 
 #include "App/EditorApp.hpp"
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
+#include "Settings/SettingsHost.hpp"
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
@@ -1360,6 +1361,10 @@ namespace Arcane::Editor
     void EditorApp::OnProjectOpened(bool recordRecents)
     {
         RetargetUndoCache(m_runtime->CurrentProject());
+
+        // Settings arc S3-12: Project Settings' identity page (idempotent: same path, replaced).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::Project, "Project", "Project",
+                                             &EditorApp::ProjectPageThunk, this);
 
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
