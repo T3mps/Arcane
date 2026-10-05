@@ -21,6 +21,7 @@ namespace Arcane::Server
         cli.Option("report",  "", "write the census to this JSON path (written when the "
                                   "loop ends -- with --frames 0 a killed server writes none)");
         cli.Flag  ("print-engine-info", "print engine identity JSON to stdout and exit");
+        cli.Flag  ("no-admin-console", "do not read admin commands (get/set/list/explain) from stdin");
 
         const Cli::Result r = cli.Parse(argc, argv);
         if (!r.ok) return { std::nullopt, r.exitCode };
@@ -32,6 +33,7 @@ namespace Arcane::Server
         cfg.fixedDtSeconds  = r.GetAs<double>("fixed-dt");
         cfg.reportPath      = r.Get("report");
         cfg.printEngineInfo = r.Flag("print-engine-info");
+        cfg.adminConsole    = !r.Flag("no-admin-console");
 
         // Same NaN reasoning HostConfig::Parse's --fixed-dt refusal documents:
         // `<= 0.0` alone does not reject NaN (every comparison against NaN is

@@ -1503,6 +1503,7 @@ project "ArcaneTests"
         -- main.cpp already establish.
         "%{wks.location}/ArcaneServer/src/ServerConfig.cpp",
         "%{wks.location}/ArcaneServer/src/ServerReport.cpp",
+        "%{wks.location}/ArcaneServer/src/ServerAdminConsole.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/

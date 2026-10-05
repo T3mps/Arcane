@@ -35,3 +35,12 @@ TEST_CASE("ServerConfig: --print-engine-info needs no --project; --help exits 0"
     CHECK(Parse({"--print-engine-info"}).config->printEngineInfo);
     auto h = Parse({"--help"}); CHECK_FALSE(h.config); CHECK(h.exitCode == 0);
 }
+TEST_CASE("ServerConfig: the stdin admin console is on by default and --no-admin-console turns it off", "[server]")
+{
+    auto on = Parse({"--project", "P"});
+    REQUIRE(on.config);
+    CHECK(on.config->adminConsole);
+    auto off = Parse({"--project", "P", "--no-admin-console"});
+    REQUIRE(off.config);
+    CHECK_FALSE(off.config->adminConsole);
+}

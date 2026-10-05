@@ -22,6 +22,7 @@ namespace Arcane::Server
         double        fixedDtSeconds = 1.0 / 60.0;    // --fixed-dt
         std::string   reportPath;                     // --report <json>
         bool          printEngineInfo = false;        // --print-engine-info (same probe as the other hosts, Core-side)
+        bool          adminConsole    = true;         // --no-admin-console turns off the stdin admin console (settings spec s9)
 
         // Forward-declared here so it names ServerConfig::ParseOutcome and can be
         // the return type of Parse; DEFINED below (after the class closes) because
