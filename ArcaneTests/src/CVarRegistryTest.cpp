@@ -412,7 +412,16 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
 TEST_CASE("render.meshCull defaults on and publishes off", "[cvar]") {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle handle = reg.Find("render.meshCull");
-    if (handle.IsStale()) return;   // Dist compiles the Dev cvar out; missing means on
+#if defined(ARC_BUILD_DIST)
+    if (handle.IsStale()) {   // Dist compiles the Dev cvar out; missing means on
+        REQUIRE(MeshCullFrustumEnabled());
+        return;
+    }
+#endif
+    // Debug/Release: a cvar some other case removed FAILS here; it never
+    // passes vacuously (the S1 gate's Debug seed 1930880111 did, with 0
+    // assertions, before Plugin::Load stopped wiping a live module's cvars).
+    REQUIRE_FALSE(handle.IsStale());
     REQUIRE(MeshCullFrustumEnabled());
     REQUIRE(reg.Set(handle, CVarValue::Bool(false), SetBy::Code) == SetResult::Applied);
     reg.Publish();
