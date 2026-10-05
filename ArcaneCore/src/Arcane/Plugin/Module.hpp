@@ -93,6 +93,11 @@ namespace Arcane
             std::size_t size = 0;
         };
         [[nodiscard]] ImageSpan Image() const noexcept;
+        // The image span of a module `path` already mapped in this process, or
+        // `{nullptr, 0}` when it is not. Plugin::Load compares this to the
+        // span after Load() so a refused already-mapped engine DLL is not
+        // mistaken for a fresh image whose statics this Load ran.
+        [[nodiscard]] static ImageSpan MappedImage(const std::filesystem::path& path) noexcept;
 
     private:
         using NativeHandle = void*;

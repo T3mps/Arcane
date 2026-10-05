@@ -5,6 +5,7 @@
 #include <Arcane/Core/Api.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -340,6 +341,17 @@ namespace Arcane
                       const CVarCaller* caller = nullptr);
 
         void UnregisterModule(std::string_view module);
+        // Drop registrations whose declaring code or callback/command pointer
+        // lies in `[base, base+size)`, plus anything tagged with the module
+        // name published for this image. PluginHost and Plugin::Load call it
+        // before the image unmaps (Review Focus 2). Returns how many slots,
+        // commands, callbacks and settings bindings were dropped.
+        std::size_t UnregisterModuleRange(const void* base, std::size_t size);
+        // Publish a loaded plugin image so an unscoped Register/AddCallback/
+        // RegisterCommand whose source address falls in the span is attributed
+        // to `module` instead of left tagged "". Teardown unpublishes.
+        void RegisterModuleImage(std::string_view module, const void* base, std::size_t size);
+        void UnregisterModuleImage(const void* base, std::size_t size);
 
         // Re-apply every rung in `layers` (directories, then the --set items) to
         // the cvars `module` declared, and nothing else; then Publish. Defined
@@ -427,6 +439,7 @@ namespace Arcane
         void FillSettingsBlocks(CVarSnapshot& next, const std::vector<std::uint32_t>& changedSlots) const;
         void ReplaceSnapshotSettings(std::vector<CVarSettingsBlock> blocks);
         void StoreSnapshot(std::shared_ptr<const CVarSnapshot> next);
+        std::size_t DropMatching(std::string_view module, const void* base, std::size_t size);
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

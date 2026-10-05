@@ -23,11 +23,11 @@ namespace Arcane::Editor
         {
             // Route through the plugin so it snapshots its own scene, including native
             // resources (e.g. the physics world) that the raw registry snapshot omits.
-            // Mirrors PluginHost's hot-reload SaveState buffer pattern.
+            // PluginHost::SaveStatePrimary opens CVarModuleScope around the vtable
+            // call, matching every other PluginHost entry point (S1-28 / S2-3).
             m_snapshot.clear();
             Astra::BinaryWriter w(m_snapshot);
-            plugin->SaveState(w);
-            if (w.HasError()) return false;
+            if (!host->SaveStatePrimary(w)) return false;
             m_usedPlugin = true;
         }
         else
@@ -160,9 +160,10 @@ namespace Arcane::Editor
         {
             // Restore via the plugin's LoadState -- it re-establishes native resources
             // (physics world, scene root) AFTER RestoreRegistry, which Arcane Editor cannot
-            // do itself without knowing the plugin's scene.
+            // do itself without knowing the plugin's scene. LoadStatePrimary opens the
+            // same CVarModuleScope as every other PluginHost vtable call.
             Astra::BinaryReader r(m_snapshot);
-            ok = plugin->LoadState(r);
+            ok = host->LoadStatePrimary(r);
         }
         else
         {

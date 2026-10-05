@@ -71,12 +71,23 @@ namespace Arcane
         struct CVarOwner
         {
             std::string module;
+            const void* imageBase = nullptr;
+            std::size_t imageSize = 0;
             CVarOwner() = default;
-            explicit CVarOwner(std::string m) noexcept : module(std::move(m)) {}
-            CVarOwner(CVarOwner&& o) noexcept : module(std::exchange(o.module, {})) {}
+            CVarOwner(std::string m, const void* base, std::size_t size) noexcept
+                : module(std::move(m)), imageBase(base), imageSize(size) {}
+            CVarOwner(CVarOwner&& o) noexcept
+                : module(std::exchange(o.module, {})), imageBase(std::exchange(o.imageBase, nullptr)),
+                  imageSize(std::exchange(o.imageSize, 0)) {}
             CVarOwner& operator=(CVarOwner&& o) noexcept
             {
-                if (this != &o) { Release(); module = std::exchange(o.module, {}); }
+                if (this != &o)
+                {
+                    Release();
+                    module = std::exchange(o.module, {});
+                    imageBase = std::exchange(o.imageBase, nullptr);
+                    imageSize = std::exchange(o.imageSize, 0);
+                }
                 return *this;
             }
             CVarOwner(const CVarOwner&) = delete;
@@ -84,9 +95,13 @@ namespace Arcane
             ~CVarOwner() { Release(); }
             void Release() noexcept
             {
-                if (module.empty()) return;
-                CVarRegistry::Get().UnregisterModule(module);
+                if (imageBase && imageSize != 0)
+                    CVarRegistry::Get().UnregisterModuleRange(imageBase, imageSize);
+                else if (!module.empty())
+                    CVarRegistry::Get().UnregisterModule(module);
                 module.clear();
+                imageBase = nullptr;
+                imageSize = 0;
             }
         };
 

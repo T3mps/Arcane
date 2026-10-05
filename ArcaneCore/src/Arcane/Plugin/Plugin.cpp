@@ -79,8 +79,10 @@ namespace
 namespace Arcane
 {
     Plugin::Plugin(Module module, PluginVTable vtable, std::string cvarModule) noexcept
-        : m_module(std::move(module)), m_vtable(vtable), m_cvars(std::move(cvarModule))
+        : m_module(std::move(module)), m_vtable(vtable)
     {
+        const Module::ImageSpan image = m_module.Image();
+        m_cvars = CVarOwner(std::move(cvarModule), image.base, image.size);
     }
 
     std::optional<Plugin> Plugin::Load(std::filesystem::path path)
@@ -127,11 +129,10 @@ namespace Arcane
             : std::string(CVarRegistry::ScopedModule());
         // An image this process has ALREADY mapped (an engine DLL named as a
         // plugin by mistake, say ArcaneClient.dll) runs no statics in this
-        // Load: the loader only bumps its reference. Whatever is registered
-        // under its name belongs to the live owner, so a refusal below must
-        // not drop it. UnregisterModule is keyed by NAME, not by image; tagging
-        // registrations by image is Review Focus 2 half (b), owed to S2-3.
-        const bool alreadyMapped = Module::IsMapped(path);
+        // Load: the loader only bumps its reference. Compare the pre-load
+        // image span to the post-load span: a match means this Load owns
+        // none of the registrations in that range and must not drop them.
+        const Module::ImageSpan already = Module::MappedImage(path);
         std::optional<Module> module;
         {
             const CVarModuleScope scope(cvarModule);
@@ -139,21 +140,30 @@ namespace Arcane
         }
         if (!module)
         {
-            if (!alreadyMapped)
-                CVarRegistry::Get().UnregisterModule(cvarModule);   // a failing DllMain may have run some statics
+            // Load failed with no handle: statics may have run then the OS
+            // unmapped. Name-drop only when this path was not already mapped.
+            if (!already.base)
+                CVarRegistry::Get().UnregisterModule(cvarModule);
             return std::nullopt;   // Kind::None; caller reads Module::LastLoadError()
         }
+
+        const Module::ImageSpan loaded = module->Image();
+        const bool alreadyMapped = already.base && already.base == loaded.base
+            && already.size == loaded.size;
 
         PluginVTable vtable{};
         if (!ResolveGamePluginAbi(*module, vtable, error))
         {
-            // Refused AFTER its statics ran: drop their registrations before
-            // `module` unmaps the code they point into.
+            // Refused AFTER its statics ran: drop THIS image's registrations
+            // by range (not by stem) before `module` unmaps the code they
+            // point into. An already-mapped engine DLL shares this span with
+            // the live owner -- leave it.
             if (!alreadyMapped)
-                CVarRegistry::Get().UnregisterModule(cvarModule);
+                CVarRegistry::Get().UnregisterModuleRange(loaded.base, loaded.size);
             return std::nullopt;
         }
 
+        CVarRegistry::Get().RegisterModuleImage(cvarModule, loaded.base, loaded.size);
         return Plugin(std::move(*module), vtable, cvarModule);
     }
 }

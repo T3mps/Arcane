@@ -63,7 +63,13 @@ namespace Arcane
                                          PluginResolveError* error)
         {
             const CVarModuleScope scope(module);
-            return Plugin::Load(dll, error);   // a null `error` is that overload's own contract
+            std::optional<Plugin> loaded = Plugin::Load(dll, error);   // a null `error` is that overload's own contract
+            if (loaded)
+            {
+                const Module::ImageSpan image = loaded->LoadedModule().Image();
+                CVarRegistry::Get().RegisterModuleImage(loaded->CVarModule(), image.base, image.size);
+            }
+            return loaded;
         }
 
         // EVERY vtable call into an image runs inside CVarModuleScope(p.CVarModule())
@@ -76,22 +82,12 @@ namespace Arcane
         // themselves; every other call into a vtable goes through here. A later
         // PluginHost edit that adds a vt call keeps this invariant.
         //
-        // The scope is AMBIENT: thread_local, not image-scoped. Whatever the call
-        // reaches is attributed to the module -- an ENGINE Register (which fills
-        // CurrentModule(), CVarRegistry.cpp) or AddCallback first reached from
-        // inside a module tick is tagged with the module and dropped at its
-        // unload. The one lazy engine site of that kind, Log.cpp's log.level
-        // registration (the process's first ARC_* line, which CAN be inside a
-        // plugin's scope -- a random ArcaneTests order showed it), opens Core's
-        // own CVarModuleScope around its Register and AddCallback for that
-        // reason; S1-27's deferred note on a registry constructed inside a scope
-        // is the same class. The exact closure, "refuse untagged adds from
-        // module images" (an
-        // image-range check of the registering code against the loaded
-        // Module::Image() spans, the UnregisterModuleRange pattern in
-        // TeardownImage), is OWED to S2-3: module code also runs OUTSIDE every
-        // vtable call (its ECS systems tick through Runtime's SystemSchedulers),
-        // which no scope opened here can reach.
+        // The scope is AMBIENT: thread_local, not image-scoped. Module code also
+        // runs OUTSIDE every vtable call (its ECS systems tick through Runtime's
+        // SystemSchedulers). CVarRegistry judges those adds by CODE ADDRESS
+        // against the images Plugin::Load / LoadScoped publish, so an unscoped
+        // AddCallback whose fn lies in a loaded plugin is attributed to that
+        // module and leaves with UnregisterModuleRange.
         template <class F>
         auto ScopedCall(const Plugin& p, F&& f)
         {
@@ -1132,5 +1128,20 @@ namespace Arcane
     std::uint32_t PluginHost::Generation() const noexcept
     {
         return m_impl->gen;
+    }
+
+    bool PluginHost::SaveStatePrimary(BinaryWriter& w)
+    {
+        const Plugin* p = m_impl->PrimaryPlugin();
+        if (!p || !p->VTable().SaveState) return false;
+        ScopedCall(*p, [&] { p->VTable().SaveState(w); });
+        return !w.HasError();
+    }
+
+    bool PluginHost::LoadStatePrimary(BinaryReader& r)
+    {
+        const Plugin* p = m_impl->PrimaryPlugin();
+        if (!p || !p->VTable().LoadState) return false;
+        return ScopedCall(*p, [&] { return p->VTable().LoadState(r); });
     }
 }

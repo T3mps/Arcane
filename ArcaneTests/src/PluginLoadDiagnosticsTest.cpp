@@ -125,7 +125,10 @@ TEST_CASE("Module::IsMapped tells an already-mapped image from one this process 
     // ArcaneClient.dll is mapped (this exe links it), the two fixtures are
     // not until someone loads them, and a missing file is never mapped.
     CHECK(Arcane::Module::IsMapped(std::filesystem::path("ArcaneClient.dll")));
+    CHECK(Arcane::Module::MappedImage(std::filesystem::path("ArcaneClient.dll")).base != nullptr);
+    CHECK(Arcane::Module::MappedImage(std::filesystem::path("ArcaneClient.dll")).size != 0);
     CHECK_FALSE(Arcane::Module::IsMapped(std::filesystem::path("this-path-does-not-exist-arcane.dll")));
+    CHECK(Arcane::Module::MappedImage(std::filesystem::path("this-path-does-not-exist-arcane.dll")).base == nullptr);
 
     auto plugin = Arcane::Plugin::Load(std::filesystem::path("HotReloadPluginBad.dll"));
     REQUIRE_FALSE(plugin.has_value());   // ABI-refused, then unmapped by Plugin::Load itself

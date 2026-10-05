@@ -68,6 +68,11 @@ namespace
     {
         ARC_INFO("HotReloadPlugin: console.historySize changed (step {})", HOTRELOAD_STEP);
     }
+
+    void OnSaveStateHistoryChanged(::Arcane::CVarHandle, void*)
+    {
+        ARC_INFO("HotReloadPlugin: SaveState callback");
+    }
 }
 
 ARC_COMMAND("hotreload.ping", ::Arcane::CVarFlags::None, "Answers with the fixture's build step.", &PingCommand);
@@ -158,6 +163,11 @@ namespace Arcane::HotReloadTest
         // OnLoadState can prove the base restored the entity it re-finds by view.
         void OnSaveState(Astra::BinaryWriter& w) override
         {
+            // Pin: PlaySession / SaveStatePrimary must open CVarModuleScope
+            // (or image-address attribution must catch this). An untagged add
+            // would survive Unload as a dangling pointer.
+            ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                      &OnSaveStateHistoryChanged, nullptr);
             w(static_cast<uint64_t>(pulse));
         }
         bool OnLoadState(Astra::BinaryReader& r) override

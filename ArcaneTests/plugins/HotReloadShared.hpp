@@ -7,6 +7,9 @@
 #include <Astra/Reflection/Reflection.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+
 namespace Arcane::HotReloadTest
 {
     struct Pulse { int ticks = 0; };
@@ -25,8 +28,24 @@ namespace Arcane::HotReloadTest
         ASTRA_REFLECT_FIELD(RoleCounters, serverTicks)
         ASTRA_REFLECT_FIELD(RoleCounters, clientTicks)
     ASTRA_END_REFLECT_TYPE()
-    struct ServerOnlyTick { void operator()(Astra::Registry& r) { r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.serverTicks; }); } };
-    struct ClientOnlyTick { void operator()(Astra::Registry& r) { r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.clientTicks; }); } };
+    // An AddCallback from a module ECS tick with NO CVarModuleScope (the
+    // scheduler runs after PluginHost's vtable FixedUpdate). The registry
+    // attributes it by the fn's image address (S2-3 Review Focus 2).
+    inline void ProbeCVarFromEcsTick()
+    {
+        static bool added = false;
+        if (added) return;
+        added = true;
+        Arcane::CVarRegistry::Get().AddCallback(
+            Arcane::CVarRegistry::Get().Find("console.historySize"),
+            [](Arcane::CVarHandle, void*) {
+                ARC_INFO("HotReloadPlugin: console.historySize changed (ecs tick)");
+            },
+            nullptr);
+    }
+
+    struct ServerOnlyTick { void operator()(Astra::Registry& r) { ProbeCVarFromEcsTick(); r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.serverTicks; }); } };
+    struct ClientOnlyTick { void operator()(Astra::Registry& r) { ProbeCVarFromEcsTick(); r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.clientTicks; }); } };
 
     // The use-after-unload probe (PluginHostTest, "[hotreload][typecontext]"). A
     // plain, NON-reflected resource -- exactly Arcane::SceneRoot's shape -- and NOT
