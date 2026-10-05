@@ -15,7 +15,7 @@ using Arcane::Test::AddSetting;
 TEST_CASE("SettingsArchiveQueue writes each dirty rung once the edits go quiet; Flush writes at once", "[settings-ui]")
 {
     std::vector<std::pair<SetBy, std::vector<std::string>>> writes;
-    const RungWriter write = [&](SetBy rung, const std::vector<std::string>& names) { writes.emplace_back(rung, names); };
+    const RungWriter write = [&](SetBy rung, const std::vector<std::string>& names) { writes.emplace_back(rung, names); return true; };
     SettingsArchiveQueue q;
     CHECK_FALSE(q.Tick(10.0, 500, write));                                // nothing dirty
     q.MarkDirty(SetBy::Project, "render.vsync", 0.0);
@@ -37,6 +37,39 @@ TEST_CASE("SettingsArchiveQueue writes each dirty rung once the edits go quiet; 
     CHECK(writes.size() == 3);                                            // nothing left to write
     q.MarkDirty(SetBy::User, "editor.undo.maxSteps", 7.0);
     CHECK(q.Tick(7.0, 0, write));                                         // a 0 ms debounce writes on the same frame
+}
+
+TEST_CASE("SettingsArchiveQueue keeps edits whose write failed or that had no writer", "[settings-ui]")
+{
+    int calls = 0;
+    bool ok = false;
+    const RungWriter write = [&](SetBy, const std::vector<std::string>&) { ++calls; return ok; };
+    SettingsArchiveQueue q;
+    q.MarkDirty(SetBy::Project, "render.vsync", 0.0);
+    CHECK_FALSE(q.Flush(RungWriter{}));                                   // no writer: nothing persisted
+    CHECK(q.Dirty());
+    CHECK_FALSE(q.Tick(1.0, 500, write));                                 // writer fails: Tick does not claim a write
+    CHECK(q.Dirty());
+    CHECK(calls == 1);
+    CHECK_FALSE(q.Tick(1.2, 500, write));                                 // retries only after another quiet debounce
+    CHECK(calls == 1);
+    ok = true;
+    CHECK(q.Tick(1.6, 500, write));
+    CHECK_FALSE(q.Dirty());
+    CHECK(calls == 2);
+}
+
+TEST_CASE("SettingsApplyTracker re-baselines a cvar that reappears after its module reloads", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "render.backend", { .type = CVarType::Int32, .def = CVarValue::Int32(0), .apply = ApplyMode::Restart }).IsStale());
+    SettingsApplyTracker t;
+    t.Observe(reg);
+    reg.UnregisterModule("test");
+    t.Observe(reg);                                                        // the unload prunes the baseline
+    REQUIRE_FALSE(AddSetting(reg, "render.backend", { .type = CVarType::Int32, .def = CVarValue::Int32(3), .apply = ApplyMode::Restart }).IsStale());
+    t.Observe(reg);
+    CHECK(t.PendingRestart(reg).empty());                                  // fresh baseline, no false Restart
 }
 
 TEST_CASE("SettingsApplyTracker: Restart rows count against boot, NextWorld rows against the last world", "[settings-ui]")

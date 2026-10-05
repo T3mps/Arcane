@@ -26,16 +26,20 @@ namespace Arcane::Editor
     ARC_CVAR_EXTERN(cvar_settingsSaveDebounceMs, std::int32_t);   // editor.settings.saveDebounceMs
 
     // Brings `names` up to date in `rung`'s config folder (SettingsHost: WriteCVarRungArchive).
-    using RungWriter = std::function<void(SetBy rung, const std::vector<std::string>& names)>;
+    // Returns true once the rung is persisted; a false keeps its edits queued.
+    using RungWriter = std::function<bool(SetBy rung, const std::vector<std::string>& names)>;
 
     class SettingsArchiveQueue
     {
     public:
         void MarkDirty(SetBy rung, const std::string& name, double nowSeconds);
         // Writes every dirty rung once `debounceMs` passed since the last
-        // MarkDirty. True when it wrote.
+        // MarkDirty. True only when every dirty rung persisted; a failed write
+        // retries after another debounce.
         bool Tick(double nowSeconds, std::int32_t debounceMs, const RungWriter& write);
-        void Flush(const RungWriter& write);
+        // Edits stay dirty when no writer is set or a rung's write fails.
+        // True when nothing is left dirty.
+        bool Flush(const RungWriter& write);
         [[nodiscard]] bool Dirty() const noexcept { return !m_dirty.empty(); }
     private:
         std::map<SetBy, std::set<std::string>> m_dirty;

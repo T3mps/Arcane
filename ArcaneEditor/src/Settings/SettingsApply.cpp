@@ -1,5 +1,6 @@
 #include "Settings/SettingsApply.hpp"
 
+#include <iterator>
 #include <optional>
 #include <utility>
 
@@ -40,17 +41,21 @@ namespace Arcane::Editor
     {
         if (m_dirty.empty()) return false;
         if ((nowSeconds - m_lastChange) * 1000.0 < static_cast<double>(debounceMs)) return false;
-        Flush(write);
-        return true;
+        if (Flush(write)) return true;
+        m_lastChange = nowSeconds;   // retry after another quiet debounce, not every frame
+        return false;
     }
 
-    void SettingsArchiveQueue::Flush(const RungWriter& write)
+    bool SettingsArchiveQueue::Flush(const RungWriter& write)
     {
         std::map<SetBy, std::set<std::string>> dirty = std::move(m_dirty);
         m_dirty.clear();
-        if (!write) return;
-        for (const auto& [rung, names] : dirty)
-            write(rung, std::vector<std::string>(names.begin(), names.end()));
+        for (auto& [rung, names] : dirty)
+        {
+            if (write && write(rung, std::vector<std::string>(names.begin(), names.end()))) continue;
+            m_dirty[rung] = std::move(names);   // not persisted: keep the edits
+        }
+        return m_dirty.empty();
     }
 
     SettingsEditSink ArchiveSink(SettingsArchiveQueue* queue, std::function<double()> now)
@@ -63,6 +68,11 @@ namespace Arcane::Editor
 
     void SettingsApplyTracker::Observe(const CVarRegistry& registry)
     {
+        // A cvar that is no longer registered (module unloaded) loses its
+        // baseline, so it is freshly baselined when it reappears.
+        for (std::map<std::string, CVarValue>* base : { &m_restart, &m_nextWorld })
+            for (auto it = base->begin(); it != base->end();)
+                it = PendingOf(registry, it->first) ? std::next(it) : base->erase(it);
         for (const std::string& name : registry.Names(/*includeHidden=*/true))
         {
             const std::optional<CVarDescInfo> d = registry.Describe(name);
