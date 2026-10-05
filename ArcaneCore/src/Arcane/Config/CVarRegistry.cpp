@@ -7,6 +7,7 @@
 #include <Arcane/Config/CVarRef.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -172,6 +173,7 @@ namespace Arcane
         CVarValue published = CVarValue::Bool(false);
         std::vector<CVarHistoryRecord> history;
         bool dirty = false;
+        std::uint64_t settingsType = 0;   // the settings struct this cvar is a field of; 0 = none
         struct Callback { ChangeFn fn = nullptr; void* user = nullptr; std::string module; };   // module: the ScopedModule at AddCallback
         std::vector<Callback> callbacks;
     };
@@ -187,6 +189,16 @@ namespace Arcane
         void* user = nullptr;
         bool alive = true;
         bool builtin = false;               // the registry's own (cvarlist, cvar_explain): survives every UnregisterModule
+    };
+
+    struct CVarRegistry::SettingsBinding
+    {
+        std::uint64_t                typeHash = 0;
+        std::string                  typeName;
+        std::string                  module;
+        std::shared_ptr<void>      (*make)() = nullptr;
+        std::vector<CVarHandle>      handles;   // per field; stale = refused (Dev in Dist, or logged error)
+        std::vector<SettingsWriteFn> writers;   // per field
     };
 
     struct CVarRegistry::Impl
@@ -209,6 +221,11 @@ namespace Arcane
         std::atomic<std::shared_ptr<const CVarSnapshot>> snapshot;
         std::uint64_t                                    serial = 0;
         std::thread::id                                  mainThread = std::this_thread::get_id();
+
+        std::vector<SettingsBinding> settings;
+        // The two snapshots before the current one, kept alive so a
+        // Settings<T>() reference survives two publishes (settings arc S2).
+        std::array<std::shared_ptr<const CVarSnapshot>, 2> retired;
 
         void RebuildSnapshot()
         {
@@ -844,7 +861,16 @@ namespace Arcane
         // The snapshot is swapped between the promote and the dispatch, so the
         // callbacks and the CVarRef readers inside them already see the new values.
         const std::vector<std::uint32_t> changed = m->Promote(dirty);
-        if (!changed.empty()) m->RebuildSnapshot();
+        if (!changed.empty())
+        {
+            auto next = std::make_shared<CVarSnapshot>();
+            next->serial = ++m->serial;
+            next->entries.reserve(m->slots.size());
+            for (const auto& s : m->slots)
+                next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
+            FillSettingsBlocks(*next, changed);   // settings arc S2: typed blocks, BEFORE the swap, so callbacks read them
+            StoreSnapshot(std::move(next));
+        }
         m->Dispatch(changed);
         // server.cheats went off in this publish (spec s4.5, O4). The Cheat
         // settings revert through the SAME promote-and-dispatch path, so their
@@ -853,7 +879,16 @@ namespace Arcane
         if (cheatsWere && !CheatsEnabled())
         {
             const std::vector<std::uint32_t> reverted = m->Promote(m->DropCheatHistory());
-            if (!reverted.empty()) m->RebuildSnapshot();
+            if (!reverted.empty())
+            {
+                auto next = std::make_shared<CVarSnapshot>();
+                next->serial = ++m->serial;
+                next->entries.reserve(m->slots.size());
+                for (const auto& s : m->slots)
+                    next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
+                FillSettingsBlocks(*next, reverted);
+                StoreSnapshot(std::move(next));
+            }
             m->Dispatch(reverted);
         }
         m->publishing = false;
@@ -1042,6 +1077,131 @@ namespace Arcane
     std::vector<std::pair<std::string, std::string>> CVarRegistry::Aliases() const
     {
         return std::vector<std::pair<std::string, std::string>>(m->aliases.begin(), m->aliases.end());
+    }
+
+    void CVarRegistry::StoreSnapshot(std::shared_ptr<const CVarSnapshot> next)
+    {
+        std::shared_ptr<const CVarSnapshot> outgoing = m->snapshot.exchange(std::move(next), std::memory_order_acq_rel);
+        m->retired[1] = std::move(m->retired[0]);
+        m->retired[0] = std::move(outgoing);
+    }
+
+    std::shared_ptr<const void> CVarRegistry::BuildSettingsBlock(const SettingsBinding& binding) const
+    {
+        std::shared_ptr<void> block = binding.make();
+        for (std::size_t i = 0; i < binding.handles.size(); ++i)
+        {
+            const CVarHandle h = binding.handles[i];
+            if (h.IsStale() || h.index >= m->slots.size()) continue;
+            const Slot& slot = m->slots[h.index];
+            if (!slot.alive || slot.generation != h.generation) continue;
+            binding.writers[i](block.get(), slot.published);
+        }
+        return block;
+    }
+
+    void CVarRegistry::FillSettingsBlocks(CVarSnapshot& next, const std::vector<std::uint32_t>& changedSlots) const
+    {
+        const std::shared_ptr<const CVarSnapshot> previous = Snapshot();
+        std::vector<std::uint64_t> touched;
+        for (std::uint32_t index : changedSlots)
+        {
+            const std::uint64_t type = m->slots[index].settingsType;
+            if (type != 0 && std::find(touched.begin(), touched.end(), type) == touched.end())
+                touched.push_back(type);
+        }
+        next.settings.clear();
+        next.settings.reserve(m->settings.size());
+        for (const SettingsBinding& b : m->settings)
+        {
+            const CVarSettingsBlock* old = previous ? previous->FindSettingsEntry(b.typeHash) : nullptr;
+            const bool rebuild = !old || std::find(touched.begin(), touched.end(), b.typeHash) != touched.end();
+            next.settings.push_back(rebuild ? CVarSettingsBlock{ b.typeHash, BuildSettingsBlock(b) } : *old);
+        }
+        std::sort(next.settings.begin(), next.settings.end(),
+                  [](const CVarSettingsBlock& a, const CVarSettingsBlock& b) { return a.typeHash < b.typeHash; });
+    }
+
+    void CVarRegistry::ReplaceSnapshotSettings(std::vector<CVarSettingsBlock> blocks)
+    {
+        const std::shared_ptr<const CVarSnapshot> current = Snapshot();
+        if (!current) return;   // no snapshot yet: the first Publish's FillSettingsBlocks builds every block
+        auto next = std::make_shared<CVarSnapshot>(*current);
+        std::sort(blocks.begin(), blocks.end(),
+                  [](const CVarSettingsBlock& a, const CVarSettingsBlock& b) { return a.typeHash < b.typeHash; });
+        next->settings = std::move(blocks);
+        StoreSnapshot(std::move(next));
+    }
+
+    bool CVarRegistry::RegisterSettings(const SettingsTypeDesc& desc)
+    {
+        m->lastError.clear();
+        if (!desc.error.empty() || !desc.make)
+        {
+            m->lastError = "settings '" + desc.typeName + "': " + (desc.error.empty() ? std::string("no factory") : desc.error);
+            ARC_ERROR("cvar: {}", m->lastError);
+            return false;
+        }
+        for (const SettingsBinding& b : m->settings)
+            if (b.typeHash == desc.typeHash)
+            {
+                m->lastError = "settings '" + desc.typeName + "' already registered by module '" + b.module + "'";
+                return false;
+            }
+
+        SettingsBinding binding;
+        binding.typeHash = desc.typeHash;
+        binding.typeName = desc.typeName;
+        binding.module   = desc.module;
+        binding.make     = desc.make;
+        for (std::size_t i = 0; i < desc.fields.size(); ++i)
+        {
+            const SettingsFieldDesc& f = desc.fields[i];
+            CVarDesc cv;
+            cv.name         = f.name;
+            cv.type         = f.type;
+            cv.defaultValue = f.defaultValue;
+            cv.min          = f.min;
+            cv.max          = f.max;
+            cv.flags        = f.flags;
+            cv.help         = f.help;
+            cv.module       = desc.module;
+            cv.displayName  = f.displayName;
+            cv.keywords     = f.keywords;
+            cv.widget       = f.widget;
+            cv.audience     = f.audience;
+            cv.scope        = f.scope;
+            cv.apply        = f.apply;
+            cv.order        = static_cast<std::int32_t>(i);
+            cv.enumNames    = f.enumNames;
+            const CVarHandle h = Register(cv);
+            if (!h.IsStale())
+            {
+                m->slots[h.index].settingsType = desc.typeHash;
+                for (const std::string& alias : f.aliases)
+                    (void)RegisterAlias(alias, f.name);
+            }
+            else if (!(HasFlag(f.flags, CVarFlags::Dev) && !m->devCvars))
+                ARC_ERROR("cvar: settings '{}' field '{}' not registered: {}", desc.typeName, f.name, m->lastError);
+            binding.handles.push_back(h);
+            binding.writers.push_back(f.write);
+        }
+        m->settings.push_back(std::move(binding));
+        // Publish the block NOW, so Settings<T>() answers before the next frame's Publish.
+        if (const std::shared_ptr<const CVarSnapshot> current = Snapshot())
+        {
+            std::vector<CVarSettingsBlock> blocks = current->settings;
+            blocks.push_back(CVarSettingsBlock{ desc.typeHash, BuildSettingsBlock(m->settings.back()) });
+            ReplaceSnapshotSettings(std::move(blocks));
+        }
+        m->lastError.clear();
+        return true;
+    }
+
+    const void* CVarRegistry::SettingsBlock(std::uint64_t typeHash) const noexcept
+    {
+        const std::shared_ptr<const CVarSnapshot> snap = Snapshot();
+        return snap ? snap->FindSettings(typeHash) : nullptr;
     }
 
     bool Detail::RegisterDeclaredAlias(std::string_view oldName, std::string_view newName)

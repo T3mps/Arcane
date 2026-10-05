@@ -4,6 +4,7 @@
 #include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Core/Api.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -155,6 +156,50 @@ namespace Arcane
     };
     using CVarAuditFn = void (*)(const CVarAuditRecord&, void* user);
 
+    // ---- settings structs (settings arc S2, spec s4.3, s4.6) ---------------
+    using SettingsWriteFn = void (*)(void* block, const CVarValue& value);
+
+    // One field of a settings struct, as ARC_SETTINGS hands it to RegisterSettings.
+    struct SettingsFieldDesc
+    {
+        std::string               name;                          // "<category>.<field>"
+        CVarType                  type = CVarType::Bool;
+        CVarValue                 defaultValue = CVarValue::Bool(false);
+        std::optional<CVarValue>  min;
+        std::optional<CVarValue>  max;
+        CVarFlags                 flags = CVarFlags::None;
+        // Literals from the declaring module's reflection block: they live as
+        // long as the module, which is as long as the cvars it registers.
+        std::string_view          help;
+        std::string_view          displayName;
+        std::string_view          keywords;
+        std::string_view          widget;
+        Audience                  audience = Audience::Game;
+        SettingScope              scope = SettingScope::Project;
+        ApplyMode                 apply = ApplyMode::Live;
+        std::vector<std::string>  enumNames;
+        std::vector<std::string>  aliases;                       // full former names
+        SettingsWriteFn           write = nullptr;
+    };
+
+    struct SettingsTypeDesc
+    {
+        std::uint64_t                  typeHash = 0;             // Astra::TypeID<T>::Hash(): stable across modules
+        std::string                    typeName;
+        std::string                    category;
+        std::string                    module;
+        std::shared_ptr<void>        (*make)() = nullptr;        // a default-constructed T, from the declaring module
+        std::vector<SettingsFieldDesc> fields;
+        std::string                    error;                    // non-empty: the template side refused; nothing registers
+    };
+
+    // One settings struct's typed copy inside a published snapshot.
+    struct CVarSettingsBlock
+    {
+        std::uint64_t               typeHash = 0;
+        std::shared_ptr<const void> data;
+    };
+
     // The published values, immutable once built (settings spec s4.6). Publish
     // swaps a fresh one in atomically. A reader keeps the copy it loaded alive
     // for as long as it holds it, so worker threads never see a torn value.
@@ -175,6 +220,23 @@ namespace Arcane
             const Entry& e = entries[h.index];
             if (!e.alive || e.generation != h.generation) return std::nullopt;
             return e.value;
+        }
+
+        // Settings structs (settings arc S2): one typed block per registered
+        // struct, sorted by typeHash. A block untouched by a publish is SHARED
+        // with the previous snapshot.
+        std::vector<CVarSettingsBlock> settings;
+
+        [[nodiscard]] const CVarSettingsBlock* FindSettingsEntry(std::uint64_t typeHash) const noexcept
+        {
+            const auto it = std::lower_bound(settings.begin(), settings.end(), typeHash,
+                [](const CVarSettingsBlock& b, std::uint64_t h) { return b.typeHash < h; });
+            return (it != settings.end() && it->typeHash == typeHash) ? &*it : nullptr;
+        }
+        [[nodiscard]] const void* FindSettings(std::uint64_t typeHash) const noexcept
+        {
+            const CVarSettingsBlock* entry = FindSettingsEntry(typeHash);
+            return entry ? entry->data.get() : nullptr;
         }
     };
 
@@ -305,6 +367,16 @@ namespace Arcane
         // thread only (the thread that constructed this registry); asserts.
         void PublishImmediate();
 
+        // Settings structs (settings arc S2). Registers one cvar per field (the
+        // field order is CVarDesc::order; a Dev field this registry compiles out
+        // stays at the struct default in the block), the AliasName aliases, and
+        // the typed block in the current snapshot. False (LastError set,
+        // nothing registered) for desc.error, or a struct already registered.
+        [[nodiscard]] bool RegisterSettings(const SettingsTypeDesc& desc);
+        // The current snapshot's block for a struct, or nullptr. A pointer stays
+        // valid until at least two more publishes; SettingsShared<T> pins it.
+        [[nodiscard]] const void* SettingsBlock(std::uint64_t typeHash) const noexcept;
+
         // Fires on the publishing thread when the published value changes.
         // A Set from the callback is pending until the next Publish.
         using ChangeFn = void (*)(CVarHandle handle, void* user);
@@ -347,8 +419,14 @@ namespace Arcane
     private:
         struct Slot;
         struct Command;
+        struct SettingsBinding;
         struct Impl;
         Impl* m;
+
+        std::shared_ptr<const void> BuildSettingsBlock(const SettingsBinding& binding) const;
+        void FillSettingsBlocks(CVarSnapshot& next, const std::vector<std::uint32_t>& changedSlots) const;
+        void ReplaceSnapshotSettings(std::vector<CVarSettingsBlock> blocks);
+        void StoreSnapshot(std::shared_ptr<const CVarSnapshot> next);
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)
