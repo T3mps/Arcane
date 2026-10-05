@@ -190,6 +190,47 @@ namespace Arcane
             return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
 
+        // WriteCVarArchive's unreadable-file rule: keep it as <file>.bad and
+        // proceed (true), or -- when even the copy fails -- leave it alone (false).
+        bool SetAsideUnreadable(const std::filesystem::path& file)
+        {
+            std::filesystem::path bad = file;
+            bad += ".bad";
+            std::error_code copied;
+            std::filesystem::copy_file(file, bad, std::filesystem::copy_options::overwrite_existing, copied);
+            if (copied)
+            {
+                ARC_WARN("cvar: '{}' is not a JSON object and could not be kept as '{}' ({}) -- left untouched, not saved",
+                         file.generic_string(), bad.generic_string(), copied.message());
+                return false;
+            }
+            ARC_WARN("cvar: '{}' is not a JSON object -- kept as '{}', replaced", file.generic_string(), bad.generic_string());
+            return true;
+        }
+
+        // <file>.tmp, then renamed over: the old file or the new, never half of one.
+        void WriteTextAtomically(const std::filesystem::path& file, const std::string& text)
+        {
+            std::filesystem::path tmp = file;
+            tmp += ".tmp";
+            bool written = false;
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                out << text;
+                out.flush();
+                written = static_cast<bool>(out);
+            }
+            std::error_code renamed;
+            if (written) std::filesystem::rename(tmp, file, renamed);
+            if (!written || renamed)
+            {
+                ARC_WARN("cvar: cannot write '{}'{}{}", file.generic_string(), renamed ? ": " : "",
+                         renamed ? renamed.message() : std::string());
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
+            }
+        }
+
         // 1-based line of a key's first mention: the path relative to the
         // category (a flat "graph.x"), else its last segment (nested). 0 = not found.
         int LineOfKey(const std::string& text, const std::string& name, const std::string& category)
@@ -515,6 +556,70 @@ namespace Arcane
                 std::error_code ignored;
                 std::filesystem::remove(tmp, ignored);
             }
+        }
+    }
+
+    void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung, const std::filesystem::path& dir,
+                              std::span<const std::string> names)
+    {
+        struct KeyEdit { std::string key; std::optional<nlohmann::json> value; };   // nullopt = remove the key
+        std::map<std::string, std::vector<KeyEdit>> byCategory;
+        for (const std::string& name : names)
+        {
+            const std::optional<CVarDescInfo> desc = registry.Describe(name);
+            if (!desc) continue;                                   // unregistered since the edit: leave the file alone
+            if (HasFlag(desc->flags, CVarFlags::Cheat)) continue;  // a session value, never persisted
+            const auto dot = name.find('.');
+            if (dot == std::string::npos) continue;
+            std::string category = name.substr(0, dot);
+            if (IsDocumentCategory(category)) continue;
+            KeyEdit edit{ name.substr(dot + 1), std::nullopt };
+            if (const std::optional<CVarValue> value = registry.RungValue(name, rung))
+            {
+                nlohmann::json json = ArchiveJson(*value, desc->enumNames);
+                if (json.is_null()) continue;
+                edit.value = std::move(json);
+            }
+            byCategory[std::move(category)].push_back(std::move(edit));
+        }
+        if (byCategory.empty()) return;
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        for (auto& [category, edits] : byCategory)
+        {
+            const std::filesystem::path file = dir / (category + ".json");
+            const std::optional<std::string> before = ReadWholeFile(file);
+            nlohmann::json doc = nlohmann::json::object();
+            if (before)
+            {
+                auto parsed = nlohmann::json::parse(*before, nullptr, false);
+                if (!parsed.is_discarded() && parsed.is_object())
+                    doc = std::move(parsed);
+                else if (!SetAsideUnreadable(file))
+                    continue;
+            }
+            for (KeyEdit& e : edits)
+            {
+                if (e.value)
+                {
+                    if (nlohmann::json* leaf = FindLeaf(doc, e.key)) *leaf = std::move(*e.value);
+                    else doc[e.key] = std::move(*e.value);
+                }
+                else
+                    (void)EraseLeaf(doc, e.key);
+            }
+            if (doc.empty())
+            {
+                if (before)
+                {
+                    std::error_code removed;
+                    std::filesystem::remove(file, removed);
+                }
+                continue;
+            }
+            const std::string text = doc.dump(2);
+            if (before && *before == text) continue;   // unchanged: not rewritten
+            WriteTextAtomically(file, text);
         }
     }
 
