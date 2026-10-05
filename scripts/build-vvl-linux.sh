@@ -14,7 +14,10 @@
 # PostCallRecordWaitSemaphores / PostCallRecordGetSemaphoreCounterValue) and is
 # clean on the same runs.
 #
-#   scripts/build-vvl-linux.sh [prefix]     (VVL_TAG overrides the pin)
+#   scripts/build-vvl-linux.sh [prefix]     (VVL_TAG + VVL_COMMIT override the pin)
+#
+# The tag is fetched, then its commit is checked against VVL_COMMIT: a moved
+# tag fails the build instead of silently changing the layer (roadmap D26).
 #
 # Needs cmake, ninja, python3, git and a C++ compiler; UPDATE_DEPS fetches
 # Vulkan-Headers, SPIRV-Headers/Tools, Vulkan-Utility-Libraries and friends at
@@ -29,10 +32,16 @@ set -euo pipefail
 
 PREFIX="${1:-/usr/local}"
 TAG="${VVL_TAG:-vulkan-sdk-1.4.328.0}"
+COMMIT="${VVL_COMMIT:-a1ff2dbc7e50828def8098c5ebf0fee10b714f85}"
 WORK="${VVL_WORK:-$(mktemp -d)}"
 JOBS="${MAKE_JOBS:-3}"
 
 git clone --depth 1 -b "$TAG" https://github.com/KhronosGroup/Vulkan-ValidationLayers "$WORK/vvl"
+got=$(git -C "$WORK/vvl" rev-parse HEAD)
+if [ "$got" != "$COMMIT" ]; then
+    echo "build-vvl-linux: $TAG resolved to $got, expected $COMMIT -- refusing" >&2
+    exit 1
+fi
 cmake -S "$WORK/vvl" -B "$WORK/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DUPDATE_DEPS=ON -DBUILD_TESTS=OFF \
     -DCMAKE_INSTALL_PREFIX="$PREFIX"

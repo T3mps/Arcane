@@ -68,6 +68,23 @@ make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
 xvfb-run -a env SDL_VIDEODRIVER=x11 scripts/run-linux-tests.sh Debug   # ~[gpu] minus scripts/linux-test-exclusions.txt
 ```
 
+**GPU lane and windowed hosts (Mesa lavapipe).** `[gpu]` cases and real
+windows run on a GPU-less box through lavapipe, under Xvfb (X11) or a headless
+weston (Wayland). Build the validation layer once with
+`scripts/build-vvl-linux.sh` (installs to `/usr/local`; do NOT also install
+Ubuntu's `vulkan-validationlayers` -- its 1.3.275 sync validation ignores host
+timeline-semaphore waits and fails every frame-slot reuse as a hazard):
+
+```sh
+xvfb-run -a -s "-screen 0 1920x1080x24" env SDL_VIDEODRIVER=x11 scripts/run-linux-tests.sh --gpu Debug
+xvfb-run -a -s "-screen 0 1920x1080x24" scripts/linux-windowed-smoke.sh Debug logs/windowed x11 wayland
+```
+
+lavapipe is a software adapter, so a `--compare` resolves its own reference
+set first, `ReferenceProject/Verify/References/vulkan-lavapipe/`, then the
+usual `vulkan/` and shared levels; a `--bless` on lavapipe writes only that
+set (`Arcane::ReferenceAdapterSet`, `ReferenceImages.hpp`).
+
 Keep `-j` low on small machines: the Debug ArcaneTests link alone writes
 about 500 MB. The game module is built before the hosts because their
 postbuild stages `ReferenceProject/` (`Binaries/` included) beside them.
