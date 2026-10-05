@@ -41,6 +41,8 @@
 #include <catch2/catch_approx.hpp>   // the ReferenceProject pose assertion
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Platform/Platform.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -277,7 +279,7 @@ TEST_CASE("ExecutablePathUtf8 reports this test exe, absolute and forward-slashe
     std::string lower = exe;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    CHECK(lower.find("arcanetests.exe") != std::string::npos);
+    CHECK(lower.find(Arcane::Platform::ExecutableFileName("arcanetests")) != std::string::npos);   // .exe on Windows only
 }
 
 TEST_CASE("EngineInfoJson is a single line", "[host]")

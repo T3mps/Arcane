@@ -53,6 +53,7 @@
 // purpose is to be broken, which this harness refuses on principle.
 
 #include "Helpers/HostWitness.hpp"
+#include <Arcane/Platform/Platform.hpp>   // ExecutableFileName: .exe on Windows only
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -74,7 +75,7 @@ namespace
     {
         const std::filesystem::path p = std::filesystem::absolute("../ArcaneRuntime");
         INFO("staged ArcaneRuntime not found -- build Arcane.slnx first: " << p.string());
-        REQUIRE(std::filesystem::exists(p / "ArcaneRuntime.exe"));
+        REQUIRE(std::filesystem::exists(p / Arcane::Platform::ExecutableFileName("ArcaneRuntime")));
         return p;
     }
 
@@ -84,7 +85,7 @@ namespace
     WitnessInvocation HostInv(const WitnessScratch& scratch, std::vector<std::string> extraArgs)
     {
         WitnessInvocation inv;
-        inv.exePath    = scratch.Dir() / "ArcaneRuntime.exe";
+        inv.exePath    = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneRuntime");
         inv.workingDir = scratch.Dir();
         inv.reportPath = scratch.Dir() / "witness-report.json";
         inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "vulkan",
