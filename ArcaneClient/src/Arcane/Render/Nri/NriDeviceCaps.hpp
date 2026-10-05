@@ -13,6 +13,7 @@
 // once, no live nri::Device reference to keep alive.
 
 #include <cstdint>
+#include <string>
 
 namespace Arcane
 {
@@ -25,6 +26,12 @@ namespace Arcane
         std::uint32_t maxPerStageTextures = 0;                // shaderStage.descriptorTextureMaxNum
         std::uint32_t maxDescriptorSetUpdateAfterSetTextures = 0; // descriptorSet.updateAfterSet.textureMaxNum
         std::uint32_t maxPerStageUpdateAfterSetTextures = 0; // shaderStage.updateAfterSet.descriptorTextureMaxNum
+
+        // Adapter identity (adapterDesc.name / architecture). Read by the hosts'
+        // --compare to pick a software adapter's own reference set
+        // (Arcane::ReferenceAdapterSet) -- not a capability gate.
+        std::string  adapterName;
+        bool         softwareAdapter = false;               // adapterDesc.architecture == SOFTWARE
 
         [[nodiscard]] bool SupportsBindless() const noexcept { return bindlessTier > 0; }
         [[nodiscard]] bool SupportsBindlessTextures(std::uint32_t required) const noexcept
