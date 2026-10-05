@@ -27,6 +27,16 @@ namespace Arcane::Editor
                 return CVarColorNearlyEqual(v.AsColor(), def.AsColor());
             return v == def;
         }
+
+        // Newest history module on `rung` (same record RungValue reads).
+        std::string SourceOfRung(const CVarRegistry& registry, std::string_view name, SetBy rung)
+        {
+            const std::optional<CVarExplain> e = registry.Explain(name);
+            if (!e) return {};
+            for (auto it = e->history.rbegin(); it != e->history.rend(); ++it)
+                if (it->by == rung) return it->module;
+            return {};
+        }
     }
 
     const char* RungLabel(SetBy by) noexcept
@@ -116,7 +126,13 @@ namespace Arcane::Editor
 
     void ApplyRungState(CVarRegistry& registry, std::string_view name, SetBy rung, const std::optional<CVarValue>& state)
     {
-        if (state) (void)registry.SetRung(name, rung, *state, RungSource(rung));
+        ApplyRungState(registry, name, rung, state, RungSource(rung));
+    }
+
+    void ApplyRungState(CVarRegistry& registry, std::string_view name, SetBy rung,
+                        const std::optional<CVarValue>& state, std::string_view sourceModule)
+    {
+        if (state) (void)registry.SetRung(name, rung, *state, sourceModule);
         else       (void)registry.RevertRung(name, rung);
         registry.Publish();
     }
@@ -127,8 +143,20 @@ namespace Arcane::Editor
     void SettingEditCommand::Put(const RungChange& c, bool toBefore)
     {
         const std::optional<CVarValue>& state = toBefore ? c.before : c.after;
-        ApplyRungState(m_registry, c.name, c.rung, state);
-        if (m_sink) m_sink(RungChange{ c.name, c.rung, toBefore ? c.after : c.before, state });
+        const std::string_view source = toBefore ? c.beforeSource : c.afterSource;
+        ApplyRungState(m_registry, c.name, c.rung, state, source);
+        if (m_sink)
+        {
+            RungChange notice;
+            notice.name = c.name;
+            notice.rung = c.rung;
+            notice.before = toBefore ? c.after : c.before;
+            notice.after = state;
+            notice.beforeSource = toBefore ? c.afterSource : c.beforeSource;
+            notice.afterSource = std::string(source);
+            notice.handle = c.handle;
+            m_sink(notice);
+        }
     }
 
     void SettingEditCommand::Undo()
@@ -144,15 +172,22 @@ namespace Arcane::Editor
     bool SettingEditCommand::IsExpired() const
     {
         for (const RungChange& c : m_changes)
-            if (m_registry.Find(c.name).IsStale()) return true;
+            if (m_registry.Find(c.name) != c.handle) return true;
         return false;
     }
 
     void SettingsEditBuilder::Change(std::string_view name, SetBy rung, std::optional<CVarValue> after)
     {
-        RungChange c{ std::string(name), rung, m_registry.RungValue(name, rung), std::move(after) };
+        RungChange c;
+        c.name = std::string(name);
+        c.rung = rung;
+        c.before = m_registry.RungValue(name, rung);
+        c.after = std::move(after);
+        c.beforeSource = SourceOfRung(m_registry, name, rung);
+        c.handle = m_registry.Find(name);
         if (c.before == c.after) return;
-        ApplyRungState(m_registry, c.name, c.rung, c.after);
+        c.afterSource = c.after ? std::string(RungSource(rung)) : std::string();
+        ApplyRungState(m_registry, c.name, c.rung, c.after, c.afterSource);
         c.after = m_registry.RungValue(c.name, c.rung);   // SetRung clamps: record what landed
         if (c.before == c.after) return;
         if (m_sink) m_sink(c);
@@ -201,7 +236,7 @@ namespace Arcane::Editor
         PrefMode to, const SettingsEditSink& sink)
     {
         const RowFacts f = ComputeRowFacts(registry, desc, SettingsWindowKind::Preferences);
-        if (f.mode == to) return nullptr;
+        if (f.overridden || f.mode == to) return nullptr;
         SettingsEditBuilder b(registry, sink);
         const std::optional<CVarValue> shown = ValueAtOrBelow(registry, desc.name, SetBy::User);
         if (to == PrefMode::ThisProject)

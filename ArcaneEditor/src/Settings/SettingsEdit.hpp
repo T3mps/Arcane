@@ -43,17 +43,26 @@ namespace Arcane::Editor
     [[nodiscard]] RowFacts ComputeRowFacts(const CVarRegistry& registry, const CVarDescInfo& desc, SettingsWindowKind window);
 
     // One rung of one cvar, before and after (nullopt = the rung held no record).
+    // `beforeSource` / `afterSource` are the history modules SetRung tags, so
+    // undo restores the record UnregisterModule would have popped.
     struct RungChange
     {
         std::string name;
         SetBy rung = SetBy::Project;
         std::optional<CVarValue> before, after;
+        std::string beforeSource;
+        std::string afterSource;
+        CVarHandle handle{};                  // registration at the edit; generation mismatch expires the step
     };
     // Told about every applied change (the archive's dirty set, S3-6).
     using SettingsEditSink = std::function<void(const RungChange&)>;
 
-    // Put rung `rung` of `name` into `state` (a value = SetRung; nullopt = RevertRung), then Publish().
+    // Put rung `rung` of `name` into `state` (a value = SetRung with `sourceModule`;
+    // nullopt = RevertRung), then Publish(). The four-argument form tags the
+    // record with RungSource(rung) -- the windows' own loaders.
     void ApplyRungState(CVarRegistry& registry, std::string_view name, SetBy rung, const std::optional<CVarValue>& state);
+    void ApplyRungState(CVarRegistry& registry, std::string_view name, SetBy rung,
+                        const std::optional<CVarValue>& state, std::string_view sourceModule);
 
     class SettingEditCommand final : public Arcane::ICommand
     {
@@ -63,7 +72,7 @@ namespace Arcane::Editor
         void Redo() override;
         const char* Label() const override { return m_label.c_str(); }
         bool AffectsScene() const override { return false; }   // settings are not scene state (spec s6.3)
-        bool IsExpired() const override;                         // a changed cvar is no longer registered
+        bool IsExpired() const override;                         // a changed cvar was unregistered or re-registered
         [[nodiscard]] const std::vector<RungChange>& Changes() const noexcept { return m_changes; }
     private:
         void Put(const RungChange& change, bool toBefore);

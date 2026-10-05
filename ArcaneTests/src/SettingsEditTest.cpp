@@ -192,3 +192,64 @@ TEST_CASE("a Color at its hex-round-tripped default is not modified", "[settings
     REQUIRE(reg.SetRung("look.light", SetBy::Project, CVarValue::Color(*CVarColorFromHex(hex)), "project"));
     CHECK(ComputeRowFacts(reg, d, SettingsWindowKind::Project).modified);
 }
+
+TEST_CASE("SwitchPrefMode refuses an overridden Preferences row (CommandLine winner)", "[settings-ui]")
+{
+    // Spec s6.4: overridden rows show the winner; Clear override is the only action.
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "editor.graph.fitMinZoom", { .type = CVarType::Float32, .def = CVarValue::Float32(0.5f),
+        .scope = SettingScope::PreferencesMachine }).IsStale());
+    const CVarDescInfo d = *reg.Describe("editor.graph.fitMinZoom");
+    const SettingsEditSink sink = [](const RungChange&) {};
+    REQUIRE(reg.Set(reg.Find("editor.graph.fitMinZoom"), CVarValue::Float32(0.9f), SetBy::CommandLine, "argv") == SetResult::Applied);
+    reg.Publish();
+    const RowFacts f = ComputeRowFacts(reg, d, SettingsWindowKind::Preferences);
+    CHECK(f.overridden);
+    CHECK(f.winner == SetBy::CommandLine);
+    CHECK(f.mode == PrefMode::AllProjects);
+    CHECK(SwitchPrefMode(reg, d, PrefMode::ThisProject, sink) == nullptr);
+    CHECK_FALSE(reg.RungValue("editor.graph.fitMinZoom", SetBy::User).has_value());
+}
+
+TEST_CASE("SettingEditCommand expires when its cvar is unregistered then re-registered", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "speed.max", { .type = CVarType::Float32, .def = CVarValue::Float32(5.0f), .module = "TestGame" }).IsStale());
+    std::unique_ptr<SettingEditCommand> step = EditSetting(reg, *reg.Describe("speed.max"), SettingsWindowKind::Project,
+                                                           CVarValue::Float32(6.0f), [](const RungChange&) {});
+    REQUIRE(step);
+    CHECK_FALSE(step->IsExpired());
+    reg.UnregisterModule("TestGame");
+    CHECK(step->IsExpired());
+    REQUIRE_FALSE(AddSetting(reg, "speed.max", { .type = CVarType::Float32, .def = CVarValue::Float32(5.0f), .module = "TestGame" }).IsStale());
+    CHECK(step->IsExpired());   // a new registration is a different generation
+}
+
+TEST_CASE("Clear override undo restores the original history source so a module unload still pops it", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    const CVarDescInfo d = *reg.Describe("render.vsync");
+    const SettingsEditSink sink = [](const RungChange&) {};
+    REQUIRE(reg.Set(reg.Find("render.vsync"), CVarValue::Bool(false), SetBy::User, "TestPlugin") == SetResult::Applied);
+    reg.Publish();
+    std::unique_ptr<SettingEditCommand> clear = ClearOverride(reg, d, SettingsWindowKind::Project, sink);
+    REQUIRE(clear);
+    CHECK_FALSE(reg.RungValue("render.vsync", SetBy::User).has_value());
+    clear->Undo();
+    CHECK(reg.RungValue("render.vsync", SetBy::User) == V(CVarValue::Bool(false)));
+    const std::optional<CVarExplain> restored = reg.Explain("render.vsync");
+    REQUIRE(restored);
+    bool foundPlugin = false;
+    for (const CVarHistoryRecord& h : restored->history)
+    {
+        if (h.by == SetBy::User)
+        {
+            CHECK(h.module == "TestPlugin");
+            foundPlugin = true;
+        }
+    }
+    CHECK(foundPlugin);
+    reg.UnregisterModule("TestPlugin");
+    CHECK_FALSE(reg.RungValue("render.vsync", SetBy::User).has_value());
+}
