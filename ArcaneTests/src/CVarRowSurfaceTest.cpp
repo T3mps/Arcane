@@ -3,9 +3,14 @@
 // order -- and the revision they rebuild on.
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
+#include "Helpers/TestEnvironment.hpp"
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Json.hpp>
 
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -130,4 +135,64 @@ TEST_CASE("CVarRegistry::Revision moves on Register and UnregisterModule, not on
     CHECK(reg.Revision() == r1);
     reg.UnregisterModule("TestGame");
     CHECK(reg.Revision() != r1);
+}
+
+namespace
+{
+    std::string ReadFileText(const std::filesystem::path& f)
+    {
+        std::ifstream in(f, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    void WriteFileText(const std::filesystem::path& f, const std::string& text)
+    {
+        std::filesystem::create_directories(f.parent_path());
+        std::ofstream(f, std::ios::binary) << text;
+    }
+}
+
+TEST_CASE("WriteCVarRungArchive updates only the named keys: written, removed, foreign and unnamed keys kept", "[cvar]")
+{
+    Arcane::Test::TempDir dir("rung-archive");
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "render.a", { .type = CVarType::Int32, .def = CVarValue::Int32(1) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.b", { .type = CVarType::Bool, .def = CVarValue::Bool(false) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.untouched", { .type = CVarType::Int32, .def = CVarValue::Int32(0) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.cheat", { .type = CVarType::Bool, .def = CVarValue::Bool(false), .flags = CVarFlags::Cheat }).IsStale());
+    WriteFileText(dir.path / "render.json", R"({"a": 1, "b": true, "foreign": 7, "untouched": 3})");
+    REQUIRE(reg.SetRung("render.a", SetBy::Project, CVarValue::Int32(5), "project"));
+    REQUIRE(reg.SetRung("render.cheat", SetBy::Project, CVarValue::Bool(true), "project"));
+    const std::vector<std::string> names{ "render.a", "render.b", "render.cheat", "physics.gone" };
+    WriteCVarRungArchive(reg, SetBy::Project, dir.path, names);
+
+    const auto doc = nlohmann::json::parse(ReadFileText(dir.path / "render.json"));
+    INFO(doc.dump());
+    CHECK(doc.at("a") == 5);                    // written
+    CHECK_FALSE(doc.contains("b"));             // named, and the rung holds nothing: removed
+    CHECK(doc.at("foreign") == 7);              // not a registered cvar: kept
+    CHECK(doc.at("untouched") == 3);            // not named: kept (another editor may own it)
+    CHECK_FALSE(doc.contains("cheat"));         // Cheat is a session value, never persisted
+    CHECK_FALSE(std::filesystem::exists(dir.path / "physics.json"));   // an unregistered name touches nothing
+    CHECK_FALSE(std::filesystem::exists(dir.path / "render.json.tmp"));
+}
+
+TEST_CASE("WriteCVarRungArchive creates a category, updates a nested leaf, and deletes a file it empties", "[cvar]")
+{
+    Arcane::Test::TempDir dir("rung-archive-shapes");
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "editor.graph.zoom", { .type = CVarType::Float32, .def = CVarValue::Float32(1.0f) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "editor.legend", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "solo.k", { .type = CVarType::Int32, .def = CVarValue::Int32(0) }).IsStale());
+    WriteFileText(dir.path / "editor.json", R"({"graph": {"zoom": 2.0}})");
+    WriteFileText(dir.path / "solo.json", R"({"k": 4})");
+    REQUIRE(reg.SetRung("editor.graph.zoom", SetBy::EditorUser, CVarValue::Float32(3.0f), "editor-user"));
+    REQUIRE(reg.SetRung("editor.legend", SetBy::EditorUser, CVarValue::Bool(false), "editor-user"));
+    const std::vector<std::string> names{ "editor.graph.zoom", "editor.legend", "solo.k" };
+    WriteCVarRungArchive(reg, SetBy::EditorUser, dir.path, names);
+
+    const auto doc = nlohmann::json::parse(ReadFileText(dir.path / "editor.json"));
+    INFO(doc.dump());
+    CHECK(doc.at("graph").at("zoom") == 3.0f);  // the nested leaf, updated in place
+    CHECK(doc.at("legend") == false);
+    CHECK_FALSE(std::filesystem::exists(dir.path / "solo.json"));   // its only key removed: the file goes
 }

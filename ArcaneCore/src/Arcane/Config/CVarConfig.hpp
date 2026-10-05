@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -89,6 +90,21 @@ namespace Arcane
     // Persist one user rung. EditorUser contains only machine-wide preferences;
     // User also removes cleared machine-wide project overrides from existing files.
     ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& dir, SetBy rung);
+
+    // The settings windows' writer (settings arc S3-2): bring the keys for
+    // `names` in <dir>/<category>.json up to date with what `rung` holds NOW
+    // -- written when the rung holds a value, REMOVED when it does not (a
+    // reset or a cleared override must not come back on the next boot).
+    // Per key, so two editors sharing one EditorUser folder only ever touch
+    // the keys each one edited. Every key not named stays, and so does every
+    // named key whose cvar is no longer registered. Archive is not required
+    // (a window edit is a persist request); Cheat cvars and the document
+    // category (input) are never written. Merge / .bad / .tmp+rename /
+    // unchanged-file rules as WriteCVarArchive; a file this write empties is
+    // deleted.
+    ARC_CORE_API void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung,
+                                           const std::filesystem::path& dir,
+                                           std::span<const std::string> names);
 
     // The context a host's `--set` runs in (settings plan, integration ruling
     // I3): the Editor context in a Debug/Release build, so a developer's
