@@ -80,15 +80,20 @@ namespace Arcane::Platform
     // A manifest names its game module with the platform it was authored on
     // ("ReferenceGame.dll" in a .arcproj written on Windows). The module's
     // identity is its STEM; the extension is the running platform's. So
-    // "ReferenceGame.dll" -> "ReferenceGame.so" on Linux, unchanged on
-    // Windows. A name without a known module extension is returned as-is.
+    // "ReferenceGame.dll" -> "ReferenceGame.so" on Linux. On Windows this is
+    // the identity -- the authored name is used exactly as it always was. A
+    // name without a known module extension is returned as-is.
     inline std::string NativeModuleFileName(std::string_view authored)
     {
+#if ARCANE_PLATFORM_WINDOWS
+        return std::string(authored);
+#else
         for (std::string_view ext : { std::string_view(".dll"), std::string_view(".so"), std::string_view(".dylib") })
         {
             if (authored.size() > ext.size() && authored.substr(authored.size() - ext.size()) == ext)
                 return ModuleFileName(authored.substr(0, authored.size() - ext.size()));
         }
         return std::string(authored);
+#endif
     }
 }

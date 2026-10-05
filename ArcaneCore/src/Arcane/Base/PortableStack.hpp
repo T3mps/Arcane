@@ -9,9 +9,10 @@
 // path may reach for it. RtlLookupFunctionEntry/RtlVirtualUnwind walk the
 // PE's own unwind metadata instead and take no such lock.
 //
-// Windows-only body (Win64 unwind metadata is a Windows concept):
-// CaptureStackFromContext/CaptureCurrentStack return 0 on every other
-// platform. FormatStackFrame is portable -- no OS calls -- and lives here
+// Windows: both walks over the Win64 unwind metadata. Linux:
+// CaptureCurrentStack walks .eh_frame via _Unwind_Backtrace;
+// CaptureStackFromContext returns 0 until the Diagnostics crash path is
+// ported. Every other platform: both return 0. FormatStackFrame is portable -- no OS calls -- and lives here
 // because it is the stack's own presentation, not the module table's.
 
 #include <Arcane/Base/ModuleTable.hpp>

@@ -1,5 +1,6 @@
 #include <Arcane/Plugin/Module.hpp>
 
+#include <Arcane/Base/Engine.hpp>           // ExecutablePathUtf8 -- the application directory (POSIX bare-name search)
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::NoteOwned -- what we load ourselves is ours
 
 #include <algorithm>
@@ -21,6 +22,7 @@
     #include <windows.h>
 #else
     #include <dlfcn.h>
+    #include <link.h>   // dlinfo(RTLD_DI_LINKMAP), dl_iterate_phdr: the loaded image's extent
 #endif
 
 namespace
@@ -105,7 +107,25 @@ namespace Arcane
             t_lastLoadError = "error " + std::to_string(err) + ": " + buf;
         }
 #else
-        NativeHandle handle = ::dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+        // A BARE file name ("HotReloadPluginV1.so"): dlopen would search only
+        // the loader's library path, while LoadLibraryW searches the
+        // application directory first. Mirror that order -- the exe's
+        // directory, then the current directory, then the system search -- so
+        // a host or test names a module beside itself the same way on both
+        // platforms. Any path with a directory part is used exactly as given.
+        std::filesystem::path resolved = path;
+        if (!path.empty() && !path.has_parent_path())
+        {
+            std::error_code ec;
+            const std::string self = ExecutablePathUtf8();
+            const std::filesystem::path besideExe =
+                self.empty() ? std::filesystem::path{} : std::filesystem::path(self).parent_path() / path;
+            if (!besideExe.empty() && std::filesystem::exists(besideExe, ec))
+                resolved = besideExe;
+            else if (std::filesystem::exists(path, ec))
+                resolved = std::filesystem::path(".") / path;
+        }
+        NativeHandle handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!handle)
         {
             const char* err = ::dlerror();
@@ -157,9 +177,51 @@ namespace Arcane
             return {};
         return ImageSpan{m_handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
 #else
-        // POSIX: dladdr/link_map would give this, but no host ships here yet.
-        // Returning "unknown" makes callers skip disowning rather than guess.
-        return {};
+        // ELF (Linux port, 2026-10-05): the object's link_map names its load
+        // bias (l_addr); dl_iterate_phdr then yields that same object's
+        // program headers, and the PT_LOAD segments' union IS the mapped
+        // image -- the ELF reading of PE's [base, base + SizeOfImage).
+        // Matched on BOTH the load bias and the link_map's name, so a
+        // mismatch is "unknown" (callers skip disowning) rather than a range
+        // that would disown another module's descriptors.
+        link_map* map = nullptr;
+        if (::dlinfo(m_handle, RTLD_DI_LINKMAP, &map) != 0 || !map)
+            return {};
+
+        struct Query
+        {
+            const link_map* map = nullptr;
+            ImageSpan       span{};
+        } query{ map, {} };
+
+        ::dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void* user) -> int
+        {
+            auto* q = static_cast<Query*>(user);
+            if (info->dlpi_addr != q->map->l_addr)
+                return 0;
+            const char* a = info->dlpi_name ? info->dlpi_name : "";
+            const char* b = q->map->l_name ? q->map->l_name : "";
+            if (std::strcmp(a, b) != 0)
+                return 0;
+
+            ElfW(Addr) lo = ~ElfW(Addr){ 0 };
+            ElfW(Addr) hi = 0;
+            for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i)
+            {
+                const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+                if (ph.p_type != PT_LOAD)
+                    continue;
+                lo = std::min(lo, ph.p_vaddr);
+                hi = std::max(hi, ph.p_vaddr + ph.p_memsz);
+            }
+            if (hi > lo)
+            {
+                q->span.base = reinterpret_cast<const void*>(info->dlpi_addr + lo);
+                q->span.size = static_cast<std::size_t>(hi - lo);
+            }
+            return 1;   // found the object: stop iterating
+        }, &query);
+        return query.span;
 #endif
     }
 
