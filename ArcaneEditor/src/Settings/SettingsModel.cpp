@@ -1,4 +1,5 @@
 #include "Settings/SettingsModel.hpp"
+#include "Settings/SettingsEdit.hpp"
 
 #include <Arcane/Project/ProjectManifest.hpp>
 
@@ -6,6 +7,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iterator>
+#include <unordered_set>
 
 namespace Arcane::Editor
 {
@@ -83,6 +85,28 @@ namespace Arcane::Editor
                 if (path.starts_with(c.path))
                     if (const SettingsTreeNode* hit = FindNode(c, path)) return hit;
             return nullptr;
+        }
+
+        std::string Lower(std::string_view s)
+        {
+            std::string out(s);
+            for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return out;
+        }
+
+        bool PruneInto(const SettingsTreeNode& from, const std::unordered_set<std::string>& keep,
+                       const std::unordered_set<std::string>& pages, SettingsTreeNode& to)
+        {
+            to.label = from.label;
+            to.path = from.path;
+            for (const std::string& n : from.cvars)
+                if (keep.contains(n)) to.cvars.push_back(n);
+            for (const SettingsTreeNode& c : from.children)
+            {
+                SettingsTreeNode sub;
+                if (PruneInto(c, keep, pages, sub)) to.children.push_back(std::move(sub));
+            }
+            return !to.cvars.empty() || !to.children.empty() || pages.contains(from.path);
         }
     }
 
@@ -192,5 +216,58 @@ namespace Arcane::Editor
         const auto it = std::lower_bound(m_descs.begin(), m_descs.end(), name,
                                          [](const CVarDescInfo& d, std::string_view n) { return d.name < n; });
         return it != m_descs.end() && it->name == name ? &*it : nullptr;
+    }
+
+    std::vector<std::string> SettingsModel::Search(std::string_view query) const
+    {
+        std::vector<std::string> tokens;
+        for (std::string_view t : Split(query, ' ')) tokens.push_back(Lower(t));
+        std::vector<std::string> out;
+        for (const CVarDescInfo& d : m_descs)
+        {
+            if (!tokens.empty())
+            {
+                const std::string hay = Lower(d.name + ' ' + SettingDisplayName(d) + ' ' + d.help + ' ' + d.keywords);
+                if (!std::all_of(tokens.begin(), tokens.end(), [&](const std::string& t) { return hay.find(t) != std::string::npos; }))
+                    continue;
+            }
+            out.push_back(d.name);
+        }
+        return out;
+    }
+
+    std::vector<std::string> SettingsModel::Visible(const CVarRegistry& registry, std::string_view query,
+                                                    Filter filter, bool showAdvanced) const
+    {
+        const SettingsWindowKind kind = m_window == SettingScope::Project ? SettingsWindowKind::Project
+                                                                         : SettingsWindowKind::Preferences;
+        std::vector<std::string> out;
+        for (std::string& name : Search(query))
+        {
+            const CVarDescInfo* d = Desc(name);
+            if (!d) continue;
+            if (!showAdvanced && (HasFlag(d->flags, CVarFlags::Dev) || HasFlag(d->flags, CVarFlags::Hidden))) continue;
+            if (filter != Filter::All)
+            {
+                const RowFacts f = ComputeRowFacts(registry, *d, kind);
+                const bool keep = filter == Filter::Modified   ? f.modified
+                                : filter == Filter::Overridden ? f.overridden
+                                                               : f.projectOverride;
+                if (!keep) continue;
+            }
+            out.push_back(std::move(name));
+        }
+        return out;
+    }
+
+    SettingsTreeNode SettingsModel::Pruned(const std::vector<std::string>& keep) const
+    {
+        const std::unordered_set<std::string> keepSet(keep.begin(), keep.end());
+        std::unordered_set<std::string> pages;
+        for (const SettingsPageRef& p : m_pages)
+            if (InWindow(p.scope, m_window)) pages.insert(p.categoryPath);
+        SettingsTreeNode out;
+        (void)PruneInto(m_root, keepSet, pages, out);
+        return out;
     }
 }

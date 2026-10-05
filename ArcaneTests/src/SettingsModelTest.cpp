@@ -6,6 +6,7 @@
 #include <Settings/SettingsModel.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -91,4 +92,90 @@ TEST_CASE("RolesForManifest takes the game module's stem and the enabled plugins
     CHECK(r.gameModule == "ReferenceGame");
     CHECK((r.plugins == std::vector<std::string>{ "Alpha" }));
     CHECK(RolesForManifest(ProjectManifest{}).gameModule.empty());
+}
+
+namespace
+{
+    bool Has(const std::vector<std::string>& v, std::string_view n) { return std::find(v.begin(), v.end(), n) != v.end(); }
+    const SettingsTreeNode* FindPath(const SettingsTreeNode& node, std::string_view path)
+    {
+        if (node.path == path) return &node;
+        for (const SettingsTreeNode& c : node.children)
+            if (const SettingsTreeNode* hit = FindPath(c, path)) return hit;
+        return nullptr;
+    }
+}
+
+TEST_CASE("SettingsModel::Search matches name, display name, help and keywords -- every token, any case", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "editor.graph.fitMinZoom", { .type = CVarType::Float32, .def = CVarValue::Float32(0.5f),
+        .scope = SettingScope::PreferencesMachine, .keywords = "frame camera", .help = "Smallest zoom a frame-to-fit may pick." }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "editor.undo.maxSteps", { .type = CVarType::Int32, .def = CVarValue::Int32(100),
+        .scope = SettingScope::PreferencesProject, .displayName = "History depth", .help = "Undo history depth in steps." }).IsStale());
+    SettingsModel m;
+    m.Rebuild(reg, SettingScope::PreferencesMachine);
+    CHECK((m.Search("FITMIN") == std::vector<std::string>{ "editor.graph.fitMinZoom" }));      // the name, any case
+    CHECK(Has(m.Search("history depth"), "editor.undo.maxSteps")); // display name and help; built-in settings can match too
+    CHECK_FALSE(Has(m.Search("history depth"), "editor.graph.fitMinZoom"));
+    CHECK((m.Search("camera") == std::vector<std::string>{ "editor.graph.fitMinZoom" }));      // keywords
+    CHECK((m.Search("zoom pick") == std::vector<std::string>{ "editor.graph.fitMinZoom" }));   // tokens across fields
+    CHECK(m.Search("zoom history").empty());                                                  // AND, not OR
+    const std::vector<std::string> everything = m.Search("");
+    CHECK(Has(everything, "editor.graph.fitMinZoom"));
+    CHECK(Has(everything, "editor.undo.maxSteps"));
+}
+
+TEST_CASE("SettingsModel::Visible applies Modified, Overridden, Project overrides and the advanced gate", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.meshCull", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.debugMarkers", { .type = CVarType::Bool, .def = CVarValue::Bool(false), .flags = CVarFlags::Dev }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "render.secret", { .type = CVarType::Bool, .def = CVarValue::Bool(false), .flags = CVarFlags::Hidden }).IsStale());
+    REQUIRE(reg.SetRung("render.vsync", SetBy::Project, CVarValue::Bool(false), "project"));               // modified
+    REQUIRE(reg.Set(reg.Find("render.meshCull"), CVarValue::Bool(true), SetBy::Console) == SetResult::Applied);   // overridden, equal to its default
+    reg.Publish();
+    SettingsModel m;
+    m.Rebuild(reg, SettingScope::Project);
+    using F = SettingsModel::Filter;
+    const std::vector<std::string> plain = m.Visible(reg, "", F::All, false);
+    CHECK(Has(plain, "render.vsync"));
+    CHECK(Has(plain, "render.meshCull"));
+    CHECK_FALSE(Has(plain, "render.debugMarkers"));
+    CHECK_FALSE(Has(plain, "render.secret"));
+    const std::vector<std::string> advanced = m.Visible(reg, "", F::All, true);
+    CHECK(Has(advanced, "render.debugMarkers"));
+    CHECK(Has(advanced, "render.secret"));
+    CHECK((m.Visible(reg, "render", F::Modified, false) == std::vector<std::string>{ "render.vsync" }));
+    CHECK((m.Visible(reg, "render", F::Overridden, false) == std::vector<std::string>{ "render.meshCull" }));
+
+    REQUIRE_FALSE(AddSetting(reg, "editor.undo.maxSteps", { .type = CVarType::Int32, .def = CVarValue::Int32(100),
+        .scope = SettingScope::PreferencesProject }).IsStale());
+    REQUIRE_FALSE(AddSetting(reg, "editor.graph.fitMinZoom", { .type = CVarType::Float32, .def = CVarValue::Float32(0.5f),
+        .scope = SettingScope::PreferencesMachine }).IsStale());
+    REQUIRE(reg.SetRung("editor.undo.maxSteps", SetBy::User, CVarValue::Int32(100), "user"));   // a project override equal to the default
+    reg.Publish();
+    SettingsModel p;
+    p.Rebuild(reg, SettingScope::PreferencesMachine);
+    CHECK((p.Visible(reg, "editor", F::ProjectOverrides, false) == std::vector<std::string>{ "editor.undo.maxSteps" }));
+    CHECK(p.Visible(reg, "editor", F::Modified, false).empty());
+}
+
+TEST_CASE("SettingsModel::Pruned keeps hit rows with their ancestors and every page, and drops empty branches", "[settings-ui]")
+{
+    CVarRegistry reg;
+    for (const char* n : { "editor.graph.fitMinZoom", "editor.graph.wire.thickness", "editor.undo.maxSteps" })
+        REQUIRE_FALSE(AddSetting(reg, n, { .type = CVarType::Float32, .def = CVarValue::Float32(1.0f),
+                                           .scope = SettingScope::PreferencesMachine }).IsStale());
+    SettingsModel m;
+    m.SetPages({ SettingsPageRef{ SettingScope::PreferencesMachine, "Appearance/Theme", "Theme" } });
+    m.Rebuild(reg, SettingScope::PreferencesMachine);
+    const SettingsTreeNode t = m.Pruned({ "editor.graph.wire.thickness" });
+    REQUIRE(FindPath(t, "Editor/Graph/Wire") != nullptr);
+    CHECK((FindPath(t, "Editor/Graph/Wire")->cvars == std::vector<std::string>{ "editor.graph.wire.thickness" }));
+    REQUIRE(FindPath(t, "Editor/Graph") != nullptr);
+    CHECK(FindPath(t, "Editor/Graph")->cvars.empty());        // fitMinZoom was not kept
+    CHECK(FindPath(t, "Editor/Undo") == nullptr);
+    CHECK(FindPath(t, "Appearance/Theme") != nullptr);         // a page always stays
 }

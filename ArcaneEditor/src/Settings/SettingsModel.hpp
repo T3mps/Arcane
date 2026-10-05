@@ -66,6 +66,19 @@ namespace Arcane::Editor
         void Rebuild(const CVarRegistry&, SettingScope window);   // Preferences window = PreferencesMachine + PreferencesProject
         const SettingsTreeNode& Tree() const { return m_root; }
 
+        // Names in this window whose name, display name, help or keywords
+        // hold EVERY whitespace-separated token of `query`, case-insensitive.
+        std::vector<std::string> Search(std::string_view query) const;
+        // The rows a window draws: Search(query), then `filter` (Modified:
+        // value != default; Overridden: a rung above the row's target wins;
+        // ProjectOverrides: the User rung holds a value, Preferences only),
+        // then the advanced gate (Dev and Hidden rows only when showAdvanced).
+        [[nodiscard]] std::vector<std::string> Visible(const CVarRegistry& registry, std::string_view query,
+                                                       Filter filter, bool showAdvanced) const;
+        // The tree cut down to nodes that hold a `keep` row, their ancestors,
+        // and the page nodes (a page always stays).
+        [[nodiscard]] SettingsTreeNode Pruned(const std::vector<std::string>& keep) const;
+
         [[nodiscard]] const SettingsTreeNode* Find(std::string_view path) const;
         [[nodiscard]] const CVarDescInfo* Desc(std::string_view name) const;
         [[nodiscard]] SettingScope Window() const noexcept { return m_window; }
