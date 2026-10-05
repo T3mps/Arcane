@@ -23,6 +23,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
+#include <Arcane/Platform/Platform.hpp>
 
 #include <Arcane/Assets/ImageCompare.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
@@ -329,12 +330,22 @@ namespace
                 m_hadOld = true;
                 m_old = old;
             }
+#if ARCANE_PLATFORM_WINDOWS
             _putenv_s(name, value.c_str());
+#else
+            ::setenv(name, value.c_str(), 1);
+#endif
         }
 
         ~ScopedEnvironmentValue()
         {
+#if ARCANE_PLATFORM_WINDOWS
             _putenv_s(m_name, m_hadOld ? m_old.c_str() : "");
+#else
+            // _putenv_s(name, "") REMOVES the variable; POSIX spells that unsetenv.
+            if (m_hadOld) ::setenv(m_name, m_old.c_str(), 1);
+            else          ::unsetenv(m_name);
+#endif
         }
 
     private:
