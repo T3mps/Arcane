@@ -161,8 +161,8 @@ TEST_CASE("HostBoot::GameModule resolves the project's Binaries/ copy when built
             == dir / "Binaries" / Arcane::Platform::ModuleFileName("Aphelyon"));
 
     // Without the built copy, it stays a bare name (borrowing path, resolved beside exe).
-    fs::remove(dir / "Binaries" / "Aphelyon.dll", ec);
-    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == "Aphelyon.dll");
+    fs::remove(dir / "Binaries" / Arcane::Platform::ModuleFileName("Aphelyon"), ec);
+    REQUIRE(Arcane::HostBoot::GameModule(&*proj, "Fallback.dll") == Arcane::Platform::ModuleFileName("Aphelyon"));
     fs::remove_all(dir, ec);
 }
 
