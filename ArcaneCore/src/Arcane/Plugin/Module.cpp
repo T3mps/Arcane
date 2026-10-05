@@ -126,11 +126,47 @@ namespace Arcane
                 resolved = std::filesystem::path(".") / path;
         }
         NativeHandle handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!handle)
+
+        // The DEPENDENCY half of the same rule. The PE loader maps a module's
+        // own imports (a game module's ArcaneClient.dll) from the application
+        // directory too; ELF looks only at the module's RUNPATH,
+        // LD_LIBRARY_PATH and the system paths -- and a hot-reload copy runs
+        // from a temp directory, where $ORIGIN finds nothing. So when the
+        // failure names a missing DEPENDENCY that sits beside the exe, map it
+        // from there and retry: an already-loaded library satisfies a later
+        // DT_NEEDED by name. Bounded; anything else fails as before.
+        for (int attempt = 0; !handle && attempt < 8; ++attempt)
         {
-            const char* err = ::dlerror();
-            t_lastLoadError = err ? err : "dlopen failed";
+            const char* raw = ::dlerror();
+            const std::string err = raw ? raw : "dlopen failed";
+            t_lastLoadError = err;
+
+            // glibc: "<dependency>: cannot open shared object file: ..."
+            constexpr std::string_view kMissing = ": cannot open shared object file";
+            const std::size_t tail = err.find(kMissing);
+            if (tail == std::string::npos)
+                break;
+            const std::size_t head = err.rfind(": ", tail == 0 ? 0 : tail - 1);
+            const std::string dependency =
+                err.substr(head == std::string::npos ? 0 : head + 2,
+                           tail - (head == std::string::npos ? 0 : head + 2));
+            const std::string self = ExecutablePathUtf8();
+            if (dependency.empty() || dependency.find('/') != std::string::npos || self.empty())
+                break;   // the module itself is missing, or the name is a path: not this rule
+            std::error_code ec;
+            const std::filesystem::path besideExe = std::filesystem::path(self).parent_path() / dependency;
+            if (!std::filesystem::exists(besideExe, ec))
+                break;
+            if (!::dlopen(besideExe.c_str(), RTLD_NOW | RTLD_LOCAL))
+            {
+                const char* depErr = ::dlerror();
+                t_lastLoadError = depErr ? depErr : err;
+                break;
+            }
+            handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
         }
+        if (handle)
+            t_lastLoadError.clear();
 #endif
         if (!handle)
             return std::nullopt;
