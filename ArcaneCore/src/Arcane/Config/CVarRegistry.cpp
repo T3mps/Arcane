@@ -36,6 +36,7 @@ namespace Arcane
             case SetBy::EngineConfig: return "EngineConfig";
             case SetBy::Plugin: return "Plugin";
             case SetBy::Project: return "Project";
+            case SetBy::EditorUser: return "EditorUser";
             case SetBy::User: return "User";
             case SetBy::CommandLine: return "CommandLine";
             case SetBy::Code: return "Code";
@@ -1020,6 +1021,20 @@ namespace Arcane
         }
     }
 
+    bool CVarRegistry::ClearRung(CVarHandle handle, SetBy rung)
+    {
+        if (rung == SetBy::Default || handle.index >= m->slots.size()) return false;
+        Slot& slot = m->slots[handle.index];
+        if (!slot.alive || slot.generation != handle.generation) return false;
+        const auto before = slot.history.size();
+        std::erase_if(slot.history, [rung](const CVarHistoryRecord& h) { return h.by == rung; });
+        if (slot.history.size() == before) return false;
+        if (slot.history.empty())
+            slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
+        slot.dirty = true;
+        return true;
+    }
+
     void CVarRegistry::SetPolicy(CVarPolicyFn fn, void* user, std::string_view module)
     {
         m->policy = fn;
@@ -1106,6 +1121,9 @@ namespace Arcane
         out.pending = slot.history.back().value;
         out.setBy = slot.history.back().by;
         out.history = slot.history;
+        out.audience = slot.audience;
+        out.scope = slot.scope;
+        out.apply = slot.apply;
         return out;
     }
 

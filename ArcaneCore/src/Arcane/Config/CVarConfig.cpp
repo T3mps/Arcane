@@ -23,12 +23,11 @@ namespace Arcane
             return category == "input";
         }
 
-        // The value the User rung holds: its newest record, whatever rung
-        // currently wins. nullptr when the User rung never set this cvar.
-        const CVarValue* NewestUserValue(const CVarExplain& explained)
+        // The newest value of this rung, even when a stronger rung wins.
+        const CVarValue* NewestValueAt(const CVarExplain& explained, SetBy rung)
         {
             for (auto it = explained.history.rbegin(); it != explained.history.rend(); ++it)
-                if (it->by == SetBy::User)
+                if (it->by == rung)
                     return &it->value;
             return nullptr;
         }
@@ -397,6 +396,12 @@ namespace Arcane
 
     void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir)
     {
+        WriteCVarArchive(registry, userDir, SetBy::User);
+    }
+
+    void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& dir, SetBy rung)
+    {
+        if (rung != SetBy::User && rung != SetBy::EditorUser) return;
         // category -> the (key, value) pairs it owns, plus the renamed keys
         // (aliases' old names) this write retires from the file. Ordered, so
         // the writes are too.
@@ -404,6 +409,7 @@ namespace Arcane
         {
             std::vector<std::pair<std::string, nlohmann::json>> values;
             std::vector<std::string> retired;
+            std::vector<std::string> erase;
         };
         std::map<std::string, CategoryWrite> owned;
         std::set<std::string> written;
@@ -417,8 +423,15 @@ namespace Arcane
             if (IsDocumentCategory(category)) continue;
             const auto explained = registry.Explain(entry.name);
             if (!explained) continue;
-            const CVarValue* value = NewestUserValue(*explained);
-            if (!value) continue;
+            const bool machineWide = explained->scope == SettingScope::PreferencesMachine;
+            if (rung == SetBy::EditorUser && !machineWide) continue;
+            const CVarValue* value = NewestValueAt(*explained, rung);
+            if (!value)
+            {
+                if (rung == SetBy::User && machineWide)
+                    owned[std::move(category)].erase.push_back(entry.name.substr(dot + 1));
+                continue;
+            }
             std::vector<std::string> enumNames;
             if (entry.type == CVarType::Enum)
                 if (const auto meta = registry.Metadata(registry.Find(entry.name))) enumNames = meta->enumNames;
@@ -439,12 +452,12 @@ namespace Arcane
         }
         if (owned.empty()) return;
         std::error_code ec;
-        std::filesystem::create_directories(userDir, ec);
         for (auto& [category, write] : owned)
         {
-            const std::filesystem::path file = userDir / (category + ".json");
+            const std::filesystem::path file = dir / (category + ".json");
             const std::optional<std::string> before = ReadWholeFile(file);
-            if (write.values.empty() && !before) continue;   // only retirements, and no file to retire them from
+            if (write.values.empty() && !before) continue;   // only removals, and no file to remove them from
+            std::filesystem::create_directories(dir, ec);
             nlohmann::json doc = nlohmann::json::object();
             if (before)
             {
@@ -471,6 +484,8 @@ namespace Arcane
                 }
             }
             for (const std::string& key : write.retired)
+                EraseLeaf(doc, key);
+            for (const std::string& key : write.erase)
                 EraseLeaf(doc, key);
             for (auto& [key, value] : write.values)
             {

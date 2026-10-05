@@ -86,6 +86,9 @@ namespace Arcane
     // over the old one, so a crash mid-write never leaves a torn file; an
     // unchanged file is not rewritten.
     ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
+    // Persist one user rung. EditorUser contains only machine-wide preferences;
+    // User also removes cleared machine-wide project overrides from existing files.
+    ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& dir, SetBy rung);
 
     // The context a host's `--set` runs in (settings plan, integration ruling
     // I3): the Editor context in a Debug/Release build, so a developer's

@@ -65,6 +65,9 @@ namespace Arcane
         CVarValue published = CVarValue::Bool(false);
         CVarValue pending = CVarValue::Bool(false);
         SetBy setBy = SetBy::Default;
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
         std::vector<CVarHistoryRecord> history;   // oldest first; the back is current
     };
 
@@ -403,6 +406,10 @@ namespace Arcane
         // hold. Runtime drops a closing project's User layer this way, so the
         // next project's archive cannot inherit it (T3-D2).
         void RevertLayer(SetBy by);
+
+        // Remove one cvar's records at a rung. The default is never cleared.
+        // The next Publish exposes the strongest remaining value.
+        bool ClearRung(CVarHandle handle, SetBy rung);
 
         // The game's policy: one per process. `module` is the module that
         // installed it, and UnregisterModule(module) clears it. A null fn clears it now.

@@ -75,6 +75,7 @@ namespace Arcane
         EngineConfig = 10,
         Plugin       = 20,
         Project      = 30,
+        EditorUser   = 35,
         User         = 40,
         CommandLine  = 50,
         Code         = 60,
