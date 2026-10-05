@@ -42,8 +42,11 @@ namespace Arcane
 
         // The same on an explicit registry and context (tests, tools).
         // categoryPrefix: "" = all; "audio" matches "audio.x" but not "audiox.y".
+        // Skips entries the registry's read rule denies for `context`
+        // (spec s3.2: Protected is never readable outside Editor and ServerAdmin).
         [[nodiscard]] ARC_CORE_API std::vector<CVarListEntryEx> List(const CVarRegistry& registry,
-                                                                        std::string_view categoryPrefix);
+                                                                        std::string_view categoryPrefix,
+                                                                        CVarContext context);
         ARC_CORE_API SetResult Set(CVarRegistry& registry, std::string_view name, const CVarValue& value,
                                       CVarContext context);
     }

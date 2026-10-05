@@ -36,13 +36,16 @@ namespace Arcane
         NetMode SessionMode() noexcept { return g_sessionMode.load(std::memory_order_acquire); }
         CVarContext SessionContext() noexcept { return CVarContextFor(SessionMode()); }
 
-        std::vector<CVarListEntryEx> List(const CVarRegistry& registry, std::string_view categoryPrefix)
+        std::vector<CVarListEntryEx> List(const CVarRegistry& registry, std::string_view categoryPrefix,
+                                          CVarContext context)
         {
             std::vector<CVarListEntryEx> out;
             for (CVarListEntryEx& e : registry.ListEx())
             {
                 if (e.audience != Audience::PlayerSafe) continue;
                 if (!MatchesCategory(e.name, categoryPrefix)) continue;
+                const CVarHandle handle = registry.Find(e.name);
+                if (!registry.CanRead(handle, context)) continue;
                 out.push_back(std::move(e));
             }
             std::sort(out.begin(), out.end(), [](const CVarListEntryEx& a, const CVarListEntryEx& b) {
@@ -64,7 +67,7 @@ namespace Arcane
 
         std::vector<CVarListEntryEx> List(std::string_view categoryPrefix)
         {
-            return List(CVarRegistry::Get(), categoryPrefix);
+            return List(CVarRegistry::Get(), categoryPrefix, SessionContext());
         }
 
         SetResult Set(std::string_view name, const CVarValue& value)

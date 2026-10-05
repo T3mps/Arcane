@@ -110,6 +110,12 @@ TEST_CASE("CVarRegistry::ListEx carries every descriptor field a settings menu n
 
 namespace
 {
+    constexpr const char* kInventoryPlayerSafeNames[] = {
+        "render.backend", "render.vsync", "render.window.width", "render.window.height",
+        "render.adapter", "render.allowTearing", "render.textureAnisotropy",
+        "input.deadzone.defaultMin", "input.deadzone.defaultMax", "audio.channels"
+    };
+
     void RegisterKnob(CVarRegistry& reg, std::string_view name, CVarValue def, Audience audience,
                       CVarFlags flags = CVarFlags::None)
     {
@@ -144,14 +150,14 @@ TEST_CASE("PlayerSettings::List returns PlayerSafe settings only, by category pr
     RegisterKnob(reg, "audiox.knob", CVarValue::Bool(true), Audience::PlayerSafe);           // prefix boundary
     RegisterKnob(reg, "render.vsync", CVarValue::Bool(true), Audience::PlayerSafe);
 
-    const auto audio = PlayerSettings::List(reg, "audio");
+    const auto audio = PlayerSettings::List(reg, "audio", CVarContext::LocalHost);
     REQUIRE(audio.size() == 2);
     CHECK(audio[0].name == "audio.channels");          // same category, same order -> by name
     CHECK(audio[1].name == "audio.masterVolume");
     for (const CVarListEntryEx& e : audio) CHECK(e.audience == Audience::PlayerSafe);
 
-    CHECK(PlayerSettings::List(reg, "audio.").size() == 2);
-    CHECK(PlayerSettings::List(reg, "").size() == 4);  // every PlayerSafe row, no Game row
+    CHECK(PlayerSettings::List(reg, "audio.", CVarContext::LocalHost).size() == 2);
+    CHECK(PlayerSettings::List(reg, "", CVarContext::LocalHost).size() == 4);  // every PlayerSafe row, no Game row
 }
 
 TEST_CASE("PlayerSettings::Set follows the audience x context table: LocalHost reaches Server settings, Client reaches only player-safe ones", "[player-settings]")
@@ -204,23 +210,18 @@ TEST_CASE("PlayerSettings follows the primary world's net mode through the plugi
     host.Unload();
 }
 
-TEST_CASE("the inventory's PlayerSafe rows are what a game's settings menu lists; no editor setting ever is", "[player-settings]")
+TEST_CASE("PlayerSettings::List includes the inventory's PlayerSafe names from a registered fixture", "[player-settings]")
 {
-    // Names from the frozen inventory (S5). If S5's review renamed a row, use the frozen name.
-    // S6 owns converting those rows onto the process registry. This S7 lane is
-    // cut from S1+S5 (DAG: S7-1..S7-8 need only S1), so the names are absent
-    // until S6 lands. When a name is registered, List("") must include it.
-    const std::vector<CVarListEntryEx> all = PlayerSettings::List("");
-    for (const char* name : { "render.backend", "render.vsync", "render.window.width", "render.window.height",
-                              "render.adapter", "render.allowTearing", "render.textureAnisotropy",
-                              "input.deadzone.defaultMin", "input.deadzone.defaultMax", "audio.channels" })
+    CVarRegistry reg;
+    for (const char* name : kInventoryPlayerSafeNames)
+        RegisterKnob(reg, name, CVarValue::Bool(true), Audience::PlayerSafe);
+    RegisterKnob(reg, "editor.undo.maxSteps", CVarValue::Int32(100), Audience::Editor);
+
+    const std::vector<CVarListEntryEx> all = PlayerSettings::List(reg, "", CVarContext::LocalHost);
+    REQUIRE(all.size() == 10);
+    for (const char* name : kInventoryPlayerSafeNames)
     {
         INFO(name);
-        if (CVarRegistry::Get().Find(name).IsStale())
-        {
-            WARN("inventory PlayerSafe row not registered yet (S6): " << name);
-            continue;
-        }
         CHECK(std::any_of(all.begin(), all.end(), [&](const CVarListEntryEx& e) { return e.name == name; }));
     }
     for (const CVarListEntryEx& e : all)
@@ -228,5 +229,60 @@ TEST_CASE("the inventory's PlayerSafe rows are what a game's settings menu lists
         INFO(e.name);
         CHECK(e.audience == Audience::PlayerSafe);
         CHECK_FALSE(e.name.starts_with("editor."));
+    }
+}
+
+TEST_CASE("PlayerSettings::List skips Protected PlayerSafe rows outside Editor and ServerAdmin", "[player-settings]")
+{
+    CVarRegistry reg;
+    RegisterKnob(reg, "audio.masterVolume", CVarValue::Float32(0.8f), Audience::PlayerSafe);
+    RegisterKnob(reg, "audio.secretToken", CVarValue::String("hunter2"), Audience::PlayerSafe, CVarFlags::Protected);
+
+    for (const CVarContext ctx : { CVarContext::LocalHost, CVarContext::Client })
+    {
+        const std::vector<CVarListEntryEx> listed = PlayerSettings::List(reg, "", ctx);
+        CHECK(FindEntry(listed, "audio.masterVolume"));
+        CHECK(FindEntry(listed, "audio.secretToken") == nullptr);
+    }
+    for (const CVarContext ctx : { CVarContext::Editor, CVarContext::ServerAdmin })
+    {
+        const std::vector<CVarListEntryEx> listed = PlayerSettings::List(reg, "", ctx);
+        CHECK(FindEntry(listed, "audio.masterVolume"));
+        const CVarListEntryEx* secret = FindEntry(listed, "audio.secretToken");
+        REQUIRE(secret);
+        CHECK(secret->value.AsString() == "hunter2");
+    }
+}
+
+TEST_CASE("the inventory's PlayerSafe rows are what a game's settings menu lists; no editor setting ever is", "[player-settings]")
+{
+    // Names from the frozen inventory (S5). If S5's review renamed a row, use the frozen name.
+    // S6 owns converting those rows onto the process registry. Until then this
+    // integration case skips the name CHECKs; the fixture case above always
+    // verifies List against registered copies of the same names.
+    const std::vector<CVarListEntryEx> all = PlayerSettings::List("");
+    for (const CVarListEntryEx& e : all)
+    {
+        INFO(e.name);
+        CHECK(e.audience == Audience::PlayerSafe);
+        CHECK_FALSE(e.name.starts_with("editor."));
+    }
+
+    bool anyRegistered = false;
+    for (const char* name : kInventoryPlayerSafeNames)
+    {
+        if (!CVarRegistry::Get().Find(name).IsStale())
+        {
+            anyRegistered = true;
+            break;
+        }
+    }
+    if (!anyRegistered)
+        SKIP("inventory PlayerSafe rows not on the process registry yet (S6)");
+
+    for (const char* name : kInventoryPlayerSafeNames)
+    {
+        INFO(name);
+        CHECK(std::any_of(all.begin(), all.end(), [&](const CVarListEntryEx& e) { return e.name == name; }));
     }
 }
