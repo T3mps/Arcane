@@ -495,15 +495,28 @@ namespace
         char stamp[32];
         TimeStampForFilename(stamp, sizeof(stamp));
 
+        // "<dir>/<app>-<stamp>-pid<n>": the Windows spelling with '/'. Built
+        // with the bounded appender (a path that does not fit is truncated,
+        // exactly as the Windows snprintf truncates it).
+        char pid[16];
+        std::snprintf(pid, sizeof(pid), "%d", static_cast<int>(::getpid()));
         char stem[kPathMax], txtPath[kPathMax], dmpPath[kPathMax];
         char diagPath[kPathMax], tmpPath[kPathMax], logTxtPath[kPathMax];
-        std::snprintf(stem, sizeof(stem), "%s/%s-%s-pid%d",
-                      g_reportDirSnap, g_appNameSnap, stamp, static_cast<int>(::getpid()));
-        std::snprintf(txtPath,    sizeof(txtPath),    "%s.txt",         stem);
-        std::snprintf(dmpPath,    sizeof(dmpPath),    "%s.dmp",         stem);
-        std::snprintf(diagPath,   sizeof(diagPath),   "%s.arcdiag",     stem);
-        std::snprintf(tmpPath,    sizeof(tmpPath),    "%s.arcdiag.tmp", stem);
-        std::snprintf(logTxtPath, sizeof(logTxtPath), "%s.log.txt",     stem);
+        {
+            Text t{ stem, sizeof(stem) };
+            t.Add(g_reportDirSnap); t.Add("/"); t.Add(g_appNameSnap); t.Add("-"); t.Add(stamp); t.Add("-pid"); t.Add(pid);
+        }
+        const auto sibling = [&stem](char* out, std::size_t cap, const char* ext) noexcept
+        {
+            Text t{ out, cap };
+            t.Add(stem);
+            t.Add(ext);
+        };
+        sibling(txtPath,    sizeof(txtPath),    ".txt");
+        sibling(dmpPath,    sizeof(dmpPath),    ".dmp");
+        sibling(diagPath,   sizeof(diagPath),   ".arcdiag");
+        sibling(tmpPath,    sizeof(tmpPath),    ".arcdiag.tmp");
+        sibling(logTxtPath, sizeof(logTxtPath), ".log.txt");
 
         // Step 2: the portable stack of the walked thread.
         const std::size_t frameCount = CaptureWalkedStack(p);
