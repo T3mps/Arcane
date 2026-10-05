@@ -286,9 +286,18 @@ project "ArcaneCore"
 
     -- ELF: dlopen/dladdr (Module, ForeignModules) and threads; -z defs makes
     -- an unresolved symbol a link error HERE, not at the first exe link.
+    -- Hidden visibility (inventory G1): the PE model, where a DLL exports
+    -- ONLY what ARCANE_CORE_API marks and every header-defined static (the
+    -- spdlog registry, Logger's sink stack, Astra's per-module statics) is
+    -- the module's own. With default visibility ELF exported ~59k symbols
+    -- and silently unified those statics across the exe and both engine
+    -- .so's -- state the engine's Windows-designed cross-module seams
+    -- (SharedTypeContext, Log::Engine) assume is per-module.
     filter "system:not windows"
         links { "dl", "pthread" }
         linkoptions { "-Wl,-z,defs" }
+        visibility "Hidden"
+        inlinesvisibility "Hidden"
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -852,6 +861,12 @@ project "ArcaneClient"
         -- SDL3 (shared, from the system -- see SDL3_INCLUDE_DIR at the top),
         -- dlopen/dladdr, threads.
         links { "SDL3", "dl", "pthread" }
+        -- Hidden visibility, as ArcaneCore (inventory G1): only ARCANE_API
+        -- leaves the .so. imgui is unaffected -- its objects are compiled in
+        -- the imgui static lib at default visibility and pulled in whole, so
+        -- GImGui and the full API still export (the /WHOLEARCHIVE contract).
+        visibility "Hidden"
+        inlinesvisibility "Hidden"
         if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR } end
         -- dxcapi.h + its WinAdapter.h COM shim for the runtime ShaderCompiler
         -- (the Windows SDK supplies dxcapi.h there). From the Linux DXC
@@ -2051,6 +2066,21 @@ local function test_plugin(name, defs)
         -- name it Name + the platform extension (see arcane_module above).
         filter "system:not windows"
             targetprefix ""
+            -- ELF: a LOADED module keeps its own copy of every header-defined
+            -- static, exactly as a PE DLL does. With default visibility GCC emits
+            -- those (Astra's per-type meta factories, the pending-meta queue,
+            -- fmt/spdlog statics) as STB_GNU_UNIQUE: bound process-wide AND
+            -- marking the .so non-unloadable, so a hot-reloaded image's entries
+            -- outlived it and were later run from unmapped code. Only the
+            -- extern "C" GamePlugin_* entry points (ARCANE_GAME_MODULE_EXPORT,
+            -- visibility("default")) leave the module.
+            visibility "Hidden"
+            inlinesvisibility "Hidden"
+        filter { "system:not windows", "toolset:gcc" }
+            -- GCC still emits STB_GNU_UNIQUE for a few std:: objects, and ONE such
+            -- symbol makes glibc refuse to unmap the module on dlclose; a PE module
+            -- is gone after FreeLibrary, and hot reload is built on that.
+            buildoptions { "-fno-gnu-unique" }
         filter {}
         targetdir ("bin/" .. outputdir .. "/" .. name)
         objdir ("bin-int/" .. outputdir .. "/" .. name)
@@ -2106,6 +2136,13 @@ project "ReferenceGameUnderTest"
     targetname "ReferenceGameUnderTest"
     filter "system:not windows"
         targetprefix ""   -- a loaded module: Name.so (see arcane_module)
+        visibility "Hidden"           -- a loaded module's statics stay its own (see test_plugin above)
+        inlinesvisibility "Hidden"
+    filter { "system:not windows", "toolset:gcc" }
+        -- GCC still emits STB_GNU_UNIQUE for a few std:: objects, and ONE such
+        -- symbol makes glibc refuse to unmap the module on dlclose; a PE module
+        -- is gone after FreeLibrary, and hot reload is built on that.
+        buildoptions { "-fno-gnu-unique" }
     filter {}
     targetdir ("bin/" .. outputdir .. "/ReferenceGameUnderTest")
     objdir ("bin-int/" .. outputdir .. "/ReferenceGameUnderTest")
@@ -2162,6 +2199,13 @@ project "TemplateSmokePlugin"
     targetname "TemplateSmokePlugin"
     filter "system:not windows"
         targetprefix ""   -- a loaded module: Name.so (see arcane_module)
+        visibility "Hidden"           -- a loaded module's statics stay its own (see test_plugin above)
+        inlinesvisibility "Hidden"
+    filter { "system:not windows", "toolset:gcc" }
+        -- GCC still emits STB_GNU_UNIQUE for a few std:: objects, and ONE such
+        -- symbol makes glibc refuse to unmap the module on dlclose; a PE module
+        -- is gone after FreeLibrary, and hot reload is built on that.
+        buildoptions { "-fno-gnu-unique" }
     filter {}
     targetdir ("bin/" .. outputdir .. "/TemplateSmokePlugin")
     objdir ("bin-int/" .. outputdir .. "/TemplateSmokePlugin")

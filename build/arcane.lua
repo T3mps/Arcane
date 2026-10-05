@@ -131,6 +131,21 @@ function arcane_game_module(name)
         -- names it by stem + the platform extension (Arcane/Platform/Platform.hpp).
         filter "system:not windows"
             targetprefix ""
+            -- ELF: a LOADED module keeps its own copy of every header-defined
+            -- static, exactly as a PE DLL does. With default visibility GCC emits
+            -- those (Astra's per-type meta factories, the pending-meta queue,
+            -- fmt/spdlog statics) as STB_GNU_UNIQUE: bound process-wide AND
+            -- marking the .so non-unloadable, so a hot-reloaded image's entries
+            -- outlived it and were later run from unmapped code. Only the
+            -- extern "C" GamePlugin_* entry points (ARCANE_GAME_MODULE_EXPORT,
+            -- visibility("default")) leave the module.
+            visibility "Hidden"
+            inlinesvisibility "Hidden"
+        filter { "system:not windows", "toolset:gcc" }
+            -- GCC still emits STB_GNU_UNIQUE for a few std:: objects, and ONE such
+            -- symbol makes glibc refuse to unmap the module on dlclose; a PE module
+            -- is gone after FreeLibrary, and hot reload is built on that.
+            buildoptions { "-fno-gnu-unique" }
         filter {}
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.

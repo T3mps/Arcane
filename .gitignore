@@ -124,6 +124,8 @@ Desktop.ini
 # -- Linux DXC (scripts/fetch-dxc-linux.sh) -----------------------------------
 # The Linux shader compiler release, fetched rather than vendored.
 ThirdParty/tools/dxc-linux/
+# The Linux premake5 (scripts/fetch-premake-linux.sh), beside the vendored .exe.
+ThirdParty/premake5/premake5
 
 # -- Engine gmake/ninja outputs (Linux port, 2026-10-05) ----------------------
 # `premake5 gmake` writes the root Makefile plus one <Project>.make beside each
