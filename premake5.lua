@@ -121,11 +121,14 @@ workspace "Arcane"
     filter "system:not windows"
         pic "On"
         buildoptions { "-ffp-contract=off", "-fno-fast-math" }
-        -- $ORIGIN: the staged layout (libArcaneCore.so/libArcaneClient.so and
-        -- game modules BESIDE the exe) must load without LD_LIBRARY_PATH,
-        -- exactly as the PE loader searches the exe directory first. Premake
-        -- adds the dev-layout ../ArcaneCore-style RUNPATH entries itself.
-        linkoptions { "-Wl,-rpath,'$$ORIGIN'" }
+        -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
+        -- beside the exe) must win, exactly as the PE loader searches the exe
+        -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy
+        -- loads and the injected-module census calls the engine foreign.
+        -- runpathdirs (unlike linkoptions) is emitted AHEAD of the
+        -- ../ArcaneCore-style entries premake adds for linked siblings, which
+        -- stay as the fallback for an unstaged tool.
+        runpathdirs { "%{cfg.targetdir}" }
     filter {}
 
     -- C4251 ("needs to have dll-interface"): disabled workspace-wide, deliberately.
