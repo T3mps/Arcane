@@ -156,3 +156,77 @@ TEST_CASE("RemoteCVarService: a command runs remotely only with ServerCanExecute
     CHECK_FALSE(f.service.Handle(Req("drop", "test.server.tick")).ok);
     CHECK_FALSE(f.service.Handle(Req("get", "")).ok);
 }
+
+TEST_CASE("RemoteCVarService: cvar_explain via the command path does not leak a Protected value or its history", "[remote-cvar]")
+{
+    Fixture f;
+    REQUIRE(f.service.Handle(Req("set", "test.server.password", "correcthorse")).ok);
+
+    const RemoteCVarResponse leaked = f.service.Handle(Req("set", "cvar_explain", "test.server.password"));
+    CHECK_FALSE(leaked.ok);
+    CHECK(leaked.text.find("hunter2") == std::string::npos);
+    CHECK(leaked.text.find("correcthorse") == std::string::npos);
+    CHECK(leaked.text.find("Default") == std::string::npos);
+    CHECK(leaked.text.find("Console") == std::string::npos);
+}
+
+TEST_CASE("RemoteCVarService: list applies ServerAdmin visibility; an Editor-only Protected name is absent", "[remote-cvar]")
+{
+    Fixture f;
+    Knob(f.reg, "editor.secret", CVarValue::String("editorhorse"), Audience::Editor, CVarFlags::Protected);
+
+    const RemoteCVarResponse list = f.service.Handle(Req("list", "editor"));
+    CHECK(list.text.find("editor.secret") == std::string::npos);
+    CHECK(list.text.find("editorhorse") == std::string::npos);
+
+    const RemoteCVarResponse got = f.service.Handle(Req("get", "editor.secret"));
+    CHECK_FALSE(got.ok);
+    CHECK(got.text.find("editorhorse") == std::string::npos);
+}
+
+TEST_CASE("RemoteCVarService: a set with a missing value on a known name is audited as denied", "[remote-cvar]")
+{
+    Fixture f;
+    const RemoteCVarResponse missing = f.service.Handle(Req("set", "test.server.tick"));
+    CHECK_FALSE(missing.ok);
+    REQUIRE(f.audit.records.size() == 1);
+    CHECK(f.audit.records.front().name == "test.server.tick");
+    CHECK(f.audit.records.front().callerId == "admin-1");
+    CHECK(f.audit.records.front().oldValue == "60");
+    CHECK(f.audit.records.front().newValue.empty());
+    CHECK(f.audit.records.front().context == CVarContext::ServerAdmin);
+    CHECK(f.audit.records.front().verdict == PolicyVerdict::Deny);
+
+    const RemoteCVarResponse prot = f.service.Handle(Req("set", "test.server.password"));
+    CHECK_FALSE(prot.ok);
+    REQUIRE(f.audit.records.size() == 2);
+    CHECK(f.audit.records.back().name == "test.server.password");
+    CHECK(f.audit.records.back().oldValue == "<protected>");
+    CHECK(f.audit.records.back().newValue.empty());
+    CHECK(f.audit.records.back().verdict == PolicyVerdict::Deny);
+}
+
+TEST_CASE("RemoteCVarService: get and explain on a ServerCanExecute command do not run it", "[remote-cvar]")
+{
+    Fixture f;
+    struct Flag { bool ran = false; } flag;
+    REQUIRE(f.reg.RegisterCommand("test.ping", CVarFlags::ServerCanExecute, "Ping.", "test-s7-remote",
+        [](std::string_view, void* user) -> CommandResult {
+            static_cast<Flag*>(user)->ran = true;
+            return { true, "pong" };
+        }, &flag));
+
+    const RemoteCVarResponse got = f.service.Handle(Req("get", "test.ping"));
+    CHECK_FALSE(got.ok);
+    CHECK_FALSE(flag.ran);
+    CHECK(got.text.find("pong") == std::string::npos);
+
+    const RemoteCVarResponse explained = f.service.Handle(Req("explain", "test.ping"));
+    CHECK_FALSE(explained.ok);
+    CHECK_FALSE(flag.ran);
+
+    const RemoteCVarResponse set = f.service.Handle(Req("set", "test.ping"));
+    CHECK(set.ok);
+    CHECK(flag.ran);
+    CHECK(set.text == "pong");
+}

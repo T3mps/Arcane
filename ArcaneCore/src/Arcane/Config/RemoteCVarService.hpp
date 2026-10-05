@@ -6,14 +6,21 @@
 // internal RPC.
 //
 // - Protected values are NEVER readable through this service, on any
-//   transport: get/explain refuse, list prints "<protected>", and a set is
-//   allowed but its audit record carries "<protected>" for old and new.
-// - Commands run only when they carry ServerCanExecute.
+//   transport: get/explain refuse, list prints "<protected>", a set is
+//   allowed but its audit record carries "<protected>" for old and new, and
+//   the cvar_explain command is refused (use the explain op) so history
+//   cannot leak through the command path.
+// - Commands run only via op set, and only when they carry ServerCanExecute.
+//   get/explain on a command is refused without executing it.
+// - list applies ServerAdmin visibility to every entry (Editor-audience
+//   names, including Protected ones, are absent).
 // - Hidden names answer "unknown", exactly like names that do not exist.
 // - Every set and every command run, allowed or refused, is handed to the
-//   injected sink (who, old, new, outcome, when). This sink is the SERVICE's
-//   audit; a host installs it OR the registry-wide SetAuditSink for the same
-//   destination, not both, or Server sets are recorded twice.
+//   injected sink (who, old, new, outcome, when). A set that names a known
+//   cvar but omits the value is a refused set and is audited as Deny.
+//   Unknown names are not audited. This sink is the SERVICE's audit; a host
+//   installs it OR the registry-wide SetAuditSink for the same destination,
+//   not both, or Server sets are recorded twice.
 //
 // THREADING: Handle runs on the registry's writer thread (ArcaneServer's tick
 // thread; Aphelyon serializes callers under a mutex). It publishes after a

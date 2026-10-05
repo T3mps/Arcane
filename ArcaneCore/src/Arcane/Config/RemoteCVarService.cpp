@@ -80,7 +80,7 @@ namespace Arcane
 
     RemoteCVarResponse RemoteCVarService::List(const std::string& prefix, const CVarCaller& caller)
     {
-        std::vector<CVarListEntry> entries = m_registry->List();
+        std::vector<CVarListEntry> entries = m_registry->List(CVarContext::ServerAdmin);
         std::sort(entries.begin(), entries.end(),
                   [](const CVarListEntry& a, const CVarListEntry& b) { return a.name < b.name; });
         std::string text;
@@ -88,6 +88,8 @@ namespace Arcane
         for (const CVarListEntry& e : entries)
         {
             if (!MatchesPrefix(e.name, prefix)) continue;
+            const CVarHandle handle = m_registry->Find(e.name);
+            if (!m_registry->CanRead(handle, CVarContext::ServerAdmin, &caller)) continue;
             std::string line;
             if (HasFlag(e.flags, CVarFlags::Protected))
             {
@@ -96,7 +98,7 @@ namespace Arcane
             else
             {
                 const ExecResult r = m_registry->Execute(e.name, CVarContext::ServerAdmin, SetBy::Console, &caller);
-                if (!r.ok) continue;   // not readable here (Editor audience, a policy)
+                if (!r.ok) continue;   // not readable here (a policy)
                 line = e.name + " = " + StripPrefix(e.name, r.text);
             }
             if (shown++ != 0) text += '\n';
@@ -114,6 +116,12 @@ namespace Arcane
         if (op == "explain") return { false, "'" + name + "' is a command, not a cvar" };
         if (!HasFlag(flags, CVarFlags::ServerCanExecute))
             return { false, "command '" + name + "' is not remotely executable (no ServerCanExecute)" };
+        // Only op set runs a command. get on a flagged command used to Execute
+        // it; the explain op is the remote history path, never cvar_explain.
+        if (op != "set")
+            return { false, "command '" + name + "' runs only via set" };
+        if (name == "cvar_explain")
+            return { false, "cvar_explain is not remotely executable; use the explain op" };
         const ExecResult r = m_registry->Execute(args.empty() ? name : name + " " + args, CVarContext::ServerAdmin,
                                                  SetBy::Console, &caller);
         Audit(name, callerId, {}, args, r.ok ? PolicyVerdict::Allow : PolicyVerdict::Deny);
@@ -158,7 +166,12 @@ namespace Arcane
         }
 
         // set
-        if (value.empty()) return { false, "set " + name + ": missing value" };
+        if (value.empty())
+        {
+            std::string before = isProtected ? std::string(kProtected) : ReadValue(name, caller);
+            Audit(name, request.callerId, std::move(before), std::string{}, PolicyVerdict::Deny);
+            return { false, "set " + name + ": missing value" };
+        }
         std::string before = isProtected ? std::string(kProtected) : ReadValue(name, caller);
         const ExecResult r = m_registry->Execute(name + " " + value, CVarContext::ServerAdmin, SetBy::Console, &caller);
         std::string after;
