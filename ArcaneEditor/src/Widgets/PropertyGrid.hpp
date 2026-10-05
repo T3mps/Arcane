@@ -151,6 +151,11 @@ namespace Arcane::Editor
         bool  reset = false;          // base/default reset slot
         bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
         std::function<std::string()> lead;   // value-cell lead painter -> its folded text (see above); empty = none
+        // A caller hook run right after the LABEL cell is drawn, while the
+        // label is still the last item (settings arc S3-7): `hovered` is its
+        // ForTooltip hover; IsItemHovered / BeginPopupContextItem attach to
+        // the label here. Honoured by every decorated row, ReadOnlyRow included.
+        std::function<void(bool hovered)> label;
     };
 
     class PropertyGrid
@@ -250,6 +255,8 @@ namespace Arcane::Editor
         // reset slot, inherited BeginDisabled) + PushID(label) / ProbeItem +
         // PopID. Plain rows (Text/ReadOnly/Button/Meter) reset the events and
         // IM_ASSERT that no decoration is pending.
+        // FieldLabelCell, or -- with a hook -- its shape with the hook run while the label is the last item.
+        void LabelCell(const char* label, bool dimmed, const std::function<void(bool)>& hook);
         void BeginValueCell(const char* label, bool dimmed);
         void EndValueCell(const char* label);
         void BeginPlainRow();
