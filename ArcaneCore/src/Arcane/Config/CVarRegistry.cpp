@@ -163,13 +163,6 @@ namespace Arcane
             return out;
         }
 
-        // "render.window.width" -> "render.window"; a single-segment name has none.
-        std::string DeriveCategoryPath(std::string_view name)
-        {
-            const std::size_t dot = name.rfind('.');
-            return dot == std::string_view::npos ? std::string{} : std::string(name.substr(0, dot));
-        }
-
         CommandResult ListCommand(std::string_view, void* user);
         CommandResult ExplainCommand(std::string_view args, void* user);
     }
@@ -945,25 +938,7 @@ namespace Arcane
             e.name = slot.name;
             e.displayName = slot.displayName.empty() ? DeriveDisplayName(slot.name) : slot.displayName;
             e.help = slot.help;
-            // Determine if categoryPath was explicitly set or derived. The registration
-            // code capitalizes derived paths; if the current value matches a case-insensitive
-            // comparison with the raw derivation, use the raw (lowercase) version.
-            {
-                std::string lowercase_derived = DeriveCategoryPath(slot.name);
-                if (slot.categoryPath.size() == lowercase_derived.size() &&
-                    std::equal(slot.categoryPath.begin(), slot.categoryPath.end(),
-                               lowercase_derived.begin(),
-                               [](char a, char b) { return std::tolower(a) == b; }))
-                {
-                    // Likely derived, use lowercase version
-                    e.categoryPath = lowercase_derived;
-                }
-                else
-                {
-                    // Explicitly set, use as-is
-                    e.categoryPath = slot.categoryPath;
-                }
-            }
+            e.categoryPath = slot.categoryPath;
             e.widget = slot.widget;
             e.type = slot.type;
             e.flags = slot.flags;

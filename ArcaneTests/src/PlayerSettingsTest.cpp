@@ -50,7 +50,7 @@ TEST_CASE("CVarRegistry::ListEx carries every descriptor field a settings menu n
     quality.audience = Audience::PlayerSafe;
     quality.apply = ApplyMode::Restart;
     quality.displayName = "Quality Preset";
-    quality.categoryPath = "Graphics";
+    quality.categoryPath = "Render";
     REQUIRE_FALSE(reg.Register(quality).IsStale());
 
     CVarDesc hidden;
@@ -70,7 +70,10 @@ TEST_CASE("CVarRegistry::ListEx carries every descriptor field a settings menu n
     const CVarListEntryEx* v = FindEntry(list, "audio.masterVolume");
     REQUIRE(v);
     CHECK(v->displayName == "Master Volume");      // derived from the last segment
-    CHECK(v->categoryPath == "audio");             // derived from the dotted name
+    CHECK(v->categoryPath == "Audio");             // registered derivation from the dotted name
+    const auto volumeMetadata = reg.Metadata(reg.Find("audio.masterVolume"));
+    REQUIRE(volumeMetadata);
+    CHECK(v->categoryPath == volumeMetadata->categoryPath);
     CHECK(v->help == "Master output volume.");
     CHECK(v->type == CVarType::Float32);
     CHECK(v->audience == Audience::PlayerSafe);
@@ -87,7 +90,10 @@ TEST_CASE("CVarRegistry::ListEx carries every descriptor field a settings menu n
     const CVarListEntryEx* q = FindEntry(list, "render.quality");
     REQUIRE(q);
     CHECK(q->displayName == "Quality Preset");     // declared names win over derivation
-    CHECK(q->categoryPath == "Graphics");
+    CHECK(q->categoryPath == "Render");            // explicit display path keeps its case
+    const auto qualityMetadata = reg.Metadata(reg.Find("render.quality"));
+    REQUIRE(qualityMetadata);
+    CHECK(q->categoryPath == qualityMetadata->categoryPath);
     CHECK(q->type == CVarType::Enum);
     CHECK(q->enumNames == std::vector<std::string>{ "Low", "Medium", "High" });
     CHECK(q->value.AsEnum() == 1);
