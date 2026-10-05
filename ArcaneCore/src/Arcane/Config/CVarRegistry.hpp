@@ -47,6 +47,7 @@ namespace Arcane
         std::int32_t order = 0;              // stable sort within a category
         std::string_view categoryPath;       // empty = derived from the dotted name ("Physics/Solver")
         std::vector<std::string> enumNames;  // an Enum's ordered names (required for one)
+        std::string_view group;              // Category attribute sub-header (I9); empty = none
     };
 
     struct CVarHistoryRecord
@@ -79,6 +80,23 @@ namespace Arcane
         CVarFlags flags = CVarFlags::None;
     };
 
+    // Settings arc S3-1: one cvar's full descriptor, as the settings windows
+    // draw it. Owned strings: it outlives the registry call that made it.
+    struct CVarDescInfo
+    {
+        std::string name, help, displayName, keywords, widget, categoryPath, module;
+        CVarType type = CVarType::Bool;
+        CVarValue defaultValue = CVarValue::Bool(false);
+        std::optional<CVarValue> min, max;
+        CVarFlags flags = CVarFlags::None;
+        Audience audience = Audience::Game;
+        SettingScope scope = SettingScope::Project;
+        ApplyMode apply = ApplyMode::Live;
+        std::int32_t order = 0;
+        std::vector<std::string> enumNames;
+        std::string group;                   // Category attribute sub-header (I9)
+    };
+
     // Everything a declaration said, with the derived display strings filled
     // in (settings spec s4.2). What the settings windows and PlayerSettings read.
     struct CVarMetadata
@@ -100,6 +118,7 @@ namespace Arcane
         std::int32_t order = 0;
         std::string categoryPath;            // declared, else DeriveCVarCategoryPath(name)
         std::vector<std::string> enumNames;
+        std::string group;                   // Category attribute sub-header (I9)
     };
 
     struct ExecResult
@@ -183,6 +202,7 @@ namespace Arcane
         ApplyMode                 apply = ApplyMode::Live;
         std::vector<std::string>  enumNames;
         std::vector<std::string>  aliases;                       // full former names
+        std::string_view          group;                         // Category attribute (I9)
         SettingsWriteFn           write = nullptr;
     };
 
@@ -430,6 +450,25 @@ namespace Arcane
         // Live commands, with List()'s rule (skips Hidden; skips Dev when
         // compiled out). `type` is meaningless for a command (left Bool).
         [[nodiscard]] std::vector<CVarListEntry> ListCommands() const;
+        // ---- the settings windows' per-row surface (settings arc S3-1) ----
+        // nullopt / false for an unknown name throughout.
+        [[nodiscard]] std::optional<CVarDescInfo> Describe(std::string_view name) const;
+        // Live cvars, sorted. Dev ones are skipped when compiled out; Hidden only when asked.
+        [[nodiscard]] std::vector<std::string> Names(bool includeHidden) const;
+        // The value rung `by` holds for `name` (its newest record), whoever wins.
+        [[nodiscard]] std::optional<CVarValue> RungValue(std::string_view name, SetBy by) const;
+        // Put ONE record at rung `by` (replacing that rung's records), in rung
+        // order -- below a stronger rung if one holds a record, so an edit to a
+        // lower rung lands even while overridden. Clamped; type-checked; marks
+        // the cvar dirty (visible at the next Publish). Refuses SetBy::Default.
+        bool SetRung(std::string_view name, SetBy by, CVarValue value, std::string_view sourceModule);
+        // Drop every record of rung `by` on ONE cvar (RevertLayer for one row).
+        // False when the rung held none, or for SetBy::Default.
+        // S2 ClearRung is the same operation on a handle; this is the S3 name.
+        bool RevertRung(std::string_view name, SetBy by) { return ClearRung(Find(name), by); }
+        // Moves whenever the set of cvars changes (Register, UnregisterModule):
+        // a settings window rebuilds its tree when it differs from the one it built on.
+        [[nodiscard]] std::uint64_t Revision() const noexcept;
         [[nodiscard]] ExecResult Execute(std::string_view line, CVarContext ctx,
                                         SetBy by = SetBy::Console,
                                         const CVarCaller* caller = nullptr);

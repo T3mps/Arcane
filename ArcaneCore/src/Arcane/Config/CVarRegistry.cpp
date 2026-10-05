@@ -177,6 +177,7 @@ namespace Arcane
         std::int32_t order = 0;
         std::string categoryPath;
         std::vector<std::string> enumNames;
+        std::string group;
         CVarValue published = CVarValue::Bool(false);
         std::vector<CVarHistoryRecord> history;
         bool dirty = false;
@@ -227,6 +228,7 @@ namespace Arcane
         // mutates one it has stored.
         std::atomic<std::shared_ptr<const CVarSnapshot>> snapshot;
         std::uint64_t                                    serial = 0;
+        std::uint64_t                                    revision = 0;
         std::thread::id                                  mainThread = std::this_thread::get_id();
 
         std::vector<SettingsBinding> settings;
@@ -712,10 +714,12 @@ namespace Arcane
         slot.order = desc.order;
         slot.categoryPath = desc.categoryPath.empty() ? DeriveCVarCategoryPath(desc.name) : std::string(desc.categoryPath);
         slot.enumNames = desc.enumNames;
+        slot.group = desc.group;
         slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         slot.dirty = false;
         m->byName.emplace(slot.name, index);
         m->RebuildSnapshot(*this);
+        ++m->revision;
         return CVarHandle{ index, generation };
     }
 
@@ -776,6 +780,7 @@ namespace Arcane
         out.order = slot.order;
         out.categoryPath = slot.categoryPath;
         out.enumNames = slot.enumNames;
+        out.group = slot.group;
         return out;
     }
 
@@ -912,6 +917,7 @@ namespace Arcane
             slot.alive = false;
             m->freeSlots.push_back(index);
         }
+        if (!kill.empty()) ++m->revision;
         for (Command& command : m->commands)
         {
             if (!command.alive || command.builtin) continue;
@@ -1156,6 +1162,77 @@ namespace Arcane
         return out;
     }
 
+    std::optional<CVarDescInfo> CVarRegistry::Describe(std::string_view name) const
+    {
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return std::nullopt;
+        const Slot& slot = m->slots[handle.index];
+        CVarDescInfo out;
+        out.name = slot.name;
+        out.help = slot.help;
+        out.displayName = slot.displayName;
+        out.keywords = slot.keywords;
+        out.widget = slot.widget;
+        out.categoryPath = slot.categoryPath;
+        out.module = slot.declaredBy;
+        out.type = slot.type;
+        out.flags = slot.flags;
+        out.min = slot.min;
+        out.max = slot.max;
+        out.audience = slot.audience;
+        out.scope = slot.scope;
+        out.apply = slot.apply;
+        out.order = slot.order;
+        out.enumNames = slot.enumNames;
+        out.group = slot.group;
+        out.defaultValue = slot.defaultValue;
+        return out;
+    }
+
+    std::vector<std::string> CVarRegistry::Names(bool includeHidden) const
+    {
+        std::vector<std::string> out;
+        for (const Slot& slot : m->slots)
+        {
+            if (!slot.alive) continue;
+            if (!includeHidden && HasFlag(slot.flags, CVarFlags::Hidden)) continue;
+            if (HasFlag(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            out.push_back(slot.name);
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
+    std::optional<CVarValue> CVarRegistry::RungValue(std::string_view name, SetBy by) const
+    {
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return std::nullopt;
+        const Slot& slot = m->slots[handle.index];
+        for (auto it = slot.history.rbegin(); it != slot.history.rend(); ++it)
+            if (it->by == by) return it->value;
+        return std::nullopt;
+    }
+
+    bool CVarRegistry::SetRung(std::string_view name, SetBy by, CVarValue value, std::string_view sourceModule)
+    {
+        if (by == SetBy::Default) return false;
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return false;
+        Slot& slot = m->slots[handle.index];
+        if (value.type != slot.type) return false;
+        value = Clamp(std::move(value), slot.min, slot.max);
+        std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
+        // History is in rung order (Set refuses a weaker rung, S1 replaces in place):
+        // insert before the first stronger record, so the winner stays the winner.
+        const auto at = std::find_if(slot.history.begin(), slot.history.end(),
+                                     [by](const CVarHistoryRecord& h) { return h.by > by; });
+        slot.history.insert(at, CVarHistoryRecord{ by, std::move(value), std::string(sourceModule) });
+        slot.dirty = true;
+        return true;
+    }
+
+    std::uint64_t CVarRegistry::Revision() const noexcept { return m->revision; }
+
     ExecResult CVarRegistry::Execute(std::string_view line, CVarContext ctx, SetBy by, const CVarCaller* caller)
     {
         while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
@@ -1398,6 +1475,7 @@ namespace Arcane
             cv.apply        = f.apply;
             cv.order        = static_cast<std::int32_t>(i);
             cv.enumNames    = f.enumNames;
+            cv.group        = f.group;
             const CVarHandle h = Register(cv);
             if (!h.IsStale())
             {
