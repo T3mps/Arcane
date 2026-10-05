@@ -1634,6 +1634,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/SettingsEdit.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/SettingsApply.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/SettingsRows.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsWindow.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
