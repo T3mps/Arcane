@@ -224,15 +224,31 @@ namespace Arcane
         // without it project A's User records would outlive A in any host,
         // shadow B's weaker rungs and (when archiving) land in B's file.
         void SetUserCVarArchiving(bool enabled) noexcept;
-        // Write the open project's archive NOW (no layer is dropped). The
-        // editor calls it before unloading its game module (whose cvars would
-        // then be gone) and at exit. False when archiving is off or no project
-        // is open.
+        // Write the open project's User archive and, when configured, the
+        // EditorUser archive NOW (no layer is dropped). The editor calls it
+        // before unloading its game module (whose cvars would then be gone)
+        // and at exit. False when archiving is off, or when there is neither
+        // a project nor an EditorUser folder.
         bool SaveUserCVars();
+
+        // --- the EditorUser rung (settings arc S2, spec s11.1) ---
+        // Machine-wide editor preferences: SettingScope::PreferencesMachine
+        // cvars (theme, fonts, shortcuts, layouts) live in `dir`. The editor
+        // passes Paths::Get(EditorUserDir) / "Config" for an INTERACTIVE session
+        // only, so a scripted, headless or golden run never reads or writes
+        // machine state.
+        // Setting it applies the layer now (SetBy::EditorUser, between Project
+        // and User). Every OpenProject re-applies it, and it survives
+        // CloseProject and project switches. With archiving on, SaveUserCVars
+        // and a switch also write it (WriteCVarArchive(..., SetBy::EditorUser)).
+        // Empty = no EditorUser rung (the default).
+        void SetEditorUserConfigDir(std::filesystem::path dir);
+        [[nodiscard]] const std::filesystem::path& EditorUserConfigDir() const noexcept;
 
         // --- the cvar rungs (settings spec s4.4) ---
         // Every config rung this Runtime layers -- the engine rung, then each
-        // active plugin, the project and the user dir of the open project --
+        // active plugin, the project, the optional EditorUser folder, and the
+        // user dir of the open project --
         // plus the host's --set list. That is exactly what
         // CVarRegistry::ApplyLayersFor needs to give a module that (re)loads
         // later the values a cold boot would.

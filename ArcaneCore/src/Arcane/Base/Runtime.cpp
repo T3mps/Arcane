@@ -121,6 +121,7 @@ namespace Arcane
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         bool                                        archiveUserCVars = false;   // SetUserCVarArchiving (T3-D2)
+        std::filesystem::path                       editorUserConfigDir; // settings arc S2; empty = no EditorUser rung
         std::vector<std::string>                    cvarCommandLine;                                   // SetCVarCommandLine
         CVarContext                                 cvarCommandLineContext = CVarContext::Editor;
         // The client seam (spec s2, plan 1 P6). Both null on a headless host; a
@@ -525,14 +526,30 @@ namespace Arcane
         // User layer (archived first when this host archives, T3-D2), its
         // Project layer and its plugins' layers, so the next project starts from
         // its own files and never inherits a key only the old one set.
-        void ReleaseProjectCVarLayers(const Project& outgoing, bool archive)
+        // The machine-wide EditorUser layer is written too when this host
+        // archives, but it STAYS (settings arc S2).
+        void ReleaseProjectCVarLayers(const Project& outgoing, bool archive, const std::filesystem::path& editorUserDir)
         {
             CVarRegistry& cvars = CVarRegistry::Get();
             if (archive)
+            {
                 WriteCVarArchive(cvars, UserCVarDir(outgoing));
+                if (!editorUserDir.empty())
+                    WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
+            }
             cvars.RevertLayer(SetBy::User);
             cvars.RevertLayer(SetBy::Project);
             cvars.RevertLayer(SetBy::Plugin);
+        }
+
+        // The EditorUser layer from disk, dropped first so a key removed from a
+        // file does not linger.
+        void ReapplyEditorUserLayer(const std::filesystem::path& dir)
+        {
+            CVarRegistry& cvars = CVarRegistry::Get();
+            cvars.RevertLayer(SetBy::EditorUser);
+            if (dir.empty()) return;
+            ApplyCVarDirectory(cvars, dir, SetBy::EditorUser, "editor-user");
         }
     }
 
@@ -545,8 +562,13 @@ namespace Arcane
             for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
                 layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
             layers.dirs.push_back(CVarLayerDir{ SetBy::Project, ProjectCVarDir(*m_impl->project), "project" });
-            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         }
+        // EditorUser sits between Project and User and survives a missing
+        // project (the start page is themed too). Empty = no EditorUser rung.
+        if (!m_impl->editorUserConfigDir.empty())
+            layers.dirs.push_back(CVarLayerDir{ SetBy::EditorUser, m_impl->editorUserConfigDir, "editor-user" });
+        if (m_impl->project)
+            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         layers.commandLine = m_impl->cvarCommandLine;
         layers.commandLineContext = m_impl->cvarCommandLineContext;
         return layers;
@@ -589,7 +611,7 @@ namespace Arcane
         // A switch: the outgoing project's settings are archived (if this host
         // archives) and its rungs dropped before the incoming one layers.
         if (m_impl->project)
-            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars, m_impl->editorUserConfigDir);
         m_impl->project = std::move(*proj);
         Paths::Config paths = Paths::Current();
         paths.projectDir = m_impl->project->Root();
@@ -614,6 +636,11 @@ namespace Arcane
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
         CVarRegistry& cvars = CVarRegistry::Get();
+        // Drop the in-memory EditorUser records first so a key removed from a
+        // file does not linger; CVarLayerSources then re-reads the folder
+        // between Project and User (S1-30: one rung list for OpenProject,
+        // ApplyLayersFor and ValidateCVarLayers).
+        cvars.RevertLayer(SetBy::EditorUser);
         const LayerSources layers = CVarLayerSources();
         for (const CVarLayerDir& layer : layers.dirs)
             ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
@@ -650,7 +677,7 @@ namespace Arcane
         // EditorUser, command-line, code and console rungs are untouched.
         if (m_impl->project)
         {
-            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars);
+            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars, m_impl->editorUserConfigDir);
             CVarRegistry::Get().Publish();
             ForgetProjectPaths(m_impl->project->Root());
         }
@@ -672,12 +699,40 @@ namespace Arcane
         m_impl->archiveUserCVars = enabled;
     }
 
+    void Runtime::SetEditorUserConfigDir(std::filesystem::path dir)
+    {
+        // Leaving a folder with archiving on: keep its unsaved edits.
+        if (!m_impl->editorUserConfigDir.empty() && m_impl->archiveUserCVars)
+            WriteCVarArchive(CVarRegistry::Get(), m_impl->editorUserConfigDir, SetBy::EditorUser);
+        m_impl->editorUserConfigDir = std::move(dir);
+        if (m_impl->editorUserConfigDir.empty())
+            CVarRegistry::Get().RevertLayer(SetBy::EditorUser);
+        else
+            ReapplyEditorUserLayer(m_impl->editorUserConfigDir);
+        CVarRegistry::Get().Publish();
+    }
+
+    const std::filesystem::path& Runtime::EditorUserConfigDir() const noexcept
+    {
+        return m_impl->editorUserConfigDir;
+    }
+
     bool Runtime::SaveUserCVars()
     {
-        if (!m_impl->archiveUserCVars || !m_impl->project)
+        if (!m_impl->archiveUserCVars)
             return false;
-        WriteCVarArchive(CVarRegistry::Get(), UserCVarDir(*m_impl->project));
-        return true;
+        bool wrote = false;
+        if (m_impl->project)
+        {
+            WriteCVarArchive(CVarRegistry::Get(), UserCVarDir(*m_impl->project));
+            wrote = true;
+        }
+        if (!m_impl->editorUserConfigDir.empty())
+        {
+            WriteCVarArchive(CVarRegistry::Get(), m_impl->editorUserConfigDir, SetBy::EditorUser);
+            wrote = true;
+        }
+        return wrote;
     }
 
     std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)

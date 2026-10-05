@@ -255,7 +255,9 @@ namespace Arcane
     // Every config rung a host applies, weakest first, plus its --set list
     // (settings spec s4.4). ApplyLayersFor re-applies all of them to the cvars
     // of a module that (re)loaded, so it gets exactly the values a cold boot
-    // would give it.
+    // would give it. EditorUser (SetBy::EditorUser) is a CVarLayerDir between
+    // Project and User when the host configured one (Runtime::CVarLayerSources);
+    // empty hosts omit it, so scripted and golden runs never read machine prefs.
     struct LayerSources
     {
         std::vector<CVarLayerDir> dirs;

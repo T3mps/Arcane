@@ -365,7 +365,13 @@ namespace Arcane::Editor
         // legend's fold, the undo budgets, ...) back to its Saved/Config/ on a
         // project switch and at exit. A scripted --frames or --headless run
         // reads them but never writes: a verify run must not rewrite them.
-        m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
+        const bool interactive = m_config.maxFrames == 0 && !m_config.headless;
+        m_runtime->Core().SetUserCVarArchiving(interactive);
+        // The EditorUser rung (settings arc S2): machine-wide preferences (theme,
+        // fonts, shortcuts, layouts) for an INTERACTIVE session only. A scripted
+        // or golden run must not depend on, or write, this machine's preferences.
+        if (interactive)
+            m_runtime->Core().SetEditorUserConfigDir(Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir) / "Config");
         // THIS EXE asks about ITS OWN caches (2026-09-16). VerifySharedTypeContext
         // is inline, so it only ever answers for the module holding the call --
         // ProjectBoot.cpp's type_context_install stage compiles into

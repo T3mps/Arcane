@@ -1,11 +1,14 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/PreferenceScope.hpp>
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Assets/Assets.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <Json.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -330,4 +333,83 @@ TEST_CASE("Runtime: re-opening a project replaces its cvar rungs, and a switch o
     CHECK(projectRecords() == 0);
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a project, sit between Project and User, and archive to their own folder",
+          "[project][settings]")
+{
+    const fs::path dir = MakeTempDir("editor_user");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    const fs::path machine = dir / "machine" / "Config";
+    WriteFile(machine / "s2eu.json", R"({ "theme": 5 })");
+    WriteFile(dir / "A" / "Config" / "s2eu.json", R"({ "theme": 3, "undo": 30 })");
+    const auto readJson = [](const fs::path& p) {
+        std::ifstream in(p, std::ios::binary);
+        return nlohmann::json::parse(in, nullptr, false);
+    };
+
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Cleanup
+    {
+        ~Cleanup()
+        {
+            Arcane::CVarRegistry& r = Arcane::CVarRegistry::Get();
+            r.RevertLayer(Arcane::SetBy::EditorUser);
+            r.UnregisterModule("s2-editoruser-runtime-test");
+            r.Publish();
+        }
+    } cleanup;
+    const auto declare = [&](const char* name, Arcane::SettingScope scope) {
+        Arcane::CVarDesc d;
+        d.name = name;
+        d.type = Arcane::CVarType::Int32;
+        d.defaultValue = Arcane::CVarValue::Int32(1);
+        d.flags = Arcane::CVarFlags::Archive;
+        d.help = "EditorUser runtime probe.";
+        d.module = "s2-editoruser-runtime-test";
+        d.audience = Arcane::Audience::Editor;
+        d.scope = scope;
+        return cvars.Register(d);
+    };
+    const Arcane::CVarHandle theme = declare("s2eu.theme", Arcane::SettingScope::PreferencesMachine);
+    const Arcane::CVarHandle undo = declare("s2eu.undo", Arcane::SettingScope::PreferencesProject);
+    REQUIRE_FALSE(theme.IsStale());
+    REQUIRE_FALSE(undo.IsStale());
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.SetUserCVarArchiving(true);
+    rt.SetEditorUserConfigDir(machine);                         // no project yet: the start page is themed too
+    CHECK(rt.EditorUserConfigDir() == machine);
+    CHECK(cvars.Get(theme)->AsInt32() == 5);
+    CHECK(cvars.Explain("s2eu.theme")->setBy == Arcane::SetBy::EditorUser);
+
+    REQUIRE(rt.OpenProject(dir / "A"));
+    CHECK(cvars.Get(theme)->AsInt32() == 5);                    // EditorUser (35) beats the project's 3 (30)
+    CHECK(cvars.Get(undo)->AsInt32() == 30);
+
+    REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::ThisProject) == Arcane::SetResult::Applied);
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(9)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    CHECK(cvars.Get(theme)->AsInt32() == 9);
+    REQUIRE(rt.SaveUserCVars());
+    CHECK(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").at("theme") == 9);   // the override is the project's...
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 5);                           // ...not the machine's
+
+    REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::AllProjects) == Arcane::SetResult::Applied);
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(7)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    REQUIRE(rt.SaveUserCVars());
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 7);
+    CHECK_FALSE(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").contains("theme"));
+
+    rt.CloseProject();
+    CHECK(cvars.Get(theme)->AsInt32() == 7);                    // machine-wide: survives the project
+    CHECK(cvars.Get(undo)->AsInt32() == 1);                     // the project rungs left with it
+
+    Arcane::Runtime reader(Arcane::Test::Process());            // a host that never sets the folder
+    CHECK(reader.EditorUserConfigDir().empty());
+    CHECK_FALSE(reader.SaveUserCVars());
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }

@@ -153,3 +153,30 @@ TEST_CASE("ApplyCVarDirectory applies a machine folder at the EditorUser rung", 
     std::error_code ec;
     fs::remove_all(machine, ec);
 }
+
+TEST_CASE("ApplyLayersFor re-applies the EditorUser rung to a reloaded module's cvars", "[settings][cvar]")
+{
+    const fs::path machine = FreshDir("eu_layers");
+    {
+        std::ofstream(machine / "eulayer.json", std::ios::binary) << R"({ "x": 4 })";
+    }
+    CVarRegistry reg;
+    CVarDesc d;
+    d.name = "eulayer.x";
+    d.type = CVarType::Int32;
+    d.defaultValue = CVarValue::Int32(1);
+    d.flags = CVarFlags::Archive;
+    d.help = "Layer probe.";
+    d.module = "eulayer-module";
+    d.audience = Audience::Editor;
+    d.scope = SettingScope::PreferencesMachine;
+    const CVarHandle h = reg.Register(d);
+    REQUIRE_FALSE(h.IsStale());
+    LayerSources layers;
+    layers.dirs.push_back(CVarLayerDir{ SetBy::EditorUser, machine, "editor-user" });
+    reg.ApplyLayersFor("eulayer-module", layers);
+    CHECK(reg.Get(h)->AsInt32() == 4);
+    CHECK(reg.Explain("eulayer.x")->setBy == SetBy::EditorUser);
+    std::error_code ec;
+    fs::remove_all(machine, ec);
+}
