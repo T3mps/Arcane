@@ -1629,6 +1629,8 @@ project "ArcaneTests"
         -- (its pure halves here; the cell joins in T2-B2). InspectorView's
         -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
+        -- Settings arc S3: the settings windows' model/edit/apply/rows/window/host/pages, driven headless by the [settings-ui] units.
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsModel.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
