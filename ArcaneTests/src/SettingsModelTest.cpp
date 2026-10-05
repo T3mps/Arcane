@@ -184,3 +184,41 @@ TEST_CASE("SettingsModel::Pruned keeps hit rows with their ancestors and every p
     CHECK(FindPath(t, "Editor/Undo") == nullptr);
     CHECK(FindPath(t, "Appearance/Theme") != nullptr);         // a page always stays
 }
+
+TEST_CASE("SettingCategoryPath: a slash-only categoryPath is General, not UB", "[settings-ui]")
+{
+    CVarDescInfo d;
+    d.name = "orphan";
+    d.categoryPath = "/";
+    CHECK(SettingCategoryPath(d, {}) == "Engine/General");
+    d.categoryPath = "///";
+    CHECK(SettingCategoryPath(d, {}) == "Engine/General");
+    d.module = "TestGame";
+    CHECK(SettingCategoryPath(d, { .gameModule = "TestGame" }) == "Game/TestGame/General");
+}
+
+TEST_CASE("SettingsModel::Rebuild applies a same-size page swap and a roles change with no revision bump", "[settings-ui]")
+{
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "speed.max", { .type = CVarType::Float32, .def = CVarValue::Float32(5.0f),
+                                                .module = "TestGame" }).IsStale());
+    SettingsModel m;
+    m.SetPages({ SettingsPageRef{ SettingScope::Project, "Project", "Project" } });
+    m.Rebuild(reg, SettingScope::Project);
+    CHECK(m.Find("Project") != nullptr);
+    CHECK(m.Find("Engine/Speed") != nullptr);
+    CHECK(m.Find("Identity") == nullptr);
+    const std::uint64_t rev = m.BuiltRevision();
+
+    m.SetPages({ SettingsPageRef{ SettingScope::Project, "Identity", "Identity" } });
+    m.Rebuild(reg, SettingScope::Project);
+    CHECK(m.BuiltRevision() == rev);
+    CHECK(m.Find("Identity") != nullptr);
+    CHECK(m.Find("Project") == nullptr);
+
+    m.SetModuleRoles({ .gameModule = "TestGame" });
+    m.Rebuild(reg, SettingScope::Project);
+    CHECK(m.BuiltRevision() == rev);
+    CHECK(m.Find("Game/TestGame/Speed") != nullptr);
+    CHECK(m.Find("Engine/Speed") == nullptr);
+}

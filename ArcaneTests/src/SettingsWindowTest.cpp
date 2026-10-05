@@ -32,6 +32,7 @@ namespace
         int restarts = 0;
         SettingsWindowKind kind = SettingsWindowKind::Project;
         SettingsModuleRoles roles;
+        std::vector<SettingsPageRef> pages;
 
         WindowHarness() { st.grid.probe = &imgui.probe; }
 
@@ -42,6 +43,7 @@ namespace
             env.kind = kind;
             env.title = "Settings Under Test";
             env.roles = roles;
+            env.pages = pages;
             env.now = [this] { return clock; };
             env.archive = &archive;
             env.writeRung = [this](SetBy rung, const std::vector<std::string>& names) { writes.emplace_back(rung, names); return true; };
@@ -219,4 +221,28 @@ TEST_CASE("Settings window: edits are written once quiet for the debounce, and a
     h.Frame();
     CHECK(h.writes.size() == 2);                                        // flushed at once, no debounce
     CHECK_FALSE(h.archive.Dirty());
+}
+
+TEST_CASE("Settings window: Rebuild picks up a same-size page swap and a roles change with no revision bump", "[settings-ui]")
+{
+    WindowHarness h;
+    h.pages = { SettingsPageRef{ SettingScope::Project, "Project", "Project" } };
+    REQUIRE_FALSE(AddSetting(h.reg, "speed.max", { .type = CVarType::Float32, .def = CVarValue::Float32(5.0f),
+                                                  .module = "TestGame" }).IsStale());
+    h.Frame();
+    h.Frame();
+    CHECK(h.TreeHas("Project"));
+    CHECK(h.TreeHas("Engine/Speed"));
+    CHECK_FALSE(h.TreeHas("Identity"));
+    CHECK_FALSE(h.TreeHas("Game/TestGame/Speed"));
+
+    h.pages = { SettingsPageRef{ SettingScope::Project, "Identity", "Identity" } };
+    h.Frame();
+    CHECK(h.TreeHas("Identity"));
+    CHECK_FALSE(h.TreeHas("Project"));
+
+    h.roles.gameModule = "TestGame";
+    h.Frame();
+    CHECK(h.TreeHas("Game/TestGame/Speed"));
+    CHECK_FALSE(h.TreeHas("Engine/Speed"));
 }

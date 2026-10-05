@@ -165,12 +165,18 @@ namespace Arcane::Editor
             }
             if (base.empty()) base = "General";
         }
+        std::vector<std::string_view> segs = Split(base, '/');
+        if (segs.empty())
+        {
+            base = "General";
+            segs = Split(base, '/');
+        }
         if (!roles.gameModule.empty() && IEquals(desc.module, roles.gameModule))
             return "Game/" + roles.gameModule + "/" + base;
         for (const std::string& plugin : roles.plugins)
             if (IEquals(desc.module, plugin))
                 return "Plugins/" + plugin + "/" + base;
-        const std::string_view first = Split(base, '/').front();
+        const std::string_view first = segs.front();
         if (RootRank(first) < std::size(kRootOrder)) return base;
         return "Engine/" + base;
     }

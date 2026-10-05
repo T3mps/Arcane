@@ -36,6 +36,7 @@ namespace Arcane::Editor
         SettingScope scope = SettingScope::Project;
         std::string  categoryPath;   // the node it draws on (created if absent)
         std::string  title;
+        friend bool operator==(const SettingsPageRef&, const SettingsPageRef&) = default;
     };
 
     // The project's game module and plugins, matched case-insensitively
@@ -44,6 +45,7 @@ namespace Arcane::Editor
     {
         std::string gameModule;                // the manifest gameModule's stem; "" = none
         std::vector<std::string> plugins;      // enabled plugin names
+        friend bool operator==(const SettingsModuleRoles&, const SettingsModuleRoles&) = default;
     };
 
     [[nodiscard]] SettingsModuleRoles RolesForManifest(const Arcane::ProjectManifest& manifest);

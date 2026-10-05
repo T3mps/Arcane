@@ -209,7 +209,7 @@ namespace Arcane
         }
 
         // <file>.tmp, then renamed over: the old file or the new, never half of one.
-        void WriteTextAtomically(const std::filesystem::path& file, const std::string& text)
+        bool WriteTextAtomically(const std::filesystem::path& file, const std::string& text)
         {
             std::filesystem::path tmp = file;
             tmp += ".tmp";
@@ -228,7 +228,9 @@ namespace Arcane
                          renamed ? renamed.message() : std::string());
                 std::error_code ignored;
                 std::filesystem::remove(tmp, ignored);
+                return false;
             }
+            return true;
         }
 
         // 1-based line of a key's first mention: the path relative to the
@@ -529,7 +531,7 @@ namespace Arcane
         }
     }
 
-    void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung, const std::filesystem::path& dir,
+    bool WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung, const std::filesystem::path& dir,
                               std::span<const std::string> names)
     {
         struct KeyEdit { std::string key; std::optional<nlohmann::json> value; };   // nullopt = remove the key
@@ -552,9 +554,16 @@ namespace Arcane
             }
             byCategory[std::move(category)].push_back(std::move(edit));
         }
-        if (byCategory.empty()) return;
+        if (byCategory.empty()) return true;
+        bool ok = true;
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
+        if (ec && !std::filesystem::is_directory(dir))
+        {
+            ARC_WARN("cvar: cannot create archive folder '{}' ({}) -- edits not persisted",
+                     dir.generic_string(), ec.message());
+            return false;
+        }
         for (auto& [category, edits] : byCategory)
         {
             const std::filesystem::path file = dir / (category + ".json");
@@ -566,7 +575,10 @@ namespace Arcane
                 if (!parsed.is_discarded() && parsed.is_object())
                     doc = std::move(parsed);
                 else if (!SetAsideUnreadable(file))
+                {
+                    ok = false;
                     continue;
+                }
             }
             for (KeyEdit& e : edits)
             {
@@ -585,15 +597,20 @@ namespace Arcane
                     std::error_code removed;
                     std::filesystem::remove(file, removed);
                     if (removed)
+                    {
                         ARC_WARN("cvar: cannot delete the emptied '{}' ({}) -- its cleared overrides will return on the next boot",
                                  file.generic_string(), removed.message());
+                        ok = false;
+                    }
                 }
                 continue;
             }
             const std::string text = doc.dump(2);
             if (before && *before == text) continue;   // unchanged: not rewritten
-            WriteTextAtomically(file, text);
+            if (!WriteTextAtomically(file, text))
+                ok = false;
         }
+        return ok;
     }
 
     void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets, CVarContext ctx)

@@ -101,8 +101,9 @@ namespace Arcane
     // (a window edit is a persist request); Cheat cvars and the document
     // category (input) are never written. Merge / .bad / .tmp+rename /
     // unchanged-file rules as WriteCVarArchive; a file this write empties is
-    // deleted.
-    ARC_CORE_API void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung,
+    // deleted. Returns false if any write, rename or delete failed (the
+    // settings archive queue keeps those names dirty and retries).
+    ARC_CORE_API bool WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung,
                                            const std::filesystem::path& dir,
                                            std::span<const std::string> names);
 

@@ -55,7 +55,8 @@ namespace Arcane::Editor
     struct SettingsWindowState
     {
         SettingsModel model;
-        std::size_t pageCount = 0;                         // pages at the model's last rebuild
+        std::vector<SettingsPageRef> builtPages;           // pages at the model's last rebuild
+        SettingsModuleRoles builtRoles;                    // roles at the model's last rebuild
         PropertyGridState grid;
         std::unique_ptr<Arcane::CommandStack> undo;        // window-local (spec s6.3); SettingsUndo builds it
         EditGesture::GestureState gesture;

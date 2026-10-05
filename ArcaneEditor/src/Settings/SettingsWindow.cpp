@@ -224,12 +224,13 @@ namespace Arcane::Editor
         {
             const SettingScope scope = env.kind == SettingsWindowKind::Project ? SettingScope::Project
                                                                                : SettingScope::PreferencesMachine;
-            if (st.model.BuiltRevision() != reg.Revision() || st.pageCount != env.pages.size())
+            if (st.model.BuiltRevision() != reg.Revision() || st.builtPages != env.pages || st.builtRoles != env.roles)
             {
                 st.model.SetModuleRoles(env.roles);
                 st.model.SetPages(env.pages);
                 st.model.Rebuild(reg, scope);
-                st.pageCount = env.pages.size();
+                st.builtPages = env.pages;
+                st.builtRoles = env.roles;
                 if (env.tracker) env.tracker->Observe(reg);   // a reloaded module's Restart rows get their baseline
             }
             const SettingsEditSink sink = ArchiveSink(env.archive, env.now);

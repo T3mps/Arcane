@@ -163,7 +163,7 @@ TEST_CASE("WriteCVarRungArchive updates only the named keys: written, removed, f
     REQUIRE(reg.SetRung("render.a", SetBy::Project, CVarValue::Int32(5), "project"));
     REQUIRE(reg.SetRung("render.cheat", SetBy::Project, CVarValue::Bool(true), "project"));
     const std::vector<std::string> names{ "render.a", "render.b", "render.cheat", "physics.gone" };
-    WriteCVarRungArchive(reg, SetBy::Project, dir.path, names);
+    CHECK(WriteCVarRungArchive(reg, SetBy::Project, dir.path, names));
 
     const auto doc = nlohmann::json::parse(ReadFileText(dir.path / "render.json"));
     INFO(doc.dump());
@@ -188,11 +188,24 @@ TEST_CASE("WriteCVarRungArchive creates a category, updates a nested leaf, and d
     REQUIRE(reg.SetRung("editor.graph.zoom", SetBy::EditorUser, CVarValue::Float32(3.0f), "editor-user"));
     REQUIRE(reg.SetRung("editor.legend", SetBy::EditorUser, CVarValue::Bool(false), "editor-user"));
     const std::vector<std::string> names{ "editor.graph.zoom", "editor.legend", "solo.k" };
-    WriteCVarRungArchive(reg, SetBy::EditorUser, dir.path, names);
+    CHECK(WriteCVarRungArchive(reg, SetBy::EditorUser, dir.path, names));
 
     const auto doc = nlohmann::json::parse(ReadFileText(dir.path / "editor.json"));
     INFO(doc.dump());
     CHECK(doc.at("graph").at("zoom") == 3.0f);  // the nested leaf, updated in place
     CHECK(doc.at("legend") == false);
     CHECK_FALSE(std::filesystem::exists(dir.path / "solo.json"));   // its only key removed: the file goes
+}
+
+TEST_CASE("WriteCVarRungArchive returns false when the archive folder cannot be written", "[cvar]")
+{
+    Arcane::Test::TempDir dir("rung-archive-unwritable");
+    const std::filesystem::path blocked = dir.path / "not-a-folder";
+    WriteFileText(blocked, "x");   // a file, so create_directories / writes under it fail
+    CVarRegistry reg;
+    REQUIRE_FALSE(AddSetting(reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    REQUIRE(reg.SetRung("render.vsync", SetBy::Project, CVarValue::Bool(false), "project"));
+    const std::vector<std::string> names{ "render.vsync" };
+    CHECK_FALSE(WriteCVarRungArchive(reg, SetBy::Project, blocked, names));
+    CHECK_FALSE(std::filesystem::is_directory(blocked));
 }

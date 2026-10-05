@@ -80,9 +80,8 @@ namespace Arcane::Editor
             }
         }
 
-        // S3-6: RungWriter returns bool (true = persisted). WriteCVarRungArchive
-        // is void, so a completed call (including "no folder -- session only")
-        // reports success; a failed write would otherwise retry every debounce.
+        // S3-6: RungWriter returns bool (true = persisted). A failed
+        // WriteCVarRungArchive keeps the queue dirty so Tick retries.
         bool WriteRung(SetBy rung, const std::vector<std::string>& names)
         {
             const std::filesystem::path dir = RungDir(rung);
@@ -92,8 +91,7 @@ namespace Arcane::Editor
                          RungLabel(rung), names.size());
                 return true;
             }
-            WriteCVarRungArchive(CVarRegistry::Get(), rung, dir, names);
-            return true;
+            return WriteCVarRungArchive(CVarRegistry::Get(), rung, dir, names);
         }
 
         SettingsWindowEnv EnvFor(Host& h, SettingsWindowKind kind)

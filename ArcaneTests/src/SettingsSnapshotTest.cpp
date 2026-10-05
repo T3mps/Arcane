@@ -101,15 +101,17 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
     bool allApplied = true;
     {
         std::vector<std::jthread> workers;
+        auto ReadOnce = [&] {
+            const std::shared_ptr<const ProbeSettings> s = SettingsShared<ProbeSettings>(reg);
+            if (static_cast<std::uint32_t>(s->count) != s->mask) torn.fetch_add(1);
+            reads.fetch_add(1);
+        };
         for (int w = 0; w < 4; ++w)
             workers.emplace_back([&] {
+                ReadOnce();
                 ready.fetch_add(1, std::memory_order_release);
                 while (!stop.load(std::memory_order_acquire))
-                {
-                    const std::shared_ptr<const ProbeSettings> s = SettingsShared<ProbeSettings>(reg);
-                    if (static_cast<std::uint32_t>(s->count) != s->mask) torn.fetch_add(1);
-                    reads.fetch_add(1);
-                }
+                    ReadOnce();
             });
         while (ready.load(std::memory_order_acquire) < 4)
             std::this_thread::yield();
@@ -123,5 +125,5 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
     }
     CHECK(allApplied);
     CHECK(torn.load() == 0);
-    CHECK(reads.load() > 0);
+    CHECK(reads.load() >= 4);
 }
