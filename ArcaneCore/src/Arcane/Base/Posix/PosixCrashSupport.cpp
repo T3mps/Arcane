@@ -313,7 +313,9 @@ namespace Arcane::Diagnostics::Internal::Posix
         sigaddset(&set, SIGQUIT);
         sigaddset(&set, SIGPIPE);
         sigaddset(&set, SIGCHLD);
-        sigaddset(&set, SIGRTMIN + 4);   // the snapshot signal, even before it is installed
+        // NOT the snapshot signal: the watchdog and the console forwarder
+        // belong in a dump like any thread (a blocked one would only cost the
+        // dump its 100 ms timeout), and the crash thread is excluded by tid.
         ::pthread_sigmask(SIG_BLOCK, &set, nullptr);
     }
 }

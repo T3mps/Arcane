@@ -72,10 +72,10 @@ namespace Arcane::Diagnostics::Internal::Posix
     void RemoveSnapshotSignal() noexcept;
     [[nodiscard]] int SnapshotSignal() noexcept;
 
-    // Blocks every ASYNCHRONOUS signal on the calling thread (console signals,
-    // the snapshot signal). The engine's own service threads (crash thread,
-    // watchdog, console forwarder) call it first, so a process-directed
-    // SIGINT/SIGTERM lands on a host thread and a snapshot never targets one.
+    // Blocks the process-directed ASYNCHRONOUS signals (SIGINT, SIGTERM,
+    // SIGHUP, SIGQUIT, SIGPIPE, SIGCHLD) on the calling thread. The engine's
+    // own service threads (crash thread, watchdog, console forwarder) call it
+    // first, so such a signal lands on a host thread, never on one of them.
     void BlockAsyncSignalsOnThisThread() noexcept;
 
     // ---- the minidump (MinidumpWriter.cpp) ---------------------------------
