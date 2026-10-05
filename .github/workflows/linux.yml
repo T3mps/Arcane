@@ -36,6 +36,10 @@ concurrency:
 env:
   PREMAKE_VERSION: 5.0.0-beta8
   SDL3_VERSION: 3.2.22
+  # SHA-256 of SDL3-${SDL3_VERSION}.tar.gz (the release asset below); bump
+  # it together with SDL3_VERSION. Third-party downloads are verified, never
+  # trusted on transport alone (roadmap D26).
+  SDL3_SHA256: f29d00cbcee273c0a54f3f32f86bf5c595e8823a96b1d92a145aac40571ebfcc
   MAKE_JOBS: 3
 
 jobs:
@@ -61,7 +65,7 @@ jobs:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Toolchains + SDL3's X11/Wayland build deps + the Vulkan loader and
       # Mesa's lavapipe (headless Vulkan; [gpu] cases are still filtered).
@@ -83,7 +87,7 @@ jobs:
       # the test exe finds libSDL3.so.0 with no LD_LIBRARY_PATH).
       - name: Cache SDL3
         id: sdl3-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/sdl3-prefix
           key: sdl3-${{ env.SDL3_VERSION }}-ubuntu-24.04-v1
@@ -93,6 +97,7 @@ jobs:
         run: |
           curl -fsSL --retry 4 -o sdl3.tar.gz \
             "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.tar.gz"
+          echo "${SDL3_SHA256}  sdl3.tar.gz" | sha256sum -c -
           tar xzf sdl3.tar.gz
           cmake -S "SDL3-${SDL3_VERSION}" -B sdl3-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/sdl3-prefix" \
@@ -110,7 +115,7 @@ jobs:
       # (ThirdParty/premake5/premake5, beside the vendored .exe), so arcbuild
       # and the [build-generator] cases resolve it exactly as on Windows.
       - name: Cache premake + dxc
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ThirdParty/premake5/premake5
@@ -168,7 +173,7 @@ jobs:
       # Crashes/hangs drop symbolized stacks under <exe dir>/diagnostics/.
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.compiler }}-${{ matrix.config }}-logs
           path: |
