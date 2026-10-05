@@ -49,6 +49,31 @@ cd ..
 bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
 ```
 
+### Linux (GCC 14 / Clang 19)
+
+The hosted `.github/workflows/linux.yml` lane is the reference recipe. The
+minimum toolchains are GCC 14 or Clang 19 with libstdc++ 14 (GCC 13 lacks
+C++23 deducing-this; Clang 18 cannot use libstdc++'s `<expected>`). SDL3
+comes from the system (`pkg-config sdl3`, or `SDL3_ROOT`), so no vcpkg is
+needed. Ubuntu 24.04 does not package SDL3, so build 3.2.x from source into
+`/usr/local`. The Vulkan backend is the only one; D3D12 is Windows-only.
+
+```sh
+scripts/fetch-premake-linux.sh   # once: ThirdParty/premake5/premake5 (gitignored)
+scripts/fetch-dxc-linux.sh       # once: ThirdParty/tools/dxc-linux (shaders + runtime compiles)
+ThirdParty/premake5/premake5 gmake          # --cc=clang for Clang
+make -j3 config=debug ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient
+bin/Debug-linux-x86_64-md/arcbuild/arcbuild build --project ReferenceProject --config Debug --sdk "$PWD"
+make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
+xvfb-run -a env SDL_VIDEODRIVER=x11 scripts/run-linux-tests.sh Debug   # ~[gpu] minus scripts/linux-test-exclusions.txt
+```
+
+Keep `-j` low on small machines: the Debug ArcaneTests link alone writes
+about 500 MB. The game module is built before the hosts because their
+postbuild stages `ReferenceProject/` (`Binaries/` included) beside them.
+Off-Windows, a module is `Name.so` (an authored `Name.dll` resolves to it),
+and engine libraries are `libArcaneCore.so`/`libArcaneClient.so`.
+
 ## Automation
 
 Two layers, both owned by the engine and both in `scripts/`, plus the agent-facing layer on top of
@@ -260,8 +285,9 @@ completely -- arcbuild stages the linked DLL into `Binaries/` itself, since
 beta8's ninja action cannot run a post-build step on Windows. Make needs a
 GCC/G++ toolchain (Premake beta8's `gmake` action defaults to GCC everywhere,
 including Windows -- never `cl.exe`); on Windows that compiles the module but
-cannot link it against the MSVC-built engine DLLs, so a Make build only
-becomes real with the engine's Linux port. Xcode resolves and composes on
+cannot link it against the MSVC-built engine DLLs. On Linux, Make is the
+default backend and builds a module against the GCC/Clang-built engine
+(ReferenceProject is built this way in the Linux CI lane). Xcode resolves and composes on
 every platform but only **executes** on macOS. `probe` alone needs no SDK.
 
 ## License
