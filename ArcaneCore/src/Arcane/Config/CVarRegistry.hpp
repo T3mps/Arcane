@@ -342,8 +342,8 @@ namespace Arcane
 
         void UnregisterModule(std::string_view module);
         // Drop registrations whose declaring code or callback/command pointer
-        // lies in `[base, base+size)`, plus anything tagged with the module
-        // name published for this image. PluginHost and Plugin::Load call it
+        // lies in `[base, base+size)`. Does not drop by published module name:
+        // two images can share a stem. PluginHost and Plugin::Load call it
         // before the image unmaps (Review Focus 2). Returns how many slots,
         // commands, callbacks and settings bindings were dropped.
         std::size_t UnregisterModuleRange(const void* base, std::size_t size);

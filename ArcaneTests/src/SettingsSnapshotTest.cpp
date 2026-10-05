@@ -46,6 +46,28 @@ TEST_CASE("UnregisterModule drops a module's settings: cvars, block, and Setting
     CHECK(reg.SettingsBlock(kHash) != nullptr);
 }
 
+TEST_CASE("UnregisterModule Debug-guards a SettingsShared held from a twice-retired snapshot", "[settings]")
+{
+    // RebuildSnapshot's StoreSnapshot evicts retired[1]. Capture the dropped
+    // blocks before that shuffle so a holder of the twice-retired unique block
+    // still trips the Debug guard and keeps its snapshot.
+    CVarRegistry reg;
+    REQUIRE(RegisterSettings<ProbeSettings>(reg, "retire-hold"));
+    reg.Publish();
+    const std::shared_ptr<const ProbeSettings> held = SettingsShared<ProbeSettings>(reg);
+    const CVarHandle count = reg.Find(Name("count"));
+    for (std::int32_t i = 1; i <= 2; ++i)
+    {
+        REQUIRE(reg.Set(count, CVarValue::Int32(10 + i), SetBy::Code) == SetResult::Applied);
+        reg.Publish();
+        CHECK(held->count == 7);
+    }
+    CHECK(Settings<ProbeSettings>(reg).count == 12);
+    reg.UnregisterModule("retire-hold");
+    CHECK(reg.SettingsBlock(kHash) == nullptr);
+    CHECK(held->count == 7);
+}
+
 TEST_CASE("A Settings<T>() reference stays readable for two more publishes", "[settings]")
 {
     CVarRegistry reg;

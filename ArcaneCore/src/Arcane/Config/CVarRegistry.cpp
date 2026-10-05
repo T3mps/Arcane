@@ -845,12 +845,39 @@ namespace Arcane
             return AddressInRange(p, base, size);
         };
 
+        const auto keepSettingsHash = [&](std::uint64_t typeHash) {
+            for (const SettingsBinding& b : m->settings)
+                if (b.typeHash == typeHash) return true;
+            return false;
+        };
+
         const std::size_t settingsBefore = m->settings.size();
         std::erase_if(m->settings, [&](const SettingsBinding& b) {
             return matchesName(b.module) || matchesAddr(reinterpret_cast<const void*>(b.make));
         });
         const bool droppedSettings = m->settings.size() != settingsBefore;
         std::size_t dropped = settingsBefore - m->settings.size();
+
+        // Pin dropped blocks BEFORE RebuildSnapshot. StoreSnapshot evicts the
+        // oldest retired snapshot; a SettingsShared holder of that snapshot's
+        // unique block would otherwise escape the Debug guard.
+        std::vector<std::shared_ptr<const void>> heldBlocks;
+        if (droppedSettings)
+        {
+            std::unordered_set<const void*> seen;
+            const auto takeDropped = [&](const std::shared_ptr<const CVarSnapshot>& snap) {
+                if (!snap) return;
+                for (const CVarSettingsBlock& block : snap->settings)
+                {
+                    if (keepSettingsHash(block.typeHash) || !block.data) continue;
+                    if (seen.insert(block.data.get()).second)
+                        heldBlocks.push_back(block.data);
+                }
+            };
+            takeDropped(m->retired[0]);
+            takeDropped(m->retired[1]);
+            takeDropped(Snapshot());
+        }
 
         std::vector<std::uint32_t> kill;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
@@ -902,38 +929,26 @@ namespace Arcane
         m->RebuildSnapshot(*this);
         if (droppedSettings)
         {
-            std::vector<std::shared_ptr<const void>> heldBlocks;
-            std::unordered_set<const void*> seen;
-            const auto takeDropped = [&](const std::shared_ptr<const CVarSnapshot>& snap) {
+            // Dropped blocks' deleters are the unloading module's code. Strip
+            // them from the retire ring while the image is still mapped, and
+            // keep other modules' blocks so a Settings<T>() reference survives
+            // its two-publish lifetime. An outside SettingsShared<T> holder
+            // keeps its copy; holding one across a hot reload is the holder's
+            // bug.
+            const auto stripDropped = [&](std::shared_ptr<const CVarSnapshot>& snap) {
                 if (!snap) return;
+                bool hasDropped = false;
                 for (const CVarSettingsBlock& block : snap->settings)
-                {
-                    bool keep = false;
-                    for (const SettingsBinding& b : m->settings)
-                        if (b.typeHash == block.typeHash) { keep = true; break; }
-                    if (keep || !block.data) continue;
-                    if (seen.insert(block.data.get()).second)
-                        heldBlocks.push_back(block.data);
-                }
+                    if (!keepSettingsHash(block.typeHash)) { hasDropped = true; break; }
+                if (!hasDropped) return;
+                auto clone = std::make_shared<CVarSnapshot>(*snap);
+                std::erase_if(clone->settings, [&](const CVarSettingsBlock& block) {
+                    return !keepSettingsHash(block.typeHash);
+                });
+                snap = std::move(clone);
             };
-            takeDropped(m->retired[0]);
-            takeDropped(m->retired[1]);
-            takeDropped(Snapshot());
-
-            if (const std::shared_ptr<const CVarSnapshot> current = Snapshot())
-            {
-                std::vector<CVarSettingsBlock> keep;
-                for (const SettingsBinding& b : m->settings)
-                    if (const CVarSettingsBlock* entry = current->FindSettingsEntry(b.typeHash))
-                        keep.push_back(*entry);
-                ReplaceSnapshotSettings(std::move(keep));
-            }
-            // The dropped blocks were built by the unloading module, and their
-            // deleters are its code. Release every retired snapshot NOW, while
-            // the image is still mapped (PluginHost calls this before it unmaps).
-            // An outside SettingsShared<T> holder keeps its copy alive; holding
-            // one across a hot reload is the holder's bug.
-            m->retired = {};
+            stripDropped(m->retired[0]);
+            stripDropped(m->retired[1]);
 #if !defined(NDEBUG)
             for (const std::shared_ptr<const void>& data : heldBlocks)
             {
@@ -959,16 +974,9 @@ namespace Arcane
 
     std::size_t CVarRegistry::UnregisterModuleRange(const void* base, std::size_t size)
     {
-        std::string name;
-        for (const Impl::ModuleImage& img : m->images)
-        {
-            if (img.base == base && (size == 0 || img.size == size || img.size == 0))
-            {
-                name = img.module;
-                break;
-            }
-        }
-        const std::size_t dropped = DropMatching(name, base, size);
+        // Address only: two images can share a stem, and name-matching would
+        // drop the other image's registrations (Review Focus 2, Plugin::Load).
+        const std::size_t dropped = DropMatching({}, base, size);
         UnregisterModuleImage(base, size);
         return dropped;
     }
