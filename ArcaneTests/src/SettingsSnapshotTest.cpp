@@ -97,11 +97,13 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
     std::atomic<bool> stop{ false };
     std::atomic<int> torn{ 0 };
     std::atomic<int> reads{ 0 };
+    std::atomic<int> ready{ 0 };
     bool allApplied = true;
     {
         std::vector<std::jthread> workers;
         for (int w = 0; w < 4; ++w)
             workers.emplace_back([&] {
+                ready.fetch_add(1, std::memory_order_release);
                 while (!stop.load(std::memory_order_acquire))
                 {
                     const std::shared_ptr<const ProbeSettings> s = SettingsShared<ProbeSettings>(reg);
@@ -109,6 +111,8 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
                     reads.fetch_add(1);
                 }
             });
+        while (ready.load(std::memory_order_acquire) < 4)
+            std::this_thread::yield();
         for (std::int32_t i = 1; i <= 100; ++i)
         {
             allApplied = reg.Set(count, CVarValue::Int32(i), SetBy::Code) == SetResult::Applied && allApplied;
