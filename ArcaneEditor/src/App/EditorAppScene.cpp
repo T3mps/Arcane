@@ -9,6 +9,7 @@
 // half of that contract.
 
 #include "App/EditorApp.hpp"
+#include "Settings/SettingsHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Project/RuntimeLaunch.hpp"
 #include "Project/ServerLaunch.hpp"   // DoLaunchServer's candidate list + argv
@@ -174,6 +175,7 @@ namespace Arcane::Editor
         Arcane::Diagnostics::Clear("scene");
         m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("New scene");
+        Arcane::Editor::SettingsWorldCreated();   // settings arc S3: NextWorld settings applied with this world
         return true;
     }
 
@@ -222,6 +224,7 @@ namespace Arcane::Editor
         m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
         m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("Opened scene {}", file.generic_string());
+        Arcane::Editor::SettingsWorldCreated();   // settings arc S3: NextWorld settings applied with this world
         return true;
     }
 

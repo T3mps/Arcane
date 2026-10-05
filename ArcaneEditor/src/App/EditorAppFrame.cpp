@@ -430,6 +430,7 @@ namespace Arcane::Editor
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            Arcane::Editor::TickSettingsHost();   // the settings windows' debounced writes (editor.settings.saveDebounceMs)
             // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
             if (m_undo)
                 if (const Arcane::UndoLimits limits = Arcane::Editor::ReadUndoLimits();
@@ -913,8 +914,11 @@ namespace Arcane::Editor
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
         const bool noOpenTxn = !m_undo->InTransaction();
         const bool barred    = Arcane::Editor::UndoBarred(InPlayMode());   // the ONE Play barrier (s3.3b)
-        if (active && !barred && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
-        if (active && !barred && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
+        // Settings arc S3-13: a focused settings window owns Ctrl+Z / Ctrl+Y for
+        // its window-local undo (spec s6.3); the scene stack stands down.
+        const bool settingsOwnUndo = Arcane::Editor::SettingsWindowFocused();
+        if (active && !barred && noOpenTxn && !settingsOwnUndo && m_edges.undo.pressed) m_undo->Undo();
+        if (active && !barred && noOpenTxn && !settingsOwnUndo && m_edges.redo.pressed) m_undo->Redo();
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
@@ -2340,6 +2344,8 @@ namespace Arcane::Editor
         // A no-op on every topology that never spawned one.
         if (wasPlaying && !InPlayMode())
             m_serverProcess.Stop();
+        if (!wasPlaying && InPlayMode())
+            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
         // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
         // (sec 1's rule): re-derive so this frame's consume blocks and panels see
         // the true state, not last frame's.
@@ -2540,9 +2546,19 @@ namespace Arcane::Editor
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
-        // Settings arc S3 (spec s6.1): Project Settings is the generated settings
-        // window; its "Project" page is ProjectPageThunk. Always called: a closed
-        // window is a no-op that flushes its archive on the frame it closes.
+        // Settings arc S3: editor.settings.openAtBoot (automation) is read once,
+        // on the first UI frame -- --set has applied by then.
+        if (!m_settingsBootOpenConsumed)
+        {
+            m_settingsBootOpenConsumed = true;
+            const Arcane::Editor::SettingsBootOpen boot = Arcane::Editor::ConsumeSettingsOpenAtBoot();
+            m_preferencesOpen = m_preferencesOpen || boot.preferences;
+            m_projectSettingsOpen = m_projectSettingsOpen || boot.project;
+        }
+        if (const auto picked = m_dialogs.settingsPath.Take())
+            Arcane::Editor::ApplySettingsPathPick(m_settingsPathCvar, *picked);
+        // Always called: a closed window is a no-op that flushes its archive on its close frame.
+        Arcane::Editor::DrawEditorPreferences(&m_preferencesOpen);
         Arcane::Editor::DrawProjectSettings(&m_projectSettingsOpen);
 
         // --open-asset: keep re-requesting focus for the scripted document
@@ -2603,6 +2619,7 @@ namespace Arcane::Editor
                                         const FrameState& fs, LoopState& ls)
     {
         if (menuReq.showProjectSettings) m_projectSettingsOpen = true;
+        if (menuReq.showPreferences) m_preferencesOpen = true;
         // Window > New Inspector -- reopen before create (UE's summon-details
         // rule: reuse an open view, else the first CLOSED slot; never a copy
         // beside a closed one). Instance 0 is the standing follower (spec

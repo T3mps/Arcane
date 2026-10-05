@@ -161,10 +161,9 @@ namespace Arcane::Editor
         // VISUAL-only -- the wiring pass is landing them task by task).
         // File's scene/project items (including both Open Recent submenus),
         // Save All, Exit, and Assets' Show in Explorer / Copy Path all land
-        // in `requests` now, as do Edit's clipboard and selection items. The
-        // one remaining placeholder, Edit > Preferences..., is disabled with
-        // a tooltip naming the configuration pass that will build it. Edit's
-        // Undo/Redo drive the CommandStack.
+        // in `requests` now, as do Edit's clipboard and selection items.
+        // Edit > Preferences... and Project Settings... open the settings windows (settings arc S3).
+        // Edit's Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -311,13 +310,10 @@ namespace Arcane::Editor
                 ImGui::Separator();
                 // UE's placement and order: the Edit menu's closing section is
                 // Editor Preferences... then Project Settings... (vendored
-                // MainMenu.cpp:261-276). Project Settings is wired. Preferences
-                // is the ONE remaining placeholder: disabled with its reason
-                // until the configuration pass builds the settings window over
-                // the cvar registry here (node page phase s6.8, s10.2).
-                ImGui::MenuItem("Preferences...", nullptr, false, false);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Settings window coming in the configuration pass");
+                // MainMenu.cpp:261-276). Both open the generated settings
+                // windows (settings arc S3, spec s6.1).
+                if (ImGui::MenuItem("Preferences..."))
+                    requests.showPreferences = true;
                 if (ImGui::MenuItem("Project Settings..."))
                     requests.showProjectSettings = true;
                 ImGui::EndMenu();

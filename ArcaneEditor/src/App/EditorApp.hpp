@@ -1443,6 +1443,11 @@ namespace Arcane::Editor
         // contract-preserving way to make the tab stick. 0 = nothing pending.
         int m_scriptedOpenFocusFrames = 0;
         bool m_projectSettingsOpen = false;
+        bool m_preferencesOpen = false;            // Edit > Preferences... (settings arc S3-13)
+        bool m_settingsBootOpenConsumed = false;   // editor.settings.openAtBoot read once, on the first UI frame
+        std::string m_settingsPathCvar;            // the path row a Browse dialog answers for
+        void ConfigureSettings();                  // the settings host's per-project config (OnProjectOpened)
+        void BrowseSettingsPath(const std::string& cvar, bool folder);
         // Settings arc S3-12: Project Settings' "Project" page (the host draws it; EditorApp applies its requests).
         static void ProjectPageThunk(void* user);
         void DrawProjectPage();
@@ -1748,19 +1753,19 @@ namespace Arcane::Editor
         // frame, from ImGui. `instanceNew`'s payload struct, its
         // InstanceDialogRequest, and the InstancePickedThunk trampoline that
         // filled it went with it -- PathPickedThunk is the only trampoline
-        // left, serving the three dialogs that still ARE OS file pickers
-        // (scene open/save, project open, and the material OPEN path, which is
-        // not a creation path).
+        // left, serving the OS file pickers (scene open/save, project open,
+        // the material OPEN path, and settings path:file / path:dir Browse).
         struct DialogInbox
         {
             DialogSlot<std::string>       sceneOpen;
             DialogSlot<std::string>       sceneSave;
             DialogSlot<std::string>       projectOpen;
             DialogSlot<std::string>       materialOpen;
+            DialogSlot<std::string>       settingsPath;
             void ClearAll()
             {
                 sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
-                materialOpen.Clear();
+                materialOpen.Clear(); settingsPath.Clear();
             }
         };
         DialogInbox m_dialogs;

@@ -46,6 +46,7 @@ namespace Arcane::Editor
         bool openProject = false;    // File -> Open Project      (file dialog)
         bool openProjectFolder = false;   // File -> Open Folder... / the start page (folder dialog: a folder IS a project, Project.hpp:46-62)
         bool showProjectSettings = false;
+        bool showPreferences = false;       // Edit -> Preferences... (settings arc S3)
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
         std::string openRecentPath;

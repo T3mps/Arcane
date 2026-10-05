@@ -23,6 +23,7 @@
 // create dialog is in-editor ImGui and returns its result synchronously.
 
 #include "App/EditorApp.hpp"
+#include "Settings/SettingsHost.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // Assets -> Create -> C++ Class (MintCppClass)
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
@@ -2369,6 +2370,9 @@ namespace Arcane::Editor
                                  "Save or close them before switching projects.");
             return;
         }
+        // Settings arc S3-13: the settings windows' pending edits belong to the
+        // OUTGOING project's folders, and their undo stacks to its rungs.
+        Arcane::Editor::SettingsHostProjectClosing();
         // The OUTGOING project's root, captured before teardown replaces it:
         // its editor lock must be released whichever way the switch ends.
         // `lockedRoot` tracks whichever root WE currently hold the lock for --

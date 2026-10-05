@@ -655,3 +655,28 @@ TEST_CASE("E10: a scripted launch with no project exits 2 and names the reason o
     CHECK_FALSE(run.reportFound);
     CHECK(ReadAllBytes(run.stderrPath).find("no project selected") != std::string::npos);
 }
+
+TEST_CASE("E11: editor.settings.openAtBoot=both opens Editor Preferences and Project Settings through the real editor", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e11-settings-windows");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "30",
+                 "--report", inv.reportPath.generic_string(), "--dump-layout", dump.generic_string(),
+                 "--set", "editor.settings.openAtBoot=both", "--set", "editor.settings.openCategory=Engine" };
+    inv.hardCapMs = 120000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    CHECK(run.report.at("exitReason") == "frames-complete");
+    REQUIRE(std::filesystem::exists(dump));
+    const std::string ini = ReadAllBytes(dump);
+    INFO("dumped layout:\n" << ini);
+    CHECK(ini.find("[Window][Editor Preferences]") != std::string::npos);   // drawn: the menu's window exists
+    CHECK(ini.find("[Window][Project Settings]") != std::string::npos);
+}

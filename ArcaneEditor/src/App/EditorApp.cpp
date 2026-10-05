@@ -1365,6 +1365,7 @@ namespace Arcane::Editor
         // Settings arc S3-12: Project Settings' identity page (idempotent: same path, replaced).
         Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::Project, "Project", "Project",
                                              &EditorApp::ProjectPageThunk, this);
+        ConfigureSettings();
 
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
@@ -1593,6 +1594,30 @@ namespace Arcane::Editor
         // already populated instead of showing an empty cache.
         if (recordRecents)
             m_recents.NoteProjectOpened(m_runtime->CurrentProject());
+    }
+
+    void EditorApp::ConfigureSettings()
+    {
+        Arcane::Editor::SettingsHostConfig config;
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        {
+            config.roles = Arcane::Editor::RolesForManifest(proj->Manifest());
+            config.projectOpen = true;
+        }
+        config.assetRefs = &m_assetRefServices;
+        config.browsePath = [this](const std::string& cvar, bool folder) { BrowseSettingsPath(cvar, folder); };
+        Arcane::Editor::ConfigureSettingsHost(std::move(config));
+    }
+
+    void EditorApp::BrowseSettingsPath(const std::string& cvar, bool folder)
+    {
+        m_settingsPathCvar = cvar;
+        if (folder)
+            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.settingsPath, m_dialogs.settingsPath.Arm() });
+        else
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.settingsPath, m_dialogs.settingsPath.Arm() }, nullptr, nullptr);
     }
 
     void EditorApp::RetargetLayoutIni()
@@ -3502,6 +3527,12 @@ namespace Arcane::Editor
             ImGui::SaveIniSettingsToDisk(m_config.dumpLayoutPath.c_str());
             ARC_INFO("--dump-layout: wrote the live ImGui layout to {}", m_config.dumpLayoutPath);
         }
+
+        // Settings arc S3-13: the settings windows' pending edits go to disk
+        // now (spec s6.3), while the project's folders are still known; then
+        // the Project page stops pointing at this EditorApp.
+        Arcane::Editor::FlushSettingsArchives();
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::Project, "Project", "Project", nullptr, nullptr);
 
         // The user cvar archive (T3-D2): written while the game module -- and
         // every Archive cvar it declared -- is still loaded. A no-op unless
