@@ -508,20 +508,8 @@ namespace Arcane
                 else
                 {
                     if (write.values.empty()) continue;      // never back up or replace a file only to retire a key
-                    std::filesystem::path bad = file;
-                    bad += ".bad";
-                    std::error_code copied;
-                    std::filesystem::copy_file(file, bad, std::filesystem::copy_options::overwrite_existing, copied);
-                    if (copied)
-                    {
-                        // No backup, no overwrite: the unparsable file may be the
-                        // user's only copy of a hand edit.
-                        ARC_WARN("cvar: '{}' is not a JSON object and could not be kept as '{}' ({}) -- left untouched, not saved",
-                                 file.generic_string(), bad.generic_string(), copied.message());
-                        continue;
-                    }
-                    ARC_WARN("cvar: '{}' is not a JSON object -- kept as '{}', replaced",
-                             file.generic_string(), bad.generic_string());
+                    // No backup, no overwrite: the unparsable file may be the user's only copy of a hand edit.
+                    if (!SetAsideUnreadable(file)) continue;
                 }
             }
             for (const std::string& key : write.retired)
@@ -537,25 +525,7 @@ namespace Arcane
             }
             const std::string text = doc.dump(2);
             if (before && *before == text) continue;
-            std::filesystem::path tmp = file;
-            tmp += ".tmp";
-            bool written2 = false;   // `written` is the set of archived names above
-            std::error_code renamed;
-            {
-                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-                out << text;
-                out.flush();
-                written2 = static_cast<bool>(out);
-            }
-            if (written2)
-                std::filesystem::rename(tmp, file, renamed);   // replaces: the old file or the new, never half of one
-            if (!written2 || renamed)
-            {
-                ARC_WARN("cvar: cannot write '{}'{}{}", file.generic_string(), renamed ? ": " : "",
-                         renamed ? renamed.message() : std::string());
-                std::error_code ignored;
-                std::filesystem::remove(tmp, ignored);
-            }
+            WriteTextAtomically(file, text);
         }
     }
 
@@ -614,6 +584,9 @@ namespace Arcane
                 {
                     std::error_code removed;
                     std::filesystem::remove(file, removed);
+                    if (removed)
+                        ARC_WARN("cvar: cannot delete the emptied '{}' ({}) -- its cleared overrides will return on the next boot",
+                                 file.generic_string(), removed.message());
                 }
                 continue;
             }
