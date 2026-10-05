@@ -246,7 +246,12 @@ namespace Arcane::Editor
         {
             const CVarDescInfo* d = Desc(name);
             if (!d) continue;
-            if (!showAdvanced && (HasFlag(d->flags, CVarFlags::Dev) || HasFlag(d->flags, CVarFlags::Hidden))) continue;
+            if (!showAdvanced && HasFlag(d->flags, CVarFlags::Hidden)) continue;
+            if (!showAdvanced && HasFlag(d->flags, CVarFlags::Dev))
+            {
+                const RowFacts f = ComputeRowFacts(registry, *d, kind);
+                if (!f.overridden) continue;
+            }
             if (filter != Filter::All)
             {
                 const RowFacts f = ComputeRowFacts(registry, *d, kind);

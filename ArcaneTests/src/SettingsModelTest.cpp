@@ -150,6 +150,11 @@ TEST_CASE("SettingsModel::Visible applies Modified, Overridden, Project override
     CHECK((m.Visible(reg, "render", F::Modified, false) == std::vector<std::string>{ "render.vsync" }));
     CHECK((m.Visible(reg, "render", F::Overridden, false) == std::vector<std::string>{ "render.meshCull" }));
 
+    REQUIRE(reg.Set(reg.Find("render.debugMarkers"), CVarValue::Bool(true), SetBy::CommandLine) == SetResult::Applied);
+    reg.Publish();
+    CHECK(Has(m.Visible(reg, "", F::All, false), "render.debugMarkers"));
+    CHECK_FALSE(Has(m.Visible(reg, "", F::All, false), "render.secret"));
+
     REQUIRE_FALSE(AddSetting(reg, "editor.undo.maxSteps", { .type = CVarType::Int32, .def = CVarValue::Int32(100),
         .scope = SettingScope::PreferencesProject }).IsStale());
     REQUIRE_FALSE(AddSetting(reg, "editor.graph.fitMinZoom", { .type = CVarType::Float32, .def = CVarValue::Float32(0.5f),
