@@ -42,6 +42,7 @@ namespace Arcane::Test
         std::vector<std::string> args;
         std::filesystem::path   workingDir;
         std::filesystem::path   reportPath;
+        std::filesystem::path   stdinPath;   // empty = the child gets no stdin (as before); else this file, read-only
         std::uint32_t            hardCapMs = 60000;
     };
 

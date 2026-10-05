@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>        // VerifySharedTypeContext / GameModule / PluginModules / BootScene
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <thread>
 
@@ -105,6 +107,11 @@ namespace Arcane::Server
         if (!m_runtime->OpenProject(m_cfg.projectPath))
             return Finish(rep, "project-open-failed", 1);
 
+        // A dedicated host refuses cheats unless the project or the operator opted
+        // in (settings spec s3.2). After OpenProject, so the Project rung is known.
+        if (ApplyDedicatedServerDefaults(Arcane::CVarRegistry::Get()))
+            Arcane::CVarRegistry::Get().Publish();
+
         const Arcane::Project* proj = m_runtime->CurrentProject();
         rep.projectOpened = true;
         rep.projectName   = proj->Manifest().name;
@@ -134,6 +141,17 @@ namespace Arcane::Server
 #endif
 
         (void)Arcane::ProjectHost::BootScene(*m_runtime, *proj);
+
+        // The operator's console (settings spec s9): stdin lines are RemoteCVarService
+        // requests in the ServerAdmin context, answered on stdout between ticks;
+        // every set is logged as a cvar-audit line.
+        if (m_cfg.adminConsole)
+        {
+            m_cvarService.emplace(Arcane::CVarRegistry::Get(), &LogAuditRecord, nullptr);
+            m_adminConsole.emplace(*m_cvarService, "stdin");
+            m_stdin.Start();
+            ARC_INFO("ArcaneServer: admin console on stdin (get/set/list/explain; 'help')");
+        }
 
         // Fixed-step tick, forever or --frames N. Wall-clock paced by sleeping the
         // remainder of each step (spec s6: tick rate is a RUNTIME value); the loop
@@ -165,6 +183,20 @@ namespace Arcane::Server
                                       [&](double dt) { m_plugin->FixedUpdateAll(dt); },
                                       [&](double dt, double a) { m_plugin->UpdateAll(dt, a); });
             m_plugin->Poll();
+            if (m_adminConsole)
+            {
+                for (const std::string& line : m_stdin.Drain())
+                {
+                    const std::string reply = m_adminConsole->Submit(line);
+                    if (reply.empty()) continue;
+                    std::fputs(reply.c_str(), stdout);
+                    std::fputc('\n', stdout);
+                    std::fflush(stdout);
+                }
+            }
+            // One publish per tick, as the client hosts do per frame: a Live Server
+            // setting set by the module or a console is in effect from the next tick.
+            Arcane::CVarRegistry::Get().Publish();
             Arcane::Diagnostics::Heartbeat();
             ++rep.framesTicked;
             std::this_thread::sleep_until(start + std::chrono::duration<double>(m_cfg.fixedDtSeconds));
