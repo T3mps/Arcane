@@ -64,6 +64,9 @@ namespace Arcane::Editor
         void DrawRows(SettingsRowContext& ctx, SettingsWindowState& st, const SettingsTreeNode& node,
                       const std::unordered_set<std::string>& visible)
         {
+            // I9 / spec 6.2: Attr::Category -> CVarDesc::group is an in-page
+            // sub-header. categoryPath children are tree nodes (and recurse
+            // below); a group never becomes one.
             const auto drawGroup = [&](std::string_view group)
             {
                 const std::string id = "##rows/" + node.path + "/" + std::string(group);
@@ -81,7 +84,7 @@ namespace Arcane::Editor
                     }
             };
             drawGroup({});
-            std::vector<std::string_view> groups;
+            std::vector<std::string> groups;
             for (const std::string& name : node.cvars)
             {
                 if (!visible.contains(name)) continue;
@@ -89,11 +92,12 @@ namespace Arcane::Editor
                 if (desc && !desc->group.empty() && std::find(groups.begin(), groups.end(), desc->group) == groups.end())
                     groups.push_back(desc->group);
             }
-            for (const std::string_view group : groups)
+            for (const std::string& group : groups)
             {
                 ImGui::PushID("group");
                 const bool open = ctx.grid.SubSection(group);
-                Probe(st, "group:" + node.path + "/" + std::string(group));
+                Probe(st, "group:" + node.path + "/" + group);
+                st.last.groups.push_back(group);
                 if (open)
                 {
                     drawGroup(group);

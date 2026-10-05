@@ -71,7 +71,7 @@ namespace Arcane::Editor
         struct FrameFacts
         {
             enum class Page : std::uint8_t { None, Rows, Custom, ModuleUnloaded } page = Page::None;
-            std::vector<std::string> treePaths, rows, overridden;
+            std::vector<std::string> treePaths, rows, overridden, groups;
             std::size_t restartPending = 0, nextWorldPending = 0;
             std::string tooltip, contextMenu;
         } last;
