@@ -155,34 +155,26 @@ namespace Arcane
     }
 }
 
-#if !defined(_WIN32)
 
-// Non-Windows stub: the compile service is Windows-only until the Linux port
-// milestone (libdxcompiler.so lands there).
-namespace Arcane
-{
-    struct ShaderCompiler::Impl {};
-    ShaderCompiler::ShaderCompiler() = default;
-    ShaderCompiler::~ShaderCompiler() = default;
-    bool ShaderCompiler::Initialize(double) { return false; }
-    void ShaderCompiler::Shutdown() {}
-    std::uint64_t ShaderCompiler::Submit(ShaderCompileRequest, double) { return 0; }
-    void ShaderCompiler::Poll(double) {}
-    std::vector<ShaderCompileResult> ShaderCompiler::Drain() { return {}; }
-    bool ShaderCompiler::IsIdle() const { return true; }
-    std::size_t ShaderCompiler::UndrainedCount() const { return 0; }
-    ShaderCompileResult ShaderCompiler::CompileNow(const ShaderCompileRequest&) { return {}; }
-    const ShaderCompileResult* ShaderCompiler::LastGood(std::uint64_t) const { return nullptr; }
-}
+#include <Arcane/Platform/Platform.hpp>
 
-#else
-
+#if ARCANE_PLATFORM_WINDOWS
 #include <windows.h>
 
 #include <unknwn.h>   // WIN32_LEAN_AND_MEAN strips COM from windows.h; dxcapi.h needs IUnknown
 
 #include <dxcapi.h>
 #include <wrl/client.h>
+#else
+// Linux port (2026-10-05): the same in-process service over libdxcompiler.so.
+// The DXC release ships dxcapi.h with WinAdapter.h, its own COM shim
+// (IUnknown, HRESULT, __uuidof/IID_PPV_ARGS, LPCWSTR = const wchar_t*), so
+// the compile path below is shared; only module loading, the smart pointer,
+// the exe path and the crash guard differ.
+#include <dlfcn.h>
+#include <link.h>      // dlinfo(RTLD_DI_LINKMAP): the loaded library's path
+#include <dxcapi.h>
+#endif
 
 #include <Arcane/Base/ServiceThread.hpp>
 
@@ -199,7 +191,45 @@ namespace Arcane
 {
     namespace
     {
+#if ARCANE_PLATFORM_WINDOWS
         using Microsoft::WRL::ComPtr;
+#else
+        // The slice of WRL's ComPtr this file uses (Get/Reset/Attach, &p for
+        // IID_PPV_ARGS, which -- like WRL's operator& -- releases first).
+        template <class T>
+        class ComPtr
+        {
+        public:
+            ComPtr() = default;
+            ~ComPtr() { Reset(); }
+            ComPtr(const ComPtr&) = delete;
+            ComPtr& operator=(const ComPtr&) = delete;
+            T* Get() const noexcept { return m_ptr; }
+            T* operator->() const noexcept { return m_ptr; }
+            explicit operator bool() const noexcept { return m_ptr != nullptr; }
+            T** operator&() noexcept { Reset(); return &m_ptr; }
+            void Attach(T* p) noexcept { Reset(); m_ptr = p; }
+            void Reset() noexcept
+            {
+                if (m_ptr)
+                {
+                    m_ptr->Release();
+                    m_ptr = nullptr;
+                }
+            }
+        private:
+            T* m_ptr = nullptr;
+        };
+
+        // A loaded shared object's own path (the toolchain hash reads its bytes).
+        std::filesystem::path LoadedLibraryPath(void* handle)
+        {
+            link_map* map = nullptr;
+            if (handle && ::dlinfo(handle, RTLD_DI_LINKMAP, &map) == 0 && map && map->l_name)
+                return std::filesystem::path(map->l_name);
+            return {};
+        }
+#endif
 
         constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
         constexpr std::uint64_t kFnvPrime = 1099511628211ull;
@@ -231,9 +261,15 @@ namespace Arcane
 
         std::filesystem::path ExeDirectory()
         {
+#if ARCANE_PLATFORM_WINDOWS
             wchar_t buf[MAX_PATH] = {};
             GetModuleFileNameW(nullptr, buf, MAX_PATH);
             return std::filesystem::path(buf).parent_path();
+#else
+            std::error_code ec;
+            const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+            return ec ? std::filesystem::current_path(ec) : exe.parent_path();
+#endif
         }
 
         std::uint64_t HashFileBytes(std::uint64_t h, const std::filesystem::path& p)
@@ -254,6 +290,7 @@ namespace Arcane
                            LPCWSTR* argv, UINT32 argc, IDxcResult** outResult,
                            HRESULT* outHr) noexcept
         {
+#if ARCANE_PLATFORM_WINDOWS
             __try
             {
                 *outHr = compiler->Compile(source, argv, argc, nullptr, IID_PPV_ARGS(outResult));
@@ -263,6 +300,12 @@ namespace Arcane
             {
                 return 1;
             }
+#else
+            // No SEH off-Windows: a crash inside libdxcompiler.so is a process
+            // crash (the Diagnostics crash path owns it), never a job failure.
+            *outHr = compiler->Compile(source, argv, argc, nullptr, IID_PPV_ARGS(outResult));
+            return 0;
+#endif
         }
 
         // Build the CLI-shaped argv for one target (argv[0] = the virtual source
@@ -398,8 +441,13 @@ namespace Arcane
         };
 
         // Toolchain (set once in Initialize).
+#if ARCANE_PLATFORM_WINDOWS
         HMODULE hDxil = nullptr;
         HMODULE hCompiler = nullptr;   // stays loaded for process lifetime (COM DLL unload is unsafe)
+#else
+        void* hDxil = nullptr;         // dlopen handles; same never-unload rule
+        void* hCompiler = nullptr;
+#endif
         DxcCreateInstanceProc createInstance = nullptr;
         std::uint64_t toolchainHash = 0;
         double debounce = 0.2;
@@ -561,6 +609,7 @@ namespace Arcane
             return true;
         im.debounce = debounceSeconds;
 
+#if ARCANE_PLATFORM_WINDOWS
         // Vendored trio beside the exe first (the postbuild copies), then the
         // regular search path. dxil.dll loads FIRST so dxcompiler's validator
         // finds it (missing validator = unsigned DXIL, warn but continue).
@@ -603,6 +652,41 @@ namespace Arcane
             th = HashFileBytes(th, modulePath);
         }
         im.toolchainHash = th;
+#else
+        // Linux: the fetched release's libdxil.so/libdxcompiler.so beside the
+        // exe first (the postbuild copies them when scripts/fetch-dxc-linux.sh
+        // has run), then the loader's search path. Same order and the same
+        // degradations as the Windows trio above.
+        const std::filesystem::path exeDir = ExeDirectory();
+        im.hDxil = ::dlopen((exeDir / "libdxil.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!im.hDxil)
+            im.hDxil = ::dlopen("libdxil.so", RTLD_NOW | RTLD_LOCAL);
+        if (!im.hDxil)
+            ARC_WARN("ShaderCompiler: libdxil.so not found -- DXIL output will be unsigned");
+
+        im.hCompiler = ::dlopen((exeDir / "libdxcompiler.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (!im.hCompiler)
+            im.hCompiler = ::dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL);
+        if (!im.hCompiler)
+        {
+            ARC_ERROR("ShaderCompiler: libdxcompiler.so not found -- runtime compiles unavailable");
+            return false;
+        }
+
+        im.createInstance = reinterpret_cast<DxcCreateInstanceProc>(
+            ::dlsym(im.hCompiler, "DxcCreateInstance"));
+        if (!im.createInstance)
+        {
+            ARC_ERROR("ShaderCompiler: DxcCreateInstance export missing from libdxcompiler.so");
+            return false;
+        }
+
+        std::uint64_t th = kFnvOffset;
+        th = HashFileBytes(th, LoadedLibraryPath(im.hCompiler));
+        if (im.hDxil)
+            th = HashFileBytes(th, LoadedLibraryPath(im.hDxil));
+        im.toolchainHash = th;
+#endif
 
         im.worker.emplace("shader.compile",
                           [this] { m_impl->WorkerMain(); },
@@ -768,5 +852,3 @@ namespace Arcane
         return it != m_impl->lastGood.end() ? &it->second : nullptr;
     }
 }
-
-#endif

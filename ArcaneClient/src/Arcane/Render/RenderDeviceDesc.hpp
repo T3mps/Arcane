@@ -16,7 +16,7 @@ namespace Arcane
 {
     struct RenderDeviceDesc
     {
-        GraphicsBackend backend = GraphicsBackend::D3D12;
+        GraphicsBackend backend = kDefaultGraphicsBackend;   // D3D12 on Windows, Vulkan elsewhere
 #if defined(ARCANE_DEBUG)
         bool enableValidation = true;   // NRI validation layer + VK validation
 #else

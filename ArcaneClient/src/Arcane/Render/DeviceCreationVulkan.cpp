@@ -14,6 +14,7 @@
 // the creation half is for.
 
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Platform/Platform.hpp>
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
 #include <Arcane/Render/DeviceRemovedObservers.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // NoteGpuDeviceLost -- the host's device-lost latch
@@ -50,13 +51,29 @@ namespace Arcane
         // headless tests and windowed swapchains.
         const char* kInstanceExtensions[] = {
             VK_KHR_SURFACE_EXTENSION_NAME,
+#if ARCANE_PLATFORM_WINDOWS
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+#endif
+            // Non-Windows: the X11/Wayland surface extensions are OPTIONAL
+            // (kOptionalSurfaceExtensions below) -- which ones exist depends on
+            // the loader/ICD, and a headless box must never fail over them.
             // NRI capability contract item 1 (hard): NRI's SwapChainVK::Create
             // calls GetPhysicalDeviceSurfaceFormats2KHR and
             // GetPhysicalDeviceSurfaceCapabilities2KHR through UNGUARDED
             // pointers, so its absence is a crash on the first swapchain.
             VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         };
+#if !ARCANE_PLATFORM_WINDOWS
+        // Linux port: the window-system surface extensions NRI's SwapChainVK
+        // can consume (it is built with VK_USE_PLATFORM_XLIB_KHR + _WAYLAND_KHR
+        // off-Windows), plus xcb, which SDL's X11 driver may use. Each is
+        // requested only when the instance enumerates it (Init's sweep).
+        const char* kOptionalSurfaceExtensions[] = {
+            "VK_KHR_xlib_surface",
+            "VK_KHR_xcb_surface",
+            "VK_KHR_wayland_surface",
+        };
+#endif
         // F-5a: the REQUIRED device extensions. The optional GPU-crash
         // diagnostics extensions are appended to a copy of this list only when
         // the physical device actually enumerates them -- see F-5c's sweep in
@@ -233,6 +250,14 @@ namespace Arcane
                       VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
             return false;
         }
+
+#if !ARCANE_PLATFORM_WINDOWS
+        for (const char* ext : kOptionalSurfaceExtensions)
+        {
+            if (instanceExtensionAvailable(ext))
+                instanceExtensions.push_back(ext);
+        }
+#endif
 
         bool debugUtils = false;
         if (desc.enableValidation &&

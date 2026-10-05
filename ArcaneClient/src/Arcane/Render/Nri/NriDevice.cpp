@@ -3,7 +3,14 @@
 // NRI headers MUST stay first in this file.
 #include <NRI.h>
 #include <Extensions/NRIDeviceCreation.h>
+#include <Arcane/Platform/Platform.hpp>   // ARCANE_PLATFORM_WINDOWS: std-only, safe after the NRI headers
+#if ARCANE_PLATFORM_WINDOWS
 #include <Extensions/NRIWrapperD3D12.h>
+#endif
+// NRIWrapperVK.h is not self-contained (uses AccelerationStructureBits from
+// NRIRayTracing.h, which only NRIWrapperD3D12.h pulls in) -- explicit here so
+// a D3D12-less (Linux) build does not depend on the include order.
+#include <Extensions/NRIRayTracing.h>
 #include <Extensions/NRIWrapperVK.h>
 
 #include "NriDevice.hpp"
@@ -12,7 +19,14 @@
 
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Report -- the injected-overlay scan, once, after the native device exists
 #include <Arcane/Base/Log.hpp>
+#if ARCANE_PLATFORM_WINDOWS
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
+#else
+// LINUX PORT: D3D12 is a Windows-target backend (its headers need <rpc.h>/
+// <dxgi1_6.h>). An EMPTY definition keeps NativeDeviceOwner::Impl's
+// unique_ptr<D3D12DeviceCreation> destructible; nothing ever allocates one.
+namespace Arcane { struct D3D12DeviceCreation {}; }
+#endif
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the ONE device-lost latch (~NriDevice's teardown gate)
 #include <Arcane/Render/ShaderConventions.hpp>
@@ -107,8 +121,10 @@ namespace Arcane
     {
         if (m_impl->vulkan)
             DestroyVulkanNativeDevice(*m_impl->vulkan);
+#if ARCANE_PLATFORM_WINDOWS
         if (m_impl->d3d12)
             DestroyD3D12NativeDevice(*m_impl->d3d12);
+#endif
     }
 
     std::unique_ptr<NativeDeviceOwner> NativeDeviceOwner::Create(const RenderDeviceDesc& desc)
@@ -136,9 +152,14 @@ namespace Arcane
         }
         else
         {
+#if ARCANE_PLATFORM_WINDOWS
             owner->m_impl->d3d12 = std::make_unique<D3D12DeviceCreation>();
             if (!CreateD3D12NativeDevice(desc, *owner->m_impl->d3d12))
                 return nullptr;
+#else
+            ARC_ERROR("Native device creation: the D3D12 backend does not exist on this platform (use Vulkan)");
+            return nullptr;
+#endif
         }
 
         // THE INJECTED-OVERLAY SCAN, here and nowhere else: the native device
@@ -277,6 +298,7 @@ namespace Arcane
 
     std::unique_ptr<NriDevice> NriDevice::WrapD3D12(const D3D12DeviceCreation& creation)
     {
+#if ARCANE_PLATFORM_WINDOWS
         if (!creation.device)
         {
             ARC_ERROR("[nri] cannot wrap D3D12: the creation half has no device "
@@ -341,6 +363,11 @@ namespace Arcane
         if (wrapped)
             wrapped->m_d3d12Creation = &creation;
         return wrapped;
+#else
+        (void)creation;
+        ARC_ERROR("[nri] cannot wrap D3D12: not a backend on this platform");
+        return nullptr;
+#endif
     }
 
     std::unique_ptr<NriDevice> NriDevice::Wrap(const NativeDeviceOwner& native)
@@ -511,19 +538,23 @@ namespace Arcane
         // layers raise while NRI's own objects go out is attributed to THIS
         // step and not to whatever ran before it (the DXGI queue only stores;
         // see DeviceCreationD3D12.cpp).
+#if ARCANE_PLATFORM_WINDOWS
         if (m_backend == GraphicsBackend::D3D12)
         {
             if (m_d3d12Creation)
                 DrainD3D12DebugMessages(*m_d3d12Creation, "before nriDestroyDevice");
             DrainDxgiDebugMessages("before nriDestroyDevice");
         }
+#endif
         nriDestroyDevice(m_device);
+#if ARCANE_PLATFORM_WINDOWS
         if (m_backend == GraphicsBackend::D3D12)
         {
             if (m_d3d12Creation)
                 DrainD3D12DebugMessages(*m_d3d12Creation, "after nriDestroyDevice");
             DrainDxgiDebugMessages("after nriDestroyDevice");
         }
+#endif
         m_device        = nullptr;
         m_graphicsQueue = nullptr;
     }

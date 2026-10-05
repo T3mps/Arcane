@@ -13,7 +13,7 @@ namespace Arcane
 {
     struct ARCANE_API HostConfig
     {
-        GraphicsBackend backend   = GraphicsBackend::D3D12;
+        GraphicsBackend backend   = kDefaultGraphicsBackend;   // D3D12 on Windows, Vulkan elsewhere
         std::uint64_t   maxFrames = 0;             // 0 = run until quit
         bool            vsync     = true;
         bool            perf      = false;
