@@ -96,9 +96,8 @@ namespace Arcane
         // The authored look: amber selected, cyan hovered, a 3 px outline
         // CENTERED on the silhouette edge with a 1 px AA ramp.
         // Display-referred -- the composite writes straight into the
-        // tonemapped backbuffer with no sRGB conversion.
-        constexpr float kSelectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
-        constexpr float kHoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
+        // tonemapped backbuffer with no sRGB conversion. Colours come from
+        // OutlineNode::m_selectColor / m_hoverColor (SetColors).
         constexpr float kSelectThickPx  = 3.0f;
         constexpr float kHoverThickPx   = 3.0f;
         constexpr float kEdgeSoftPx     = 1.0f;
@@ -1244,8 +1243,8 @@ namespace Arcane
         cb.edgeSoft    = kEdgeSoftPx;
         cb.dimX        = (std::int32_t)width;
         cb.dimY        = (std::int32_t)height;
-        std::memcpy(cb.selectColor, kSelectColor, sizeof(kSelectColor));
-        std::memcpy(cb.hoverColor,  kHoverColor,  sizeof(kHoverColor));
+        std::memcpy(cb.selectColor, m_selectColor, sizeof(m_selectColor));
+        std::memcpy(cb.hoverColor,  m_hoverColor,  sizeof(m_hoverColor));
 
         // AlphaOver, matching SelectionOutline's composite blend state
         // (SrcAlpha / InvSrcAlpha for colour, One / InvSrcAlpha for alpha):

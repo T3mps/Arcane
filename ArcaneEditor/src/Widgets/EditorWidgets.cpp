@@ -1,5 +1,6 @@
 #include "Widgets/EditorWidgets.hpp"
 
+#include "Settings/AxisColors.hpp"
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
 
@@ -234,17 +235,8 @@ namespace Arcane::Editor
         // ---------------------------------------------------------------------
         // Axis color bars (UE's Details-panel treatment for vector components:
         // X red, Y green, Z blue on the left edge of each component's frame).
+        // Colours come from editor.theme.axisX/Y/Z (Settings/AxisColors).
         // ---------------------------------------------------------------------
-
-        // Sampled off the UE reference screenshot -- deliberately muted, unlike
-        // the saturated primaries ImGui's own component markers use
-        // (GDefaultRgbaColorMarkers is 240/20/20, 20/240/20, 20/20/240 --
-        // imgui_widgets.cpp:2257-2260).
-        constexpr ImU32 kAxisBarColors[3] = {
-            IM_COL32(196,  64,  54, 255),   // X
-            IM_COL32( 96, 166,  58, 255),   // Y
-            IM_COL32( 58, 122, 196, 255),   // Z
-        };
 
         // How wide the strip is, in pixels. Matches ImGuiStyle::ColorMarkerSize's
         // own default (imgui.cpp:1564), which is the width the vendored marker
@@ -258,7 +250,8 @@ namespace Arcane::Editor
         // Section 2's rule that inspector style constants live in one place.
         // ---------------------------------------------------------------------
 
-        // Sampled off the UE reference screenshot, same as kAxisBarColors --
+        // Sampled off the UE reference screenshot, same as the inspector axis
+        // bars --
         // desk call, not measured off UE pixels. Hover/active step up in
         // lightness so the row still visibly responds to input. They sit ABOVE
         // the theme's panel tone (#1e1e1e, EditorTheme.hpp kPanel), so the band
@@ -302,7 +295,7 @@ namespace Arcane::Editor
         // neutral border IS a theme token already -- kSeparator is
         // EditorTheme.hpp's own #333333, used today for table borders -- but
         // the amber variant's #7a5a20 has no token of its own, so it is
-        // hardcoded here for the same reason kAxisBarColors/kHeaderBandColor
+        // hardcoded here for the same reason kHeaderBandColor
         // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
         // oversight.
         //
@@ -468,9 +461,9 @@ namespace Arcane::Editor
     }
 
     // Paint the axis strip over the left edge of the item just submitted.
-    // `component` indexes kAxisBarColors; an index past the palette draws
-    // nothing, so a row wider than three components degrades quietly rather
-    // than reading out of bounds.
+    // `component` indexes the X/Y/Z inspector bars; an index past the palette
+    // draws nothing, so a row wider than three components degrades quietly
+    // rather than reading out of bounds.
     //
     // An OVERLAY on purpose: it runs AFTER the widget, so it pushes no style
     // and cannot move layout. It sits flush on the frame's corners because
@@ -482,7 +475,7 @@ namespace Arcane::Editor
     // text boxes, which need the same strip.
     void DrawAxisBar(int component)
     {
-        if (component < 0 || component >= IM_ARRAYSIZE(kAxisBarColors))
+        if (component < 0 || component > 2)
             return;
         // A window that is skipping items submitted nothing: both DragScalar
         // (imgui_widgets.cpp:2721-2723) and InputTextEx (:4708-4710) return
@@ -491,10 +484,10 @@ namespace Arcane::Editor
         // that one.
         if (ImGui::GetCurrentWindowRead()->SkipItems)
             return;
+        const ImU32 colour = DeriveAxisRoles(Theme::Live()).inspectorBar[component];
         const ImVec2 min = ImGui::GetItemRectMin();
         const ImVec2 max = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            min, ImVec2(min.x + kAxisBarWidth, max.y), kAxisBarColors[component]);
+        ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + kAxisBarWidth, max.y), colour);
     }
 
     // WHY NOT DragFloat2/3: the bar needs each component's OWN frame rect,

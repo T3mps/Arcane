@@ -123,6 +123,18 @@ namespace Arcane
                                  GizmoHandleMask handles, float sizeScale,
                                  glm::vec2 mouseScreen);
 
+    // The three axis colours the gizmo paints (settings arc S4): the editor
+    // derives them from the editor.theme.axis* tokens (Settings/AxisColors);
+    // the defaults are the gizmo's own display-space cousins of UE's palette.
+    // S5-2 option A: these stay the painted values until a unification re-bless
+    // (pending axis unification re-bless).
+    struct GizmoAxisColors
+    {
+        glm::vec4 x{ 0.96f, 0.28f, 0.22f, 1.0f };
+        glm::vec4 y{ 0.48f, 0.84f, 0.16f, 1.0f };
+        glm::vec4 z{ 0.24f, 0.58f, 0.98f, 1.0f };
+    };
+
     // Screen-constant gizmo geometry for the current state, UNREAL'S WIDGET
     // (UnrealWidgetRender.cpp) in pixels: shaded rods with cone heads (cubes
     // in Scale), the centre disc, camera-facing quarter bands for Rotate (the
@@ -136,7 +148,8 @@ namespace Arcane
                          const GizmoTransform& t, const ViewTransform& view,
                          GizmoHandleMask handles, float sizeScale,
                          GizmoAxis hovered, GizmoAxis active,
-                         const GizmoRotateSweep* sweep = nullptr);   // the active rotate drag, if any
+                         const GizmoRotateSweep* sweep = nullptr,   // the active rotate drag, if any
+                         const GizmoAxisColors& colors = GizmoAxisColors{});
 
     // The sweep of an in-progress rotate drag on `axis` (X/Y/Z/Screen) --
     // nullopt for any other axis or when a mouse ray misses the ring's plane.

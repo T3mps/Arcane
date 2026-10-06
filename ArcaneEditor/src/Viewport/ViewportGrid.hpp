@@ -67,10 +67,19 @@ namespace Arcane::Editor
     inline constexpr float kGridMajorAlpha = 0.55f;
 
     // Level lines are neutral grey at the level's alpha; the axes are full
-    // colour on top.
+    // colour on top. pending axis unification re-bless (S5-2 A): these stay
+    // the painted 2D-grid values; inspector bars bind to editor.theme.axis*.
     inline constexpr glm::vec3 kGridLineRgb    { 0.5f, 0.5f, 0.5f };
     inline constexpr glm::vec4 kGridAxisXColor { 0.85f, 0.25f, 0.25f, 0.9f };
     inline constexpr glm::vec4 kGridAxisYColor { 0.3f,  0.8f,  0.3f,  0.9f };
+
+    // The two axis lines' colours (settings arc S4): the editor derives them
+    // from editor.theme.axisX/Y; the defaults are the values above.
+    struct Grid2DAxisColors
+    {
+        glm::vec4 x = kGridAxisXColor;
+        glm::vec4 y = kGridAxisYColor;
+    };
 
     inline constexpr float kGridLineThicknessPx = 1.0f;
 
@@ -101,5 +110,5 @@ namespace Arcane::Editor
     // at (0, 0) after (the batcher resets per Begin anyway; the caller is the
     // first submitter in the bracket). Returns without a draw when the view
     // is not orthographic, has no viewport, or the plan is empty.
-    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan);
+    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan, const Grid2DAxisColors& axes = Grid2DAxisColors{});
 }

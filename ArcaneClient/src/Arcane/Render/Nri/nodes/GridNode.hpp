@@ -121,6 +121,7 @@ namespace Arcane
         // below does exactly that, and is what the editor wiring calls. The
         // shader never branches on the plane for COLOUR (grid.hlsl's header),
         // so an explicit override of either field after SetPlane stands.
+        // pending axis unification re-bless (S5-2 A): painted 3D-grid values.
         static constexpr glm::vec4 kAxisXColor{ 0.85f, 0.25f, 0.25f, 0.9f };
         static constexpr glm::vec4 kAxisYColor{ 0.30f, 0.80f, 0.35f, 0.9f };
         static constexpr glm::vec4 kAxisZColor{ 0.30f, 0.40f, 0.90f, 0.9f };

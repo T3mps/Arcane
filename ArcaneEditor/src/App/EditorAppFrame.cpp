@@ -22,6 +22,7 @@
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
+#include "Settings/AxisColors.hpp"
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
 
@@ -45,6 +46,7 @@
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
+#include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
@@ -1737,6 +1739,11 @@ namespace Arcane::Editor
                                             !WindowedFrameCapture(m_config);
             vp.capture = isCaptureLastFrame;
 
+            if (Arcane::OutlineNode* outline = m_viewportTargets.graph->Outline())
+            {
+                const Arcane::Editor::AxisRoleColors roles = Arcane::Editor::DeriveAxisRoles(Arcane::Editor::Theme::Live());
+                outline->SetColors(roles.outlineSelect, roles.outlineHover);
+            }
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Any outcome but Presented means GpuSceneSyncNode did not run, so

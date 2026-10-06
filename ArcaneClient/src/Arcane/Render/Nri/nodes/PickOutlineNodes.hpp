@@ -118,6 +118,7 @@
 #include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
 #include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
 
+#include <glm/glm.hpp>
 #include <glm/mat4x4.hpp>
 
 #include <cstdint>
@@ -456,6 +457,15 @@ namespace Arcane
         // Over kMaxSelectedIds the first kMaxSelectedIds are kept, with one WARN.
         void PrepareSelection(std::span<const std::uint32_t> selectedIds);
 
+        // The composite's two colours (settings arc S4): the editor pushes
+        // editor.theme.amber (selected) and the graph hover border (hovered)
+        // every frame. Defaults are the values this node always drew.
+        void SetColors(const glm::vec4& select, const glm::vec4& hover) noexcept
+        {
+            m_selectColor[0] = select.x; m_selectColor[1] = select.y; m_selectColor[2] = select.z; m_selectColor[3] = select.w;
+            m_hoverColor[0]  = hover.x;  m_hoverColor[1]  = hover.y;  m_hoverColor[2]  = hover.z;  m_hoverColor[3]  = hover.w;
+        }
+
         // Pass 1: the SUPERSAMPLED R32_UINT id buffer -> a boundary-seeded
         // RGBA16_SNORM field at 1x, over the selection PrepareSelection copied.
         // A cursor of (-1,-1) means no hover.
@@ -603,6 +613,9 @@ namespace Arcane
 
         bool m_warnedViewChurn = false;
         bool m_warnedIdOverflow = false;
+
+        float m_selectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
+        float m_hoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
     };
 
     // =====================================================================

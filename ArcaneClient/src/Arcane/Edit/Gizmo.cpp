@@ -53,15 +53,22 @@ namespace Arcane
         // yellow) but sit a notch more saturated in display space so they
         // still read after the overlay halo and against the lit cube / sky.
         // Linear UE values were (0.594, 0.0197, 0) / (0.1349, 0.3959, 0) /
-        // (0.0251, 0.207, 0.85); these are the punched display cousins, not
-        // a second palette.
-        constexpr glm::vec4 kColorX      { 0.96f, 0.28f, 0.22f, 1.0f };
-        constexpr glm::vec4 kColorY      { 0.48f, 0.84f, 0.16f, 1.0f };
-        constexpr glm::vec4 kColorZ      { 0.24f, 0.58f, 0.98f, 1.0f };
+        // (0.0251, 0.207, 0.85); the painted X/Y/Z triples live on
+        // GizmoAxisColors (pending axis unification re-bless).
         constexpr glm::vec4 kColorHot    { 1.00f, 0.86f, 0.18f, 1.0f };
         constexpr glm::vec4 kColorScreen { 0.90f, 0.91f, 0.93f, 1.0f };
         constexpr glm::vec4 kColorScreenArc { 0.96f, 0.90f, 0.42f, 1.0f };
         constexpr glm::vec4 kColorCentre { 0.97f, 0.97f, 0.98f, 1.0f };
+
+        // The colours of the Draw call in flight (main thread; Draw is not
+        // re-entrant). Null outside Draw: the defaults.
+        thread_local const GizmoAxisColors* t_axisColors = nullptr;
+
+        struct AxisColorScope
+        {
+            explicit AxisColorScope(const GizmoAxisColors& c) noexcept { t_axisColors = &c; }
+            ~AxisColorScope() { t_axisColors = nullptr; }
+        };
 
         glm::vec3 AxisUnit(GizmoAxis a) noexcept
         {
@@ -255,16 +262,18 @@ namespace Arcane
 
         glm::vec4 AxisColor(GizmoAxis a) noexcept
         {
+            static const GizmoAxisColors kDefaults{};
+            const GizmoAxisColors& c = t_axisColors ? *t_axisColors : kDefaults;
             switch (a)
             {
-            case GizmoAxis::X: case GizmoAxis::YZ: return kColorX;
-            case GizmoAxis::Y: case GizmoAxis::XZ: return kColorY;
-            case GizmoAxis::Z: case GizmoAxis::XY: return kColorZ;
+            case GizmoAxis::X: case GizmoAxis::YZ: return c.x;
+            case GizmoAxis::Y: case GizmoAxis::XZ: return c.y;
+            case GizmoAxis::Z: case GizmoAxis::XY: return c.z;
             case GizmoAxis::Center:                return kColorCentre;
             case GizmoAxis::Screen:                return kColorScreen;
             default:                               return kColorCentre;
             }
-        }
+        };
 
         // UE: the hovered / dragged handle turns YELLOW (CurrentColor), every
         // other handle keeps its axis colour.
@@ -508,8 +517,9 @@ namespace Arcane
     // ---- Draw --------------------------------------------------------------------
     void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
               GizmoHandleMask handles, float sizeScale, GizmoAxis hovered, GizmoAxis active,
-              const GizmoRotateSweep* sweep)
+              const GizmoRotateSweep* sweep, const GizmoAxisColors& colors)
     {
+        const AxisColorScope axisColors(colors);
         // Into the host's FOREGROUND sink (GizmoDrawSink): over the finished
         // frame, no depth -- Unreal's SDPG_Foreground for its widget.
         if (!Visible(view, t.position)) return;   // behind the eye: no phantom to draw
