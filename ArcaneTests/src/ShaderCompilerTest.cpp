@@ -127,7 +127,7 @@ TEST_CASE("ParseDxcDiagnostics handles located, bare, and follow-line forms", "[
 TEST_CASE("ShaderCompiler compiles one source to both targets in-process", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(sc.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     REQUIRE(sc.IsAvailable());
 
     const ShaderCompileResult r = sc.CompileNow(MakeRequest(kGoodPs));
@@ -154,7 +154,7 @@ TEST_CASE("ShaderCompiler compiles one source to both targets in-process", "[sha
 TEST_CASE("ShaderCompiler surfaces structured errors with line/col", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     const ShaderCompileResult r = sc.CompileNow(MakeRequest(kBadPs));
     CHECK_FALSE(r.dxil.succeeded);
@@ -182,7 +182,7 @@ TEST_CASE("ShaderCompiler surfaces structured errors with line/col", "[shadercom
 TEST_CASE("ShaderCompiler parses warnings on successful compiles", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     const ShaderCompileResult r = sc.CompileNow(MakeRequest(kWarnPs));
     REQUIRE(r.dxil.succeeded);
@@ -205,7 +205,7 @@ TEST_CASE("ShaderCompiler parses warnings on successful compiles", "[shadercompi
 TEST_CASE("ShaderCompiler content-hash cache serves repeat compiles", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     const ShaderCompileResult first = sc.CompileNow(MakeRequest(kGoodPs));
     REQUIRE(first.AllSucceeded());
@@ -233,7 +233,7 @@ TEST_CASE("ShaderCompiler content-hash cache serves repeat compiles", "[shaderco
 TEST_CASE("ShaderCompiler async submit -> poll -> drain round-trip", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     const std::uint64_t jobId = sc.Submit(MakeRequest(kGoodPs, /*key=*/42), /*now=*/0.0);
     REQUIRE(jobId != 0);
@@ -267,7 +267,7 @@ TEST_CASE("ShaderCompiler async submit -> poll -> drain round-trip", "[shadercom
 TEST_CASE("ShaderCompiler: IsIdle() stays false while a finished result sits undrained", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     sc.Submit(MakeRequest(kGoodPs, /*key=*/99), /*now=*/0.0);
     CHECK_FALSE(sc.IsIdle());   // pending, pre-dispatch
@@ -289,7 +289,7 @@ TEST_CASE("ShaderCompiler last-good stays bound while a newer compile fails", "[
     // The arc's headline failure-UX contract: a broken edit must never regress
     // the consumer below the last success for that key.
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     sc.Submit(MakeRequest(kGoodPs, /*key=*/11), 0.0);
     sc.Poll(0.0);
@@ -322,7 +322,7 @@ TEST_CASE("ShaderCompiler last-good stays bound while a newer compile fails", "[
 TEST_CASE("ShaderCompiler debounce coalesces rapid submits to the newest", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(/*debounceSeconds=*/0.5));
+    REQUIRE(sc.InitializeWithDebounce(/*debounceSeconds=*/0.5));
 
     sc.Submit(MakeRequest(kGoodPs, /*key=*/7), /*now=*/0.0);
     const std::uint64_t newest = sc.Submit(MakeRequest(kWarnPs, /*key=*/7), /*now=*/0.1);
@@ -348,7 +348,7 @@ TEST_CASE("ShaderCompiler debounce coalesces rapid submits to the newest", "[sha
 TEST_CASE("ShaderCompiler drops results superseded after dispatch", "[shadercompile]")
 {
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     // First job dispatches and completes fully.
     sc.Submit(MakeRequest(kGoodPs, /*key=*/9), 0.0);

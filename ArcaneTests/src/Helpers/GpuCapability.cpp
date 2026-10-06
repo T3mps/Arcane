@@ -18,8 +18,8 @@ namespace Arcane::Test
             // matters -- an adapter that enumerates but cannot create a device
             // is not an available backend.
             //
-            // VALIDATION OFF, even in Debug where RenderDeviceDesc defaults it
-            // ON: the probe asks ONE question -- can a device be created -- and
+            // VALIDATION OFF, even in Debug where render.debug.validation
+            // defaults it ON: the probe asks ONE question -- can a device be created -- and
             // must neither fail for a reason unrelated to availability nor pay
             // for layers it will immediately throw away.
             RenderDeviceDesc desc;

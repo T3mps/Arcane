@@ -105,12 +105,12 @@ namespace Arcane
 
     nri::DescriptorPoolDesc GridNode::PoolSizes() noexcept
     {
-        // ONE dimension: kSwapchainFramesInFlight per-frame sets, each
+        // ONE dimension: FramesInFlight() per-frame sets, each
         // carrying exactly ONE CONSTANT_BUFFER descriptor (b1). No textures,
         // no samplers, no update-after-set.
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kSwapchainFramesInFlight;
-        poolDesc.constantBufferMaxNum = kSwapchainFramesInFlight;
+        poolDesc.descriptorSetMaxNum  = FramesInFlight();
+        poolDesc.constantBufferMaxNum = FramesInFlight();
         return poolDesc;
     }
 
@@ -177,7 +177,7 @@ namespace Arcane
         // the SIZE every CB view is created with (D3D12 requires a multiple
         // of 256 for D3D12_CONSTANT_BUFFER_VIEW_DESC::SizeInBytes).
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
-        const std::uint64_t arenaBytes = m_arenaStride * kSwapchainFramesInFlight;
+        const std::uint64_t arenaBytes = m_arenaStride * FramesInFlight();
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -203,7 +203,7 @@ namespace Arcane
             return false;
         }
 
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -231,7 +231,7 @@ namespace Arcane
             return false;
         }
 
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             // setIndex 0: the ARRAY position of frameSetDesc in CreateBindings'
             // layout -- the only set there is.
@@ -333,7 +333,7 @@ namespace Arcane
         // attaches its D32 depth and the grid tests against it; a frame with
         // none attaches nothing (UNKNOWN), and NRI bakes both facts into the
         // pipeline.
-        key.depthFormat     = hasDepth ? kGraphDepthFormat : nri::Format::UNKNOWN;
+        key.depthFormat     = hasDepth ? GraphDepthFormat() : nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
         // STRAIGHT ALPHA: the shader writes (rgb, coverage * fades) and the
         // canvas keeps the mesh pass's colour underneath -- the grid is a
@@ -431,7 +431,7 @@ namespace Arcane
             return;
         }
 
-        nri::DescriptorSet* set = frameSlot < kSwapchainFramesInFlight ? m_sets[frameSlot] : nullptr;
+        nri::DescriptorSet* set = frameSlot < FramesInFlight() ? m_sets[frameSlot] : nullptr;
         if (!set)
         {
             GraphError("GridNode: no descriptor set for this frame slot -- nothing recorded");

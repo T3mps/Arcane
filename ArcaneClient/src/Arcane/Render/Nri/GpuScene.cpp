@@ -9,6 +9,7 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderGpuSceneSettings -- the row caps Create latches
 
 #include <algorithm>
 #include <cstddef>
@@ -97,10 +98,14 @@ namespace Arcane
     {
         std::unique_ptr<GpuScene> s(new GpuScene());
         s->m_device = &device;
-        if (!s->CreateInstances(kInitialRows))
+        const RenderGpuSceneSettings& caps = Settings<RenderGpuSceneSettings>();
+        s->m_initialRows = caps.initialRows;
+        s->m_scratchRows = caps.scratchRowsPerFrame;
+        if (!s->CreateInstances(s->m_initialRows))
             return nullptr;
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
-            if (!s->CreateSlotBuffers(slot, kInitialRows, kScratchRows, kInitialRows))
+        const std::uint32_t frames = FramesInFlight();
+        for (std::uint32_t slot = 0; slot < frames; ++slot)
+            if (!s->CreateSlotBuffers(slot, s->m_initialRows, s->m_scratchRows, s->m_initialRows))
                 return nullptr;   // ~GpuScene destroys what got made
         return s;
     }
@@ -117,7 +122,7 @@ namespace Arcane
             ARC_WARN("[nri-graph] GpuScene destroyed with live NRI objects -- its owner skipped Release()");
         if (m_instancesView) core.DestroyDescriptor(m_instancesView);
         if (m_instances)     core.DestroyBuffer(m_instances);
-        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
+        for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s)
         {
             if (m_cullBatchesView[s]) core.DestroyDescriptor(m_cullBatchesView[s]);
             if (m_cullBatches[s])     core.DestroyBuffer(m_cullBatches[s]);
@@ -148,7 +153,7 @@ namespace Arcane
 
     bool GpuScene::CreateInstances(std::uint32_t rowCapacity)
     {
-        const std::uint64_t rows = std::uint64_t(rowCapacity) + std::uint64_t(kScratchRows) * kSwapchainFramesInFlight;
+        const std::uint64_t rows = std::uint64_t(rowCapacity) + std::uint64_t(m_scratchRows) * FramesInFlight();
         nri::Buffer* buffer = nullptr;
         if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, rows * kRowBytes, static_cast<std::uint32_t>(kRowBytes),
                           nri::BufferUsageBits::SHADER_RESOURCE, "gpuscene instances", buffer))
@@ -167,7 +172,7 @@ namespace Arcane
 
     std::uint64_t GpuScene::InstanceBytes() const noexcept
     {
-        return (std::uint64_t(m_rowCapacity) + std::uint64_t(kScratchRows) * kSwapchainFramesInFlight) * kRowBytes;
+        return (std::uint64_t(m_rowCapacity) + std::uint64_t(m_scratchRows) * FramesInFlight()) * kRowBytes;
     }
 
     std::uint64_t GpuScene::ArgBytes(std::uint32_t slot) const noexcept
@@ -270,7 +275,7 @@ namespace Arcane
                 m_syncedGeneration = 0;
             return false;
         };
-        if (frameSlot >= kSwapchainFramesInFlight)
+        if (frameSlot >= FramesInFlight())
         {
             ARC_ERROR("[nri-graph] GpuScene::Reserve: frame slot {} is out of range", frameSlot);
             return refuse();
@@ -329,11 +334,11 @@ namespace Arcane
         }
 
         // 3. The scratch overflow is decided here and clamped in Apply.
-        if (adHocCount > kScratchRows && !m_warnedScratchOverflow)
+        if (adHocCount > m_scratchRows && !m_warnedScratchOverflow)
         {
             m_warnedScratchOverflow = true;
             ARC_WARN("[nri-graph] GpuScene: {} ad-hoc instances exceed the {} scratch rows per frame slot -- the rest are dropped",
-                     adHocCount, kScratchRows);
+                     adHocCount, m_scratchRows);
         }
         return true;
     }
@@ -397,7 +402,7 @@ namespace Arcane
             m_syncedGeneration = 0;
             result.registryReady = false;
         };
-        if (frameSlot >= kSwapchainFramesInFlight || !m_instances)
+        if (frameSlot >= FramesInFlight() || !m_instances)
         {
             if (frame)
                 refuseRegistry();
@@ -452,8 +457,8 @@ namespace Arcane
         if (!adHoc.empty())
         {
             std::span<const GpuInstance> rows = adHoc;
-            if (rows.size() > kScratchRows)
-                rows = rows.subspan(0, kScratchRows);   // Reserve warned, once
+            if (rows.size() > m_scratchRows)
+                rows = rows.subspan(0, m_scratchRows);   // Reserve warned, once
             result.adHocReady = CopyRows(ctx, {}, rows, ScratchFirstRow(frameSlot), /*contiguous*/ true);
         }
 
@@ -527,14 +532,14 @@ namespace Arcane
         const nri::CoreInterface* core = &m_device->Core();
         nri::Buffer* inst = m_instances; nri::Descriptor* instView = m_instancesView;
         nri::Buffer* readback = m_debugReadback;
-        nri::Buffer* args[kSwapchainFramesInFlight]; nri::Descriptor* argsView[kSwapchainFramesInFlight]; nri::Buffer* vis[kSwapchainFramesInFlight]; nri::Descriptor* visView[kSwapchainFramesInFlight]; nri::Descriptor* visStorage[kSwapchainFramesInFlight]; nri::Buffer* batches[kSwapchainFramesInFlight]; nri::Descriptor* batchViews[kSwapchainFramesInFlight];
-        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { args[s] = m_args[s]; argsView[s] = m_argsStorageView[s]; vis[s] = m_visible[s]; visView[s] = m_visibleView[s]; visStorage[s] = m_visibleStorageView[s]; batches[s] = m_cullBatches[s]; batchViews[s] = m_cullBatchesView[s]; }
+        nri::Buffer* args[kMaxFramesInFlight]; nri::Descriptor* argsView[kMaxFramesInFlight]; nri::Buffer* vis[kMaxFramesInFlight]; nri::Descriptor* visView[kMaxFramesInFlight]; nri::Descriptor* visStorage[kMaxFramesInFlight]; nri::Buffer* batches[kMaxFramesInFlight]; nri::Descriptor* batchViews[kMaxFramesInFlight];
+        for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s) { args[s] = m_args[s]; argsView[s] = m_argsStorageView[s]; vis[s] = m_visible[s]; visView[s] = m_visibleView[s]; visStorage[s] = m_visibleStorageView[s]; batches[s] = m_cullBatches[s]; batchViews[s] = m_cullBatchesView[s]; }
         graves.Bury(fence, [core, inst, instView, readback, args, argsView, vis, visView, visStorage, batches, batchViews]
         {
             if (instView) core->DestroyDescriptor(instView);
             if (inst)     core->DestroyBuffer(inst);
             if (readback) core->DestroyBuffer(readback);
-            for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
+            for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s)
             {
                 if (batchViews[s]) core->DestroyDescriptor(batchViews[s]);
                 if (batches[s]) core->DestroyBuffer(batches[s]);
@@ -556,8 +561,8 @@ namespace Arcane
         if (m_visibility)
         {
             m_visibility->released = true;
-            nri::Buffer* visibility[kSwapchainFramesInFlight];
-            for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
+            nri::Buffer* visibility[kMaxFramesInFlight];
+            for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s)
             {
                 visibility[s] = m_visibility->slots[s].buffer;
                 m_visibility->slots[s] = {};
@@ -568,7 +573,7 @@ namespace Arcane
                     if (b) core->DestroyBuffer(b);
             });
         }
-        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { m_args[s] = nullptr; m_argsStorageView[s] = nullptr; m_visible[s] = nullptr; m_visibleView[s] = nullptr; m_visibleStorageView[s] = nullptr; m_cullBatches[s] = nullptr; m_cullBatchesView[s] = nullptr; }
+        for (std::uint32_t s = 0; s < kMaxFramesInFlight; ++s) { m_args[s] = nullptr; m_argsStorageView[s] = nullptr; m_visible[s] = nullptr; m_visibleView[s] = nullptr; m_visibleStorageView[s] = nullptr; m_cullBatches[s] = nullptr; m_cullBatchesView[s] = nullptr; }
 
         // Anything still parked was retired by a frame that never submitted
         // (its stamp is fence + 1, and nothing in flight names it). Buried AT
@@ -662,12 +667,12 @@ namespace Arcane
 
     nri::Buffer* GpuScene::VisibilityReadbackBuffer(std::uint32_t slot) const noexcept
     {
-        return (m_visibility && slot < kSwapchainFramesInFlight) ? m_visibility->slots[slot].buffer : nullptr;
+        return (m_visibility && slot < FramesInFlight()) ? m_visibility->slots[slot].buffer : nullptr;
     }
 
     std::uint64_t GpuScene::VisibilityReadbackBytes(std::uint32_t slot) const noexcept
     {
-        return (m_visibility && slot < kSwapchainFramesInFlight) ? m_visibility->slots[slot].bytes : 0;
+        return (m_visibility && slot < FramesInFlight()) ? m_visibility->slots[slot].bytes : 0;
     }
 
     const GpuVisibilityReadback* GpuScene::LatestVisibility() const noexcept
@@ -753,7 +758,7 @@ namespace Arcane
     bool GpuScene::EnsureVisibilityReadback(std::uint32_t slot, std::uint32_t argCount,
                                             std::uint32_t visibleCount, std::uint64_t fence)
     {
-        if (!m_visibility || slot >= kSwapchainFramesInFlight)
+        if (!m_visibility || slot >= FramesInFlight())
         {
             ARC_ERROR("[nri-graph] GpuScene: EnsureVisibilityReadback on an unarmed ring or frame slot {} -- refused", slot);
             return false;
@@ -865,7 +870,7 @@ namespace Arcane
     void GpuScene::RecordVisibilityReadback(RenderGraphNodeContext& ctx, RgBuffer args, RgBuffer visibleIndices,
                                             std::uint32_t slot)
     {
-        if (!m_visibility || slot >= kSwapchainFramesInFlight)
+        if (!m_visibility || slot >= FramesInFlight())
             return;
         VisibilityRing::Slot& s = m_visibility->slots[slot];
 

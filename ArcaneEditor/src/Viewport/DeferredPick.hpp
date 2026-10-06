@@ -9,7 +9,7 @@
 // The readback is a graph COPY node into a per-frame-slot HOST_READBACK region,
 // and the CPU reads a region only at the moment the graph is about to overwrite
 // it -- so the value that comes back is the one written
-// kSwapchainFramesInFlight frames ago (PickOutlineNodes.hpp, THE READBACK). No
+// FramesInFlight() frames ago (PickOutlineNodes.hpp, THE READBACK). No
 // fence query, no idle, and no answer this frame.
 //
 // THAT LATENCY IS ACCEPTED. What is NOT accepted is applying the WRONG answer,
@@ -155,7 +155,7 @@ namespace Arcane::Editor
         // the frame it gives up, so the caller can say so once.
         //
         // A budget rather than a trust: the readback is guaranteed to drain
-        // after kSwapchainFramesInFlight rendered frames of the declared chain,
+        // after FramesInFlight() rendered frames of the declared chain,
         // and the caller keeps the chain declared for precisely that reason --
         // so this should never fire. It exists because the failure it guards is
         // a state machine that never returns to Idle, which would silently keep
@@ -198,7 +198,7 @@ namespace Arcane::Editor
         }
 
         // Frames a request may stay in flight before TickAndMaybeAbandon gives
-        // up. Two orders of magnitude above kSwapchainFramesInFlight, because
+        // up. Two orders of magnitude above FramesInFlight(), because
         // the only legitimate reason to exceed that is a run of SKIPPED frames
         // (a collapsed viewport panel), and the budget must not turn a briefly
         // collapsed panel into a lost click.

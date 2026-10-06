@@ -1,6 +1,6 @@
 // VisibleSet -- the CPU coarse visibility stage (F3 plan 1 T3, spec s4).
 // Linear over every WorldBounds; the culling frustum comes from the
-// UNJITTERED ViewTransform, widened by kVisibilitySlack metres.
+// UNJITTERED ViewTransform, widened by VisibilitySlackMeters() (render.cull.frustumSlackMeters).
 #include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>

@@ -48,7 +48,8 @@ namespace Arcane
         // exists.
         //
         // May rewrite cfg.backend from Vulkan to D3D12 before the window
-        // exists. Windowed Vulkan plus GTIII-OSD64-VK.dll fast-fails inside
+        // exists (unless render.vulkan.foreignModuleFallback is off).
+        // Windowed Vulkan plus GTIII-OSD64-VK.dll fast-fails inside
         // vulkan-1.dll at swapchain creation; D3D12 is the path whose device
         // reference armor survives that injector family. Headless is left on
         // Vulkan: it never builds the swapchain the hook kills.

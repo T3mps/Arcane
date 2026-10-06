@@ -99,7 +99,7 @@ TEST_CASE("Node page fixture: NodePageGraph's snippet compiles on both targets",
     ShaderSourceProvider provider;
     provider.AddRoot("data/shaders");
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
     const auto templateText = provider.Get("materials/sprite_material.hlsl");
     REQUIRE(templateText.has_value());
     const MaterialBuildResult build = BuildMaterialShaderSource(

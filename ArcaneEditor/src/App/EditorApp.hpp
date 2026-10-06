@@ -284,6 +284,9 @@ namespace Arcane::Editor
         };
 
         FramePump PumpFrameEvents();
+        // editor.perf.backgroundFps: when the previous frame's pump ran, so an
+        // unfocused frame can be held to the configured rate.
+        std::chrono::steady_clock::time_point m_lastFramePump{};
         void RunSceneAction(const Arcane::Editor::SceneSession::PendingRequest& req,
                             LoopState& ls);
         void ConsumeDeferredSceneAction(LoopState& ls);
@@ -2037,10 +2040,12 @@ namespace Arcane::Editor
         // (MenuRequests::openIde) and from a Source row's Open
         // (AssetPanelActions::openInIde), EditorAppFrame.cpp.
         //
-        // devenv.exe is resolved ONCE per process, lazily, on the first
-        // project open (vswhere spawns a process; ~100 ms, not per frame):
-        // m_devenvResolved latches the attempt, m_devenv holds the answer
-        // (empty = no install found -> the menu greys with a tooltip).
+        // devenv.exe is resolved through IdeLaunch::DevenvCache: on the first
+        // project open, then again only when build.ideExecutable changes
+        // (Live; vswhere spawns a process, ~100 ms, so never per frame).
+        // RefreshDevenv runs at project open, before every menu draw and on
+        // every OpenInIde; m_devenv.Path() holds the answer (empty = no
+        // install found -> the menu greys with a tooltip).
         // Returns the outcome (no project = NoSolution) so OpenSourceAtLine can
         // fall back to the shell. `line` > 0 puts the caret there (IdeLaunch::OpenFileAtLine).
         IdeLaunch::Outcome OpenInIde(const std::filesystem::path& file, int line = 0);
@@ -2048,9 +2053,8 @@ namespace Arcane::Editor
         // and on NoDevenv / NoSolution / DetectionFailed, OsShell::ShellOpen(file).
         void OpenSourceAtLine(const std::filesystem::path& file, int line);
         [[nodiscard]] Arcane::Editor::IdeMenuState IdeMenuStateNow() const;
-        void ResolveDevenvOnce();
-        std::filesystem::path m_devenv;
-        bool                  m_devenvResolved = false;
+        void RefreshDevenv();
+        IdeLaunch::DevenvCache m_devenv;
 
         // Run `arcbuild generate` alone, SYNCHRONOUSLY, for the open project
         // against the running editor's SDK (ModuleBuild::ComposeDriverCommand

@@ -15,9 +15,10 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderImguiSettings -- the pool chain's caps
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
-#include <Arcane/Render/FramePacing.hpp>           // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>           // FramesInFlight()
 
 #include <imgui.h>
 
@@ -144,6 +145,12 @@ namespace Arcane
         m_pipelines = &pipelines;
         m_vs        = vs;
         m_ps        = ps;
+
+        // The pool chain's caps (Restart): latched here, before the first
+        // link, so a later publish never changes how this chain grows.
+        const RenderImguiSettings& caps = Settings<RenderImguiSettings>();
+        m_firstPoolSets = caps.firstPoolSets;
+        m_maxPoolSets   = caps.maxPoolSetsPerLink;
 
         if (m_vs.empty() || m_ps.empty())
         {
@@ -297,12 +304,12 @@ namespace Arcane
         // texture's view, the shared sampler} and is written exactly once, at
         // the moment the texture is first seen. Nothing rewrites a set the GPU
         // might be reading -- the one path that reuses one (AcquireSet's
-        // recycling of a retired set) waits kSwapchainFramesInFlight recorded
+        // recycling of a retired set) waits FramesInFlight() recorded
         // frames first.
         //
         // ONE LINK OF THE CHAIN per call -- see THE POOL CHAIN in the header
         // for the sizing and why the chain grows rather than capping.
-        const std::uint32_t capacity = PoolCapacityFor(m_pools.size());
+        const std::uint32_t capacity = LinkCapacity(m_pools.size());
         nri::DescriptorPoolDesc poolDesc = {};
         poolDesc.descriptorSetMaxNum = capacity;
         poolDesc.textureMaxNum       = capacity;
@@ -331,14 +338,15 @@ namespace Arcane
     ImGuiNri::AcquiredSet ImGuiNri::AcquireSet(const nri::CoreInterface& core)
     {
         // A retired set is reusable once the submission that last bound it has
-        // retired. kSwapchainFramesInFlight recorded frames is exactly that
-        // bound: frame N records only after frame N - kSwapchainFramesInFlight
+        // retired. FramesInFlight() recorded frames is exactly that
+        // bound: frame N records only after frame N - FramesInFlight()
         // completed (the pacing wait inside NriSwapChain::AcquireNextTexture),
         // which is the same argument Batch2DNode's constant arena and the pick
         // readback both rest on.
+        const std::uint32_t framesInFlight = FramesInFlight();
         for (std::size_t i = 0; i < m_retired.size(); ++i)
         {
-            if (m_recordCount - m_retired[i].retiredAt < kSwapchainFramesInFlight)
+            if (m_recordCount - m_retired[i].retiredAt < framesInFlight)
                 continue;
             const AcquiredSet recycled{ m_retired[i].set, m_retired[i].pool };
             m_retired.erase(m_retired.begin() + (std::ptrdiff_t)i);
@@ -828,7 +836,7 @@ namespace Arcane
                 GraphError("ImGuiNri: the upload ring could not fit this frame's HUD geometry ("
                            + std::to_string(vertexBytes + indexBytes)
                            + " bytes) -- the HUD is dropped this frame. Raise "
-                             "kUploadRingBytesPerFrame in NriGraphContext.cpp.");
+                             "render.uploadRingBytesPerFrame.");
             }
             return;
         }

@@ -71,7 +71,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
 #include <Arcane/Scene/ViewTransform.hpp>     // the editor camera, whole
 
 #include <glm/glm.hpp>
@@ -194,7 +194,7 @@ namespace Arcane
             return (std::uint64_t)frameSlot * regionStride;
         }
 
-        // THE DESCRIPTOR POOL'S CAPACITY: kSwapchainFramesInFlight sets, one
+        // THE DESCRIPTOR POOL'S CAPACITY: FramesInFlight() sets, one
         // CONSTANT_BUFFER descriptor each, and nothing else.
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
@@ -231,12 +231,12 @@ namespace Arcane
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
 
         // The per-frame-slot b1 arena: ONE HOST_UPLOAD buffer, persistently
-        // mapped, carved into kSwapchainFramesInFlight regions.
+        // mapped, carved into FramesInFlight() regions.
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
-        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_frameCbView[kMaxFramesInFlight]{};
+        nri::DescriptorSet* m_sets[kMaxFramesInFlight]{};
 
         // Resolved by Prepare for the frame being declared; borrowed from the
         // cache. Which of the two PSOs it is (depth-tested or not) is decided

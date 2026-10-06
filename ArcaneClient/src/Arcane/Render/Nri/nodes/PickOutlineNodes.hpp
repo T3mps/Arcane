@@ -52,11 +52,11 @@
 //     slot safe to reuse at all -- i.e. the submission that last recorded into
 //     frame slot s has RETIRED by the time any exec fn of this frame runs;
 //   * so the readback node's exec fn drains slot s FIRST and records into it
-//     SECOND, and the value it drains is the one written kSwapchainFramesInFlight
+//     SECOND, and the value it drains is the one written FramesInFlight()
 //     frames ago. No fence query, no idle, no extra API: the same argument that
 //     makes Batch2DNode's constant-buffer arena safe.
 //
-// LATENCY IS THEREFORE kSwapchainFramesInFlight FRAMES, not one -- which is
+// LATENCY IS THEREFORE FramesInFlight() FRAMES, not one -- which is
 // why --pick-probe refuses an open-ended run (HostConfig::Parse) and why a
 // probe wants a --frames N comfortably above that.
 //
@@ -115,7 +115,7 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
-#include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>       // kMaxFramesInFlight, FramesInFlight()
 #include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
 
 #include <glm/glm.hpp>
@@ -264,7 +264,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t ReadbackBytes()  const noexcept { return m_readbackBytes; }
 
         // The most recently DRAINED id, or nullopt until one has landed (the
-        // first kSwapchainFramesInFlight frames of a probe run). 0 is a
+        // first FramesInFlight() frames of a probe run). 0 is a
         // legitimate value: it means the probed pixel was background.
         [[nodiscard]] std::optional<std::uint32_t> LastProbeId() const noexcept
         {
@@ -358,7 +358,7 @@ namespace Arcane
         nri::VertexStreamDesc    m_meshStream{};
         nri::VertexInputDesc     m_meshVertexInput{};
 
-        // The readback staging buffer: kSwapchainFramesInFlight regions of
+        // The readback staging buffer: FramesInFlight() regions of
         // m_readbackStride bytes, persistently mapped (NRI's D3D12 UnmapBuffer
         // is a no-op anyway). NONE-backend MapBuffer returns null, so this node
         // is a [gpu] path from Create() down -- the same footgun the upload
@@ -372,11 +372,11 @@ namespace Arcane
         // Which frame slots hold a copy that has been recorded but not yet
         // drained. Cleared by the drain, set by the record -- both inside the
         // readback node's exec fn.
-        bool m_pending[kSwapchainFramesInFlight]{};
+        bool m_pending[kMaxFramesInFlight]{};
         // The ticket each pending copy carried, written beside m_pending and
         // published to m_probeTicket by the drain. Per SLOT because that is the
         // granularity the copies themselves have.
-        std::uint64_t m_ticket[kSwapchainFramesInFlight]{};
+        std::uint64_t m_ticket[kMaxFramesInFlight]{};
 
         // The prepared geometry for the frame being declared. Members rather
         // than per-frame vectors so a steady-state probe run allocates nothing.
@@ -417,7 +417,7 @@ namespace Arcane
     //   * the one space-0 pipeline layout ({ b0 CB, t0 texture }, FRAGMENT),
     //     registered in the vehicle's NriPipelineCache;
     //   * one descriptor pool holding kCbRegionsPerFrame x
-    //     kSwapchainFramesInFlight sets -- one per (region, frame slot);
+    //     FramesInFlight() sets -- one per (region, frame slot);
     //   * the per-frame-slot HOST_UPLOAD constant arena those sets' b0 views
     //     name, carved into fixed regions: 0 the seed CB, 1 the composite CB,
     //     2 + step the step's JFA CB;
@@ -587,15 +587,15 @@ namespace Arcane
 
         nri::DescriptorPool* m_pool = nullptr;
         // One set per (frame slot, region) -- SetIndex() is the flattening.
-        nri::DescriptorSet*  m_sets[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::DescriptorSet*  m_sets[kMaxFramesInFlight * kCbRegionsPerFrame]{};
         // What each set currently has bound at t0; a rebind happens only when
         // it changes.
-        nri::Texture*        m_bound[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::Texture*        m_bound[kMaxFramesInFlight * kCbRegionsPerFrame]{};
 
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_cbView[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::Descriptor* m_cbView[kMaxFramesInFlight * kCbRegionsPerFrame]{};
 
         // SHADER_RESOURCE views over graph transients, keyed by texture. Buried
         // wholesale when the pool epoch moves.

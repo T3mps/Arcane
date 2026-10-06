@@ -18,6 +18,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderShaderSettings.hpp>
 
 #if !defined(ARC_BUILD_DIST)
     #include <Arcane/Render/GpuFaultInjector.hpp>   // kPassName -- ONE spelling of the breadcrumb both arms produce
@@ -833,8 +834,9 @@ namespace Arcane
             // and the battery already expects it.
             if (device.Backend() == GraphicsBackend::D3D12 && !GpuDeviceLostObserved())
             {
-                constexpr auto kRemovalBudget = std::chrono::seconds(45);
-                constexpr auto kRemovalPoll   = std::chrono::milliseconds(50);
+                const DiagnosticsGpuFaultSettings& fault = Settings<DiagnosticsGpuFaultSettings>();
+                const auto kRemovalBudget = std::chrono::seconds(fault.removalBudgetSeconds);
+                const auto kRemovalPoll   = std::chrono::milliseconds(fault.removalPollMs);
 
                 void* const nativeDev = core.GetDeviceNativeObject
                                             ? core.GetDeviceNativeObject(&device.Device())

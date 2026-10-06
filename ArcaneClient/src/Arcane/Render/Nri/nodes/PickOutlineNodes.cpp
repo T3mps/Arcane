@@ -276,7 +276,7 @@ namespace Arcane
         m_readbackRow    = (std::uint32_t)AlignUp(4, deviceDesc.memoryAlignment.uploadBufferTextureRow);
         m_readbackStride = ReadbackRegionStride(m_readbackRow,
                                                 deviceDesc.memoryAlignment.uploadBufferTextureSlice);
-        m_readbackBytes  = m_readbackStride * kSwapchainFramesInFlight;
+        m_readbackBytes  = m_readbackStride * FramesInFlight();
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = m_readbackBytes;
@@ -434,8 +434,8 @@ namespace Arcane
                 m_warnedRing = true;
                 GraphError("PickNode: the upload ring could not fit this frame's id-pass geometry ("
                            + std::to_string(vertexBytes + indexBytes)
-                           + " bytes) -- the id pass is dropped. Raise kUploadRingBytesPerFrame in "
-                             "NriGraphContext.cpp.");
+                           + " bytes) -- the id pass is dropped. Raise "
+                             "render.uploadRingBytesPerFrame.");
             }
             return;
         }
@@ -457,7 +457,7 @@ namespace Arcane
         // The depth attachment is BOUND for the whole pass, so this pipeline
         // must name its format; the 2D silhouettes neither test nor write it
         // (the fill below) -- later-wins by submission order, as before.
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         // No blend: an R32_UINT target is integer and therefore unblendable.
         // Front-most wins by SUBMISSION ORDER -- the output merger is
@@ -549,7 +549,7 @@ namespace Arcane
         key.layoutId        = m_layoutId;
         key.colorFormats[0] = kGraphPickIdFormat;
         key.colorCount      = 1;
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
         key.depthWrite      = true;
@@ -619,7 +619,7 @@ namespace Arcane
                                   std::uint32_t width, std::uint32_t height,
                                   std::uint32_t frameSlot, std::uint64_t ticket)
     {
-        if (frameSlot >= kSwapchainFramesInFlight)
+        if (frameSlot >= FramesInFlight())
         {
             GraphError("PickNode: the readback node was handed a frame slot outside the ring");
             return;
@@ -630,7 +630,7 @@ namespace Arcane
         // stated in full at the top of the header. The executor acquired the
         // backbuffer before it reset this frame's command allocator, and the
         // pacing wait inside that acquire is what makes THIS slot safe to
-        // reuse: whatever was copied into it kSwapchainFramesInFlight frames
+        // reuse: whatever was copied into it FramesInFlight() frames
         // ago has retired. No fence query, no idle.
         // ---------------------------------------------------------------
         if (m_pending[frameSlot] && m_readbackCpu)
@@ -792,23 +792,23 @@ namespace Arcane
         // texture, and the FRAME SLOT because a set's contents must not be
         // rewritten while an earlier submission may still be reading it --
         // exactly the mechanism FullscreenNodes documents.
-        constexpr std::uint32_t kSetCount = kSwapchainFramesInFlight * kCbRegionsPerFrame;
+        const std::uint32_t setCount = FramesInFlight() * kCbRegionsPerFrame;
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kSetCount;
-        poolDesc.textureMaxNum        = kSetCount;
-        poolDesc.constantBufferMaxNum = kSetCount;
+        poolDesc.descriptorSetMaxNum  = setCount;
+        poolDesc.textureMaxNum        = setCount;
+        poolDesc.constantBufferMaxNum = setCount;
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] OutlineNode: descriptor pool creation failed");
             return false;
         }
-        for (std::uint32_t i = 0; i < kSetCount; ++i)
+        for (std::uint32_t i = 0; i < setCount; ++i)
         {
             if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &m_sets[i], 1, 0))
                 || !m_sets[i])
             {
                 ARC_ERROR("[nri-graph] OutlineNode: descriptor set allocation failed at {} of {}",
-                          i, kSetCount);
+                          i, setCount);
                 return false;
             }
         }
@@ -827,8 +827,8 @@ namespace Arcane
         // shader simply reads less than it.
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
 
-        constexpr std::uint32_t kRegionCount = kSwapchainFramesInFlight * kCbRegionsPerFrame;
-        const std::uint64_t arenaBytes = (std::uint64_t)kRegionCount * m_arenaStride;
+        const std::uint32_t regionCount = FramesInFlight() * kCbRegionsPerFrame;
+        const std::uint64_t arenaBytes = (std::uint64_t)regionCount * m_arenaStride;
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -856,7 +856,7 @@ namespace Arcane
         // One CB view per region, created ONCE and written into its set once:
         // the CONTENTS change every frame, the (buffer, offset) never does,
         // which is exactly what lets the set naming it be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < kCbRegionsPerFrame; ++region)
             {
@@ -1061,7 +1061,7 @@ namespace Arcane
     {
         const nri::CoreInterface& core = context.core;
 
-        if (frameSlot >= kSwapchainFramesInFlight || region >= kCbRegionsPerFrame)
+        if (frameSlot >= FramesInFlight() || region >= kCbRegionsPerFrame)
         {
             GraphError("OutlineNode: a pass was handed a frame slot or region outside the arena");
             return false;
@@ -1301,7 +1301,7 @@ namespace Arcane
                 // belongs to the canvas, at 1x). Written and attached here,
                 // read by nothing else -- its whole lifetime is this node.
                 RgTextureDesc depthDesc;
-                depthDesc.format       = kGraphDepthFormat;
+                depthDesc.format       = GraphDepthFormat();
                 depthDesc.width        = width  * PickNode::kSuperSample;
                 depthDesc.height       = height * PickNode::kSuperSample;
                 depthDesc.depthStencil = true;

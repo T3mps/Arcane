@@ -89,6 +89,25 @@ namespace Arcane::Editor::IdeLaunch
     // once and cache -- it spawns a process.
     [[nodiscard]] std::filesystem::path ResolveDevenv();
 
+    // ResolveDevenv's answer, cached against the build.ideExecutable value it
+    // was resolved under (the setting applies Live, frozen inventory): Refresh
+    // re-resolves only on the first call and whenever the cvar has changed
+    // since, so a per-frame call costs one string compare and a changed
+    // setting reaches the next "Open Visual Studio" -- and the menu's greying
+    // -- without a relaunch. vswhere spawns at most once per value.
+    class DevenvCache
+    {
+    public:
+        // True when this call (re)resolved.
+        bool Refresh();
+        [[nodiscard]] const std::filesystem::path& Path() const noexcept { return m_path; }
+
+    private:
+        std::filesystem::path m_path;
+        std::string           m_resolvedFor;   // the build.ideExecutable value m_path answers
+        bool                  m_resolved = false;
+    };
+
     // The ROT walk alone, for the [ide-desk] probe: which Access would a click
     // see right now for `solution`? Initialises COM for the call's duration.
     [[nodiscard]] Access Probe(const std::filesystem::path& solution);

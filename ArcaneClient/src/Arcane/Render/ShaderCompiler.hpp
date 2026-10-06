@@ -107,8 +107,10 @@ namespace Arcane
         // search path), hash their bytes into the cache key, start the worker.
         // False (and IsAvailable()==false) when the compiler DLL cannot be
         // loaded; a missing dxil.dll only warns (DXIL comes out unsigned).
-        // debounceSeconds = the quiet window Poll enforces per coalesceKey.
-        bool Initialize(double debounceSeconds = 0.2);
+        // The published render.shader setting supplies the quiet window.
+        bool Initialize();
+        // Explicit override for clock-pinned tests and tools.
+        bool InitializeWithDebounce(double debounceSeconds);
         void Shutdown();
         bool IsAvailable() const { return m_available; }
 

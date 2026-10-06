@@ -57,10 +57,13 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
+#include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
+#include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
+#include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -509,9 +512,20 @@ namespace Arcane::Editor
         }
         if (m_gpu->Win().IsMinimized())
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return FramePump::SkipFrame;
         }
+        // editor.perf.backgroundFps (0 = off, the default): an unfocused
+        // editor sleeps out the rest of its 1000 / fps ms frame. Never under
+        // --headless, whose never-shown window has no input focus.
+        const std::uint32_t backgroundFps = Arcane::Settings<Arcane::Editor::EditorPerfSettings>().backgroundFps;
+        if (backgroundFps != 0 && !m_config.headless && !m_gpu->Win().IsFocused())
+        {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - m_lastFramePump);
+            std::this_thread::sleep_for(Arcane::Editor::BackgroundFrameWait(backgroundFps, elapsed));
+        }
+        m_lastFramePump = std::chrono::steady_clock::now();
         return FramePump::Continue;
     }
 
@@ -2004,14 +2018,13 @@ namespace Arcane::Editor
             m_meshScene.view       = m_meshView->view;
             m_meshScene.projection = m_meshView->projection;
         }
-        // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
-        // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
-        // registers none -- so lightDirection/lightColor/ambient are left at
-        // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
-        // component is future work; inventing one here would land an
-        // unreviewed scene-schema change in a host .cpp with zero test
-        // coverage rather than in a reviewed, tested component.
-        //
+        // NO LIGHT COMPONENT YET: this engine has none anywhere --
+        // Scene/Components.hpp declares none and SceneModule.hpp registers
+        // none -- so the scene's one light is render.mesh.defaultLight.*
+        // (RenderLookSettings.hpp; Live, read once per frame). A light
+        // component is future work and a reviewed scene-schema change.
+        Arcane::ApplyDefaultLight(m_meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
         // the field null" mechanism vp.gameUi just used above.
@@ -2226,6 +2239,7 @@ namespace Arcane::Editor
         // with no gameModule (content-only, or none open).
         const Arcane::Project* menuProj = m_runtime->CurrentProject();
         const bool hasGameModule = menuProj && !menuProj->Manifest().gameModule.empty();
+        if (menuProj) RefreshDevenv();   // build.ideExecutable is Live: one string compare unless it changed
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        InPlayMode(),
                                        m_moduleBuild.Running(), hasGameModule,
@@ -3674,7 +3688,7 @@ namespace Arcane::Editor
         //
         // ============ THE PICK IS DEFERRED, NOT SYNCHRONOUS ============
         // The readback is a graph COPY node whose value lands
-        // kSwapchainFramesInFlight frames later, so the click is ARMED here
+        // FramesInFlight() frames later, so the click is ARMED here
         // and the resulting Select/Toggle/Clear is APPLIED here on a LATER
         // frame. That latency is inherent to reading a GPU-rasterised id back
         // without stalling the device, and it is the only pick path there is.
@@ -3725,7 +3739,7 @@ namespace Arcane::Editor
                 }
             }
             // Bounded, and loud if it ever fires: the readback is
-            // guaranteed to drain after kSwapchainFramesInFlight RENDERED
+            // guaranteed to drain after FramesInFlight() RENDERED
             // frames, and ArmGraphViewportFrame keeps the chain declared
             // for exactly as long as this is Busy() -- so the only way to
             // exhaust the budget is a very long run of Skipped frames (a
@@ -4024,8 +4038,8 @@ namespace Arcane::Editor
             // presented, so nothing downstream should count one. The sleep
             // matches RuntimeFrame::RenderGraph's: without a presented frame
             // there is no pacing wait, and a zero-sized window would
-            // otherwise spin.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // otherwise spin. Both read app.window.minimizedSleepMs.
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return false;
         }
 

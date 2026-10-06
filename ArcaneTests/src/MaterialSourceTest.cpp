@@ -220,7 +220,7 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target SPRITE sh
     CHECK(build.hlsl.find("%{") == std::string::npos);
 
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
     for (const char* entry : { kPsEntry, kVsEntry })
     {
         ShaderCompileRequest req;
@@ -267,7 +267,7 @@ TEST_CASE("BuildMaterialShaderSource stitches a compilable dual-target shader", 
     CHECK(build.hlsl.find(snippet) != std::string::npos);   // body rides verbatim
 
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     ShaderCompileRequest ps;
     ps.debugName = "spec_example.hlsl";
@@ -326,7 +326,7 @@ TEST_CASE("Vertex-stage sources compile on both targets and surfaces", "[shaderc
     ShaderSourceProvider provider;
     provider.AddRoot("data/shaders");
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     auto compileBoth = [&](const std::string& hlsl, const char* name)
     {
@@ -652,7 +652,7 @@ TEST_CASE("Pass-chain sources compile on both targets", "[shadercompile]")
     CHECK(r.chainInputSlots == 2);
 
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
     for (std::size_t p = 0; p < r.hlsl.size(); ++p)
     {
         for (const char* entry : { kPsEntry, kVsEntry })

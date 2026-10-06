@@ -123,7 +123,7 @@ namespace Arcane
     // The ENTITY-ONLY twin of PickEntityForId, same contract, for a consumer
     // that RETAINED the id<->entity table rather than the drawables it came
     // from. That is not a convenience: the NRI graph's pick readback lands
-    // kSwapchainFramesInFlight frames after the id pass that produced it, so
+    // FramesInFlight() frames after the id pass that produced it, so
     // the editor's deferred click-pick has to hold the table from the frame
     // that RASTERISED the click -- by which time the live drawables vector has
     // been rebuilt two or more times. Copying entities rather than whole

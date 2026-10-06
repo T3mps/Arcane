@@ -326,7 +326,7 @@ namespace Arcane
 
         NriPipelineCache& pipelines;  // Task 7 (forward-declared; NONE tests pass a stub)
 
-        // Which of the graph's kSwapchainFramesInFlight command-buffer slots
+        // Which of the graph's FramesInFlight() command-buffer slots
         // this frame records into. CALLER CONTRACT, same one NriUploadRing::
         // BeginFrame carries: a slot must not be reused until the submission
         // it last carried has retired, because Execute() resets that slot's
@@ -649,7 +649,7 @@ namespace Arcane
         // must therefore call it every frame. Burying there would have made
         // the reuse property unreachable in the actual loop -- N committed
         // render-target creations plus N burials per frame, reaped
-        // kSwapchainFramesInFlight frames later. Intent governs; the pool
+        // FramesInFlight() frames later. Intent governs; the pool
         // persists.
         //
         // Pool resources die through the graveyard on exactly four paths:
@@ -1098,7 +1098,7 @@ namespace Arcane
         // precisely what this replaced).
         std::vector<CachedView>    m_importedViews;
 
-        std::vector<GpuFrameSlot>  m_frames;            // kSwapchainFramesInFlight entries once realized
+        std::vector<GpuFrameSlot>  m_frames;            // FramesInFlight() entries once realized
         nri::Fence*                m_fence = nullptr;   // this graph's own submission timeline
 
         // Per-execution resolution: which physical resource each declared

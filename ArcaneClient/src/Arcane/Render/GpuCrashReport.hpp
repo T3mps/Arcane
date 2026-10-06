@@ -50,11 +50,15 @@ namespace Arcane::Diag
     // Shared rather than per-backend because ReplayMarkerBuffer below reads
     // ANY backend's region with these constants: if a backend's writer and
     // this reader could disagree, the replay would silently produce garbage.
-    inline constexpr std::uint32_t kGpuMarkerSlots =
-        static_cast<std::uint32_t>(GpuBreadcrumbs::kRingCapacity);
+    inline std::uint32_t GpuMarkerSlots(const GpuBreadcrumbs& breadcrumbs)
+    {
+        return static_cast<std::uint32_t>(breadcrumbs.Capacity());
+    }
     inline constexpr std::uint32_t kGpuMarkerValuesPerSlot = 2;
-    inline constexpr std::size_t   kGpuMarkerBytes =
-        std::size_t{ kGpuMarkerSlots } * kGpuMarkerValuesPerSlot * sizeof(std::uint32_t);
+    inline std::size_t GpuMarkerBytes(const GpuBreadcrumbs& breadcrumbs)
+    {
+        return std::size_t{ GpuMarkerSlots(breadcrumbs) } * kGpuMarkerValuesPerSlot * sizeof(std::uint32_t);
+    }
 
     // A backend writes `id + 1` so that 0 -- what a region is zeroed to at arm
     // time -- unambiguously means "the GPU never reached this marker".
