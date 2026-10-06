@@ -232,7 +232,7 @@ namespace Arcane::Editor
             switch (b)
             {
             case RowBadge::NextWorld:     return { ICON_LC_ROTATE_CW, Theme::kTextDim, "Applies on the next world load (Play or scene reopen)" };
-            case RowBadge::Restart:       return { ICON_LC_POWER, Theme::kWarning, "Restart required: read once at startup" };
+            case RowBadge::Restart:       return { ICON_LC_POWER, Theme::kWarning, "Applies after a restart or a document reopen -- see the row's tooltip" };
             case RowBadge::Deterministic: return { ICON_LC_ATOM, Theme::kAmber, "Simulation: changing it changes replays and goldens" };
             }
             return { "", Theme::kTextDim, "" };
