@@ -1259,6 +1259,8 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/FontsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/LayoutLibrary.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/LayoutSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
         "%{wks.location}/ArcaneEditor/src/Input/EditorActionTable.cpp",
         "%{wks.location}/ArcaneEditor/src/Viewport/ViewportActions.cpp",

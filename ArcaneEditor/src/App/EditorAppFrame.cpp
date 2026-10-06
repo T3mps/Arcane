@@ -24,6 +24,8 @@
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
+#include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
+#include "Panels/LayoutLibrary.hpp"       // ParseOpenPanels
 #include "Project/ModuleBuild.hpp"          // ModuleBuild::ExeDir: the bundled font families
 #include "Widgets/EditorFonts.hpp"         // the deferred font-atlas rebuild
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
@@ -2295,7 +2297,7 @@ namespace Arcane::Editor
                           { return m_inspectorHost.Find(kv.first) == nullptr; });
         }
         if (menuReq.resetLayout)
-            m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
+            m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());   // reset shows the configured panels ("*" = all)
 
         ConsumeMenuRequests(menuReq, fs, ls);
 

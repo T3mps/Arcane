@@ -25,11 +25,13 @@
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Settings/SettingsHost.hpp"
 #include "Settings/EditorRestart.hpp"
+#include "Settings/LayoutSettings.hpp"   // editor.layout.default / openPanelsAtStart (S4-18)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Input/EditorActions.hpp"
 #include <Arcane/Input/KeyLayout.hpp>
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
+#include "Panels/LayoutLibrary.hpp"     // the session layout dir + its seed (S4-18)
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/MeshDocument.hpp"
@@ -294,11 +296,12 @@ namespace Arcane::Editor
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // every panel back to a fresh EditorApp's visibility.
+    // every panel back to a fresh EditorApp's visibility -- the configured
+    // editor.layout.openPanelsAtStart ("*" = all, today's default).
     void EditorApp::PanelVisibilitySettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_panelVis = decltype(self->m_panelVis){};
+        self->m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
     }
 
     void EditorApp::RegisterPanelVisibilitySettings()
@@ -532,6 +535,9 @@ namespace Arcane::Editor
         // NewFrame, which is where ImGui reads the ini; a handler added later
         // would never see the saved entry.
         RegisterPlayModeSettings();
+        // A fresh layout shows editor.layout.openPanelsAtStart; a saved ini's
+        // [ArcaneEditor][Panels] entry then overrides it ("*" = today's all-visible).
+        m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
         // Inspector filters s6: the Asset Browser's selection is a PERMANENT
@@ -1718,13 +1724,13 @@ namespace Arcane::Editor
         if (m_editorImguiContext)
             ImGui::SetCurrentContext(m_editorImguiContext);
 
-        // <EditorUserDir>\layouts\<project-guid>.ini ("default" for a project-
-        // less session) -- %LOCALAPPDATA%\Arcane\Editor\layouts, the same folder
-        // as before on Windows (case-insensitive), resolved through Arcane::Paths
-        // (settings spec s11.0). With LOCALAPPDATA unset or the folder unwritable,
-        // ImGui's exe-dir imgui.ini default stands -- degraded, never broken.
-        const std::filesystem::path dir = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
-                                                              Arcane::Paths::Current(), "layouts");
+        // <EditorUserDir>\Layouts\Session\<project-guid>.ini ("default" for a
+        // project-less session), resolved through Arcane::Paths (settings spec
+        // s11.0). Settings S4 (spec s7.4): session layouts live in
+        // Layouts/Session; named layouts own Layouts/. Degraded, never broken:
+        // with LOCALAPPDATA unset or the folder unwritable, ImGui's exe-dir
+        // imgui.ini default stands.
+        const std::filesystem::path dir = Arcane::Editor::SessionLayoutDir();
         if (dir.empty())
             return;
         std::error_code ec;
@@ -1754,12 +1760,26 @@ namespace Arcane::Editor
         if (!m_layoutIniPath.empty() && io.IniFilename && *io.IniFilename)
             ImGui::SaveIniSettingsToDisk(io.IniFilename);
 
-        // One-time migration: seed a project's first appdata layout from the
-        // legacy exe-dir imgui.ini so a hand-tuned layout survives the move.
-        // The legacy file is left in place (bin/ is untracked scratch).
+        // One-time migration: seed a project's first session layout -- from its
+        // pre-S4 file (<EditorUserDir>\layouts\<key>.ini), else the named
+        // layout editor.layout.default, else the legacy exe-dir imgui.ini, so a
+        // hand-tuned layout survives the move. Every source is COPIED and left
+        // in place (bin/ is untracked scratch; the pre-S4 file stays for a
+        // rollback).
         if (!std::filesystem::exists(target, ec))
-            if (std::filesystem::exists("imgui.ini", ec))
-                std::filesystem::copy_file("imgui.ini", target, ec);
+        {
+            const std::filesystem::path preS4 = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
+                                                                    Arcane::Paths::Current(), "layouts")
+                                                / (key + ".ini");
+            const Arcane::Editor::LayoutSeed seed = Arcane::Editor::SeedSessionLayout(
+                target, preS4, Arcane::Editor::LayoutLibrary(Arcane::Editor::NamedLayoutDir()),
+                Arcane::Editor::cvar_layoutDefault.Get(), "imgui.ini");
+            ARC_INFO("layout: session layout {} seeded from {}", target.string(),
+                     seed == Arcane::Editor::LayoutSeed::PreS4File      ? "the pre-S4 file"
+                   : seed == Arcane::Editor::LayoutSeed::NamedDefault   ? "the default named layout"
+                   : seed == Arcane::Editor::LayoutSeed::LegacyExeIni   ? "the exe-dir imgui.ini"
+                                                                         : "nothing (factory layout)");
+        }
 
         const bool switching = !m_layoutIniPath.empty();   // boot: ImGui's first NewFrame autoloads; a switch must reload by hand
         // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the

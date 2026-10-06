@@ -1002,9 +1002,9 @@ namespace Arcane::Editor
         }
 
         // ---- Editor layout ini (imgui.ini), per project ---------------------
-        // <Paths::EditorUserDir>\layouts\<project-guid>.ini, i.e.
-        // %LOCALAPPDATA%\Arcane\Editor\layouts (settings spec s11.0); "default"
-        // project-less. io.IniFilename BORROWS this string (ImGui never
+        // <Paths::EditorUserDir>\Layouts\Session\<project-guid>.ini, i.e.
+        // %LOCALAPPDATA%\Arcane\Editor\Layouts\Session (settings spec s11.0,
+        // s7.4: named layouts own Layouts\); "default" project-less. io.IniFilename BORROWS this string (ImGui never
         // copies it), so it lives here, never in a local. Retargeted at boot
         // (StageFinalize, before the first NewFrame auto-loads it) and on
         // project switch. A windowed switch loads the INCOMING project's
