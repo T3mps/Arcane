@@ -307,19 +307,16 @@ namespace Arcane
         if (!manifest)
             return std::nullopt;   // LoadFile already logged
 
-        if (!manifest->legacySettings.empty())
+        // A read-only (unmigratable) project keeps legacySettings populated;
+        // Open itself applies NOTHING to the global CVarRegistry, so a probe
+        // Open (the editor's project-switch validation) has no side effects.
+        // The in-memory application belongs to the rung appliers:
+        // Runtime::OpenProject (right after the Project Config dir) and
+        // HostBoot's ApplyEarlyConfigRungs.
+        if (!manifest->legacySettings.empty() && MigrateLegacySettingsAt(*manifestFile))
         {
-            if (MigrateLegacySettingsAt(*manifestFile))
-            {
-                manifest->legacySettings = nlohmann::json::object();
-                manifest->formatVersion = ProjectManifest::kFormatVersion;
-            }
-            else
-            {
-                // Read-only shipped projects still get the legacy values for
-                // this process; nothing attempts to mutate their manifest.
-                ApplyLegacyManifestSettings(CVarRegistry::Get(), *manifest);
-            }
+            manifest->legacySettings = nlohmann::json::object();
+            manifest->formatVersion = ProjectManifest::kFormatVersion;
         }
 
         // Self-heal the project's durable identity: a manifest that predates

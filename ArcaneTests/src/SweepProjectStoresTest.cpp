@@ -3,6 +3,7 @@
 #include "Helpers/TestTypeContext.hpp"
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Project/AppSplashSettings.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
@@ -87,6 +88,49 @@ TEST_CASE("sweep: an unmigrated read-only legacy block overrides an older Config
     REQUIRE(runtime.OpenProject(root));
     CHECK(runtime.ResolvedGravity().y == -3.5f);
     runtime.CloseProject();
+    held.close();
+    fs::remove_all(root);
+}
+
+TEST_CASE("sweep: Project::Open on an unmigratable legacy project leaves the global registry untouched", "[sweep][project]")
+{
+    // The editor's project-switch validation probe calls Project::Open and may
+    // then abort the switch (dirty documents). Open must therefore apply
+    // nothing to the global CVarRegistry: the in-memory legacy fallback is the
+    // rung appliers' job (Runtime::OpenProject, ApplyEarlyConfigRungs).
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane-sweep-open-no-side-effects";
+    fs::remove_all(root);
+    fs::create_directories(root / "Content");
+    fs::create_directories(root / "Config");
+    std::ofstream(root / "P.arcproj") << R"({ "formatVersion": 2, "name": "P", "engine": { "abi": 1 },
+        "physics": { "gravity": [0.0, -3.5] }, "splash": { "showProgress": true } })";
+    std::ofstream(root / "Config" / "physics.json") << R"({ "gravity": [0.0, -1.0] })";
+    // Held destination: the migration cannot replace it (see the case above).
+    std::ifstream held(root / "Config" / "physics.json", std::ios::binary);
+    REQUIRE(held.good());
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    const auto before = reg.Explain("physics.gravity");
+    REQUIRE(before.has_value());
+    {
+        const auto project = Project::Open(root);
+        REQUIRE(project.has_value());
+        // Unmigrated: the block stays in memory for the rung appliers.
+        CHECK_FALSE(project->Manifest().legacySettings.empty());
+    }
+    const auto after = reg.Explain("physics.gravity");
+    REQUIRE(after.has_value());
+    CHECK(after->published == before->published);
+    CHECK(after->pending == before->pending);
+    CHECK(after->setBy == before->setBy);
+    REQUIRE(after->history.size() == before->history.size());
+    for (std::size_t i = 0; i < after->history.size(); ++i)
+    {
+        CHECK(after->history[i].by == before->history[i].by);
+        CHECK(after->history[i].value == before->history[i].value);
+        CHECK(after->history[i].module == before->history[i].module);
+    }
     held.close();
     fs::remove_all(root);
 }
