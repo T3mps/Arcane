@@ -344,6 +344,10 @@ TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs,
     REQUIRE_FALSE(crash.stem.empty());
     const std::string sibling = crash.stem.string() + ".symbolized.txt";
 
+    // Dist builds death-fixture with `symbols "off"` (premake5.lua, the
+    // fixture's Dist filter), so there is no death-fixture.pdb to resolve and
+    // the named half cannot hold there; the symbol-less half below still runs.
+#if !defined(ARCANE_DIST)
     const std::string fixtureDir = std::filesystem::absolute("../death-fixture").string();
     const std::string coreDir    = std::filesystem::absolute("../ArcaneCore").string();
     {
@@ -360,6 +364,7 @@ TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs,
         CHECK(text.find("DeathFixtureMain.cpp") != std::string::npos);
     }
     std::filesystem::remove(sibling);
+#endif
     {
         const auto hidden = std::filesystem::temp_directory_path() / "arcane-no-symbols";
         std::filesystem::remove_all(hidden);
