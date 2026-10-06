@@ -349,8 +349,9 @@ namespace Arcane::Editor
         // grid pair is shared with the Graph lens, and the selection/hover
         // accents live in Widgets/GraphCanvasStyle.hpp (selection IS
         // Theme::kAmber; hover is editor.theme.graph.hoverBorder). Read per
-        // frame, except what ApplyGraphCanvasStyle latches at ed::CreateEditor
-        // (node body/border, group fill/border, hover: Apply(Restart)).
+        // frame; what ApplyGraphCanvasStyle writes into the node-editor style
+        // (node body/border, group fill/border, hover) is re-applied on a
+        // change by RefreshGraphCanvasStyle, so every one is Live.
         ImVec4 NodeBodyColor()   { return GraphThemeColor(&GraphThemeSettings::nodeBody); }      // #2d2d30
         ImVec4 NodeTitleColor()  { return GraphThemeColor(&GraphThemeSettings::nodeTitle); }     // #232326
         ImVec4 NodeTitleText()   { return GraphThemeColor(&GraphThemeSettings::nodeTitleText); } // #cecfd4
@@ -528,7 +529,8 @@ namespace Arcane::Editor
         GraphCanvasStyleDesc ShaderCanvasStyleDesc()
         {
             GraphCanvasStyleDesc d;
-            // The snapshot at canvas creation (Apply(Restart): reopen the document).
+            // The published snapshot: applied at canvas creation and
+            // re-applied per frame on a change (RefreshGraphCanvasStyle).
             d.nodeBody    = NodeBodyColor();    // #2d2d30, the Unity SG reference tone
             d.nodeBorder  = GraphThemeColor(&GraphThemeSettings::nodeBorder);
             d.groupBg     = GraphThemeColor(&GraphThemeSettings::groupBg);       // this canvas HAS group (comment) nodes
@@ -3368,6 +3370,7 @@ namespace Arcane::Editor
         auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
 
         ed::SetCurrentEditor(m_passCanvasCtx);
+        RefreshGraphCanvasStyle(ShaderCanvasStyleDesc());   // a Live theme change reaches the open canvas
         // Its OWN grid instance -- the phase is per-canvas state, so sharing
         // one with the graph canvas would hand each the other's accumulated
         // pan/zoom on every breadcrumb trip (see DrawCanvasBackdrop).
@@ -4839,6 +4842,7 @@ namespace Arcane::Editor
         Arcane::MaterialGraph& g = *ActiveGraphOpt();
 
         ed::SetCurrentEditor(m_graphCtx);
+        RefreshGraphCanvasStyle(ShaderCanvasStyleDesc());   // a Live theme change reaches the open canvas
         DrawCanvasBackdrop(m_gridPhase);
         // The canvas's SCREEN rect, for the pin legend (screen space, T3-D1).
         const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();

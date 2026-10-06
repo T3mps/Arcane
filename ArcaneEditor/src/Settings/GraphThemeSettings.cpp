@@ -11,13 +11,13 @@ namespace Arcane::Editor
     ARC_REFLECT_TYPE(GraphThemeSettings)
         ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme.graph", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
                              "Appearance/Graph colours")
-        ARC_REFLECT_FIELD(GraphThemeSettings, nodeBody)      ARC_REFLECT_ATTR(DisplayName, "Node body")        ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Apply, ApplyMode::Restart) ARC_REFLECT_ATTR(Tooltip, "The shader graph's node body. Applies when a graph document is reopened.")
+        ARC_REFLECT_FIELD(GraphThemeSettings, nodeBody)      ARC_REFLECT_ATTR(DisplayName, "Node body")        ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The shader graph's node body.")
         ARC_REFLECT_FIELD(GraphThemeSettings, nodeTitle)     ARC_REFLECT_ATTR(DisplayName, "Node title band")  ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The title band of a pass-canvas node (Scene, Output and each pass).")
-        ARC_REFLECT_FIELD(GraphThemeSettings, nodeBorder)    ARC_REFLECT_ATTR(DisplayName, "Node border")      ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Apply, ApplyMode::Restart) ARC_REFLECT_ATTR(Tooltip, "The shader graph's node outline. Applies when a graph document is reopened.")
+        ARC_REFLECT_FIELD(GraphThemeSettings, nodeBorder)    ARC_REFLECT_ATTR(DisplayName, "Node border")      ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The shader graph's node outline.")
         ARC_REFLECT_FIELD(GraphThemeSettings, nodeTitleText) ARC_REFLECT_ATTR(DisplayName, "Node title text")  ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "A node's title text on its title band.")
         ARC_REFLECT_FIELD(GraphThemeSettings, nodeBadgeText) ARC_REFLECT_ATTR(DisplayName, "Node error title") ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The title of a node with an error, shown with its (!) badge.")
-        ARC_REFLECT_FIELD(GraphThemeSettings, groupBg)       ARC_REFLECT_ATTR(DisplayName, "Comment box fill") ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Apply, ApplyMode::Restart) ARC_REFLECT_ATTR(Tooltip, "The wash inside a comment (group) box. Applies when a graph document is reopened.")
-        ARC_REFLECT_FIELD(GraphThemeSettings, groupBorder)   ARC_REFLECT_ATTR(DisplayName, "Comment box border") ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Apply, ApplyMode::Restart) ARC_REFLECT_ATTR(Tooltip, "The outline of a comment (group) box. Applies when a graph document is reopened.")
+        ARC_REFLECT_FIELD(GraphThemeSettings, groupBg)       ARC_REFLECT_ATTR(DisplayName, "Comment box fill") ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The wash inside a comment (group) box.")
+        ARC_REFLECT_FIELD(GraphThemeSettings, groupBorder)   ARC_REFLECT_ATTR(DisplayName, "Comment box border") ARC_REFLECT_ATTR(Category, "Nodes") ARC_REFLECT_ATTR(Tooltip, "The outline of a comment (group) box.")
         ARC_REFLECT_FIELD(GraphThemeSettings, pinTexture)    ARC_REFLECT_ATTR(DisplayName, "Render target pin") ARC_REFLECT_ATTR(Category, "Pins") ARC_REFLECT_ATTR(Tooltip, "The pass canvas's pins and wires: every one carries a full-frame render target.")
         ARC_REFLECT_FIELD(GraphThemeSettings, pinScalar)     ARC_REFLECT_ATTR(DisplayName, "float pin")        ARC_REFLECT_ATTR(Category, "Pins") ARC_REFLECT_ATTR(Tooltip, "A float pin and its wire, on the canvas, the node page and the pin legend.")
         ARC_REFLECT_FIELD(GraphThemeSettings, pinVec2)       ARC_REFLECT_ATTR(DisplayName, "float2 pin")       ARC_REFLECT_ATTR(Category, "Pins") ARC_REFLECT_ATTR(Tooltip, "A float2 pin and its wire, on the canvas, the node page and the pin legend.")
@@ -25,7 +25,7 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(GraphThemeSettings, pinDynamic)    ARC_REFLECT_ATTR(DisplayName, "Dynamic pin")      ARC_REFLECT_ATTR(Category, "Pins") ARC_REFLECT_ATTR(Tooltip, "An unresolved dynamic pin, and the ring around a resolved one (it adapts to its input).")
         ARC_REFLECT_FIELD(GraphThemeSettings, gridMinor)     ARC_REFLECT_ATTR(DisplayName, "Grid (minor)")     ARC_REFLECT_ATTR(Category, "Canvas") ARC_REFLECT_ATTR(Tooltip, "The fine lines of both graph canvases' grid; alpha is the octave's peak strength.")
         ARC_REFLECT_FIELD(GraphThemeSettings, gridMajor)     ARC_REFLECT_ATTR(DisplayName, "Grid (major)")     ARC_REFLECT_ATTR(Category, "Canvas") ARC_REFLECT_ATTR(Tooltip, "The coarse lines of both graph canvases' grid; alpha is the octave's peak strength.")
-        ARC_REFLECT_FIELD(GraphThemeSettings, hoverBorder)   ARC_REFLECT_ATTR(DisplayName, "Hover border")     ARC_REFLECT_ATTR(Category, "Canvas") ARC_REFLECT_ATTR(Apply, ApplyMode::Restart) ARC_REFLECT_ATTR(Tooltip, "The border of a node under the cursor, and the viewport's hover outline. Graph canvases pick it up when reopened.")
+        ARC_REFLECT_FIELD(GraphThemeSettings, hoverBorder)   ARC_REFLECT_ATTR(DisplayName, "Hover border")     ARC_REFLECT_ATTR(Category, "Canvas") ARC_REFLECT_ATTR(Tooltip, "The border of a node under the cursor, and the viewport's hover outline.")
     ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(GraphThemeSettings);

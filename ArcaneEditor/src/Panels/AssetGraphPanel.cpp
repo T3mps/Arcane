@@ -1348,6 +1348,7 @@ namespace Arcane::Editor
             state.graphFitPending.Arm();   // s6.9: a fresh context frames itself
         }
         ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
+        RefreshGraphCanvasStyle(AssetGraphCanvasStyleDesc());   // a Live theme change reaches the open canvas
 
         // ---- 3. The backdrop, before ed::Begin ------------------------
         // The canvas rect is measured HERE because this is the one place

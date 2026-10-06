@@ -82,7 +82,8 @@ namespace Arcane::Editor
     // border" among that token's own citations. Both files re-spelled the token
     // as a literal; this spends it where it was authored to be spent. Hover
     // cyan is the graph theme's own token, editor.theme.graph.hoverBorder
-    // (settings S6-27), latched with the rest of the style at ed::CreateEditor.
+    // (settings S6-27), written with the rest of the style at ed::CreateEditor
+    // and re-written by RefreshGraphCanvasStyle when the theme changes.
     inline constexpr const ImVec4& kGraphNodeSelBorderColor = Theme::kAmber;
 
     namespace ed = ax::NodeEditor;
@@ -144,7 +145,7 @@ namespace Arcane::Editor
         // left, top, right, bottom, in canvas units.
         ImVec4 nodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the snapshot at canvas creation
+        ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the published snapshot; RefreshGraphCanvasStyle keeps an open canvas current
         ImVec4 selBorder = kGraphNodeSelBorderColor;
         float  rounding       = kGraphNodeRounding;
         float  borderWidth    = kGraphNodeBorderWidth;
@@ -188,5 +189,39 @@ namespace Arcane::Editor
         s.NodePadding             = desc.nodePadding;
         // EditorActions owns canvas shortcuts, including F, Delete and clipboard.
         ed::EnableShortcuts(false);
+    }
+
+    // True when the CURRENT context's style already carries every value
+    // ApplyGraphCanvasStyle would write for `desc`.
+    [[nodiscard]] inline bool GraphCanvasStyleMatches(const GraphCanvasStyleDesc& desc)
+    {
+        const ed::Style& s = ed::GetStyle();
+        const auto same = [](const ImVec4& a, const ImVec4& b)
+        { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+        return same(s.Colors[ed::StyleColor_NodeBg], desc.nodeBody)
+            && same(s.Colors[ed::StyleColor_NodeBorder], desc.nodeBorder)
+            && same(s.Colors[ed::StyleColor_HovNodeBorder], desc.hovBorder)
+            && same(s.Colors[ed::StyleColor_SelNodeBorder], desc.selBorder)
+            && same(s.Colors[ed::StyleColor_GroupBg], desc.groupBg)
+            && same(s.Colors[ed::StyleColor_GroupBorder], desc.groupBorder)
+            && same(s.NodePadding, desc.nodePadding)
+            && s.NodeRounding == desc.rounding
+            && s.NodeBorderWidth == desc.borderWidth
+            && s.HoveredNodeBorderWidth == desc.hovBorderWidth
+            && s.SelectedNodeBorderWidth == desc.selBorderWidth;
+    }
+
+    // Per frame, with the canvas's context CURRENT and before ed::Begin: a
+    // theme change (editor.theme.graph.* publishes Live -- a preset switch,
+    // an import, a swatch edit) reaches an ALREADY-OPEN canvas without a
+    // reopen (settings S6-27 carried gap). The style is latched per node at
+    // BeginNode, so a write here lands on this frame's nodes. Unchanged
+    // values cost one compare and write nothing. True when it re-applied.
+    inline bool RefreshGraphCanvasStyle(const GraphCanvasStyleDesc& desc)
+    {
+        if (GraphCanvasStyleMatches(desc))
+            return false;
+        ApplyGraphCanvasStyle(desc);
+        return true;
     }
 }

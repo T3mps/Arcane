@@ -9,7 +9,11 @@
 #include "Settings/ThemePresets.hpp"
 #include "Documents/ShaderGraphCategoryColors.hpp"
 #include "Documents/ShaderGraphPinTypes.hpp"
+#include "Documents/DocumentHost.hpp"
+#include "Documents/ShaderEditorDocument.hpp"
+#include "Helpers/NodePageDocs.hpp"   // HeadlessImGui + SpriteNodeDoc: an open graph document
 #include "Widgets/GraphCanvasStyle.hpp"
+#include <imgui_node_editor.h>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Settings.hpp>
 #include <imgui.h>
@@ -90,7 +94,7 @@ TEST_CASE("sweep: every graph colour draws its pre-sweep constant at the default
     CHECK(SameColor(Editor::GraphCanvasStyleDesc{}.hovBorder, ImVec4(0.25f, 0.70f, 1.0f, 1.0f)));
 }
 
-TEST_CASE("sweep: graph colour cvars are Editor machine preferences; the canvas-latched ones are Restart", "[sweep][graph-theme]")
+TEST_CASE("sweep: graph colour cvars are Live Editor machine preferences", "[sweep][graph-theme]")
 {
     const CVarRegistry& reg = CVarRegistry::Get();
     for (const Editor::GraphThemeTokenInfo& t : Editor::GraphThemeTokens())
@@ -102,11 +106,66 @@ TEST_CASE("sweep: graph colour cvars are Editor machine preferences; the canvas-
         CHECK_FALSE(e->help.empty());
         CHECK(e->audience == Audience::Editor);
         CHECK(e->scope == SettingScope::PreferencesMachine);
-        const bool latched = t.field == "graph.nodeBody" || t.field == "graph.nodeBorder" || t.field == "graph.groupBg"
-                          || t.field == "graph.groupBorder" || t.field == "graph.hoverBorder";
-        CHECK(e->apply == (latched ? ApplyMode::Restart : ApplyMode::Live));
+        // The style-latched five included: an open canvas re-applies them
+        // (RefreshGraphCanvasStyle), so none needs a reopen.
+        CHECK(e->apply == ApplyMode::Live);
     }
     CHECK(Editor::GraphThemeTokens().size() == 24);
+}
+
+TEST_CASE("sweep: a theme change reaches an already-open graph document's canvas style without a reopen (S6-27 carried gap)",
+          "[sweep][graph-theme][graphcanvas]")
+{
+    namespace ed = ax::NodeEditor;
+    EditorUserLayerReset reset;
+    Test::HeadlessImGui imgui;   // before the doc: its dtor needs the context
+    Editor::ShaderEditorDocument doc(Editor::DocServices{}, "theme.arcmat", Test::SpriteNodeDoc());
+    const auto frame = [&doc]
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        bool requestClose = false;
+        doc.Draw(requestClose);
+        ImGui::Render();
+    };
+    const auto styleColor = [&doc](ed::StyleColor c)
+    {
+        ed::SetCurrentEditor(doc.GraphCanvasContext());
+        const ImVec4 v = ed::GetStyle().Colors[c];
+        ed::SetCurrentEditor(nullptr);
+        return v;
+    };
+    frame();   // the canvas context exists, styled from the defaults
+    REQUIRE(doc.GraphCanvasContext() != nullptr);
+    CHECK(SameColor(styleColor(ed::StyleColor_NodeBg), Editor::GraphThemeColor(&Editor::GraphThemeSettings::nodeBody)));
+    CHECK(SameColor(styleColor(ed::StyleColor_HovNodeBorder), ImVec4(0.25f, 0.70f, 1.0f, 1.0f)));
+
+    // A preset switch writes the EditorUser rung and publishes (Live).
+    CVarRegistry& reg = CVarRegistry::Get();
+    const ImVec4 body(1.0f, 0.0f, 0.0f, 1.0f), border(0.0f, 1.0f, 0.0f, 1.0f), hover(0.0f, 0.0f, 1.0f, 1.0f);
+    const ImVec4 groupBg(1.0f, 1.0f, 0.0f, 1.0f), groupBorder(0.0f, 1.0f, 1.0f, 1.0f);
+    const std::pair<const char*, ImVec4> sets[] = {
+        { "editor.theme.graph.nodeBody", body }, { "editor.theme.graph.nodeBorder", border },
+        { "editor.theme.graph.hoverBorder", hover }, { "editor.theme.graph.groupBg", groupBg },
+        { "editor.theme.graph.groupBorder", groupBorder } };
+    for (const auto& [name, colour] : sets)
+        REQUIRE(reg.Set(reg.Find(name), CVarValue::Color(Editor::ToSettingColor(colour)), SetBy::EditorUser,
+                        "editor", CVarContext::Editor) == SetResult::Applied);
+    reg.PublishImmediate();
+
+    frame();   // the SAME document, never reopened
+    CHECK(U32(styleColor(ed::StyleColor_NodeBg)) == IM_COL32(255, 0, 0, 255));
+    CHECK(U32(styleColor(ed::StyleColor_NodeBorder)) == IM_COL32(0, 255, 0, 255));
+    CHECK(U32(styleColor(ed::StyleColor_HovNodeBorder)) == IM_COL32(0, 0, 255, 255));
+    CHECK(U32(styleColor(ed::StyleColor_GroupBg)) == IM_COL32(255, 255, 0, 255));
+    CHECK(U32(styleColor(ed::StyleColor_GroupBorder)) == IM_COL32(0, 255, 255, 255));
+
+    // Back to the defaults (Reset to Dark): the canvas follows again.
+    reg.RevertLayer(SetBy::EditorUser);
+    reg.PublishImmediate();
+    frame();
+    CHECK(SameColor(styleColor(ed::StyleColor_HovNodeBorder), ImVec4(0.25f, 0.70f, 1.0f, 1.0f)));
+    CHECK(SameColor(styleColor(ed::StyleColor_NodeBg), Editor::GraphThemeColor(&Editor::GraphThemeSettings::nodeBody)));
 }
 
 TEST_CASE("sweep: a graph colour set away from its default is what gets drawn", "[sweep][graph-theme]")

@@ -15,9 +15,10 @@
 // today's DISPLAY value; the struct default is written from it, and a value
 // equal to its default draws the constant itself, bit for bit (goldens).
 //
-// node body/border, group bg/border and the hover border are latched into the
-// node-editor style at ed::CreateEditor (ApplyGraphCanvasStyle), so they are
-// Apply(Restart): reopen the document. Everything else is read per frame.
+// Every field is Live. node body/border, group bg/border and the hover border
+// live in the node-editor style (ApplyGraphCanvasStyle at ed::CreateEditor);
+// each open canvas re-applies them on a change (RefreshGraphCanvasStyle,
+// before ed::Begin). Everything else is read per frame.
 
 #include "Settings/EditorThemeSettings.hpp"
 
