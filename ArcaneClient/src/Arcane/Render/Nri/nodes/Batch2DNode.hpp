@@ -96,7 +96,7 @@
 // per (texture), because its contents (t0 + s0) carry nothing per-frame; a
 // registered material's is per (material, texture, frame slot), because its
 // constant-buffer views are per-frame-slot. Both are capped
-// (kMaxSpriteTextures) for the reason every cap in this file exists: a
+// (render.batch2d.maxSpriteTextures) for the reason every cap in this file exists: a
 // descriptor pool's capacity is fixed at creation and NRI cannot free one set,
 // so the alternative to a cap is discovering the limit mid-frame.
 //
@@ -128,6 +128,7 @@ namespace Arcane
     struct Batch2DDrained;
     struct Batch2DDrawSpan;
     struct Material2DDesc;
+    struct RenderBatch2dSettings;
 
     // =====================================================================
     // The pipeline-layout SHAPE a registered sprite material needs, as a
@@ -239,60 +240,70 @@ namespace Arcane
         void Record(RenderGraphNodeContext& context, const Batch2DDrained& batch,
                     nri::Format canvasFormat, std::uint32_t frameSlot);
 
-        // How many distinct REGISTERED materials one frame may draw through
-        // this node, and how many declared textures one of them may carry.
-        // Both are descriptor-pool and arena sizing constants, not opinions
-        // about content: a pool's capacity is fixed at creation and NRI cannot
-        // free one descriptor set, so the alternative to a cap is discovering
-        // the limit mid-frame. Over either cap the material degrades to the
-        // plain sprite pipeline with one ERROR naming the constant to raise.
-        static constexpr std::uint32_t kMaxMaterialSlots    = 8;
-        static constexpr std::uint32_t kMaxMaterialTextures = 8;
-        // How many DISTINCT sprite textures one run may bind at t0 -- the
-        // third pool-sizing cap. Past it a span degrades to the white texel
-        // with one ERROR naming this constant, exactly as the other two caps
-        // degrade.
-        //
-        // 64, NOT 8, because the editor opens ARBITRARY projects: a tileset
-        // plus a few characters plus UI art passes 8 without anything unusual
-        // happening -- and the failure is quiet in the way that matters. The
-        // sprites draw as flat tint, the ERROR is one log line, and
-        // RenderErrorCount (the exit-code gate) does not move, so a scripted
-        // run still exits 0.
-        //
-        // 64 rather than higher because the cost is NOT linear: PoolSizes()
-        // spends (1 + kMaxSpriteTextures) descriptor sets per material slot per
-        // frame slot, so this multiplies the whole pool. At 64 that is 65
-        // built-in sets and 8 * 2 * 65 = 1040 material sets -- ~1105 sets and
-        // ~9425 texture descriptors, tens of KiB of descriptor heap, created
-        // once at node creation. Comfortably inside both backends' limits while
-        // covering an ordinary 2D scene by a wide margin; 256 would quadruple it
-        // for content this renderer has no other reason to expect.
-        static constexpr std::uint32_t kMaxSpriteTextures   = 64;
-        // Arena region size BEFORE alignment. A sprite material's cbuffer is a
-        // handful of 16-byte registers (the reference material's is 32 bytes);
-        // 256 is also D3D12's constant-buffer placement alignment, so on that
-        // backend this is exactly one region and nothing is wasted.
-        static constexpr std::uint32_t kMaterialCbMaxBytes  = 256;
+        // THE CAPS (settings arc S6-18): render.batch2d.* (Restart), LATCHED
+        // ONCE by the constructor, so a value published later never resizes a
+        // live pool or arena. They are descriptor-pool and arena sizing
+        // numbers, not opinions about content: a pool's capacity is fixed at
+        // creation and NRI cannot free one descriptor set, so the alternative
+        // to a cap is discovering the limit mid-frame.
+        //   * materialSlots / materialTextures: how many distinct REGISTERED
+        //     materials one frame may draw through this node, and how many
+        //     declared textures one of them may carry. Over either the
+        //     material degrades to the plain sprite pipeline with one ERROR
+        //     naming the setting to raise.
+        //   * spriteTextures: how many DISTINCT sprite textures one run may
+        //     bind at t0. Past it a span degrades to the white texel with one
+        //     ERROR. The default is 64, NOT 8, because the editor opens
+        //     ARBITRARY projects: a tileset plus a few characters plus UI art
+        //     passes 8 without anything unusual happening -- and the failure
+        //     is quiet in the way that matters (flat tint, one log line,
+        //     RenderErrorCount unmoved, a scripted run still exits 0). Not
+        //     higher by default because the cost is NOT linear: PoolSizes()
+        //     spends (1 + spriteTextures) descriptor sets per material slot per
+        //     frame slot. At the defaults that is 65 built-in sets and
+        //     8 * 2 * 65 = 1040 material sets -- ~1105 sets and ~9425 texture
+        //     descriptors, tens of KiB of descriptor heap.
+        //   * materialCbBytes: the arena region size BEFORE alignment, a
+        //     multiple of 256 (MaterialCbRegionBytes; the constructor rounds
+        //     down with one WARN). A sprite material's cbuffer is a handful of
+        //     16-byte registers; 256 is also D3D12's constant-buffer placement
+        //     alignment, so on that backend the default is exactly one region.
+        struct Caps
+        {
+            std::uint32_t materialSlots    = 0;   // render.batch2d.maxMaterialSlots
+            std::uint32_t materialTextures = 0;   // render.batch2d.maxMaterialTextures
+            std::uint32_t spriteTextures   = 0;   // render.batch2d.maxSpriteTextures
+            std::uint32_t materialCbBytes  = 0;   // render.batch2d.materialCbBytes, rounded to a multiple of 256
+        };
+        // The caps `settings` asks for (materialCbBytes rounded down to a
+        // multiple of 256). PURE: the constructor applies it to the published
+        // settings, and the device-less cases apply it to the defaults.
+        [[nodiscard]] static Caps CapsFrom(const RenderBatch2dSettings& settings) noexcept;
+        // The caps this node latched at creation.
+        [[nodiscard]] const Caps& GetCaps() const noexcept { return m_caps; }
+
         // Region 0 of every frame slot is the globals CB; 1 + n is material
         // slot n's.
-        static constexpr std::uint32_t kCbRegionsPerFrame   = kMaxMaterialSlots + 1;
+        [[nodiscard]] static constexpr std::uint32_t CbRegionsPerFrame(const Caps& caps) noexcept
+        {
+            return caps.materialSlots + 1;
+        }
 
-        // The arena's region stride on a device whose
-        // deviceDesc.memoryAlignment.constantBufferOffset is
+        // The arena's region stride for `regionBytes` (Caps::materialCbBytes)
+        // on a device whose deviceDesc.memoryAlignment.constantBufferOffset is
         // `constantBufferAlignment`. PURE and public for the same reason
         // CbRegionOffset is: it carries an invariant whose violation would be
         // silent. The result must be BOTH a multiple of the device's alignment
         // (or every CB view past the first is misaligned) AND at least
-        // kMaterialCbMaxBytes (or a material's packed bytes spill into the next
+        // `regionBytes` (or a material's packed bytes spill into the next
         // region). Rounding UP satisfies both for any power-of-two alignment,
-        // including one larger than kMaterialCbMaxBytes.
+        // including one larger than `regionBytes`.
         [[nodiscard]] static constexpr std::uint64_t CbRegionStride(
-            std::uint64_t constantBufferAlignment) noexcept
+            std::uint32_t regionBytes, std::uint64_t constantBufferAlignment) noexcept
         {
             return constantBufferAlignment <= 1
-                 ? kMaterialCbMaxBytes
-                 : ((kMaterialCbMaxBytes + constantBufferAlignment - 1) / constantBufferAlignment)
+                 ? regionBytes
+                 : ((regionBytes + constantBufferAlignment - 1) / constantBufferAlignment)
                        * constantBufferAlignment;
         }
 
@@ -303,14 +314,15 @@ namespace Arcane
         // `regionStride` -- which is what makes ONE alignment computed at
         // creation correct for every region.
         [[nodiscard]] static constexpr std::uint64_t CbRegionOffset(
-            std::uint64_t regionStride, std::uint32_t frameSlot, std::uint32_t region) noexcept
+            std::uint64_t regionStride, std::uint32_t regionsPerFrame, std::uint32_t frameSlot,
+            std::uint32_t region) noexcept
         {
-            return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
+            return ((std::uint64_t)frameSlot * regionsPerFrame + region) * regionStride;
         }
 
         // How many DISTINCT non-nil texture ids `spans` names -- i.e. how many
         // per-texture descriptor sets this node must have written before it can
-        // record them, and therefore how much of kMaxSpriteTextures the frame
+        // record them, and therefore how much of Caps::spriteTextures the frame
         // spends. PURE and public for the same reason the two above are: it
         // carries an invariant no device can show and no rendered frame can
         // fail on.
@@ -322,8 +334,7 @@ namespace Arcane
         [[nodiscard]] static std::uint32_t DistinctTextureCount(
             std::span<const Batch2DDrawSpan> spans);
 
-        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over the three
-        // caps above. PUBLIC and separated from CreateBindings for the same
+        // THE DESCRIPTOR POOL'S CAPACITY, as pure arithmetic over `caps`. PUBLIC and separated from CreateBindings for the same
         // reason CbRegionOffset is separated from the arena: a pool's sizes are
         // fixed at creation and NRI cannot free one descriptor set, so a
         // capacity that does not cover what the caps ALLOW is not a compile
@@ -331,10 +342,10 @@ namespace Arcane
         // through a frame at the desk, after which that material or texture
         // silently draws with the white texel. No device can show that the
         // numbers agree; a device-less case can, and does ([nri], RenderGraphTest).
-        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
+        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes(const Caps& caps) noexcept;
 
     private:
-        Batch2DNode() = default;
+        Batch2DNode();   // latches m_caps from the published render.batch2d.*
 
         bool Init(NriGraphContext& context);
         bool CreateWhiteTexel();
@@ -395,9 +406,9 @@ namespace Arcane
             // written without rebuilding the layout or re-resolving the
             // declared params.
             std::uint32_t textureCount = 0;
-            // The declared params' views (t1..), in ordinal order. Null means
-            // "the white texel".
-            nri::Descriptor* paramViews[kMaxMaterialTextures]{};
+            // The declared params' views (t1..), in ordinal order -- textureCount
+            // of them, at most Caps::materialTextures. Null means "the white texel".
+            std::vector<nri::Descriptor*> paramViews;
         };
 
         // The slot for `material`, building it if needed. Null (already
@@ -414,7 +425,7 @@ namespace Arcane
         // The BUILT-IN descriptor set that binds `id` at t0, allocating and
         // writing it on first use. Falls back to m_set (the white texel) for a
         // nil id, an image that is not resident, or a run that has spent
-        // kMaxSpriteTextures. Declaration-time only.
+        // Caps::spriteTextures. Declaration-time only.
         [[nodiscard]] nri::DescriptorSet* EnsureSpriteSet(const Guid& id);
         // The same for a REGISTERED material: the (material, texture) variant's
         // set for every frame slot, allocated and written on first use. Null
@@ -435,7 +446,7 @@ namespace Arcane
         // CbRegionOffset against this node's own stride.
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot, std::uint32_t region) const
         {
-            return CbRegionOffset(m_arenaStride, frameSlot, region);
+            return CbRegionOffset(m_arenaStride, CbRegionsPerFrame(m_caps), frameSlot, region);
         }
 
         // sprite / circle / msdf -- Batcher2D::kMaterialSprite/Circle/Text, in
@@ -454,6 +465,11 @@ namespace Arcane
             std::span<const std::uint8_t> vs;
             std::span<const std::uint8_t> ps;
         };
+
+        // render.batch2d.*, latched by the constructor (Restart): every pool,
+        // arena and cap below is sized from these, never from the live
+        // settings.
+        Caps m_caps{};
 
         NriDevice* m_device = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
@@ -490,12 +506,12 @@ namespace Arcane
 
         // ---- registered materials ---------------------------------------
         // The constant-buffer arena: ONE HOST_UPLOAD buffer, persistently
-        // mapped, carved into (kMaxMaterialSlots + 1) regions per frame slot.
+        // mapped, carved into CbRegionsPerFrame(m_caps) regions per frame slot.
         // See THE CONSTANT-BUFFER ARENA in the file header for why this is not
         // the Task 5 upload ring.
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
-        std::uint64_t    m_arenaStride = 0;   // AlignUp(kMaterialCbMaxBytes, constantBufferOffset)
+        std::uint64_t    m_arenaStride = 0;   // AlignUp(m_caps.materialCbBytes, constantBufferOffset)
         nri::Descriptor* m_globalsView[kMaxFramesInFlight]{};
 
         // Slot per REGISTERED material id, assigned in first-use order (ids are

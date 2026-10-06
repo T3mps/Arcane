@@ -1333,7 +1333,7 @@ namespace Arcane
         void InvalidateMeshAlbedoSlot(const Guid& id) { m_meshAlbedoSlots.erase(id); }
 
     private:
-        NriGraphContext();   // latches FramesInFlight() before any per-frame resource exists
+        NriGraphContext();   // latches FramesInFlight() and the upload ring's size before any per-frame resource exists
 
         bool Init(const HostConfig& config, Window& window);
         bool InitOffscreen(const HostConfig& config, NriDevice& shared,
@@ -1414,6 +1414,9 @@ namespace Arcane
         Graveyard                          m_graves;
         std::unique_ptr<NriSwapChain>      m_swap;
         NriUploadRing                      m_ring;
+        // render.uploadRingBytesPerFrame, latched by the constructor (Restart):
+        // the size m_ring is Init()'d with and every log line reports.
+        std::uint64_t                      m_uploadRingBytes = 0;
         NriPipelineCache                   m_pipelines;
         // BEFORE the graph and the nodes in declaration order, so it is
         // destroyed AFTER them: a node holds descriptor SETS naming this

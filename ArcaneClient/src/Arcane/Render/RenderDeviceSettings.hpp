@@ -10,7 +10,9 @@
 //                    (backend, vsync, adapter, tearing; PlayerSafe, so a
 //                    player override writes the per-machine User rung), the
 //                    frames-in-flight depth (S6-17; FramePacing.hpp latches
-//                    it once per process) and
+//                    it once per process), the upload ring's size per frame
+//                    slot (S6-18; RenderBudgetSettings.hpp holds the other
+//                    render budgets) and
 //                    the GPU frustum-cull debug switch, folded in from the S2
 //                    one-off struct with its name, type, default, flags and
 //                    help unchanged. --backend and --no-vsync stay as flags:
@@ -51,6 +53,7 @@ namespace Arcane
         bool            allowTearing = false;
         bool            meshCull     = true;
         std::uint32_t   framesInFlight = 2;   // FramePacing.hpp: latched once, clamped to kMaxFramesInFlight
+        std::uint64_t   uploadRingBytesPerFrame = 4ull << 20;   // S6-18; NriGraphContext latches it at creation
     };
 
     ARC_REFLECT_TYPE(RenderSettings)
@@ -77,6 +80,11 @@ namespace Arcane
             ARC_REFLECT_ATTR(Range, 2.0, 3.0)
             ARC_REFLECT_ATTR(Tooltip, "How many frames the CPU may record ahead of the GPU. 3 smooths uneven frame times at the "
                                       "cost of one more frame of input latency; 2 is the lower-latency default.")
+        ARC_REFLECT_FIELD(RenderSettings, uploadRingBytesPerFrame)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 1048576.0, 268435456.0)
+            ARC_REFLECT_ATTR(Tooltip, "Bytes of per-frame upload space (sprite geometry, the HUD, pick ids) in each frame slot. "
+                                      "A frame that overflows it drops that content with one error; the peak actually used is "
+                                      "logged at shutdown, which is the number to size this from.")
     ARC_END_REFLECT_TYPE()
 
     // The per-configuration validation default: on in Debug, off in Release

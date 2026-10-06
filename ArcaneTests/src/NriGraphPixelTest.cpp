@@ -1914,7 +1914,9 @@ namespace
 
         Arcane::GpuScene* device = v.ctx->Scene();
         REQUIRE(device != nullptr);
-        REQUIRE(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+        // The latched render.gpuScene.initialRows (its 256 default in this process).
+        const std::uint32_t kInitialRows = device->InitialRows();
+        REQUIRE(device->RowCapacity() == kInitialRows);
         REQUIRE(device->EnableDebugReadback());
         const std::uint64_t generationBefore = device->InstanceBufferGeneration();
         CHECK(Arcane::GpuSceneSyncedGeneration(device) == 0u);
@@ -1922,7 +1924,7 @@ namespace
 
         constexpr std::uint32_t kRowA = 0u;
         constexpr std::uint32_t kRowB = 5u;                               // NOT adjacent: per-row copies, not one span
-        constexpr std::uint32_t kRowC = Arcane::GpuScene::kInitialRows;   // the row that forces the growth
+        const std::uint32_t     kRowC = kInitialRows;   // the row that forces the growth
         const Arcane::GpuInstance rowA  = MakeInstanceRow(1.0f);
         const Arcane::GpuInstance rowB  = MakeInstanceRow(2.0f);
         const Arcane::GpuInstance rowB2 = MakeInstanceRow(4.0f);   // row B re-staged INSIDE the copied range, in the growth frame
@@ -1933,11 +1935,11 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = { kRowA, kRowB };
             frame.stage.values      = { rowA, rowB };
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.rowCapacity = kInitialRows;
             frame.stage.fullRebuild = true;
             frame.stage.generation  = 42u;
             const std::uint32_t visible[] = { kRowA, kRowB };
-            FillOneBatch(frame, Arcane::GpuScene::kInitialRows, visible);
+            FillOneBatch(frame, kInitialRows, visible);
 
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
@@ -1954,7 +1956,7 @@ namespace
             CHECK(bytes.size() == device->InstanceBytes());
             CheckRowBytes(bytes, kRowA, rowA);
             CheckRowBytes(bytes, kRowB, rowB);
-            CHECK(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+            CHECK(device->RowCapacity() == kInitialRows);
             CHECK(device->InstanceBufferGeneration() == generationBefore);
             CHECK(device->SyncedGeneration() == 42u);
             CHECK(Arcane::GpuSceneSyncedGeneration(device) == 42u);
@@ -1972,11 +1974,11 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = { kRowB, kRowC };
             frame.stage.values      = { rowB2, rowC };
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows + 1u;
+            frame.stage.rowCapacity = kInitialRows + 1u;
             frame.stage.fullRebuild = false;
             frame.stage.generation  = 42u;
             const std::uint32_t visible[] = { kRowA, kRowB, kRowC };
-            FillOneBatch(frame, Arcane::GpuScene::kInitialRows + 1u, visible);
+            FillOneBatch(frame, kInitialRows + 1u, visible);
 
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
@@ -1988,7 +1990,7 @@ namespace
 
             std::vector<std::uint8_t> bytes;
             REQUIRE(device->ReadDebugInstances(bytes));
-            CHECK(device->RowCapacity() == 2u * Arcane::GpuScene::kInitialRows);
+            CHECK(device->RowCapacity() == 2u * kInitialRows);
             CHECK(bytes.size() == device->InstanceBytes());
             CheckRowBytes(bytes, kRowA, rowA);    // survived the grow-copy
             CheckRowBytes(bytes, kRowB, rowB2);   // the re-stage won over the grow-copy
@@ -2040,6 +2042,7 @@ namespace
 
         Arcane::GpuScene* device = v.ctx->Scene();
         REQUIRE(device != nullptr);
+        const std::uint32_t kInitialRows = device->InitialRows();   // the latched render.gpuScene.initialRows
         REQUIRE(device->EnableDebugReadback());
         REQUIRE(device->SyncedGeneration() == 0u);
 
@@ -2053,10 +2056,10 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = std::move(rows);
             frame.stage.values      = std::move(values);
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.rowCapacity = kInitialRows;
             frame.stage.fullRebuild = fullRebuild;
             frame.stage.generation  = generation;
-            frame.rowCount          = Arcane::GpuScene::kInitialRows;   // no batches: nothing draws
+            frame.rowCount          = kInitialRows;   // no batches: nothing draws
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
             FillCamera(scene);
@@ -2469,8 +2472,7 @@ namespace
         constexpr std::uint32_t kCellW = kW / kCols;   // 16
         constexpr std::uint32_t kCellH = kH / 10u;     // 9
         static_assert(kCount > 32u, "must exceed the old single-pool cap");
-        static_assert(kCount > Arcane::ImGuiNri::PoolCapacityFor(0),
-                      "must spill past the chain's first link");
+        REQUIRE(kCount > renderer.LinkCapacity(0));   // must spill past the chain's first link
 
         const auto colourOf = [](std::uint32_t i)
         {

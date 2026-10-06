@@ -60,9 +60,8 @@ namespace Arcane
     class ARC_API GpuScene
     {
     public:
-        static constexpr std::uint32_t kInitialRows = 256;
-        static constexpr std::uint32_t kScratchRows = 64;    // per frame slot; ad-hoc instances beyond this are dropped with one WARN
-
+        // Latches render.gpuScene.initialRows and .scratchRowsPerFrame
+        // (Restart) for this object's life: InitialRows() / ScratchRows().
         static std::unique_ptr<GpuScene> Create(NriDevice& device);
         ~GpuScene();
         GpuScene(const GpuScene&)            = delete;
@@ -107,7 +106,11 @@ namespace Arcane
         [[nodiscard]] nri::Buffer*     CullBatches(std::uint32_t slot) const noexcept { return m_cullBatches[slot]; }
         [[nodiscard]] nri::Descriptor* CullBatchesView(std::uint32_t slot) const noexcept { return m_cullBatchesView[slot]; }
         [[nodiscard]] std::uint32_t    RowCapacity() const noexcept { return m_rowCapacity; }
-        [[nodiscard]] std::uint32_t    ScratchFirstRow(std::uint32_t slot) const noexcept { return m_rowCapacity + slot * kScratchRows; }
+        [[nodiscard]] std::uint32_t    ScratchFirstRow(std::uint32_t slot) const noexcept { return m_rowCapacity + slot * m_scratchRows; }
+        // The instance capacity Create started with (it grows by doubling).
+        [[nodiscard]] std::uint32_t    InitialRows() const noexcept { return m_initialRows; }
+        // Scratch rows per frame slot; ad-hoc instances beyond this are dropped with one WARN.
+        [[nodiscard]] std::uint32_t    ScratchRows() const noexcept { return m_scratchRows; }
         [[nodiscard]] std::uint64_t    InstanceBufferGeneration() const noexcept { return m_instanceGeneration; }   // bumps on every grow
         [[nodiscard]] std::uint64_t    SyncedGeneration() const noexcept { return m_syncedGeneration; }   // the mirror generation the last SUCCESSFUL Apply stamped; 0 after a refusal (or never)
         void SetSyncedGeneration(std::uint64_t g) noexcept { m_syncedGeneration = g; }
@@ -231,7 +234,7 @@ namespace Arcane
 
     private:
         GpuScene() = default;
-        bool CreateInstances(std::uint32_t rowCapacity);            // buffer + view for rowCapacity + kScratchRows * frames
+        bool CreateInstances(std::uint32_t rowCapacity);            // buffer + view for rowCapacity + ScratchRows() * frames
         bool CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount);
         bool EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount, std::uint64_t fence);
         bool CopyRows(RenderGraphNodeContext& ctx, std::span<const std::uint32_t> rows,
@@ -242,6 +245,8 @@ namespace Arcane
         nri::Buffer*     m_instances = nullptr;
         nri::Descriptor* m_instancesView = nullptr;
         std::uint32_t    m_rowCapacity = 0;
+        std::uint32_t    m_initialRows = 0;   // render.gpuScene.initialRows, latched by Create
+        std::uint32_t    m_scratchRows = 0;   // render.gpuScene.scratchRowsPerFrame, latched by Create
         std::uint64_t    m_instanceGeneration = 1;
         std::uint64_t    m_syncedGeneration = 0;
         nri::Buffer*     m_args[kMaxFramesInFlight] = {};

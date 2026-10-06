@@ -64,8 +64,6 @@ ArcaneClient/src/Arcane/Host/SettleBound.hpp|kSettleIntervalMs|CONSTANT|Test-onl
 ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kOldestSupportedSchemaVersion|CONSTANT|Report format
 ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kSchemaVersion|CONSTANT|Report format
 ArcaneClient/src/Arcane/ImGui/ImGuiNri.cpp|kVertexAlign|CONSTANT|Layout, IDs
-ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kFirstPoolSets|PENDING|inventory:752 SETTING
-ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kMaxPoolSets|PENDING|inventory:753 SETTING
 ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kShaderPairId|CONSTANT|Layout, IDs
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kBtnThreshold|PENDING|inventory:821 SETTING
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadAxisTokens|UNLISTED|line 156
@@ -102,9 +100,6 @@ ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp|kGpuDumpVersion|CONSTANT|Dum
 ArcaneClient/src/Arcane/Render/Nri/BindlessTable.hpp|kInvalidSlot|CONSTANT|Sentinels (0xFFFFFFFF markers)
 ArcaneClient/src/Arcane/Render/Nri/GpuScene.cpp|kRingAlign|CONSTANT|Hardware alignment
 ArcaneClient/src/Arcane/Render/Nri/GpuScene.cpp|kVisibilityRegionAlign|CONSTANT|Hardware alignment
-ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp|kInitialRows|PENDING|inventory:688 SETTING
-ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp|kScratchRows|PENDING|inventory:689 SETTING
-ArcaneClient/src/Arcane/Render/Nri/MeshResidencyBudget.hpp|kMeshResidencyBudgetBytes|PENDING|inventory:694 SETTING
 ArcaneClient/src/Arcane/Render/Nri/NriDevice.cpp|kNoShift|UNLISTED|line 45
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultCBSize|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultIterations|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
@@ -115,7 +110,6 @@ ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalBudget|PENDING|inv
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalPoll|PENDING|inventory:769 SETTING
 ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
-ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kUploadRingBytesPerFrame|PENDING|inventory:647 SETTING
 ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kInvalidLayout|CONSTANT|Sentinel
 ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kMaxColorAttachments|CONSTANT|Fixed array size in the exported pipeline key (ABI); the hardware maximum is 8
 ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
@@ -131,28 +125,19 @@ ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoCurrentNode|CONSTANT|Senti
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoSlot|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoNode|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoPoolSlot|CONSTANT|Sentinels
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kBuiltInSets|PENDING|inventory:670 DERIVED
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kCanvasClear|PENDING|inventory:662 SETTING
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvOffset|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvPrime|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kVertexAlign|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kBuiltInCount|CONSTANT|Alignment, math, shader names, IDs, identity texel
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kCbRegionsPerFrame|PENDING|inventory:670 DERIVED
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaterialCbMaxBytes|PENDING|inventory:669 SETTING
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxMaterialSlots|PENDING|inventory:666 SETTING
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxMaterialTextures|PENDING|inventory:667 SETTING
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxSpriteTextures|PENDING|inventory:668 SETTING
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kNoRange|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kShaderPairBase|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.cpp|kFnvOffset|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.cpp|kFnvPrime|CONSTANT|Layout, IDs, math
-ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kCbMaxBytes|PENDING|inventory:702 SETTING
-ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kCbRegionsPerFrame|PENDING|inventory:702 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kCbRegionsPerFrame|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kGlobalsRegion|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaterialRegion|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxInputs|CONSTANT|static_assert equal to kMaxPassInputs (FullscreenNodes.cpp:158), the post asset format's ceiling
-ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxPasses|PENDING|inventory:699 SETTING
-ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxTextures|PENDING|inventory:700 SETTING
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kNoRange|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kShaderPairId|CONSTANT|Layout, IDs, math
 ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kShaderPairMark|CONSTANT|Layout, IDs, math

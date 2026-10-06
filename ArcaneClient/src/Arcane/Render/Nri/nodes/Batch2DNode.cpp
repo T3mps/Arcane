@@ -20,6 +20,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Batcher2D.hpp>        // Batch2DDrained / Batch2DVertex / Batch2DDrawSpan
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderBatch2dSettings -- the caps the constructor latches
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>  // kVsEntry / kPsEntry
 
@@ -29,6 +30,7 @@
 #include <filesystem>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -119,6 +121,28 @@ namespace Arcane
         {
             return HashBytes(&value, sizeof(value), seed);
         }
+    }
+
+    Batch2DNode::Caps Batch2DNode::CapsFrom(const RenderBatch2dSettings& settings) noexcept
+    {
+        Caps caps;
+        caps.materialSlots    = settings.maxMaterialSlots;
+        caps.materialTextures = settings.maxMaterialTextures;
+        caps.spriteTextures   = settings.maxSpriteTextures;
+        caps.materialCbBytes  = MaterialCbRegionBytes(settings.materialCbBytes);
+        return caps;
+    }
+
+    // THE LATCH (Restart): every pool, arena and cap this node creates is
+    // sized from m_caps, so a render.batch2d.* value published after this
+    // point waits for the next node -- the next vehicle, i.e. a restart.
+    Batch2DNode::Batch2DNode()
+    {
+        const RenderBatch2dSettings& settings = Settings<RenderBatch2dSettings>();
+        m_caps = CapsFrom(settings);
+        if (m_caps.materialCbBytes != settings.materialCbBytes)
+            ARC_WARN("[nri-graph] Batch2DNode: render.batch2d.materialCbBytes {} is not a multiple of 256 -- "
+                     "using {}", settings.materialCbBytes, m_caps.materialCbBytes);
     }
 
     std::unique_ptr<Batch2DNode> Batch2DNode::Create(NriGraphContext& context)
@@ -247,26 +271,26 @@ namespace Arcane
         return true;
     }
 
-    nri::DescriptorPoolDesc Batch2DNode::PoolSizes() noexcept
+    nri::DescriptorPoolDesc Batch2DNode::PoolSizes(const Caps& caps) noexcept
     {
         // THREE set families since Task 2 (the middle one is new):
         //   * the ONE built-in nil-texture set (the white texel);
         //   * one built-in set per distinct SPRITE TEXTURE, capped at
-        //     kMaxSpriteTextures -- no frame-slot dimension, because a built-in
-        //     set's contents (t0 + s0) carry nothing per-frame, so it is
-        //     written once and never rewritten;
+        //     caps.spriteTextures -- no frame-slot dimension, because a
+        //     built-in set's contents (t0 + s0) carry nothing per-frame, so it
+        //     is written once and never rewritten;
         //   * per registered material: one set per (texture variant, frame
         //     slot), where variant 0 is the nil-texture one Task 9 had. Hence
-        //     the (1 + kMaxSpriteTextures) factor.
-        constexpr std::uint32_t kBuiltInSets  = 1 + kMaxSpriteTextures;
-        const std::uint32_t materialSets  = kMaxMaterialSlots * FramesInFlight() * (1 + kMaxSpriteTextures);
+        //     the (1 + caps.spriteTextures) factor.
+        const std::uint32_t builtInSets  = 1 + caps.spriteTextures;
+        const std::uint32_t materialSets = caps.materialSlots * FramesInFlight() * (1 + caps.spriteTextures);
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kBuiltInSets + materialSets;
+        poolDesc.descriptorSetMaxNum  = builtInSets + materialSets;
         // Per material set: the sprite's t0 plus its declared t1..N. Per
         // built-in set: t0 alone.
-        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * materialSets;
-        poolDesc.samplerMaxNum        = kBuiltInSets + materialSets;
+        poolDesc.textureMaxNum        = builtInSets + (1 + caps.materialTextures) * materialSets;
+        poolDesc.samplerMaxNum        = builtInSets + materialSets;
         // Per material set: material CB b1 (when the template has numeric
         // params) and globals CB b2. A built-in set has neither.
         poolDesc.constantBufferMaxNum = 2 * materialSets;
@@ -361,14 +385,13 @@ namespace Arcane
         // lots of descriptor sets can be created in advance and reused without
         // calling ResetDescriptorPool" (NRI.h).
         //
-        // Capacity is the hard cap kMaxMaterialSlots/kMaxMaterialTextures/
-        // kMaxSpriteTextures name: a pool's sizes are fixed at creation and a
-        // single set cannot be freed, so the numbers are decided up front
-        // rather than discovered mid-frame. The arithmetic itself is PoolSizes()
-        // -- pure, public and device-lessly pinned, because this device call is the
-        // only thing standing between a wrong constant and a mid-frame
-        // allocation failure at the desk.
-        const nri::DescriptorPoolDesc poolDesc = PoolSizes();
+        // Capacity is the hard cap m_caps names (render.batch2d.*): a pool's
+        // sizes are fixed at creation and a single set cannot be freed, so the
+        // numbers are decided up front rather than discovered mid-frame. The
+        // arithmetic itself is PoolSizes() -- pure, public and device-lessly
+        // pinned, because this device call is the only thing standing between
+        // a wrong cap and a mid-frame allocation failure at the desk.
+        const nri::DescriptorPoolDesc poolDesc = PoolSizes(m_caps);
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] Batch2DNode: descriptor pool creation failed");
@@ -497,15 +520,15 @@ namespace Arcane
         // D3D12_CONSTANT_BUFFER_VIEW_DESC::SizeInBytes, which D3D12 requires to
         // be a multiple of 256 -- so the views name a whole region, not the
         // template's byte count, and the shader simply reads less than it.
-        m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
+        m_arenaStride = CbRegionStride(m_caps.materialCbBytes, deviceDesc.memoryAlignment.constantBufferOffset);
 
         // RESERVED, not merely sized: EnsureMaterial hands Prepare a
         // MaterialSlot* out of this vector and then keeps building, so a
         // reallocation mid-frame would dangle it. The cap is the reservation, so
         // the vector never grows past it.
-        m_materials.reserve(kMaxMaterialSlots);
+        m_materials.reserve(m_caps.materialSlots);
 
-        const std::uint64_t regionsPerFrame = kMaxMaterialSlots + 1;
+        const std::uint64_t regionsPerFrame = CbRegionsPerFrame(m_caps);
         const std::uint64_t arenaBytes = regionsPerFrame * FramesInFlight() * m_arenaStride;
 
         nri::BufferDesc bufferDesc = {};
@@ -783,14 +806,14 @@ namespace Arcane
         for (const auto& [key, existing] : m_spriteSets)
             if (existing)
                 ++live;
-        if (live >= kMaxSpriteTextures)
+        if (live >= m_caps.spriteTextures)
         {
             if (!m_warnedTextureBudget)
             {
                 m_warnedTextureBudget = true;
                 ARC_ERROR("[nri-graph] Batch2DNode: more than {} distinct sprite textures -- the "
-                          "rest draw with the white texel. Raise kMaxSpriteTextures (it sizes the "
-                          "descriptor pool).", kMaxSpriteTextures);
+                          "rest draw with the white texel. Raise render.batch2d.maxSpriteTextures (it "
+                          "sizes the descriptor pool).", m_caps.spriteTextures);
             }
             m_spriteSets[id] = nullptr;
             return m_set;
@@ -842,7 +865,8 @@ namespace Arcane
         SpriteMaterialLayout layout2D;
         layout2D.Build(slot.cbSize, slot.textureCount);
 
-        nri::Descriptor* textures[1 + kMaxMaterialTextures] = {};
+        // Declaration time, written once per set: a heap vector is fine here.
+        std::vector<nri::Descriptor*> textures(1 + slot.textureCount, nullptr);
         textures[0] = spriteView ? spriteView : m_whiteView;   // t0: the sprite's own
         for (std::uint32_t t = 0; t < slot.textureCount; ++t)
             textures[1 + t] = slot.paramViews[t] ? slot.paramViews[t] : m_whiteView;
@@ -878,7 +902,7 @@ namespace Arcane
         updates[updateCount].descriptorNum = 1;
         ++updateCount;
 
-        const nri::Descriptor* const* textureArray = textures;
+        const nri::Descriptor* const* textureArray = textures.data();
         updates[updateCount].descriptorSet = &set;
         updates[updateCount].rangeIndex    = layout2D.textures;
         updates[updateCount].descriptors   = textureArray;
@@ -916,14 +940,15 @@ namespace Arcane
             return fallback();
 
         // variants[0] is the nil one and is not a texture, hence the `>`.
-        if (slot.variants.size() > kMaxSpriteTextures)
+        if (slot.variants.size() > m_caps.spriteTextures)
         {
             if (!m_warnedTextureBudget)
             {
                 m_warnedTextureBudget = true;
                 ARC_ERROR("[nri-graph] Batch2DNode: a material binds more than {} distinct sprite "
                           "textures -- the rest draw with the white texel. Raise "
-                          "kMaxSpriteTextures (it sizes the descriptor pool).", kMaxSpriteTextures);
+                          "render.batch2d.maxSpriteTextures (it sizes the descriptor pool).",
+                          m_caps.spriteTextures);
             }
             return fallback();
         }
@@ -944,8 +969,8 @@ namespace Arcane
             {
                 ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for a "
                           "material's sprite-texture variant -- the pool holds {} material sets, "
-                          "sized by kMaxMaterialSlots x kMaxSpriteTextures",
-                          kMaxMaterialSlots * framesInFlight * (1 + kMaxSpriteTextures));
+                          "sized by render.batch2d.maxMaterialSlots x maxSpriteTextures",
+                          m_caps.materialSlots * framesInFlight * (1 + m_caps.spriteTextures));
                 return fallback();
             }
             WriteMaterialSet(slot, *fresh.set[frameSlot], frameSlot, spriteView);
@@ -961,18 +986,18 @@ namespace Arcane
         const std::uint32_t textureCount = desc.templ->TextureCount();
         const std::uint32_t cbSize       = desc.templ->CbSize();
 
-        if (textureCount > kMaxMaterialTextures)
+        if (textureCount > m_caps.materialTextures)
         {
             ARC_ERROR("[nri-graph] Batch2DNode: material '{}' declares {} textures, over this node's "
-                      "cap of {} -- raise kMaxMaterialTextures (it sizes the descriptor pool)",
-                      desc.templ->Name(), textureCount, kMaxMaterialTextures);
+                      "cap of {} -- raise render.batch2d.maxMaterialTextures (it sizes the descriptor "
+                      "pool)", desc.templ->Name(), textureCount, m_caps.materialTextures);
             return false;
         }
-        if (cbSize > kMaterialCbMaxBytes)
+        if (cbSize > m_caps.materialCbBytes)
         {
             ARC_ERROR("[nri-graph] Batch2DNode: material '{}' has a {}-byte constant buffer, over "
-                      "this node's arena region of {} -- raise kMaterialCbMaxBytes",
-                      desc.templ->Name(), cbSize, kMaterialCbMaxBytes);
+                      "this node's arena region of {} -- raise render.batch2d.materialCbBytes",
+                      desc.templ->Name(), cbSize, m_caps.materialCbBytes);
             return false;
         }
 
@@ -1039,8 +1064,7 @@ namespace Arcane
         // the white texel.
         const std::vector<Guid> textureIds = desc.instance->ResolveTextures();
         slot.textureCount = textureCount;
-        for (nri::Descriptor*& view : slot.paramViews)
-            view = nullptr;
+        slot.paramViews.assign(textureCount, nullptr);
         for (std::uint32_t t = 0; t < textureCount; ++t)
             slot.paramViews[t] = t < textureIds.size() ? TextureView(textureIds[t]) : nullptr;
 
@@ -1083,9 +1107,9 @@ namespace Arcane
                     || !nil.set[frameSlot])
                 {
                     ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for material "
-                              "'{}' -- the pool holds {} material sets, sized by kMaxMaterialSlots "
-                              "x kMaxSpriteTextures", desc.templ->Name(),
-                              kMaxMaterialSlots * framesInFlight * (1 + kMaxSpriteTextures));
+                              "'{}' -- the pool holds {} material sets, sized by "
+                              "render.batch2d.maxMaterialSlots x maxSpriteTextures", desc.templ->Name(),
+                              m_caps.materialSlots * framesInFlight * (1 + m_caps.spriteTextures));
                     return false;
                 }
             }
@@ -1179,9 +1203,10 @@ namespace Arcane
             return &slot;
         }
 
-        if (m_materials.size() >= kMaxMaterialSlots)
-            return refuse("this node's material-slot table is full -- raise kMaxMaterialSlots "
-                          "(it sizes the descriptor pool and the constant-buffer arena)");
+        if (m_materials.size() >= m_caps.materialSlots)
+            return refuse("this node's material-slot table is full -- raise "
+                          "render.batch2d.maxMaterialSlots (it sizes the descriptor pool and the "
+                          "constant-buffer arena)");
 
         MaterialSlot& slot = m_materials.emplace_back();
         slot.cbRegion = (std::uint32_t)m_materials.size();   // region 0 is the globals CB
@@ -1218,13 +1243,13 @@ namespace Arcane
         // allocation point); both share m_warnedTextureBudget, so a frame over
         // budget says this exactly once.
         const std::uint32_t distinct = DistinctTextureCount(batch.spans);
-        if (distinct > kMaxSpriteTextures && !m_warnedTextureBudget)
+        if (distinct > m_caps.spriteTextures && !m_warnedTextureBudget)
         {
             m_warnedTextureBudget = true;
             ARC_ERROR("[nri-graph] Batch2DNode: this frame names {} distinct sprite textures, over "
                       "this node's cap of {} -- the ones past the cap draw with the white texel. "
-                      "Raise kMaxSpriteTextures (it sizes the descriptor pool).",
-                      distinct, kMaxSpriteTextures);
+                      "Raise render.batch2d.maxSpriteTextures (it sizes the descriptor pool).",
+                      distinct, m_caps.spriteTextures);
         }
         for (const Batch2DDrawSpan& span : batch.spans)
             (void)EnsureSpriteSet(span.textureId);
@@ -1380,7 +1405,7 @@ namespace Arcane
             GraphError("Batch2DNode: the upload ring could not fit this frame's vertex/index streams ("
                        + std::to_string(vertexBytes + indexBytes)
                        + " bytes) -- the batch is dropped this frame. Raise "
-                         "kUploadRingBytesPerFrame in NriGraphContext.cpp.");
+                         "render.uploadRingBytesPerFrame.");
             return;
         }
         std::memcpy(vertexAlloc.cpu, batch.vertices.data(), (std::size_t)vertexBytes);
@@ -1489,7 +1514,7 @@ namespace Arcane
                 layout   = m_pipelines->Layout(slot.layoutId);
                 // The (material, sprite texture) VARIANT Prepare built for this
                 // span, or the nil one. A LINEAR SCAN and not a map: `variants`
-                // holds at most 1 + kMaxSpriteTextures entries and is almost
+                // holds at most 1 + m_caps.spriteTextures entries and is almost
                 // always one or two, so this is cheaper than hashing -- and it
                 // allocates nothing, which is the rule inside the recording
                 // window.

@@ -15,6 +15,7 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderImguiSettings -- the pool chain's caps
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 #include <Arcane/Render/FramePacing.hpp>           // FramesInFlight()
@@ -144,6 +145,12 @@ namespace Arcane
         m_pipelines = &pipelines;
         m_vs        = vs;
         m_ps        = ps;
+
+        // The pool chain's caps (Restart): latched here, before the first
+        // link, so a later publish never changes how this chain grows.
+        const RenderImguiSettings& caps = Settings<RenderImguiSettings>();
+        m_firstPoolSets = caps.firstPoolSets;
+        m_maxPoolSets   = caps.maxPoolSetsPerLink;
 
         if (m_vs.empty() || m_ps.empty())
         {
@@ -302,7 +309,7 @@ namespace Arcane
         //
         // ONE LINK OF THE CHAIN per call -- see THE POOL CHAIN in the header
         // for the sizing and why the chain grows rather than capping.
-        const std::uint32_t capacity = PoolCapacityFor(m_pools.size());
+        const std::uint32_t capacity = LinkCapacity(m_pools.size());
         nri::DescriptorPoolDesc poolDesc = {};
         poolDesc.descriptorSetMaxNum = capacity;
         poolDesc.textureMaxNum       = capacity;
@@ -829,7 +836,7 @@ namespace Arcane
                 GraphError("ImGuiNri: the upload ring could not fit this frame's HUD geometry ("
                            + std::to_string(vertexBytes + indexBytes)
                            + " bytes) -- the HUD is dropped this frame. Raise "
-                             "kUploadRingBytesPerFrame in NriGraphContext.cpp.");
+                             "render.uploadRingBytesPerFrame.");
             }
             return;
         }

@@ -164,11 +164,12 @@ namespace Arcane
     // THE AD-HOC INSTANCE (F3 plan 1 T7): a REGISTRY-LESS caller's row --
     // MeshDocument's preview, the thumbnail harvester, a [gpu] test. Drawn
     // DIRECT (one CmdDrawIndexed each, root flags & kMeshRootDirect),
-    // UNCULLED, in submission order, from the GpuScene::kScratchRows scratch
-    // rows this frame slot owns in the instance buffer: MeshNode::Prepare
+    // UNCULLED, in submission order, from the GpuScene::ScratchRows() scratch
+    // rows this frame slot owns in the instance buffer
+    // (render.gpuScene.scratchRowsPerFrame): MeshNode::Prepare
     // converts each one into a GpuInstance (AdHocRows()), AddMeshNode hands
     // that span to GpuSceneSyncNode, which copies it into the slot's scratch
-    // region ahead of the pass. Beyond kScratchRows per frame the rest are
+    // region ahead of the pass. Beyond ScratchRows() per frame the rest are
     // DROPPED -- by Prepare, which is also what WARNS, once per node (the
     // sync node only ever sees the capped span, so GpuScene::Reserve's own
     // overflow guard cannot fire on this path).
@@ -255,7 +256,7 @@ namespace Arcane
     struct MeshSceneDesc
     {
         // THE AD-HOC ROWS (see MeshInstance's header): drawn direct, unculled,
-        // in order, at most GpuScene::kScratchRows of them per frame.
+        // in order, at most GpuScene::ScratchRows() of them per frame.
         // BORROWED SPAN for the duration of the RenderFrame call, exactly like
         // FrameDesc::pickables: the declaration copies the SPAN into the
         // node's exec fn, never the elements, and the exec fn runs inside the
@@ -465,7 +466,7 @@ namespace Arcane
         // "missing pipeline" warning that named the wrong cause.
         //
         // SINCE F3 PLAN 1 T7 this ALSO builds AdHocRows(): every ad-hoc
-        // instance (`scene.instances`, capped at GpuScene::kScratchRows --
+        // instance (`scene.instances`, capped at GpuScene::ScratchRows() --
         // the overflow is dropped and WARNED once, here, naming the count) is
         // converted to a GpuInstance -- model, NormalMatrixFor(model)'s
         // columns, baseColor, materialSlot -- and its draw range remembered,
@@ -737,7 +738,7 @@ namespace Arcane
         std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>> m_residents;
 
         // THE AD-HOC ROWS (F3 plan 1 T7), built by Prepare from
-        // scene.instances (at most GpuScene::kScratchRows) and read twice:
+        // scene.instances (at most GpuScene::ScratchRows()) and read twice:
         // by AddMeshNode, which hands AdHocRows() to the sync node (copied
         // into this slot's scratch region), and by Record, which draws
         // m_adHocDraws[i] direct from scratch row i. Parallel vectors: row i
@@ -758,7 +759,10 @@ namespace Arcane
         // degradations a reader must be able to see.
         bool m_warnedNoPipeline      = false;
         bool m_warnedBadCamera       = false;
-        bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past kScratchRows dropped
+        bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past m_scratchRows dropped
+        // The context's GpuScene::ScratchRows(), latched by Init: the cap
+        // Prepare applies, so the span it stages always fits the scratch region.
+        std::uint32_t m_scratchRows = 0;
     };
 
     // Declares the mesh node -- opaque, masked and ordered transparent, the

@@ -17,7 +17,8 @@
 #include <Arcane/Base/Diagnostics.hpp>              // Heartbeat / GpuHeartbeatRefresh -- the offscreen pacing wait
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>       // RenderDeviceDesc (and GraphicsBackend + ToString behind it)
-#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderPostSettings -- the device-less post clamp
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*, render.uploadRingBytesPerFrame
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
@@ -50,15 +51,6 @@ namespace Arcane
         {
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
-
-        // Per-frame-slot upload arena -- the batch node's vertex + index
-        // streams (Task 8), the material/globals constant buffers (Task 9).
-        // Init()'d at Create so a mapping failure is found at boot rather than
-        // inside the first draw. A starting point, not a measurement:
-        // NriUploadRing::HighWater() is the number to size it from, and it is
-        // logged at shutdown. 4 MiB is ~27k quads of batch geometry
-        // (128 B of vertices + 24 B of indices each).
-        constexpr std::uint64_t kUploadRingBytesPerFrame = 4ull * 1024 * 1024;
 
         // Where the offline shader artifacts live, relative to the
         // executable. Resolved through ShaderPaths::ResolveFlavorDir, so a
@@ -125,7 +117,17 @@ namespace Arcane
     // FIRST, before any per-frame resource: render.framesInFlight (Restart)
     // becomes FramesInFlight() for the rest of the process, so the ring,
     // the command-buffer slots, the node pools and the swapchain all agree.
+    //
+    // render.uploadRingBytesPerFrame (Restart) is this context's per-frame-
+    // slot upload arena -- the batch node's vertex + index streams (Task 8),
+    // the HUD's geometry and the pick pass's ids. Init()'d at Create so a
+    // mapping failure is found at boot rather than inside the first draw. A
+    // starting point, not a measurement: NriUploadRing::HighWater() is the
+    // number to size it from, and it is logged at shutdown. The 4 MiB default
+    // is ~27k quads of batch geometry (128 B of vertices + 24 B of indices
+    // each).
     NriGraphContext::NriGraphContext()
+        : m_uploadRingBytes(Settings<RenderSettings>().uploadRingBytesPerFrame)
     {
         LatchFramesInFlight();
     }
@@ -260,7 +262,7 @@ namespace Arcane
 
         ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
                  m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
-                 kUploadRingBytesPerFrame / 1024);
+                 m_uploadRingBytes / 1024);
         return true;
     }
 
@@ -336,7 +338,7 @@ namespace Arcane
 
         ARC_INFO("[nri-graph] offscreen ready: {}x{} format={} ring={}KiB/slot, pacing {} frames deep",
                  m_offscreenWidth, m_offscreenHeight, (int)m_format,
-                 kUploadRingBytesPerFrame / 1024, FramesInFlight());
+                 m_uploadRingBytes / 1024, FramesInFlight());
         return true;
     }
 
@@ -393,10 +395,10 @@ namespace Arcane
 
         // The upload ring is [gpu]-only by construction (NONE's MapBuffer
         // returns null), so this is its first real Init in the tree.
-        if (!m_ring.Init(*m_device, kUploadRingBytesPerFrame))
+        if (!m_ring.Init(*m_device, m_uploadRingBytes))
         {
-            ARC_ERROR("[nri-graph] upload-ring init failed ({} bytes x {} slots)",
-                      kUploadRingBytesPerFrame, FramesInFlight());
+            ARC_ERROR("[nri-graph] upload-ring init failed ({} bytes x {} slots; render.uploadRingBytesPerFrame)",
+                      m_uploadRingBytes, FramesInFlight());
             return false;
         }
 
@@ -903,7 +905,7 @@ namespace Arcane
         // remembered; now there is no shared structure for them to sit in.
         graves.Drain();
 
-        // The number to size kUploadRingBytesPerFrame from once a real frame
+        // The number to size render.uploadRingBytesPerFrame from once a real frame
         // has run -- the peak across every slot, not slot 0's.
         std::uint64_t ringPeak = 0;
         for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
@@ -914,12 +916,12 @@ namespace Arcane
         {
             ARC_INFO("[nri-graph] offscreen graph render half shut down after {} rendered frame(s); "
                      "upload-ring peak {} of {} bytes per slot", m_frameIndex, ringPeak,
-                     kUploadRingBytesPerFrame);
+                     m_uploadRingBytes);
         }
         else
         {
             ARC_INFO("[nri-graph] graph render half shut down after {} presented frame(s); upload-ring "
-                     "peak {} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+                     "peak {} of {} bytes per slot", m_frameIndex, ringPeak, m_uploadRingBytes);
         }
         // NOTHING releases the window here, and nothing may start to: it is the
         // host's (THE BORROWED WINDOW). Every NRI object that named its HWND or
@@ -1394,9 +1396,10 @@ namespace Arcane
             // returns 0 for a chain it cannot honour -- which this then
             // declares nothing for, rather than declaring passes whose exec fn
             // would leave their targets holding undefined pool contents.
-            // Device-lessly it is the wiring alone, clamped to the same cap.
+            // Device-lessly it is the wiring alone, clamped to the cap a node
+            // would latch (render.post.maxPasses).
             std::uint32_t passCount = (std::uint32_t)std::min<std::size_t>(
-                shape.post->passes.size(), PostChainNode::kMaxPasses);
+                shape.post->passes.size(), Settings<RenderPostSettings>().maxPasses);
             if (context)
             {
                 PostChainNode* node = context->PostChain();

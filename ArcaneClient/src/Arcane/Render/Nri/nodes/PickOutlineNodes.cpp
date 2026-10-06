@@ -435,8 +435,8 @@ namespace Arcane
                 m_warnedRing = true;
                 GraphError("PickNode: the upload ring could not fit this frame's id-pass geometry ("
                            + std::to_string(vertexBytes + indexBytes)
-                           + " bytes) -- the id pass is dropped. Raise kUploadRingBytesPerFrame in "
-                             "NriGraphContext.cpp.");
+                           + " bytes) -- the id pass is dropped. Raise "
+                             "render.uploadRingBytesPerFrame.");
             }
             return;
         }

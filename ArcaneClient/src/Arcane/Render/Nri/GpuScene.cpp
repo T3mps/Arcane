@@ -9,6 +9,7 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderGpuSceneSettings -- the row caps Create latches
 
 #include <algorithm>
 #include <cstddef>
@@ -97,11 +98,14 @@ namespace Arcane
     {
         std::unique_ptr<GpuScene> s(new GpuScene());
         s->m_device = &device;
-        if (!s->CreateInstances(kInitialRows))
+        const RenderGpuSceneSettings& caps = Settings<RenderGpuSceneSettings>();
+        s->m_initialRows = caps.initialRows;
+        s->m_scratchRows = caps.scratchRowsPerFrame;
+        if (!s->CreateInstances(s->m_initialRows))
             return nullptr;
         const std::uint32_t frames = FramesInFlight();
         for (std::uint32_t slot = 0; slot < frames; ++slot)
-            if (!s->CreateSlotBuffers(slot, kInitialRows, kScratchRows, kInitialRows))
+            if (!s->CreateSlotBuffers(slot, s->m_initialRows, s->m_scratchRows, s->m_initialRows))
                 return nullptr;   // ~GpuScene destroys what got made
         return s;
     }
@@ -149,7 +153,7 @@ namespace Arcane
 
     bool GpuScene::CreateInstances(std::uint32_t rowCapacity)
     {
-        const std::uint64_t rows = std::uint64_t(rowCapacity) + std::uint64_t(kScratchRows) * FramesInFlight();
+        const std::uint64_t rows = std::uint64_t(rowCapacity) + std::uint64_t(m_scratchRows) * FramesInFlight();
         nri::Buffer* buffer = nullptr;
         if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, rows * kRowBytes, static_cast<std::uint32_t>(kRowBytes),
                           nri::BufferUsageBits::SHADER_RESOURCE, "gpuscene instances", buffer))
@@ -168,7 +172,7 @@ namespace Arcane
 
     std::uint64_t GpuScene::InstanceBytes() const noexcept
     {
-        return (std::uint64_t(m_rowCapacity) + std::uint64_t(kScratchRows) * FramesInFlight()) * kRowBytes;
+        return (std::uint64_t(m_rowCapacity) + std::uint64_t(m_scratchRows) * FramesInFlight()) * kRowBytes;
     }
 
     std::uint64_t GpuScene::ArgBytes(std::uint32_t slot) const noexcept
@@ -330,11 +334,11 @@ namespace Arcane
         }
 
         // 3. The scratch overflow is decided here and clamped in Apply.
-        if (adHocCount > kScratchRows && !m_warnedScratchOverflow)
+        if (adHocCount > m_scratchRows && !m_warnedScratchOverflow)
         {
             m_warnedScratchOverflow = true;
             ARC_WARN("[nri-graph] GpuScene: {} ad-hoc instances exceed the {} scratch rows per frame slot -- the rest are dropped",
-                     adHocCount, kScratchRows);
+                     adHocCount, m_scratchRows);
         }
         return true;
     }
@@ -453,8 +457,8 @@ namespace Arcane
         if (!adHoc.empty())
         {
             std::span<const GpuInstance> rows = adHoc;
-            if (rows.size() > kScratchRows)
-                rows = rows.subspan(0, kScratchRows);   // Reserve warned, once
+            if (rows.size() > m_scratchRows)
+                rows = rows.subspan(0, m_scratchRows);   // Reserve warned, once
             result.adHocReady = CopyRows(ctx, {}, rows, ScratchFirstRow(frameSlot), /*contiguous*/ true);
         }
 
