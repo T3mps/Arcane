@@ -20,6 +20,7 @@
 #include "Widgets/GraphZoomLevels.hpp"   // ApplyZoomLevels (editor.graph.zoomLevels) -- shared with the Graph lens
 #include "Widgets/UiMetrics.hpp"         // Ui::Px: the header gap follows editor.ui.scale
 #include "Settings/GraphCanvasSettings.hpp"   // editor.graph.*: header gap, cull band, pin dot, selection modifier
+#include "Settings/DocumentSettings.hpp"      // editor.shader.* / editor.preview.*: caps, drag speeds, the checker
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
 #include "Widgets/PropertyGrid.hpp"   // the material page's sections (s5.3)
@@ -73,6 +74,10 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // editor.shader.dragSpeed: a constant / parameter default's per-pixel
+        // drag step on a graph node (S6-35).
+        [[nodiscard]] float NodeDragSpeed() { return Arcane::Settings<ShaderEditorSettings>().dragSpeed; }
+
         // s5.3 (9.28 #25): the preview square's height cap, as a share of the page.
         ARC_CVAR(cvar_materialPreviewFraction, "editor.inspector.materialPreviewFraction", float, 0.45f,
                  .min = 0.2f, .max = 0.8f, .flags = ::Arcane::CVarFlags::Archive,
@@ -1539,7 +1544,7 @@ namespace Arcane::Editor
         ++m_previewVehicleAttempts;
         m_graphPreview = Arcane::NriGraphContext::CreateOffscreen(
             *m_services.hostConfig, chrome->Device(),
-            kGraphPreviewSize, kGraphPreviewSize);
+            m_graphPreviewSize, m_graphPreviewSize);
         if (!m_graphPreview)
         {
             // Degraded, not fatal, and it degrades to exactly what a missing
@@ -1678,14 +1683,14 @@ namespace Arcane::Editor
         Arcane::GlobalParams globals;
         globals.time = static_cast<float>(m_animTime);
         globals.deltaTime = static_cast<float>(dt);
-        globals.viewportWidth = static_cast<float>(kGraphPreviewSize);
-        globals.viewportHeight = static_cast<float>(kGraphPreviewSize);
+        globals.viewportWidth = static_cast<float>(m_graphPreviewSize);
+        globals.viewportHeight = static_cast<float>(m_graphPreviewSize);
 
         Arcane::Batcher2D& b = *m_graphBatch;
         // Extent only, since ABI v15: the null command list + null framebuffer
         // that used to lead Begin were read by End() alone, and the NODE
         // drains this batch rather than this code calling End().
-        b.Begin(kGraphPreviewSize, kGraphPreviewSize);
+        b.Begin(m_graphPreviewSize, m_graphPreviewSize);
         // AFTER Begin, matching SubmitSceneToBatcher's own SetGlobals call --
         // so a future change to what Begin resets cannot silently drop this.
         b.SetGlobals(globals);
@@ -1693,8 +1698,10 @@ namespace Arcane::Editor
         // The checkerboard. On the fullscreen surface it is ALSO what
         // kSceneInput samples, which is what makes it the scene stand-in.
         constexpr float kCell = 32.0f;
-        const float extent = static_cast<float>(kGraphPreviewSize);
-        const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
+        const float extent = static_cast<float>(m_graphPreviewSize);
+        const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
+        const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
+                              preview.checkerLight.a);
         for (int y = 0; y * kCell < extent; ++y)
             for (int x = 0; x * kCell < extent; ++x)
                 if ((x + y) & 1)
@@ -1702,7 +1709,7 @@ namespace Arcane::Editor
 
         if (haveSprite)
         {
-            const float s = 0.8f * extent;
+            const float s = preview.checkerExtent * extent;
             b.QuadMaterial(m_graphSpriteMaterial,
                            glm::vec2((extent - s) * 0.5f, (extent - s) * 0.5f),
                            glm::vec2(s, s),
@@ -3252,7 +3259,8 @@ namespace Arcane::Editor
         // reason a new jump abandons whatever forward history existed.
         m_navHistory.resize(static_cast<std::size_t>(m_navIndex + 1));
         m_navHistory.push_back(now);
-        if (static_cast<int>(m_navHistory.size()) > kNavHistoryMax)
+        const int navMax = Arcane::Settings<ShaderEditorSettings>().navHistoryMax;
+        while (static_cast<int>(m_navHistory.size()) > navMax)   // while: the cap may have shrunk live
             m_navHistory.erase(m_navHistory.begin());
         m_navIndex = static_cast<int>(m_navHistory.size()) - 1;
     }
@@ -4204,7 +4212,7 @@ namespace Arcane::Editor
         if (!PreviewReady() || !m_graphPreview)
             return {};
         return { static_cast<ImTextureID>(GraphPreviewTextureId()),
-                 static_cast<float>(kGraphPreviewSize) };
+                 static_cast<float>(m_graphPreviewSize) };
     }
 
     void ShaderEditorDocument::DrawPreviewPanel(ImVec2 size)
@@ -4799,8 +4807,8 @@ namespace Arcane::Editor
         // the port rows. `width` is last frame's measured content width -- a
         // node drawing for the first time has none and gets the floor, which is
         // also what keeps a narrow node from collapsing the thumbnail.
-        constexpr float kThumbMin = 96.0f;
-        const float kThumbDraw = width > kThumbMin ? width : kThumbMin;
+        const float thumbMin = Arcane::Settings<ShaderEditorSettings>().nodePreviewMinPx;
+        const float kThumbDraw = width > thumbMin ? width : thumbMin;
         // The Output node shows the material's own preview -- the pass
         // canvas's base-node convention. It is the ONLY node with a preview:
         // there is no per-node compile/record machinery.
@@ -5450,10 +5458,12 @@ namespace Arcane::Editor
             ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
             ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
                         m_renameTargets.size());
-            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
+            const std::size_t listMax =
+                static_cast<std::size_t>(Arcane::Settings<ShaderEditorSettings>().renameListMax);
+            for (std::size_t i = 0; i < m_renameTargets.size() && i < listMax; ++i)
                 ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
-            if (m_renameTargets.size() > 8)
-                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
+            if (m_renameTargets.size() > listMax)
+                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - listMax);
             ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
                                 "old entry drops.", m_renameNew.c_str());
             ImGui::Separator();
@@ -5935,9 +5945,9 @@ namespace Arcane::Editor
                 std::memcpy(pre, buf, sizeof(pre));
                 const bool litExisted = lit != nullptr;   // `lit` may dangle once SetPinLiteral runs
                 const bool changed =
-                    lanes == 1 ? ImGui::DragFloat("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
-                    : lanes == 2 ? ImGui::DragFloat2("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
-                                 : ImGui::DragFloat4("##lit", buf, 0.01f, 0.0f, 0.0f, fmt);
+                    lanes == 1 ? ImGui::DragFloat("##lit", buf, NodeDragSpeed(), 0.0f, 0.0f, fmt)
+                    : lanes == 2 ? ImGui::DragFloat2("##lit", buf, NodeDragSpeed(), 0.0f, 0.0f, fmt)
+                                 : ImGui::DragFloat4("##lit", buf, NodeDragSpeed(), 0.0f, 0.0f, fmt);
                 bool existed = true;
                 const bool escaped = CanvasDragEscape(pre, litExisted, buf, lanes, &existed);
                 // Same bracketing as the Const payload drags below, and STRICTLY
@@ -5989,7 +5999,7 @@ namespace Arcane::Editor
                 ImGui::SetNextItemWidth(90.0f);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
-                const bool changed = ImGui::DragFloat("##v", &n.value[0], 0.01f);
+                const bool changed = ImGui::DragFloat("##v", &n.value[0], NodeDragSpeed());
                 const bool escaped = CanvasDragEscape(pre, true, n.value, 1);
                 gestureBegin("Edit Value");
                 if (changed || escaped) valueEdited();
@@ -6001,7 +6011,7 @@ namespace Arcane::Editor
                 ImGui::SetNextItemWidth(140.0f);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
-                const bool changed = ImGui::DragFloat2("##v", n.value, 0.01f);
+                const bool changed = ImGui::DragFloat2("##v", n.value, NodeDragSpeed());
                 const bool escaped = CanvasDragEscape(pre, true, n.value, 2);
                 gestureBegin("Edit Value");
                 if (changed || escaped) valueEdited();
@@ -6014,7 +6024,7 @@ namespace Arcane::Editor
                 ImGui::SetNextItemWidth(220.0f);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
-                const bool changed = ImGui::DragFloat4("##v", n.value, 0.01f);
+                const bool changed = ImGui::DragFloat4("##v", n.value, NodeDragSpeed());
                 const bool escaped = CanvasDragEscape(pre, true, n.value, 4);
                 gestureBegin("Edit Value");
                 if (changed || escaped) valueEdited();
@@ -6121,11 +6131,11 @@ namespace Arcane::Editor
                     float pre[4];
                     std::memcpy(pre, n.paramDefault.f, sizeof(pre));
                     if (lanes == 1)
-                        changed = ImGui::DragFloat("##pdef", &n.paramDefault.f[0], 0.01f);
+                        changed = ImGui::DragFloat("##pdef", &n.paramDefault.f[0], NodeDragSpeed());
                     else if (lanes == 2)
-                        changed = ImGui::DragFloat2("##pdef", n.paramDefault.f, 0.01f);
+                        changed = ImGui::DragFloat2("##pdef", n.paramDefault.f, NodeDragSpeed());
                     else
-                        changed = ImGui::DragFloat4("##pdef", n.paramDefault.f, 0.01f);
+                        changed = ImGui::DragFloat4("##pdef", n.paramDefault.f, NodeDragSpeed());
                     const bool escaped = CanvasDragEscape(pre, true, n.paramDefault.f, lanes);
                     gestureBegin("Param Default");
                     if (changed || escaped) valueEdited();
@@ -6145,7 +6155,8 @@ namespace Arcane::Editor
                         ImGui::SetNextItemWidth(120.0f);
                         float mm[2] = { n.rangeMin, n.rangeMax };
                         const float pre[4] = { mm[0], mm[1], 0.0f, 0.0f };
-                        const bool rchanged = ImGui::DragFloat2("##prange", mm, 0.05f);
+                        const bool rchanged = ImGui::DragFloat2(
+                            "##prange", mm, Arcane::Settings<ShaderEditorSettings>().rangeDragSpeed);
                         const bool escaped = CanvasDragEscape(pre, true, mm, 2);
                         gestureBegin("Param Range");
                         if (rchanged || escaped)
@@ -6238,16 +6249,18 @@ namespace Arcane::Editor
                 // ignores zoom). Editing happens in a Suspend'ed popup (normal
                 // ImGui space), opened by the button below.
                 {
+                    const ShaderEditorSettings& es = Arcane::Settings<ShaderEditorSettings>();
+                    const std::size_t lineChars = static_cast<std::size_t>(es.bodyPreviewChars);
                     std::string_view bodyText = n.customBody;
                     int shown = 0;
-                    while (!bodyText.empty() && shown < 8)
+                    while (!bodyText.empty() && shown < es.bodyPreviewLines)
                     {
                         const std::size_t nl = bodyText.find('\n');
                         std::string_view lineText = bodyText.substr(0, nl);
                         if (!lineText.empty() && lineText.back() == '\r')
                             lineText.remove_suffix(1);
-                        std::string display(lineText.substr(0, 48));
-                        if (lineText.size() > 48)
+                        std::string display(lineText.substr(0, lineChars));
+                        if (lineText.size() > lineChars)
                             display += "...";
                         ImGui::TextDisabled("%s", display.c_str());
                         ++shown;

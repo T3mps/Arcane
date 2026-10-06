@@ -1,9 +1,11 @@
 #include "Project/MaterialPreviewHarvester.hpp"
 #include "Documents/MaterialSpherePreview.hpp"   // the sphere scene, shared with the document's live preview (T3-D6)
+#include "Settings/DocumentSettings.hpp"          // editor.preview.*: the checker, the one preview light (S6-35)
 
 #include <Arcane/Assets/Assets.hpp>          // LoadDisplayPixels / WriteThumbnailPngRgba
 #include <Arcane/Assets/ImageIo.hpp>         // PixelData
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
@@ -1173,7 +1175,9 @@ namespace Arcane::Editor
         b.SetGlobals(globals);   // AFTER Begin -- matching every other call site
 
         const float extent = static_cast<float>(kThumbSize);
-        const glm::vec4 light(0.16f, 0.16f, 0.19f, 1.0f);
+        const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
+        const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
+                              preview.checkerLight.a);
         for (int y = 0; y * kCheckerCell < extent; ++y)
             for (int x = 0; x * kCheckerCell < extent; ++x)
                 if ((x + y) & 1)
@@ -1183,7 +1187,7 @@ namespace Arcane::Editor
         if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Sprite &&
             r.spriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
         {
-            const float s = 0.8f * extent;
+            const float s = preview.checkerExtent * extent;
             b.QuadMaterial(r.spriteMaterial,
                            glm::vec2((extent - s) * 0.5f, (extent - s) * 0.5f),
                            glm::vec2(s, s),
@@ -1251,12 +1255,13 @@ namespace Arcane::Editor
             meshScene.view = glm::lookAtRH(cam.eye, cam.target, glm::vec3(0.0f, 1.0f, 0.0f));
             meshScene.projection =
                 Arcane::PerspectiveProjection(kMeshThumbFovDegrees, 1.0f, cam.nearZ, cam.farZ);
-            // The SAME light/ambient values as the mesh-kind material's sphere, left
-            // unchanged per this task's brief -- one lighting feel across every mesh
-            // thumbnail, material or asset.
-            meshScene.lightDirection = glm::vec3(0.45f, 0.7f, 0.8f);   // TOWARD the light
-            meshScene.lightColor = glm::vec3(1.0f);
-            meshScene.ambient = glm::vec3(0.12f);
+            // The SAME light as the mesh-kind material's sphere -- the one preview
+            // light, editor.preview.light.* (R1) -- so every mesh thumbnail,
+            // material or asset, has one lighting feel.
+            const EditorPreviewLightSettings& l = Arcane::Settings<EditorPreviewLightSettings>();
+            meshScene.lightDirection = glm::vec3(l.direction.x, l.direction.y, l.direction.z);   // TOWARD the light
+            meshScene.lightColor = glm::vec3(l.color.r, l.color.g, l.color.b);
+            meshScene.ambient = glm::vec3(l.ambient);
             vp.mesh = &meshScene;
         }
 
