@@ -3,6 +3,7 @@
 // re-themes, so these tests read the registry and the draw list.
 #include <catch2/catch_test_macros.hpp>
 #include "Settings/EditorThemeSettings.hpp"
+#include "Settings/SettingsModel.hpp"
 #include "Settings/ThemePage.hpp"
 #include "Settings/ThemePresets.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -10,6 +11,7 @@
 #include <Arcane/Config/Settings.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <algorithm>
 #include <filesystem>
 
 using namespace Arcane::Editor;
@@ -89,6 +91,24 @@ TEST_CASE("Theme page: export appends .arctheme; import reads it back; a swatch 
     CHECK(st.status.find("missing.arctheme") != std::string::npos);
     std::filesystem::remove(written);
     RevertEditorUser();
+}
+
+TEST_CASE("Theme page: the Preferences tree has Appearance/Theme with the swatch page and the theme cvars", "[theme][settings-ui]")
+{
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const auto panel = reg.Describe("editor.theme.panel");
+    REQUIRE(panel.has_value());
+    CHECK(panel->categoryPath == "Appearance/Theme");
+
+    SettingsModel m;
+    m.SetPages({ SettingsPageRef{ Arcane::SettingScope::PreferencesMachine, "Appearance/Theme", "Theme" } });
+    m.Rebuild(reg, Arcane::SettingScope::PreferencesMachine);
+    const SettingsTreeNode* theme = m.Find("Appearance/Theme");
+    REQUIRE(theme != nullptr);
+    CHECK(theme->label == "Theme");
+    CHECK(std::find(theme->cvars.begin(), theme->cvars.end(), "editor.theme.panel") != theme->cvars.end());
+    REQUIRE(m.Find("Appearance") != nullptr);
+    CHECK(m.Find("editor.theme") == nullptr);
 }
 
 TEST_CASE("Theme page: draws balanced, and warns in the warning colour when a pair falls under its bar", "[theme][settings-ui]")

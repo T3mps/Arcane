@@ -547,7 +547,7 @@ namespace Arcane::Editor
             m_gpu->Win().ShowSaveFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.themeExport, m_dialogs.themeExport.Arm() }, "Arcane Theme", "arctheme");
         };
-        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "editor.theme", "Theme",
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Appearance/Theme", "Theme",
                                              &Arcane::Editor::DrawThemePage, &m_themePage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task

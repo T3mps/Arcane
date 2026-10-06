@@ -1479,6 +1479,7 @@ namespace Arcane
             cv.order        = static_cast<std::int32_t>(i);
             cv.enumNames    = f.enumNames;
             cv.group        = f.group;
+            cv.categoryPath = f.categoryPath;
             const CVarHandle h = Register(cv);
             if (!h.IsStale())
             {

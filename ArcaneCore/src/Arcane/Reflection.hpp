@@ -49,9 +49,11 @@ namespace Arcane::Attr
         SettingScope     scope;
         ApplyMode        apply;
         Audience         audience;
+        std::string_view categoryPath{};   // display tree path; empty = derived from the dotted name
 
-        constexpr Settings(std::string_view cat, SettingScope s, ApplyMode a, Audience au) noexcept
-            : category(cat), scope(s), apply(a), audience(au) {}
+        constexpr Settings(std::string_view cat, SettingScope s, ApplyMode a, Audience au,
+                           std::string_view tree = {}) noexcept
+            : category(cat), scope(s), apply(a), audience(au), categoryPath(tree) {}
     };
 
     // Field attributes. Any of them on a field overrides the type default.

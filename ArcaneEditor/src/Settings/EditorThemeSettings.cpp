@@ -9,7 +9,8 @@
 namespace Arcane::Editor
 {
     ARC_REFLECT_TYPE(EditorThemeSettings)
-        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
+                             "Appearance/Theme")
         ARC_REFLECT_FIELD(EditorThemeSettings, chromeDeep)    ARC_REFLECT_ATTR(DisplayName, "Chrome (deep)")       ARC_REFLECT_ATTR(Category, "Chrome")               ARC_REFLECT_ATTR(Tooltip, "Title bars and the scrollbar track: the darkest chrome tone.")
         ARC_REFLECT_FIELD(EditorThemeSettings, chrome)        ARC_REFLECT_ATTR(DisplayName, "Chrome")              ARC_REFLECT_ATTR(Category, "Chrome")               ARC_REFLECT_ATTR(Tooltip, "The menu bar, popups and table headers.")
         ARC_REFLECT_FIELD(EditorThemeSettings, panel)         ARC_REFLECT_ATTR(DisplayName, "Panel")               ARC_REFLECT_ATTR(Category, "Panels")               ARC_REFLECT_ATTR(Tooltip, "The base surface of every panel and of the selected tab.")
