@@ -216,16 +216,15 @@ namespace Arcane::Editor
                 t_pageRow = nullptr;
                 t_pageGrid = nullptr;
             }
-            // A custom page owns its node's keychord rows (Preferences >
-            // Keyboard: the chord-listener table, S4-14); the generic text
-            // field would only repeat each binding below the page. Font rows
-            // stay standard rows: the Fonts and Scale page (S4-17) only hands
-            // them the family list (SetSettingsFontFamilies), so a family pick
-            // keeps provenance, Clear override, reset and the window's undo.
+            // Keyboard owns its keychord rows and Layout owns its two controls;
+            // generic rows would repeat those controls below the custom page.
+            // Font rows stay standard rows so edits retain row provenance and undo.
             const auto ownedByPage = [&](const std::string& name)
             {
                 const CVarDescInfo* desc = st.model.Desc(name);
-                return desc && RowWidgetFor(*desc) == RowWidget::KeyChord;
+                return (desc && RowWidgetFor(*desc) == RowWidget::KeyChord) ||
+                       (node->path == "Layout" &&
+                        (name == "editor.layout.default" || name == "editor.layout.openPanelsAtStart"));
             };
             if (custom && std::any_of(node->cvars.begin(), node->cvars.end(), ownedByPage))
             {

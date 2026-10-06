@@ -6,11 +6,11 @@ namespace Arcane::Editor
              .flags = Arcane::CVarFlags::Archive, .audience = Arcane::Audience::Editor,
              .scope = Arcane::SettingScope::PreferencesMachine, .apply = Arcane::ApplyMode::Restart,
              .help = "The named layout a project opens with the first time (empty = the factory layout). Layouts are files in the Layouts folder.",
-             .displayName = "Default layout", .keywords = "layout dock panels workspace");
+             .displayName = "Default layout", .keywords = "layout dock panels workspace", .categoryPath = "Layout");
 
     ARC_CVAR(cvar_layoutOpenPanelsAtStart, "editor.layout.openPanelsAtStart", std::string, std::string("*"),
              .flags = Arcane::CVarFlags::Archive, .audience = Arcane::Audience::Editor,
              .scope = Arcane::SettingScope::PreferencesMachine, .apply = Arcane::ApplyMode::Restart,
              .help = "Panels shown on a fresh or reset layout: * for all, or a comma list of panel names (Outliner, Inspector, Asset Browser, Asset Graph, Asset Status, Problems, Console).",
-             .displayName = "Panels at start", .keywords = "layout panels windows visible open");
+             .displayName = "Panels at start", .keywords = "layout panels windows visible open", .categoryPath = "Layout");
 }
