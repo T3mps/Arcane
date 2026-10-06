@@ -93,7 +93,9 @@ namespace Arcane::Editor
     // S6-31: the rest of editor.gizmo.* -- the pick tolerances, shape and
     // shade literals Gizmo.cpp held (passed to Arcane::Gizmo as a GizmoTuning,
     // MakeGizmoTuning), and the tool / mode / space a session starts in
-    // (NextWorld: read once at editor boot).
+    // (NextWorld: applied at editor boot and again on every windowed project
+    // switch -- ApplyGizmoSessionDefaults -- exactly like the camera's
+    // editor.camera.default* through ApplyFreshPose).
     struct EditorGizmoSettings
     {
         float size = 1.0f;           // Range 0.1..10: a zero or negative scale is refused
@@ -130,6 +132,31 @@ namespace Arcane::Editor
     [[nodiscard]] Arcane::GizmoTuning ToGizmoTuning(const EditorGizmoSettings& s) noexcept;
     [[nodiscard]] Arcane::GizmoTuning MakeGizmoTuning();
     [[nodiscard]] Arcane::GizmoSnap   MakeGizmoSnap(bool enabled);
+
+    // The editor's gizmo session state: the transform mode, its space, and
+    // whether the transform tool (rather than Select) is active.
+    struct GizmoSessionState
+    {
+        Arcane::GizmoMode  mode    = Arcane::GizmoMode::Translate;
+        Arcane::GizmoSpace space   = Arcane::GizmoSpace::World;
+        bool               enabled = false;   // false = the Select tool
+    };
+
+    // editor.gizmo.default* (NextWorld) -> the state a session starts in:
+    // pure (ToGizmoSessionState) and from the published snapshot
+    // (ApplyGizmoSessionDefaults). The editor calls the latter at boot
+    // (StageEditorShell, beside ApplyFreshPose) and on a windowed project
+    // switch (ViewportSettingsClearAll, beside ApplyFreshPose), so the
+    // incoming project's Pref-P values take effect without a restart.
+    [[nodiscard]] GizmoSessionState ToGizmoSessionState(const EditorGizmoSettings& s) noexcept;
+    void ApplyGizmoSessionDefaults(GizmoSessionState& state);
+
+    // --tool: "select" turns the transform tool off; "rotate" / "scale" pick
+    // that mode; any other non-empty spelling HostConfig accepted means
+    // translate; "" (absent) = no seed. Applied after the defaults (boot:
+    // StageFinalize; switch: ViewportSettingsClearAll), so the flag beats
+    // editor.gizmo.default* exactly as --view-mode beats the persisted camera.
+    void ApplyGizmoToolSeed(std::string_view flag, GizmoSessionState& state) noexcept;
 
     // The preference lines of an old [EditorViewport][Camera] block, captured
     // by ViewportSettings::ReadIniLine (validated exactly as before) and not

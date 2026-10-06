@@ -211,6 +211,30 @@ namespace Arcane::Editor
         return snap;
     }
 
+    GizmoSessionState ToGizmoSessionState(const EditorGizmoSettings& s) noexcept
+    {
+        GizmoSessionState state;
+        state.mode    = s.defaultMode;
+        state.space   = s.defaultSpace;
+        state.enabled = s.defaultTool;
+        return state;
+    }
+
+    void ApplyGizmoSessionDefaults(GizmoSessionState& state)
+    {
+        state = ToGizmoSessionState(Arcane::Settings<EditorGizmoSettings>());
+    }
+
+    void ApplyGizmoToolSeed(std::string_view flag, GizmoSessionState& state) noexcept
+    {
+        if (flag.empty()) return;
+        if (flag == "select") { state.enabled = false; return; }
+        state.enabled = true;
+        state.mode    = flag == "rotate" ? GizmoMode::Rotate
+                      : flag == "scale"  ? GizmoMode::Scale
+                                         : GizmoMode::Translate;
+    }
+
     std::size_t ImportLegacyViewportPrefs(CVarRegistry& reg, const LegacyViewportPrefs& p)
     {
         std::size_t n = 0;

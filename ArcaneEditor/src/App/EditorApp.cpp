@@ -245,6 +245,29 @@ namespace Arcane::Editor
         self->m_legacyViewport        = {};
         self->m_cameraRestoredFromIni = false;
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
+        // editor.gizmo.default* (NextWorld, Pref-P): the incoming project's
+        // starting tool / mode / space, then --tool on top as at boot.
+        // RetargetLayoutIni runs after OnProjectOpened, so the snapshot
+        // already carries the incoming project's User rung.
+        self->ApplyGizmoSessionDefaults();
+        self->ApplyGizmoToolSeed();
+    }
+
+    void EditorApp::ApplyGizmoSessionDefaults()
+    {
+        Arcane::Editor::GizmoSessionState state;
+        Arcane::Editor::ApplyGizmoSessionDefaults(state);
+        m_gizmoMode    = state.mode;
+        m_gizmoSpace   = state.space;
+        m_gizmoEnabled = state.enabled;
+    }
+
+    void EditorApp::ApplyGizmoToolSeed()
+    {
+        Arcane::Editor::GizmoSessionState state{ m_gizmoMode, m_gizmoSpace, m_gizmoEnabled };
+        Arcane::Editor::ApplyGizmoToolSeed(m_config.tool, state);
+        m_gizmoMode    = state.mode;
+        m_gizmoEnabled = state.enabled;
     }
 
     void EditorApp::RegisterViewportSettings()
@@ -555,13 +578,9 @@ namespace Arcane::Editor
         // the handler below lets a saved [EditorViewport] block restore one.
         Arcane::Editor::ApplyFreshPose(m_camera);
         // editor.gizmo.default* (NextWorld): the tool, mode and space this
-        // session starts in. Session state from here on (W/E/R, the toolbar).
-        {
-            const Arcane::Editor::EditorGizmoSettings& gizmo = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>();
-            m_gizmoMode    = gizmo.defaultMode;
-            m_gizmoSpace   = gizmo.defaultSpace;
-            m_gizmoEnabled = gizmo.defaultTool;
-        }
+        // session starts in. Session state from here on (W/E/R, the toolbar)
+        // until a windowed project switch re-applies them (ViewportSettingsClearAll).
+        ApplyGizmoSessionDefaults();
         RegisterViewportSettings();
         // Settings arc S4: Preferences > Appearance > Theme.
         m_themePage.requestImport = [this]
@@ -1356,18 +1375,7 @@ namespace Arcane::Editor
             else
                 m_assetModel.Select(*guid);           // the asset edge routes it next frame, like a click
         }
-        if (!m_config.tool.empty())
-        {
-            if (m_config.tool == "select")
-                m_gizmoEnabled = false;
-            else
-            {
-                m_gizmoEnabled = true;
-                m_gizmoMode = m_config.tool == "rotate" ? Arcane::GizmoMode::Rotate
-                            : m_config.tool == "scale"  ? Arcane::GizmoMode::Scale
-                                                        : Arcane::GizmoMode::Translate;
-            }
-        }
+        ApplyGizmoToolSeed();   // the flag beats editor.gizmo.default* (StageEditorShell)
         // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
         // hang report from THIS boot must land under THIS project's own
         // Saved/Diagnostics, not the exe-relative default a project-less

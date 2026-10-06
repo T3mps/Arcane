@@ -100,6 +100,53 @@ TEST_CASE("sweep: MakeGizmoSnap and MakeGizmoTuning read the published editor.gi
     CHECK(Editor::MakeGizmoTuning().pickRadiusPx == 8.0f);
 }
 
+// Fix round 1: editor.gizmo.default* are NextWorld Pref-P settings, so the
+// editor re-applies them on a windowed project switch (ViewportSettingsClearAll,
+// beside ApplyFreshPose) as well as at boot. Both sites call this one helper;
+// the switch itself (an ImGui ClearIniSettings inside EditorApp) has no
+// ArcaneTests seam, so the helper's contract is what is pinned here: it reads
+// the CURRENT snapshot (an incoming project's rung), not a boot-time copy.
+TEST_CASE("sweep: editor.gizmo.default* -> the session start, re-read from the snapshot, --tool on top", "[sweep][gizmo]")
+{
+    using Editor::GizmoSessionState;
+    const GizmoSessionState def = Editor::ToGizmoSessionState(Editor::EditorGizmoSettings{});
+    CHECK(def.mode == GizmoMode::Translate); CHECK(def.space == GizmoSpace::World); CHECK_FALSE(def.enabled);
+
+    Editor::EditorGizmoSettings g;
+    g.defaultMode = GizmoMode::Rotate; g.defaultSpace = GizmoSpace::Local; g.defaultTool = true;
+    const GizmoSessionState custom = Editor::ToGizmoSessionState(g);
+    CHECK(custom.mode == GizmoMode::Rotate); CHECK(custom.space == GizmoSpace::Local); CHECK(custom.enabled);
+
+    // A session the user drove away from the defaults (W/E/R, the toolbar) ...
+    GizmoSessionState live{ GizmoMode::Rotate, GizmoSpace::World, false };
+    // ... then a project switch whose incoming project holds other defaults.
+    CVarRegistry& reg = CVarRegistry::Get();
+    reg.Set(reg.Find("editor.gizmo.defaultMode"), CVarValue::Enum(2), SetBy::Code);    // Scale
+    reg.Set(reg.Find("editor.gizmo.defaultSpace"), CVarValue::Enum(1), SetBy::Code);   // Local
+    reg.Set(reg.Find("editor.gizmo.defaultTool"), CVarValue::Bool(true), SetBy::Code);
+    reg.PublishImmediate();
+    Editor::ApplyGizmoSessionDefaults(live);
+    CHECK(live.mode == GizmoMode::Scale); CHECK(live.space == GizmoSpace::Local); CHECK(live.enabled);
+
+    // Switching back to a project at the defaults re-applies those too.
+    reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
+    Editor::ApplyGizmoSessionDefaults(live);
+    CHECK(live.mode == GizmoMode::Translate); CHECK(live.space == GizmoSpace::World); CHECK_FALSE(live.enabled);
+
+    // --tool beats the defaults; "" is no seed; the space is never the flag's.
+    GizmoSessionState seeded{ GizmoMode::Scale, GizmoSpace::Local, true };
+    Editor::ApplyGizmoToolSeed("", seeded);
+    CHECK(seeded.mode == GizmoMode::Scale); CHECK(seeded.space == GizmoSpace::Local); CHECK(seeded.enabled);
+    Editor::ApplyGizmoToolSeed("select", seeded);
+    CHECK_FALSE(seeded.enabled); CHECK(seeded.mode == GizmoMode::Scale);
+    Editor::ApplyGizmoToolSeed("rotate", seeded);
+    CHECK(seeded.enabled); CHECK(seeded.mode == GizmoMode::Rotate); CHECK(seeded.space == GizmoSpace::Local);
+    Editor::ApplyGizmoToolSeed("move", seeded);
+    CHECK(seeded.enabled); CHECK(seeded.mode == GizmoMode::Translate);
+    Editor::ApplyGizmoToolSeed("scale", seeded);
+    CHECK(seeded.enabled); CHECK(seeded.mode == GizmoMode::Scale);
+}
+
 namespace
 {
     // The 2D view: 800x600 at 100 px/m, the pivot at pixel (400,300); the X

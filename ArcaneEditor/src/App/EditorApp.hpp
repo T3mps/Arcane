@@ -980,6 +980,17 @@ namespace Arcane::Editor
         static void  ViewportSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterViewportSettings();
 
+        // The gizmo session's start (settings S6-31): ApplyGizmoSessionDefaults
+        // writes editor.gizmo.defaultMode / defaultSpace / defaultTool
+        // (NextWorld) to m_gizmoMode / m_gizmoSpace / m_gizmoEnabled;
+        // ApplyGizmoToolSeed then lays the --tool flag on top (the flag beats
+        // the defaults). Boot: the defaults in StageEditorShell, the seed in
+        // StageFinalize after the boot scene. A windowed project switch: both,
+        // in ViewportSettingsClearAll beside ApplyFreshPose, so the incoming
+        // project's Pref-P defaults apply without an editor restart.
+        void ApplyGizmoSessionDefaults();
+        void ApplyGizmoToolSeed();
+
         // ImGuiSettingsHandler callbacks for m_panelVis ("[EditorPanels]
         // [Visibility]", one name-keyed line per hideable panel), mirroring
         // the PlayMode handler above. Registered at the same Init site.
@@ -1162,7 +1173,8 @@ namespace Arcane::Editor
         // space (Unreal parity) -- EditorApp converts through Edit::WorldMatrix on
         // read and Edit::ParentWorldMatrix's inverse on write-back. Mode, space
         // and tool start from editor.gizmo.defaultMode / defaultSpace /
-        // defaultTool (NextWorld), read once at boot (settings S6-31).
+        // defaultTool (NextWorld), applied at boot and on every windowed
+        // project switch (ApplyGizmoSessionDefaults, settings S6-31).
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
         bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)
