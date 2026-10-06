@@ -172,6 +172,11 @@ namespace Arcane::Editor
         TheHost().archive.Flush(&WriteRung);
     }
 
+    void NoteSettingEdited(SetBy rung, const std::string& name)
+    {
+        TheHost().archive.MarkDirty(rung, name, Now());
+    }
+
     void SettingsWorldCreated()
     {
         TheHost().tracker.WorldCreated(CVarRegistry::Get());

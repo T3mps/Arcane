@@ -1,15 +1,22 @@
 // Settings arc S4 (spec s7.2): the shortcuts page -- rows, search, listen/
 // cancel/clear, reserved refusal, red conflicts on every row, type flip, reset.
 #include <catch2/catch_test_macros.hpp>
+#include "Helpers/TestEnvironment.hpp"
 #include "Input/EditorActionTable.hpp"
 #include "Input/EditorActions.hpp"
+#include "Settings/SettingsApply.hpp"
 #include "Settings/SettingsModel.hpp"
 #include "Settings/ShortcutsPage.hpp"
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Input/KeyLayout.hpp>
+#include <Json.hpp>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
+#include <iterator>
 
 using namespace Arcane::Editor;
 namespace Keys = Arcane::Keys;
@@ -137,4 +144,75 @@ TEST_CASE("Shortcuts page: Preferences > Keyboard holds the page and the editor.
     REQUIRE(keyboard != nullptr);
     CHECK(std::find(keyboard->cvars.begin(), keyboard->cvars.end(), "editor.keys.edit.undo") != keyboard->cvars.end());
     CHECK(m.Find("Editor/Keys") == nullptr);
+}
+
+TEST_CASE("Shortcuts page: Reset All survives a restart -- the archive takes the saved binding out of editor.json", "[shortcuts][settings-ui]")
+{
+    Arcane::Test::TempDir dir("shortcuts-reset-all");
+    const std::filesystem::path file = dir.path / "editor.json";
+    const auto boot = [&](Rig& r)   // Runtime: the EditorUser layer from <EditorUserDir>/Config
+    {
+        (void)Arcane::ApplyCVarDirectory(r.reg, dir.path, Arcane::SetBy::EditorUser, "editor-user");
+        r.reg.Publish();
+        r.actions.RefreshBindings();
+    };
+    const auto exitWrite = [&](Rig& r) { Arcane::WriteCVarArchive(r.reg, dir.path, Arcane::SetBy::EditorUser); };
+
+    {   // Session 1: edit.copy -> F (conflicting with Frame Selection); the exit-time archive saves it.
+        Rig r;
+        REQUIRE(SetActionChord(r.actions, "edit.copy", *ParseKeyChord("F")));
+        exitWrite(r);
+        REQUIRE(std::filesystem::exists(file));
+    }
+    {   // Session 2: the binding came back from the file; Reset All, the debounced archive, then exit.
+        Rig r;
+        boot(r);
+        REQUIRE(FormatKeyChord(*r.actions.ChordOf("edit.copy")) == "F");
+        REQUIRE(r.Row(BuildShortcutRows(r.actions, ""), "edit.copy").conflict);
+        SettingsArchiveQueue archive;
+        ResetAllShortcuts(r.actions, [&](const std::string& cvar) { archive.MarkDirty(Arcane::SetBy::EditorUser, cvar, 0.0); });
+        CHECK(archive.Dirty());
+        CHECK(archive.Flush([&](Arcane::SetBy rung, const std::vector<std::string>& names)
+        {
+            return Arcane::WriteCVarRungArchive(r.reg, rung, dir.path, names);
+        }));
+        exitWrite(r);
+    }
+    if (std::filesystem::exists(file))
+    {
+        std::ifstream in(file, std::ios::binary);
+        const std::string text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+        INFO(text);
+        const auto doc = nlohmann::json::parse(text, nullptr, false);
+        REQUIRE_FALSE(doc.is_discarded());
+        CHECK_FALSE(doc.contains("keys.edit.copy"));
+        CHECK_FALSE(doc.contains("keys"));
+    }
+    {   // Session 3: the defaults, and no conflict.
+        Rig r;
+        boot(r);
+        CHECK(FormatKeyChord(*r.actions.ChordOf("edit.copy")) == "Ctrl+C");
+        CHECK_FALSE(r.reg.RungValue("editor.keys.edit.copy", Arcane::SetBy::EditorUser).has_value());
+        for (const ShortcutRow& row : BuildShortcutRows(r.actions, "")) { INFO(row.id); CHECK_FALSE(row.conflict); CHECK(row.isDefault); }
+    }
+}
+
+TEST_CASE("Shortcuts page: every page write reports its cvar to the archive sink", "[shortcuts][settings-ui]")
+{
+    Rig r;
+    std::vector<std::string> heard;
+    const ShortcutWriteSink sink = [&](const std::string& cvar) { heard.push_back(cvar); };
+    REQUIRE(SetActionChord(r.actions, "edit.undo", *ParseKeyChord("Ctrl+K"), sink));
+    REQUIRE(FlipKeyType(r.actions, "editor.camera.flyForward", sink));
+    CHECK((heard == std::vector<std::string>{ "editor.keys.edit.undo", "editor.keys.editor.camera.flyForward" }));
+    heard.clear();
+    r.page.listeningId = "edit.redo";
+    r.actions.SetListening(true);
+    r.Frame({});
+    r.Frame({ Keys::kScanBackspace });
+    CHECK(FeedListen(r.actions, r.page, sink) == ListenOutcome::Cleared);
+    CHECK((heard == std::vector<std::string>{ "editor.keys.edit.redo" }));
+    heard.clear();
+    ResetAllShortcuts(r.actions, sink);
+    CHECK(heard.size() == kEditorActionTable.size());
 }

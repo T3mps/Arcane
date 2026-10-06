@@ -55,6 +55,11 @@ namespace Arcane::Editor
     [[nodiscard]] bool SettingsHostArchivePending();         // dirty rungs waiting for debounce / flush
     void TickSettingsHost();                                 // once per frame: the debounced write
     void FlushSettingsArchives();                            // editor exit
+    // A custom page changed `name` at `rung` itself (CVarRegistry::Set /
+    // ClearRung, outside the row verbs): queue it for the debounced archive
+    // write, which also REMOVES the key when the rung no longer holds a value
+    // (the exit-time WriteCVarArchive only ever adds keys).
+    void NoteSettingEdited(SetBy rung, const std::string& name);
     void SettingsWorldCreated();                             // Play started / scene opened or new: NextWorld baselines
     [[nodiscard]] bool SettingsWindowFocused();              // a settings window had focus last frame
     void SelectSettingsCategory(SettingsWindowKind kind, std::string path);

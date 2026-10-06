@@ -206,7 +206,8 @@ namespace Arcane::Editor
                                     .memo = st.memo, .sink = sink, .textDrafts = st.textDrafts, .assetRefs = env.assetRefs,
                                     .browsePath = env.browsePath, .projectOpen = env.projectOpen };
             st.last.page = Page::Rows;
-            if (env.drawPage && HasPage(env, node->path))
+            const bool custom = env.drawPage && HasPage(env, node->path);
+            if (custom)
             {
                 st.last.page = Page::Custom;
                 t_pageRow = &ctx;
@@ -215,7 +216,23 @@ namespace Arcane::Editor
                 t_pageRow = nullptr;
                 t_pageGrid = nullptr;
             }
-            DrawRows(ctx, st, *node, visible);
+            // A custom page owns its node's keychord rows (Preferences >
+            // Keyboard: the chord-listener table, S4-14); the generic text
+            // field would only repeat each binding below the page.
+            const auto ownedByPage = [&](const std::string& name)
+            {
+                const CVarDescInfo* desc = st.model.Desc(name);
+                return desc && RowWidgetFor(*desc) == RowWidget::KeyChord;
+            };
+            if (custom && std::any_of(node->cvars.begin(), node->cvars.end(), ownedByPage))
+            {
+                std::unordered_set<std::string> rows = visible;
+                for (const std::string& name : node->cvars)
+                    if (ownedByPage(name)) rows.erase(name);
+                DrawRows(ctx, st, *node, rows);
+            }
+            else
+                DrawRows(ctx, st, *node, visible);
             st.last.tooltip = ctx.lastTooltip;
             st.last.contextMenu = ctx.lastContextMenu;
         }
