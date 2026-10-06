@@ -2,6 +2,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/PreferenceScope.hpp>
 #include <Arcane/Config/Config.hpp>
+#include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Assets/Assets.hpp>
@@ -13,6 +14,7 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -415,6 +417,142 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     Arcane::Runtime reader(Arcane::Test::Process());            // a host that never sets the folder
     CHECK(reader.EditorUserConfigDir().empty());
     CHECK_FALSE(reader.SaveUserCVars());
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    // S2-H item 2: two cvars a project's rungs set -- one from <project>/Config
+    // (the Project rung) and one archived from <project>/Saved/Config (User).
+    struct OwnershipProbe
+    {
+        Arcane::CVarHandle knob, pref;
+        OwnershipProbe()
+        {
+            Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+            Arcane::CVarDesc d;
+            d.type = Arcane::CVarType::Int32;
+            d.defaultValue = Arcane::CVarValue::Int32(1);
+            d.help = "S2-H project ownership probe.";
+            d.module = "s2h-ownership-test";
+            d.name = "s2hown.knob";
+            knob = cvars.Register(d);
+            d.name = "s2hown.pref";
+            d.flags = Arcane::CVarFlags::Archive;
+            pref = cvars.Register(d);
+        }
+        ~OwnershipProbe()
+        {
+            Arcane::CVarRegistry::Get().UnregisterModule("s2h-ownership-test");
+            Arcane::CVarRegistry::Get().Publish();
+        }
+        OwnershipProbe(const OwnershipProbe&) = delete;
+        OwnershipProbe& operator=(const OwnershipProbe&) = delete;
+        static std::int32_t Value(Arcane::CVarHandle h) { return Arcane::CVarRegistry::Get().Get(h)->AsInt32(); }
+        static std::size_t ProjectOwnedRecords(const char* name)
+        {
+            const auto explained = Arcane::CVarRegistry::Get().Explain(name);
+            return static_cast<std::size_t>(std::count_if(explained->history.begin(), explained->history.end(),
+                [](const Arcane::CVarHistoryRecord& h) {
+                    return h.by == Arcane::SetBy::User || h.by == Arcane::SetBy::Project || h.by == Arcane::SetBy::Plugin;
+                }));
+        }
+    };
+}
+
+// S2-H item 2: the project cvar rungs live on the process-global registry, so
+// they belong to ONE Runtime -- the one that configured Paths for its project.
+// A second Runtime may open (and close, or die with) a project of its own
+// without layering over, or releasing, the owner's rungs.
+TEST_CASE("Runtime: a second Runtime's project neither layers over nor releases the owning Runtime's cvar rungs",
+          "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("s2h_owner");
+    REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
+    REQUIRE(Arcane::Project::Create(dir / "Q", "Queue").has_value());
+    WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
+    WriteFile(dir / "P" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 7 })");
+    WriteFile(dir / "Q" / "Config" / "s2hown.json", R"({ "knob": 9 })");
+    WriteFile(dir / "Q" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 8 })");
+    const OwnershipProbe probe;
+    REQUIRE_FALSE(probe.knob.IsStale());
+    REQUIRE_FALSE(probe.pref.IsStale());
+
+    Arcane::Runtime a(Arcane::Test::Process());
+    REQUIRE(a.OpenProject(dir / "P"));
+    REQUIRE(OwnershipProbe::Value(probe.knob) == 5);
+    REQUIRE(OwnershipProbe::Value(probe.pref) == 7);
+    {
+        Arcane::Runtime b(Arcane::Test::Process());
+        REQUIRE(b.OpenProject(dir / "Q"));
+        CHECK(OwnershipProbe::Value(probe.knob) == 5);              // Q did not layer over P
+        CHECK(OwnershipProbe::Value(probe.pref) == 7);
+        b.CloseProject();
+        CHECK(OwnershipProbe::Value(probe.knob) == 5);              // ...and Q's close released nothing of P's
+        CHECK(OwnershipProbe::Value(probe.pref) == 7);
+    }
+    {
+        Arcane::Runtime c(Arcane::Test::Process());
+        REQUIRE(c.OpenProject(dir / "Q"));
+    }                                                                // destroyed with Q open
+    CHECK(OwnershipProbe::Value(probe.knob) == 5);
+    CHECK(OwnershipProbe::Value(probe.pref) == 7);
+    CHECK(Arcane::Paths::Get(Arcane::Paths::Location::ProjectDir).lexically_normal() ==
+          a.CurrentProject()->Root().lexically_normal());            // Paths still follows the owner
+
+    a.CloseProject();                                                // the owner releases...
+    CHECK(OwnershipProbe::Value(probe.knob) == 1);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.knob") == 0);
+    Arcane::Runtime d(Arcane::Test::Process());                      // ...and the next project's Runtime owns
+    REQUIRE(d.OpenProject(dir / "Q"));
+    CHECK(OwnershipProbe::Value(probe.knob) == 9);
+    CHECK(OwnershipProbe::Value(probe.pref) == 8);
+    d.CloseProject();
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// S2-H item 2: ~Runtime goes through CloseProject's release path -- the User
+// layer archived when this host archives, then the User, Project and Plugin
+// rungs dropped -- so the next Runtime starts from the files alone.
+TEST_CASE("Runtime: a Runtime destroyed with its project open releases the project's cvar rungs as CloseProject does",
+          "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("s2h_dtor");
+    REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
+    WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
+    const OwnershipProbe probe;
+    REQUIRE_FALSE(probe.knob.IsStale());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        REQUIRE(rt.OpenProject(dir / "P"));
+        REQUIRE(cvars.Set(probe.pref, Arcane::CVarValue::Int32(3), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+        cvars.Publish();
+        REQUIRE(OwnershipProbe::Value(probe.knob) == 5);
+        REQUIRE(OwnershipProbe::Value(probe.pref) == 3);
+    }                                                                // destroyed with P open
+    CHECK(OwnershipProbe::Value(probe.knob) == 1);
+    CHECK(OwnershipProbe::Value(probe.pref) == 1);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.knob") == 0);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.pref") == 0);
+    CHECK(Arcane::Paths::Get(Arcane::Paths::Location::ProjectDir).empty());
+    {
+        std::ifstream in(dir / "P" / "Saved" / "Config" / "s2hown.json", std::ios::binary);
+        const auto doc = nlohmann::json::parse(in, nullptr, false);
+        REQUIRE(doc.is_object());
+        CHECK(doc.value("pref", 0) == 3);                            // archived on the way out
+    }
+
+    Arcane::Runtime next(Arcane::Test::Process());
+    REQUIRE(next.OpenProject(dir / "P"));
+    CHECK(OwnershipProbe::Value(probe.knob) == 5);
+    CHECK(OwnershipProbe::Value(probe.pref) == 3);                   // read back from the archive
+    next.CloseProject();
 
     std::error_code ec;
     fs::remove_all(dir, ec);

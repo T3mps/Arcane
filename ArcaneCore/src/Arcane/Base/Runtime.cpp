@@ -123,9 +123,23 @@ namespace Arcane
             return ResolveWorkerThreads(Settings<JobsSettings>());
         }
 
-        // Paths follows the OPEN project (settings spec s11.0). It is cleared
-        // only when the project being dropped is still the configured one,
-        // because another Runtime may own the current project.
+        // The process's project state -- Arcane::Paths' project (settings spec
+        // s11.0) and the User, Project and Plugin cvar rungs on the
+        // process-wide registry (s4.5) -- follows ONE Runtime (S2-H). The
+        // first Runtime to open a project owns it until it closes it or dies;
+        // a project switch keeps the owner. Every host opens its project in
+        // exactly one Runtime today (the editor's, ProjectBoot's, ServerApp's;
+        // the embedded server and PIE worlds never open one), so this only
+        // decides what a second Runtime that does open one may touch: nothing
+        // process-wide. Its OpenProject neither configures Paths nor layers
+        // its rungs over the owner's, and its CloseProject or destruction
+        // releases nothing of the owner's. The Impl address is the identity.
+        // Main thread only, like OpenProject.
+        const void* g_projectOwner = nullptr;
+
+        // Paths follows the OWNER's project. It is cleared only when the
+        // project being dropped is still the configured one (a host may have
+        // re-pointed Paths itself).
         void ForgetProjectPaths(const std::filesystem::path& root)
         {
             Paths::Config paths = Paths::Current();
@@ -185,6 +199,13 @@ namespace Arcane
         ProcessContext*                             process = nullptr;
         NetMode                                     mode    = NetMode::Standalone;
         INetDriver*                                 net     = nullptr;
+
+        // True when THIS Runtime's open project is the one the process's
+        // Paths and project cvar rungs follow (g_projectOwner, S2-H).
+        bool OwnsProject() const noexcept { return project && g_projectOwner == this; }
+        // CloseProject's and ~Runtime's one release path; defined below,
+        // beside the rung helpers it calls.
+        void ReleaseProject();
 
         // `sharedComponents` non-null = a SECONDARY world built on the PRIMARY's
         // ComponentRegistry (spec s4; Runtime.hpp's three-argument ctor explains
@@ -322,8 +343,12 @@ namespace Arcane
     }
     Runtime::~Runtime()   // do not reset the module slot: a later Runtime re-installs
     {
-        if (m_impl && m_impl->project)
-            ForgetProjectPaths(m_impl->project->Root());
+        // Dying with its project open releases it exactly as CloseProject
+        // does (S2-H): the User layer archived when this host archives, the
+        // project rungs dropped and published, Paths' project forgotten -- so
+        // the next Runtime starts from the files alone.
+        if (m_impl)
+            m_impl->ReleaseProject();
     }
 
     ProcessContext& Runtime::Process()      noexcept { return *m_impl->process; }
@@ -603,11 +628,23 @@ namespace Arcane
         }
     }
 
+    void Runtime::Impl::ReleaseProject()
+    {
+        if (!OwnsProject()) return;   // a second Runtime's project: nothing process-wide is its to release
+        ReleaseProjectCVarLayers(*project, archiveUserCVars, editorUserConfigDir);
+        CVarRegistry::Get().Publish();
+        ForgetProjectPaths(project->Root());
+        g_projectOwner = nullptr;
+    }
+
     LayerSources Runtime::CVarLayerSources() const
     {
         LayerSources layers;
         layers.dirs.push_back(CVarLayerDir{ SetBy::EngineConfig, m_impl->engineConfigDir, "engine-config" });
-        if (m_impl->project)
+        // The project's rungs only for the Runtime that owns the process's
+        // project state (S2-H): a second Runtime's module reload must not
+        // layer its project over the owner's.
+        if (m_impl->OwnsProject())
         {
             for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
                 layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
@@ -617,7 +654,7 @@ namespace Arcane
         // project (the start page is themed too). Empty = no EditorUser rung.
         if (!m_impl->editorUserConfigDir.empty())
             layers.dirs.push_back(CVarLayerDir{ SetBy::EditorUser, m_impl->editorUserConfigDir, "editor-user" });
-        if (m_impl->project)
+        if (m_impl->OwnsProject())
             layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         layers.commandLine = m_impl->cvarCommandLine;
         layers.commandLineContext = m_impl->cvarCommandLineContext;
@@ -658,15 +695,26 @@ namespace Arcane
                      proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
         }
 
+        // Only the owner of the process's project state configures Paths and
+        // layers the cvar rungs (g_projectOwner, S2-H): the first Runtime to
+        // open a project, and the same Runtime on a switch.
+        const bool owner = g_projectOwner == nullptr || g_projectOwner == m_impl.get();
+        if (!owner)
+            ARC_WARN("Runtime::OpenProject: '{}' opens in a second Runtime while another Runtime's project "
+                     "owns Paths and the project cvar rungs -- they stay the owner's", proj->Manifest().name);
         // A switch: the outgoing project's settings are archived (if this host
         // archives) and its rungs dropped before the incoming one layers.
-        if (m_impl->project)
+        if (m_impl->OwnsProject())
             ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars, m_impl->editorUserConfigDir);
         m_impl->project = std::move(*proj);
-        Paths::Config paths = Paths::Current();
-        paths.projectDir = m_impl->project->Root();
-        paths.gameName = m_impl->project->Manifest().name;
-        Paths::Configure(paths);
+        if (owner)
+        {
+            g_projectOwner = m_impl.get();
+            Paths::Config paths = Paths::Current();
+            paths.projectDir = m_impl->project->Root();
+            paths.gameName = m_impl->project->Manifest().name;
+            Paths::Configure(paths);
+        }
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
         // GUID loads resolve through THIS project's registry (Assets AssetId seam).
@@ -682,6 +730,8 @@ namespace Arcane
         for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
             m_impl->config.LayerDir(pluginRoot / "Config");
         m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir(*m_impl->project));
+        if (!owner)
+            return true;
         // The cvar rungs come from the ONE source a module that loads later is
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
@@ -729,12 +779,8 @@ namespace Arcane
         // The cvar User, Project and Plugin rungs leave with the project (the
         // User layer archived first when this host archives); the engine,
         // EditorUser, command-line, code and console rungs are untouched.
-        if (m_impl->project)
-        {
-            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars, m_impl->editorUserConfigDir);
-            CVarRegistry::Get().Publish();
-            ForgetProjectPaths(m_impl->project->Root());
-        }
+        // Only the owner releases (ReleaseProject, shared with ~Runtime).
+        m_impl->ReleaseProject();
         m_impl->project.reset();
         m_impl->assets->SetContentRoot({});
         m_impl->assets->SetAssetResolver({});
@@ -745,7 +791,10 @@ namespace Arcane
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
         // The project's config rows go away with it; only the engine rung remains
         // (a shrinking set logs nothing: the log is a delta against the last logged set).
-        PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()), CVarConfigLog::Now);
+        // The set is process-wide: while another Runtime owns a project, its
+        // rows stay.
+        if (g_projectOwner == nullptr)
+            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()), CVarConfigLog::Now);
     }
 
     void Runtime::SetUserCVarArchiving(bool enabled) noexcept
@@ -776,7 +825,7 @@ namespace Arcane
         if (!m_impl->archiveUserCVars)
             return false;
         bool wrote = false;
-        if (m_impl->project)
+        if (m_impl->OwnsProject())   // the User rung holds the OWNER's project values (S2-H)
         {
             WriteCVarArchive(CVarRegistry::Get(), UserCVarDir(*m_impl->project));
             wrote = true;

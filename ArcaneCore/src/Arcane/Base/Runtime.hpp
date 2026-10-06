@@ -161,6 +161,13 @@ namespace Arcane
         IClientHooks*  ClientHooks() const noexcept;
 
         // --- project (Slice 1b) ---
+        // ONE Runtime owns the process's project state -- Arcane::Paths' project
+        // and the User/Project/Plugin cvar rungs on the process-wide registry
+        // (S2-H): the first to open a project, until it closes it or is
+        // destroyed (which releases it as CloseProject does). A second Runtime
+        // may open a project for its own assets and Config, but configures no
+        // Paths, layers no cvar rungs and releases nothing of the owner's.
+        //
         // Open a project folder or .arcproj: validate-then-commit. On success the
         // Project is adopted and the Assets facade's content root is set to the
         // project's game:// mount (root/Content); returns false and leaves ALL state
