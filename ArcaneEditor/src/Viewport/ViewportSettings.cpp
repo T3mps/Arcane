@@ -1,5 +1,9 @@
 #include "Viewport/ViewportSettings.hpp"
 
+#include "Settings/EditorViewportSettings.hpp"
+
+#include <Arcane/Config/Settings.hpp>
+
 #include <imgui.h>
 
 #include <cmath>
@@ -56,7 +60,8 @@ namespace Arcane::Editor
             float cx = 0, cy = 0, hh = 0;
             if (std::sscanf(line, "Ortho=%f %f %f%c", &cx, &cy, &hh, &trailing) != 3) return false;
             if (!Finite(cx) || !Finite(cy)) return false;
-            if (!InRange(hh, EditorCamera::kMinHalfHeight, EditorCamera::kMaxHalfHeight)) return false;
+            const EditorCameraSettings& camPrefs = Settings<EditorCameraSettings>();   // the camera's own clamps
+            if (!InRange(hh, camPrefs.orthoMinHalfHeight, camPrefs.orthoMaxHalfHeight)) return false;
             cam.ortho.center     = { cx, cy };
             cam.ortho.halfHeight = hh;
             return true;
@@ -81,7 +86,8 @@ namespace Arcane::Editor
             if (!Finite(px) || !Finite(py) || !Finite(pz) || !Finite(yaw)) return false;
             // Strictly inside the lock: +-90 exactly makes Right()/Up() NaN.
             if (!InRange(pitch, -kMaxPitchDeg, kMaxPitchDeg)) return false;
-            if (!InRange(dist, EditorCamera::kMinDistance, EditorCamera::kMaxDistance)) return false;
+            const EditorCameraSettings& camPrefs = Settings<EditorCameraSettings>();   // the camera's own clamps
+            if (!InRange(dist, camPrefs.minOrbitDistance, camPrefs.maxOrbitDistance)) return false;
             if (n == 7 && !InRange(fov, kMinFovYDeg, kMaxFovYDeg)) return false;
             cam.orbit.pivot    = { px, py, pz };
             cam.orbit.yawDeg   = yaw;

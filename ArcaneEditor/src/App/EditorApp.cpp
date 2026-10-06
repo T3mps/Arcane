@@ -240,6 +240,7 @@ namespace Arcane::Editor
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
         self->m_camera                = decltype(self->m_camera){};
+        Arcane::Editor::ApplyFreshPose(self->m_camera);   // editor.camera.default* (NextWorld)
         self->m_legacyViewport        = {};
         self->m_cameraRestoredFromIni = false;
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
@@ -549,6 +550,9 @@ namespace Arcane::Editor
         // source -- registered once, never closed, and kept across a project
         // switch's ReleaseAll (its history entries and pins still drop).
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
+        // editor.camera.default* (NextWorld): the boot camera's pose, before
+        // the handler below lets a saved [EditorViewport] block restore one.
+        Arcane::Editor::ApplyFreshPose(m_camera);
         RegisterViewportSettings();
         // Settings arc S4: Preferences > Appearance > Theme.
         m_themePage.requestImport = [this]

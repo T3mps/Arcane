@@ -45,10 +45,48 @@ namespace Arcane::Editor
         GridPlane gridPlane = GridPlane::XZ;
     };
 
+    // S6-30: the rest of editor.camera.* -- what EditorCamera's static
+    // constexpr block and literals were. EditorCamera's methods read the
+    // published snapshot once per call; Ortho2D / Orbit3D member defaults read
+    // EditorCameraSettings{} (the fresh-camera pose cvars reach a camera
+    // through ApplyFreshPose, NextWorld).
     struct EditorCameraSettings
     {
         float fovYDeg     = 60.0f;   // Range 1..179: the projection stays finite
         float speedScalar = 1.0f;    // Range 0.01..100: the wheel's clamp
+
+        // The fresh-camera pose (Dev, NextWorld): 5 m shows a 10 m slice in
+        // 2D; the 3/4 perspective view.
+        float default2DHalfHeight = 5.0f;
+        float default3DYaw        = -30.0f;
+        float default3DPitch      = 30.0f;
+        float default3DDistance   = 10.0f;
+
+        // 2D zoom clamp in world half-height (UE's MIN_/MAX_ORTHOZOOM). Both
+        // ends are positive, so the pixels-per-metre the 2D ops divide by is
+        // never zero.
+        float orthoMinHalfHeight = 0.01f;
+        float orthoMaxHalfHeight = 1.0e6f;
+        float wheelZoomStep      = 1.12f;   // multiplicative zoom / dolly per wheel tick
+        float frameFill          = 0.9f;    // fraction of the viewport a framed AABB spans
+        float minOrbitDistance   = 0.05f;   // the eye can never reach the pivot
+        float maxOrbitDistance   = 1.0e5f;
+        float nearClip           = 0.05f;
+        float farClip            = 5000.0f;
+        float baseFlySpeed       = 5.0f;    // m/s at speedScalar 1 and distance scale 1
+
+        // UE's bUseDistanceScaledCameraSpeed shape: fly / pan speed x
+        // clamp(distance / refDistance, speedFloor, speedCap). ON here, with
+        // a floor (ours, not UE's) so a camera parked on its pivot still moves.
+        bool  distanceScaledSpeed = true;
+        float refDistance         = 10.0f;
+        float speedFloor          = 0.1f;
+        float speedCap            = 1000.0f;
+
+        float lookSensitivity  = 0.2f;      // deg per px (UE's MouseSensitivity)
+        float orbitSensitivity = 0.2f;
+        float boostMultiplier  = 2.0f;      // Shift while flying
+        float speedWheelStep   = 1.1f;      // speedScalar x / per wheel tick while flying
     };
 
     struct EditorGizmoSettings

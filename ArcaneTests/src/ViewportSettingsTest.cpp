@@ -77,14 +77,14 @@ TEST_CASE("A malformed or out-of-range ini line leaves the defaults", "[editor][
     // read refuses it (and everything past the clamps) rather than loading it.
     CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Orbit=0 0 0 0 90 10 60", cam, legacy));
     CHECK(cam.orbit.pitchDeg == Approx(30.0f));
-    CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Orbit=0 0 0 0 0 0 60", cam, legacy));   // distance below kMinDistance
+    CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Orbit=0 0 0 0 0 0 60", cam, legacy));   // distance below editor.camera.minOrbitDistance
     CHECK(cam.orbit.distance == Approx(10.0f));
     CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Orbit=0 0 0 0 10 10 0", cam, legacy));  // legacy fov below kMinFovYDeg
     CHECK(cam.orbit.pitchDeg == Approx(30.0f));
     CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Orbit=0 0 0 0 10 10x", cam, legacy));   // junk after six values
     CHECK(cam.orbit.pitchDeg == Approx(30.0f));
     CHECK_FALSE(legacy.fovYDeg);
-    CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Ortho=0 0 0", cam, legacy));            // halfHeight below kMinHalfHeight
+    CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Ortho=0 0 0", cam, legacy));            // halfHeight below editor.camera.orthoMinHalfHeight
     CHECK(cam.ortho.halfHeight == Approx(5.0f));
     CHECK_FALSE(Arcane::Editor::ViewportSettings::ReadIniLine("Ortho=inf 0 1", cam, legacy));
     CHECK(cam.ortho.center.x == Approx(0.0f));
