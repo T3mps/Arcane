@@ -476,7 +476,10 @@ namespace Arcane
         struct Interaction
         {
             enum class Kind { Press, Hold, Tap } kind = Kind::Press;
-            float duration = 0.0f;   // Hold/Tap only; ParseInteraction sets it
+            // Hold/Tap only. Unset = undecorated token: EvalAction resolves it
+            // from the per-Update InputSettings read (input.holdSeconds /
+            // input.tapSeconds, Live). An explicit duration= overrides.
+            std::optional<float> duration;
         };
 
         Interaction ParseInteraction(const std::string& token)
@@ -490,7 +493,6 @@ namespace Arcane
             if (name == "hold")
             {
                 it.kind = Interaction::Kind::Hold;
-                it.duration = Settings<InputSettings>().holdSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
@@ -501,7 +503,6 @@ namespace Arcane
             else if (name == "tap")
             {
                 it.kind = Interaction::Kind::Tap;
-                it.duration = Settings<InputSettings>().tapSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
@@ -1086,7 +1087,8 @@ namespace Arcane
                 ++m_frame;
 
                 // ONE settings read per evaluation, passed down to every action.
-                const float threshold = Settings<InputSettings>().pressThreshold;
+                const InputSettings& input = Settings<InputSettings>();
+                const float threshold = input.pressThreshold;
                 const InputDeadzoneSettings& deadzone = Settings<InputDeadzoneSettings>();
 
                 bool kbmActive = false;
@@ -1102,7 +1104,7 @@ namespace Arcane
                     const bool visible = MapVisible(&m);
                     for (auto& [aName, a] : m.actions)
                     {
-                        EvalAction(a, dt, snap, threshold, deadzone);
+                        EvalAction(a, dt, snap, input, deadzone);
                         if (a.id.IsValid() && visible)
                         {
                             if (a.started) QueueTransition(a.id, InputActionPhase::Started);
@@ -1357,9 +1359,12 @@ namespace Arcane
             // Evaluate one action (oracle evalAction).
             // Implements composite resolution, GamepadStick vector path,
             // best-vector / best-scalar split, and Vector2 action reporting.
-            void EvalAction(Action& a, double dt, const InputSnapshot& snap, float threshold,
+            // pressThreshold, holdSeconds and tapSeconds all come from the ONE
+            // InputSettings read Update makes.
+            void EvalAction(Action& a, double dt, const InputSnapshot& snap, const InputSettings& input,
                             const InputDeadzoneSettings& deadzone)
             {
+                const float threshold = input.pressThreshold;
                 bool isVec = (a.controlType == "Vector2");
                 float bestScalar = 0.0f;
                 float bestScalarMag = 0.0f;
@@ -1515,7 +1520,8 @@ namespace Arcane
                 const Interaction& it = a.interaction;
                 if (it.kind == Interaction::Kind::Hold)
                 {
-                    if (a.curDown && !a._perfFired && a.heldTime >= (double)it.duration)
+                    const float duration = it.duration.value_or(input.holdSeconds);
+                    if (a.curDown && !a._perfFired && a.heldTime >= (double)duration)
                     {
                         a.performed  = true;
                         a._perfFired = true;
@@ -1527,11 +1533,12 @@ namespace Arcane
                 }
                 else if (it.kind == Interaction::Kind::Tap)
                 {
-                    if (a.curDown && a.heldTime > (double)it.duration)
+                    const float duration = it.duration.value_or(input.tapSeconds);
+                    if (a.curDown && a.heldTime > (double)duration)
                         a._tapValid = false;
                     if (falling)
                     {
-                        if (a._tapValid && a.heldTime <= (double)it.duration)
+                        if (a._tapValid && a.heldTime <= (double)duration)
                             a.performed = true;
                         else
                             a.canceled = true;
