@@ -1256,6 +1256,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
         "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
         "%{wks.location}/ArcaneEditor/src/Input/EditorActionTable.cpp",
         "%{wks.location}/ArcaneEditor/src/Viewport/ViewportActions.cpp",

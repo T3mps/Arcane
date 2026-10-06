@@ -443,6 +443,7 @@ namespace Arcane::Editor
         cd.scope = Arcane::SettingScope::PreferencesMachine;
         cd.apply = Arcane::ApplyMode::Live;
         cd.order = static_cast<std::int32_t>(s->index);
+        cd.categoryPath = "Keyboard";   // Preferences > Keyboard: the shortcuts page's node (S4-14)
         s->handle = m_registry.Register(cd);
         if (s->handle.IsStale()) s->handle = m_registry.Find(s->cvarName);   // a module reload kept it
 

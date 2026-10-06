@@ -552,6 +552,9 @@ namespace Arcane::Editor
         };
         Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Appearance/Theme", "Theme",
                                              &Arcane::Editor::DrawThemePage, &m_themePage);
+        // Settings arc S4: Preferences > Keyboard (the editor.keys.* cvars live on this node).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Keyboard", "Keyboard Shortcuts",
+                                             &Arcane::Editor::DrawShortcutsPage, &m_shortcutsPage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now

@@ -46,6 +46,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Settings/AppearanceApplier.hpp"
 #include "Settings/ProjectSettingsPage.hpp"
+#include "Settings/ShortcutsPage.hpp"
 #include "Settings/ThemePage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
@@ -1136,6 +1137,7 @@ namespace Arcane::Editor
         // style, compared per frame against what was last applied.
         Arcane::Editor::AppearanceApplier m_appearance;
         Arcane::Editor::ThemePageState m_themePage;
+        Arcane::Editor::ShortcutsPageState m_shortcutsPage;   // Preferences > Keyboard
 
         // Mouse edge tracking (architecture pass sec 6). Keyboard chords now
         // read EditorActions (settings S4); only the camera/gizmo buttons remain.

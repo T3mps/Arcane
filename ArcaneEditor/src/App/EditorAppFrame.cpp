@@ -2445,6 +2445,7 @@ namespace Arcane::Editor
         Arcane::Editor::ConsumeSettingsPathPick(m_settingsPathCvar, m_dialogs.settingsPath);
         // Always called: a closed window is a no-op that flushes its archive on its close frame.
         Arcane::Editor::DrawEditorPreferences(&m_preferencesOpen);
+        Arcane::Editor::EndListenIfPageHidden(Arcane::Editor::EditorActions::Get(), m_shortcutsPage, ImGui::GetFrameCount());
         Arcane::Editor::DrawProjectSettings(&m_projectSettingsOpen);
 
         // --open-asset: keep re-requesting focus for the scripted document
