@@ -635,6 +635,4 @@ namespace Arcane::Editor
         return DisplayKeyChord(self->chord) + " is also bound to " + JoinAnd(named) + ". Where they overlap, "
              + winner->displayName + " (" + ActionContextName(winner->desc.context) + ") fires.";
     }
-
-    void RegisterEditorActions(EditorActions&) {}
 }
