@@ -59,7 +59,7 @@ namespace
             REQUIRE(best); return best;
         }
         ImVec2 RowCenter(int i) const   // Rows()[i] under the frozen 24 px header
-        { const ImGuiWindow* w = RowsWindow(); return ImVec2(w->Pos.x + 60, w->Pos.y + kTableRowHeight * (i + 1.5f)); }
+        { const ImGuiWindow* w = RowsWindow(); return ImVec2(w->Pos.x + 60, w->Pos.y + TableRowHeight() * (i + 1.5f)); }
         // A left-button drag from `a` to `b` in eight mouse steps, one frame each.
         void Drag(ImVec2 a, ImVec2 b)
         {
@@ -170,7 +170,7 @@ TEST_CASE("Asset Browser box selection: a drag from the void or from a row selec
     BrowserHarness h("arcane_browser_boxselect_test", 4); (void)h.Frame(true);   // 5 rows: void below them
     const auto& rows = h.model.Rows(); REQUIRE(rows.size() == 5);
     const ImGuiWindow* w = BrowserHarness::RowsWindow();
-    const ImVec2 voidPt(w->Pos.x + 60, w->Pos.y + kTableRowHeight * 6.0f + 12.0f);   // under the last row's bottom (6 x 24 px)
+    const ImVec2 voidPt(w->Pos.x + 60, w->Pos.y + TableRowHeight() * 6.0f + 12.0f);   // under the last row's bottom (6 x 24 px)
     REQUIRE(w->InnerRect.Contains(voidPt));
     SECTION("from the void, upward over rows 2..4")
     {

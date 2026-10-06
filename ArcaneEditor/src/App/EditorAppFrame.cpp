@@ -26,6 +26,7 @@
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
 #include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
+#include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
 #include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
 #include "Settings/LayoutPage.hpp"
 #include "Panels/LayoutLibrary.hpp"       // ParseOpenPanels
@@ -694,11 +695,13 @@ namespace Arcane::Editor
             Arcane::Editor::EditorFontRequest req;
             req.uiFace   = Arcane::Editor::ResolveEditorFontFamily(families, fonts->fontFamily, "Inter");
             req.monoFace = Arcane::Editor::ResolveEditorFontFamily(families, fonts->monoFontFamily, "JetBrains Mono");
+            req.altFace  = Arcane::Editor::ResolveEditorFontFamily(families, fonts->altFontFamily, "Roboto");
             req.sizePx   = fonts->fontSize;
             Arcane::Editor::ReinstallEditorFonts(req);
             style.FontSizeBase = fonts->fontSize;
         }
         m_appearance.UpdateTheme(Arcane::Settings<Arcane::Editor::EditorThemeSettings>(), style);
+        m_appearance.UpdateStyle(Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>(), style);   // before UpdateUi: recomposes at the applied scale
         m_appearance.UpdateUi(Arcane::Settings<Arcane::Editor::EditorUiSettings>(),
                               m_gpu ? m_gpu->Win().DisplayScale() : 1.0f, style);
         ImGui::SetCurrentContext(prev);
@@ -2920,17 +2923,17 @@ namespace Arcane::Editor
                 std::chrono::system_clock::now().time_since_epoch()).count());
             const Arcane::Editor::StartPageModel page = Arcane::Editor::BuildStartPage(m_recents.projects, now);
             const float avail = ImGui::GetContentRegionAvail().x;
-            const float width = std::min(640.0f, avail);
+            const float width = std::min(Ui::Px(640.0f), avail);   // start page column (settings S6-28: px follow editor.ui.scale)
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - width) * 0.5f));
             ImGui::BeginChild("##startcol", ImVec2(width, 0.0f));
             // ---- section 1: heading + actions ---------------------------------
-            ImGui::Dummy(ImVec2(0.0f, 24.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(24.0f)));
             ImGui::TextUnformatted("No project open");
             ImGui::Spacing();
             if (ImGui::Button(ICON_LC_FOLDER_OPEN " Open Project...")) req.openProject = true;
             ImGui::SameLine();
             if (ImGui::Button(ICON_LC_FOLDER " Open Folder...")) req.openProjectFolder = true;
-            ImGui::Dummy(ImVec2(0.0f, 16.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(16.0f)));
             // ---- (crash-window plan 3's "Recover" section slots in HERE) ------
             // ---- section 2: recent projects -------------------------------------
             ImGui::TextDisabled("Recent projects");

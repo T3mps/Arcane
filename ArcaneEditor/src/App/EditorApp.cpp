@@ -52,6 +52,7 @@
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
+#include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
@@ -528,8 +529,11 @@ namespace Arcane::Editor
         // Before this call the editor ran on ImGui's stock dark style, whose whole
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
-        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
-        m_appearance.Init(ImGui::GetStyle());   // the boot look IS the defaults: the first per-frame update applies nothing
+        // The style metrics are the published editor.ui block (settings S6-28):
+        // the early config rungs have run, so a saved value lands at boot.
+        const Arcane::Editor::EditorUiStyleSettings& uiStyle = Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>();
+        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle(), uiStyle);
+        m_appearance.Init(ImGui::GetStyle(), uiStyle);   // the boot look IS the defaults: the first per-frame update applies nothing
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later

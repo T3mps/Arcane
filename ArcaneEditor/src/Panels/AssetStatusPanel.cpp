@@ -209,27 +209,27 @@ namespace Arcane::Editor
             // technique RowWithThumb uses, so none of it competes with the hit
             // target above for ImGui's "last item".
             float x = innerMin.x;
-            const float thumbY = innerMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+            const float thumbY = innerMin.y + (rowH - AssetRowThumbSize()) * 0.5f;
             const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             if (thumb != 0)
             {
                 dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(x, thumbY),
-                            ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                            ImVec2(x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
             }
             else
             {
                 // The same well-plus-centred-kind-icon fallback the preview
                 // pane's own thumb uses, at the row's 18px size.
                 dl->AddRectFilled(ImVec2(x, thumbY),
-                                  ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                  ImVec2(x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()),
                                   ImGui::GetColorU32(Theme::kWell));
                 const char* kindIcon = KindIcon(e.kind);
                 const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
-                dl->AddText(ImVec2(x + (kAssetRowThumbSize - ks.x) * 0.5f,
-                                   thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                dl->AddText(ImVec2(x + (AssetRowThumbSize() - ks.x) * 0.5f,
+                                   thumbY + (AssetRowThumbSize() - ks.y) * 0.5f),
                            ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
             }
-            x += kAssetRowThumbSize + style.ItemInnerSpacing.x;
+            x += AssetRowThumbSize() + style.ItemInnerSpacing.x;
 
             // State glyph: amber triangle for refused, dim clock for queued.
             // Amber never carries the meaning ALONE -- the glyph shape, the
@@ -445,7 +445,7 @@ namespace Arcane::Editor
                 // card's inner content edge instead of its outer border.
                 const float  pad       = wellMin.x - cardMin.x;
                 const float  wellWidth = std::max(1.0f, cardWidth - pad * 2.0f);
-                const float  rowH      = kTableRowHeight;
+                const float  rowH      = TableRowHeight();
                 dl->AddRectFilled(wellMin,
                                   ImVec2(wellMin.x + wellWidth, wellMin.y + rowH * static_cast<float>(unused.size())),
                                   ImGui::GetColorU32(Theme::kWell));
@@ -462,22 +462,22 @@ namespace Arcane::Editor
 
                     // Thumb: same 18px well-plus-kind-icon fallback
                     // DrawAttentionCard's own line 1 uses.
-                    const float thumbY = rowMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+                    const float thumbY = rowMin.y + (rowH - AssetRowThumbSize()) * 0.5f;
                     const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(guid) : 0;
                     if (thumb != 0)
                     {
                         dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(rowMin.x, thumbY),
-                                    ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                                    ImVec2(rowMin.x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
                     }
                     else
                     {
                         dl->AddRectFilled(ImVec2(rowMin.x, thumbY),
-                                          ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                          ImVec2(rowMin.x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()),
                                           ImGui::GetColorU32(Theme::kWell));
                         const char* kindIcon = KindIcon(e->kind);
                         const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
-                        dl->AddText(ImVec2(rowMin.x + (kAssetRowThumbSize - ks.x) * 0.5f,
-                                           thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                        dl->AddText(ImVec2(rowMin.x + (AssetRowThumbSize() - ks.x) * 0.5f,
+                                           thumbY + (AssetRowThumbSize() - ks.y) * 0.5f),
                                    ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
                     }
 
@@ -488,7 +488,7 @@ namespace Arcane::Editor
                     // Name, chip-style -- AssetPill, vertically centered the
                     // same way DrawAttentionCard positions its own trailing
                     // pill (rowH - PillLineHeight(), halved).
-                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kAssetRowThumbSize + style.ItemInnerSpacing.x,
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + AssetRowThumbSize() + style.ItemInnerSpacing.x,
                                                      rowMin.y + (rowH - PillLineHeight()) * 0.5f));
                     AssetPill(e->fileName.c_str());
 

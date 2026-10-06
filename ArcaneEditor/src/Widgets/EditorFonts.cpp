@@ -131,7 +131,8 @@ namespace Arcane::Editor
     EditorFontRequest DefaultEditorFontRequest(const std::filesystem::path& dir)
     {
         return { dir / "data" / "font" / "inter" / "static" / "Inter_18pt-Regular.ttf",
-                 dir / "data" / "font" / "jetbrainsmono" / "JetBrainsMono-Regular.ttf", 16.0f };
+                 dir / "data" / "font" / "jetbrainsmono" / "JetBrainsMono-Regular.ttf", 16.0f,
+                 dir / "data" / "font" / "roboto" / "static" / "Roboto-Regular.ttf" };
     }
 
     std::vector<EditorFontFamily> ListEditorFontFamilies(const std::filesystem::path& exeDir,
@@ -194,10 +195,9 @@ namespace Arcane::Editor
         // The UI face FIRST -> becomes Fonts[0], the implicit editor default
         // (ProggyClean is never added). The default is Inter's 18pt optical cut,
         // its UI/body design (24/28pt are for display sizes); static weights,
-        // since ImGui's rasterizer ignores variable-font axes. Roboto loads next
-        // as a pushable alternate face.
-        const std::string roboto =
-            (dir / "data" / "font" / "roboto" / "static" / "Roboto-Regular.ttf").string();
+        // since ImGui's rasterizer ignores variable-font axes. The alternate
+        // face (editor.ui.altFontFamily, Roboto by default) loads next as a
+        // pushable face.
 
         // Brand wordmark face (Aldo the Apache) -- a display face used ONLY for the "Arcane"
         // toolbar wordmark, rendered via PushFont(brand, size) at a display size. No lucide
@@ -208,7 +208,8 @@ namespace Arcane::Editor
         const EditorFontRequest bundled = DefaultEditorFontRequest(dir);
         g_fonts = EditorFontSet{};
         g_fonts.interRegular = AddFaceOrBundled(io, r.uiFace, bundled.uiFace, lucide, r.sizePx);
-        g_fonts.roboto       = AddFaceWithIcons(io, roboto, lucide, r.sizePx);
+        g_fonts.roboto       = AddFaceOrBundled(io, r.altFace.empty() ? bundled.altFace : r.altFace,
+                                                bundled.altFace, lucide, r.sizePx);
         // Mono AFTER Roboto (Fonts[0] stays the UI face), merged with lucide at the UI
         // size so ICON_LC_* work in mono rows; AddFaceWithIcons' GlyphExcludeRanges
         // keeps any PUA glyph of its own out of the icon block, as for Inter.

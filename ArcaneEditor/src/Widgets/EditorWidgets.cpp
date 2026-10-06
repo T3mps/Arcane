@@ -5,6 +5,7 @@
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
 #include "Widgets/UiMetrics.hpp"     // Ui::Px / FontPx -- the hard pixel sizes follow editor.ui.*
+#include "Widgets/UiScale.hpp"       // UiStyle: editor.ui.tableRowHeight / assetRowThumbPx (settings S6-28)
 
 #include <Arcane/Config/Settings.hpp>   // Settings<EditorThemeInputPillSettings>()
 
@@ -27,6 +28,11 @@
 
 namespace Arcane::Editor
 {
+    // Whole pixels, so a row edge stays pixel-integral at any scale (the
+    // Browser's hairlines rely on it); exact at the defaults.
+    float AssetRowThumbSize() { return std::floor(Ui::TextPx(UiStyle().assetRowThumbPx)); }
+    float TableRowHeight()    { return std::floor(Ui::TextPx(UiStyle().tableRowHeight)); }
+
     namespace
     {
         int StringResizeCallback(ImGuiInputTextCallbackData* data)
@@ -832,11 +838,11 @@ namespace Arcane::Editor
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        const float thumbY = rowMin.y + (rowHeight - kAssetRowThumbSize) * 0.5f;
+        const float thumbY = rowMin.y + (rowHeight - AssetRowThumbSize()) * 0.5f;
         if (thumb != 0)
         {
             dl->AddImage(thumb, ImVec2(rowMin.x + indent, thumbY),
-                        ImVec2(rowMin.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                        ImVec2(rowMin.x + indent + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
         }
         else
         {
@@ -844,7 +850,7 @@ namespace Arcane::Editor
             // cell, under whichever font is active (every editor face
             // carries the merged icon range, EditorFonts.cpp).
             const ImVec2 iconSize = ImGui::CalcTextSize(iconUtf8);
-            dl->AddText(ImVec2(rowMin.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+            dl->AddText(ImVec2(rowMin.x + indent + (AssetRowThumbSize() - iconSize.x) * 0.5f,
                               rowMin.y + (rowHeight - iconSize.y) * 0.5f),
                        ImGui::GetColorU32(ImGuiCol_Text), iconUtf8);
         }
@@ -853,7 +859,7 @@ namespace Arcane::Editor
         // there is no per-glyph icon-rect to diverge from any more (nothing
         // above is a real item), so both the thumb and icon-fallback paths
         // already agree on where the cell ends.
-        const float nameX = rowMin.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+        const float nameX = rowMin.x + indent + AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
         const ImVec2 nameSize = ImGui::CalcTextSize(name);
         dl->AddText(ImVec2(nameX, rowMin.y + (rowHeight - nameSize.y) * 0.5f),
                    ImGui::GetColorU32(ImGuiCol_Text), name);

@@ -9,9 +9,21 @@
 
 namespace Arcane::Editor
 {
-    void AppearanceApplier::Init(const ImGuiStyle& bootStyle)
+    namespace
+    {
+        bool SameStyleSettings(const EditorUiStyleSettings& a, const EditorUiStyleSettings& b) noexcept
+        {
+            return a.frameBorderSize == b.frameBorderSize && a.dockNodeCloseButton == b.dockNodeCloseButton
+                && a.tabOverlineSize == b.tabOverlineSize && a.disabledAlpha == b.disabledAlpha
+                && a.tabRounding == b.tabRounding;   // the five ApplyEditorStyleMetrics writes; density is read per draw
+        }
+    }
+
+    void AppearanceApplier::Init(const ImGuiStyle& bootStyle, const EditorUiStyleSettings& bootUiStyle)
     {
         m_baseMetrics = bootStyle;
+        m_appliedStyle = bootUiStyle;
+        m_styleApplies = 0;
         m_appliedTheme = EditorThemeSettings{};
         m_themeApplies = 0;
         m_appliedUi = EditorUiSettings{};
@@ -33,11 +45,22 @@ namespace Arcane::Editor
         return true;
     }
 
+    bool AppearanceApplier::UpdateStyle(const EditorUiStyleSettings& uiStyle, ImGuiStyle& style)
+    {
+        if (SameStyleSettings(uiStyle, m_appliedStyle))
+            return false;
+        ApplyEditorStyleMetrics(m_baseMetrics, uiStyle);   // the unscaled base every recompose starts from
+        Recompose(style, m_appliedScale);
+        m_appliedStyle = uiStyle;
+        ++m_styleApplies;
+        return true;
+    }
+
     bool AppearanceApplier::UpdateUi(const EditorUiSettings& ui, float displayScale, ImGuiStyle& style)
     {
         bool changed = false;
         if (ui.fontFamily != m_appliedUi.fontFamily || ui.monoFontFamily != m_appliedUi.monoFontFamily
-            || ui.fontSize != m_appliedUi.fontSize)
+            || ui.altFontFamily != m_appliedUi.altFontFamily || ui.fontSize != m_appliedUi.fontSize)
         {
             m_pendingFonts = ui;
             changed = true;

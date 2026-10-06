@@ -536,7 +536,7 @@ namespace Arcane::Reporter
     {
         if (dpiScale < 1.0f) dpiScale = 1.0f;
         ImGuiStyle fresh;
-        Arcane::Editor::ApplyEditorTheme(fresh);
+        Arcane::Editor::ApplyEditorTheme(fresh, Arcane::Editor::EditorUiStyleSettings{});   // no editor registry here: the defaults
         if (dpiScale != 1.0f) fresh.ScaleAllSizes(dpiScale);
         fresh.FontSizeBase = 16.0f;     // the editor's UI size (InstallEditorFonts)
         fresh.FontScaleDpi = dpiScale;  // sizes above were scaled; text follows

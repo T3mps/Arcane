@@ -76,10 +76,10 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityLog/Entry/Kind -- the recency-line case's own ring
-#include "Panels/AssetPanelCommon.hpp"    // AssetPanelActions/Services, kAssetPanelBottomBarHeight, kTableRowHeight
+#include "Panels/AssetPanelCommon.hpp"    // AssetPanelActions/Services, kAssetPanelBottomBarHeight, TableRowHeight()
 #include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel
-#include "Widgets/EditorWidgets.hpp"      // StatTile/MeterBar/BeginCardFrame/EndCardFrame, kAssetRowThumbSize
+#include "Widgets/EditorWidgets.hpp"      // StatTile/MeterBar/BeginCardFrame/EndCardFrame, AssetRowThumbSize()
 #include "Widgets/UiMetrics.hpp"          // Ui::Px -- the card padding mirror
 
 #include <Arcane/Assets/Assets.hpp>
@@ -462,7 +462,7 @@ TEST_CASE("Status panel Reveal control raises revealInBrowse only while Browse i
             const float wellWidth = avail - cardPaddingMirror;
             const float revealW = ImGui::CalcTextSize("Reveal").x + style.FramePadding.x * 2.0f;
             const float revealX = rowMin.x + wellWidth - revealW;
-            const float revealY = rowMin.y + (kTableRowHeight - frameH) * 0.5f;
+            const float revealY = rowMin.y + (TableRowHeight() - frameH) * 0.5f;
             clickPoint = ImVec2(revealX + revealW * 0.5f, revealY + frameH * 0.5f);
         }
         return 0ull;

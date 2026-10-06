@@ -39,11 +39,15 @@
 // user sees. Hex comments are the 8-bit spelling of the float triple.
 //
 // Header-only and free of every editor type on purpose: ApplyEditorTheme takes
-// the ImGuiStyle to fill, so any Arcane ImGui consumer (a game's debug HUD, a
-// future tool host) can adopt the same look with one call. Callers today:
+// the ImGuiStyle to fill (and the plain editor.ui style struct,
+// Settings/EditorUiStyleSettings.hpp, which includes nothing), so any Arcane
+// ImGui consumer (a game's debug HUD, a future tool host) can adopt the same
+// look with one call. Callers today:
 // the editor, and ArcaneCrashReporter (ReporterWindow.cpp), which reaches
 // this header through a bare `ArcaneEditor/src` include path -- a shared
 // header-only home for it is owed (crash-window spec s13).
+
+#include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
 
 #include <imgui.h>
 #include <cmath>
@@ -335,24 +339,24 @@ namespace Arcane::Editor
         c[ImGuiCol_ModalWindowDimBg]       = Theme::kModalDim;
     }
 
-    // The full look: the colours above, then the six metrics. Boot and the
-    // crash reporter call this; a live re-theme calls ApplyEditorThemeColors
-    // alone so the UI scale's metrics (S4-15) are never reset. WindowPadding
-    // (4,4) is the user-requested inset (controller 2026-10-05) and stays.
-    inline void ApplyEditorTheme(ImGuiStyle& style)
+    // The five style metrics that are editor.ui.* settings (settings S6-28,
+    // inventory Fonts/Style; EditorUiStyleSettings): the values come from `ui`,
+    // never literals. ApplyEditorTheme writes them at boot; AppearanceApplier::
+    // UpdateStyle re-writes them into its unscaled base on a Live change (the UI
+    // scale is applied on top). The notes below say why each default differs
+    // from ImGui's stock.
+    inline void ApplyEditorStyleMetrics(ImGuiStyle& style, const EditorUiStyleSettings& ui)
     {
-        ApplyEditorThemeColors(style);
-
         // The first of SIX metrics this theme changes (FrameBorderSize,
         // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha,
-        // TabRounding, WindowPadding). Default
+        // TabRounding -- the five settings -- and WindowPadding). Default
         // is 0 (imgui.cpp:1533): with no frame border a near-black well on a dark
         // panel has only its fill to separate it, and small fields lose their
         // edge entirely. One pixel of kBorder (darker than both) is the inset
         // line the reference shows around every field. Everything else --
         // FrameRounding 0, GrabRounding 0, the frame/item paddings -- is left at ImGui's
         // default, which is already the near-square shape the reference wants.
-        style.FrameBorderSize = 1.0f;
+        style.FrameBorderSize = ui.frameBorderSize;
 
         // The second: kill the dock node's OWN close button (the X at the
         // right end of every tab bar, which closes the node's visible window).
@@ -360,7 +364,7 @@ namespace Arcane::Editor
         // per-tab at imgui.cpp:19661, independent of this) -- two X's per
         // panel read as clutter, and the corner one closes whichever tab
         // happens to be selected, which is never what the user aimed at.
-        style.DockingNodeHasCloseButton = false;
+        style.DockingNodeHasCloseButton = ui.dockNodeCloseButton;
 
         // The third: a 2 px tab overline (ImGui's default is 1, imgui.cpp:1555).
         // The overline is drawn over the tab fill (imgui_widgets.cpp:10883-10898),
@@ -368,22 +372,35 @@ namespace Arcane::Editor
         // unchanged, so this line carries focus. ScaleAllSizes DPI-scales it
         // (imgui.cpp:1638) -- the crash reporter, which applies this theme
         // (ReporterWindow.cpp:535-536), gets the same line.
-        style.TabBarOverlineSize = 2.0f;
+        style.TabBarOverlineSize = ui.tabOverlineSize;
 
         // The fourth: DisabledAlpha 0.6 -> 0.45 (s6.6). At ImGui's stock 0.6
         // (imgui.cpp:1519) disabled kText composites to #929292, BRIGHTER than
         // kTextDim -- raising dim text alone would make the two indistinguishable.
         // At 0.45 disabled kText is #757575 (3.62:1), a step under dim text.
-        style.DisabledAlpha = 0.45f;
+        style.DisabledAlpha = ui.disabledAlpha;
 
         // The fifth: TabRounding 5 -> 2 (user, 2026-10-02: "reduce the rounding
         // on tabs"). ImGui's stock radius (imgui.cpp:1548) rounds a 2 px accent
         // overline into a pill on short tabs; 2 px keeps a hint of a corner and
         // reads closer to the near-square frames. ScaleAllSizes DPI-scales it
         // (imgui.cpp:1631).
-        style.TabRounding = 2.0f;
+        style.TabRounding = ui.tabRounding;
+    }
 
-        // The sixth: WindowPadding 8 -> 4 (user, 2026-10-04: "less than it was,
+    // The full look: the colours above, the five metrics from `ui`, then
+    // WindowPadding. Boot passes the published editor.ui block; the crash
+    // reporter (no cvar registry) passes EditorUiStyleSettings{}; the default
+    // argument is the same defaults. A live re-theme calls
+    // ApplyEditorThemeColors alone so the UI scale's metrics (S4-15) are never
+    // reset. WindowPadding (4,4) is the user-requested inset (controller
+    // 2026-10-05) and stays a constant.
+    inline void ApplyEditorTheme(ImGuiStyle& style, const EditorUiStyleSettings& ui = EditorUiStyleSettings{})
+    {
+        ApplyEditorThemeColors(style);
+        ApplyEditorStyleMetrics(style, ui);
+
+        // The sixth metric, and the one that is not a setting: WindowPadding 8 -> 4 (user, 2026-10-04: "less than it was,
         // maybe 4px"). ImGui's stock (8,8) (imgui.cpp:1520) insets every panel's
         // content by a visible margin; Unreal's dock tab content area pads 0
         // (SDockTab ContentPadding, SDockTab.h:97) and each panel insets itself by

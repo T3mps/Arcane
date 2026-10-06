@@ -68,7 +68,7 @@
 // and the em dash when the canvas was never opened at all.
 //
 // BootSceneGuid, ScenesByName, DrawAssetPeekTooltip, PillWidth, OpenAssetRow,
-// DrawAssetMenuItems, SubkindPillText and kTableRowHeight are NOT here: all
+// DrawAssetMenuItems, SubkindPillText and TableRowHeight() are NOT here: all
 // are genuinely cross-panel (the Browser and/or Status panels call them too),
 // so their declarations live on AssetPanelCommon.hpp and -- as of Task 7,
 // which retired AssetsPanel.cpp where they used to sit -- their bodies live
@@ -890,7 +890,7 @@ namespace Arcane::Editor
         // it, so it sets the row.
         float GraphBodyRowHeight()
         {
-            return kAssetRowThumbSize;
+            return AssetRowThumbSize();
         }
 
         float GraphNodeHeight()
@@ -1065,17 +1065,17 @@ namespace Arcane::Editor
                 if (body.thumb != 0)
                 {
                     dl->AddImage(static_cast<ImTextureID>(body.thumb), ImVec2(x, rowTop),
-                                 ImVec2(x + kAssetRowThumbSize, rowTop + kAssetRowThumbSize));
+                                 ImVec2(x + AssetRowThumbSize(), rowTop + AssetRowThumbSize()));
                 }
                 else if (body.icon)
                 {
                     const ImVec2 iconSize = ImGui::CalcTextSize(body.icon);
-                    dl->AddText(ImVec2(x + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                    dl->AddText(ImVec2(x + (AssetRowThumbSize() - iconSize.x) * 0.5f,
                                        rowTop + (rowH - iconSize.y) * 0.5f),
                                 dimCol, body.icon);
                 }
                 if (body.thumb != 0 || body.icon)
-                    x += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+                    x += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
 
                 const float budgetEnd = origin.x + v.width - kGraphNodePadRight;
                 if (!body.pills.empty())
@@ -1168,8 +1168,10 @@ namespace Arcane::Editor
         // gaps, font size and the kChrome/kBorder/kTextDim tones -- moved to
         // Widgets/GraphLegend.hpp (T3-D1) when the shader graph grew a pin
         // legend in the same chrome; the swatches below stay this lens's own.
-        constexpr float kGraphLegendSwatchW    = 18.0f;
-        constexpr float kGraphLegendSwatchH    = 2.0f;
+        // The swatch scales with the legend box around it (Ui::Px, like
+        // GraphLegend.hpp's padding and gaps; settings S6-28): 18 x 2 px at scale 1.
+        float GraphLegendSwatchW() { return Ui::Px(18.0f); }
+        float GraphLegendSwatchH() { return Ui::Px(2.0f); }
         // The two swatch colours are theme cvars (settings S6-27):
         // editor.theme.assetGraph.legendEdge (#5c5c5c) / .legendUsedBy (#4a4a4a).
 
@@ -1190,7 +1192,7 @@ namespace Arcane::Editor
             {
                 if (i > 0)
                     contentW += GraphLegendEntryGap();
-                contentW += kGraphLegendSwatchW + GraphLegendSwatchGap() +
+                contentW += GraphLegendSwatchW() + GraphLegendSwatchGap() +
                             ImGui::CalcTextSize(entries[i].text).x;
             }
 
@@ -1214,7 +1216,7 @@ namespace Arcane::Editor
                     x += GraphLegendEntryGap();
                 const ImU32 swatch = ImGui::GetColorU32(entries[i].color);
                 x = std::floor(x);
-                const float y0 = std::floor(midY - kGraphLegendSwatchH * 0.5f);
+                const float y0 = std::floor(midY - GraphLegendSwatchH() * 0.5f);
                 if (entries[i].dashed)
                 {
                     // The same 6-on/5-off cell the in-flight wire uses, walked
@@ -1222,13 +1224,13 @@ namespace Arcane::Editor
                     // that wire, so it cannot pick its own pattern.
                     float cx = x;
                     bool ink = true;
-                    while (cx < x + kGraphLegendSwatchW)
+                    while (cx < x + GraphLegendSwatchW())
                     {
                         const float step = (std::min)(ink ? kGraphDashOnPx : kGraphDashOffPx,
-                                                      x + kGraphLegendSwatchW - cx);
+                                                      x + GraphLegendSwatchW() - cx);
                         if (ink)
                             dl->AddRectFilled(ImVec2(cx, y0),
-                                              ImVec2(cx + step, y0 + kGraphLegendSwatchH), swatch);
+                                              ImVec2(cx + step, y0 + GraphLegendSwatchH()), swatch);
                         cx += step;
                         ink = !ink;
                     }
@@ -1236,10 +1238,10 @@ namespace Arcane::Editor
                 else
                 {
                     dl->AddRectFilled(ImVec2(x, y0),
-                                      ImVec2(x + kGraphLegendSwatchW, y0 + kGraphLegendSwatchH),
+                                      ImVec2(x + GraphLegendSwatchW(), y0 + GraphLegendSwatchH()),
                                       swatch);
                 }
-                x += kGraphLegendSwatchW + GraphLegendSwatchGap();
+                x += GraphLegendSwatchW() + GraphLegendSwatchGap();
                 dl->AddText(ImVec2(x, midY - lineH * 0.5f), textCol, entries[i].text);
                 x += ImGui::CalcTextSize(entries[i].text).x;
             }
@@ -1633,7 +1635,7 @@ namespace Arcane::Editor
             }
             float wantBody = kGraphNodePadLeft + kGraphNodePadRight;
             if (body.thumb != 0 || body.icon)
-                wantBody += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+                wantBody += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
             if (!body.pills.empty())
             {
                 bool first = true;

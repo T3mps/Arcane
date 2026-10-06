@@ -50,7 +50,7 @@
 // and AssetStatusPanel.cpp do.
 //
 // kTooltipWidth/kTooltipThumbSize went to AssetPanelCommon.cpp with
-// DrawAssetPeekTooltip, their only reader. kRailWidth/kRailRowHeight/
+// DrawAssetPeekTooltip, their only reader. kRailWidth/RailRowHeight()/
 // kChildIndent/kGroupIndent live here in full: nothing outside this panel
 // ever read any of them.
 namespace Arcane::Editor
@@ -58,7 +58,9 @@ namespace Arcane::Editor
     namespace
     {
         constexpr float kRailWidth        = 180.0f;
-        constexpr float kRailRowHeight    = 26.0f;
+        // The rail's row pitch tracks text like the tables' (settings S6-28;
+        // the S4-16 follow-up): 26 px at scale 1 and font 16.
+        float RailRowHeight() { return Ui::TextPx(26.0f); }
         constexpr float kChildIndent      = 20.0f;
         // 2026-09-07 nested folder groups (spec s6/s11.2): 20px per nesting
         // depth, stacked with kChildIndent above rather than merged into it --
@@ -217,7 +219,7 @@ namespace Arcane::Editor
                     const ImVec2 rowMin = ImGui::GetCursorScreenPos();
                     const float rowWidth = ImGui::GetContentRegionAvail().x;
                     const AssetRowResult res = RowWithThumb("##rail", 0, icon, re.label.c_str(),
-                                                            selected, 0.0f, kRailRowHeight);
+                                                            selected, 0.0f, RailRowHeight());
                     if (res.clicked)
                     {
                         state.railKind = re.kind;
@@ -269,7 +271,7 @@ namespace Arcane::Editor
                     std::snprintf(countBuf, sizeof(countBuf), "%d", re.count);
                     const float countW = ImGui::CalcTextSize(countBuf).x;
                     const float padX = ImGui::GetStyle().FramePadding.x;
-                    const float rowCenterY = rowMin.y + kRailRowHeight * 0.5f;
+                    const float rowCenterY = rowMin.y + RailRowHeight() * 0.5f;
 
                     // Count anchors flush to the row's right edge ALWAYS --
                     // never shifted by whether the "+" exists or is
@@ -334,7 +336,7 @@ namespace Arcane::Editor
                     // returns) -- this is what SameLine() used to do for
                     // free when the trailing content was SameLine-chained;
                     // absolute positioning has to restate it explicitly.
-                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + kRailRowHeight));
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + RailRowHeight()));
 
                     ImGui::PopID();
                 }
@@ -382,7 +384,7 @@ namespace Arcane::Editor
             const bool clicked = ImGui::Selectable("##grouprow", false,
                                                    ImGuiSelectableFlags_SpanAllColumns |
                                                    ImGuiSelectableFlags_NoPadWithHalfSpacing,
-                                                   ImVec2(0.0f, kTableRowHeight));
+                                                   ImVec2(0.0f, TableRowHeight()));
             if (clicked)
             {
                 const bool newOpen = !open;
@@ -433,7 +435,7 @@ namespace Arcane::Editor
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const float padX = ImGui::GetStyle().FramePadding.x;
-            const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+            const float textY = rowMin.y + (TableRowHeight() - ImGui::GetTextLineHeight()) * 0.5f;
 
             // 2026-09-07 nested folder groups: the whole row (chevron, label,
             // count) shifts right by 20px per nesting depth (spec s6/s11.2).
@@ -490,7 +492,7 @@ namespace Arcane::Editor
         // Theme::kChrome) + drawlist text -- rather than ImGui's own
         // TableSetupColumn/TableHeadersRow mechanism, because that mechanism
         // computes its row height from CellPadding/font metrics, not the
-        // pinned kTableRowHeight every other row (and the clipper, and the
+        // pinned TableRowHeight() every other row (and the clipper, and the
         // scroll-position arithmetic in DrawTable) assumes exactly; this way
         // the header shares the identical 24px pitch with zero risk of it
         // drifting from the body rows it sits above. Static and
@@ -511,7 +513,7 @@ namespace Arcane::Editor
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const float rowWidth = ImGui::GetContentRegionAvail().x;
             const float padX = ImGui::GetStyle().FramePadding.x;
-            const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+            const float textY = rowMin.y + (TableRowHeight() - ImGui::GetTextLineHeight()) * 0.5f;
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddText(ImVec2(rowMin.x + padX, textY),
@@ -522,10 +524,10 @@ namespace Arcane::Editor
             // Theme::kSeparator IS that exact hex (AssetPill's own comment
             // makes the same mapping for its border), so no new token is
             // needed. Full row width, drawn at the row's own bottom edge
-            // (rowMin.y + kTableRowHeight is already pixel-integral -- same
+            // (rowMin.y + TableRowHeight() is already pixel-integral -- same
             // "no +0.5" convention DrawBottomBar's own hairline divider
             // uses just above this file, and it measures crisp there too).
-            const float lineY = rowMin.y + kTableRowHeight;
+            const float lineY = rowMin.y + TableRowHeight();
             dl->AddLine(ImVec2(rowMin.x, lineY), ImVec2(rowMin.x + rowWidth, lineY),
                        ImGui::GetColorU32(Theme::kSeparator));
         }
@@ -546,19 +548,19 @@ namespace Arcane::Editor
             st.renameDrawn = true; const ImVec2 at = ImGui::GetCursorScreenPos();
             {
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                const float thumbY = at.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                const float thumbY = at.y + (TableRowHeight() - AssetRowThumbSize()) * 0.5f;
                 if (thumbId != 0)
                     dl->AddImage(static_cast<ImTextureID>(thumbId), ImVec2(at.x + indent, thumbY),
-                                 ImVec2(at.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                                 ImVec2(at.x + indent + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
                 else
                 {
                     const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-                    dl->AddText(ImVec2(at.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
-                                       at.y + (kTableRowHeight - iconSize.y) * 0.5f),
+                    dl->AddText(ImVec2(at.x + indent + (AssetRowThumbSize() - iconSize.x) * 0.5f,
+                                       at.y + (TableRowHeight() - iconSize.y) * 0.5f),
                                 ImGui::GetColorU32(ImGuiCol_Text), icon);
                 }
             }
-            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
+            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + AssetRowThumbSize() + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
             const std::string ext = std::filesystem::path(e.fileName).extension().string();
             ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
             if (st.renameFocusPending) { ImGui::SetKeyboardFocusHere(); st.renameFocusPending = false; }
@@ -643,7 +645,7 @@ namespace Arcane::Editor
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
-                                                    e.fileName.c_str(), selected, indent, kTableRowHeight);
+                                                    e.fileName.c_str(), selected, indent, TableRowHeight());
             if (res.clicked)
                 state.msClicked = e.guid;   // T5 s7.9: the primary once DrawTable applies EndMultiSelect's requests
 
@@ -668,7 +670,7 @@ namespace Arcane::Editor
             {
                 ImGui::SetCursorScreenPos(ImVec2(rowMin.x + groupIndentPx, rowMin.y));
                 const std::string expId = "##exp_" + e.guid.ToString();
-                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, kTableRowHeight)))
+                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, TableRowHeight())))
                 {
                     const bool newOpen = !childrenOpen;
                     state.childrenOpen[e.guid] = newOpen;
@@ -678,7 +680,7 @@ namespace Arcane::Editor
                 const ImVec2 cs = ImGui::CalcTextSize(chevron);
                 ImGui::GetWindowDrawList()->AddText(
                     ImVec2(rowMin.x + groupIndentPx + (kChildIndent - cs.x) * 0.5f,
-                          rowMin.y + (kTableRowHeight - cs.y) * 0.5f),
+                          rowMin.y + (TableRowHeight() - cs.y) * 0.5f),
                     ImGui::GetColorU32(ImGuiCol_Text), chevron);
             }
 
@@ -713,9 +715,9 @@ namespace Arcane::Editor
                 const char* badge = refused ? ICON_LC_TRIANGLE_ALERT : ICON_LC_CLOCK;
                 ImGui::PushFont(GetEditorFonts().interRegular, kBadgeFontSize);
                 const ImVec2 badgeSize = ImGui::CalcTextSize(badge);
-                const float thumbY      = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
-                const float thumbRight  = rowMin.x + indent + kAssetRowThumbSize;
-                const float thumbBottom = thumbY + kAssetRowThumbSize;
+                const float thumbY      = rowMin.y + (TableRowHeight() - AssetRowThumbSize()) * 0.5f;
+                const float thumbRight  = rowMin.x + indent + AssetRowThumbSize();
+                const float thumbBottom = thumbY + AssetRowThumbSize();
                 const ImVec2 badgePos(thumbRight  - badgeSize.x - kBadgeMargin,
                                       thumbBottom - badgeSize.y - kBadgeMargin);
                 ImGui::GetWindowDrawList()->AddText(badgePos,
@@ -781,7 +783,7 @@ namespace Arcane::Editor
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
-                                                    e.fileName.c_str(), selected, indent, kTableRowHeight);
+                                                    e.fileName.c_str(), selected, indent, TableRowHeight());
             ImGui::PopStyleColor();
             if (res.clicked)
                 state.msClicked = e.guid;   // T5 s7.9
@@ -873,7 +875,7 @@ namespace Arcane::Editor
                 // every asset/child row's alternating RowBg1 tint landed one
                 // row off from where it did before the header existed.
                 ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers, kTableRowHeight);
+                ImGui::TableNextRow(ImGuiTableRowFlags_Headers, TableRowHeight());
                 ImGui::TableSetColumnIndex(0);
                 DrawNameHeaderRow();
 
@@ -914,10 +916,10 @@ namespace Arcane::Editor
                 if (scrollTargetIndex >= 0)
                 {
                     const float scrollY = ImGui::GetScrollY();
-                    const float viewTop = scrollY + kTableRowHeight;
+                    const float viewTop = scrollY + TableRowHeight();
                     const float viewBottom = scrollY + ImGui::GetCurrentWindow()->InnerRect.GetHeight();
-                    const float rowTop = kTableRowHeight * static_cast<float>(scrollTargetIndex + 1);
-                    const float rowBottom = rowTop + kTableRowHeight;
+                    const float rowTop = TableRowHeight() * static_cast<float>(scrollTargetIndex + 1);
+                    const float rowBottom = rowTop + TableRowHeight();
                     targetAlreadyVisible = state.revealPending
                         ? (rowTop >= viewTop && rowBottom <= viewBottom)
                         : (rowBottom > viewTop && rowTop < viewBottom);
@@ -962,7 +964,7 @@ namespace Arcane::Editor
                 storage.ApplyRequests(ms);
 
                 ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(rows.size()), kTableRowHeight);
+                clipper.Begin(static_cast<int>(rows.size()), TableRowHeight());
                 if (scrollTargetIndex >= 0 && !targetAlreadyVisible)
                     clipper.IncludeItemByIndex(scrollTargetIndex);
                 // The Shift-range source must be submitted even when clipped
@@ -975,7 +977,7 @@ namespace Arcane::Editor
                     for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
                     {
                         const AssetPanelRow& row = rows[i];
-                        ImGui::TableNextRow(ImGuiTableRowFlags_None, kTableRowHeight);
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None, TableRowHeight());
                         ImGui::TableSetColumnIndex(0);
 
                         switch (row.type)

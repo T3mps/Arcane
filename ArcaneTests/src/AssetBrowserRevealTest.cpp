@@ -16,6 +16,7 @@
 #include "Panels/AssetBrowserPanel.hpp"
 #include "Panels/AssetPanelCommon.hpp"
 #include "Panels/AssetPanelModel.hpp"
+#include "Widgets/EditorWidgets.hpp"   // TableRowHeight (settings S6-28)
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -215,9 +216,9 @@ namespace
             const int i = RowIndex(g);
             if (!t || i < 0)
                 return false;
-            const float top = kTableRowHeight * static_cast<float>(i + 1);
-            const float bottom = top + kTableRowHeight;
-            const float viewTop = t->Scroll.y + kTableRowHeight;
+            const float top = TableRowHeight() * static_cast<float>(i + 1);
+            const float bottom = top + TableRowHeight();
+            const float viewTop = t->Scroll.y + TableRowHeight();
             const float viewBottom = t->Scroll.y + t->InnerRect.GetHeight();
             UNSCOPED_INFO("row " << i << " [" << top << "," << bottom << ") view [" << viewTop << "," << viewBottom
                           << ") scrollMax " << t->ScrollMax.y);
