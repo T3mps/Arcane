@@ -1,4 +1,5 @@
 #include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
@@ -207,7 +208,9 @@ namespace Arcane
     {
         using Microsoft::WRL::ComPtr;
 
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
         std::uint64_t Fnv64(std::uint64_t h, const void* data, std::size_t size) noexcept

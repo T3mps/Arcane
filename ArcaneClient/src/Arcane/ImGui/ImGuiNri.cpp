@@ -7,6 +7,7 @@
 // declares nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp ->
 // spdlog) #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include <Arcane/ImGui/ImGuiNri.hpp>
@@ -77,6 +78,7 @@ namespace Arcane
         // widest member alignment. The index side keeps sizeof(ImDrawIdx),
         // which IS a power of two and IS required: both backends want an
         // index-buffer offset that is a multiple of the index size.
+        ARC_CONSTANT("hardware alignment: vertex upload alignment")
         constexpr std::uint64_t kVertexAlign = 16;
         static_assert((kVertexAlign & (kVertexAlign - 1)) == 0,
                       "RingLayout::Allocate requires a power-of-two alignment");

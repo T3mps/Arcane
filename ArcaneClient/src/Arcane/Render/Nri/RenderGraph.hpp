@@ -43,6 +43,7 @@
 // -- <NRI.h> alone provides all of it. Keep it that way; do not add an
 // Extensions include here without re-reading that comment.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 
@@ -74,6 +75,7 @@ namespace Arcane
     // index == kInvalid never refers to a declared resource. Checked
     // verbatim (before any decode), so it stays unambiguous regardless of
     // the encoding below.
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kInvalid = 0xFFFFFFFFu;
 
     // ---------------------------------------------------------------------
@@ -457,7 +459,9 @@ namespace Arcane
     // pool slot: its Lifetime is {kRgNoNode, kRgNoNode} and its
     // transientPoolSlot entry is kRgNoPoolSlot. Task 6 must not realize it
     // (there is no pool slot to realize it into).
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kRgNoNode     = 0xFFFFFFFFu;
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kRgNoPoolSlot = 0xFFFFFFFFu;
 
     struct RgCompiled
@@ -897,15 +901,21 @@ namespace Arcane
         // way: a future task adding a handle-consuming method (e.g. Task
         // 4/6's Resolve()) MUST route through DecodeAndValidateSlot() too.
         // ---------------------------------------------------------------
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kIndexBits      = 24;
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kGenerationBits = 8;
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kIndexMask      = (1u << kIndexBits) - 1u;      // 0x00FFFFFF -- max live slots per generation
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kGenerationMask = (1u << kGenerationBits) - 1u; // 0xFF -- generation wraps mod 256
+        ARC_CONSTANT("sentinel: render-graph 'none' marker")
         static constexpr std::size_t   kNoSlot         = static_cast<std::size_t>(-1); // decode failure: invalid, stale, or out of range
 
         [[nodiscard]] static std::uint32_t EncodeHandle(std::uint32_t slot, std::uint32_t generation) noexcept;
         [[nodiscard]] std::size_t DecodeAndValidateSlot(std::uint32_t encoded, std::size_t resourceCount) const noexcept;
 
+        ARC_CONSTANT("sentinel: render-graph 'none' marker")
         static constexpr std::size_t kNoCurrentNode = static_cast<std::size_t>(-1);
 
         // ---------------------------------------------------------------

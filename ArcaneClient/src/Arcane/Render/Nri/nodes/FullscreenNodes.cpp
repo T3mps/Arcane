@@ -4,6 +4,7 @@
 //
 // Same include-order rule as every file under Render/Nri/ (NriCommon.hpp).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include "FullscreenNodes.hpp"
@@ -41,7 +42,9 @@ namespace Arcane
         // contract, rule 3, requires the key to change whenever the bytecode
         // would -- a CONTENT hash satisfies that by construction) and the stamp
         // that decides whether the built chain is still current.
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvPrime  = 1099511628211ull;
 
         std::uint64_t HashBytes(const void* data, std::size_t size,

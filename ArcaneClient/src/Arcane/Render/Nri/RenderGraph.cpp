@@ -1,4 +1,5 @@
 #include "RenderGraph.hpp"
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Assert.hpp>
 
@@ -398,6 +399,7 @@ namespace Arcane
         // correctly, and both are derivable from the declared accesses alone
         // -- neither reads a single barrier.
         // --------------------------------------------------------------
+        ARC_CONSTANT("sentinel: no transient resource")
         constexpr std::size_t kNoTransient = static_cast<std::size_t>(-1);
         std::vector<std::size_t> textureTransient(m_textures.size(), kNoTransient);
         std::vector<std::size_t> bufferTransient(m_buffers.size(), kNoTransient);

@@ -1,4 +1,5 @@
 #include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Audio/AudioSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Assets/Assets.hpp>
@@ -359,6 +360,7 @@ namespace Arcane::Audio
 			if (frames == 0)
 				return;
 
+			ARC_CONSTANT("capacity hint: the mixer's scratch-chunk size; no observable preference")
 			constexpr ma_uint64 kChunkFrames = 512;
 			std::vector<float> scratch(static_cast<size_t>(ch) * kChunkFrames);
 			while (frames > 0)

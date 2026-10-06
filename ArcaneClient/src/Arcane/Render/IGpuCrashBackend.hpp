@@ -14,6 +14,7 @@
 // no state, so a test links it without pulling in a GPU backend.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -55,9 +56,13 @@ namespace Arcane::Diag
     // whether a section is raw device memory (D3D12 marker bytes) or its
     // own flattening of a pointer-linked API structure (DRED breadcrumbs).
     inline constexpr char          kGpuDumpMagic[4]  = { 'A', 'G', 'P', 'U' };
+    ARC_CONSTANT("file format: the GPU crash dump layout")
     inline constexpr std::uint32_t kGpuDumpVersion   = 1;
+    ARC_CONSTANT("file format: the GPU crash dump layout")
     inline constexpr std::size_t   kGpuDumpTagBytes  = 16;
+    ARC_CONSTANT("file format: the GPU crash dump layout")
     inline constexpr std::size_t   kGpuDumpHeaderBytes = 12;                      // magic + version + count
+    ARC_CONSTANT("file format: the GPU crash dump layout")
     inline constexpr std::size_t   kGpuDumpEntryBytes  = kGpuDumpTagBytes + 8 + 8; // tag + offset + size
 
     struct GpuDumpSection

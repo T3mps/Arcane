@@ -13,6 +13,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -198,6 +199,26 @@ TEST_CASE("constant guard: no allow-listed constants remain under ArcaneCore", "
         if (line.rfind("ArcaneCore/", 0) == 0) left += "  " + line + "\n";
     INFO("Mark these with ARC_CONSTANT(\"why\") and delete the lines:\n" << left);
     CHECK(left.empty());
+}
+
+TEST_CASE("constant guard: no allow-listed constants remain under Client, Runtime, Server or CrashReporter", "[sweep][guard][markers]")
+{
+    constexpr std::string_view kPrefixes[] = { "ArcaneClient/", "ArcaneRuntime/", "ArcaneServer/", "ArcaneCrashReporter/" };
+    std::ifstream in(RepoRoot() / "scripts" / "constant-allowlist.txt");
+    std::string line, left;
+    while (std::getline(in, line))
+        for (std::string_view prefix : kPrefixes)
+            if (line.starts_with(prefix)) left += "  " + line + "\n";
+    INFO("Mark these with ARC_CONSTANT(\"why\") and delete the lines:\n" << left);
+    CHECK(left.empty());
+}
+
+TEST_CASE("constant guard: the D3D12 Agility SDK version is spelled once", "[sweep][guard][markers]")
+{
+    int literal = 0;
+    for (const ConstantSite& s : ScanNumericConstants(RepoRoot()))
+        if (s.symbol == "D3D12SDKVersion") ++literal;
+    CHECK(literal == 0);   // the three EXE exports read AgilitySdk::kVersion: no numeric literal left
 }
 
 TEST_CASE("constant guard: seed dump", "[.][sweep-seed]")

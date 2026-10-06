@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arcane/Audio/AudioSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -55,8 +56,11 @@ namespace Arcane::Audio
 		}
 	};
 
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr SoundHandle kInvalidSound{ 0u, 0u };
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr VoiceHandle kInvalidVoice{ 0u, 0u };
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr BusHandle kInvalidBus{ 0u, 0u }; // In descs, invalid/default means route to master.
 
 	struct AudioDeviceDesc

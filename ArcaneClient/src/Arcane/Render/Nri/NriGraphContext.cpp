@@ -8,6 +8,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRISwapChain.h>
 
 #include "NriGraphContext.hpp"
@@ -100,7 +101,9 @@ namespace Arcane
         // owed: a shared version would have to be called from
         // NriSwapChain.cpp too, which is the host-window present path.
         // ---------------------------------------------------------------
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, matching NriSwapChain.cpp
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kFencePollWindow{ 15 };  // ...and its 15s window
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence,

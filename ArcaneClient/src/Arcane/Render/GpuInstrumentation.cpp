@@ -1,4 +1,5 @@
 #include <Arcane/Base/DiagnosticsSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 
 #include <Arcane/Base/Diagnostics.hpp>
@@ -27,6 +28,7 @@ namespace Arcane
         // OS scheduling quantum a "sleep" degrades into a spin, and burning a
         // core to shave sub-millisecond latency off a frame that is already
         // waiting on the GPU is a bad trade.
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kSlotPollSleepNs = 1'000'000;
 
         // How long to keep polling before parking in the blocking wait. Chosen
@@ -36,6 +38,7 @@ namespace Arcane
         // A host configuring a gpuStallSeconds ABOVE this would lose the polling
         // window's benefit -- that is the one coupling here, and it is why this
         // constant lives next to that comment rather than in a header.
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kSlotPollWindow{ 15 };
     }
 

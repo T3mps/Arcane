@@ -29,6 +29,7 @@
 // that would be correct for LUMINANCE (Y), which this is deliberately not.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 // SettleBail, the --settle bail decision (Task 2). Header-only and constexpr
 // -- <cstdint> is its ONLY include -- so pulling it in here adds no link
 // dependency and leaves this component's standalone-parse property intact:
@@ -232,7 +233,9 @@ namespace Arcane
         // name, compile, preview, image} entry per open shader or mesh
         // document: its PreviewStatus ids (see SetDocumentPreviews). Absent
         // unless the editor set it; 12 remains readable.
+        ARC_CONSTANT("file format: verify-report schema version; readers gate on it")
         static constexpr int kSchemaVersion                = 13;
+        ARC_CONSTANT("file format: verify-report schema version; readers gate on it")
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept

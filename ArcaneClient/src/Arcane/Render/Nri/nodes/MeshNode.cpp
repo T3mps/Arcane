@@ -6,6 +6,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include "MeshNode.hpp"
@@ -78,6 +79,7 @@ namespace Arcane
         // a separately-decided-against choice), which is the value that pairs
         // with CompareOp::LESS below. Flipping one without the other is
         // exactly the mistake that renders an empty frame.
+        ARC_CONSTANT("convention: standard-Z depth clear with a LESS compare; changing it is a bug")
         constexpr float kDepthClear = 1.0f;
 
         // THE ROOT BLOCK is MeshRootConstants (MeshNode.hpp, 8 bytes) since

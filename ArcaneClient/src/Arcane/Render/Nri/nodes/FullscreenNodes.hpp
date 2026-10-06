@@ -66,6 +66,7 @@
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Material/GlobalParams.hpp>   // GlobalParams (16 bytes, held by value)
@@ -134,6 +135,7 @@ namespace Arcane
 
         // Range indices into `ranges`, for UpdateDescriptorRanges. kNoRange
         // when the material's shape declares no such range.
+        ARC_CONSTANT("sentinel: no constant-buffer range")
         static constexpr std::uint32_t kNoRange = 0xFFFFFFFFu;
         std::uint32_t materialCb = kNoRange;   // b0
         std::uint32_t globalsCb  = kNoRange;   // b1
@@ -269,11 +271,15 @@ namespace Arcane
 
         // kMaxPassInputs (Material/MaterialSource.hpp) is 4; pinned by a
         // static_assert in the .cpp so this cannot silently fall behind.
+        ARC_CONSTANT("file format: equals kMaxPassInputs, the post asset format's input ceiling (static_assert)")
         static constexpr std::uint32_t kMaxInputs   = 4;
         // Region 0 of every frame slot is the globals CB, region 1 the ONE
         // material CB the whole chain shares.
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kCbRegionsPerFrame = 2;
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kGlobalsRegion     = 0;
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kMaterialRegion    = 1;
 
         // PURE and public for the same reason Batch2DNode's twins are: they
@@ -367,6 +373,7 @@ namespace Arcane
         // the high bit set (like a registered sprite material's) -- and the
         // layout id is part of GraphicsKey anyway, so the two cannot collide
         // even on identical bytecode.
+        ARC_CONSTANT("id scheme: fullscreen shader-pair ids")
         static constexpr std::uint64_t kShaderPairMark = 0x8000000000000000ull;
 
         // render.post.*, latched by the constructor (Restart): the pool, the
@@ -496,6 +503,7 @@ namespace Arcane
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the two nodes'
         // opaque shader-pair id spaces must not overlap.
+        ARC_CONSTANT("id scheme: fullscreen shader-pair ids")
         static constexpr std::uint64_t kShaderPairId = 0x3000;
 
         NriDevice*        m_device    = nullptr;

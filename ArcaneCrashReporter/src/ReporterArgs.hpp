@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Base/ReporterSettingsData.hpp>
 #include <Arcane/Config/UiSettingsData.hpp>
 
@@ -27,10 +28,15 @@ namespace Arcane::Reporter
 {
     namespace ExitCode
     {
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kOk           = 0;
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kBadArgs      = 2;
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kNoEnvelope   = 3;
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kHostMismatch = 4;   // --host-created did not match: terminate refused
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kDeadline     = 5;   // unattended deadline expired; partial sibling written
         // R64, APPROVED as a plan amendment (controller, fix round 1) -- so
         // this is a CONTRACT ADDITION, not merely a header constant. The plan's
@@ -49,6 +55,7 @@ namespace Arcane::Reporter
         // human stares at when the symbolized file is missing and nothing else
         // looks wrong, which is what makes it worth naming. 6 collides with
         // nothing: the reporter owns 0-5, the hosts own 10-13 (spec §4).
+        ARC_CONSTANT("wire protocol: reporter exit code; the host monitor and CI read it")
         inline constexpr int kWriteFailed  = 6;   // the .symbolized.txt sibling could not be written
     }
 

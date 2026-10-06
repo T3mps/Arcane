@@ -2,6 +2,7 @@
 // include-order rule (nri::Message::ERROR vs wingdi.h's ERROR macro) -- the
 // NRI headers MUST stay first in this file.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>
 #include <Extensions/NRIWrapperD3D12.h>
 #include <Extensions/NRIWrapperVK.h>
@@ -43,6 +44,7 @@ namespace Arcane
         // truth, which also feeds the offline compile script) instead of being
         // copied here: edit the shifts there and this either follows or stops
         // compiling.
+        ARC_CONSTANT("sentinel: no register shift")
         constexpr std::uint32_t kNoShift = 0xFFFFFFFFu;
 
         constexpr std::uint32_t ParseShift(std::string_view text)

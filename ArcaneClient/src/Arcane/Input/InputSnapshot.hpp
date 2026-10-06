@@ -7,13 +7,16 @@
 // these directly; InputDevices::Sample fills them from SDL.
 
 #include <cstdint>
+#include <Arcane/Core/Constant.hpp>
 #include <type_traits>
 
 namespace Arcane
 {
     struct InputSnapshot
     {
+        ARC_CONSTANT("ABI: fixed arrays in InputSnapshot (crosses the plugin ABI), sized by SDL_SCANCODE_COUNT")
         static constexpr uint32_t kScancodeWords   = 8;   // 512 scancodes
+        ARC_CONSTANT("ABI: fixed arrays in InputSnapshot (crosses the plugin ABI), sized by SDL_SCANCODE_COUNT")
         static constexpr uint32_t kMaxKeycodesDown = 16;
 
         // Keyboard: physical scancodes as a bitset (SDL scancode index),

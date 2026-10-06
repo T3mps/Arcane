@@ -13,6 +13,7 @@
 // lives in Arcane.dll and is the only permitted side to couple physics + render.
 
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <algorithm>   // std::clamp (emphasis floor)
 #include <cmath>
@@ -362,6 +363,7 @@ namespace Arcane
                 // Sleeping dynamic bodies drawn dim (Lua dim = 0.35).
                 if (!awake)
                 {
+                    ARC_CONSTANT("base style: debug.physics overlay styling; DERIVED px/factor, not a setting (S5-1 L9)")
                     constexpr float kDim = 0.35f;
                     col.r *= kDim;
                     col.g *= kDim;
@@ -677,6 +679,7 @@ namespace Arcane
         {
             const int n = static_cast<int>(trace.satAxes.size());
             const int sel = (stepIndex >= 0 && stepIndex < n) ? stepIndex : -1;
+            ARC_CONSTANT("base style: debug.physics overlay styling; DERIVED px/factor, not a setting (S5-1 L9)")
             constexpr float kAxisHalfLenPx = 60.0f;  // half-length of the drawn segment
 
             for (int i = 0; i < n; ++i)

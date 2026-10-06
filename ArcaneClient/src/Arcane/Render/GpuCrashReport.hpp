@@ -24,6 +24,7 @@
 // backend either (GpuCrashReportTest.cpp).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 
 #include <cstddef>
@@ -54,6 +55,7 @@ namespace Arcane::Diag
     {
         return static_cast<std::uint32_t>(breadcrumbs.Capacity());
     }
+    ARC_CONSTANT("record layout: begin + end values per marker slot; every backend writer and ReplayMarkerBuffer share it")
     inline constexpr std::uint32_t kGpuMarkerValuesPerSlot = 2;
     inline std::size_t GpuMarkerBytes(const GpuBreadcrumbs& breadcrumbs)
     {
@@ -62,6 +64,7 @@ namespace Arcane::Diag
 
     // A backend writes `id + 1` so that 0 -- what a region is zeroed to at arm
     // time -- unambiguously means "the GPU never reached this marker".
+    ARC_CONSTANT("record layout: the GPU marker 'unwritten' sentinel every backend writer and the replay share")
     inline constexpr std::uint32_t kGpuMarkerUnwritten = 0;
 
     // ---------------------------------------------------------------------

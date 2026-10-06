@@ -17,8 +17,11 @@ namespace Arcane
 {
     namespace
     {
+        ARC_CONSTANT("math: degenerate-length epsilon")
         constexpr float kEps      = 1e-6f;
+        ARC_CONSTANT("math: pi")
         constexpr float kPi       = 3.14159265358979323846f;
+        ARC_CONSTANT("math: 2 pi")
         constexpr float kTau      = 2.0f * kPi;
 
         // Handle geometry in PIXELS at gizmo size 1, UNREAL'S PROPORTIONS
@@ -28,23 +31,41 @@ namespace Arcane
         // from WorldUnitsPerPixel at the pivot (screen-constant size). The pick
         // tolerances, edge-on cutoffs, full-ring tessellation, drag floor and
         // shading factors are the editor's: GizmoTuning (settings arc S6-31).
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kAxisLenPx          = 70.0f;   // AXIS_LENGTH 35: the translate cylinder
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kAxisTipPx          = 94.0f;   // cone apex: root at AXIS_LENGTH + ConeHeadOffset 12
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kHeadLenPx          = 26.0f;   // DrawCone scaled -13
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kHeadHalfPx         = 8.6f;    // a touch wider than UE's 5-deg cone so the head reads at thumbnail size
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kShaftPx            = 5.0f;    // CylinderRadius 1.2 -> diameter 2.4 units
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScaleShaftFromPx   = 7.0f;    // scale mode: UE starts its rod at AXIS_LENGTH_SCALE_OFFSET 5 (10 px) and the lit sphere hides the seam; our flat disc (radius 8) does not, so the rod starts just inside it ...
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScaleShaftToPx     = 60.0f;   // ... to AXIS_LENGTH - 5
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScaleCubeCentrePx  = 66.0f;   // Render_Cube at AxisLength + CubeHeadOffset 3 + offset 5
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScaleCubeHalfPx    = 8.0f;    // Render_Cube(FVector(4)) scales a UNIT DrawBox: half-extent 4 units, so the cube (58..74 px) overlaps the rod's end at 60
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kPlaneCornerPx      = 14.0f;   // CornerPos 7
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kPlaneBarPx         = 24.0f;   // AxisSize 12 along each spanning axis
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kPlaneBarWidthPx    = 4.0f;    // a touch over UE's 1.2 units so the L-corner survives the halo
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kCentrePx           = 8.0f;    // DrawSphere radius 4
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kRingInnerPx        = 96.0f;   // INNER_AXIS_CIRCLE_RADIUS 48
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kRingOuterPx        = 112.0f;  // OUTER_AXIS_CIRCLE_RADIUS 56
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScreenRingPx       = 140.0f;  // OUTER_AXIS_CIRCLE_RADIUS * 1.25
+        ARC_CONSTANT("base px at gizmo size 1; DERIVED: editor.gizmo.size scales it")
         constexpr float kScreenRingWidthPx  = 3.0f;    // 1.25 units
+        ARC_CONSTANT("base geometry: the screen ring's quarter-band tessellation; the full-ring count is GizmoTuning's setting")
         constexpr int   kArcSegments        = 24;      // a quarter band (smooth enough that the facets don't read as a saw)
 
         // Axis colours keep UE's RGB assignment (X red, Y green, Z blue, hot

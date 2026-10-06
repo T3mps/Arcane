@@ -6,6 +6,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include "Batch2DNode.hpp"
@@ -84,6 +85,7 @@ namespace Arcane
         // offset to be a multiple of the stride; each attribute only has to
         // land on its natural boundary, which 16 guarantees for a stride that
         // is a multiple of 4.
+        ARC_CONSTANT("hardware alignment: vertex upload alignment")
         constexpr std::uint64_t kVertexAlign = 16;
         static_assert((kVertexAlign & (kVertexAlign - 1)) == 0, "the ring wants a power of two");
         static_assert(sizeof(Batch2DVertex) % 4 == 0, "every attribute is float-aligned");
@@ -102,7 +104,9 @@ namespace Arcane
         //     that by construction, where a material id would not;
         //   * over the registration's identity fields it produces the stamp
         //     that decides whether a built material slot is still current.
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvPrime  = 1099511628211ull;
 
         std::uint64_t HashBytes(const void* data, std::size_t size, std::uint64_t seed = kFnvOffset) noexcept

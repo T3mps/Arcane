@@ -190,6 +190,7 @@ namespace Arcane
 
         // The b1 block's region size BEFORE alignment. grid.hlsl's GridFrameCB
         // is 160 bytes; 256 is D3D12's constant-buffer placement alignment.
+        ARC_CONSTANT("layout: constant-buffer placement size; the frame struct must fit")
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
         // The arena's region stride for a device whose constant-buffer offset
@@ -235,6 +236,7 @@ namespace Arcane
         // the node id spaces must not overlap: Batch2DNode 0x2000..0x2002,
         // TonemapNode 0x3000, outline 0x4000..0x4002, PickNode 0x4100,
         // MeshNode 0x5000.
+        ARC_CONSTANT("id scheme: the grid shader-pair id")
         static constexpr std::uint64_t kShaderPairId = 0x6000;
 
         NriDevice*        m_device    = nullptr;

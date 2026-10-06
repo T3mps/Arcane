@@ -120,6 +120,7 @@
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
 // <windows.h>, via spdlog, #defines ERROR).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -450,6 +451,7 @@ namespace Arcane
         // One shared cache, so every node's opaque shader-pair id space must
         // stay disjoint: Batch2DNode 0x2000+, TonemapNode 0x3000, the outline
         // passes 0x4000-0x4002, PickNode 0x4100. ImGui takes 0x5000.
+        ARC_CONSTANT("id scheme: the ImGui shader-pair id")
         static constexpr std::uint64_t kShaderPairId = 0x5000;
 
         NriDevice*        m_device    = nullptr;

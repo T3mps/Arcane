@@ -1,6 +1,7 @@
 #pragma once
 
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <Arcane/Base/Api.hpp>
@@ -25,6 +26,7 @@ namespace Arcane
 
     // render.meshCull's published value (RenderSettings). Missing (Dev, compiled out) means the default: on.
     [[nodiscard]] ARC_API bool MeshCullFrustumEnabled();
+    ARC_CONSTANT("shader contract: must match numthreads(64) in data/shaders/mesh_cull.hlsl")
     inline constexpr std::uint32_t kMeshCullThreads = 64;
     [[nodiscard]] constexpr std::uint32_t MeshCullDispatchGroups(std::uint32_t rowCount) noexcept
     {

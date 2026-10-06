@@ -108,6 +108,7 @@
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Mesh/MeshBuilder.hpp>              // MeshVertex -- the mesh half's vertex layout
@@ -336,7 +337,9 @@ namespace Arcane
         // See Batch2DNode::kShaderPairBase / TonemapNode::kShaderPairId: one
         // shared pipeline cache, so the nodes' opaque shader-pair id spaces
         // must not overlap. Two pairs here: the 2D half and the mesh half.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kShaderPairId     = 0x4100;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kMeshShaderPairId = 0x4101;
 
         NriDevice*        m_device    = nullptr;
@@ -498,19 +501,25 @@ namespace Arcane
         //
         // 16 steps floods a 65536-px field; the declarator clamps to this and
         // says so once.
+        ARC_CONSTANT("layout: constant-buffer region count; the log2 ceiling of the JFA schedule")
         static constexpr std::uint32_t kMaxJfaSteps = 16;
         // outline_seed.hlsl's `uint4 gSelectedIds[16]` -- 64 ids. Pinned by
         // the .cpp's static_assert(kMaxSelectedIds * sizeof(std::uint32_t)
         // == 256, ...) against outline_seed.hlsl's uint4[16].
+        ARC_CONSTANT("shader contract: the 256-byte cbuffer id array the outline shader reads (static_assert)")
         static constexpr std::uint32_t kMaxSelectedIds = 64;
         // The largest of the three constant blocks: SeedCB is 288 bytes
         // (32 header + 256 ids). Pinned by a static_assert in the .cpp.
+        ARC_CONSTANT("layout: constant-buffer placement size; the struct must fit")
         static constexpr std::uint32_t kCbMaxBytes = 288;
 
         // Region 0 is the seed CB, region 1 the composite CB, region 2 + step
         // the JFA step's. One descriptor set per (region, frame slot).
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kSeedRegion         = 0;
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kCompositeRegion    = 1;
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kJfaRegionBase      = 2;
         static constexpr std::uint32_t kCbRegionsPerFrame  = kJfaRegionBase + kMaxJfaSteps;
 
@@ -577,8 +586,11 @@ namespace Arcane
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the nodes'
         // opaque id spaces must not overlap. PickNode is 0x4100-0x4101.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kSeedPairId      = 0x4000;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kJfaPairId       = 0x4001;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kCompositePairId = 0x4002;
 
         NriDevice*        m_device    = nullptr;

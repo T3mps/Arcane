@@ -1,4 +1,5 @@
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSettings.hpp>
@@ -134,10 +135,12 @@ namespace Arcane
         // Gamepad token tables: control name -> bit/index, plus its readable
         // name. The bit/index order MUST match the InputDevices sampler's
         // snapshot layout (gamepadButtons bits, gamepadAxes).
+        ARC_CONSTANT("sentinel: no gamepad token")
         constexpr int kNoGamepadToken = -1;
 
         struct GamepadToken { const char* name; int index; const char* display; };
 
+        ARC_CONSTANT("SDL vocabulary: binding-token names mapped to SDL gamepad enum values; the binding file format")
         constexpr GamepadToken kGamepadButtonTokens[] = {
             { "buttonSouth",      0,  "South Button"      },
             { "buttonEast",       1,  "East Button"       },
@@ -156,6 +159,7 @@ namespace Arcane
             { "rightStickPress",  14, "Right Stick Press" },
         };
 
+        ARC_CONSTANT("SDL vocabulary: binding-token names mapped to SDL gamepad enum values; the binding file format")
         constexpr GamepadToken kGamepadAxisTokens[] = {
             { "leftStick/x",   0, "Left Stick X"  },
             { "leftStick/y",   1, "Left Stick Y"  },
@@ -166,6 +170,7 @@ namespace Arcane
         };
 
         // Sticks resolve as a 2D vector: 0 = leftStick, 1 = rightStick.
+        ARC_CONSTANT("SDL vocabulary: binding-token names mapped to SDL gamepad enum values; the binding file format")
         constexpr GamepadToken kGamepadStickTokens[] = {
             { "leftStick",  0, "Left Stick"  },
             { "rightStick", 1, "Right Stick" },
@@ -192,6 +197,7 @@ namespace Arcane
             { "rightButton",  "Right Button"  },
             { "middleButton", "Middle Button" },
         };
+        ARC_CONSTANT("SDL vocabulary: the mouse buttons SDL reports")
         constexpr int kMouseButtonCount = 5;
 
         // Path compiler

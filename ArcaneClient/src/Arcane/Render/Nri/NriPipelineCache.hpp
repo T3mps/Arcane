@@ -81,6 +81,7 @@
 // (reachable through NriDevice.hpp) declares nri::Message::ERROR and
 // <windows.h> (via Arcane/Base/Log.hpp -> spdlog) #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>   // NriDevice, Graveyard
@@ -99,11 +100,13 @@ namespace Arcane
         // Four is the Deadlock chassis' GBuffer width and comfortably above
         // Phase 2's needs (every 2D node renders to one). A caller asking for
         // more is refused, loudly, rather than silently truncated.
+        ARC_CONSTANT("ABI: fixed array in the exported pipeline key; the hardware maximum is 8")
         static constexpr std::uint32_t kMaxColorAttachments = 4;
 
         // RegisterLayout's failure value, and the value a default-constructed
         // GraphicsKey carries -- so a key whose layout was never registered
         // cannot accidentally name layout 0.
+        ARC_CONSTANT("sentinel: invalid pipeline layout")
         static constexpr std::uint32_t kInvalidLayout = 0xFFFFFFFFu;
 
         struct GraphicsKey

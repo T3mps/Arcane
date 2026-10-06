@@ -7,6 +7,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include "PickOutlineNodes.hpp"
 
@@ -422,6 +423,7 @@ namespace Arcane
         // asserts a power of two and the 36-byte stride is not one -- Batch2DNode's
         // kVertexAlign reasoning, verbatim (no backend wants a bind offset that is
         // a multiple of the stride; every attribute lands on its natural boundary).
+        ARC_CONSTANT("hardware alignment: vertex upload alignment")
         constexpr std::uint64_t kVertexAlign = 16;
         const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, kVertexAlign);
         const NriUploadRing::Alloc indexAlloc  = context.ring.Allocate(indexBytes, sizeof(std::uint32_t));

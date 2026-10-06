@@ -3,6 +3,7 @@
 // GpuFrameSlot). Same include-order rule as NriDevice.cpp/NriCommon.hpp
 // (nri::Message::ERROR vs wingdi.h's ERROR macro) -- NRI headers first.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRISwapChain.h>
 
 #include "NriSwapChain.hpp"
@@ -37,7 +38,9 @@ namespace Arcane
         // helper.
         // ---------------------------------------------------------------
 
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, via SDL's high-resolution waitable timer -- NOT std::this_thread::sleep_for's ~15.6ms Windows quantum
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kFencePollWindow{ 15 };  // comfortably above Config::gpuStallSeconds' 8s default
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence, uint64_t value)

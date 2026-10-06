@@ -1,5 +1,6 @@
 // Include order: NRI first, ALWAYS (NriCommon.hpp explains the ERROR clash).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Render/Nri/GpuScene.hpp>
 
@@ -29,11 +30,13 @@ namespace Arcane
     namespace
     {
         constexpr std::uint64_t kRowBytes = sizeof(GpuInstance);
+        ARC_CONSTANT("hardware alignment: GPU buffer placement alignment")
         constexpr std::uint64_t kRingAlign = 16;
 
         // The visibility readback packs the args region and the visible-index
         // region into ONE buffer; the second region starts at this alignment so
         // both copies land on an offset every backend accepts.
+        ARC_CONSTANT("hardware alignment: GPU buffer placement alignment")
         constexpr std::uint64_t kVisibilityRegionAlign = 256;
 
         [[nodiscard]] constexpr std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) noexcept

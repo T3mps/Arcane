@@ -310,7 +310,9 @@ namespace Arcane
         // 0 x 0 = unset = GpuContext's 1280x720 default, which every golden
         // reference is captured at and therefore stays load-bearing. Each side
         // is refused outside [kMinWindowSide, kMaxWindowSide].
+        ARC_CONSTANT("validation bound: the range metadata of the render.window.* size flags, not a setting")
         static constexpr std::uint32_t kMinWindowSide = 64;
+        ARC_CONSTANT("validation bound: the range metadata of the render.window.* size flags, not a setting")
         static constexpr std::uint32_t kMaxWindowSide = 8192;
         std::uint32_t   windowWidth  = 0;
         std::uint32_t   windowHeight = 0;

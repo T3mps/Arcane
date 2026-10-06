@@ -15,6 +15,7 @@
 // screen ports; migrating to premultiplied is a deliberate future decision.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <glm/glm.hpp>
@@ -204,9 +205,13 @@ namespace Arcane
         // The material table (Slice 8): every draw carries a material id; the
         // built-in pipelines are entries 0..2, so the pre-material path is the
         // degenerate case. Registered ids start at 3.
+        ARC_CONSTANT("id scheme: the built-in 2D material ids and sort-key encoding")
         static constexpr uint16_t kMaterialSprite    = 0;
+        ARC_CONSTANT("id scheme: the built-in 2D material ids and sort-key encoding")
         static constexpr uint16_t kMaterialCircle    = 1;
+        ARC_CONSTANT("id scheme: the built-in 2D material ids and sort-key encoding")
         static constexpr uint16_t kMaterialText      = 2;
+        ARC_CONSTANT("id scheme: the built-in 2D material ids and sort-key encoding")
         static constexpr uint16_t kInvalidMaterialId = 0xFFFF;
 
         // Register a compiled sprite-surface material; returns its id

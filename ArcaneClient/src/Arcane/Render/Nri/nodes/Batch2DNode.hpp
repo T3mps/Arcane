@@ -155,6 +155,7 @@ namespace Arcane
 
         // Range indices into `ranges`, for UpdateDescriptorRanges.
         // kNoRange when the material declares no numeric params.
+        ARC_CONSTANT("sentinel: no constant-buffer range")
         static constexpr std::uint32_t kNoRange = 0xFFFFFFFFu;
         std::uint32_t materialCb = kNoRange;   // b1
         std::uint32_t globalsCb  = kNoRange;   // b2
@@ -479,6 +480,7 @@ namespace Arcane
 
         // sprite / circle / msdf -- Batcher2D::kMaterialSprite/Circle/Text, in
         // that order, so a drained span's `material` indexes this directly.
+        ARC_CONSTANT("id scheme: built-in 2D material count and shader-pair ids")
         static constexpr std::uint32_t kBuiltInCount = 3;
 
         // NriPipelineCache::GraphicsKey::shaderPairId is opaque to the cache
@@ -486,6 +488,7 @@ namespace Arcane
         // carry (that class's fill-contract rule 3). This node and
         // TonemapNode share one cache, so their id spaces must not overlap --
         // see FullscreenNodes.hpp's matching base.
+        ARC_CONSTANT("id scheme: built-in 2D material count and shader-pair ids")
         static constexpr std::uint64_t kShaderPairBase = 0x2000;
 
         struct BuiltIn

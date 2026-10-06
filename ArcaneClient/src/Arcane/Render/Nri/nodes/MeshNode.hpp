@@ -125,6 +125,7 @@
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
 // <windows.h> #defines ERROR via wingdi.h).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>   // explicitly: GpuSceneTypes.hpp below reaches <windows.h> (GpuScene.hpp explains)
 
 #include <Arcane/Base/Api.hpp>
@@ -376,6 +377,7 @@ namespace Arcane
         std::uint32_t firstOutput = 0;
         std::uint32_t flags       = 0;
     };
+    ARC_CONSTANT("layout: root-layout index")
     inline constexpr std::uint32_t kMeshRootDirect = 1u;
     static_assert(sizeof(MeshRootConstants) == 8, "mesh.hlsl's MeshRoot is two uints");
 
@@ -577,6 +579,7 @@ namespace Arcane
         // The b1 block's region size BEFORE alignment. mesh.hlsl's MeshFrameCB
         // is 112 bytes; 256 is also D3D12's constant-buffer placement
         // alignment, so on that backend this is exactly one region.
+        ARC_CONSTANT("layout: constant-buffer placement size; the frame struct must fit")
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
         // THE BINDLESS MATERIAL TABLE'S CAPACITY (Task 8/10). PUBLIC (unlike
@@ -595,6 +598,7 @@ namespace Arcane
         // with the matching literal -- HLSL cannot include this header, so
         // that one comparison has no compiler behind it; this comment (and
         // its mirror in mesh.hlsl) is the whole of that contract.
+        ARC_CONSTANT("shader contract: must equal kMeshBindlessCapacity in data/shaders/mesh.hlsl")
         static constexpr std::uint32_t kBindlessCapacity = 256;
 
         // The arena's region stride on a device whose
@@ -675,6 +679,7 @@ namespace Arcane
         // once and draws twenty times; a RESERVED MEMBER rather than a local, so
         // the steady state allocates nothing inside the declaration window. Past
         // this many distinct meshes the vector grows once per high-water mark.
+        ARC_CONSTANT("capacity hint: resident-slot reserve; no observable preference")
         static constexpr std::size_t kInitialResidentSlots = 16;
 
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot) const

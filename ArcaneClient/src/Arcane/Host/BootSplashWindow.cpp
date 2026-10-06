@@ -1,4 +1,5 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8() -- exe-relative image path resolution
 #include <Arcane/Base/Log.hpp>
@@ -40,7 +41,9 @@ namespace Arcane
         // thread -- the direct replacement for the old kMsgSetProgress (a raw
         // WM_APP+1) now that thread/class/message-loop ownership lives in
         // NativeWindow.
+        ARC_CONSTANT("in-process protocol: private window-message id (WM_APP range)")
         constexpr unsigned kUserSetProgress = 1;   // wParam = integer percent
+        ARC_CONSTANT("in-process protocol: private window-message id (WM_APP range)")
         constexpr unsigned kUserLoadImage   = 2;   // posted from OnCreate so the decode runs AFTER the first paint
 
         // Height of the status-text strip along the bottom edge, shared by
@@ -48,6 +51,7 @@ namespace Arcane
         // Invalidate) so the two can never drift apart -- both need the EXACT
         // same rect, or a text-only repaint could invalidate a region
         // PaintSplash does not redraw (leaving stale pixels) or vice versa.
+        ARC_CONSTANT("base px: splash layout metric inside the app.splash.width/height window; styling, not a preference (S5-1 L9)")
         constexpr LONG kTextRowHeightPx = 24;
 
         std::wstring Utf8ToWide(const std::string& s)
@@ -284,6 +288,7 @@ namespace Arcane
                 const UINT bh = impl.bitmap->GetHeight();
                 if (bw > 0 && bh > 0)
                 {
+                    ARC_CONSTANT("base px: splash layout metric inside the app.splash.width/height window; styling, not a preference (S5-1 L9)")
                     constexpr float kMarginPx = 12.0f;
                     const float availW = clientW - 2.0f * kMarginPx;
                     // kTextRowHeightPx: reserve room so the image never touches the status line.

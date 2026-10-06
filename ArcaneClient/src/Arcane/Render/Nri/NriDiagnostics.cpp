@@ -4,6 +4,7 @@
 // Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and <windows.h>
 // (via Arcane/Base/Log.hpp -> spdlog) #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include "NriDiagnostics.hpp"
 
@@ -369,14 +370,19 @@ namespace Arcane
         // ReportMessage aborted the process before the injector could ever
         // dispatch. The shader reads only the first 16 bytes; the rest is
         // zero-filled padding.
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultCBSize       = 256u;
         static_assert(sizeof(FaultCB) <= kFaultCBSize,
                       "the fault constant buffer must fit in one 256-byte CBV window");
 
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultSinkElements = 256u;
         constexpr std::uint32_t kFaultSinkStride   = sizeof(std::uint32_t);
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultThreadGroups = 256u;
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultIterations   = 0xFFFFFFFFu;
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultOobElement   = 1u << 30;
 
         // The artifact stem + the directory literal every shader loader in
