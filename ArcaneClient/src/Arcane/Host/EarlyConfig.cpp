@@ -6,6 +6,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/FramePacing.hpp>
 #include <Arcane/Render/RenderDeviceSettings.hpp>
 
 #include <filesystem>
@@ -49,6 +50,9 @@ namespace Arcane::HostBoot
         sets.insert(sets.end(), cfg.cvarSets.begin(), cfg.cvarSets.end());
         ApplyCVarCommandLine(cvars, sets, ctx);
         cvars.PublishImmediate();
+        // A FramesInFlight() read before this publish has already frozen the
+        // pacing depth for the process; say so if it differs (FramePacing.hpp).
+        CheckFramesInFlightLatch();
 
         // Restart settings the host carries to GpuContext::Create, the device
         // and the swapchain: from here on the HostConfig holds the published
