@@ -17,12 +17,15 @@
 
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 #include <Arcane/Render/PickEmit.hpp>
+#include <Arcane/Render/RenderOutlineSettings.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 
 #include <glm/glm.hpp>
 
 #include <vector>
+
+#include "Helpers/SettingsSweep.hpp"
 
 TEST_CASE("OutlineJfaStepCount = ceil(log2(maxThickness)) + 2", "[outline]")
 {
@@ -59,4 +62,19 @@ TEST_CASE("PickSampleTexel maps a 1x click to the center subsample, clamped", "[
     CHECK(Arcane::PickSampleTexel(glm::vec2(3.7f, 4.2f), 1u, 64u, 64u) == glm::ivec2(3, 4));
     // out-of-range clamps into the buffer.
     CHECK(Arcane::PickSampleTexel(glm::vec2(999.0f, -5.0f), 2u, 128u, 128u) == glm::ivec2(127, 0));
+}
+
+TEST_CASE("render.outline.*: the latched ceiling and supersample are today's 32 px / 2x, the widths 3/3/1 px", "[outline][sweep]")
+{
+    // Settings S6-21: the Restart pair is latched for the process and must
+    // reproduce the constants it replaced, so the JFA schedule (7 steps) and
+    // the id target's extent are unchanged at the defaults.
+    CHECK(Arcane::OutlineMaxThicknessPx() == 32u);
+    CHECK(Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx()) == 7u);
+    CHECK(Arcane::PickSupersample() == 2u);
+    CHECK(Arcane::PickNode::SuperSample() == 2u);
+    Arcane::Test::RequireDefault("render.outline.selectWidthPx", Arcane::CVarValue::Float32(3.0f));
+    Arcane::Test::RequireDefault("render.outline.hoverWidthPx", Arcane::CVarValue::Float32(3.0f));
+    Arcane::Test::RequireDefault("render.outline.edgeSoftnessPx", Arcane::CVarValue::Float32(1.0f));
+    Arcane::Test::RequireDefault("render.outline.maxThicknessPx", Arcane::CVarValue::UInt32(32u));
 }

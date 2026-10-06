@@ -93,14 +93,12 @@ namespace Arcane
         static_assert(sizeof(CompositeCB) == 64, "CompositeCB must match outline_composite.hlsl");
         static_assert(offsetof(CompositeCB, selectColor) == 32, "selectColor at offset 32");
 
-        // The authored look: amber selected, cyan hovered, a 3 px outline
-        // CENTERED on the silhouette edge with a 1 px AA ramp.
-        // Display-referred -- the composite writes straight into the
+        // The authored look: amber selected, cyan hovered, an outline
+        // CENTERED on the silhouette edge with an AA ramp -- the widths are
+        // render.outline.* (RenderOutlineSettings; 3 px / 3 px / 1 px by
+        // default). Display-referred -- the composite writes straight into the
         // tonemapped backbuffer with no sRGB conversion. Colours come from
         // OutlineNode::m_selectColor / m_hoverColor (SetColors).
-        constexpr float kSelectThickPx  = 3.0f;
-        constexpr float kHoverThickPx   = 3.0f;
-        constexpr float kEdgeSoftPx     = 1.0f;
 
         std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) noexcept
         {
@@ -670,8 +668,8 @@ namespace Arcane
         // the SAME mapping PickBuffer::Pick uses, so a probe and an editor click
         // at the same pixel read the same texel.
         const glm::ivec2 texel = PickSampleTexel(glm::vec2((float)probeX, (float)probeY),
-                                                  kSuperSample,
-                                                  width * kSuperSample, height * kSuperSample);
+                                                  SuperSample(),
+                                                  width * SuperSample(), height * SuperSample());
 
         nri::TextureDataLayoutDesc layout = {};
         layout.offset     = frameSlot * m_readbackStride;
@@ -1237,10 +1235,14 @@ namespace Arcane
     {
         SyncPoolEpoch(context);
 
+        // A width past the latched ceiling would read the field where it is
+        // deliberately empty, so the ceiling caps both.
+        const RenderOutlineSettings& o = Settings<RenderOutlineSettings>();
+        const float ceiling = static_cast<float>(OutlineMaxThicknessPx());
         CompositeCB cb{};
-        cb.selectThick = kSelectThickPx;
-        cb.hoverThick  = kHoverThickPx;
-        cb.edgeSoft    = kEdgeSoftPx;
+        cb.selectThick = std::min(o.selectWidthPx, ceiling);
+        cb.hoverThick  = std::min(o.hoverWidthPx,  ceiling);
+        cb.edgeSoft    = o.edgeSoftnessPx;
         cb.dimX        = (std::int32_t)width;
         cb.dimY        = (std::int32_t)height;
         std::memcpy(cb.selectColor, m_selectColor, sizeof(m_selectColor));
@@ -1287,9 +1289,9 @@ namespace Arcane
                 // root constants stay logical and the executor takes the
                 // viewport from the attachment), so the same silhouettes
                 // rasterise at ss x density and outline_seed.hlsl gets the
-                // sub-pixel coverage its centroid needs. See PickNode::kSuperSample.
-                desc.width  = width  * PickNode::kSuperSample;
-                desc.height = height * PickNode::kSuperSample;
+                // sub-pixel coverage its centroid needs. See PickNode::SuperSample().
+                desc.width  = width  * PickNode::SuperSample();
+                desc.height = height * PickNode::SuperSample();
                 desc.hasOptimizedClearValue = true; // PickNode clears ids to uint zero.
                 *ids = builder.CreateTexture("pickids", desc);
                 builder.Write(*ids, RgUsage::ColorWrite);
@@ -1302,8 +1304,8 @@ namespace Arcane
                 // read by nothing else -- its whole lifetime is this node.
                 RgTextureDesc depthDesc;
                 depthDesc.format       = kGraphDepthFormat;
-                depthDesc.width        = width  * PickNode::kSuperSample;
-                depthDesc.height       = height * PickNode::kSuperSample;
+                depthDesc.width        = width  * PickNode::SuperSample();
+                depthDesc.height       = height * PickNode::SuperSample();
                 depthDesc.depthStencil = true;
                 depthDesc.optimizedClearValue.depthStencil.depth = 1.0f;
                 depthDesc.hasOptimizedClearValue = true;
@@ -1397,7 +1399,7 @@ namespace Arcane
                                       // --pick-probe pixel, which is what makes
                                       // that run still show cyan under its own
                                       // probe.
-                                      context->HoverX(), context->HoverY(), PickNode::kSuperSample,
+                                      context->HoverX(), context->HoverY(), PickNode::SuperSample(),
                                       width, height, context->FrameSlot());
             });
 
@@ -1405,7 +1407,7 @@ namespace Arcane
         // thickness, so it is identical on every surface size. See
         // OutlineJfaStepCount.
         const std::uint32_t steps =
-            std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx), OutlineNode::kMaxJfaSteps);
+            std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()), OutlineNode::kMaxJfaSteps);
 
         // Each step CREATES its own transient and the pool allocator collapses
         // them onto two physical textures -- step k overlaps step k-1 (both live

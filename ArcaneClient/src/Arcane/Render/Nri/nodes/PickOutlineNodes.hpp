@@ -115,6 +115,7 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
+#include <Arcane/Render/RenderOutlineSettings.hpp>   // OutlineMaxThicknessPx, PickSupersample
 #include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
 #include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
 
@@ -144,12 +145,14 @@ namespace Arcane
     // both backends.
     inline constexpr nri::Format kGraphOutlineFieldFormat = nri::Format::RGBA16_SNORM;
 
-    // The outline field's maximum useful radius, in 1x px --
-    // the deleted SelectionOutline.cpp's `kMaxThicknessPx`, and the ONLY input to the
-    // jump-flood schedule below. The composite discards any pixel farther than
-    // half the outline width from an edge, so the field only has to be exact
-    // near a silhouette; the field is deliberately EMPTY (w == 0) beyond this.
-    inline constexpr std::uint32_t kOutlineMaxThicknessPx = 32;
+    // The outline field's maximum useful radius, in 1x px, is the Restart
+    // setting render.outline.maxThicknessPx (default 32), read through the
+    // process latch Arcane::OutlineMaxThicknessPx() (RenderOutlineSettings.hpp,
+    // settings S6-21) -- the deleted SelectionOutline.cpp's `kMaxThicknessPx`,
+    // and the ONLY input to the jump-flood schedule below. The composite
+    // discards any pixel farther than half the outline width from an edge, so
+    // the field only has to be exact near a silhouette; the field is
+    // deliberately EMPTY (w == 0) beyond this.
 
     // How many jump-flood steps the chain declares for a `maxThicknessPx`-px
     // field: the halving schedule 2^(N-1) .. 1 (N = ceil(log2(maxThicknessPx)),
@@ -281,19 +284,20 @@ namespace Arcane
         [[nodiscard]] std::uint64_t LastProbeTicket() const noexcept { return m_probeTicket; }
 
         // The id pass's supersample factor: the id target is declared at
-        // kSuperSample*width x kSuperSample*height while the root constants stay
+        // SuperSample()*width x SuperSample()*height while the root constants stay
         // LOGICAL, so the same silhouettes rasterise at ss x density and the
         // seed shader averages them into a sub-pixel edge centroid through
-        // gSuperSample. Stated as a constant rather than left implicit so the id
-        // target's extent, the seed CB and the readback texel cannot disagree
-        // about it.
+        // gSuperSample. Stated as ONE accessor rather than left implicit so the
+        // id target's extent, the seed CB and the readback texel cannot
+        // disagree about it.
         //
-        // IT MUST NOT BE 1. At 1 every seed position shifts by a quarter
-        // pixel and the outline edge visibly changes, because the seed shader
-        // averages the supersampled silhouettes into a sub-pixel centroid.
-        // The value is Arcane::kPickSupersample and this node is its only
-        // reader -- see PickEmit.hpp.
-        static constexpr std::uint32_t kSuperSample = kPickSupersample;
+        // CHANGING IT MOVES THE OUTLINE. At 1 every seed position shifts by a
+        // quarter pixel and the outline edge visibly changes, because the seed
+        // shader averages the supersampled silhouettes into a sub-pixel
+        // centroid -- a value other than the default 2 re-blesses the goldens.
+        // The value is Arcane::PickSupersample() (render.outline.supersample,
+        // latched for the process) -- see PickEmit.hpp.
+        [[nodiscard]] static std::uint32_t SuperSample() noexcept { return PickSupersample(); }
 
         // entity_id.hlsl's BatchConstants and entity_id_mesh.hlsl's MeshIdConstants:
         // BOTH 80 bytes, so ONE pipeline layout (root constants b0, vertex + fragment)
@@ -457,9 +461,11 @@ namespace Arcane
         // Over kMaxSelectedIds the first kMaxSelectedIds are kept, with one WARN.
         void PrepareSelection(std::span<const std::uint32_t> selectedIds);
 
-        // The composite's two colours (settings arc S4): the editor pushes
-        // editor.theme.amber (selected) and the graph hover border (hovered)
-        // every frame. Defaults are the values this node always drew.
+        // The composite's two colours (settings arc S4; ruling I5, S6-21 reuses
+        // this transport): the editor pushes editor.theme.amber (selected) and
+        // the graph hover border (hovered) every frame. The member defaults
+        // are the values this node always drew, kept for the producer with no
+        // theme -- ArcaneRuntime's --pick-probe outline.
         void SetColors(const glm::vec4& select, const glm::vec4& hover) noexcept
         {
             m_selectColor[0] = select.x; m_selectColor[1] = select.y; m_selectColor[2] = select.z; m_selectColor[3] = select.w;
@@ -627,7 +633,7 @@ namespace Arcane
 
     struct RgPickHandles
     {
-        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::kSuperSample x
+        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::SuperSample() x
         RgTexture depth{};      // the pass-local D32 transient (spec s7.1), supersampled like ids
         RgBuffer  readback{};   // the imported HOST_READBACK staging buffer
     };
@@ -635,13 +641,13 @@ namespace Arcane
     // Declares "pick" (Raster, the id pass) and "pickreadback" (Copy, the
     // 1-texel probe copy) into `graph`. `width`/`height` are the LOGICAL 1x
     // extent: the id target AND the pass's own depth are created here at
-    // PickNode::kSuperSample times that; the id target is read by both the
+    // PickNode::SuperSample() times that; the id target is read by both the
     // readback and the outline seed (which are told the factor rather than
     // left to infer it), the depth by nothing outside the pass.
     ARC_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
                                           std::uint32_t width, std::uint32_t height);
 
-    // Declares "outlineseed" plus OutlineJfaStepCount(kOutlineMaxThicknessPx)
+    // Declares "outlineseed" plus OutlineJfaStepCount(OutlineMaxThicknessPx())
     // "outlinejfaN" nodes, and hands back the LAST step's target -- the field
     // the composite samples. Every target is its OWN RGBA16_SNORM transient at
     // the 1x extent; the two-physical-texture ping-pong is the transient pool

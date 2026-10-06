@@ -171,10 +171,11 @@ namespace Arcane
     // That makes this factor PIXEL-VISIBLE, not a quality knob: at ss=1 every
     // seed sits at its pixel centre, at ss=2 it sits up to a quarter-pixel off
     // it, and the composite's AA ramp is only 1 px wide -- so the two produce
-    // visibly different outline edges. It is a named constant, not a literal
-    // at each site, for exactly that reason: two copies would drift and the
-    // symptom would be a subtly different outline.
-    inline constexpr uint32_t kPickSupersample = 2;
+    // visibly different outline edges. It is ONE read, not a literal at each
+    // site, for exactly that reason: two copies would drift and the symptom
+    // would be a subtly different outline. The factor is the Restart setting
+    // render.outline.supersample (default 2), read through the process latch
+    // Arcane::PickSupersample() in RenderOutlineSettings.hpp (settings S6-21).
 
     // =====================================================================
     // THE ID PASS'S 2D GEOMETRY -- ONE emitter.

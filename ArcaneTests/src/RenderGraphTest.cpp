@@ -5702,7 +5702,7 @@ TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected se
     // is no second opinion to cross-check against; the expected sequence below
     // is spelled out instead. On a pure function that is just as effective a
     // regression guard -- any change to the formula still trips here.
-    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx());
     REQUIRE(steps <= Arcane::OutlineNode::kMaxJfaSteps);   // never clamped away
 
     std::vector<std::int32_t> graphJumps;
@@ -5718,13 +5718,13 @@ TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected se
     CHECK(graphJumps[steps - 2] == 1);
 
     // The reach still covers the field the composite can actually draw into:
-    // every pixel within kOutlineMaxThicknessPx of a silhouette must be able to
+    // every pixel within OutlineMaxThicknessPx() of a silhouette must be able to
     // see it. Beyond that the field is empty BY DESIGN and the composite
     // discards -- which is why the count is thickness-derived, not extent-derived.
     std::uint64_t reach = 0;
     for (const std::int32_t jump : graphJumps)
         reach += (std::uint64_t)jump;
-    CHECK(reach >= Arcane::kOutlineMaxThicknessPx);
+    CHECK(reach >= Arcane::OutlineMaxThicknessPx());
 
     // Degenerate thickness still asks for passes rather than none: a zero-step
     // chain would leave the composite reading a never-written transient, which
@@ -5745,8 +5745,8 @@ TEST_CASE("outline jfa: the graph's id pass supersamples by the pinned constant"
     // AA ramp. That is why the constant is pinned rather than tuned freely.
     //
     // ONE constant: PickNode sizes its graph transient by it.
-    CHECK(Arcane::kPickSupersample >= 1);
-    CHECK(Arcane::PickNode::kSuperSample == Arcane::kPickSupersample);
+    CHECK(Arcane::PickSupersample() >= 1);
+    CHECK(Arcane::PickNode::SuperSample() == Arcane::PickSupersample());
 }
 
 TEST_CASE("nri graph frame: the pick + outline chain is absent unless the frame asks for it", "[nri]")
@@ -5792,7 +5792,7 @@ TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap a
     // NOT a function of the 320x200 canvas: see the "the graph's jump schedule
     // matches the pinned expected sequence" case for why the count is
     // thickness-derived.
-    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx());
     REQUIRE(steps == 7);
     CHECK(handles.jfaStepCount == steps);
 
@@ -7063,7 +7063,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
     Arcane::MeshSceneDesc scene;
     scene.instances = instances;
 
-    Arcane::GridSceneDesc grid;   // defaults: XZ plane, 1 m / 10 m, the editor's view
+    Arcane::GridSceneDesc grid;   // XZ plane; the tunables are zero (MakeGridScene fills them) -- the declaration shape does not read them
 
     SECTION("with a mesh scene: batch2d, gpuscene-sync, mesh-cull, mesh, grid, tonemap -- one shared depth transient")
     {
@@ -7387,7 +7387,7 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
     CHECK(Node::kCbRegionsPerFrame == 2 + Node::kMaxJfaSteps);
     // The cap must cover the schedule the chain actually declares, with room
     // for a thicker outline than today's 32 px if one is ever authored.
-    CHECK(Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx) <= Node::kMaxJfaSteps);
+    CHECK(Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx()) <= Node::kMaxJfaSteps);
     CHECK(Arcane::OutlineJfaStepCount(4096) <= Node::kMaxJfaSteps);
 
     const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };

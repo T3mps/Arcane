@@ -45,6 +45,7 @@
 // dropped when a finer one qualified -- is held at the major strength, so the
 // crossing moves no line discontinuously from either side (ViewportGrid.cpp).
 
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <glm/glm.hpp>
@@ -58,19 +59,24 @@ namespace Arcane
 
 namespace Arcane::Editor
 {
-    // The crossfade window, in screen pixels of a level's spacing.
-    inline constexpr float kGridFadeInPx   = 8.0f;
-    inline constexpr float kGridFadeFullPx = 24.0f;
+    // The crossfade window, in screen pixels of a level's spacing, at UI
+    // scale 1.0: DERIVED (s16.11) -- the plan reads Ui::Px of these, so the
+    // window follows editor.ui.scale.
+    ARC_CONSTANT("DERIVED base px: x editor.ui.scale through Ui::Px (s16.11)")
+    inline constexpr float kGridFadeInPxBase   = 8.0f;
+    ARC_CONSTANT("DERIVED base px: x editor.ui.scale through Ui::Px (s16.11)")
+    inline constexpr float kGridFadeFullPxBase = 24.0f;
 
-    // Peak strengths: a fully faded-in minor level, and the major level.
-    inline constexpr float kGridMinorAlpha = 0.35f;
-    inline constexpr float kGridMajorAlpha = 0.55f;
-
-    // Level lines are neutral grey at the level's alpha; the axes are full
-    // colour on top. pending axis unification re-bless (S5-2 A): these stay
-    // the painted 2D-grid values; inspector bars bind to editor.theme.axis*.
-    inline constexpr glm::vec3 kGridLineRgb    { 0.5f, 0.5f, 0.5f };
+    // The tunables -- the minor/major peak strengths, the line colour and
+    // thickness and the per-axis line budget -- are editor.viewport.grid.*
+    // (EditorGridSettings, settings S6-21), read once per PlanGrid2D /
+    // DrawGrid2D. Level lines are lineColor at the level's alpha; the axes are
+    // full colour on top. pending axis unification re-bless (S5-2 A): the axis
+    // pair stays the painted 2D-grid values; inspector bars bind to
+    // editor.theme.axis*.
+    ARC_CONSTANT("pending axis unification re-bless (S5-2)")
     inline constexpr glm::vec4 kGridAxisXColor { 0.85f, 0.25f, 0.25f, 0.9f };
+    ARC_CONSTANT("pending axis unification re-bless (S5-2)")
     inline constexpr glm::vec4 kGridAxisYColor { 0.3f,  0.8f,  0.3f,  0.9f };
 
     // The two axis lines' colours (settings arc S4): the editor derives them
@@ -80,8 +86,6 @@ namespace Arcane::Editor
         glm::vec4 x = kGridAxisXColor;
         glm::vec4 y = kGridAxisYColor;
     };
-
-    inline constexpr float kGridLineThicknessPx = 1.0f;
 
     struct GridLevel
     {

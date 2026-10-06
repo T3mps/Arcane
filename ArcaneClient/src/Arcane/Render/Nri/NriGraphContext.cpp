@@ -536,6 +536,11 @@ namespace Arcane
 
         if (m_pickArmed || nodes.pickOutline)
         {
+            // The Restart pair (render.outline.maxThicknessPx / .supersample)
+            // latches HERE, at node creation, for the process: the JFA
+            // schedule and the id target's extent never change under a graph.
+            (void)OutlineMaxThicknessPx();
+            (void)PickSupersample();
             m_pick = PickNode::Create(*this);
             if (!m_pick)
                 return false;   // already logged
@@ -554,7 +559,7 @@ namespace Arcane
                      // be worse than no log line. Thickness-derived and
                      // therefore surface-independent (D3c), which is exactly why
                      // it can be stated once here at boot.
-                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+                     std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
         }
@@ -564,7 +569,7 @@ namespace Arcane
                      "carries the entity-id pass, its readback and up to a {}-step JFA outline "
                      "whenever it asks; a readback lands {} rendered frames after the frame that "
                      "armed it",
-                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+                     std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                               OutlineNode::kMaxJfaSteps),
                      kSwapchainFramesInFlight);
         }
@@ -1475,7 +1480,7 @@ namespace Arcane
             handles.pickReadback = pick.readback;
             handles.outlineField = AddOutlineNodes(graph, context, pick.ids,
                                                     shape.canvasWidth, shape.canvasHeight);
-            handles.jfaStepCount = std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+            handles.jfaStepCount = std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                                              OutlineNode::kMaxJfaSteps);
             AddOutlineCompositeNode(graph, context, handles.outlineField, handles.backbuffer,
                                      shape.canvasWidth, shape.canvasHeight);

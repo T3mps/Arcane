@@ -1251,6 +1251,7 @@ project "ArcaneTests"
         -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorUiSettings.cpp",

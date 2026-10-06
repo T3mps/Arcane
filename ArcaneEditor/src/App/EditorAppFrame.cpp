@@ -23,6 +23,7 @@
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
 #include "Settings/LayoutPage.hpp"
@@ -2031,6 +2032,10 @@ namespace Arcane::Editor
         if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
             && m_viewSettings.showGrid)
         {
+            // The tunables are editor.viewport.grid.* / grid3D.* (settings
+            // S6-21), rebuilt every frame so a Live edit lands next frame.
+            m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
+                                                        Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
             m_gridScene.view = m_runtime->View();
             m_gridScene.SetPlane(m_viewSettings.gridPlane == Arcane::Editor::GridPlane::XY
                                      ? Arcane::GridSceneDesc::Plane::XY
