@@ -9,6 +9,8 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Sim/RunLoop.hpp>
+#include <Arcane/Sim/SimSettings.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -198,5 +200,32 @@ TEST_CASE("physics.parallelSolver: off by default (the serial solver, as before)
         REQUIRE(res->world);
         CHECK(res->world->Executor() == rt.WorkScheduler());
     }
+}
+
+TEST_CASE("SimSettings: today's 60 Hz step and 0.25 s frame clamp; sim.fixedHz is read when a Runtime is built", "[settings]")
+{
+    CHECK(SimSettings{}.fixedHz == 60.0);
+    CHECK(SimSettings{}.maxFrameDeltaSeconds == 0.25);
+    CHECK(RunLoop::Config{}.fixedHz == SimSettings{}.fixedHz);
+    CVarRegistry& reg = CVarRegistry::Get();
+    const auto hz = reg.Explain("sim.fixedHz");
+    REQUIRE(hz);
+    CHECK(hz->type == CVarType::Float64);
+    CHECK(HasFlag(hz->flags, CVarFlags::Deterministic));
+    CHECK(hz->apply == ApplyMode::NextWorld);
+    const auto clamp = reg.Explain("sim.maxFrameDeltaSeconds");
+    REQUIRE(clamp);
+    CHECK(clamp->apply == ApplyMode::Live);
+    CHECK(HasFlag(clamp->flags, CVarFlags::Deterministic));
+
+    Runtime before(Test::Process());
+    const CVarHandle h = reg.Find("sim.fixedHz");
+    ClearCodeOnExit restore{ h };
+    REQUIRE(reg.Set(h, CVarValue::Float64(30.0), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(Settings<SimSettings>().fixedHz == 30.0);
+    Runtime after(Test::Process());
+    CHECK(after.Loop().FixedHz() == 30.0);
+    CHECK(before.Loop().FixedHz() == 60.0);                     // NextWorld: a live Runtime keeps its step
 }
 

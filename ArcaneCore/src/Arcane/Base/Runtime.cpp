@@ -25,6 +25,7 @@
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
 #include <Arcane/Sim/NetDriver.hpp>   // INetDriver::IsActive (the hot-reload refusal asks it)
+#include <Arcane/Sim/SimSettings.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentModule.hpp>
@@ -231,6 +232,9 @@ namespace Arcane
 
             registry   = std::make_unique<Astra::Registry>(components, ToAstraConfig(Settings<AstraMemorySettings>(), sched));
             schedulers = std::make_unique<SystemSchedulers>(sched);
+            // sim.fixedHz (settings arc S2, NextWorld): this Runtime's step,
+            // read once. InstallEngineSystems and PhysicsEditPass read loopCfg.
+            loopCfg.fixedHz = Settings<SimSettings>().fixedHz;
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
             assets = Assets::Create();

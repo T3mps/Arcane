@@ -48,6 +48,7 @@
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
+#include <Arcane/Sim/SimSettings.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -1359,7 +1360,7 @@ namespace Arcane::Editor
         // reaches RunLoop::Advance -- FixedUpdateAll/UpdateAll, gameplay -- so a
         // wall-clock simDt means `--frames N` advances a --play-as run's sim by
         // however long N frames happened to take on THIS machine, and no two
-        // runs agree. The 0.25 s spiral-of-death clamp stays wall-clock-only:
+        // runs agree. The sim.maxFrameDeltaSeconds spiral-of-death clamp stays wall-clock-only:
         // fixedDtSeconds is refused at parse time unless positive (HostConfig.
         // cpp) and is a deliberate per-run choice, not a stall to guard against.
         // Edit mode steps no physics either way (EditModeSchedule owns the
@@ -1379,7 +1380,8 @@ namespace Arcane::Editor
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - ls.simPrev).count();
             ls.simPrev = now;
-            if (simDt > 0.25) simDt = 0.25;
+            const double maxFrameDelta = Arcane::Settings<Arcane::SimSettings>().maxFrameDeltaSeconds;   // settings arc S2: shared with editor Play
+            if (simDt > maxFrameDelta) simDt = maxFrameDelta;
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         m_runtime->Loop().Advance(simDt,

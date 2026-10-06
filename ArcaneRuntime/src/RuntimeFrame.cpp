@@ -22,6 +22,7 @@
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
+#include <Arcane/Sim/SimSettings.hpp>
 
 #include <imgui.h>
 #include <cstdio>
@@ -267,7 +268,7 @@ void AdvanceSim(FrameIo& io)
         // RunLoop::Advance below, i.e. FixedUpdateAll/UpdateAll -- gameplay
         // -- so a wall-clock simDt means `--frames 5` advances the sim by
         // however long five frames happened to take on THIS run's machine,
-        // and no two runs agree. The 0.25s spiral-of-death clamp stays
+        // and no two runs agree. The sim.maxFrameDeltaSeconds spiral-of-death clamp stays
         // wall-clock-only: fixedDtSeconds is refused at parse time unless
         // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
         // stall to guard against.
@@ -285,7 +286,8 @@ void AdvanceSim(FrameIo& io)
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - io.simPrev).count();
             io.simPrev = now;
-            if (simDt > 0.25) simDt = 0.25;
+            const double maxFrameDelta = Arcane::Settings<Arcane::SimSettings>().maxFrameDeltaSeconds;   // settings arc S2: shared with editor Play
+            if (simDt > maxFrameDelta) simDt = maxFrameDelta;
         }
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->EnsurePhysics();   // engine-owned physics (spec s4.3): mint/refresh the world before the step
