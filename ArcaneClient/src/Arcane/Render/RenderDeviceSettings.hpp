@@ -19,7 +19,9 @@
 //                    help unchanged, and the look (S6-19): the canvas clear
 //                    colour, texture anisotropy and the graph's canvas and
 //                    depth formats (latched once per process by
-//                    NriGraphContext.hpp's GraphCanvasFormat/GraphDepthFormat).
+//                    LatchedCanvasFormat/LatchedDepthFormat below, which
+//                    NriGraphContext.hpp's GraphCanvasFormat/GraphDepthFormat
+//                    map to NRI formats).
 //                    RenderLookSettings.hpp holds the rest of the look. --backend and --no-vsync stay as flags:
 //                    HostBoot::ApplyEarlyConfigRungs puts them on the
 //                    CommandLine rung, and the HostConfig adopts the
@@ -260,4 +262,26 @@ namespace Arcane
 
     // The published render.backend and render.debug.* as a device desc.
     [[nodiscard]] ARC_API RenderDeviceDesc MakeRenderDeviceDesc();
+
+    // THE GRAPH FORMAT LATCH (settings arc S6-19; Restart): render.canvasFormat
+    // and render.depthFormat, fixed per process on the first read (each
+    // independently) from the published snapshot, so every graph context,
+    // node and PSO key in the process agrees. NriGraphContext.hpp's
+    // GraphCanvasFormat/GraphDepthFormat are these as NRI formats.
+    //
+    // THE CONTRACT (the FramesInFlight() one, FramePacing.hpp): in a host,
+    // nothing may read them -- nor build a graph -- before
+    // HostBoot::ApplyEarlyConfigRungs has published the config rungs, or the
+    // default freezes for the process and silently overrides the user's
+    // setting. ApplyEarlyConfigRungs therefore calls CheckGraphFormatLatch()
+    // right after its publish. A process with no host (the tests) latches the
+    // default unless it sets the cvars first.
+    [[nodiscard]] ARC_API CanvasFormat LatchedCanvasFormat() noexcept;
+    [[nodiscard]] ARC_API DepthFormat LatchedDepthFormat() noexcept;
+
+    // The early-latch diagnostic. True when each format is not latched yet or
+    // is latched to its published value; false, with one warning per format
+    // that differs, when an earlier read latched another. Never latches and
+    // never changes a format.
+    ARC_API bool CheckGraphFormatLatch() noexcept;
 }

@@ -42,17 +42,16 @@
 namespace Arcane
 {
     // render.canvasFormat / render.depthFormat, latched on first use (the
-    // header's contract: one format per process, Restart).
+    // header's contract: one format per process, Restart). The latch itself,
+    // and its too-early diagnostic, live in RenderDeviceSettings.cpp.
     nri::Format GraphCanvasFormat() noexcept
     {
-        static const nri::Format latched = ToNriFormat(Settings<RenderSettings>().canvasFormat);
-        return latched;
+        return ToNriFormat(LatchedCanvasFormat());
     }
 
     nri::Format GraphDepthFormat() noexcept
     {
-        static const nri::Format latched = ToNriFormat(Settings<RenderSettings>().depthFormat);
-        return latched;
+        return ToNriFormat(LatchedDepthFormat());
     }
 
     namespace

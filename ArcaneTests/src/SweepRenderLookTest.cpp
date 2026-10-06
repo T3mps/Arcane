@@ -43,7 +43,9 @@ TEST_CASE("sweep: render look cvars are registered with their declared defaults"
     Test::RequireDefault("render.cull.frustumSlackMeters", CVarValue::Float32(0.25f));
     Test::RequireDefault("render.mesh.defaultLight.direction", CVarValue::Vec3(CVarVec3{ 0.0f, 0.0f, 1.0f }));
     Test::RequireDefault("render.mesh.defaultLight.color", CVarValue::Color(CVarColor{ 1.0f, 1.0f, 1.0f, 1.0f }));
+    Test::RequireDefault("render.mesh.defaultLight.intensity", CVarValue::Float32(1.0f));
     Test::RequireDefault("render.mesh.defaultLight.ambient", CVarValue::Color(CVarColor{ 0.05f, 0.05f, 0.05f, 1.0f }));
+    Test::RequireDefault("render.mesh.defaultLight.ambientIntensity", CVarValue::Float32(1.0f));
     // Enums store the declared ordinal (Integration ruling I7).
     Test::RequireDefault("render.sprite.filter", CVarValue::Enum(0));
     Test::RequireDefault("render.canvasFormat", CVarValue::Enum(0));
@@ -59,6 +61,33 @@ TEST_CASE("sweep: the canvas and depth format settings map to the NRI formats th
     // The process latch, at the defaults: exactly the old kGraph* constants.
     CHECK(GraphCanvasFormat() == nri::Format::RGBA16_SFLOAT);
     CHECK(GraphDepthFormat() == nri::Format::D32_SFLOAT);
+    CHECK(LatchedCanvasFormat() == CanvasFormat::Rgba16f);
+    CHECK(LatchedDepthFormat() == DepthFormat::D32);
+}
+
+TEST_CASE("sweep: a graph format latch that beat the config rungs is reported", "[sweep][render-look]")
+{
+    // The process latches are already fixed (or are fixed here) at the defaults.
+    CHECK(GraphCanvasFormat() == nri::Format::RGBA16_SFLOAT);
+    CHECK(GraphDepthFormat() == nri::Format::D32_SFLOAT);
+    CHECK(CheckGraphFormatLatch());   // latched == published: silent
+    CVarRegistry& reg = CVarRegistry::Get();
+
+    // An early read froze Rgba16f; R11g11b10f was published after.
+    reg.Set(reg.Find("render.canvasFormat"), CVarValue::Enum(1), SetBy::Code);
+    reg.PublishImmediate();
+    CHECK_FALSE(CheckGraphFormatLatch());
+    CHECK(GraphCanvasFormat() == nri::Format::RGBA16_SFLOAT);   // the check never changes a format
+    reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
+    CHECK(CheckGraphFormatLatch());
+
+    // ...and the depth format, independently.
+    reg.Set(reg.Find("render.depthFormat"), CVarValue::Enum(1), SetBy::Code);
+    reg.PublishImmediate();
+    CHECK_FALSE(CheckGraphFormatLatch());
+    CHECK(GraphDepthFormat() == nri::Format::D32_SFLOAT);
+    reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
+    CHECK(CheckGraphFormatLatch());
 }
 
 TEST_CASE("sweep: the default mesh light is applied from the published setting", "[sweep][render-look]")
@@ -72,6 +101,17 @@ TEST_CASE("sweep: the default mesh light is applied from the published setting",
     CHECK(scene.lightDirection == glm::vec3(0.5f, -1.0f, 2.0f));
     CHECK(scene.lightColor == glm::vec3(0.25f, 0.5f, 0.75f));
     CHECK(scene.ambient == glm::vec3(0.125f, 0.0f, 1.0f));
+
+    // Colour x intensity: an HDR light past the colour's 0..1 (exact in
+    // binary, so == is safe).
+    light.intensity        = 8.0f;
+    light.ambientIntensity = 0.5f;
+    ApplyDefaultLight(scene, light);
+    CHECK(scene.lightColor == glm::vec3(2.0f, 4.0f, 6.0f));
+    CHECK(scene.ambient == glm::vec3(0.0625f, 0.0f, 0.5f));
+    light.intensity = 0.0f;   // 0 turns the directional light off
+    ApplyDefaultLight(scene, light);
+    CHECK(scene.lightColor == glm::vec3(0.0f));
 
     // At the defaults the applied light is MeshSceneDesc's own, bit for bit.
     MeshSceneDesc byDefault;

@@ -288,7 +288,9 @@ namespace Arcane
     // and every pipeline key in the process -- including a node built with no
     // context -- reads the SAME format, so a value published mid-session can
     // never split an attachment from the PSOs keyed for it. A host builds no
-    // graph before HostBoot::ApplyEarlyConfigRungs has published the rungs.
+    // graph before HostBoot::ApplyEarlyConfigRungs has published the rungs;
+    // that function warns (CheckGraphFormatLatch, RenderDeviceSettings.hpp)
+    // when an earlier read latched a format other than the published one.
     [[nodiscard]] constexpr nri::Format ToNriFormat(CanvasFormat format) noexcept
     {
         return format == CanvasFormat::R11g11b10f ? nri::Format::R11_G11_B10_UFLOAT : nri::Format::RGBA16_SFLOAT;

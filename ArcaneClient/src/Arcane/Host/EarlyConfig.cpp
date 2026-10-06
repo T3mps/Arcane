@@ -52,7 +52,10 @@ namespace Arcane::HostBoot
         cvars.PublishImmediate();
         // A FramesInFlight() read before this publish has already frozen the
         // pacing depth for the process; say so if it differs (FramePacing.hpp).
+        // The graph's canvas and depth formats latch the same way
+        // (RenderDeviceSettings.hpp).
         CheckFramesInFlightLatch();
+        CheckGraphFormatLatch();
 
         // Restart settings the host carries to GpuContext::Create, the device
         // and the swapchain: from here on the HostConfig holds the published

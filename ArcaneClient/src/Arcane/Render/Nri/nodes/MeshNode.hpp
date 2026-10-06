@@ -256,10 +256,15 @@ namespace Arcane
 
     namespace Detail
     {
-        // render.mesh.defaultLight.* as the glm values MeshSceneDesc holds
-        // (the colour's alpha is unused).
+        // render.mesh.defaultLight.* as the glm values MeshSceneDesc holds:
+        // a light is its colour x its intensity (the colour's alpha is
+        // unused). x * 1.0f is x exactly, so intensity 1 is the colour bit
+        // for bit.
         [[nodiscard]] constexpr glm::vec3 ToGlm(const CVarVec3& v) noexcept { return { v.x, v.y, v.z }; }
-        [[nodiscard]] constexpr glm::vec3 ToGlmRgb(const CVarColor& c) noexcept { return { c.r, c.g, c.b }; }
+        [[nodiscard]] constexpr glm::vec3 ToGlmRgb(const CVarColor& c, float intensity) noexcept
+        {
+            return { c.r * intensity, c.g * intensity, c.b * intensity };
+        }
     }
 
     struct MeshSceneDesc
@@ -309,8 +314,10 @@ namespace Arcane
         // a scene-view host overwrites them every frame from the published
         // setting with ApplyDefaultLight (Live).
         glm::vec3 lightDirection = Detail::ToGlm(RenderMeshDefaultLightSettings{}.direction);
-        glm::vec3 lightColor     = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.color);
-        glm::vec3 ambient        = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.ambient);
+        glm::vec3 lightColor     = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.color,
+                                                    RenderMeshDefaultLightSettings{}.intensity);
+        glm::vec3 ambient        = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.ambient,
+                                                    RenderMeshDefaultLightSettings{}.ambientIntensity);
 
         // THE REGISTRY-BACKED SCENE (F3 plan 1 T6): what GpuSceneSync +
         // BuildGpuSceneFrame produced for this frame -- the staged rows,
@@ -348,13 +355,14 @@ namespace Arcane
 
     // The scene's light from render.mesh.defaultLight.* -- the one
     // directional light and the ambient term every scene view gets until a
-    // light component exists (the colours' alpha is unused). A host passes
+    // light component exists, each its colour x its intensity (the colours'
+    // alpha is unused). A host passes
     // Settings<RenderMeshDefaultLightSettings>() once per frame (Live).
     inline void ApplyDefaultLight(MeshSceneDesc& scene, const RenderMeshDefaultLightSettings& light) noexcept
     {
         scene.lightDirection = Detail::ToGlm(light.direction);
-        scene.lightColor     = Detail::ToGlmRgb(light.color);
-        scene.ambient        = Detail::ToGlmRgb(light.ambient);
+        scene.lightColor     = Detail::ToGlmRgb(light.color, light.intensity);
+        scene.ambient        = Detail::ToGlmRgb(light.ambient, light.ambientIntensity);
     }
 
     // THE 8-BYTE ROOT BLOCK (F3): `firstOutput` is the batch's start in the
