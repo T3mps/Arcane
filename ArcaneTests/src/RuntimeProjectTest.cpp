@@ -172,6 +172,34 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
 // T3-D2: the user cvar archive. A project's User layer (Saved/Config/) leaves
 // with it; a host that archives writes it back on the switch and close, so a
 // value set in project A survives A -> B -> A and never leaks into B.
+TEST_CASE("Runtime teardown: ~Runtime survives a release that throws: a User cvar holding invalid UTF-8 is logged, not std::terminate", "[project][cvar]")
+{
+    // S4-GATE (S2-H follow-up): ~Runtime runs ReleaseProject, whose archive
+    // write dumps JSON; nlohmann::json::dump throws on an invalid-UTF-8 string,
+    // and an exception out of the implicitly noexcept destructor terminated the
+    // host at exit. The release is now guarded: ERROR logged, teardown goes on.
+    const fs::path dir = MakeTempDir("teardown_throw");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s4gate-teardown-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    const Arcane::CVarHandle bad = cvars.Register(Arcane::CVarDesc{ "s4gatetest.text", Arcane::CVarType::String,
+        Arcane::CVarValue::String("ok"), {}, {}, Arcane::CVarFlags::Archive, "test cvar", "s4gate-teardown-test" });
+    REQUIRE_FALSE(bad.IsStale());
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(bad, Arcane::CVarValue::String(std::string("\xFF\xFE not UTF-8")), Arcane::SetBy::User, "editor")
+                == Arcane::SetResult::Applied);
+        cvars.Publish();
+    }   // ~Runtime: the archive write throws inside ReleaseProject
+    CHECK_FALSE(cvars.RungValue("s4gatetest.text", Arcane::SetBy::User).has_value());   // still released: the User layer left with it
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
 TEST_CASE("Runtime user cvar archive: a project switch writes the OLD project's file, drops its User layer, and a reopen reads it back",
           "[project][cvar]")
 {

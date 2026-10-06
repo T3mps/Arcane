@@ -35,6 +35,7 @@
 #include <Astra/Core/WorkScheduler.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
 
+#include <exception>   // ~Runtime / ReleaseProjectCVarLayers guard the release (S4-GATE)
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -355,8 +356,22 @@ namespace Arcane
         // does (S2-H): the User layer archived when this host archives, the
         // project rungs dropped and published, Paths' project forgotten -- so
         // the next Runtime starts from the files alone.
-        if (m_impl)
+        if (!m_impl) return;
+        // A destructor is noexcept: an exception out of the release (a cvar
+        // callback during Publish, say) would std::terminate the host at exit.
+        // Log it and let the rest of teardown run (S4-GATE).
+        try
+        {
             m_impl->ReleaseProject();
+        }
+        catch (const std::exception& e)
+        {
+            ARC_ERROR("Runtime: releasing the project at teardown threw ({}) -- teardown continues", e.what());
+        }
+        catch (...)
+        {
+            ARC_ERROR("Runtime: releasing the project at teardown threw a non-standard exception -- teardown continues");
+        }
     }
 
     ProcessContext& Runtime::Process()      noexcept { return *m_impl->process; }
@@ -616,9 +631,20 @@ namespace Arcane
             CVarRegistry& cvars = CVarRegistry::Get();
             if (archive)
             {
-                WriteCVarArchive(cvars, UserCVarDir(outgoing));
-                if (!editorUserDir.empty())
-                    WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
+                // A failed archive write must not leave the layers half released
+                // (S4-GATE): nlohmann::json::dump throws on a string value that is
+                // not UTF-8, and this also runs from ~Runtime.
+                try
+                {
+                    WriteCVarArchive(cvars, UserCVarDir(outgoing));
+                    if (!editorUserDir.empty())
+                        WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
+                }
+                catch (const std::exception& e)
+                {
+                    ARC_ERROR("cvar: archiving the user settings of '{}' failed ({}) -- unsaved edits are lost; the project still closes",
+                              outgoing.Manifest().name, e.what());
+                }
             }
             cvars.RevertLayer(SetBy::User);
             cvars.RevertLayer(SetBy::Project);
