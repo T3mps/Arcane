@@ -13,7 +13,12 @@ namespace Arcane
 {
     struct ARC_API HostConfig
     {
+        // backend and vsync are what the process boots with: Parse fills them
+        // from --backend / --no-vsync, and HostBoot::ApplyEarlyConfigRungs
+        // replaces them with the published render.backend / render.vsync
+        // (which those flags feed, on the CommandLine rung).
         GraphicsBackend backend   = GraphicsBackend::D3D12;
+        bool            backendSupplied = false;   // --backend was on the command line
         std::uint64_t   maxFrames = 0;             // 0 = run until quit
         bool            vsync     = true;
         bool            perf      = false;

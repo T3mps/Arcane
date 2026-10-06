@@ -49,7 +49,7 @@ int main(int argc, char** argv)
     Arcane::Log::Init();
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
-    const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
+    Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);   // non-const: the early rungs fill backend/vsync
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 
     // Same probe as the editor: identity to stdout, no window, no device. The

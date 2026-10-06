@@ -6,12 +6,15 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace Arcane::HostBoot
 {
-    void ApplyEarlyConfigRungs(const HostConfig& cfg, CVarContext ctx, bool editor)
+    void ApplyEarlyConfigRungs(HostConfig& cfg, CVarContext ctx, bool editor)
     {
         CVarRegistry& cvars = CVarRegistry::Get();
         const std::filesystem::path exeDir = std::filesystem::path(ExecutablePathUtf8()).parent_path();
@@ -36,7 +39,22 @@ namespace Arcane::HostBoot
                                    SetBy::User, "user");
             }
         }
-        ApplyCVarCommandLine(cvars, cfg.cvarSets, ctx);
+        // --backend / --no-vsync are render.backend / render.vsync on the
+        // CommandLine rung (settings arc S6-16), ahead of the --set list so an
+        // explicit --set still wins. An absent --backend leaves the rung alone.
+        std::vector<std::string> sets;
+        if (cfg.backendSupplied)
+            sets.emplace_back(cfg.backend == GraphicsBackend::Vulkan ? "render.backend=Vulkan" : "render.backend=D3D12");
+        if (!cfg.vsync) sets.emplace_back("render.vsync=false");
+        sets.insert(sets.end(), cfg.cvarSets.begin(), cfg.cvarSets.end());
+        ApplyCVarCommandLine(cvars, sets, ctx);
         cvars.PublishImmediate();
+
+        // Restart settings the host carries to GpuContext::Create, the device
+        // and the swapchain: from here on the HostConfig holds the published
+        // values (GpuContext may still fall Vulkan back to D3D12).
+        const RenderSettings& render = Settings<RenderSettings>();
+        cfg.backend = render.backend;
+        cfg.vsync   = render.vsync;
     }
 }

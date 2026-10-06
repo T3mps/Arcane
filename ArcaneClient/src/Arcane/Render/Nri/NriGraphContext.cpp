@@ -17,6 +17,7 @@
 #include <Arcane/Base/Diagnostics.hpp>              // Heartbeat / GpuHeartbeatRefresh -- the offscreen pacing wait
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>       // RenderDeviceDesc (and GraphicsBackend + ToString behind it)
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
@@ -150,14 +151,14 @@ namespace Arcane
         }
 
         // -------------------------------------------------------------
-        // The creation half, with validation forced ON in Debug -- every
-        // channel a validation message can arrive through ends at
+        // The creation half, its validation from render.debug.* (settings
+        // arc S6-16; all three on by default in Debug builds, off otherwise)
+        // -- every channel a validation message can arrive through ends at
         // RenderErrorCount, which is what makes this run's exit code mean
         // something (VK core + sync validation -> DeviceCreationVulkan.cpp's
         // VkDebugCallback; the D3D12 debug layer -> DeviceCreationD3D12.cpp's
-        // ID3D12InfoQueue1 callback, which is why enableD3D12DebugLayer is
-        // forced here since it defaults FALSE for the Nahimic-OSD fail-fast
-        // hazard; NRI's own validation layer -> MakeNriCallbacks).
+        // ID3D12InfoQueue1 callback; NRI's own validation layer ->
+        // MakeNriCallbacks).
         //
         // ALL THREE ARE LIVE SINCE TASK 6, and that is the change: this is now
         // the FIRST graphics device the process creates, so
@@ -170,18 +171,10 @@ namespace Arcane
         // implemented by the servicing d3d12SDKLayers.dll is a separate
         // question that same file logs the answer to.
         // -------------------------------------------------------------
-        RenderDeviceDesc dd;
+        // config.backend, not render.backend: the host adopted the setting
+        // at boot, and GpuContext may have fallen Vulkan back to D3D12.
+        RenderDeviceDesc dd = MakeRenderDeviceDesc();
         dd.backend = config.backend;
-#if defined(ARC_BUILD_DEBUG)
-        dd.enableValidation      = true;
-        dd.enableD3D12DebugLayer = true;
-        dd.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
-#else
-        // Release/Dist: leave RenderDeviceDesc's own defaults (validation off)
-        // rather than forcing debug layers into an optimized build. A Release
-        // graph run is a performance/behaviour check; its exit code still
-        // fails on any error the NRI callbacks report.
-#endif
 
         // NO two-VkDevice WARN here any more, and its absence is the point:
         // NriDevice.hpp's "one live Vulkan device per process" rule held only

@@ -4,7 +4,7 @@
 
 #undef ERROR
 
-#include <Arcane/Render/RenderDebugSettings.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Nri/GpuScene.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
@@ -19,9 +19,9 @@ namespace Arcane
 {
     bool MeshCullFrustumEnabled()
     {
-        // render.meshCull (RenderDebugSettings, settings arc S2). In a Dist
-        // build the block holds the struct default: on.
-        return Settings<RenderDebugSettings>().meshCull;
+        // render.meshCull (RenderSettings; settings arc S2, folded in S6-16).
+        // In a Dist build the field holds the struct default: on.
+        return Settings<RenderSettings>().meshCull;
     }
 
     namespace

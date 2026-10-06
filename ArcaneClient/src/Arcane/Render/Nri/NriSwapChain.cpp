@@ -13,6 +13,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the device-lost teardown gate
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.allowTearing
 #include <Arcane/Platform/Window.hpp>
 
 #include <SDL3/SDL_timer.h>
@@ -136,13 +137,16 @@ namespace Arcane
         // order, only this abstract class -- the concrete nri::Format is
         // queried after creation, not assumed.
         desc.format = nri::SwapChainFormat::BT709_G22_8BIT;
-        // No ALLOW_TEARING: on D3D12 that means FLIP_DISCARD with
-        // DXGI_PRESENT_ALLOW_TEARING never passed. On Vulkan, leaving it unset
-        // means NRI's own present-mode search (SwapChainVK.hpp) tries MAILBOX
-        // first when not syncing, falling back to FIFO_LATEST_READY or FIFO if
-        // Mailbox is unavailable. Present-mode selection past what the VSYNC
-        // bit alone controls is deliberately not chased.
+        // ALLOW_TEARING only when render.allowTearing is on AND vsync is off
+        // (default off). Without it: on D3D12, FLIP_DISCARD with
+        // DXGI_PRESENT_ALLOW_TEARING never passed; on Vulkan, NRI's own
+        // present-mode search (SwapChainVK.hpp) tries MAILBOX first when not
+        // syncing, falling back to FIFO_LATEST_READY or FIFO if Mailbox is
+        // unavailable. Present-mode selection past what these two bits
+        // control is deliberately not chased.
         desc.flags = m_vsync ? nri::SwapChainBits::VSYNC : nri::SwapChainBits::NONE;
+        if (!m_vsync && Settings<RenderSettings>().allowTearing)
+            desc.flags |= nri::SwapChainBits::ALLOW_TEARING;
         // aka "frames in flight" per NRISwapChain.h -- keep DXGI's own
         // frame-latency machinery (SetMaximumFrameLatency, D3D12 non-WAITABLE
         // path) aligned with the depth our OWN timeline-fence pacing already

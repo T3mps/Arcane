@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.vulkan.foreignModuleFallback
 
 #include <string>
 #include <vector>
@@ -48,8 +49,11 @@ namespace Arcane
         // enumeration Report() runs after the device exists; doing it here
         // is what makes the refusal earlier than the fast-fail. Headless
         // stays on the requested backend: its device is offscreen and the
-        // measured crash is the windowed swapchain.
-        if (!cfg.headless && cfg.backend == GraphicsBackend::Vulkan)
+        // measured crash is the windowed swapchain. render.vulkan.
+        // foreignModuleFallback off (a developer reproducing the crash) skips
+        // the fallback and keeps Vulkan.
+        if (!cfg.headless && cfg.backend == GraphicsBackend::Vulkan &&
+            Settings<RenderVulkanSettings>().foreignModuleFallback)
         {
             const std::vector<ForeignModules::LoadedModule> loaded = ForeignModules::EnumerateProcessModules();
             std::vector<std::string> names;

@@ -7,6 +7,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*
 
 namespace Arcane
 {
@@ -20,16 +21,12 @@ namespace Arcane
         // order).
         std::unique_ptr<OffscreenVehicle> v(new OffscreenVehicle());
 
-        RenderDeviceDesc desc;
-        desc.backend = cfg.backend;
-#if defined(ARC_BUILD_DEBUG)
-        // Mirror NriGraphContext.cpp's windowed creation half EXACTLY (same
-        // three flags, same Debug-only gate). An offscreen run's
-        // RenderErrorCount is the WHOLE verdict an agent gets -- there is no
-        // human watching a window to notice what a narrower validation
-        // surface would miss. Leaving any of these three off here would make
-        // --headless quietly weaker than windowed, silently undermining
-        // every verification built on top of it.
+        // The same desc as NriGraphContext.cpp's windowed creation half: the
+        // three validation switches come from render.debug.* (on by default
+        // in Debug builds; settings arc S6-16), so --headless is never
+        // quietly weaker than windowed. An offscreen run's RenderErrorCount
+        // is the WHOLE verdict an agent gets -- there is no human watching a
+        // window to notice what a narrower validation surface would miss.
         //
         // enableD3D12DebugLayer's legality here is guaranteed only for
         // ArcaneRuntime: RuntimeApp::MainLoop (RuntimeApp.cpp) builds exactly
@@ -45,10 +42,8 @@ namespace Arcane
         // later device (WARN, losing that one validation channel) instead of
         // calling EnableDebugLayer and tearing down the device that already
         // exists.
-        desc.enableValidation      = true;
-        desc.enableD3D12DebugLayer = true;
-        desc.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
-#endif
+        RenderDeviceDesc desc = MakeRenderDeviceDesc();
+        desc.backend = cfg.backend;   // the host's adopted backend (render.backend at boot)
         v->m_native = NativeDeviceOwner::Create(desc);
         if (!v->m_native) { ARC_ERROR("[offscreen] no usable adapter for the requested backend"); return nullptr; }
 

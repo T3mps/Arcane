@@ -19,7 +19,7 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SimSettings.hpp>
-#include <Arcane/Render/RenderDebugSettings.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 
@@ -365,7 +365,7 @@ TEST_CASE("log.level is LogSettings' field: same flags and scope as before, and 
 
 TEST_CASE("render.meshCull and diagnostics.drawMarkers keep their names, types, defaults, flags and help as settings-struct fields", "[settings]")
 {
-    CHECK(RenderDebugSettings{}.meshCull == true);
+    CHECK(RenderSettings{}.meshCull == true);
     CHECK(DiagnosticsSettings{}.drawMarkers == false);
     CVarRegistry& reg = CVarRegistry::Get();
 #if defined(ARC_BUILD_DIST)

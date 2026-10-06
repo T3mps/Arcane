@@ -187,6 +187,7 @@ namespace Arcane
 
         HostConfig cfg;
         cfg.backend    = (r.Get("backend") == "vulkan") ? GraphicsBackend::Vulkan : GraphicsBackend::D3D12;
+        cfg.backendSupplied = r.Supplied("backend");
         cfg.maxFrames  = r.GetAs<std::uint64_t>("frames");
         cfg.vsync      = !r.Flag("no-vsync");
         cfg.perf       = r.Flag("perf");

@@ -33,6 +33,7 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // RenderDebugSettings -- the per-configuration validation default
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderPaths.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>
@@ -361,6 +362,7 @@ TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is 
 
     Arcane::RenderDeviceDesc desc;
     desc.backend = Arcane::GraphicsBackend::D3D12;
+    desc.enableValidation = Arcane::RenderDebugSettings{}.validation;   // the per-configuration default (on in Debug)
     auto native = Arcane::NativeDeviceOwner::Create(desc);
     REQUIRE(native != nullptr);
     auto nri = Arcane::NriDevice::Wrap(*native);

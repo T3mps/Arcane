@@ -21,9 +21,12 @@
 #include <Arcane/Assets/ArtifactReader.hpp>   // LoadedClientArtifact -- the compiled-texture supply (Task 7)
 #include <Arcane/Assets/ImageIo.hpp>   // PixelData -- the device-free decode (Task 1)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.debug.pendingCookChecker*
 
 #undef ERROR
 
+#include <array>
 #include <string>
 
 namespace Arcane
@@ -382,7 +385,13 @@ namespace Arcane
         // back to, and not a plausible real-asset colour either, so a
         // PendingCook sprite reads as "placeholder" at a glance and can never
         // be mistaken for a Refused one (the spec's placeholder rule: the two
-        // must never render alike).
+        // must never render alike). The colours are
+        // render.debug.pendingCookChecker / pendingCookCheckerAlt (default
+        // magenta and (16,16,16)), read when the placeholder is built.
+        const RenderDebugSettings& debugSettings = Settings<RenderDebugSettings>();
+        const std::array<std::uint8_t, 4> lead = Srgb8Bytes(debugSettings.pendingCookChecker);
+        const std::array<std::uint8_t, 4> alt  = Srgb8Bytes(debugSettings.pendingCookCheckerAlt);
+        ARC_CONSTANT("placeholder shape: an 8x8 checker; only its colours are settings")
         constexpr std::uint32_t kSize = 8;
         std::vector<unsigned char> pixels(static_cast<std::size_t>(kSize) * kSize * 4);
         for (std::uint32_t y = 0; y < kSize; ++y)
@@ -391,10 +400,11 @@ namespace Arcane
             {
                 unsigned char* p = pixels.data() + (static_cast<std::size_t>(y) * kSize + x) * 4;
                 const bool dark = ((x ^ y) & 1u) != 0u;
-                p[0] = dark ? 16   : 255;
-                p[1] = dark ? 16   : 0;
-                p[2] = dark ? 16   : 255;
-                p[3] = 255;
+                const std::array<std::uint8_t, 4>& texel = dark ? alt : lead;
+                p[0] = texel[0];
+                p[1] = texel[1];
+                p[2] = texel[2];
+                p[3] = texel[3];
             }
         }
 

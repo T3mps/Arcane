@@ -84,7 +84,6 @@ ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kInvalidMaterialId|CONSTANT|ID sche
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialCircle|CONSTANT|ID scheme and key encoding
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialSprite|CONSTANT|ID scheme and key encoding
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialText|CONSTANT|ID scheme and key encoding
-ArcaneClient/src/Arcane/Render/DeviceCreationD3D12.cpp|kDeviceArmorRefs|PENDING|inventory:630 SETTING
 ArcaneClient/src/Arcane/Render/FramePacing.hpp|kSwapchainFramesInFlight|PENDING|inventory:635 SETTING
 ArcaneClient/src/Arcane/Render/GpuBreadcrumbs.hpp|kRingCapacity|PENDING|inventory:762 SETTING
 ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp|kGpuMarkerUnwritten|CONSTANT|Marker record layout
@@ -122,7 +121,6 @@ ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kInvalidLayout|CONSTANT|
 ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kMaxColorAttachments|CONSTANT|Fixed array size in the exported pipeline key (ABI); the hardware maximum is 8
 ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
-ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.cpp|kSize|PENDING|inventory:735 SETTING
 ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.hpp|kPendingCookRepollInterval|PENDING|inventory:734 SETTING
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.cpp|kNoTransient|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kGenerationBits|CONSTANT|Handle encoding
