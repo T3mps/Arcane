@@ -694,7 +694,7 @@ namespace Arcane::Editor
         // compile service to settle spins until its own timeout. A caller that
         // pins the clock must zero the debounce too.
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
-        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
+        if (!m_shaderCompiler->Initialize())
         {
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
         }

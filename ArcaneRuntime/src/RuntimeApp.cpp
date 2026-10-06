@@ -308,9 +308,9 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // a warn: sprites still resolve (no compile step), materials and the post
     // chain simply stay unbound.
     //
-    // Debounce is a HOT-RELOAD nicety: a 0.2 s quiet window keeps a designer
-    // holding Ctrl+S from firing a compile per keystroke.
-    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
+    // Debounce is a HOT-RELOAD nicety: the configured quiet window keeps a
+    // designer holding Ctrl+S from firing a compile per keystroke.
+    if (!m_shaderCompiler.Initialize())
     {
         // Degrades to a warning rather than refusing the boot: the missing
         // material is on screen and recoverable.

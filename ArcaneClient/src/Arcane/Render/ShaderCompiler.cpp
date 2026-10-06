@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
+#include <Arcane/Render/RenderShaderSettings.hpp>
 
 #include <charconv>
 #include <cstring>
@@ -164,7 +165,8 @@ namespace Arcane
     struct ShaderCompiler::Impl {};
     ShaderCompiler::ShaderCompiler() = default;
     ShaderCompiler::~ShaderCompiler() = default;
-    bool ShaderCompiler::Initialize(double) { return false; }
+    bool ShaderCompiler::Initialize() { return false; }
+    bool ShaderCompiler::InitializeWithDebounce(double) { return false; }
     void ShaderCompiler::Shutdown() {}
     std::uint64_t ShaderCompiler::Submit(ShaderCompileRequest, double) { return 0; }
     void ShaderCompiler::Poll(double) {}
@@ -267,7 +269,8 @@ namespace Arcane
 
         // Build the CLI-shaped argv for one target (argv[0] = the virtual source
         // name, exactly how UE feeds IDxcCompiler3 -- DXC uses it for diagnostics).
-        std::vector<std::string> BuildArgs(const ShaderCompileRequest& req, bool spirv)
+        std::vector<std::string> BuildArgs(const ShaderCompileRequest& req, bool spirv,
+                                           const std::vector<std::wstring>& settingsArgs)
         {
             std::vector<std::string> args;
             args.push_back(req.debugName);
@@ -285,6 +288,14 @@ namespace Arcane
                 for (std::size_t i = 0; i < kSpirvArgCount; ++i)
                     args.push_back(kSpirvArgs[i]);
             }
+            for (const std::wstring& arg : settingsArgs)
+            {
+                std::string narrow;
+                narrow.reserve(arg.size());
+                for (wchar_t ch : arg)
+                    narrow.push_back(static_cast<char>(ch)); // DXC switches are ASCII
+                args.push_back(std::move(narrow));
+            }
             return args;
         }
 
@@ -301,10 +312,11 @@ namespace Arcane
 
         ShaderTargetResult CompileTarget(IDxcCompiler3* compiler,
                                          const ShaderCompileRequest& req, bool spirv,
-                                         bool& crashed, bool& environmental)
+                                         bool& crashed, bool& environmental,
+                                         const std::vector<std::wstring>& settingsArgs)
         {
             ShaderTargetResult out;
-            const std::vector<std::string> args = BuildArgs(req, spirv);
+            const std::vector<std::string> args = BuildArgs(req, spirv, settingsArgs);
             out.reproCmdLine = JoinRepro(args);
 
             std::vector<std::wstring> wide;
@@ -402,7 +414,8 @@ namespace Arcane
         HMODULE hCompiler = nullptr;   // stays loaded for process lifetime (COM DLL unload is unsafe)
         DxcCreateInstanceProc createInstance = nullptr;
         std::uint64_t toolchainHash = 0;
-        double debounce = 0.2;
+        double debounce = 0.0;
+        std::vector<std::wstring> settingsArgs;
 
         // Main-thread state (Submit/Poll/Drain/CompileNow are main-thread-only).
         std::uint64_t nextJobId = 1;
@@ -438,6 +451,10 @@ namespace Arcane
             for (std::size_t i = 0; i < kSpirvArgCount; ++i)
                 h = Fnv64Str(h, kSpirvArgs[i]);
             h = Fnv64(h, &toolchainHash, sizeof(toolchainHash));
+            // Preserve every legacy default key: only an explicit DXC switch
+            // contributes to the hash.
+            for (const std::wstring& arg : settingsArgs)
+                h = Fnv64(h, arg.data(), arg.size() * sizeof(wchar_t));
             return h;
         }
 
@@ -448,7 +465,7 @@ namespace Arcane
             r.coalesceKey = job.req.coalesceKey;
             r.contentHash = job.contentHash;
             r.debugName = job.req.debugName;
-            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed, r.environmental);
+            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed, r.environmental, settingsArgs);
             if (r.crashed)
             {
                 // The instance may be corrupt after the SEH crash -- never run
@@ -460,7 +477,7 @@ namespace Arcane
                 r.spirv.diags.push_back(std::move(d));
                 return r;
             }
-            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed, r.environmental);
+            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed, r.environmental, settingsArgs);
             return r;
         }
 
@@ -554,12 +571,18 @@ namespace Arcane
         delete m_impl;
     }
 
-    bool ShaderCompiler::Initialize(double debounceSeconds)
+    bool ShaderCompiler::Initialize()
+    {
+        return InitializeWithDebounce(Settings<RenderShaderSettings>().compileDebounceSeconds);
+    }
+
+    bool ShaderCompiler::InitializeWithDebounce(double debounceSeconds)
     {
         Impl& im = *m_impl;
         if (m_available)
             return true;
         im.debounce = debounceSeconds;
+        im.settingsArgs = DxcArgumentsFor(Settings<RenderShaderSettings>());
 
         // Vendored trio beside the exe first (the postbuild copies), then the
         // regular search path. dxil.dll loads FIRST so dxcompiler's validator

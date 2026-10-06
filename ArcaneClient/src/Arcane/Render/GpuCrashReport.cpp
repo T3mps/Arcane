@@ -27,14 +27,14 @@ namespace Arcane::Diag
         }
 
         const auto* slots = static_cast<const volatile std::uint32_t*>(markerMemory);
-        for (std::uint32_t slot = 0; slot < kGpuMarkerSlots; ++slot)
+        for (std::uint32_t slot = 0; slot < GpuMarkerSlots(breadcrumbs); ++slot)
         {
             const std::uint32_t beginValue = slots[slot * kGpuMarkerValuesPerSlot + 0];
             const std::uint32_t endValue   = slots[slot * kGpuMarkerValuesPerSlot + 1];
             if (beginValue != kGpuMarkerUnwritten) breadcrumbs.OnMarkerWritten(beginValue - 1, true);
             if (endValue   != kGpuMarkerUnwritten) breadcrumbs.OnMarkerWritten(endValue   - 1, false);
         }
-        raw.Add("markers", markerMemory, kGpuMarkerBytes);
+        raw.Add("markers", markerMemory, GpuMarkerBytes(breadcrumbs));
 
         // activeLayers is the report's declared truth channel for "what
         // engaged", so the claim tracks the runtime kill switch -- see the

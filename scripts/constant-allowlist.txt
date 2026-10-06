@@ -82,7 +82,6 @@ ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kInvalidMaterialId|CONSTANT|ID sche
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialCircle|CONSTANT|ID scheme and key encoding
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialSprite|CONSTANT|ID scheme and key encoding
 ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialText|CONSTANT|ID scheme and key encoding
-ArcaneClient/src/Arcane/Render/GpuBreadcrumbs.hpp|kRingCapacity|PENDING|inventory:762 SETTING
 ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp|kGpuMarkerUnwritten|CONSTANT|Marker record layout
 ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp|kGpuMarkerValuesPerSlot|PENDING|inventory:763 DERIVED
 ArcaneClient/src/Arcane/Render/GpuInstrumentation.cpp|kSlotPollSleepNs|PENDING|inventory:770 SETTING
@@ -106,8 +105,6 @@ ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultIterations|CONSTANT|
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultOobElement|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultSinkElements|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
 ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultThreadGroups|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
-ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalBudget|PENDING|inventory:768 SETTING
-ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalPoll|PENDING|inventory:769 SETTING
 ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kInvalidLayout|CONSTANT|Sentinel
