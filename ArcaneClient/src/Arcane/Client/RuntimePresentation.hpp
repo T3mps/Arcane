@@ -9,6 +9,7 @@
 // its only owner. Client-only; Core never includes it.
 
 #include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Audio/AudioSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Input/LocalInputUser.hpp>
@@ -44,6 +45,9 @@ namespace Arcane
         void InitAudio(Assets* assets, bool enableAudioDevice) noexcept
         {
             audioDesc.enableDevice = enableAudioDevice;
+            // audio.sampleRate / audio.channels: the device format, read at device creation (Restart).
+            audioDesc.sampleRate = Settings<Audio::AudioSettings>().sampleRate;
+            audioDesc.channels = Settings<Audio::AudioSettings>().channels;
             if (!assets) return;
             if (audio.Init(assets, audioDesc)) return;
             if (audioDesc.enableDevice)

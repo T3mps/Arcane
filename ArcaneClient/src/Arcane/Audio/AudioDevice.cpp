@@ -1,4 +1,5 @@
 #include <Arcane/Audio/AudioDevice.hpp>
+#include <Arcane/Audio/AudioSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Assets/Assets.hpp>
 
@@ -651,7 +652,8 @@ namespace Arcane::Audio
 		const VoiceHandle voice = m_impl->AllocVoice();
 		VoiceSlot& voiceSlot = m_impl->voices[voice.index];
 
-		const ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
+		// audio.spatialization is read per voice, so a change reaches the next world's sounds.
+		const ma_uint32 flags = Settings<AudioSettings>().spatialization ? 0u : static_cast<ma_uint32>(MA_SOUND_FLAG_NO_SPATIALIZATION);
 
 		ma_result result = MA_SUCCESS;
 		if (soundSlot.mode == SoundLoadMode::DecodeToMemory)
