@@ -25,6 +25,7 @@
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
+#include "Settings/LayoutPage.hpp"
 #include "Panels/LayoutLibrary.hpp"       // ParseOpenPanels
 #include "Project/ModuleBuild.hpp"          // ModuleBuild::ExeDir: the bundled font families
 #include "Widgets/EditorFonts.hpp"         // the deferred font-atlas rebuild
@@ -405,6 +406,7 @@ namespace Arcane::Editor
             // editor.theme.* / editor.ui.* -> the editor style (settings S4).
             // After the barrier, before the ImGui frame opens.
             ApplyAppearanceSettings();
+            ApplyPendingLayoutRequest();
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();
@@ -641,6 +643,33 @@ namespace Arcane::Editor
     {
         if (const auto path = m_dialogs.themeImport.Take()) (void)Arcane::Editor::ImportThemeFrom(m_themePage, *path);
         if (const auto path = m_dialogs.themeExport.Take()) (void)Arcane::Editor::ExportThemeTo(m_themePage, *path);
+    }
+
+    // Load a named layout at the frame boundary, after the settings publish.
+    void EditorApp::ApplyPendingLayoutRequest()
+    {
+        if (!m_layoutPage.loadRequest) return;
+        const std::string name = *std::exchange(m_layoutPage.loadRequest, std::nullopt);
+        if (m_config.headless || !m_editorImguiContext)
+        {
+            ARC_WARN("layout: Load '{}' refused -- the layout is pinned under --headless", name);
+            return;
+        }
+        const Arcane::Editor::LayoutLibrary lib(m_layoutPage.dir.empty() ? Arcane::Editor::NamedLayoutDir() : m_layoutPage.dir);
+        const std::optional<std::string> text = lib.Load(name);
+        if (!text)
+        {
+            m_layoutPage.status = "Could not read layout '" + name + "'";
+            return;
+        }
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(m_editorImguiContext);
+        ImGui::ClearIniSettings();
+        ImGui::LoadIniSettingsFromMemory(text->data(), text->size());
+        ImGui::MarkIniSettingsDirty();
+        ImGui::SetCurrentContext(prev);
+        m_layoutPage.status = "Loaded '" + name + "'";
+        ARC_INFO("layout: loaded named layout '{}'", name);
     }
 
     void EditorApp::ApplyAppearanceSettings()
@@ -2285,6 +2314,7 @@ namespace Arcane::Editor
         // -- the build wins, which is correct: the default layout just docked
         // instance 1, not the upgrade's id.
         const bool pendingLegacy = m_inspectorHost.TakeLegacyLayoutUpgrade();
+        menuReq.resetLayout |= std::exchange(m_layoutPage.resetRequested, false);
         const bool legacy = pendingLegacy && !menuReq.resetLayout;
         const int legacyAssetsId = legacy ? m_inspectorHost.UpgradeLegacyInspectorLayout() : -1;
         const Arcane::Editor::DockSpaceResult dock = Arcane::Editor::EndDockSpace(menuReq.resetLayout, legacyAssetsId);

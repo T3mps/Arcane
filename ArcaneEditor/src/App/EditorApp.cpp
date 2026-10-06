@@ -564,6 +564,8 @@ namespace Arcane::Editor
         // Settings arc S4: Preferences > Appearance > Fonts and Scale (the editor.ui.* cvars live on this node).
         Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, std::string(Arcane::Editor::kFontsPageCategory),
                                              "Fonts and Scale", &Arcane::Editor::DrawFontsPage, &m_fontsPage);
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Layout", "Layouts",
+                                             &Arcane::Editor::DrawLayoutPage, &m_layoutPage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now

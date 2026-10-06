@@ -47,6 +47,7 @@
 #include "Settings/AppearanceApplier.hpp"
 #include "Settings/ProjectSettingsPage.hpp"
 #include "Settings/FontsPage.hpp"
+#include "Settings/LayoutPage.hpp"
 #include "Settings/ShortcutsPage.hpp"
 #include "Settings/ThemePage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
@@ -291,6 +292,7 @@ namespace Arcane::Editor
         void ConsumeMaterialDialogResults();
         void ConsumeSettingsDialogResults();
         void ApplyAppearanceSettings();   // S4: theme/UI cvars -> the editor style, outside the ImGui frame
+        void ApplyPendingLayoutRequest();
         void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
         [[nodiscard]] bool IsDesignatedInputAsset(const Arcane::Guid& asset);   // the open project's manifest inputActions names `asset`
         void FrameInput(LoopState& ls, FrameState& fs);
@@ -1140,6 +1142,7 @@ namespace Arcane::Editor
         Arcane::Editor::ThemePageState m_themePage;
         Arcane::Editor::ShortcutsPageState m_shortcutsPage;   // Preferences > Keyboard
         Arcane::Editor::FontsPageState m_fontsPage;           // Preferences > Appearance > Fonts and Scale
+        Arcane::Editor::LayoutPageState m_layoutPage;         // Preferences > Layout
 
         // Mouse edge tracking (architecture pass sec 6). Keyboard chords now
         // read EditorActions (settings S4); only the camera/gizmo buttons remain.
