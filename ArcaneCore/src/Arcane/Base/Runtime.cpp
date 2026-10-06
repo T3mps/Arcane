@@ -76,15 +76,50 @@ namespace Arcane
             return std::filesystem::current_path();
         }
 
+        // The ONE engine-config folder (S2-H): Arcane::Paths names the engine
+        // dir once per process (settings spec s11.0) -- the exe dir, where the
+        // shipped data/EngineConfig defaults sit, unless a host already set
+        // one. The cold-boot EngineConfig rung, the JSON Config layer and
+        // CVarLayerSources (what a module reload re-layers) all read this
+        // folder, so a host-configured engine dir is honoured by all three.
+        std::filesystem::path EngineConfigDir()
+        {
+            Paths::Config paths = Paths::Current();
+            if (paths.engineDir.empty())
+            {
+                paths.engineDir = ExeDir();
+                Paths::Configure(paths);
+            }
+            return Paths::Get(Paths::Location::EngineConfig);
+        }
+
+        // The folder the EngineConfig rung was last applied from. Main thread
+        // only, like every Runtime construction.
+        std::filesystem::path g_engineRungDir;
+
         // The EngineConfig cvar rung, applied BEFORE Impl reads any setting
         // (settings arc S2). JobSystem's size (jobs.workerThreads, Restart) and
         // the first registry's Astra config (astra.memory.*, NextWorld) are read
-        // while Impl constructs, so the shipped data/EngineConfig values must
-        // already be published. Returns the JobSystem ctor argument.
+        // while Impl constructs, so the engine-config values must already be
+        // published. Returns the JobSystem ctor argument.
+        // Once per process (S2-H): the first Runtime applies the rung, and so
+        // does the first one after the folder changes -- dropping the old
+        // folder's records first. Every other Runtime (the editor's embedded
+        // server, a PIE world) neither re-reads the folder nor publishes. A
+        // module that (re)loads still gets the rung through ApplyLayersFor
+        // (CVarLayerSources names the same folder).
         std::uint32_t ApplyEngineRungAndResolveWorkers()
         {
-            ApplyCVarDirectory(CVarRegistry::Get(), ExeDir() / "data" / "EngineConfig", SetBy::EngineConfig, "engine-config");
-            CVarRegistry::Get().Publish();
+            const std::filesystem::path dir = EngineConfigDir();
+            if (dir != g_engineRungDir)
+            {
+                CVarRegistry& cvars = CVarRegistry::Get();
+                if (!g_engineRungDir.empty())
+                    cvars.RevertLayer(SetBy::EngineConfig);
+                ApplyCVarDirectory(cvars, dir, SetBy::EngineConfig, "engine-config");
+                cvars.PublishImmediate();   // asserts the main thread (settings spec s4.6)
+                g_engineRungDir = dir;
+            }
             return ResolveWorkerThreads(Settings<JobsSettings>());
         }
 
@@ -134,7 +169,7 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         std::unique_ptr<Assets>                     assets;
         Config                                      config;          // layered engine+project config (Slice 3)
-        std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
+        std::filesystem::path                       engineConfigDir; // EngineConfigDir(): <engine dir>/data/EngineConfig
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         bool                                        archiveUserCVars = false;   // SetUserCVarArchiving (T3-D2)
         std::filesystem::path                       editorUserConfigDir; // settings arc S2; empty = no EditorUser rung
@@ -254,19 +289,10 @@ namespace Arcane
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
-            // Arcane::Paths names the engine dir once per process (settings spec
-            // s11.0): the first Runtime sets it to the exe dir -- where the shipped
-            // data/EngineConfig defaults sit -- unless a host already did.
             // The EngineConfig cvar rung was applied at the top of Impl (before
-            // JobSystem and the first registry), so only the JSON Config layer
-            // remains here.
-            Paths::Config paths = Paths::Current();
-            if (paths.engineDir.empty())
-            {
-                paths.engineDir = ExeDir();
-                Paths::Configure(paths);
-            }
-            engineConfigDir = Paths::Get(Paths::Location::EngineConfig);
+            // JobSystem and the first registry) from this same folder
+            // (EngineConfigDir), so only the JSON Config layer remains here.
+            engineConfigDir = EngineConfigDir();
             config.LoadEngineDefaults(engineConfigDir);
             // The audio device that used to be initialized here is ClientRuntime's
             // (its RuntimePresentation member, initialized from its own ctor with
