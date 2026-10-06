@@ -1256,6 +1256,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
