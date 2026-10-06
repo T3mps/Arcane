@@ -2,12 +2,14 @@
 
 #include "Panels/AssetActivityLog.hpp"   // AssetActivityEntry/Kind -- the activity feed's rows
 #include "Panels/AssetPanelModel.hpp"    // AssetPanelModel/AssetPanelEntry/HealthCounts/CookState/KindIcon/KindLabel
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assetStatus.rightColumnMaxFraction (settings S6-38)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
 #include "Widgets/UiMetrics.hpp"   // Ui::FontPx -- the cards' 13px secondary text follows editor.ui.fontSize
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>
@@ -703,9 +705,12 @@ namespace Arcane::Editor
         // (ImGui::InvisibleButton asserts on exactly zero). Same
         // "sane-range clamp" discipline (the Asset Browser's retired preview
         // pane used the same one) -- capped to a fraction of what is
-        // actually available THIS frame, floored so it is never <= 0.
+        // actually available THIS frame (editor.assetStatus.
+        // rightColumnMaxFraction, 0.45; settings S6-38), floored so it is
+        // never <= 0.
         const float rightColumnWidth = std::max(1.0f,
-            std::min(kStatusRightColumnWidth, ImGui::GetContentRegionAvail().x * 0.45f));
+            std::min(kStatusRightColumnWidth,
+                     ImGui::GetContentRegionAvail().x * Arcane::Settings<AssetStatusSettings>().rightColumnMaxFraction));
         if (ImGui::BeginTable("##statuscolumns", 2, ImGuiTableFlags_NoSavedSettings))
         {
             ImGui::TableSetupColumn("##left",  ImGuiTableColumnFlags_WidthStretch);

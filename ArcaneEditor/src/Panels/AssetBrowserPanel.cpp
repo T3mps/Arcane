@@ -5,11 +5,14 @@
 #include "Input/MenuShortcut.hpp"
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry/AssetPanelRow -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateKindForAssetKind -- the rail's per-kind "+" (AssetKind -> CreateAssetKind bridge)
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.railWidth (settings S6-38)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
 #include "Widgets/UiMetrics.hpp"   // Ui::Px / FontPx -- the refused badge follows editor.ui.*
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
@@ -50,14 +53,14 @@
 // and AssetStatusPanel.cpp do.
 //
 // kTooltipWidth/kTooltipThumbSize went to AssetPanelCommon.cpp with
-// DrawAssetPeekTooltip, their only reader. kRailWidth/RailRowHeight()/
-// kChildIndent/kGroupIndent live here in full: nothing outside this panel
-// ever read any of them.
+// DrawAssetPeekTooltip, their only reader. RailRowHeight()/kChildIndent/
+// kGroupIndent live here in full: nothing outside this panel ever read any of
+// them. The rail width is editor.assets.railWidth (settings S6-38), base px
+// at editor.ui.scale.
 namespace Arcane::Editor
 {
     namespace
     {
-        constexpr float kRailWidth        = 180.0f;
         // The rail's row pitch tracks text like the tables' (settings S6-28;
         // the S4-16 follow-up): 26 px at scale 1 and font 16.
         float RailRowHeight() { return Ui::TextPx(26.0f); }
@@ -206,7 +209,7 @@ namespace Arcane::Editor
         void DrawRail(AssetBrowserPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kChrome);
-            if (ImGui::BeginChild("##assetsrail", ImVec2(kRailWidth, 0.0f), ImGuiChildFlags_None))
+            if (ImGui::BeginChild("##assetsrail", ImVec2(Ui::Px(Arcane::Settings<AssetBrowserSettings>().railWidth), 0.0f), ImGuiChildFlags_None))
             {
                 for (const RailEntry& re : model.Rail())
                 {

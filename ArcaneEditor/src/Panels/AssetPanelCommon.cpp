@@ -4,6 +4,7 @@
 #include "Panels/AssetBrowserPanel.hpp"    // AssetBrowserPanelState's full definition (RevealAssetInBrowser)
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelEntry/CookState/KindIcon/KindLabel/GroupParentOf
 #include "Panels/CreateAssetDialog.hpp"    // CreateAssetKind
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.namedTargets (settings S6-38)
 #include "Widgets/EditorFonts.hpp"         // PillWidth measures in AssetPill's own font
 #include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/EditorWidgets.hpp"       // AssetPill
@@ -11,6 +12,7 @@
 #include "Widgets/UiMetrics.hpp"   // Ui::FontPx -- PillWidth measures at AssetPill's scaled size
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Project/AssetId.hpp>
@@ -450,9 +452,9 @@ namespace Arcane::Editor
             if (targets.empty())
                 return;
 
-            constexpr std::size_t kNamedTargets = 3;
+            const auto namedTargets = static_cast<std::size_t>(Arcane::Settings<AssetBrowserSettings>().namedTargets);
             std::string line;
-            for (std::size_t i = 0; i < targets.size() && i < kNamedTargets; ++i)
+            for (std::size_t i = 0; i < targets.size() && i < namedTargets; ++i)
             {
                 if (i != 0)
                     line += ", ";
@@ -462,11 +464,11 @@ namespace Arcane::Editor
                 const AssetPanelEntry* t = model.Find(targets[i]);
                 line += t ? t->fileName : targets[i].ToString().substr(0, 8);
             }
-            if (targets.size() > kNamedTargets)
+            if (targets.size() > namedTargets)
             {
                 char more[24];
                 std::snprintf(more, sizeof(more), " +%d more",
-                              static_cast<int>(targets.size() - kNamedTargets));
+                              static_cast<int>(targets.size() - namedTargets));
                 line += more;
             }
             // Wrapped, unlike the fixed-width lines above it: three file names

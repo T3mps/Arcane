@@ -272,8 +272,10 @@ namespace Arcane::Editor
     // (Fullscreen). Chosen to PRESERVE what the retired `Assets -> Create ->
     // Material...` menu item minted (CreateMaterialAt's own Fullscreen
     // default) -- collapsing two menu items into one dialog must not silently
-    // change what the surviving one produces.
-    inline constexpr int kMaterialSurfaceDefaultIndex = 2;
+    // change what the surviving one produces. Now
+    // editor.assets.newMaterialDefaultSurface (settings S6-38; per-project,
+    // default 2), read each time the dialog opens and clamped to the combo.
+    [[nodiscard]] int MaterialSurfaceDefaultIndex();
 
     // The subkind pill text for a material's surface -- the SAME three strings
     // the combo offers, so the picker's pills and the combo can never drift.

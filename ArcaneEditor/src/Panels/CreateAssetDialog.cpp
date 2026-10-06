@@ -2,10 +2,12 @@
 
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // CppClass: ValidateClassName + the Template combo's labels
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.newMaterialDefaultSurface (settings S6-38)
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>
@@ -13,6 +15,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <string>
@@ -426,6 +429,12 @@ namespace Arcane::Editor
         }
     }
 
+    int MaterialSurfaceDefaultIndex()
+    {
+        constexpr int kLast = static_cast<int>(std::size(kMaterialSurfaceLabels)) - 1;
+        return std::clamp(Arcane::Settings<AssetBrowserSettings>().newMaterialDefaultSurface, 0, kLast);
+    }
+
     CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
                                             const AssetPanelModel& model,
                                             const std::filesystem::path& projectRoot)
@@ -442,7 +451,7 @@ namespace Arcane::Editor
             (request.prefillSurface >= 0 &&
              request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
                 ? MaterialSurfaceComboIndex(static_cast<Arcane::MaterialSurface>(request.prefillSurface))
-                : kMaterialSurfaceDefaultIndex;
+                : MaterialSurfaceDefaultIndex();
 
         // `prefillParent` is the kind's ONE asset-valued field (the field's own
         // doc comment): an instance's parent, or -- Task 13 -- a sprite's

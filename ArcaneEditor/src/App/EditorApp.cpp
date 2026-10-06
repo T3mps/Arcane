@@ -53,6 +53,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
+#include "Settings/AssetBrowserSettings.hpp"     // EditorOpenOptions: editor.assets.mountDiagnostics (settings S6-38)
 #include "Settings/EditorPlaySettings.hpp"       // ReadPlayModeIniLine: the old [EditorPlayMode] section (settings S6-32)
 #include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
@@ -2177,7 +2178,7 @@ namespace Arcane::Editor
         // machine's own crash history -- the 24-pixel scrollbar-thumb diff
         // that demoted editor-ui to advisory. Same shared rule the runtime
         // host uses (HostBoot::OpenOptionsFor), never a second copy.
-        m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        m_bootCtx.openOptions = Arcane::Editor::EditorOpenOptions(Arcane::HostBoot::OpenOptionsFor(m_config));
         m_bootCtx.hostConfig = &m_config;
         m_bootCtx.cvarContext = Arcane::CVarContext::Editor;
 
