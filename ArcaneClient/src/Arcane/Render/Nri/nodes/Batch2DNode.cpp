@@ -123,13 +123,27 @@ namespace Arcane
         }
     }
 
-    Batch2DNode::Caps Batch2DNode::CapsFrom(const RenderBatch2dSettings& settings) noexcept
+    Batch2DNode::Caps Batch2DNode::CapsFrom(const RenderBatch2dSettings& settings,
+                                            std::uint32_t framesInFlight) noexcept
     {
         Caps caps;
         caps.materialSlots    = settings.maxMaterialSlots;
         caps.materialTextures = settings.maxMaterialTextures;
         caps.spriteTextures   = settings.maxSpriteTextures;
         caps.materialCbBytes  = MaterialCbRegionBytes(settings.materialCbBytes);
+
+        // THE SAMPLER CEILING (kMaxPoolSamplers). PoolSizes() spends one
+        // sampler per set: per sprite-texture variant, the built-in set plus
+        // one material set per (material slot, frame slot). So the variants
+        // that fit are kMaxPoolSamplers / that, and spriteTextures is one less
+        // (variant 0 is the nil texture). 64-bit, so no product can wrap.
+        const std::uint64_t perVariant =
+            1ull + (std::uint64_t)caps.materialSlots * framesInFlight;
+        if ((1ull + caps.spriteTextures) * perVariant > kMaxPoolSamplers)
+        {
+            const std::uint64_t variants = kMaxPoolSamplers / perVariant;
+            caps.spriteTextures = variants > 0 ? (std::uint32_t)(variants - 1) : 0u;
+        }
         return caps;
     }
 
@@ -139,10 +153,18 @@ namespace Arcane
     Batch2DNode::Batch2DNode()
     {
         const RenderBatch2dSettings& settings = Settings<RenderBatch2dSettings>();
-        m_caps = CapsFrom(settings);
+        const std::uint32_t framesInFlight = FramesInFlight();
+        m_caps = CapsFrom(settings, framesInFlight);
         if (m_caps.materialCbBytes != settings.materialCbBytes)
             ARC_WARN("[nri-graph] Batch2DNode: render.batch2d.materialCbBytes {} is not a multiple of 256 -- "
                      "using {}", settings.materialCbBytes, m_caps.materialCbBytes);
+        if (m_caps.spriteTextures != settings.maxSpriteTextures)
+            ARC_WARN("[nri-graph] Batch2DNode: render.batch2d.maxSpriteTextures {} would need {} samplers "
+                     "(render.batch2d.maxMaterialSlots {} at {} frames in flight), over the {}-descriptor "
+                     "ceiling of a D3D12 shader-visible sampler heap -- clamped to {}",
+                     settings.maxSpriteTextures,
+                     (1ull + settings.maxSpriteTextures) * (1ull + (std::uint64_t)m_caps.materialSlots * framesInFlight),
+                     m_caps.materialSlots, framesInFlight, kMaxPoolSamplers, m_caps.spriteTextures);
     }
 
     std::unique_ptr<Batch2DNode> Batch2DNode::Create(NriGraphContext& context)
@@ -271,7 +293,7 @@ namespace Arcane
         return true;
     }
 
-    nri::DescriptorPoolDesc Batch2DNode::PoolSizes(const Caps& caps) noexcept
+    nri::DescriptorPoolDesc Batch2DNode::PoolSizes(const Caps& caps, std::uint32_t framesInFlight) noexcept
     {
         // THREE set families since Task 2 (the middle one is new):
         //   * the ONE built-in nil-texture set (the white texel);
@@ -283,7 +305,7 @@ namespace Arcane
         //     slot), where variant 0 is the nil-texture one Task 9 had. Hence
         //     the (1 + caps.spriteTextures) factor.
         const std::uint32_t builtInSets  = 1 + caps.spriteTextures;
-        const std::uint32_t materialSets = caps.materialSlots * FramesInFlight() * (1 + caps.spriteTextures);
+        const std::uint32_t materialSets = caps.materialSlots * framesInFlight * (1 + caps.spriteTextures);
 
         nri::DescriptorPoolDesc poolDesc = {};
         poolDesc.descriptorSetMaxNum  = builtInSets + materialSets;

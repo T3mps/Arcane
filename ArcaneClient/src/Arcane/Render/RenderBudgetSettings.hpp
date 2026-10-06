@@ -53,8 +53,10 @@ namespace Arcane
         ARC_REFLECT_FIELD(RenderBatch2dSettings, maxSpriteTextures)
             ARC_REFLECT_ATTR(Range, 8.0, 512.0)
             ARC_REFLECT_ATTR(Tooltip, "Distinct sprite textures the 2D renderer can bind. Past it sprites draw as flat tint "
-                                      "(the white texel) with one error, and the run still exits 0, so raise it for a project "
-                                      "with many textures. Multiplies the descriptor pool.")
+                                      "(the white texel) with one error, and the run still exits 0. Multiplies the descriptor "
+                                      "pool: (1 + this) x (1 + maxMaterialSlots x frames in flight) samplers, and a D3D12 "
+                                      "shader-visible sampler heap holds at most 2048, so a value past that ceiling is "
+                                      "clamped with a warning.")
         ARC_REFLECT_FIELD(RenderBatch2dSettings, materialCbBytes)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 256.0, 65536.0)
             ARC_REFLECT_ATTR(Tooltip, "Largest constant buffer, in bytes, a sprite material's numeric parameters may pack "

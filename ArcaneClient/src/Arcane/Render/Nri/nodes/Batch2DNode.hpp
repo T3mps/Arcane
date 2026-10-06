@@ -106,6 +106,7 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
@@ -262,7 +263,9 @@ namespace Arcane
         //     spends (1 + spriteTextures) descriptor sets per material slot per
         //     frame slot. At the defaults that is 65 built-in sets and
         //     8 * 2 * 65 = 1040 material sets -- ~1105 sets and ~9425 texture
-        //     descriptors, tens of KiB of descriptor heap.
+        //     descriptors, tens of KiB of descriptor heap -- and 1105 of the
+        //     2048 samplers a D3D12 heap allows, past which CapsFrom clamps it
+        //     (kMaxPoolSamplers).
         //   * materialCbBytes: the arena region size BEFORE alignment, a
         //     multiple of 256 (MaterialCbRegionBytes; the constructor rounds
         //     down with one WARN). A sprite material's cbuffer is a handful of
@@ -275,10 +278,29 @@ namespace Arcane
             std::uint32_t spriteTextures   = 0;   // render.batch2d.maxSpriteTextures
             std::uint32_t materialCbBytes  = 0;   // render.batch2d.materialCbBytes, rounded to a multiple of 256
         };
-        // The caps `settings` asks for (materialCbBytes rounded down to a
-        // multiple of 256). PURE: the constructor applies it to the published
-        // settings, and the device-less cases apply it to the defaults.
-        [[nodiscard]] static Caps CapsFrom(const RenderBatch2dSettings& settings) noexcept;
+        // THE SAMPLER CEILING. PoolSizes() asks for one sampler per descriptor
+        // set, (1 + spriteTextures) * (1 + materialSlots * framesInFlight) of
+        // them, and D3D12 creates the pool's ONE shader-visible sampler heap at
+        // exactly that size -- a heap the API caps at 2048 descriptors. Inside
+        // the settings' ranges the product reaches ~99k, so past the ceiling
+        // the vehicle would fail at boot with an error naming no setting.
+        // CapsFrom clamps spriteTextures to fit instead, on every backend (the
+        // constructor WARNs once, naming render.batch2d.maxSpriteTextures).
+        // Clamping that one cap always suffices: its floor of 8 with 64
+        // material slots at 3 frames in flight is 9 * 193 = 1737 samplers. The
+        // ImGui pool chain (render.imgui.maxPoolSetsPerLink) stops at the same
+        // ceiling.
+        ARC_CONSTANT("hardware limit: a D3D12 shader-visible sampler heap holds at most 2048 descriptors")
+        static constexpr std::uint32_t kMaxPoolSamplers = 2048;
+
+        // The caps `settings` asks for at `framesInFlight` (materialCbBytes
+        // rounded down to a multiple of 256; spriteTextures clamped so that
+        // PoolSizes(caps, framesInFlight).samplerMaxNum <= kMaxPoolSamplers;
+        // materialSlots never touched). PURE: the constructor applies it to
+        // the published settings at the latched depth, and the device-less
+        // cases apply it to chosen settings at a chosen depth.
+        [[nodiscard]] static Caps CapsFrom(const RenderBatch2dSettings& settings,
+                                           std::uint32_t framesInFlight = FramesInFlight()) noexcept;
         // The caps this node latched at creation.
         [[nodiscard]] const Caps& GetCaps() const noexcept { return m_caps; }
 
@@ -342,7 +364,10 @@ namespace Arcane
         // through a frame at the desk, after which that material or texture
         // silently draws with the white texel. No device can show that the
         // numbers agree; a device-less case can, and does ([nri], RenderGraphTest).
-        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes(const Caps& caps) noexcept;
+        // `framesInFlight` defaults to the latched depth the node runs at; the
+        // device-less cases pass another to check every depth the setting allows.
+        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes(
+            const Caps& caps, std::uint32_t framesInFlight = FramesInFlight()) noexcept;
 
     private:
         Batch2DNode();   // latches m_caps from the published render.batch2d.*
