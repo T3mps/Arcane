@@ -72,19 +72,25 @@ jobs:
           set _APH_NOPAUSE=1
           call GenerateProjects.bat
 
-      - name: Build Debug
-        run: msbuild Arcane.slnx /p:Configuration=Debug /m /nologo /v:minimal
-
-      - name: Build Release
-        run: msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
-
-      - name: Build Dist
-        run: msbuild Arcane.slnx /p:Configuration=Dist /m /nologo /v:minimal
-
       # test-results/ must exist before the first reporter writes into it,
       # matching the Jenkinsfile's own `if not exist test-results mkdir`.
       - name: Prepare test-results
         run: mkdir test-results
+
+      # ReferenceProject's game module (Binaries/ReferenceGame.dll) is an SDK
+      # build, not part of Arcane.slnx: build it with arcbuild for THIS config
+      # (a module must match its host's CRT; arcbuild forces /t:Rebuild when the
+      # single-slot Binaries/ holds another config), then rebuild the solution
+      # incrementally so every host's postbuild restages it beside itself. Without
+      # this the [witness][server] cases see "module-load-failed".
+      - name: Build Debug
+        run: msbuild Arcane.slnx /p:Configuration=Debug /m /nologo /v:minimal
+
+      - name: Build ReferenceGame Debug (arcbuild) and restage
+        run: |
+          bin/Debug-windows-x86_64-md/arcbuild/arcbuild.exe build --project ReferenceProject --config Debug --sdk "${{ github.workspace }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild Arcane.slnx /p:Configuration=Debug /m /nologo /v:minimal
 
       # Each suite runs FROM ITS OWN EXE DIRECTORY (working-directory): fixtures,
       # data/ and the staged automation-exclusions.json are all resolved relative
@@ -102,12 +108,32 @@ jobs:
       - name: Check Debug baselines
         run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug -Invocation "~[gpu]"
 
+      # Same per-config sequence as Debug: solution, ReferenceGame via arcbuild, restage.
+      - name: Build Release
+        run: msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
+
+      - name: Build ReferenceGame Release (arcbuild) and restage
+        run: |
+          bin/Release-windows-x86_64-md/arcbuild/arcbuild.exe build --project ReferenceProject --config Release --sdk "${{ github.workspace }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
+
       - name: Test Release
         working-directory: bin/Release-windows-x86_64-md/ArcaneTests
         run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
 
       - name: Check Release baselines
         run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release -Invocation "~[gpu]"
+
+      # Same per-config sequence as Debug: solution, ReferenceGame via arcbuild, restage.
+      - name: Build Dist
+        run: msbuild Arcane.slnx /p:Configuration=Dist /m /nologo /v:minimal
+
+      - name: Build ReferenceGame Dist (arcbuild) and restage
+        run: |
+          bin/Dist-windows-x86_64-md/arcbuild/arcbuild.exe build --project ReferenceProject --config Dist --sdk "${{ github.workspace }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild Arcane.slnx /p:Configuration=Dist /m /nologo /v:minimal
 
       - name: Test Dist
         working-directory: bin/Dist-windows-x86_64-md/ArcaneTests
