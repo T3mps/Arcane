@@ -9,6 +9,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <vector>
@@ -151,7 +152,7 @@ namespace
 {
     // The 2D view: 800x600 at 100 px/m, the pivot at pixel (400,300); the X
     // arrow runs (400..494, 300).
-    ViewTransform OrthoView() { return ViewTransform::Orthographic({0.0f, 0.0f}, 3.0f, {800u, 600u}); }
+    ViewTransform OrthoView() { return Ortho2DView({0.0f, 0.0f}, 3.0f, {800u, 600u}); }
     ViewTransform ObliqueView() { return ViewTransform::Perspective({4.0f, 3.0f, 6.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 60.0f, {800u, 600u}, 0.1f, 100.0f); }
 
     struct ColourSink final : GizmoDrawSink

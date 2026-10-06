@@ -3,12 +3,10 @@
 #include <Arcane/Config/ConsoleSettings.hpp>
 #include <Arcane/Host/HostSettings.hpp>
 #include <Arcane/Platform/Window.hpp>
+#include <Arcane/Project/AppSplashSettings.hpp>
 #include "Settings/EditorPerfSettings.hpp"
 #include <chrono>
 using namespace Arcane;
-// S6-24 deviation: the app.splash.width/height/textColor rows ride on S6-7's
-// AppSplashSettings, which lives on the other S6 lane (feat/settings-s6); its
-// checks join this file when the lanes merge.
 TEST_CASE("sweep: host window/boot defaults are the pre-sweep literals (goldens are 1280x720)", "[sweep][host]")
 {
     CHECK(RenderWindowSettings{}.width == 1280u);
@@ -21,6 +19,9 @@ TEST_CASE("sweep: host window/boot defaults are the pre-sweep literals (goldens 
     CHECK(AppWindowSettings{}.minimizedSleepMs == 1u);
     CHECK(BootSettings{}.scanProgressStride == 32u);
     CHECK(BootSettings{}.splashPumpMs == 8u);
+    CHECK(AppSplashSettings{}.width == 480u);
+    CHECK(AppSplashSettings{}.height == 270u);
+    CHECK(ToSrgb8(AppSplashSettings{}.textColor) == 0xA0A0A0u);
     CHECK(ConsoleSettings{}.windowWidth == 640u);
     CHECK(ConsoleSettings{}.windowHeight == 280u);
     CHECK(ConsoleSettings{}.maxLineChars == 512u);

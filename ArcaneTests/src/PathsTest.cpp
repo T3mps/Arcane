@@ -345,7 +345,7 @@ TEST_CASE("HostBoot: a host-configured engine dir is the early EngineConfig rung
     WriteText(exeFile.file, R"({ "knob": 9 })");
 
     EngineRungProbe::UseEngineDir(engine);
-    const Arcane::HostConfig cfg{};                                          // no project, no --set
+    Arcane::HostConfig cfg{};                                                // no project, no --set
     Arcane::HostBoot::ApplyEarlyConfigRungs(cfg, Arcane::CommandLineCVarContext(), /*editor*/ false);
     CHECK(probe.Value() == 5);                                               // the host's folder...
     CHECK(cvars.Get(exeOnly)->AsInt32() == 1);                               // ...and not the exe dir's

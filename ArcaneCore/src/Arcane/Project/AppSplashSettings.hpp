@@ -21,6 +21,9 @@ namespace Arcane
         CVarColor   backgroundColor = ColorFromSrgb8(0x0D, 0x0D, 0x0F);
         bool        showProgress = false;
         float       minDurationSeconds = 0.0f;
+        std::uint32_t width  = 480;
+        std::uint32_t height = 270;
+        CVarColor   textColor = ColorFromSrgb8(160, 160, 160);
     };
 
     ARC_REFLECT_TYPE(AppSplashSettings)
@@ -37,5 +40,13 @@ namespace Arcane
         ARC_REFLECT_FIELD(AppSplashSettings, minDurationSeconds)
             ARC_REFLECT_ATTR(Range, 0.0, 10.0)
             ARC_REFLECT_ATTR(Tooltip, "Minimum time in seconds that the boot splash remains visible.")
+        ARC_REFLECT_FIELD(AppSplashSettings, width)
+            ARC_REFLECT_ATTR(Range, 64.0, 4096.0)
+            ARC_REFLECT_ATTR(Tooltip, "Boot splash window width in pixels.")
+        ARC_REFLECT_FIELD(AppSplashSettings, height)
+            ARC_REFLECT_ATTR(Range, 64.0, 4096.0)
+            ARC_REFLECT_ATTR(Tooltip, "Boot splash window height in pixels.")
+        ARC_REFLECT_FIELD(AppSplashSettings, textColor)
+            ARC_REFLECT_ATTR(Tooltip, "Linear colour of the boot splash status text.")
     ARC_END_REFLECT_TYPE()
 }

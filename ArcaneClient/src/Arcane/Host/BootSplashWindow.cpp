@@ -124,6 +124,7 @@ namespace Arcane
         std::string       imagePath;
         std::mutex        textMutex;     // statusText: written by any thread, read by OnPaint
         std::string       statusText;
+        std::uint32_t     textRgb = 0xA0A0A0;   // app.splash.textColor (0xRRGGBB), latched at Open
 
         // Gate for BootSplashPresenter::Present's forwarding of status text +
         // taskbar progress -- see SetShowProgress/ShowProgress's own comments
@@ -330,7 +331,9 @@ namespace Arcane
                 textRect.bottom -= 6;
 
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, RGB(160, 160, 160));   // matches WindowsPlatformSplash.cpp's StartupProgress colour
+                // app.splash.textColor; its default (160,160,160) matches
+                // WindowsPlatformSplash.cpp's StartupProgress colour.
+                SetTextColor(hdc, RGB((impl.textRgb >> 16) & 0xFF, (impl.textRgb >> 8) & 0xFF, impl.textRgb & 0xFF));
                 DrawTextW(hdc, wtext.c_str(), -1, &textRect,
                           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
@@ -367,12 +370,14 @@ namespace Arcane
             // so the window thread's first WM_PAINT is guaranteed to see it.
             // There is no other thread in existence yet to race with.
             m_impl->statusText = "Loading...";
+            const AppSplashSettings& splash = Settings<AppSplashSettings>();   // Restart: the early rungs are applied
+            m_impl->textRgb = ToSrgb8(splash.textColor);
 
             NativeWindowDesc d;
             d.className     = L"ArcaneBootSplash";   // BootSplashPresenterTest finds the window by this name
             d.title         = L"Arcane";
-            d.width         = 480;
-            d.height        = 270;
+            d.width         = static_cast<int>(splash.width);
+            d.height        = static_cast<int>(splash.height);
             d.popup         = true;
             d.topmost       = true;
             // WS_EX_APPWINDOW, not WS_EX_TOOLWINDOW (2026-07-30 review round
@@ -388,7 +393,7 @@ namespace Arcane
             // Consequence, taken deliberately: the splash has a taskbar
             // button and appears in Alt-Tab, matching UE's editor behaviour.
             d.appWindow     = true;
-            d.backgroundRgb = ToSrgb8(Settings<AppSplashSettings>().backgroundColor);
+            d.backgroundRgb = ToSrgb8(splash.backgroundColor);
             m_impl->window.Open(d, m_impl.get());
         }
         catch (...) { m_impl.reset(); }   // never fail boot for a splash
