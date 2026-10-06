@@ -18,6 +18,7 @@
 #include "Widgets/GraphWire.hpp"           // bezier/lerp/brighten/view-scale + the links channel
 #include "Widgets/GraphZoomLevels.hpp"     // ApplyZoomLevels -- same table the shader editor's canvases use
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"           // Ui::FontPx -- the canvas font sizes follow editor.ui.fontSize
 
 #include <Arcane/Guid.hpp>
 
@@ -1022,7 +1023,7 @@ namespace Arcane::Editor
 
             // ---- header row ----
             {
-                ImGui::PushFont(GetEditorFonts().interRegular, kGraphHeaderFontPx);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphHeaderFontPx));
                 const float lineH  = ImGui::GetTextLineHeight();
                 const float rowY   = origin.y + (kGraphHeaderHeight - lineH) * 0.5f;
                 float x = origin.x + kGraphNodePadLeft;
@@ -1047,7 +1048,7 @@ namespace Arcane::Editor
                     // `rightEdge` above already reserved its slot.
                     ImGui::SetCursorScreenPos(
                         ImVec2(origin.x + v.width - kGraphNodePadRight - PillWidth(headerPill),
-                               origin.y + (kGraphHeaderHeight - kPillLineHeight) * 0.5f));
+                               origin.y + (kGraphHeaderHeight - PillLineHeight()) * 0.5f));
                     AssetPill(headerPill, 1);
                 }
             }
@@ -1084,7 +1085,7 @@ namespace Arcane::Editor
                         if (x + gap + w > budgetEnd)
                             break;   // never let a pill push the node past §11.2's width
                         x += gap;
-                        ImGui::SetCursorScreenPos(ImVec2(x, rowTop + (rowH - kPillLineHeight) * 0.5f));
+                        ImGui::SetCursorScreenPos(ImVec2(x, rowTop + (rowH - PillLineHeight()) * 0.5f));
                         AssetPill(text, variant);
                         x += w;
                         first = false;
@@ -1092,7 +1093,7 @@ namespace Arcane::Editor
                 }
                 else if (!body.meta.empty())
                 {
-                    ImGui::PushFont(GetEditorFonts().interRegular, kGraphMetaFontPx);
+                    ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphMetaFontPx));
                     const std::string shown = GraphEllipsize(body.meta, budgetEnd - x);
                     dl->AddText(ImVec2(x, rowTop + (rowH - ImGui::GetTextLineHeight()) * 0.5f),
                                 dimCol, shown.c_str());
@@ -1178,23 +1179,23 @@ namespace Arcane::Editor
                 { "drag a material pin = derive", Theme::kAmber, true },
             };
 
-            ImGui::PushFont(GetEditorFonts().interRegular, kGraphLegendFontPx);
+            ImGui::PushFont(GetEditorFonts().interRegular, GraphLegendFontPx());
             const float lineH = ImGui::GetTextLineHeight();
 
             float contentW = 0.0f;
             for (int i = 0; i < IM_ARRAYSIZE(entries); ++i)
             {
                 if (i > 0)
-                    contentW += kGraphLegendEntryGap;
-                contentW += kGraphLegendSwatchW + kGraphLegendSwatchGap +
+                    contentW += GraphLegendEntryGap();
+                contentW += kGraphLegendSwatchW + GraphLegendSwatchGap() +
                             ImGui::CalcTextSize(entries[i].text).x;
             }
 
             // SNAPPED TO WHOLE PIXELS (GraphLegendBoxMin says why). A 2px rule
             // and a 1px border are the two things here a half-pixel origin
             // visibly softens, and the board's are crisp.
-            const float boxW = std::floor(contentW) + kGraphLegendPadX * 2.0f;
-            const float boxH = std::floor(lineH) + kGraphLegendPadY * 2.0f;
+            const float boxW = std::floor(contentW) + GraphLegendPadX() * 2.0f;
+            const float boxH = std::floor(lineH) + GraphLegendPadY() * 2.0f;
             const ImVec2 boxMin = GraphLegendBoxMin(canvasMin, canvasSize, boxH);
             const ImVec2 boxMax(boxMin.x + boxW, boxMin.y + boxH);
 
@@ -1203,11 +1204,11 @@ namespace Arcane::Editor
 
             const ImU32 textCol = ImGui::GetColorU32(Theme::kTextDim);
             const float midY = boxMin.y + boxH * 0.5f;
-            float x = boxMin.x + kGraphLegendPadX;
+            float x = boxMin.x + GraphLegendPadX();
             for (int i = 0; i < IM_ARRAYSIZE(entries); ++i)
             {
                 if (i > 0)
-                    x += kGraphLegendEntryGap;
+                    x += GraphLegendEntryGap();
                 const ImU32 swatch = ImGui::GetColorU32(entries[i].color);
                 x = std::floor(x);
                 const float y0 = std::floor(midY - kGraphLegendSwatchH * 0.5f);
@@ -1235,7 +1236,7 @@ namespace Arcane::Editor
                                       ImVec2(x + kGraphLegendSwatchW, y0 + kGraphLegendSwatchH),
                                       swatch);
                 }
-                x += kGraphLegendSwatchW + kGraphLegendSwatchGap;
+                x += kGraphLegendSwatchW + GraphLegendSwatchGap();
                 dl->AddText(ImVec2(x, midY - lineH * 0.5f), textCol, entries[i].text);
                 x += ImGui::CalcTextSize(entries[i].text).x;
             }
@@ -1617,7 +1618,7 @@ namespace Arcane::Editor
             // Width: what the content wants, clamped into §11.2's band.
             float wantHeader = kGraphNodePadLeft + kGraphNodePadRight;
             {
-                ImGui::PushFont(GetEditorFonts().interRegular, kGraphHeaderFontPx);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphHeaderFontPx));
                 if (headerIcon)
                     wantHeader += ImGui::CalcTextSize(headerIcon).x + kGraphNodeIconGap;
                 wantHeader += ImGui::CalcTextSize(headerLabel.c_str()).x;
@@ -1640,7 +1641,7 @@ namespace Arcane::Editor
             }
             else if (!body.meta.empty())
             {
-                ImGui::PushFont(GetEditorFonts().interRegular, kGraphMetaFontPx);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphMetaFontPx));
                 wantBody += ImGui::CalcTextSize(body.meta.c_str()).x;
                 ImGui::PopFont();
             }
@@ -1797,7 +1798,7 @@ namespace Arcane::Editor
                 // Ruling 9's mid-edge label, 12px and dim, on the small
                 // plate the board gives it so the wire does not run
                 // through the glyphs.
-                ImGui::PushFont(GetEditorFonts().interRegular, kGraphLabelFontPx);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphLabelFontPx));
                 const ImVec2 size = ImGui::CalcTextSize(e.label);
                 const ImVec2 tl(mid.x - size.x * 0.5f, mid.y - size.y * 0.5f);
                 ImDrawList* dl = ImGui::GetWindowDrawList();

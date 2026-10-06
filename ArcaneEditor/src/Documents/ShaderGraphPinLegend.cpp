@@ -37,7 +37,7 @@ namespace Arcane::Editor
 
         struct LegendFont
         {
-            LegendFont() { ImGui::PushFont(GetEditorFonts().interRegular, kGraphLegendFontPx); }
+            LegendFont() { ImGui::PushFont(GetEditorFonts().interRegular, GraphLegendFontPx()); }
             ~LegendFont() { ImGui::PopFont(); }
             LegendFont(const LegendFont&) = delete;
             LegendFont& operator=(const LegendFont&) = delete;
@@ -48,14 +48,14 @@ namespace Arcane::Editor
         {
             float w = 0.0f;
             for (int i = 0; i < IM_ARRAYSIZE(kTypeWidths); ++i)
-                w += (i > 0 ? kGraphLegendEntryGap : 0.0f) + kLegendDotSlot + kGraphLegendSwatchGap +
+                w += (i > 0 ? GraphLegendEntryGap() : 0.0f) + kLegendDotSlot + GraphLegendSwatchGap() +
                      ImGui::CalcTextSize(PinWidthName(kTypeWidths[i])).x;
             return w;
         }
         float RuleRowWidth()
         {
-            return kLegendDotSlot + kGraphLegendSwatchGap + ImGui::CalcTextSize(kRingText).x +
-                   kGraphLegendEntryGap + kLegendDotSlot * 2.0f + kLegendDotPairGap + kGraphLegendSwatchGap +
+            return kLegendDotSlot + GraphLegendSwatchGap() + ImGui::CalcTextSize(kRingText).x +
+                   GraphLegendEntryGap() + kLegendDotSlot * 2.0f + kLegendDotPairGap + GraphLegendSwatchGap() +
                    ImGui::CalcTextSize(kFilledText).x;
         }
         ImVec2 BoxSize(bool expanded)   // the caller holds a LegendFont
@@ -63,12 +63,12 @@ namespace Arcane::Editor
             const float lineH = std::floor(ImGui::GetTextLineHeight());
             if (!expanded)
             {
-                const float side = lineH + kGraphLegendPadY * 2.0f;
+                const float side = lineH + GraphLegendPadY() * 2.0f;
                 return ImVec2(side, side);
             }
             const float contentW = std::max(TypeRowWidth(), RuleRowWidth());
-            return ImVec2(std::floor(contentW) + kGraphLegendPadX * 2.0f,
-                          lineH * 2.0f + kLegendRowGap + kGraphLegendPadY * 2.0f);
+            return ImVec2(std::floor(contentW) + GraphLegendPadX() * 2.0f,
+                          lineH * 2.0f + kLegendRowGap + GraphLegendPadY() * 2.0f);
         }
 
         // One dot in the swatch slot whose left edge is `x`, centred on `midY`,
@@ -127,21 +127,21 @@ namespace Arcane::Editor
         if (!shown)
         {
             const ImVec2 t = ImGui::CalcTextSize(kChipText);
-            dl->AddText(ImVec2(std::floor(boxMin.x + (size.x - t.x) * 0.5f), boxMin.y + kGraphLegendPadY),
+            dl->AddText(ImVec2(std::floor(boxMin.x + (size.x - t.x) * 0.5f), boxMin.y + GraphLegendPadY()),
                         textCol, kChipText);
             return;
         }
 
         // Row 1: the four types, each dot painted as a wired pin of that width.
-        float y = boxMin.y + kGraphLegendPadY;
-        float x = boxMin.x + kGraphLegendPadX;
+        float y = boxMin.y + GraphLegendPadY();
+        float x = boxMin.x + GraphLegendPadX();
         for (int i = 0; i < IM_ARRAYSIZE(kTypeWidths); ++i)
         {
             if (i > 0)
-                x += kGraphLegendEntryGap;
+                x += GraphLegendEntryGap();
             x = std::floor(x);
             SwatchDot(dl, x, y + lineH * 0.5f, PinPaintFor(kTypeWidths[i], 0), true);
-            x += kLegendDotSlot + kGraphLegendSwatchGap;
+            x += kLegendDotSlot + GraphLegendSwatchGap();
             const char* word = PinWidthName(kTypeWidths[i]);
             dl->AddText(ImVec2(x, y), textCol, word);
             x += ImGui::CalcTextSize(word).x;
@@ -149,16 +149,16 @@ namespace Arcane::Editor
 
         // Row 2: the ring (a dynamic pin resolved to float4), then filled vs hollow.
         y += lineH + kLegendRowGap;
-        x = boxMin.x + kGraphLegendPadX;
+        x = boxMin.x + GraphLegendPadX();
         SwatchDot(dl, x, y + lineH * 0.5f, PinPaintFor(0, 4), true);
-        x += kLegendDotSlot + kGraphLegendSwatchGap;
+        x += kLegendDotSlot + GraphLegendSwatchGap();
         dl->AddText(ImVec2(x, y), textCol, kRingText);
-        x = std::floor(x + ImGui::CalcTextSize(kRingText).x + kGraphLegendEntryGap);
+        x = std::floor(x + ImGui::CalcTextSize(kRingText).x + GraphLegendEntryGap());
         const GraphPinPaint plain = PinPaintFor(0, 0);
         SwatchDot(dl, x, y + lineH * 0.5f, plain, true);
         x += kLegendDotSlot + kLegendDotPairGap;
         SwatchDot(dl, x, y + lineH * 0.5f, plain, false);
-        x += kLegendDotSlot + kGraphLegendSwatchGap;
+        x += kLegendDotSlot + GraphLegendSwatchGap();
         dl->AddText(ImVec2(x, y), textCol, kFilledText);
     }
 }

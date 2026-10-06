@@ -2,6 +2,7 @@
 
 #include "Widgets/EditorTheme.hpp"     // Theme::kError / kAmber
 #include "Widgets/EditorWidgets.hpp"   // RowWithThumb (the doomed rows)
+#include "Widgets/UiMetrics.hpp"       // Ui::Px -- modal and button widths follow editor.ui.scale
 
 #include <imgui.h>
 
@@ -14,7 +15,7 @@ namespace Arcane::Editor
     {
         if (!st.open) return std::nullopt;
         if (st.justOpened) ImGui::OpenPopup("Rename Asset##assetops");
-        std::optional<AssetOpRequest> out; ImGui::SetNextWindowSize(ImVec2(380, 0));
+        std::optional<AssetOpRequest> out; ImGui::SetNextWindowSize(ImVec2(Ui::Px(380.0f), 0));
         if (ImGui::BeginPopupModal("Rename Asset##assetops", &st.open))
         {
             ImGui::SetNextItemWidth(-FLT_MIN); if (st.justOpened) { ImGui::SetKeyboardFocusHere(); st.justOpened = false; }
@@ -22,9 +23,9 @@ namespace Arcane::Editor
             const AssetOpRequest req{ .kind = AssetOpKind::Rename, .guids = { st.guid }, .newStem = st.buf };
             const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string("unavailable");
             ImGui::TextDisabled("%s", why.c_str()); ImGui::BeginDisabled(!why.empty());
-            if (ImGui::Button("Rename", ImVec2(92, 0)) || (enter && why.empty())) { out = req; st.open = false; ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Rename", ImVec2(Ui::Px(92.0f), 0)) || (enter && why.empty())) { out = req; st.open = false; ImGui::CloseCurrentPopup(); }
             ImGui::EndDisabled(); ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(92, 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Cancel", ImVec2(Ui::Px(92.0f), 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
         return out;
@@ -34,7 +35,7 @@ namespace Arcane::Editor
     {
         if (!st.open) return DeleteModalResult::None;
         if (st.justOpened) { ImGui::OpenPopup("Delete Assets##assetops"); st.justOpened = false; }
-        DeleteModalResult out = DeleteModalResult::None; ImGui::SetNextWindowSize(ImVec2(440, 0));
+        DeleteModalResult out = DeleteModalResult::None; ImGui::SetNextWindowSize(ImVec2(Ui::Px(440.0f), 0));
         if (!ImGui::BeginPopupModal("Delete Assets##assetops", nullptr)) return out;
         const DeleteModalText text = DescribeDeleteModal(st.plan, st.request.guids, st.dirtyTitles);
         ImGui::TextUnformatted(text.title.c_str());
@@ -57,7 +58,7 @@ namespace Arcane::Editor
             if (!text.unsaved.empty()) ImGui::TextColored(Theme::kAmber, "%s", text.unsaved.c_str());
         }
         ImGui::TextDisabled("%s", text.footer.c_str());
-        if (ImGui::Button("Cancel", ImVec2(92, 0))) { out = DeleteModalResult::Cancel; st.open = false; ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button("Cancel", ImVec2(Ui::Px(92.0f), 0))) { out = DeleteModalResult::Cancel; st.open = false; ImGui::CloseCurrentPopup(); }
         ImGui::SameLine(); ImGui::BeginDisabled(!st.plan.refusals.empty());
         if (ImGui::Button(text.confirm.c_str())) { out = DeleteModalResult::Confirm; st.open = false; ImGui::CloseCurrentPopup(); }
         ImGui::EndDisabled(); ImGui::EndPopup(); return out;
@@ -74,8 +75,8 @@ namespace Arcane::Editor
             const bool enter = ImGui::InputText("##newfolder", st.name, sizeof(st.name), ImGuiInputTextFlags_EnterReturnsTrue);
             const CreateNameCheck ck = ValidateCreateName(st.name, project.Root() / "Content" / st.parent, "");   // rule 3 catches a file or folder
             ImGui::TextDisabled("%s", ck.ok ? "" : ck.message.c_str()); ImGui::BeginDisabled(!ck.ok);
-            if (ImGui::Button("Create", ImVec2(92, 0)) || (enter && ck.ok)) { out = AssetOpRequest{ .kind = AssetOpKind::NewFolder, .newStem = st.name, .destFolder = st.parent }; st.open = false; ImGui::CloseCurrentPopup(); }
-            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(92, 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Create", ImVec2(Ui::Px(92.0f), 0)) || (enter && ck.ok)) { out = AssetOpRequest{ .kind = AssetOpKind::NewFolder, .newStem = st.name, .destFolder = st.parent }; st.open = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(Ui::Px(92.0f), 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
         else if (!ImGui::IsPopupOpen("New Folder##assetops")) st.open = false;   // closed from outside (its parent went): never a stale open flag
@@ -99,8 +100,8 @@ namespace Arcane::Editor
             if (ImGui::Button("New Folder...")) { nf = {}; nf.open = nf.justOpened = true; nf.parent = req.destFolder; }
             const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string("unavailable");
             ImGui::TextColored(Theme::kError, "%s", why.c_str()); ImGui::BeginDisabled(!why.empty());   // the first refusal inline
-            if (ImGui::Button("Move", ImVec2(92, 0))) { result.move = req; st.open = false; ImGui::CloseCurrentPopup(); }
-            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(92, 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Move", ImVec2(Ui::Px(92.0f), 0))) { result.move = req; st.open = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(Ui::Px(92.0f), 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
             // Nested (carry ruling): opened INSIDE Move's popup scope, so its
             // OpenPopup runs at popup-stack level 1 and keeps Move open behind it.
             result.newFolder = DrawNewFolderModal(nf, project);

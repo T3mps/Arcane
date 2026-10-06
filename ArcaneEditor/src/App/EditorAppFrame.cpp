@@ -65,6 +65,7 @@
 #include <glm/glm.hpp>
 
 #include "Widgets/EditorTheme.hpp"   // Theme::kTextDim (the start page's dim path / time)
+#include "Widgets/UiMetrics.hpp"   // Ui::Px -- the modal button widths follow editor.ui.scale
 #include "Widgets/IconsLucide.h"   // the start page's Open Project... / Open Folder... icons
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -3399,7 +3400,7 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(err->message.c_str());
                 ImGui::PopTextWrapPos();
                 ImGui::Separator();
-                if (ImGui::Button("OK", ImVec2(120, 0)) ||
+                if (ImGui::Button("OK", ImVec2(Ui::Px(120.0f), 0)) ||
                     Arcane::Editor::EditorActions::Get().Pressed("ui.cancel") || Arcane::Editor::EditorActions::Get().Pressed("ui.confirm"))
                 {
                     m_modalErrors.Pop();
@@ -3489,7 +3490,7 @@ namespace Arcane::Editor
                     : "'" + m_scene.DisplayName() + "' has unsaved changes.").c_str());
                 ImGui::Separator();
                 if (ImGui::Button(isLaunch ? "Save and Play" : "Save",
-                                  ImVec2(isLaunch ? 140.f : 90.f, 0)))
+                                  ImVec2(Ui::Px(isLaunch ? 140.f : 90.f), 0)))
                 {
                     // Stop Play BEFORE saving, in both branches below. Stop
                     // restores the pre-Play snapshot, which IS the authored
@@ -3533,14 +3534,14 @@ namespace Arcane::Editor
                 if (!isLaunch)
                 {
                     ImGui::SameLine();
-                    if (ImGui::Button("Discard", ImVec2(90, 0)))
+                    if (ImGui::Button("Discard", ImVec2(Ui::Px(90.0f), 0)))
                     {
                         ls.sceneAction = m_scene.TakePending();
                         ImGui::CloseCurrentPopup();
                     }
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
+                if (ImGui::Button("Cancel", ImVec2(Ui::Px(90.0f), 0)) ||
                     Arcane::Editor::EditorActions::Get().Pressed("ui.cancel"))
                 {
                     m_scene.ClearPending();

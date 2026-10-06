@@ -3,6 +3,7 @@
 #include "Settings/AxisColors.hpp"
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
+#include "Widgets/UiMetrics.hpp"     // Ui::Px / FontPx -- the hard pixel sizes follow editor.ui.*
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiTable + ImGuiTableColumn + TableSetColumnWidth
@@ -290,7 +291,7 @@ namespace Arcane::Editor
         // ---------------------------------------------------------------------
 
         // Pill geometry (spec §11.2: "12px text, 16px line, 1px #333333
-        // border"). The line height itself is the HEADER's kPillLineHeight --
+        // border"). The line height itself is the HEADER's PillLineHeight() --
         // it has an out-of-file consumer (see its doc comment there). The
         // neutral border IS a theme token already -- kSeparator is
         // EditorTheme.hpp's own #333333, used today for table borders -- but
@@ -361,8 +362,8 @@ namespace Arcane::Editor
         // still live on this stack.
         std::deque<CardFrameState> g_cardFrameStack;
 
-        // Inner padding shared by BeginCardFrame/EndCardFrame (spec: 8px).
-        constexpr float kCardFramePadding = 8.0f;
+        // Inner padding shared by BeginCardFrame/EndCardFrame (spec: 8px at UI scale 1).
+        [[nodiscard]] float CardFramePadding() noexcept { return Ui::Px(8.0f); }
     }
 
     // capacity() + 1 is BufSize's own C++ spelling (imgui.h:2772); the +1 is
@@ -726,12 +727,12 @@ namespace Arcane::Editor
         if (ImGui::GetCurrentWindowRead()->SkipItems)
             return;
 
-        ImGui::PushFont(GetEditorFonts().interRegular, 12.0f);
+        ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(12.0f));
 
         const ImVec2 textSize = ImGui::CalcTextSize(text);
         const float paddingX = ImGui::GetStyle().FramePadding.x;
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const ImVec2 size(textSize.x + paddingX * 2.0f, kPillLineHeight);
+        const ImVec2 size(textSize.x + paddingX * 2.0f, PillLineHeight());
 
         ImU32 borderColor = ImGui::GetColorU32(Theme::kSeparator);
         ImU32 textColor   = ImGui::GetColorU32(Theme::kGrab);
@@ -745,7 +746,7 @@ namespace Arcane::Editor
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), borderColor);
-        dl->AddText(ImVec2(pos.x + paddingX, pos.y + (kPillLineHeight - textSize.y) * 0.5f),
+        dl->AddText(ImVec2(pos.x + paddingX, pos.y + (PillLineHeight() - textSize.y) * 0.5f),
                     textColor, text);
 
         // A real item, not just drawlist paint: Dummy reserves the layout
@@ -859,7 +860,7 @@ namespace Arcane::Editor
         // convention (there is no longer a real name ITEM for SameLine to
         // read line metrics off of).
         result.trailingPos = ImVec2(nameX + nameSize.x + ImGui::GetStyle().ItemInnerSpacing.x,
-                                    rowMin.y + (rowHeight - kPillLineHeight) * 0.5f);
+                                    rowMin.y + (rowHeight - PillLineHeight()) * 0.5f);
 
         // Put the flow cursor back at the row's true bottom: the NEXT
         // sibling (another row, in the common no-trailing-content case)
@@ -901,7 +902,7 @@ namespace Arcane::Editor
         dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
                    ImGui::GetColorU32(Theme::kSeparator));
 
-        constexpr float kPad = 8.0f;
+        const float kPad = Ui::Px(8.0f);
         const bool hasIcon = iconUtf8 != nullptr && iconUtf8[0] != '\0';
 
         // Icon measured at the AMBIENT font (whatever is active when StatTile
@@ -917,7 +918,7 @@ namespace Arcane::Editor
         const ImVec2 iconSize = hasIcon ? ImGui::CalcTextSize(iconUtf8) : ImVec2(0.0f, 0.0f);
         const float iconAdvance = hasIcon ? iconSize.x + ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
 
-        ImGui::PushFont(GetEditorFonts().interRegular, 24.0f);
+        ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(24.0f));
         const ImVec2 numberSize = ImGui::CalcTextSize(number);
         const float rowY = pos.y + kPad;
         dl->AddText(ImVec2(pos.x + kPad + iconAdvance, rowY), ImGui::GetColorU32(ImGuiCol_Text), number);
@@ -933,8 +934,8 @@ namespace Arcane::Editor
                        iconColor, iconUtf8);
         }
 
-        ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
-        dl->AddText(ImVec2(pos.x + kPad, rowY + numberSize.y + 2.0f),
+        ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(13.0f));
+        dl->AddText(ImVec2(pos.x + kPad, rowY + numberSize.y + Ui::Px(2.0f)),
                    ImGui::GetColorU32(Theme::kTextDim), label);
         ImGui::PopFont();
 
@@ -961,11 +962,11 @@ namespace Arcane::Editor
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        constexpr float kBarHeight  = 12.0f;   // spec §11.2: "10-12px tall"
-        constexpr float kSegmentGap = 2.0f;    // spec §11.2: "2px gaps"
-        constexpr float kSwatchSize = 8.0f;
-        constexpr float kLegendGapY = 6.0f;
-        constexpr float kLegendGapX = 14.0f;
+        const float kBarHeight  = Ui::Px(12.0f);   // spec §11.2: "10-12px tall"
+        const float kSegmentGap = Ui::Px(2.0f);    // spec §11.2: "2px gaps"
+        const float kSwatchSize = Ui::Px(8.0f);
+        const float kLegendGapY = Ui::Px(6.0f);
+        const float kLegendGapX = Ui::Px(14.0f);
 
         dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + kBarHeight),
                           ImGui::GetColorU32(Theme::kWell));
@@ -1027,7 +1028,7 @@ namespace Arcane::Editor
     // Opens a card: pushes `id` (caller content -- buttons, a Recook/Problems
     // pair -- needs its own id scope, RowWithThumb's reasoning) and a fresh
     // ImDrawListSplitter, redirects the drawlist to channel 1 (content), and
-    // seats the cursor `kCardFramePadding` in from the card's top-left. The
+    // seats the cursor `CardFramePadding()` in from the card's top-left. The
     // background+border cannot be drawn yet -- the card's height is whatever
     // the caller draws next -- so EndCardFrame paints it retroactively into
     // channel 0 once the content's extent is known.
@@ -1054,7 +1055,7 @@ namespace Arcane::Editor
         st.splitter.Split(dl, 2);
         st.splitter.SetCurrentChannel(dl, 1);
 
-        ImGui::SetCursorScreenPos(ImVec2(pos.x + kCardFramePadding, pos.y + kCardFramePadding));
+        ImGui::SetCursorScreenPos(ImVec2(pos.x + CardFramePadding(), pos.y + CardFramePadding()));
         ImGui::BeginGroup();
         return true;
     }
@@ -1075,7 +1076,7 @@ namespace Arcane::Editor
         const ImVec2 groupMax = ImGui::GetItemRectMax();
 
         const ImVec2 frameMin = st.pos;
-        const ImVec2 frameMax(st.pos.x + st.width, groupMax.y + kCardFramePadding);
+        const ImVec2 frameMax(st.pos.x + st.width, groupMax.y + CardFramePadding());
 
         // Channel 0, UNDER the content already painted into channel 1 --
         // Merge() below flattens 0-then-1, so this fill+border sits behind
@@ -1134,11 +1135,11 @@ namespace Arcane::Editor
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        constexpr float kDotSize   = 7.0f;    // spec §11.2: "feed dots 7px"
-        constexpr float kDotRadius = kDotSize * 0.5f;
-        constexpr float kTextGap   = 8.0f;    // dot column -> text column, and age -> title
-        constexpr float kEntryGap  = 6.0f;    // between one entry's detail line and the next dot
-        constexpr float kLineGap   = 2.0f;    // age/title line -> detail line
+        const float kDotSize   = Ui::Px(7.0f);    // spec §11.2: "feed dots 7px"
+        const float kDotRadius = kDotSize * 0.5f;
+        const float kTextGap   = Ui::Px(8.0f);    // dot column -> text column, and age -> title
+        const float kEntryGap  = Ui::Px(6.0f);    // between one entry's detail line and the next dot
+        const float kLineGap   = Ui::Px(2.0f);    // age/title line -> detail line
 
         const float lineX = pos.x + kDotRadius;
         const float textX = pos.x + kDotSize + kTextGap;

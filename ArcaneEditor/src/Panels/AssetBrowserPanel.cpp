@@ -9,6 +9,7 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::Px / FontPx -- the refused badge follows editor.ui.*
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
@@ -707,8 +708,8 @@ namespace Arcane::Editor
             // edge lands exactly at the thumb boundary, never past it.
             if (refused || e.cook == CookState::Queued)
             {
-                constexpr float kBadgeFontSize = 10.0f;
-                constexpr float kBadgeMargin    = 3.0f;
+                const float kBadgeFontSize = Ui::FontPx(10.0f);
+                const float kBadgeMargin    = Ui::Px(3.0f);
                 const char* badge = refused ? ICON_LC_TRIANGLE_ALERT : ICON_LC_CLOCK;
                 ImGui::PushFont(GetEditorFonts().interRegular, kBadgeFontSize);
                 const ImVec2 badgeSize = ImGui::CalcTextSize(badge);

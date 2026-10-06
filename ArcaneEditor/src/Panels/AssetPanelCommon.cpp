@@ -8,6 +8,7 @@
 #include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/EditorWidgets.hpp"       // AssetPill
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::FontPx -- PillWidth measures at AssetPill's scaled size
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>
@@ -295,7 +296,7 @@ namespace Arcane::Editor
     // the Graph panel's node chrome budgets the same way.
     float PillWidth(const char* text)
     {
-        ImGui::PushFont(GetEditorFonts().interRegular, 12.0f);
+        ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(12.0f));
         const float w = ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::PopFont();
         return w;

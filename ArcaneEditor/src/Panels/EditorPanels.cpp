@@ -16,6 +16,7 @@
 #include "Scene/EntityClipboard.hpp"
 #include "Panels/EntityList.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::Px -- the transport strip's pixel gaps follow editor.ui.scale
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
@@ -772,7 +773,7 @@ namespace Arcane::Editor
         const float btnH     = ImGui::GetFrameHeight();
         const float logoH    = (logoTex != 0) ? std::floor(btnH * 1.35f) : btnH;
         const float overhang = (logoH - btnH) * 0.5f;   // logo extends this far above/below the row
-        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(3.0f) + overhang));
 
         // Measure the full strip at the button-row start so the transport centers in the
         // whole width (not the width left of the logo).
@@ -783,14 +784,14 @@ namespace Arcane::Editor
         // -- LEFT cluster (Unity-style branding): [pad] [logo] [wordmark], inset from the
         // window edge and vertically centered on the button row. Absolute SetCursorPos so it
         // never perturbs the transport's own placement. leftX tracks the running right edge.
-        const float leftPad = 8.0f;
+        const float leftPad = Ui::Px(8.0f);
         float leftX = lineStartX + leftPad;
         if (logoTex != 0)
         {
             ImGui::SetCursorPos(ImVec2(leftX, rowY - overhang));
             ImGui::Image((ImTextureID)logoTex, ImVec2(logoH, logoH));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Arcane");
-            leftX += logoH + 8.0f;   // gap between logo and wordmark
+            leftX += logoH + Ui::Px(8.0f);   // gap between logo and wordmark
         }
         if (ImFont* brand = GetEditorFonts().brand)
         {
@@ -818,8 +819,8 @@ namespace Arcane::Editor
         // At 8 the buttons read as four separate objects instead of one instrument; the
         // group is an instrument. Everything else on the row keeps the global spacing,
         // which is why this is a scoped PushStyleVar and not a style change.
-        constexpr float kTransportGap = 2.0f;
-        constexpr float kCaretPadX    = 2.0f;   // the caret half is slimmer than a full icon button
+        const float kTransportGap = Ui::Px(2.0f);
+        const float kCaretPadX    = Ui::Px(2.0f);   // the caret half is slimmer than a full icon button
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         // The split's two halves overlap by one border so the shared edge is a single
@@ -830,7 +831,7 @@ namespace Arcane::Editor
         const float transportW = splitW + btnW(ICON_LC_PAUSE) + btnW(ICON_LC_STEP_FORWARD)
                                + kTransportGap * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        const float transportX = std::max(centerStart, leftX + 12.0f);
+        const float transportX = std::max(centerStart, leftX + Ui::Px(12.0f));
         ImGui::SetCursorPos(ImVec2(transportX, rowY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
@@ -1020,7 +1021,7 @@ namespace Arcane::Editor
         {
             const ImVec2 afterTransport = ImGui::GetCursorPos();
             const float  rightEdge = lineStartX + fullContentW - leftPad;          // mirrors leftPad
-            const float  minX      = transportX + transportW + 12.0f;             // mirrors the left clamp
+            const float  minX      = transportX + transportW + Ui::Px(12.0f);             // mirrors the left clamp
             const float  gap       = st.ItemSpacing.x * 2.0f;
             const float  lineH     = ImGui::GetTextLineHeight();
             const StripStatusMetrics m = MeasureStripStatus(status.title);
@@ -1047,7 +1048,7 @@ namespace Arcane::Editor
             ImGui::SetCursorPos(afterTransport);
         }
 
-        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(3.0f) + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
         return result;
     }
