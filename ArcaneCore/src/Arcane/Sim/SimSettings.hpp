@@ -7,7 +7,9 @@
 // - sim.fixedHz is NextWorld: the Runtime reads it into its loop config when it
 //   is built, and PhysicsSystem captures 1/fixedHz then (inventory Part 1 note 4).
 // - sim.maxStepsPerFrame and sim.maxFrameDeltaSeconds are Live: both host
-//   frames read them each frame (ApplySimStepCap and ClampFrameDelta below).
+//   frames read them each frame (ApplySimStepCap and ClampFrameDelta below),
+//   and editor Play's embedded server world takes the same cap each tick
+//   (PlaySession::TickServer), so the two worlds never step differently.
 //   --fixed-dt runs bypass the clamp.
 // - server.tickHz is the dedicated server's tick, separate from sim.fixedHz so
 //   a client and a server can differ; ArcaneServer's --fixed-dt overrides it.
@@ -28,7 +30,9 @@ namespace Arcane
     }
 
     // sim.maxStepsPerFrame is Live: ArcaneRuntime's and editor Play's frames
-    // call this before Advance, so a changed cap takes effect next frame.
+    // call this before Advance (editor Play on BOTH its loops: the primary and,
+    // under EmbeddedServer, the server world's), so a changed cap takes effect
+    // next frame.
     inline void ApplySimStepCap(RunLoop& loop) noexcept
     {
         loop.SetMaxStepsPerFrame(Settings<SimSettings>().maxStepsPerFrame);
