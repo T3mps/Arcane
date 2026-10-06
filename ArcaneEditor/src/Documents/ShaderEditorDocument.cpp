@@ -1,6 +1,7 @@
 #include "Documents/ShaderEditorDocument.hpp"
 #include "Input/EditorActions.hpp"
 
+#include "Documents/CustomBodyPreview.hpp"       // the Custom node's capped body preview (editor.shader.bodyPreview*)
 #include "Documents/MaterialSpherePreview.hpp"   // the mesh-surface preview sphere, shared with the thumbnails (T3-D6)
 #include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
 #include "Documents/ShaderGraphPinLegend.hpp"   // the canvas's pin colour legend (T3-D1)
@@ -6250,25 +6251,11 @@ namespace Arcane::Editor
                 // ImGui space), opened by the button below.
                 {
                     const ShaderEditorSettings& es = Arcane::Settings<ShaderEditorSettings>();
-                    const std::size_t lineChars = static_cast<std::size_t>(es.bodyPreviewChars);
-                    std::string_view bodyText = n.customBody;
-                    int shown = 0;
-                    while (!bodyText.empty() && shown < es.bodyPreviewLines)
-                    {
-                        const std::size_t nl = bodyText.find('\n');
-                        std::string_view lineText = bodyText.substr(0, nl);
-                        if (!lineText.empty() && lineText.back() == '\r')
-                            lineText.remove_suffix(1);
-                        std::string display(lineText.substr(0, lineChars));
-                        if (lineText.size() > lineChars)
-                            display += "...";
-                        ImGui::TextDisabled("%s", display.c_str());
-                        ++shown;
-                        if (nl == std::string_view::npos)
-                            break;
-                        bodyText.remove_prefix(nl + 1);
-                    }
-                    if (!bodyText.empty() && shown == 8)
+                    const CustomBodyPreview preview = BuildCustomBodyPreview(
+                        n.customBody, es.bodyPreviewLines, static_cast<std::size_t>(es.bodyPreviewChars));
+                    for (const std::string& line : preview.lines)
+                        ImGui::TextDisabled("%s", line.c_str());
+                    if (preview.truncated)
                         ImGui::TextDisabled("...");
                 }
                 if (ImGui::SmallButton("Edit HLSL..."))

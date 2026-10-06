@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsSweep.hpp"
 #include "Settings/DocumentSettings.hpp"
+#include "Documents/CustomBodyPreview.hpp"
 #include "Documents/MaterialSpherePreview.hpp"
 
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -86,4 +87,35 @@ TEST_CASE("sweep: every editor document / preview default is the declared litera
     Test::RequireDefault("editor.sprite.ppuMin", CVarValue::Float32(1.0f));
     Test::RequireDefault("editor.sprite.ppuMax", CVarValue::Float32(4096.0f));
     Test::RequireDefault("editor.sprite.pivotDragSpeed", CVarValue::Float32(0.005f));
+}
+
+TEST_CASE("sweep: the Custom body preview honours a non-default line cap and marks the cut", "[sweep][documents]")
+{
+    using Arcane::Editor::BuildCustomBodyPreview;
+    const std::string tenLines = "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9";
+
+    // editor.shader.bodyPreviewLines = 4 on a 10-line body: four lines + the "..." marker.
+    const auto four = BuildCustomBodyPreview(tenLines, 4, 48);
+    REQUIRE(four.lines.size() == 4);
+    CHECK(four.lines.front() == "l0");
+    CHECK(four.lines.back() == "l3");
+    CHECK(four.truncated);
+
+    // The default cap (8) still cuts and marks.
+    const auto eight = BuildCustomBodyPreview(tenLines, 8, 48);
+    CHECK(eight.lines.size() == 8);
+    CHECK(eight.truncated);
+
+    // A body that fits is not marked -- including one of exactly the cap with
+    // no trailing newline, and one ending in a newline.
+    CHECK_FALSE(BuildCustomBodyPreview("a\nb\nc\nd", 4, 48).truncated);
+    CHECK_FALSE(BuildCustomBodyPreview("a\nb\nc\nd\n", 4, 48).truncated);
+    CHECK(BuildCustomBodyPreview("a\nb\nc\nd\ne", 4, 48).truncated);
+
+    // Lines clip to bodyPreviewChars with "..."; CR is stripped.
+    const auto clipped = BuildCustomBodyPreview("abcdefgh\r\nxy", 8, 4);
+    REQUIRE(clipped.lines.size() == 2);
+    CHECK(clipped.lines[0] == "abcd...");
+    CHECK(clipped.lines[1] == "xy");
+    CHECK_FALSE(clipped.truncated);
 }
