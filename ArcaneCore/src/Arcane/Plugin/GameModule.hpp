@@ -243,6 +243,9 @@ namespace Arcane
                 delete components;
                 components = nullptr;
                 ctx        = nullptr;
+                // This module's Mosaic level setter (Log.hpp, settings arc S2)
+                // must not be called after the image unmaps.
+                Log::UninstallMosaicLevelTarget();
             }
 
             void SaveState(Arcane::BinaryWriter& w)

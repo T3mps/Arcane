@@ -39,10 +39,34 @@ namespace Arcane::Log
     // ARC_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
     ARC_CORE_API Mosaic::LogSink MosaicSink() noexcept;
 
-    // Install the sink into the CALLING module's Mosaic storage. Inline on
-    // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
-    // (Arcane.dll, ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
-    inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
+    // Mosaic's LEVEL is a per-module inline atomic too (Mosaic/Log.hpp
+    // detail::g_logLevel). log.level therefore reaches Astra/Manifold2D output
+    // only if EVERY module's copy is set (settings arc S2; the 2026-10-03
+    // inventory bug was that Mosaic::SetLogLevel was never called). Each module
+    // registers its own setter, and ApplyLogSettings calls them all.
+    // Registering applies the current level at once.
+    using MosaicLevelFn = void (*)(Mosaic::LogLevel level) noexcept;
+    ARC_CORE_API void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    ARC_CORE_API void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    // Sets ArcaneCore.dll's own copy and every registered module's.
+    ARC_CORE_API void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept;
+    // ArcaneCore.dll's own copy. Other modules read theirs with Mosaic::GetLogLevel().
+    ARC_CORE_API Mosaic::LogLevel CoreMosaicLevel() noexcept;
+
+    // THIS module's setter. It is inline, so its address is the CALLING module's copy.
+    inline void SetThisModuleMosaicLevel(Mosaic::LogLevel level) noexcept { Mosaic::SetLogLevel(level); }
+
+    // Install the sink into the CALLING module's Mosaic storage, and register
+    // that module's level setter. Inline on purpose: Mosaic's g_logSink and
+    // g_logLevel are per-module inline atomics, so each module (Arcane.dll,
+    // ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
+    inline void InstallMosaicSink() noexcept
+    {
+        Mosaic::SetLogSink(MosaicSink(), nullptr);
+        RegisterMosaicLevelTarget(&SetThisModuleMosaicLevel);
+    }
+    // A module that unloads (GameModule.hpp's Shutdown) unregisters its setter first.
+    inline void UninstallMosaicLevelTarget() noexcept { UnregisterMosaicLevelTarget(&SetThisModuleMosaicLevel); }
     // ARC_INTERNAL_END
 
     // ------------------------------------------------------------------

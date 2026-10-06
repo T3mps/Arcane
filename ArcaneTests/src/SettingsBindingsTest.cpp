@@ -4,11 +4,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
 #include <Arcane/Config/Bindings/JobsBinding.hpp>
+#include <Arcane/Config/Bindings/LogBinding.hpp>
 #include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Mosaic/Log.hpp>
 #include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
@@ -298,5 +301,61 @@ TEST_CASE("ApplyEarlyConfigRungs: jobs.workerThreads in <project>/Config/jobs.js
     Runtime serial(Test::Process());
     CHECK(serial.Jobs().WorkerCount() == one.WorkerCount());
     fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    Mosaic::LogLevel g_probeLevel = Mosaic::LogLevel::Info;
+    void ProbeMosaicLevel(Mosaic::LogLevel level) noexcept { g_probeLevel = level; }
+}
+
+TEST_CASE("ApplyLogSettings sets spdlog and Mosaic's level in Core, this exe and every registered module", "[settings]")
+{
+    Log::Init();
+    Log::InstallMosaicSink();                                    // registers THIS exe's Mosaic level setter
+    Log::RegisterMosaicLevelTarget(&ProbeMosaicLevel);
+    CHECK(g_probeLevel == Log::CoreMosaicLevel());               // a new target receives the current level at once
+
+    ApplyLogSettings(LogSettings{ .level = 3 });
+    CHECK(Log::Engine()->level() == spdlog::level::warn);
+    CHECK(Mosaic::GetLogLevel() == Mosaic::LogLevel::Warn);       // ArcaneTests.exe's copy
+    CHECK(Log::CoreMosaicLevel() == Mosaic::LogLevel::Warn);      // ArcaneCore.dll's copy
+    CHECK(g_probeLevel == Mosaic::LogLevel::Warn);
+
+    Log::UnregisterMosaicLevelTarget(&ProbeMosaicLevel);
+    ApplyLogSettings(LogSettings{ .level = 1 });
+    CHECK(g_probeLevel == Mosaic::LogLevel::Warn);               // unregistered: untouched
+    CHECK(Mosaic::GetLogLevel() == Mosaic::LogLevel::Debug);
+
+    ApplyLogSettings(LogSettings{});                             // back to info
+    CHECK(Log::Engine()->level() == spdlog::level::info);
+    CHECK(Mosaic::GetLogLevel() == Mosaic::LogLevel::Info);
+}
+
+TEST_CASE("log.level is LogSettings' field: same flags and scope as before, and its publish reaches Mosaic", "[settings]")
+{
+    Log::Init();
+    Log::InstallMosaicSink();
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("log.level");
+#if defined(ARC_BUILD_DIST)
+    if (h.IsStale()) return;   // Dev: compiled out in Dist
+#endif
+    REQUIRE_FALSE(h.IsStale());
+    const auto e = reg.Explain("log.level");
+    REQUIRE(e);
+    CHECK(e->flags == (CVarFlags::Archive | CVarFlags::Dev));   // byte-identical to the registration it replaces
+    CHECK(e->scope == SettingScope::PreferencesProject);
+    CHECK(e->help.find("0 trace") != std::string::npos);
+    CHECK(LogSettings{}.level == static_cast<std::int32_t>(spdlog::level::info));
+    {
+        ClearCodeOnExit restore{ h };
+        REQUIRE(reg.Set(h, CVarValue::Int32(4), SetBy::Code) == SetResult::Applied);
+        reg.Publish();
+        CHECK(Log::Engine()->level() == spdlog::level::err);
+        CHECK(Mosaic::GetLogLevel() == Mosaic::LogLevel::Error);
+        CHECK(Log::CoreMosaicLevel() == Mosaic::LogLevel::Error);
+    }
+    ApplyLogSettings(Settings<LogSettings>());                   // whatever the rungs hold now
 }
 

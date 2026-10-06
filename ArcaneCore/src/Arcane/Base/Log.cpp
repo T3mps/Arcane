@@ -6,8 +6,6 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
-#include <Arcane/Config/CVarModule.hpp>   // ARC_MODULE_NAME_STRING: the Core scope around log.level's registration (Init)
-#include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Mosaic/Assert.hpp>
 #include <Mosaic/Log.hpp>
@@ -21,6 +19,7 @@
 #include <mutex>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -207,13 +206,12 @@ namespace Arcane::Log
         };
         FlushHelperShutdownGuard s_flushHelperShutdownGuard;
 
-        std::once_flag s_levelCvarOnce;
-
-        void OnLogLevelPublished(Arcane::CVarHandle handle, void*)
-        {
-            if (const auto v = Arcane::CVarRegistry::Get().Get(handle); v && v->type == Arcane::CVarType::Int32)
-                Arcane::Log::SetLevel(static_cast<spdlog::level::level_enum>(v->AsInt32()));
-        }
+        // settings arc S2: the other modules' Mosaic level setters (Log.hpp).
+        // Registration happens at module load and the set at a log.level
+        // publish, never on a hot path.
+        std::mutex                 s_mosaicLevelMutex;
+        std::vector<MosaicLevelFn> s_mosaicLevelTargets;
+        std::atomic<int>           s_mosaicLevel{ static_cast<int>(Mosaic::LogLevel::Info) };
     }
 
     void Init(spdlog::level::level_enum level)
@@ -249,34 +247,6 @@ namespace Arcane::Log
             Mosaic::SetLogSink(MosaicSink(), nullptr);
             Mosaic::SetAssertHandler(Arcane::Assert::MosaicHandler(), nullptr);
         });
-
-        // `log.level` (s2.4's Core exception): registered HERE, not by ARC_CVAR,
-        // because its default is Init's runtime argument -- the first caller's
-        // level, so an explicit Init(level) is never overridden by a static
-        // default. An Archive value from Saved/Config applies through the
-        // callback when config loads and publishes.
-        std::call_once(s_levelCvarOnce, [level] {
-            // Core's own scope, not the ambient one: this registration is LAZY
-            // (the process's first ARC_* line), and the CVarModuleScope open at
-            // that moment may be a plugin's (PluginHost brackets every call into
-            // an image). Inherited, log.level and its callback would be the
-            // plugin's and die at its unload. They are Core's whoever logs first.
-            const Arcane::CVarModuleScope core(ARC_MODULE_NAME_STRING);
-            Arcane::CVarDesc desc;
-            desc.name = "log.level";
-            desc.type = Arcane::CVarType::Int32;
-            desc.defaultValue = Arcane::CVarValue::Int32(static_cast<std::int32_t>(level));
-            desc.min = Arcane::CVarValue::Int32(0);
-            desc.max = Arcane::CVarValue::Int32(6);
-            desc.flags = Arcane::CVarFlags::Archive | Arcane::CVarFlags::Dev;
-            desc.help = "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
-                        "Gates stderr, the log file and the Console.";
-            desc.audience = Arcane::Audience::Game;
-            desc.scope = Arcane::SettingScope::PreferencesProject;   // inventory R1
-            desc.apply = Arcane::ApplyMode::Live;
-            const Arcane::CVarHandle h = Arcane::CVarRegistry::Get().Register(desc);
-            if (!h.IsStale()) Arcane::CVarRegistry::Get().AddCallback(h, &OnLogLevelPublished, nullptr);   // Dist: refused (Dev)
-        });
     }
 
     void SetLevel(spdlog::level::level_enum level)
@@ -310,6 +280,35 @@ namespace Arcane::Log
     }
 
     Mosaic::LogSink MosaicSink() noexcept { return &MosaicLogSinkImpl; }
+
+    void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept
+    {
+        if (!fn) return;
+        std::lock_guard lock(s_mosaicLevelMutex);
+        if (std::find(s_mosaicLevelTargets.begin(), s_mosaicLevelTargets.end(), fn) == s_mosaicLevelTargets.end())
+            s_mosaicLevelTargets.push_back(fn);
+        fn(static_cast<Mosaic::LogLevel>(s_mosaicLevel.load(std::memory_order_relaxed)));
+    }
+
+    void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept
+    {
+        std::lock_guard lock(s_mosaicLevelMutex);
+        std::erase(s_mosaicLevelTargets, fn);
+    }
+
+    void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept
+    {
+        s_mosaicLevel.store(static_cast<int>(level), std::memory_order_relaxed);
+        Mosaic::SetLogLevel(level);   // ArcaneCore.dll's own copy
+        std::lock_guard lock(s_mosaicLevelMutex);
+        for (MosaicLevelFn fn : s_mosaicLevelTargets)
+            fn(level);
+    }
+
+    Mosaic::LogLevel CoreMosaicLevel() noexcept
+    {
+        return Mosaic::GetLogLevel();
+    }
 
     bool AttachFileSink(const std::filesystem::path& file)
     {
