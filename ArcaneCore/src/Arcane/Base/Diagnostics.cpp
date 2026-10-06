@@ -300,10 +300,10 @@ namespace
     wchar_t g_productWide[128]{};
     wchar_t g_spawnCmd[8192]{};
     // The reporter's settings flags (S6-4; ReporterSettingsArgs), formatted
-    // from the published settings at Install and at RetargetDumpDir -- before
-    // the crash thread exists or under g_reportMutex, which it holds for a
-    // whole report -- and appended verbatim by both spawns. The reporter has
-    // no registry of its own.
+    // from the published settings at Install, at RetargetDumpDir and when a
+    // Live one publishes -- before the crash thread exists or under
+    // g_reportMutex, which it holds for a whole report -- and appended
+    // verbatim by both spawns. The reporter has no registry of its own.
     wchar_t g_reporterSettingsArgs[512]{};
 
     // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
@@ -2352,6 +2352,33 @@ namespace
         wcsncpy_s(g_reporterSettingsArgs, tail.c_str(), _TRUNCATE);
     }
 
+    // S6-4 carried gap (Live apply): diagnostics.logTailLines and
+    // ui.copyFlashSeconds are Live, so a change re-formats the tail for the
+    // NEXT spawn. Publish runs on the main thread; the lock is the one the
+    // crash thread holds for a whole report, so a report never reads a
+    // half-written buffer and the crash path still only copies it.
+    void OnReporterSettingPublished(CVarHandle, void*)
+    {
+        std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
+        SnapshotReporterSettingsArgs();
+    }
+
+    // Once per process, at the first Install: the cvars are registered by
+    // then (static init of their own TUs). Dist compiles both Dev cvars out,
+    // so there is nothing to watch and Install's snapshot stands.
+    std::atomic<bool> g_reporterSettingCallbacks{ false };
+    void WatchLiveReporterSettings()
+    {
+        if (g_reporterSettingCallbacks.exchange(true, std::memory_order_acq_rel)) return;
+        CVarRegistry& reg = CVarRegistry::Get();
+        for (const char* name : { "diagnostics.logTailLines", "ui.copyFlashSeconds" })
+        {
+            const CVarHandle h = reg.Find(name);
+            if (!h.IsStale())
+                reg.AddCallback(h, &OnReporterSettingPublished, nullptr);
+        }
+    }
+
     // ---- monitor mode (plan 2, task 9; spec S5.8, D15/D16) ----------------
     // Everything below runs at Install / RetargetDumpDir time, on an ordinary
     // thread: the heap, nlohmann and std::filesystem are all fine here. Only
@@ -2616,6 +2643,16 @@ std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s, std::uin
     return n > 0 ? std::wstring(buf, static_cast<std::size_t>(n)) : std::wstring{};
 }
 
+std::wstring CurrentReporterSettingsArgs()
+{
+#if defined(_WIN32)
+    std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
+    return std::wstring(g_reporterSettingsArgs);
+#else
+    return {};
+#endif
+}
+
 void Install(const Config& cfg)
 {
     if (g_installed.exchange(true, std::memory_order_acq_rel)) return;
@@ -2689,6 +2726,7 @@ void Install(const Config& cfg)
     ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
     ResolveReporterPath();
     SnapshotReporterSettingsArgs();   // before ArmMonitor: the monitor's line carries them too
+    WatchLiveReporterSettings();      // ...and a Live change re-formats it for later spawns
 
     // The hang protocol's host half (plan 2, D11/D7), prepared here so the
     // crash thread only ever resets an existing event and prints a number.

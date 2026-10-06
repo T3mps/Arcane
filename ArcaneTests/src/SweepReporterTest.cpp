@@ -14,6 +14,7 @@
 
 #include "ReporterArgs.hpp"
 
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -170,3 +171,48 @@ TEST_CASE("sweep: malformed reporter settings flags are refused, not absorbed", 
     CHECK(zero.args->flushTimeoutMs == 0u);
     CHECK(zero.args->copyFlashSeconds == 0.0);
 }
+
+#if defined(_WIN32)
+// S6-4 carried gap (Live apply): diagnostics.logTailLines and
+// ui.copyFlashSeconds are Live, so a reporter spawned after a change in the
+// same session must carry the new values -- not Install's snapshot.
+TEST_CASE("sweep: a Live reporter setting reaches the next reporter spawn", "[sweep][reporter]")
+{
+    Diagnostics::Config cfg;
+    cfg.appName             = "SweepReporterTest";
+    cfg.dumpDir             = (std::filesystem::temp_directory_path() / "arcane-sweep-reporter").string();
+    cfg.installCrashHandler = false;   // never hijack the suite's own fault handling
+    cfg.startHangWatchdog   = false;
+    cfg.spawnReporter       = false;
+    struct Armed
+    {
+        explicit Armed(const Diagnostics::Config& c) { Diagnostics::Install(c); }
+        ~Armed() { Diagnostics::Shutdown(); }
+    } armed{ cfg };
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle tail  = reg.Find("diagnostics.logTailLines");
+    const CVarHandle flash = reg.Find("ui.copyFlashSeconds");
+    REQUIRE_FALSE(tail.IsStale());
+    REQUIRE_FALSE(flash.IsStale());
+    struct Revert
+    {
+        CVarRegistry& reg; CVarHandle a, b;
+        ~Revert() { reg.ClearRung(a, SetBy::Code); reg.ClearRung(b, SetBy::Code); reg.PublishImmediate(); }
+    } revert{ reg, tail, flash };
+
+    const auto before = Reporter::ParseArgs(ReportLine(Tokens(Diagnostics::CurrentReporterSettingsArgs())));
+    REQUIRE(before.args.has_value());
+    CHECK(before.args->logTailLines == Settings<DiagnosticsSettings>().logTailLines);
+
+    REQUIRE(reg.Set(tail, CVarValue::UInt32(123u), SetBy::Code) == SetResult::Applied);
+    REQUIRE(reg.Set(flash, CVarValue::Float64(1.5), SetBy::Code) == SetResult::Applied);
+    reg.PublishImmediate();
+
+    const auto after = Reporter::ParseArgs(ReportLine(Tokens(Diagnostics::CurrentReporterSettingsArgs())));
+    INFO(after.error);
+    REQUIRE(after.args.has_value());
+    CHECK(after.args->logTailLines == 123u);
+    CHECK(Test::SameBits(after.args->copyFlashSeconds, 1.5));
+}
+#endif

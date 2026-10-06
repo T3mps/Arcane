@@ -301,6 +301,12 @@ namespace Arcane::Diagnostics
     [[nodiscard]] ARC_CORE_API std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s,
                                                                  std::uint32_t logTailLines, double copyFlashSeconds);
 
+    // The tail the NEXT reporter spawn appends (S6-4 carried gap): Install's
+    // snapshot, re-formatted when diagnostics.logTailLines or
+    // ui.copyFlashSeconds (both Live) publish a change. A test seam; it
+    // allocates, so never the crash path. Empty before the first Install.
+    [[nodiscard]] ARC_CORE_API std::wstring CurrentReporterSettingsArgs();
+
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
     // its first statement (crash window plan 1, R23). Install already does this
     // for the thread that called it -- the main thread -- and the reason is the
