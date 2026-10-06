@@ -290,13 +290,6 @@ ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kCubeFaces|CONSTANT|unit-primitive co
 ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kHalfHeight|CONSTANT|unit-primitive contract (scale via Transform); thumbnail goldens
 ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kRadius|CONSTANT|unit-primitive contract (scale via Transform); thumbnail goldens
 ArcaneCore/src/Arcane/Net/Protocol.hpp|kInvalidMsgId|CONSTANT|wire sentinel
-ArcaneCore/src/Arcane/Net/RateLimiter.hpp|MAX_RECORDS|PENDING|inventory:347 SETTING
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_CONNECTIONS_PER_IP|PENDING|inventory:343 SETTING
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_CONNECTIONS_TOTAL|PENDING|inventory:342 SETTING
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_PAYLOAD_SIZE|PENDING|inventory:338 SETTING
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_RECEIVE_BUFFER_SIZE|PENDING|inventory:339 SETTING
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|RECV_CHUNK_SIZE|CONSTANT|capacity hint (R2): a stack-array bound in the Aphelyon services (ServiceClient.hpp:229); ARC_CONSTANT marker
-ArcaneCore/src/Arcane/Net/TcpSocket.hpp|RECV_TIMEOUT_MS|PENDING|inventory:341 SETTING
 ArcaneCore/src/Arcane/Platform/NativeWindow.cpp|kMsgSetTitle|CONSTANT|Win32 / OS baseline DPI
 ArcaneCore/src/Arcane/Plugin/PluginABI.hpp|kGamePluginABIVersion|CONSTANT|ABI
 ArcaneCore/src/Arcane/Project/AssetRegistry.cpp|kSourceIdNamespace|CONSTANT|stable identity namespace

@@ -101,8 +101,9 @@ namespace Arcane
             // TcpSocket.hpp::ServerConfig. Configurable so a launch-day
             // topology change (CGNAT presence, reverse-proxy, etc.)
             // doesn't require a rebuild. Missing keys in protocol.json
-            // fall back to the ServerConfig defaults at load time, so
-            // pre-existing protocol.json files keep working unchanged.
+            // fall back to net.maxConnectionsPerIp / net.maxConnectionsTotal
+            // (NetSettings) at load time, so pre-existing protocol.json
+            // files keep working unchanged.
             int maxConnectionsPerIp = 0;
             int maxConnectionsTotal = 0;
         };
@@ -113,7 +114,13 @@ namespace Arcane
             return instance;
         }
 
-        bool Load(const std::string& path = "data/protocol.json")
+        // Loads net.protocolPath (settings arc S6-11; "data/protocol.json" by default).
+        bool Load()
+        {
+            return Load(std::string(::Arcane::Settings<NetSettings>().protocolPath));
+        }
+
+        bool Load(const std::string& path)
         {
             std::ifstream file(path);
             if (!file.is_open())
@@ -174,16 +181,17 @@ namespace Arcane
                 newSettings.heartbeatIntervalSeconds = settings["heartbeat_interval_seconds"].get<int>();
 
                 // Audit M-V5-6 networking (2026-06-04): optional keys.
-                // Default to the compile-time ServerConfig values when
-                // absent so existing protocol.json files keep working
-                // without modification. Casting through int is safe --
-                // the ServerConfig constants are small (16, 2048).
+                // Default to net.maxConnectionsPerIp / net.maxConnectionsTotal
+                // when absent so existing protocol.json files keep working
+                // without modification. Casting through int is safe -- the
+                // settings' ranges top out at 1e4 and 1e6.
+                const NetSettings& net = ::Arcane::Settings<NetSettings>();
                 newSettings.maxConnectionsPerIp = settings.value(
                     "max_connections_per_ip",
-                    static_cast<int>(ServerConfig::MAX_CONNECTIONS_PER_IP));
+                    static_cast<int>(net.maxConnectionsPerIp));
                 newSettings.maxConnectionsTotal = settings.value(
                     "max_connections_total",
-                    static_cast<int>(ServerConfig::MAX_CONNECTIONS_TOTAL));
+                    static_cast<int>(net.maxConnectionsTotal));
 
                 std::unordered_map<std::string, MessageDef> newMessages;
                 std::unordered_map<int, std::string> newIdToName;

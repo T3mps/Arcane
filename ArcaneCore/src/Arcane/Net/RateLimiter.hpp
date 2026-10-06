@@ -4,6 +4,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <Arcane/Net/NetSettings.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Util/LruCache.hpp>
 
@@ -40,20 +41,31 @@ namespace Arcane
         // bounded by it; legit users never lose access as a side-effect
         // of someone else's spray.
         //
-        // The 10-min idle cleanup is preserved as memory hygiene -- keeps
-        // the cache size small when the service is mostly idle. The 30s
-        // AGGRESSIVE_SWEEP path that M8 added is gone (no longer needed --
-        // LRU handles cap pressure automatically).
-        static constexpr std::size_t MAX_RECORDS = 10000;
+        // The idle cleanup (10 min by default) is preserved as memory
+        // hygiene -- keeps the cache size small when the service is mostly
+        // idle. The 30s AGGRESSIVE_SWEEP path that M8 added is gone (no
+        // longer needed -- LRU handles cap pressure automatically).
+        //
+        // The cap is net.rateLimit.maxRecords (settings arc S6-11), read when
+        // the limiter is built; the idle sweep's cadence and expiry are
+        // net.rateLimit.cleanupEvery / .idleExpiryMinutes, read per sweep.
 
+        // A call site's limits. The member defaults are net.rateLimit.*'s
+        // declared defaults; ConfigFromSettings() is the live values.
         struct Config
         {
-            int maxAttempts = 5;
-            int windowSeconds = 60;
-            int cooldownSeconds = 30;
+            int maxAttempts = NetRateLimitSettings{}.maxAttempts;
+            int windowSeconds = NetRateLimitSettings{}.windowSeconds;
+            int cooldownSeconds = NetRateLimitSettings{}.cooldownSeconds;
         };
 
-        RateLimiter() : m_records(MAX_RECORDS) {}
+        static Config ConfigFromSettings()
+        {
+            const NetRateLimitSettings& s = ::Arcane::Settings<NetRateLimitSettings>();
+            return { s.maxAttempts, s.windowSeconds, s.cooldownSeconds };
+        }
+
+        RateLimiter() : m_records(static_cast<std::size_t>(::Arcane::Settings<NetRateLimitSettings>().maxRecords)) {}
 
         bool Allow(const std::string& key, const Config& config)
         {
@@ -159,11 +171,12 @@ namespace Arcane
 
         void CleanupExpired(std::chrono::steady_clock::time_point now)
         {
-            if (++m_cleanupCounter < 100)
+            const NetRateLimitSettings& s = ::Arcane::Settings<NetRateLimitSettings>();
+            if (++m_cleanupCounter < s.cleanupEvery)
                 return;
             m_cleanupCounter = 0;
 
-            auto expiry = now - std::chrono::minutes(10);
+            auto expiry = now - std::chrono::minutes(s.idleExpiryMinutes);
             m_records.EraseIf([&](const std::string&, const Record& r) {
                 return r.windowStart < expiry && r.cooldownStart < expiry;
             });
