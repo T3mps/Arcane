@@ -9,37 +9,14 @@
 #include <string>
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Net/Protocol.hpp>
+#include "Helpers/ProtocolLayer.hpp"
 
 using Arcane::ProtocolLoader;
 using Arcane::kInvalidMsgId;
+using Arcane::Test::ProtocolLayerReset;   // drops the file's net.* Project layer at case end (S6-12)
 
 namespace
 {
-    // A good Load layers the file's settings onto net.* at the Project rung
-    // (settings arc S6-12). Drops those records when a case ends, so no other
-    // case in the random-order run sees this file's net.* values.
-    struct ProtocolLayerReset
-    {
-        ~ProtocolLayerReset()
-        {
-            Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            bool cleared = false;
-            for (const Arcane::CVarListEntry& entry : reg.List())
-            {
-                if (!entry.name.starts_with("net.")) continue;
-                const auto e = reg.Explain(entry.name);
-                if (!e) continue;
-                for (const Arcane::CVarHistoryRecord& r : e->history)
-                    if (r.by == Arcane::SetBy::Project && r.module == "protocol.json")
-                    {
-                        cleared |= reg.ClearRung(reg.Find(entry.name), Arcane::SetBy::Project);
-                        break;
-                    }
-            }
-            if (cleared) reg.PublishImmediate();
-        }
-    };
-
     // Write `content` to a unique temp file and return its path.
     std::string WriteTemp(const std::string& content)
     {

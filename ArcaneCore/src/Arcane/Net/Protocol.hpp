@@ -172,13 +172,32 @@ namespace Arcane
                     return false;
                 }
 
-                // Type validation, as before the sweep: a non-numeric value
-                // throws here and the load fails with the prior definition intact.
+                // Settings arc S6-12 (inventory R3): protocol.json's settings are a
+                // Project-rung layer over net.* during the migration window. File key
+                // -> net.* key; the two max_connections_* keys are optional.
+                static constexpr std::pair<const char*, const char*> kNetKeys[] = {
+                    { "default_port", "defaultPort" }, { "max_message_size", "maxPayloadBytes" },
+                    { "token_length", "tokenLength" }, { "session_lifetime_seconds", "sessionLifetimeSeconds" },
+                    { "idle_timeout_seconds", "idleTimeoutSeconds" }, { "heartbeat_interval_seconds", "heartbeatIntervalSeconds" },
+                    { "max_connections_per_ip", "maxConnectionsPerIp" }, { "max_connections_total", "maxConnectionsTotal" } };
+
+                // Type validation BEFORE anything is applied: a non-string format
+                // throws, and every numeric key the file carries (optional ones
+                // included) must be a JSON integer -- the predicate ValueFromJson
+                // applies to the net.* Int32/UInt32/UInt64 cvars. A float (65536.0)
+                // or a string ("12") fails the load loudly with the prior definition
+                // and the net.* cvars intact, instead of being skipped by the layer
+                // apply (settings spec s12: a type mismatch is refused AND reported).
                 std::string messageFormat = settings["message_format"].get<std::string>();
-                for (const char* key : { "default_port", "max_message_size", "token_length",
-                                         "session_lifetime_seconds", "idle_timeout_seconds",
-                                         "heartbeat_interval_seconds" })
-                    (void)settings[key].get<int>();
+                for (const auto& [fileKey, cvarKey] : kNetKeys)
+                {
+                    if (settings.contains(fileKey) && !settings[fileKey].is_number_integer())
+                    {
+                        LOG_CORE_ERROR("Setting '{}' must be an integer (net.{}); got {}",
+                                       fileKey, cvarKey, settings[fileKey].dump());
+                        return false;
+                    }
+                }
 
                 std::unordered_map<std::string, MessageDef> newMessages;
                 std::unordered_map<int, std::string> newIdToName;
@@ -243,21 +262,25 @@ namespace Arcane
                 // Commit -- all validation passed. Replace the definition
                 // wholesale (reload-replace, never merge).
                 //
-                // Settings arc S6-12 (inventory R3): protocol.json's settings are a
-                // Project-rung layer over net.* during the migration window. Applied
-                // here, after every check, so a failed load leaves the cvars untouched.
-                // An optional key the file omits (max_connections_*) keeps the net
+                // The protocol.json layer (kNetKeys above) is applied here, after
+                // every check, so a failed load leaves the cvars untouched. An
+                // optional key the file omits (max_connections_*) keeps the net
                 // default, as before the sweep.
-                static constexpr std::pair<const char*, const char*> kNetKeys[] = {
-                    { "default_port", "defaultPort" }, { "max_message_size", "maxPayloadBytes" },
-                    { "token_length", "tokenLength" }, { "session_lifetime_seconds", "sessionLifetimeSeconds" },
-                    { "idle_timeout_seconds", "idleTimeoutSeconds" }, { "heartbeat_interval_seconds", "heartbeatIntervalSeconds" },
-                    { "max_connections_per_ip", "maxConnectionsPerIp" }, { "max_connections_total", "maxConnectionsTotal" } };
                 Json layer = Json::object();
                 for (const auto& [fileKey, cvarKey] : kNetKeys)
                     if (settings.contains(fileKey)) layer[cvarKey] = settings[fileKey];
-                ApplyCVarCategory(CVarRegistry::Get(), "net", layer, SetBy::Project, false, "protocol.json");
+                const CVarApplyReport applied =
+                    ApplyCVarCategory(CVarRegistry::Get(), "net", layer, SetBy::Project, false, "protocol.json");
                 CVarRegistry::Get().PublishImmediate();
+                // The integer check above makes these unreachable for a file
+                // error; a hit here is a programming error (a net.* cvar missing
+                // or retyped). The Sets already happened, so log rather than
+                // fail. NOT PublishCVarConfigDiagnostics: it replaces the whole
+                // "config.cvars" Problems set (the project-config rows).
+                for (const std::string& key : applied.unknownKeys)
+                    LOG_CORE_ERROR("protocol.json: {} is not a registered cvar; value ignored", key);
+                for (const std::string& key : applied.typeMismatches)
+                    LOG_CORE_ERROR("protocol.json: {} refused the value's type; value ignored", key);
 
                 m_version = version;
                 m_name = protoName;

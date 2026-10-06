@@ -4,6 +4,7 @@
 // behavioural proof that nothing moved.
 
 #include <catch2/catch_test_macros.hpp>
+#include "Helpers/ProtocolLayer.hpp"
 #include "Helpers/SettingsSweep.hpp"
 #include <Arcane/Net/NetSettings.hpp>
 #include <Arcane/Net/Protocol.hpp>
@@ -87,6 +88,7 @@ TEST_CASE("sweep: ProtocolLoader::Load() reads net.protocolPath; absent caps fal
     REQUIRE(reg.Set(h, CVarValue::String(path.string()), SetBy::Code) == SetResult::Applied);
     reg.PublishImmediate();
 
+    const Test::ProtocolLayerReset layerReset;   // S6-12: a good Load layers net.* at the Project rung
     ProtocolLoader& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load());
     CHECK(proto.GetName() == "SweepNetProtocol");
