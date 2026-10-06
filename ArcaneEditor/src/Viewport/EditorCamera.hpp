@@ -135,7 +135,7 @@ namespace Arcane::Editor
         ViewMode mode = ViewMode::TwoD;
         Ortho2D  ortho;
         Orbit3D  orbit;
-        float    speedScalar = 1.0f;   // persisted; wheel while flying adjusts x1.1
+        float    speedScalar = 1.0f;   // editor.camera.speedScalar, synced per frame; the wheel adjusts x1.1
 
         // The ONE view every consumer reads, for the current mode.
         [[nodiscard]] ViewTransform Resolve(glm::uvec2 viewport) const noexcept;
@@ -166,8 +166,9 @@ namespace Arcane::Editor
         void Pan3D(glm::vec2 screenDelta, glm::uvec2 viewport) noexcept;
         // Wheel: multiplicative distance change about the pivot.
         void Dolly(float wheelTicks) noexcept;
-        // Wheel while flying: speedScalar x1.1 per tick, clamped.
-        void AdjustSpeed(float wheelTicks) noexcept;
+        // Wheel while flying: speedScalar x1.1 per tick, clamped to the
+        // editor.camera.speedScalar cvar's range (the caller writes the cvar).
+        void AdjustSpeed(float wheelTicks);
 
         [[nodiscard]] glm::vec3 Eye() const noexcept;
         [[nodiscard]] glm::vec3 Forward() const noexcept;

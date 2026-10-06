@@ -24,6 +24,7 @@
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
+#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29)
 #include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
@@ -393,11 +394,32 @@ namespace Arcane::Editor
 #endif
 
             FrameState fs;
+            // An old [EditorViewport][Camera] block's preference lines, read by
+            // the ini handler since the last frame (boot, RetargetLayoutIni, a
+            // windowed project switch's reload): imported ONCE into the User
+            // rung where the user has not chosen (settings S6-29), BEFORE the
+            // barrier below so this frame already reads them, and queued for
+            // the debounced archive write.
+            if (m_legacyViewport.Any())
+            {
+                Arcane::Editor::ImportLegacyViewportPrefs(Arcane::CVarRegistry::Get(), m_legacyViewport);
+                Arcane::Editor::ForEachLegacyViewportPref(m_legacyViewport, [](std::string_view name)
+                    { Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, std::string(name)); });
+                m_legacyViewport = {};
+            }
             // THE CVAR PUBLISH BARRIER, once per frame: every Set a console
             // line, a callback or a plugin made since the last one becomes
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            // editor.camera.* -> the camera's runtime copies, before any input
+            // reads them (the wheel and the view-settings popup write the cvar;
+            // the camera picks it up here, next frame).
+            {
+                const auto& camPrefs = Arcane::Settings<Arcane::Editor::EditorCameraSettings>();
+                m_camera.orbit.fovYDeg = camPrefs.fovYDeg;
+                m_camera.speedScalar   = camPrefs.speedScalar;
+            }
             Arcane::Editor::TickSettingsHost();   // the settings windows' debounced writes (editor.settings.saveDebounceMs)
             // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
             if (m_undo)
@@ -1075,7 +1097,11 @@ namespace Arcane::Editor
                 // CameraSpeedScalar via the wheel during RMB flight), never
                 // the zoom/dolly.
                 if (snap.wheelY != 0.0f)
-                    m_camera.AdjustSpeed(snap.wheelY);
+                {
+                    m_camera.AdjustSpeed(snap.wheelY);   // live this frame; the cvar carries it on
+                    Arcane::Editor::SetViewportPref("editor.camera.speedScalar",
+                                                    Arcane::CVarValue::Float32(m_camera.speedScalar));
+                }
             }
             // The wheel otherwise: 2D zoom anchored on the viewport-local
             // cursor (the pixel space the resolved view maps to), or the
@@ -1180,7 +1206,7 @@ namespace Arcane::Editor
             const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
             const Arcane::ViewTransform& view = m_runtime->View();
             const Arcane::GizmoHandleMask handles = GizmoHandles();
-            const float gizmoSize = m_viewSettings.gizmoSize;
+            const float gizmoSize = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size;
 
             if (!m_gizmoDrag.active)
             {
@@ -1812,7 +1838,8 @@ namespace Arcane::Editor
         // grid is Task 10's depth-tested GridNode, not these lines. In Play
         // the view is the scene camera's and the grid is an editor affordance,
         // so it stays off.
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD && m_viewSettings.showGrid)
+        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
             const Arcane::ViewTransform& view = m_runtime->View();
             Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
@@ -2038,14 +2065,14 @@ namespace Arcane::Editor
         // Nothing here reaches the pick chain below: the grid is canvas
         // content only (GridNode.hpp).
         if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
-            && m_viewSettings.showGrid)
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
             // The tunables are editor.viewport.grid.* / grid3D.* (settings
             // S6-21), rebuilt every frame so a Live edit lands next frame.
             m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
                                                         Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
             m_gridScene.view = m_runtime->View();
-            m_gridScene.SetPlane(m_viewSettings.gridPlane == Arcane::Editor::GridPlane::XY
+            m_gridScene.SetPlane(Arcane::Settings<Arcane::Editor::EditorViewportSettings>().gridPlane == Arcane::Editor::GridPlane::XY
                                      ? Arcane::GridSceneDesc::Plane::XY
                                      : Arcane::GridSceneDesc::Plane::XZ);
             vp.grid = &m_gridScene;
@@ -3620,13 +3647,12 @@ namespace Arcane::Editor
                                           : 0;
         // The overlay's state, by reference (F4 plan 1 T8): the 2D | Persp
         // segments assign m_camera.mode exactly as Alt+J / Alt+G do (Resolve
-        // reads it next frame); the settings popup edits m_viewSettings, the
-        // orbit fov and the speed scalar in place, and the camera reads them
-        // per frame.
+        // reads it next frame); the settings popup writes the editor.viewport.*
+        // / editor.camera.* / editor.gizmo.* cvars (settings S6-29), which the
+        // camera and the grids read from the next published snapshot.
         Arcane::Editor::ViewportToolState tools{
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
-            m_camera.mode, m_viewSettings,
-            m_camera.orbit.fovYDeg, m_camera.speedScalar,
+            m_camera.mode,
         };
         // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
         // SDPG_Foreground for its widget): drawn by the panel right after the
@@ -3649,7 +3675,7 @@ namespace Arcane::Editor
                     Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
                 Arcane::Editor::ImGuiGizmoSink sink(list, origin);
                 Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             m_viewSettings.gizmoSize, m_gizmoHovered,
+                             Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
                              m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
                              m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
             };

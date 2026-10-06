@@ -7,6 +7,7 @@
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT (the console colours)
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
@@ -23,6 +24,7 @@
 #include "Panels/InspectorView.hpp"
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
+#include "Settings/EditorViewportSettings.hpp"   // the view-settings popup's cvars (settings S6-29)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
@@ -1474,8 +1476,8 @@ namespace Arcane::Editor
             ImGui::BeginGroup();
 
             // --- View control: 2D | Persp + the settings gear ----------------
-            // MarkIniSettingsDirty on every edit here and in the popup, as the
-            // shader editor's preferences do (:716): the [EditorViewport]
+            // MarkIniSettingsDirty on every view-mode edit here (the popup's
+            // preferences are cvars), as the shader editor's do (:716): the [EditorViewport]
             // handler only WRITES when ImGui next saves, and a camera or
             // settings change on its own dirties nothing.
             const bool view2d = IconToggle(ICON_LC_SQUARE "##view_2d", tools.viewMode == ViewMode::TwoD);
@@ -1497,28 +1499,35 @@ namespace Arcane::Editor
                                     ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
             if (ImGui::BeginPopup("##viewsettings"))
             {
-                Arcane::Editor::ViewportSettings& settings = tools.settings;
-                bool edited = false;
+                // The preferences are cvars (settings S6-29): each widget edits
+                // a copy of the published value and writes the cvar at the User
+                // rung on change (SetViewportPref also queues the archive), so
+                // nothing here touches imgui.ini any more.
+                EditorViewportSettings view = Arcane::Settings<EditorViewportSettings>();
+                EditorCameraSettings   cam  = Arcane::Settings<EditorCameraSettings>();
+                float gizmoSize             = Arcane::Settings<EditorGizmoSettings>().size;
                 ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
-                edited |= ImGui::Checkbox("Show grid", &settings.showGrid);
+                if (ImGui::Checkbox("Show grid", &view.showGrid))
+                    SetViewportPref("editor.viewport.showGrid", Arcane::CVarValue::Bool(view.showGrid));
                 {
-                    int plane = static_cast<int>(settings.gridPlane);
+                    int plane = static_cast<int>(view.gridPlane);
                     if (ImGui::Combo("Grid plane", &plane, "XZ (ground)\0XY (2D plane)\0"))
-                    { settings.gridPlane = (plane == 1) ? GridPlane::XY : GridPlane::XZ; edited = true; }
+                        SetViewportPref("editor.viewport.gridPlane",
+                                        Arcane::CVarValue::Enum(static_cast<std::int32_t>(plane == 1 ? GridPlane::XY : GridPlane::XZ)));
                 }
                 // AlwaysClamp on every slider: a Ctrl+click typed value past the
-                // range would otherwise land in the persisted block, which
-                // ViewportSettings::ReadIniLine refuses WHOLE on the next boot.
-                edited |= ImGui::SliderFloat("Field of view", &tools.fovYDeg, 20.0f, 120.0f, "%.0f deg",
-                                             ImGuiSliderFlags_AlwaysClamp);
-                edited |= ImGui::SliderFloat("Camera speed", &tools.speedScalar,
-                                             Arcane::Editor::ViewportSettings::kMinSpeedScalar,
-                                             Arcane::Editor::ViewportSettings::kMaxSpeedScalar, "%.2fx",
-                                             ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-                edited |= ImGui::SliderFloat("Gizmo size", &settings.gizmoSize, 0.5f, 3.0f, "%.2f",
-                                             ImGuiSliderFlags_AlwaysClamp);
+                // range is held to the slider's ends, not just the cvar's range.
+                if (ImGui::SliderFloat("Field of view", &cam.fovYDeg, 20.0f, 120.0f, "%.0f deg",
+                                       ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.camera.fovYDeg", Arcane::CVarValue::Float32(cam.fovYDeg));
+                const auto [speedLo, speedHi] = CameraSpeedScalarRange();
+                if (ImGui::SliderFloat("Camera speed", &cam.speedScalar, speedLo, speedHi, "%.2fx",
+                                       ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.camera.speedScalar", Arcane::CVarValue::Float32(cam.speedScalar));
+                if (ImGui::SliderFloat("Gizmo size", &gizmoSize, 0.5f, 3.0f, "%.2f",
+                                       ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.gizmo.size", Arcane::CVarValue::Float32(gizmoSize));
                 ImGui::PopItemWidth();
-                if (edited) ImGui::MarkIniSettingsDirty();
                 ImGui::EndPopup();
             }
             // The popup is a window of its own, so while the cursor is over it

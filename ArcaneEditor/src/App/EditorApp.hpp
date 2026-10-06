@@ -961,7 +961,7 @@ namespace Arcane::Editor
         static void  PlayModeSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterPlayModeSettings();   // called from Init
 
-        // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
+        // ImGuiSettingsHandler callbacks for m_camera + m_legacyViewport
         // ("[EditorViewport][Camera]", F4 plan 1 T7), mirroring the PlayMode
         // handler above line for line; the line format and its refusal table
         // are ViewportSettings::WriteIni / ReadIniLine (pure, unit-tested),
@@ -1215,11 +1215,13 @@ namespace Arcane::Editor
         // destruction order is unchanged: it still destructs before m_runtime.
         std::optional<Arcane::Editor::EditModeSchedule> m_editSchedule;
         bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
-        // The persisted viewport preferences (grid, gizmo size) that ride the
-        // same [EditorViewport][Camera] ini block as m_camera -- see
-        // ViewportSettings.hpp and RegisterViewportSettings below. Task 8's
-        // settings popup edits these; the grids (Tasks 9/10) read them.
-        Arcane::Editor::ViewportSettings m_viewSettings;
+        // An old [EditorViewport][Camera] block's preference lines (fov,
+        // speed, grid, gizmo size), captured by ViewportSettingsReadLine and
+        // imported ONCE at the top of the next frame (settings S6-29:
+        // ImportLegacyViewportPrefs, User rung, only where the user has not
+        // chosen). The preferences themselves are editor.viewport.* /
+        // editor.camera.* / editor.gizmo.* cvars, read via Settings<T>().
+        Arcane::Editor::LegacyViewportPrefs m_legacyViewport;
         // Set by ViewportSettingsReadLine when the persisted block restores a
         // transform (an Ortho= or Orbit= line parsed). F4 plan 1 final
         // review, F3: a restored camera cancels the boot-time SceneOpen

@@ -1,5 +1,7 @@
 #include "Viewport/EditorCamera.hpp"
 
+#include "Settings/EditorViewportSettings.hpp"   // CameraSpeedScalarRange
+
 #include <Arcane/Scene/Components.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -108,10 +110,13 @@ namespace Arcane::Editor
         orbit.distance = std::clamp(orbit.distance / std::pow(kWheelStep, ticks), kMinDistance, kMaxDistance);
     }
     // UE's wheel-while-flying step is additive +-10 % (down = x0.9); a symmetric
-    // x1.1 / /1.1 keeps up-then-down a no-op. Limits are ours.
-    void EditorCamera::AdjustSpeed(float ticks) noexcept
+    // x1.1 / /1.1 keeps up-then-down a no-op. The limits are
+    // editor.camera.speedScalar's range (settings S6-29), read on the wheel
+    // event only.
+    void EditorCamera::AdjustSpeed(float ticks)
     {
-        speedScalar = std::clamp(speedScalar * std::pow(1.1f, ticks), 0.01f, 100.0f);
+        const auto [lo, hi] = CameraSpeedScalarRange();
+        speedScalar = std::clamp(speedScalar * std::pow(1.1f, ticks), lo, hi);
     }
     void EditorCamera::Frame(const FramingBounds& b, glm::uvec2 vp) noexcept
     {

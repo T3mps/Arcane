@@ -197,7 +197,7 @@ namespace Arcane::Editor
         // windowed project switch). The committed verify-layout.ini
         // carries no [EditorViewport] block, so gate/witness runs still frame.
         const bool accepted =
-            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_legacyViewport);
         if (accepted && (std::strncmp(line, "Ortho=", 6) == 0 || std::strncmp(line, "Orbit=", 6) == 0))
         {
             self->m_cameraRestoredFromIni = true;
@@ -224,11 +224,12 @@ namespace Arcane::Editor
         auto* self = static_cast<EditorApp*>(handler->UserData);
         // WriteIni appends the "[Type][Name]" header itself from the same
         // constants handler.TypeName was registered from.
-        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera, self->m_viewSettings);
+        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera);
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // the camera and the viewport preferences go back to a fresh EditorApp's,
+    // the camera and any not-yet-imported legacy preferences go back to a
+    // fresh EditorApp's (the preferences themselves are cvars, untouched),
     // and the camera counts as NOT restored. The SceneOpen framing request is
     // deliberately left alone: the reload's ReadLine cancels it when the
     // incoming file carries a camera, exactly as at boot. The --view-mode seed
@@ -239,7 +240,7 @@ namespace Arcane::Editor
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
         self->m_camera                = decltype(self->m_camera){};
-        self->m_viewSettings          = decltype(self->m_viewSettings){};
+        self->m_legacyViewport        = {};
         self->m_cameraRestoredFromIni = false;
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
     }
