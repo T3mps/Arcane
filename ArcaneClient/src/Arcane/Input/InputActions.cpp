@@ -1,6 +1,7 @@
 #include <Arcane/Input/InputActions.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Input/InputSettings.hpp>
 
 #include <Json.hpp>
 
@@ -15,11 +16,13 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <fstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -364,20 +367,17 @@ namespace Arcane
             }
         }
 
-        // Resolve a chord: 1 only if every part magnitude >= threshold.
-        // Returns the max magnitude for the whole chord if all down, else 0.
-        // (oracle resolvePath chord logic)
-        constexpr float kBtnThreshold = 0.5f;
-
-        float ResolveChord(const std::vector<ControlId>& chord, const InputSnapshot& snap)
+        // Resolve a chord: nonzero only if every part magnitude >= threshold
+        // (input.pressThreshold). Returns the weakest part's magnitude when
+        // all are down, else 0. (oracle resolvePath chord logic)
+        float ResolveChord(const std::vector<ControlId>& chord, const InputSnapshot& snap, float threshold)
         {
             if (chord.empty()) return 0.0f;
             float minMag = 1.0f;
             for (const auto& id : chord)
             {
-                float v = ResolveControl(id, snap);
-                float mag = std::abs(v);
-                if (mag < kBtnThreshold) return 0.0f;
+                const float mag = std::abs(ResolveControl(id, snap));
+                if (mag < threshold) return 0.0f;
                 minMag = std::min(minMag, mag);
             }
             return minMag;
@@ -387,10 +387,19 @@ namespace Arcane
         struct ProcessorOp
         {
             enum class Kind { Invert, Scale, Deadzone, NormalizeVector2 } kind;
-            float min    = 0.125f;
-            float max    = 0.925f;
+            // Unset = the input.deadzone.defaultMin / defaultMax of the
+            // settings the evaluation runs under (DeadzoneBounds).
+            std::optional<float> min;
+            std::optional<float> max;
             float factor = 1.0f;
         };
+
+        // A deadzone processor's [min, max]: its own parameters, else the
+        // input.deadzone.* defaults.
+        std::pair<float, float> DeadzoneBounds(const ProcessorOp& op, const InputDeadzoneSettings& dz)
+        {
+            return { op.min.value_or(dz.defaultMin), op.max.value_or(dz.defaultMax) };
+        }
 
         ProcessorOp ParseProcessorToken(const std::string& token)
         {
@@ -467,7 +476,7 @@ namespace Arcane
         struct Interaction
         {
             enum class Kind { Press, Hold, Tap } kind = Kind::Press;
-            float duration = kDefaultHoldSeconds;
+            float duration = 0.0f;   // Hold/Tap only; ParseInteraction sets it
         };
 
         Interaction ParseInteraction(const std::string& token)
@@ -481,7 +490,7 @@ namespace Arcane
             if (name == "hold")
             {
                 it.kind = Interaction::Kind::Hold;
-                it.duration = kDefaultHoldSeconds;
+                it.duration = Settings<InputSettings>().holdSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
@@ -492,7 +501,7 @@ namespace Arcane
             else if (name == "tap")
             {
                 it.kind = Interaction::Kind::Tap;
-                it.duration = kDefaultTapSeconds;
+                it.duration = Settings<InputSettings>().tapSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
@@ -1037,11 +1046,12 @@ namespace Arcane
                 const auto it = m_bindingById.find(bindingId);
                 if (it == m_bindingById.end()) return 0.0f;
                 const CompiledBinding& binding = *it->second.binding;
-                if (!binding.isComposite) return RawBindingValue(binding, m_lastSnap);
+                const float threshold = Settings<InputSettings>().pressThreshold;
+                if (!binding.isComposite) return RawBindingValue(binding, m_lastSnap, threshold);
                 float best = 0.0f;
                 for (const auto& [role, parts] : binding.parts)
                     for (const CompiledBinding& part : parts)
-                        best = std::max(best, std::abs(RawBindingValue(part, m_lastSnap)));
+                        best = std::max(best, std::abs(RawBindingValue(part, m_lastSnap, threshold)));
                 return best;
             }
 
@@ -1075,6 +1085,10 @@ namespace Arcane
                 m_lastSnap = snap;
                 ++m_frame;
 
+                // ONE settings read per evaluation, passed down to every action.
+                const float threshold = Settings<InputSettings>().pressThreshold;
+                const InputDeadzoneSettings& deadzone = Settings<InputDeadzoneSettings>();
+
                 bool kbmActive = false;
                 float padMaxMag = 0.0f;
 
@@ -1088,7 +1102,7 @@ namespace Arcane
                     const bool visible = MapVisible(&m);
                     for (auto& [aName, a] : m.actions)
                     {
-                        EvalAction(a, dt, snap);
+                        EvalAction(a, dt, snap, threshold, deadzone);
                         if (a.id.IsValid() && visible)
                         {
                             if (a.started) QueueTransition(a.id, InputActionPhase::Started);
@@ -1103,10 +1117,10 @@ namespace Arcane
                     }
                 }
 
-                // Active device: kbm wins immediately; gamepad needs magnitude > 0.5
+                // Active device: kbm wins immediately; gamepad needs magnitude > input.pressThreshold
                 if (kbmActive)
                     m_activeDevice = InputDevice::Kbm;
-                else if (padMaxMag > kBtnThreshold)
+                else if (padMaxMag > threshold)
                     m_activeDevice = InputDevice::Gamepad;
             }
 
@@ -1258,12 +1272,13 @@ namespace Arcane
             std::vector<InputActionTransition> m_pendingTransitions;
             std::vector<InputActionTransition> m_fixedTransitions;
             bool m_overflowReported = false;
+            // input.maxQueuedTransitions, latched at construction (Restart).
+            const std::size_t m_maxTransitions = Settings<InputSettings>().maxQueuedTransitions;
             InputSnapshot m_lastSnap{};   // the last Update's snapshot, for BindingValue
 
             void QueueTransition(const Guid& action, InputActionPhase phase)
             {
-                constexpr size_t kMaxTransitions = 256;
-                if (m_pendingTransitions.size() == kMaxTransitions)
+                if (m_pendingTransitions.size() == m_maxTransitions)
                 {
                     m_pendingTransitions.erase(m_pendingTransitions.begin());
                     if (!m_overflowReported)
@@ -1342,7 +1357,8 @@ namespace Arcane
             // Evaluate one action (oracle evalAction).
             // Implements composite resolution, GamepadStick vector path,
             // best-vector / best-scalar split, and Vector2 action reporting.
-            void EvalAction(Action& a, double dt, const InputSnapshot& snap)
+            void EvalAction(Action& a, double dt, const InputSnapshot& snap, float threshold,
+                            const InputDeadzoneSettings& deadzone)
             {
                 bool isVec = (a.controlType == "Vector2");
                 float bestScalar = 0.0f;
@@ -1374,9 +1390,9 @@ namespace Arcane
                         if (b.compositeType == "1DAxis")
                         {
                             // oracle: pos - neg, then scalar processors
-                            float pos = PartStrength(getPart("positive"), snap, m_activeSchemeGroup);
-                            float neg = PartStrength(getPart("negative"), snap, m_activeSchemeGroup);
-                            float val = ApplyScalarProcessors(b.processors, pos - neg);
+                            float pos = PartStrength(getPart("positive"), snap, m_activeSchemeGroup, threshold, deadzone);
+                            float neg = PartStrength(getPart("negative"), snap, m_activeSchemeGroup, threshold, deadzone);
+                            float val = ApplyScalarProcessors(b.processors, pos - neg, deadzone);
                             float mag = std::abs(val);
                             if (mag > bestScalarMag)
                             {
@@ -1386,17 +1402,17 @@ namespace Arcane
                             // Composite parts are assumed keyboard-sourced (all authored composites are
                             // WASD today). Gamepad-sourced composites would need device plumbing from
                             // PartStrength; deferred until an asset needs it.
-                            if (mag >= kBtnThreshold) kbmContrib = true;
+                            if (mag >= threshold) kbmContrib = true;
                         }
                         else  // 2DVector (default)
                         {
                             // oracle: vec = {right-left, down-up}, then vector processors
-                            float up    = PartStrength(getPart("up"),    snap, m_activeSchemeGroup);
-                            float down  = PartStrength(getPart("down"),  snap, m_activeSchemeGroup);
-                            float left  = PartStrength(getPart("left"),  snap, m_activeSchemeGroup);
-                            float right = PartStrength(getPart("right"), snap, m_activeSchemeGroup);
+                            float up    = PartStrength(getPart("up"),    snap, m_activeSchemeGroup, threshold, deadzone);
+                            float down  = PartStrength(getPart("down"),  snap, m_activeSchemeGroup, threshold, deadzone);
+                            float left  = PartStrength(getPart("left"),  snap, m_activeSchemeGroup, threshold, deadzone);
+                            float right = PartStrength(getPart("right"), snap, m_activeSchemeGroup, threshold, deadzone);
                             glm::vec2 rawVec(right - left, down - up);
-                            glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec);
+                            glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec, deadzone);
                             float len = glm::length(vec);
                             if (len > bestVecLen)
                             {
@@ -1404,7 +1420,7 @@ namespace Arcane
                                 bestVec    = vec;
                             }
                             // Device contribution: composite parts are keyboard (scancodes)
-                            if (len >= kBtnThreshold) kbmContrib = true;
+                            if (len >= threshold) kbmContrib = true;
                         }
                         continue;
                     }
@@ -1413,20 +1429,20 @@ namespace Arcane
                     if (b.chord.size() == 1 && b.chord[0].source == ControlSource::GamepadStick)
                     {
                         glm::vec2 rawVec = ResolveControlVec(b.chord[0], snap);
-                        glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec);
+                        glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec, deadzone);
                         float len = glm::length(vec);
                         if (len > bestVecLen)
                         {
                             bestVecLen = len;
                             bestVec    = vec;
                         }
-                        if (len >= kBtnThreshold) padContrib = true;
+                        if (len >= threshold) padContrib = true;
                         continue;
                     }
 
                     // Scalar path (keyboard / mouse / gamepad button / gamepad axis / chord)
-                    float raw = ResolveChord(b.chord, snap);
-                    float val = ApplyScalarProcessors(b.processors, raw);
+                    float raw = ResolveChord(b.chord, snap, threshold);
+                    float val = ApplyScalarProcessors(b.processors, raw, deadzone);
                     float mag = std::abs(val);
                     if (mag > bestScalarMag)
                     {
@@ -1435,7 +1451,7 @@ namespace Arcane
                     }
 
                     // Device contribution tracking
-                    if (mag >= kBtnThreshold)
+                    if (mag >= threshold)
                     {
                         for (const auto& id : b.chord)
                         {
@@ -1463,13 +1479,13 @@ namespace Arcane
                     // strength = length (oracle: a.strength = bestVecLen for hysteresis).
                     a.vec      = bestVec;
                     a.strength = bestVecLen;
-                    a.curDown  = bestVecLen >= kBtnThreshold;
+                    a.curDown  = bestVecLen >= threshold;
                 }
                 else
                 {
                     a.vec      = glm::vec2(0.0f);
                     a.strength = bestScalar;
-                    a.curDown  = bestScalarMag >= kBtnThreshold;
+                    a.curDown  = bestScalarMag >= threshold;
                 }
 
                 a.kbmContrib = kbmContrib;
@@ -1529,7 +1545,8 @@ namespace Arcane
             }
 
             // Apply scalar processors in order.
-            static float ApplyScalarProcessors(const std::vector<ProcessorOp>& procs, float v)
+            static float ApplyScalarProcessors(const std::vector<ProcessorOp>& procs, float v,
+                                               const InputDeadzoneSettings& deadzone)
             {
                 for (const auto& op : procs)
                 {
@@ -1543,11 +1560,12 @@ namespace Arcane
                         break;
                     case ProcessorOp::Kind::Deadzone:
                     {
+                        const auto [lo, hi] = DeadzoneBounds(op, deadzone);
                         float m = std::abs(v);
                         float sgn = (v < 0.0f) ? -1.0f : 1.0f;
-                        if (m < op.min) v = 0.0f;
-                        else if (m > op.max) v = sgn;
-                        else v = sgn * (m - op.min) / (op.max - op.min);
+                        if (m < lo) v = 0.0f;
+                        else if (m > hi) v = sgn;
+                        else v = sgn * (m - lo) / (hi - lo);
                         break;
                     }
                     case ProcessorOp::Kind::NormalizeVector2:
@@ -1564,7 +1582,8 @@ namespace Arcane
             //   k = scale/len; return v*k.
             // Invert: {-v.x, -v.y}.
             // Scale: v * factor (passthrough).
-            static glm::vec2 ApplyVectorProcessors(const std::vector<ProcessorOp>& procs, glm::vec2 v)
+            static glm::vec2 ApplyVectorProcessors(const std::vector<ProcessorOp>& procs, glm::vec2 v,
+                                                   const InputDeadzoneSettings& deadzone)
             {
                 for (const auto& op : procs)
                 {
@@ -1578,14 +1597,15 @@ namespace Arcane
                     }
                     case ProcessorOp::Kind::Deadzone:
                     {
+                        const auto [lo, hi] = DeadzoneBounds(op, deadzone);
                         float len = glm::length(v);
-                        if (len < op.min)
+                        if (len < lo)
                         {
                             v = glm::vec2(0.0f, 0.0f);
                         }
                         else
                         {
-                            float scaled = (len > op.max) ? 1.0f : (len - op.min) / (op.max - op.min);
+                            float scaled = (len > hi) ? 1.0f : (len - lo) / (hi - lo);
                             float k = scaled / len;
                             v = v * k;
                         }
@@ -1620,25 +1640,26 @@ namespace Arcane
             // One simple/chord binding's raw value, before processors: the
             // chord value, or a stick binding's vector length (ResolveChord
             // reads a stick as 0 -- sticks resolve through the vector path).
-            static float RawBindingValue(const CompiledBinding& binding, const InputSnapshot& snap)
+            static float RawBindingValue(const CompiledBinding& binding, const InputSnapshot& snap, float threshold)
             {
                 if (binding.chord.size() == 1 && binding.chord[0].source == ControlSource::GamepadStick)
                     return glm::length(ResolveControlVec(binding.chord[0], snap));
-                return ResolveChord(binding.chord, snap);
+                return ResolveChord(binding.chord, snap, threshold);
             }
 
             // Compute the max-magnitude scalar strength for a composite part's
             // binding array (oracle: partStrength in Input.lua).
             // Each binding in the array is a simple/chord path (no nested composites).
             static float PartStrength(const std::vector<CompiledBinding>& partBindings,
-                                      const InputSnapshot& snap, std::string_view activeGroup)
+                                      const InputSnapshot& snap, std::string_view activeGroup,
+                                      float threshold, const InputDeadzoneSettings& deadzone)
             {
                 float best = 0.0f;
                 for (const auto& pb : partBindings)
                 {
                     if (!SchemeAllows(pb, activeGroup)) continue;
-                    float raw = ResolveChord(pb.chord, snap);
-                    float val = ApplyScalarProcessors(pb.processors, raw);
+                    float raw = ResolveChord(pb.chord, snap, threshold);
+                    float val = ApplyScalarProcessors(pb.processors, raw, deadzone);
                     float mag = std::abs(val);
                     if (mag > best) best = mag;
                 }

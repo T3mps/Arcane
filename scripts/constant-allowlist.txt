@@ -65,15 +65,11 @@ ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kOldestSupportedSchemaVersion|CONS
 ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kSchemaVersion|CONSTANT|Report format
 ArcaneClient/src/Arcane/ImGui/ImGuiNri.cpp|kVertexAlign|CONSTANT|Layout, IDs
 ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kShaderPairId|CONSTANT|Layout, IDs
-ArcaneClient/src/Arcane/Input/InputActions.cpp|kBtnThreshold|PENDING|inventory:821 SETTING
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadAxisTokens|UNLISTED|line 156
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadButtonTokens|UNLISTED|line 138
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadStickTokens|UNLISTED|line 166
-ArcaneClient/src/Arcane/Input/InputActions.cpp|kMaxTransitions|PENDING|inventory:826 SETTING
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kMouseButtonCount|CONSTANT|SDL vocabulary; sentinel
 ArcaneClient/src/Arcane/Input/InputActions.cpp|kNoGamepadToken|CONSTANT|SDL vocabulary; sentinel
-ArcaneClient/src/Arcane/Input/InputActions.hpp|kDefaultHoldSeconds|PENDING|inventory:824 SETTING
-ArcaneClient/src/Arcane/Input/InputActions.hpp|kDefaultTapSeconds|PENDING|inventory:825 SETTING
 ArcaneClient/src/Arcane/Input/InputSnapshot.hpp|kMaxKeycodesDown|CONSTANT|SDL_SCANCODE_COUNT; fixed arrays in InputSnapshot, which crosses the plugin ABI
 ArcaneClient/src/Arcane/Input/InputSnapshot.hpp|kScancodeWords|CONSTANT|SDL_SCANCODE_COUNT; fixed arrays in InputSnapshot, which crosses the plugin ABI
 ArcaneClient/src/Arcane/Render/AgilitySdk.hpp|kVersion|CONSTANT|Must match the vendored Agility redistributable (inventory D3D12SDKVersion row; moved here by S1-11)
