@@ -19,6 +19,9 @@
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Render/RenderOutlineSettings.hpp>
 
+#include "Settings/AxisColors.hpp"
+#include "Settings/EditorThemeSettings.hpp"
+
 #include <Astra/Entity/Entity.hpp>
 
 #include <glm/glm.hpp>
@@ -77,4 +80,20 @@ TEST_CASE("render.outline.*: the latched ceiling and supersample are today's 32 
     Arcane::Test::RequireDefault("render.outline.hoverWidthPx", Arcane::CVarValue::Float32(3.0f));
     Arcane::Test::RequireDefault("render.outline.edgeSoftnessPx", Arcane::CVarValue::Float32(1.0f));
     Arcane::Test::RequireDefault("render.outline.maxThicknessPx", Arcane::CVarValue::UInt32(32u));
+}
+
+TEST_CASE("Outline colours: the editor's SetColors values at EditorThemeSettings{} are the node's own defaults", "[outline][theme][editor]")
+{
+    // Settings S6-21 (ruling I5): the editor pushes these two colours into
+    // OutlineNode::SetColors every frame (EditorAppFrame, the outline submit),
+    // derived from the theme. The node itself needs a device, so this pins the
+    // producer half on the CPU: the exact chain the editor runs, from the
+    // DEFAULT settings block, lands on the colours OutlineNode keeps as its
+    // member defaults (PickOutlineNodes.hpp: m_selectColor / m_hoverColor),
+    // which ArcaneRuntime's theme-less --pick-probe outline still draws with.
+    // So the editor and the runtime agree at the defaults, and no pixel moves.
+    const Arcane::Editor::AxisRoleColors roles =
+        Arcane::Editor::DeriveAxisRoles(Arcane::Editor::ToPalette(Arcane::Editor::EditorThemeSettings{}));
+    CHECK(roles.outlineSelect == glm::vec4(1.0f, 0.65f, 0.10f, 1.0f));
+    CHECK(roles.outlineHover  == glm::vec4(0.25f, 0.70f, 1.00f, 1.0f));
 }
