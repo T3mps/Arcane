@@ -107,8 +107,10 @@ namespace Arcane::Reporter
         return static_cast<std::intptr_t>(CallWindowProcW(prev, h, msg, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam)));
     }
 
-    ReporterWindow::ReporterWindow(ReportView initial, std::function<void(int)> onCommand)
-        : m_view(std::move(initial)), m_onCommand(std::move(onCommand)) {}
+    ReporterWindow::ReporterWindow(ReportView initial, std::function<void(int)> onCommand, const Args& args)
+        : m_view(std::move(initial)), m_onCommand(std::move(onCommand)),
+          m_windowWidth(args.windowWidth), m_windowHeight(args.windowHeight),
+          m_windowReadyMs(args.windowReadyMs), m_copyFlashSeconds(args.copyFlashSeconds) {}
 
     void ReporterWindow::Show(NativeWindow& window, const std::string& productForTitle)
     {
@@ -120,14 +122,16 @@ namespace Arcane::Reporter
         // and at 96 DPI they need 2*12 + 6*150 + 5*8 = 964 px of client
         // area; a 900 px window has about 884, which clipped "Terminate and
         // Collect" off the right edge. Layout also shrinks the row to fit
-        // (below), so this is the width at which nothing HAS to shrink.
-        d.width = 1000; d.height = 640;
+        // (below), so 1000 -- diagnostics.reporter.windowWidth's default
+        // (S6-4) -- is the width at which nothing HAS to shrink.
+        d.width  = static_cast<int>(m_windowWidth);
+        d.height = static_cast<int>(m_windowHeight);
         d.popup = false; d.topmost = false; d.appWindow = true;
         d.foreground = true;   // UE's CRC forces itself to front (CrashReportClientApp.cpp:425-427)
         d.backgroundRgb = 0xF0F0F0;   // the system button face: plain Win32 controls draw on it
         d.dialogNavigation = true;    // R83: Tab between controls, Enter/Esc close via the default button / IDCANCEL
         window.Open(d, this);
-        (void)window.WaitUntilReady(5000);
+        (void)window.WaitUntilReady(m_windowReadyMs);
     }
 
     void ReporterWindow::SetView(ReportView v)
@@ -714,7 +718,7 @@ namespace Arcane::Reporter
         {
             ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui));
             m_copyState = state;
-            m_copyUntil = ImGui::GetTime() + 0.75;
+            m_copyUntil = ImGui::GetTime() + m_copyFlashSeconds;
             if (m_window) m_window->PostUser(kUserViewChanged);   // repaint now; no timer
             return;
         }

@@ -35,6 +35,7 @@ namespace Arcane
         std::uint32_t minFatalWaitMs = 5000;
         bool          perfLog = false;
         std::uint32_t perfLogIntervalFrames = 60;
+        std::uint32_t logTailLines = 200;               // the log excerpt in a crash report: reporter + editor (S6-4)
     };
 
     namespace Detail

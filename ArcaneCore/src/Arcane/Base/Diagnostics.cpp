@@ -7,7 +7,10 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ModuleTable.hpp>    // address -> module+offset, lock-free (Task 3)
 #include <Arcane/Base/PortableStack.hpp>  // RtlVirtualUnwind walk -- no DbgHelp anywhere below
+#include <Arcane/Base/DiagnosticsSettings.hpp>     // Settings<DiagnosticsSettings>() -- the reporter args, off the crash path
+#include <Arcane/Base/ReporterSettings.hpp>        // diagnostics.reporter.* (S6-4) -- likewise
 #include <Arcane/Config/Bindings/LogBinding.hpp>   // log.dir (ConfigFromSettings) -- never read on the crash path
+#include <Arcane/Config/UiSettings.hpp>            // ui.copyFlashSeconds (S6-4) -- likewise
 
 #include <Json.hpp>                        // the session record (plan 2, task 9) -- written OFF the crash path only
 
@@ -20,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>       // _set_abort_behavior, _set_invalid_parameter_handler, _set_purecall_handler
 #include <cstring>
+#include <cwchar>       // std::swprintf -- ReporterSettingsArgs
 #include <exception>     // set_terminate, current_exception, rethrow_exception
 #include <iterator>
 #include <new>           // std::bad_alloc -- the terminate handler's OOM arm
@@ -295,6 +299,12 @@ namespace
     wchar_t g_reporterExe[kPathMax]{};
     wchar_t g_productWide[128]{};
     wchar_t g_spawnCmd[8192]{};
+    // The reporter's settings flags (S6-4; ReporterSettingsArgs), formatted
+    // from the published settings at Install and at RetargetDumpDir -- before
+    // the crash thread exists or under g_reportMutex, which it holds for a
+    // whole report -- and appended verbatim by both spawns. The reporter has
+    // no registry of its own.
+    wchar_t g_reporterSettingsArgs[512]{};
 
     // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
     // so the reporter can OpenEventW it by name; the reporter handle is kept
@@ -1086,13 +1096,14 @@ namespace
         ToWide(kind, wideKind, 64);
 
         _snwprintf_s(g_spawnCmd, sizeof(g_spawnCmd) / sizeof(g_spawnCmd[0]), _TRUNCATE,
-                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\" --host-created %llu%s%s%s",
+                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\" --host-created %llu%s%s%s%s",
                      g_reporterExe, wideStem,
                      static_cast<unsigned long>(GetCurrentProcessId()),
                      wideKind, g_productWide, g_hostCreated,
                      g_cfg.unattended ? L" --unattended" : L"",
                      (hangProtocol && g_recoveredEvent) ? L" --recovered-event " : L"",
-                     (hangProtocol && g_recoveredEvent) ? g_recoveredName : L"");
+                     (hangProtocol && g_recoveredEvent) ? g_recoveredName : L"",
+                     g_reporterSettingsArgs);
 
         STARTUPINFOW        si{};
         PROCESS_INFORMATION pi{};
@@ -2331,6 +2342,16 @@ namespace
         g_reporterExe[n] = L'\0';
     }
 
+    // S6-4: the reporter's settings, read from the published snapshot HERE
+    // (Install, RetargetDumpDir) so the crash thread only copies a buffer.
+    void SnapshotReporterSettingsArgs()
+    {
+        const std::wstring tail = ReporterSettingsArgs(Settings<DiagnosticsReporterSettings>(),
+                                                       Settings<DiagnosticsSettings>().logTailLines,
+                                                       Settings<UiSettings>().copyFlashSeconds);
+        wcsncpy_s(g_reporterSettingsArgs, tail.c_str(), _TRUNCATE);
+    }
+
     // ---- monitor mode (plan 2, task 9; spec S5.8, D15/D16) ----------------
     // Everything below runs at Install / RetargetDumpDir time, on an ordinary
     // thread: the heap, nlohmann and std::filesystem are all fine here. Only
@@ -2434,7 +2455,8 @@ namespace
         std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
                          + L" --host-handle ";
         const std::wstring cmdTail = L" --session \"" + std::wstring(g_sessionPathWide) + L"\""
-                                   + (g_cfg.unattended ? L" --unattended" : L"");
+                                   + (g_cfg.unattended ? L" --unattended" : L"")
+                                   + std::wstring(g_reporterSettingsArgs);
         cmd.reserve(cmd.size() + 24 + cmdTail.size());
 
         HANDLE self = nullptr;
@@ -2580,6 +2602,20 @@ Config ConfigFromSettings(const DiagnosticsSettings& s)
     return c;
 }
 
+std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s, std::uint32_t logTailLines, double copyFlashSeconds)
+{
+    // One flag per ReporterArgs field, in the struct's order. 512 holds the
+    // widest line (every number at its maximum digits) with room to spare.
+    wchar_t buf[512];
+    const int n = std::swprintf(buf, std::size(buf),
+        L" --deadline %u --max-frames-thread %u --max-frames-fault %u --max-threads %u --dbgeng-wait-ms %u"
+        L" --log-tail %u --hang-log-tail %u --flush-ms %u --ui-poll-ms %u --window %ux%u --window-ready-ms %u --copy-flash %.17g",
+        s.deadlineSeconds, s.maxFramesPerThread, s.maxFramesFaultingThread, s.maxThreads, s.dbgengWaitMs,
+        logTailLines, s.hangLogTailLines, s.flushTimeoutMs, s.uiPollMs, s.windowWidth, s.windowHeight,
+        s.windowReadyMs, copyFlashSeconds);
+    return n > 0 ? std::wstring(buf, static_cast<std::size_t>(n)) : std::wstring{};
+}
+
 void Install(const Config& cfg)
 {
     if (g_installed.exchange(true, std::memory_order_acq_rel)) return;
@@ -2652,6 +2688,7 @@ void Install(const Config& cfg)
     SnapshotReportDir();
     ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
     ResolveReporterPath();
+    SnapshotReporterSettingsArgs();   // before ArmMonitor: the monitor's line carries them too
 
     // The hang protocol's host half (plan 2, D11/D7), prepared here so the
     // crash thread only ever resets an existing event and prints a number.
@@ -2860,6 +2897,10 @@ void RetargetDumpDir(const std::filesystem::path& dir)
     // The crash path may not touch std::filesystem, so the new directory is
     // re-derived (and created) HERE and only the snapshot travels.
     SnapshotReportDir();
+    // S6-4: a project's own diagnostics.reporter.* / logTailLines /
+    // copyFlashSeconds rungs are applied by the time a host retargets onto
+    // it, so later crash spawns carry them. The monitor keeps its launch line.
+    SnapshotReporterSettingsArgs();
     // R5: a DERIVED log directory follows the reports, so a project's log
     // lands beside that project's crash reports. An explicit Config::logDir
     // is host state and never moves.

@@ -52,6 +52,7 @@
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>
+#include <Arcane/Base/ReporterSettingsData.hpp>
 #include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Guid.hpp>
 
@@ -288,6 +289,17 @@ namespace Arcane::Diagnostics
     // logDir is log.dir (S6-3), read from the published LogSettings: it lives
     // in the log category, not in `s`.
     [[nodiscard]] ARC_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
+
+    // The crash reporter's settings as the tail of its command line (settings
+    // arc S6-4): " --deadline <s> --max-frames-thread <n> ... --copy-flash <s>",
+    // every flag ReporterArgs parses back, the double printed round-trip
+    // exact (%.17g). The reporter has no registry, so this IS how
+    // diagnostics.reporter.*, diagnostics.logTailLines and ui.copyFlashSeconds
+    // reach it. Install formats it once from the published settings (and
+    // RetargetDumpDir again, after a project's rungs) into fixed storage; the
+    // crash thread only appends that buffer, never calls this.
+    [[nodiscard]] ARC_CORE_API std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s,
+                                                                 std::uint32_t logTailLines, double copyFlashSeconds);
 
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
     // its first statement (crash window plan 1, R23). Install already does this

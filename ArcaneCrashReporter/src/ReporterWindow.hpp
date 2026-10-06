@@ -13,6 +13,7 @@
 // controls and reports which button fired.
 #pragma once
 #include "ReportView.hpp"
+#include "ReporterArgs.hpp"
 #include <Arcane/Platform/NativeWindow.hpp>
 #include <atomic>
 #include <cstdint>
@@ -50,8 +51,9 @@ namespace Arcane::Reporter
 
         // `onCommand` runs ON THE WINDOW THREAD with a Command id. The reporter's
         // main decides what a button means (relaunch, terminate); the presenter
-        // only draws and reports.
-        ReporterWindow(ReportView initial, std::function<void(int)> onCommand);
+        // only draws and reports. `args` supplies the window's settings
+        // (diagnostics.reporter.window*, ui.copyFlashSeconds; S6-4), copied.
+        ReporterWindow(ReportView initial, std::function<void(int)> onCommand, const Args& args);
 
         // Open the window on its own thread and wait for it. The initial view
         // is drawn with "Symbolizing..." in the details until SetView arrives.
@@ -82,7 +84,7 @@ namespace Arcane::Reporter
         [[nodiscard]] std::string ReportFolder();      // m_view.reportFolder
         [[nodiscard]] std::string RelaunchLine();      // m_view.relaunchLine
         // Window thread (OnButton's kBtnCopy): the Copy button reads "Copied" /
-        // "Copy failed" for 0.75 s (styled: until an ImGui::GetTime() deadline,
+        // "Copy failed" for ui.copyFlashSeconds (styled: until an ImGui::GetTime() deadline,
         // reverting on the first input-driven frame after it; Win32: until the
         // next ApplyView/RefreshDetails).
         void NoteCopy(bool ok);
@@ -119,6 +121,11 @@ namespace Arcane::Reporter
         ReportView              m_view;
         bool                    m_symbolizing = true;
         std::function<void(int)> m_onCommand;
+        // S6-4: from Args, so from the host's settings.
+        std::uint32_t           m_windowWidth;
+        std::uint32_t           m_windowHeight;
+        std::uint32_t           m_windowReadyMs;
+        double                  m_copyFlashSeconds;
         void* m_hwnd = nullptr; void* m_header = nullptr; void* m_when = nullptr; void* m_reason = nullptr;
         void* m_combo = nullptr; void* m_details = nullptr; void* m_buttons[6] = {};
         void* m_uiFont = nullptr; void* m_monoFont = nullptr;
