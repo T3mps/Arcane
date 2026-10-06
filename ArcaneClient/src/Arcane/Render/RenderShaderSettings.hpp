@@ -30,7 +30,7 @@ namespace Arcane
         ARC_REFLECT_TYPE_ATTR(Settings, "render.shader", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
         ARC_REFLECT_FIELD(RenderShaderSettings, compileDebounceSeconds)
-            ARC_REFLECT_ATTR(Range, 0.0, 10.0)
+            ARC_REFLECT_ATTR(Range, 0.0, 2.0)
             ARC_REFLECT_ATTR(Tooltip, "Quiet time in seconds after an edit before the shader compiler starts a job.")
         ARC_REFLECT_FIELD(RenderShaderSettings, debugInfo)
             ARC_REFLECT_ATTR(Tooltip, "Embed DXC debug information in newly compiled shaders.")
@@ -58,10 +58,10 @@ namespace Arcane
     };
 
     ARC_REFLECT_TYPE(DiagnosticsGpuFaultSettings)
-        ARC_REFLECT_TYPE_ATTR(Settings, "diagnostics.gpuFault", SettingScope::Project, ApplyMode::Restart, Audience::Game)
+        ARC_REFLECT_TYPE_ATTR(Settings, "diagnostics.gpuFault", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
         ARC_REFLECT_FIELD(DiagnosticsGpuFaultSettings, removalBudgetSeconds)
-            ARC_REFLECT_ATTR(Range, 1.0, 300.0)
+            ARC_REFLECT_ATTR(Range, 5.0, 300.0)
             ARC_REFLECT_ATTR(Tooltip, "Maximum seconds to wait for D3D12 device removal after an injected GPU fault.")
         ARC_REFLECT_FIELD(DiagnosticsGpuFaultSettings, removalPollMs)
             ARC_REFLECT_ATTR(Range, 1.0, 1000.0)
