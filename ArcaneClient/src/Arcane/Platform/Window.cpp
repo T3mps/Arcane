@@ -191,6 +191,14 @@ namespace Arcane
         SDL_SetWindowTitle(m_window, title.c_str());
     }
 
+    float Window::DisplayScale() const
+    {
+        if (!m_window)
+            return 1.0f;
+        const float s = SDL_GetWindowDisplayScale(m_window);
+        return s > 0.0f ? s : 1.0f;
+    }
+
     void Window::SetSize(uint32_t width, uint32_t height)
     {
         if (!m_window)

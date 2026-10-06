@@ -23,6 +23,9 @@
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
+#include "Project/ModuleBuild.hpp"          // ModuleBuild::ExeDir: the bundled font families
+#include "Widgets/EditorFonts.hpp"         // the deferred font-atlas rebuild
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
 #include "Input/EditorActions.hpp"
@@ -38,6 +41,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Platform/Paths.hpp>   // EditorUserDir/Fonts: the user font families
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -641,9 +645,28 @@ namespace Arcane::Editor
         if (!m_editorImguiContext)
             return;
         // The game context may be current here (the offscreen layer); the
-        // editor's style is the one this writes.
-        ImGuiStyle& style = m_editorImguiContext->Style;
+        // editor's style and font atlas are the ones this writes, and the
+        // atlas calls below act on the CURRENT context.
+        ImGuiContext* const prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(m_editorImguiContext);
+        ImGuiStyle& style = ImGui::GetStyle();
+        // A font change queued LAST frame lands now, between frames (spec s7.3: deferred one frame).
+        if (const std::optional<Arcane::Editor::EditorUiSettings> fonts = m_appearance.TakeFontRebuild())
+        {
+            const std::filesystem::path exe = Arcane::Editor::ModuleBuild::ExeDir();
+            const auto families = Arcane::Editor::ListEditorFontFamilies(
+                exe, Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir) / "Fonts");
+            Arcane::Editor::EditorFontRequest req;
+            req.uiFace   = Arcane::Editor::ResolveEditorFontFamily(families, fonts->fontFamily, "Inter");
+            req.monoFace = Arcane::Editor::ResolveEditorFontFamily(families, fonts->monoFontFamily, "JetBrains Mono");
+            req.sizePx   = fonts->fontSize;
+            Arcane::Editor::ReinstallEditorFonts(req);
+            style.FontSizeBase = fonts->fontSize;
+        }
         m_appearance.UpdateTheme(Arcane::Settings<Arcane::Editor::EditorThemeSettings>(), style);
+        m_appearance.UpdateUi(Arcane::Settings<Arcane::Editor::EditorUiSettings>(),
+                              m_gpu ? m_gpu->Win().DisplayScale() : 1.0f, style);
+        ImGui::SetCurrentContext(prev);
     }
 
     // Phase 6: input sample + the editor's own keybinds + gizmo interaction.

@@ -1,5 +1,10 @@
 #pragma once
 
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <vector>
+
 struct ImFont;
 
 namespace Arcane::Editor
@@ -10,17 +15,42 @@ namespace Arcane::Editor
     // into every face, so icons render under whichever font is active.
     struct EditorFontSet
     {
-        ImFont* interRegular = nullptr;   // default UI face (Inter)
+        ImFont* interRegular = nullptr;   // the UI face (editor.ui.fontFamily; Inter by default)
         ImFont* roboto       = nullptr;   // alternate face (Roboto), pushable
         ImFont* brand        = nullptr;   // display wordmark (Aldo the Apache); push at a size
-        ImFont* mono         = nullptr;   // monospace (JetBrains Mono, OFL); push via MonoFont
+        ImFont* mono         = nullptr;   // monospace (editor.ui.monoFontFamily; JetBrains Mono by default); push via MonoFont
     };
 
-    // Install the editor fonts on the CURRENT ImGui context: Inter (default) + Roboto +
-    // JetBrains Mono, each with merged lucide icons. Call once in Init, after the editor
-    // ImGuiLayer is up and its context is current, before the first frame. Paths resolve
-    // exe-relative.
-    const EditorFontSet& InstallEditorFonts(float sizePx = 16.0f);
+    struct EditorFontFamily
+    {
+        std::string name;              // what editor.ui.fontFamily holds
+        std::filesystem::path file;
+        bool bundled = true;
+    };
+    // The bundled Inter, Roboto, JetBrains Mono (in that order), then every .ttf/.otf
+    // in `userFontsDir` by file stem, sorted. `userFontsDir` may be empty or absent.
+    [[nodiscard]] std::vector<EditorFontFamily> ListEditorFontFamilies(const std::filesystem::path& exeDir,
+                                                                       const std::filesystem::path& userFontsDir);
+    // The file of the family named `name`, else of `fallback`, else the first family's.
+    [[nodiscard]] std::filesystem::path ResolveEditorFontFamily(const std::vector<EditorFontFamily>& families,
+                                                                std::string_view name, std::string_view fallback);
+
+    struct EditorFontRequest
+    {
+        std::filesystem::path uiFace;
+        std::filesystem::path monoFace;
+        float sizePx = 16.0f;
+    };
+    [[nodiscard]] EditorFontRequest DefaultEditorFontRequest(const std::filesystem::path& exeDir);   // today's faces at 16 px
+
+    // Install on the CURRENT context: the UI face (Fonts[0]), Roboto, the mono
+    // face, each with merged lucide icons, then the brand face. Before the first
+    // frame. The bundled faces resolve exe-relative.
+    const EditorFontSet& InstallEditorFonts(const EditorFontRequest& request);
+    const EditorFontSet& InstallEditorFonts(float sizePx = 16.0f);   // DefaultEditorFontRequest(exe dir) at sizePx: the boot path
+    // Remove the installed set and install `request` (settings S4). OUTSIDE an ImGui frame only.
+    const EditorFontSet& ReinstallEditorFonts(const EditorFontRequest& request);
+    [[nodiscard]] int EditorFontInstallCount();   // installs since process start (tests: "once")
 
     // The set installed by the most recent InstallEditorFonts call (all-null before that).
     const EditorFontSet& GetEditorFonts();
