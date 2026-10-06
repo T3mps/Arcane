@@ -1094,6 +1094,8 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         -- Task C (F2c debts): wipe the staged Content/Source/Verify subtrees before the
         -- whole-tree {COPYDIR} below re-populates them, same reasoning (and NOT-mirrored
         -- list -- Intermediate/, Saved/, Binaries/, the .arcproj, and any other non-source-of-
@@ -1252,6 +1254,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
@@ -1775,6 +1778,8 @@ project "ArcaneTests"
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
