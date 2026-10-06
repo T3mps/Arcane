@@ -1,4 +1,7 @@
 #include <Panels/AssetGraphViewModel.hpp>
+#include "Settings/AssetGraphSettings.hpp"
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +19,15 @@
 
 namespace Arcane::Editor
 {
+    GraphBuildInput MakeAssetGraphQuery()
+    {
+        const AssetGraphSettings& s = Arcane::Settings<AssetGraphSettings>();
+        GraphBuildInput in;
+        in.depthLimit = s.defaultDepth;
+        in.breadthCap = s.breadthCap;
+        return in;
+    }
+
     namespace
     {
         using Entries = std::unordered_map<Arcane::Guid, AssetPanelEntry>;

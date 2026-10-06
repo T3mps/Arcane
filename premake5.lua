@@ -1251,6 +1251,7 @@ project "ArcaneTests"
         -- editor.undo.* (T1-B10; S6-33): EditorUndoSettings + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",

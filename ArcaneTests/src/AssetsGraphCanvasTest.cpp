@@ -36,6 +36,7 @@
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/Project.hpp>
 
@@ -346,6 +347,39 @@ TEST_CASE("Asset Graph panel survives device-less ImGui frames", "[editor][graph
     // build -- proof the focus actually reached the projection, not just the
     // state field.
     CHECK(state.graph.nodes.size() < everythingNodeCount);
+
+    // editor.assetGraph.* (S6-36) are the guard's last inputs: a published
+    // breadth cap rebuilds once (no more), and a published column pitch
+    // re-lays the projection out WITHOUT a rebuild.
+    {
+        Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+        const Arcane::CVarHandle breadth = reg.Find("editor.assetGraph.breadthCap");
+        const Arcane::CVarHandle pitch   = reg.Find("editor.assetGraph.layoutColumnPitch");
+        CHECK(state.graphBuiltBreadth == 20);
+        CHECK(state.graphLaidOutColumnPitch == 300.0f);
+        const std::uint32_t epochBeforeCaps = state.graph.buildEpoch;
+        REQUIRE(reg.Set(breadth, Arcane::CVarValue::Int32(19), Arcane::SetBy::Code, {}, Arcane::CVarContext::Editor)
+                == Arcane::SetResult::Applied);
+        REQUIRE(reg.Set(pitch, Arcane::CVarValue::Float32(350.0f), Arcane::SetBy::Code, {}, Arcane::CVarContext::Editor)
+                == Arcane::SetResult::Applied);
+        reg.PublishImmediate();
+        for (int frame = 0; frame < 2; ++frame)
+            drawFrame();
+        const std::uint32_t epochAfterCaps = state.graph.buildEpoch;
+        const int builtBreadth = state.graphBuiltBreadth;
+        const float laidOutPitch = state.graphLaidOutColumnPitch;
+        reg.ClearRung(breadth, Arcane::SetBy::Code);
+        reg.ClearRung(pitch, Arcane::SetBy::Code);
+        reg.PublishImmediate();
+        for (int frame = 0; frame < 2; ++frame)
+            drawFrame();
+        CHECK(epochAfterCaps == epochBeforeCaps + 1u);
+        CHECK(builtBreadth == 19);
+        CHECK(laidOutPitch == 350.0f);
+        CHECK(state.graph.buildEpoch == epochBeforeCaps + 2u);   // the restore rebuilds once too
+        CHECK(state.graphBuiltBreadth == 20);
+        CHECK(state.graphLaidOutColumnPitch == 300.0f);
+    }
 
     // ---- Task 4: the selection bridge's stamp handshake -------------------
     // The MODEL is the selection authority and the lens acknowledges its own
