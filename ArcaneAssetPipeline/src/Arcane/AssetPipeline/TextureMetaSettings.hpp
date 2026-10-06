@@ -28,6 +28,7 @@
 #include <Arcane/Reflection.hpp>
 
 #include <cstdint>
+#include <filesystem>
 
 #include <Json.hpp>
 
@@ -88,4 +89,11 @@ namespace Arcane::AssetPipeline
             ARC_REFLECT_ATTR(Range, 0.0, 16384.0)
             ARC_REFLECT_ATTR(Tooltip, "Largest cooked dimension (0 = unlimited) unless a texture's .meta says otherwise.")
     ARC_END_REFLECT_TYPE()
+
+    // Settings arc S6-6: an out-of-editor cooker's settings bootstrap (arccook). Applies the
+    // project's own Config rung (<projectDir>/Config at SetBy::Project) to the process
+    // registry, publishes it, and returns the resolved Settings<TextureMetaSettings>() -- the
+    // value a CookSession's SetTextureDefaults takes, so a .meta field left out resolves to the
+    // same project default the editor cooks with. Main thread (the registry is written there).
+    [[nodiscard]] TextureMetaSettings ApplyProjectCookConfig(const std::filesystem::path& projectDir);
 }

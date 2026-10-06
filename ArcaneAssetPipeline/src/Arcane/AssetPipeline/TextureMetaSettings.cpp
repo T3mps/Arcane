@@ -1,6 +1,8 @@
 #include "Arcane/AssetPipeline/TextureMetaSettings.hpp"
 
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>
 
 #include <Arcane/Util/Logger.hpp>
 
@@ -112,5 +114,16 @@ namespace Arcane::AssetPipeline
         j["generateMips"] = generateMips;
         j["maxSize"] = maxSize;
         return j;
+    }
+
+    TextureMetaSettings ApplyProjectCookConfig(const std::filesystem::path& projectDir)
+    {
+        // The report is advisory here (unknown keys/files are logged by the apply itself);
+        // a project with no Config folder simply leaves the struct defaults in place.
+        (void)ApplyCVarDirectory(CVarRegistry::Get(),
+                                 Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(projectDir)),
+                                 SetBy::Project, "project");
+        CVarRegistry::Get().PublishImmediate();
+        return Settings<TextureMetaSettings>();
     }
 }
