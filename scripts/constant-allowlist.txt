@@ -190,29 +190,7 @@ ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kSeedPairId|CONSTA
 ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kSeedRegion|CONSTANT|Layout, IDs, shader encoding
 ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kShaderPairId|CONSTANT|Layout, IDs, shader encoding
 ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kAxisHalfLenPx|PENDING|inventory:816 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColAabb|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColCom|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColContact|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColKinematic|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColOrient|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColResidencyGrid|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColSensor|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColStaticGrid|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColStatic|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceAxisHi|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceAxis|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceNormal|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTracePoint|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceShapeB|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreeFat|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreePair|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreeTight|PENDING|inventory:810 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColVelocity|PENDING|inventory:810 SETTING
 ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kDim|PENDING|inventory:816 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kIslandPalette|PENDING|inventory:811 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kManifoldNormalLen|PENDING|inventory:813 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kManifoldPointPx|PENDING|inventory:814 SETTING
-ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kNormalLen|PENDING|inventory:815 SETTING
 ArcaneClient/src/Arcane/Render/PickEmit.cpp|kSigns|UNLISTED|line 253
 ArcaneClient/src/Arcane/Render/PickEmit.hpp|kPickSupersample|PENDING|inventory:724 SETTING
 ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp|kFnvOffset|CONSTANT|Math

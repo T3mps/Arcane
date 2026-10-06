@@ -1886,12 +1886,12 @@ namespace Arcane::Editor
                 ctx ? ctx->view.AsAffine2D() : std::nullopt;
             if (plan.draw && phys && phys->world && overlayAffine)
             {
-                Arcane::PhysicsDebugDrawOptions opts;
+                Arcane::PhysicsDebugDrawOptions opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
                 opts.view   = *overlayAffine;
                 opts.alpha  = ctx->alpha;
                 opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
-                opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = false;   // outlines + contacts (spec)
-                opts.drawContacts   = plan.wholeWorld;
+                opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
+                opts.contacts   = plan.wholeWorld;
                 if (!plan.wholeWorld) opts.onlyBody = selectedBody;
                 Arcane::DrawPhysicsDebug(*phys->world, b, opts);
             }

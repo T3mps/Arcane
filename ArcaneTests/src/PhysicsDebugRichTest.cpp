@@ -102,10 +102,10 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
     {
         RecMock off;
         Arcane::PhysicsDebugDrawOptions opts;
-        opts.drawVelocities  = false;
-        opts.drawComMarkers  = false;
-        opts.drawOrientations = false;
-        opts.drawContacts    = false;
+        opts.velocities  = false;
+        opts.comMarkers  = false;
+        opts.orientations = false;
+        opts.contacts    = false;
         Arcane::DrawPhysicsDebug(w, off, opts);
         CHECK(off.lines.size() == 4);   // just the 4 polygon edges
     }
@@ -114,10 +114,10 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
     {
         RecMock on;
         Arcane::PhysicsDebugDrawOptions opts;
-        opts.drawVelocities   = true;
-        opts.drawComMarkers   = false;
-        opts.drawOrientations = false;
-        opts.drawContacts     = false;
+        opts.velocities   = true;
+        opts.comMarkers   = false;
+        opts.orientations = false;
+        opts.contacts     = false;
         Arcane::DrawPhysicsDebug(w, on, opts);
         CHECK(on.lines.size() > 4);   // outline + velocity ray
     }
@@ -136,10 +136,10 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
     {
         RecMock on;
         Arcane::PhysicsDebugDrawOptions opts;
-        opts.drawVelocities   = false;
-        opts.drawComMarkers   = false;
-        opts.drawOrientations = true;
-        opts.drawContacts     = false;
+        opts.velocities   = false;
+        opts.comMarkers   = false;
+        opts.orientations = true;
+        opts.contacts     = false;
         Arcane::DrawPhysicsDebug(w, on, opts);
         CHECK(on.lines.size() > 4);   // outline + orientation tick
     }
@@ -148,10 +148,10 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
     {
         RecMock on;
         Arcane::PhysicsDebugDrawOptions opts;
-        opts.drawVelocities   = false;
-        opts.drawComMarkers   = true;
-        opts.drawOrientations = false;
-        opts.drawContacts     = false;
+        opts.velocities   = false;
+        opts.comMarkers   = true;
+        opts.orientations = false;
+        opts.contacts     = false;
         Arcane::DrawPhysicsDebug(w, on, opts);
         CHECK((on.lines.size() > 4 || on.circles.size() > 0));
     }
@@ -164,7 +164,7 @@ TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
     wd.gravityY = Real(0);
     PhysicsWorld w(wd);
 
-    // A static body never moves -> with drawVelocities on it must still emit
+    // A static body never moves -> with velocities on it must still emit
     // ONLY its outline (no zero-length velocity ray clutter).
     BodyDef bd;
     bd.type     = BodyType::Static;
@@ -174,10 +174,10 @@ TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
 
     RecMock m;
     Arcane::PhysicsDebugDrawOptions opts;
-    opts.drawVelocities   = true;
-    opts.drawComMarkers   = false;
-    opts.drawOrientations = false;
-    opts.drawContacts     = false;
+    opts.velocities   = true;
+    opts.comMarkers   = false;
+    opts.orientations = false;
+    opts.contacts     = false;
     Arcane::DrawPhysicsDebug(w, m, opts);
 
     // 4 outline lines for the AABB, and NO velocity ray (static -> v == 0).
@@ -219,7 +219,7 @@ TEST_CASE("PhysicsDebug projects an oriented box's WORLD corners through a mirro
     RecMock rec;
     Arcane::PhysicsDebugDrawOptions opts;
     opts.view = *affine;
-    opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = opts.drawContacts = false;
+    opts.velocities = opts.comMarkers = opts.orientations = opts.contacts = false;
     Arcane::DrawPhysicsDebug(w, rec, opts);
     REQUIRE(rec.lines.size() == 4);   // the four edges, nothing else
 

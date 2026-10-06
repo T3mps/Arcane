@@ -195,8 +195,8 @@ TEST_CASE("DrawPhysicsDebug interpolates the body outline by alpha", "[interp]")
     buf.captured = true;
 
     Arcane::PhysicsDebugDrawOptions opts;
-    opts.drawContacts = opts.drawAabbs = opts.drawVelocities = false;
-    opts.drawComMarkers = opts.drawOrientations = false;   // isolate the outline
+    opts.contacts = opts.aabbs = opts.velocities = false;
+    opts.comMarkers = opts.orientations = false;   // isolate the outline
     opts.interp = &buf;
     opts.alpha  = 0.5f;                                     // halfway 0 -> 10
 

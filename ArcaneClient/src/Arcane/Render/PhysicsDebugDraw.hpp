@@ -15,10 +15,11 @@
 //
 // PRESENTATION BOUNDARY: this file lives in Arcane.dll (Render/).  It includes
 // PhysicsWorld.hpp (Core) and Batcher2D.hpp.  Core never includes Render --
-// the boundary is one-way.  No Astra / SDL3 / graphics headers in the options
-// struct itself; only Batcher2D.hpp is included here.
+// the boundary is one-way.  No SDL3 / graphics headers in the options struct
+// itself; its settings blocks bring Settings.hpp (reflection) with them.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Render/PhysicsDebugSettings.hpp>   // the debug.physics.* blocks PhysicsDebugDrawOptions inherits
 #include <Arcane/Scene/ViewTransform.hpp>   // Affine2D (PhysicsDebugDrawOptions::view)
 
 #include <Manifold2D/Physics/PhysicsTypes.hpp>   // BodyHandle -- optional<T> needs it complete
@@ -47,7 +48,29 @@ namespace Arcane
     struct PhysicsInterpBuffer;
 
     // Options for DrawPhysicsDebug.
-    struct PhysicsDebugDrawOptions
+    //
+    // Settings arc S6-10: the overlay's look, toggles and palette are the
+    // debug.physics.* cvars (PhysicsDebugSettings.hpp). The options block
+    // inherits the four settings blocks, so a default-constructed block draws
+    // with their defaults (the pre-sweep literals) and
+    // MakePhysicsDebugDrawOptions() draws with the published values; a caller
+    // may still override any inherited member for one call. Inherited:
+    //   DebugPhysicsSettings      lineThickness (canvas px), contactMarkerSize
+    //                             (m, through view.Length), velocityScale (s of
+    //                             look-ahead), velocityMinSpeed (m/s; slower
+    //                             bodies draw no ray), comMarkerSize (m),
+    //                             orientationTickLen (m), manifoldNormalLength,
+    //                             manifoldPointPx;
+    //   DebugPhysicsDrawSettings  contacts (centre-to-centre line + midpoint
+    //                             disc per begun pair), aabbs (each body's tight
+    //                             SlotAabb), velocities (awake dynamic bodies),
+    //                             comMarkers (dynamic bodies), orientations
+    //                             (local +x tick, so circles show rotation);
+    //   DebugPhysicsColorSettings the palette (per body type, island, overlay
+    //                             and NarrowphaseKind);
+    //   DebugPhysicsTraceSettings DrawNarrowphaseWorldOverlay's defaults.
+    struct PhysicsDebugDrawOptions : DebugPhysicsSettings, DebugPhysicsDrawSettings,
+                                     DebugPhysicsColorSettings, DebugPhysicsTraceSettings
     {
         // Camera transform applied to every emitted point + length: the
         // orthographic ViewTransform's Affine2D (F4 plan 1 T3) -- points go
@@ -59,57 +82,6 @@ namespace Arcane
         // when that is nullopt (a perspective view). Default: unit scale, zero
         // offset -- a caller that sets no camera draws at 1 px per metre, y down.
         Affine2D view{};
-
-        // Thickness (canvas pixels) for Line primitives.
-        float lineThickness = 1.0f;
-
-        // Draw a line between the centers of each active contact pair
-        // (begun == true in the ContactManager).  Magenta, like COL_CONTACT
-        // in PhysicsDebug.lua.  A small disc marks the segment midpoint so the
-        // contact reads clearly even when the two body centers are close.
-        bool drawContacts = true;
-        // Radius (WORLD units, through view.Length) of the contact-midpoint disc.
-        // 0.03 m = 3 px apparent size at the sandbox's pixelsPerMeter=100.
-        float contactMarkerSize = 0.03f;
-
-        // Outline each body's world-space AABB (SlotAabb).  Off by default;
-        // useful when debugging the broadphase.
-        bool drawAabbs = false;
-
-        // ---- rich per-body overlays (Sandbox outline-unify pivot, Item A) ---
-        //
-        // DrawPhysicsDebug is the SINGLE canonical Sandbox renderer now (bodies
-        // are no longer drawn as filled SpriteRenderer quads), so it grew richer
-        // debug geometry.  Each overlay is GENERIC (every shape) and gated by a
-        // flag so the HUD can toggle it; defaults ON for the velocity/COM/
-        // orientation set keep the showcase informative out of the box while a
-        // headless caller that constructs default options still gets them.
-
-        // Velocity vector: a line from each awake DYNAMIC body's world COM along
-        // its linear velocity (scaled by `velocityScale`), tipped with a small
-        // arrow head.  Suppressed for bodies at rest (|v| ~ 0) to avoid clutter.
-        bool  drawVelocities = true;
-        // Seconds of look-ahead for the velocity ray length (world = v * scale,
-        // then projected).  0.15 s reads well at the sandbox scale.
-        float velocityScale  = 0.15f;
-        // Minimum world-space speed (m/s) for a body to draw a velocity ray; below
-        // this the ray is suppressed as jitter. Defaults to the MKS sleep threshold
-        // (WorldDef sleepThreshold default 0.05 m/s) so any body the solver considers
-        // awake shows a ray -- restoring the px-era gate<<sleepThreshold relation that
-        // the units flip had inverted (old raw literal was 1.0 world-u/s).
-        float velocityRayMinSpeed = 0.05f;
-
-        // Center-of-mass marker: a small cross (two short lines) at each DYNAMIC
-        // body's world COM.  Makes the off-origin COM of compound bodies visible.
-        bool  drawComMarkers = true;
-        // Half-length (WORLD units, through view.Length) of each COM cross arm.
-        float comMarkerSize  = 0.05f;
-
-        // Orientation tick: a short line from each body's COM along its local +x
-        // axis, so rotation is visible even on a circle (whose outline is
-        // rotation-invariant).  Length is `orientationTickLen` (world units).
-        bool  drawOrientations = true;
-        float orientationTickLen = 0.18f;
 
         // ---- Slice A broadphase + manifold overlays (default OFF) -----------
         //
@@ -133,7 +105,7 @@ namespace Arcane
 
         // Contact manifolds: for each ContactConstraint point, a disc at the
         // world contact point + a normal arrow, colored by NarrowphaseKind. This
-        // is ADDITIVE to the legacy center-to-center `drawContacts` line; both can
+        // is ADDITIVE to the legacy center-to-center `contacts` line; both can
         // be on at once.
         bool drawManifolds = false;
 
@@ -142,7 +114,7 @@ namespace Arcane
         // each body's outline / COM / orientation / velocity origin is drawn at
         // lerp(prev, current, alpha). Null -> current step pose (unchanged). A
         // per-body generation mismatch (recycled slot) falls back to current.
-        // The per-body AABB (drawAabbs), contacts, and the broadphase overlays
+        // The per-body AABB (aabbs), contacts, and the broadphase overlays
         // (drawFixtureTree / drawStaticGrid / drawResidencyGrid / drawManifolds)
         // are NOT interpolated -- they stay at the current step by spec.
         const PhysicsInterpBuffer* interp = nullptr;
@@ -156,6 +128,10 @@ namespace Arcane
         // default) is every existing caller: the whole world, every flag honoured.
         std::optional<Manifold2D::Physics::BodyHandle> onlyBody;
     };
+
+    // A fresh options block holding the PUBLISHED debug.physics.* values (the
+    // per-call members keep their defaults). Read it once per frame.
+    [[nodiscard]] ARC_API PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions();
 
     // Submit physics debug geometry to `batcher`.
     //
@@ -173,15 +149,15 @@ namespace Arcane
     //   * Dynamic     -> hue-keyed by IslandRootOf(i) from a small palette;
     //                    sleeping dynamics are drawn at 35% brightness.
     //
-    // If opts.drawContacts, a magenta line connects the centers of each
+    // If opts.contacts, a magenta line connects the centers of each
     // currently-begun contact pair (ForEachContact) with a midpoint disc.
-    // If opts.drawAabbs, a white outline is drawn for each body's tight AABB
+    // If opts.aabbs, a white outline is drawn for each body's tight AABB
     // (SlotAabb).
     //
     // Rich per-body overlays (each gated by its option flag):
-    //   * drawVelocities   -> a velocity ray (COM along linear velocity, arrow).
-    //   * drawComMarkers   -> a small cross at each dynamic body's world COM.
-    //   * drawOrientations -> a short tick along the body's local +x (rotation).
+    //   * velocities   -> a velocity ray (COM along linear velocity, arrow).
+    //   * comMarkers   -> a small cross at each dynamic body's world COM.
+    //   * orientations -> a short tick along the body's local +x (rotation).
     ARC_API void DrawPhysicsDebug(
         const Manifold2D::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
@@ -208,12 +184,14 @@ namespace Arcane
     // `stepIndex` selects the per-iteration snapshot to emphasize for stepped kinds
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
     // emphasis. The caller brackets batcher.Begin()..Drain() (this only submits primitives).
+    // An absent lineThickness / emphasis takes the published debug.physics.trace
+    // value (1.5 / 1.0 by default); the colours and the normal length always do.
     ARC_API void DrawNarrowphaseWorldOverlay(
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,
         Batcher2D& batcher,
         const Affine2D& view,
-        float lineThickness = 1.5f,
-        float emphasis = 1.0f);
+        std::optional<float> lineThickness = std::nullopt,
+        std::optional<float> emphasis = std::nullopt);
 
 } // namespace Arcane
