@@ -16,13 +16,26 @@ namespace Arcane::Editor
     {
         LayoutLibrary Library(const LayoutPageState& st) { return LayoutLibrary(st.dir.empty() ? NamedLayoutDir() : st.dir); }
 
-        bool SetString(Arcane::CVarHandle h, std::string value)
+        Arcane::SetResult SetString(Arcane::CVarHandle h, std::string value)
         {
             Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
-            const bool ok = reg.Set(h, Arcane::CVarValue::String(std::move(value)), Arcane::SetBy::EditorUser,
-                                    "editor", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied;
+            const Arcane::SetResult result = reg.Set(h, Arcane::CVarValue::String(std::move(value)),
+                                                     Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
             reg.PublishImmediate();
-            return ok;
+            return result;
+        }
+
+        std::string_view SetFailureReason(Arcane::SetResult result)
+        {
+            switch (result)
+            {
+            case Arcane::SetResult::RefusedWeaker: return "a stronger setting source is active";
+            case Arcane::SetResult::Stale:         return "the setting is unavailable";
+            case Arcane::SetResult::TypeMismatch:  return "the setting rejected this value type";
+            case Arcane::SetResult::Denied:        return "permission was denied";
+            case Arcane::SetResult::Applied:       break;
+            }
+            return "the setting rejected the value";
         }
     }
 
@@ -41,9 +54,14 @@ namespace Arcane::Editor
 
     bool SetDefaultLayout(LayoutPageState& st, std::string_view name)
     {
-        const bool ok = SetString(cvar_layoutDefault.Handle(), std::string(name));
+        const Arcane::SetResult result = SetString(cvar_layoutDefault.Handle(), std::string(name));
+        if (result != Arcane::SetResult::Applied)
+        {
+            st.status = "Default not applied: " + std::string(SetFailureReason(result));
+            return false;
+        }
         st.status = name.empty() ? "New projects open with the factory layout" : "New projects open with '" + std::string(name) + "'";
-        return ok;
+        return true;
     }
 
     bool DeleteLayout(LayoutPageState& st, std::string_view name)
@@ -59,7 +77,7 @@ namespace Arcane::Editor
 
     bool SetOpenPanelsAtStart(const PanelVisibility& vis)
     {
-        return SetString(cvar_layoutOpenPanelsAtStart.Handle(), FormatOpenPanels(vis));
+        return SetString(cvar_layoutOpenPanelsAtStart.Handle(), FormatOpenPanels(vis)) == Arcane::SetResult::Applied;
     }
 
     void DrawLayoutPage(void* user)

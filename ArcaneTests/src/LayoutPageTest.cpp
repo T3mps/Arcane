@@ -47,3 +47,24 @@ TEST_CASE("Layout page: panels at start write the panel list", "[settings-ui][ed
     CHECK(cvar_layoutOpenPanelsAtStart.Get() == "*");
     Revert();
 }
+
+// S4-19 deferral: a Set As Default that a stronger rung (here --set) outranks
+// must report the refusal, not the success line.
+TEST_CASE("Layout page: a refused default write reports the refusal instead of success", "[settings-ui][editor]")
+{
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Revert();
+    REQUIRE(reg.Set(cvar_layoutDefault.Handle(), Arcane::CVarValue::String("Locked"),
+                    Arcane::SetBy::CommandLine, "test", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+
+    LayoutPageState st;
+    CHECK_FALSE(SetDefaultLayout(st, "Wide"));
+    CHECK(st.status.starts_with("Default not applied"));
+    CHECK(st.status.find("stronger") != std::string::npos);
+    CHECK(cvar_layoutDefault.Get() == "Locked");
+
+    reg.ClearRung(cvar_layoutDefault.Handle(), Arcane::SetBy::CommandLine);
+    Revert();
+    CHECK(cvar_layoutDefault.Get().empty());
+}
