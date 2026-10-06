@@ -27,6 +27,8 @@
 #include "Settings/EditorRestart.hpp"
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Input/EditorActions.hpp"
+#include <Arcane/Input/KeyLayout.hpp>
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
@@ -445,6 +447,7 @@ namespace Arcane::Editor
         // Create -> ImGuiLayer::Create), before the first frame and before the
         // game ImGui context is created in StageRenderBridge. Zero engine change.
         Arcane::Editor::InstallEditorFonts();
+        Arcane::Editor::SetActiveKeyLayout(&Arcane::SystemKeyLayout());
         return true;
     }
 
