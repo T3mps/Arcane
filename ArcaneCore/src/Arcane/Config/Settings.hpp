@@ -29,6 +29,7 @@
 //   which pins the snapshot.
 // - A struct that is not registered (or whose module unloaded) reads as T{}.
 
+#include <Arcane/Config/CVarModule.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Reflection.hpp>
 
@@ -123,7 +124,7 @@ namespace Arcane
         SettingsTypeDesc desc;
         desc.typeHash = ::Astra::TypeID<T>::Hash();
         desc.typeName = std::string(::Astra::TypeID<T>::Name());
-        desc.module   = std::string(module.empty() ? CVarRegistry::CurrentModule() : module);
+        desc.module   = std::string(module.empty() ? ::Arcane::Detail::CallerModule() : module);
         desc.make     = &Detail::MakeSettingsBlock<T>;
         if (!::Astra::Detail::MetaFactory<T>::fn)
         {
@@ -182,4 +183,5 @@ namespace Arcane
 // holds the struct's reflection block. That header's registrar is partially
 // ordered and this static is ordered, so the registrar initializes first.
 #define ARC_SETTINGS(Type) \
-    static const bool ARC_SETTINGS_CAT(arcSettings_, __LINE__) = ::Arcane::RegisterSettings<Type>(::Arcane::CVarRegistry::Get())
+    static const bool ARC_SETTINGS_CAT(arcSettings_, __LINE__) = \
+        ::Arcane::RegisterSettings<Type>(::Arcane::CVarRegistry::Get(), ::Arcane::Detail::CallerModule())

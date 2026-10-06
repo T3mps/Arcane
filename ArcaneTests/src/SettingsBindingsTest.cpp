@@ -336,6 +336,19 @@ TEST_CASE("ApplyLogSettings sets spdlog and Mosaic's level in Core, this exe and
     CHECK(Mosaic::GetLogLevel() == Mosaic::LogLevel::Info);
 }
 
+TEST_CASE("UnregisterModuleRange drops Mosaic level setters whose address lies in the image", "[settings]")
+{
+    Log::Init();
+    Log::RegisterMosaicLevelTarget(&ProbeMosaicLevel);
+    g_probeLevel = Mosaic::LogLevel::Info;
+    const auto* p = reinterpret_cast<const unsigned char*>(&ProbeMosaicLevel);
+    (void)CVarRegistry::Get().UnregisterModuleRange(p, 1);
+    ApplyLogSettings(LogSettings{ .level = 4 });
+    CHECK(g_probeLevel == Mosaic::LogLevel::Info);               // range-dropped: untouched
+    CHECK(Log::Engine()->level() == spdlog::level::err);
+    ApplyLogSettings(LogSettings{});                             // back to info
+}
+
 TEST_CASE("log.level is LogSettings' field: same flags and scope as before, and its publish reaches Mosaic", "[settings]")
 {
     Log::Init();

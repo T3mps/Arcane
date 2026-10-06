@@ -19,6 +19,7 @@
     #define NOMINMAX
     #endif
     #include <windows.h>
+    #include <tlhelp32.h>
 #else
     #include <dlfcn.h>
 #endif
@@ -181,6 +182,63 @@ namespace Arcane
         const ImageSpan span = ImageFromHandle(handle);
         ::dlclose(handle);
         return span;
+#endif
+    }
+
+    std::vector<Module::MappedModule> Module::MappedModules() noexcept
+    {
+        std::vector<MappedModule> result;
+#if defined(_WIN32)
+        // ERROR_BAD_LENGTH is the documented transient failure while another
+        // thread is loading or unloading a module; retry it a few times.
+        HANDLE snapshot = INVALID_HANDLE_VALUE;
+        for (int attempt = 0; attempt < 8 && snapshot == INVALID_HANDLE_VALUE; ++attempt)
+        {
+            snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, ::GetCurrentProcessId());
+            if (snapshot == INVALID_HANDLE_VALUE && ::GetLastError() != ERROR_BAD_LENGTH)
+                break;
+        }
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return result;
+
+        MODULEENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (::Module32FirstW(snapshot, &entry))
+        {
+            do
+            {
+                result.push_back(MappedModule{
+                    std::filesystem::path(entry.szExePath),
+                    ImageSpan{entry.modBaseAddr, static_cast<std::size_t>(entry.modBaseSize)} });
+                entry.dwSize = sizeof(entry);
+            }
+            while (::Module32NextW(snapshot, &entry));
+        }
+        ::CloseHandle(snapshot);
+#endif
+        return result;
+    }
+
+    std::optional<Module> Module::PinMapped(const MappedModule& mapped) noexcept
+    {
+#if defined(_WIN32)
+        if (!mapped.image.base)
+            return std::nullopt;
+        HMODULE handle = nullptr;
+        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                  static_cast<LPCWSTR>(mapped.image.base), &handle) || !handle)
+            return std::nullopt;
+        if (static_cast<const void*>(handle) != mapped.image.base)
+        {
+            // The base now lies inside some OTHER image: the one asked about
+            // was unmapped and its range reused. Not ours to pin.
+            ::FreeLibrary(handle);
+            return std::nullopt;
+        }
+        return Module(mapped.path, reinterpret_cast<NativeHandle>(handle));
+#else
+        (void)mapped;
+        return std::nullopt;
 #endif
     }
 

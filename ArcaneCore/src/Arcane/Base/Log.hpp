@@ -48,6 +48,10 @@ namespace Arcane::Log
     using MosaicLevelFn = void (*)(Mosaic::LogLevel level) noexcept;
     ARC_CORE_API void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
     ARC_CORE_API void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    // Drop setters whose code address lies in [base, base+size).
+    // CVarRegistry::UnregisterModuleRange calls this while the image is still
+    // mapped (a plugin's unload, and PluginHost's dependency images).
+    ARC_CORE_API void UnregisterMosaicLevelTargetsInRange(const void* base, std::size_t size) noexcept;
     // Sets ArcaneCore.dll's own copy and every registered module's.
     ARC_CORE_API void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept;
     // ArcaneCore.dll's own copy. Other modules read theirs with Mosaic::GetLogLevel().

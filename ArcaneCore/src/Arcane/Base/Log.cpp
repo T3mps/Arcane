@@ -296,6 +296,17 @@ namespace Arcane::Log
         std::erase(s_mosaicLevelTargets, fn);
     }
 
+    void UnregisterMosaicLevelTargetsInRange(const void* base, std::size_t size) noexcept
+    {
+        if (!base || size == 0) return;
+        const auto* b = static_cast<const unsigned char*>(base);
+        std::lock_guard lock(s_mosaicLevelMutex);
+        std::erase_if(s_mosaicLevelTargets, [b, size](MosaicLevelFn fn) {
+            const auto* p = reinterpret_cast<const unsigned char*>(fn);
+            return p >= b && p < b + size;
+        });
+    }
+
     void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept
     {
         s_mosaicLevel.store(static_cast<int>(level), std::memory_order_relaxed);

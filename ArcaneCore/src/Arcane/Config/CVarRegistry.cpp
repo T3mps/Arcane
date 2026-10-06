@@ -984,6 +984,7 @@ namespace Arcane
         // Address only: two images can share a stem, and name-matching would
         // drop the other image's registrations (Review Focus 2, Plugin::Load).
         const std::size_t dropped = DropMatching({}, base, size);
+        Log::UnregisterMosaicLevelTargetsInRange(base, size);
         UnregisterModuleImage(base, size);
         return dropped;
     }
