@@ -1,4 +1,5 @@
 #include "Panels/AssetGraphPanel.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Documents/DocumentHost.hpp"      // the open route a node's double-click hands to OpenAssetRow
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry -- this panel's whole read surface
@@ -2323,6 +2324,15 @@ namespace Arcane::Editor
                 state.graphFitPending.Disarm();
         }
 
+        if (ImGui::IsWindowHovered() || ed::IsActive())
+        {
+            EditorActions::Get().MarkContextActive(ActionContext::Graph);
+            if (!ImGui::GetIO().WantTextInput && EditorActions::Get().Pressed("graph.frameSelected"))
+            {
+                if (ed::GetSelectedObjectCount() > 0) ed::NavigateToSelection(true);
+                else ed::NavigateToContent();
+            }
+        }
         ed::End();
         ed::SetCurrentEditor(nullptr);
 
@@ -2532,7 +2542,7 @@ namespace Arcane::Editor
                     ImGui::CloseCurrentPopup();
                 };
 
-                const bool enter = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+                const bool enter = ImGui::IsItemFocused() && EditorActions::Get().Pressed("ui.confirm");
                 if (enter && !live.rows.empty())
                     applyRow(live.rows[static_cast<std::size_t>(state.graphFocusNav)]);
 

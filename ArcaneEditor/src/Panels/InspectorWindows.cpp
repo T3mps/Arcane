@@ -1,4 +1,5 @@
 #include "Panels/InspectorWindows.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -424,11 +425,13 @@ namespace Arcane::Editor
             // RowWithThumb already guard it.
             (void)ImGui::Begin(title.c_str(), inst.id == 0 ? primaryOpen : &open);
             InspectorSource* src = host.SourceFor(inst.id);
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) result.focusedSource = src;
-            // Shortcut(), not IsKeyChordPressed(): RouteFocused means only the
-            // focused instance fires, and an active InputText does not swallow
-            // Ctrl+S (SpriteDocument.cpp:178-183 relies on the same fact).
-            if (src && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) result.saveRequested.push_back(src);
+            const bool instFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+            if (instFocused)
+            {
+                result.focusedSource = src;
+                EditorActions::Get().MarkContextActive(ActionContext::Inspector);
+            }
+            if (src && instFocused && EditorActions::Get().Pressed("document.save")) result.saveRequested.push_back(src);
             InspectorPage* page = nullptr;
             if (inst.pinned) page = src ? src->PageFor(inst.pinnedKey) : nullptr;
             else page = src ? src->Page() : nullptr;

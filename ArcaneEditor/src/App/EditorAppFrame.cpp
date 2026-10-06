@@ -3755,6 +3755,8 @@ namespace Arcane::Editor
                 m_inspectorWindows.grids.erase(id);
             }
             m_inspectorFocusedSource = res.focusedSource;
+            if (InspectorSaveTarget(m_inspectorFocusedSource) != nullptr)
+                Arcane::Editor::EditorActions::Get().MarkContextActive(Arcane::Editor::ActionContext::Document);
             // The document's save GESTURE (RequestSave), never the raw Save:
             // the material's save-with-errors confirm must hold here too. A
             // REFUSED save is reported (a deferred confirm is not a refusal).

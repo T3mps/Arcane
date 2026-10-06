@@ -8,6 +8,8 @@
 #include <Panels/InspectorHost.hpp>
 #include <Panels/InspectorKinds.hpp>     // kInspectorKinds / kInspectorAllIcon (the filter face)
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
+#include <Input/EditorActions.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Widgets/IconsLucide.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
@@ -1357,6 +1359,28 @@ TEST_CASE("DrawInspectorWindows: the page scrolls in ##page under a pinned heade
         REQUIRE(r.saveRequested.size() == 1);
         CHECK(r.saveRequested[0] == &scene);
         CHECK(r.focusedSource == &scene);
+    }
+    SECTION("a rebound document.save fires on its new chord, and Ctrl+S no longer does")
+    {
+        Arcane::Editor::EditorActions& keys = Arcane::Editor::EditorActions::Get();
+        Arcane::CVarRegistry& reg = keys.Registry();
+        reg.Set(keys.HandleOf("document.save"), Arcane::CVarValue::String("Ctrl+K"), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
+        reg.PublishImmediate();
+        keys.RefreshBindings();
+        ImGui::FocusWindow(page);
+        frame(); frame();
+        io.AddKeyEvent(ImGuiMod_Ctrl, true); io.AddKeyEvent(ImGuiKey_S, true);
+        const InspectorWindowsResult viaS = frame();
+        io.AddKeyEvent(ImGuiKey_S, false); io.AddKeyEvent(ImGuiKey_K, true);
+        const InspectorWindowsResult viaK = frame();
+        io.AddKeyEvent(ImGuiKey_K, false); io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        CHECK(viaS.saveRequested.empty());
+        REQUIRE(viaK.saveRequested.size() == 1);
+        CHECK(viaK.saveRequested[0] == &scene);
+        reg.RevertLayer(Arcane::SetBy::EditorUser);
+        reg.PublishImmediate();
+        keys.RefreshBindings();
     }
 }
 

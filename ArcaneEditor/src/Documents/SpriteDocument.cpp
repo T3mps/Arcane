@@ -1,4 +1,5 @@
 #include "Documents/SpriteDocument.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
 #include "Widgets/PropertyGrid.hpp"
@@ -200,17 +201,11 @@ namespace Arcane::Editor
             requestClose = !open;
             return;
         }
-        // Answers DocumentHost::FocusedDoc, which is how the APP's scene-level
-        // Ctrl+S learns to stand down while the user is inside a document. The
-        // Shortcut below routes itself and does not need this.
+        // Answers DocumentHost::FocusedDoc and gates this document's save action.
         m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-        // Ctrl+S saves. Shortcut() (not IsKeyChordPressed) so it ROUTES to
-        // whichever window/document currently owns focus (imgui.h:1106-1114,
-        // default ImGuiInputFlags_RouteFocused) -- with several sprite/
-        // material documents open at once, each one's Ctrl+S only fires for
-        // the one on top.
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+        if (m_windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Document);
+        if (m_windowFocused && EditorActions::Get().Pressed("document.save"))
             Save();
 
         if (ImGui::Button("Save"))

@@ -188,5 +188,7 @@ namespace Arcane::Editor
         s.HoveredNodeBorderWidth  = desc.hovBorderWidth;
         s.SelectedNodeBorderWidth = desc.selBorderWidth;
         s.NodePadding             = desc.nodePadding;
+        // EditorActions owns canvas shortcuts, including F, Delete and clipboard.
+        ed::EnableShortcuts(false);
     }
 }

@@ -1,4 +1,5 @@
 #include "Documents/InputActionsDocument.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Documents/InputActionsJson.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -226,7 +227,7 @@ namespace Arcane::Editor
             onChrome = onChrome || ImGui::IsAnyItemActive();   // the grip corner sits inside InnerRect; the columns are NoInputs, so an active item here is window decoration
         }
         if (!bodyDrawn || !focused_ || clickedAway) capture_.Cancel();
-        else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
+        else if (EditorActions::Get().Pressed("ui.cancel")) capture_.Cancel();
         else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive(), onChrome),
                               ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);
         const auto& result = capture_.Result();
@@ -265,10 +266,11 @@ namespace Arcane::Editor
         if (focusRequest_) { ImGui::SetNextWindowFocus(); focusRequest_ = false; }   // the page's Rebind... (BeginRebindFromPage)
         const bool bodyDrawn = ImGui::Begin(windowLabel_.c_str(), &open, flags);
         focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);   // valid on both branches
+        if (focused_) EditorActions::Get().MarkContextActive(ActionContext::Document);
         TickCapture(bodyDrawn);                                                      // BEFORE the shortcut: the swallow stamp is written here
         if (bodyDrawn)
         {
-            if (!InputSwallowed() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+            if (!InputSwallowed() && focused_ && EditorActions::Get().Pressed("document.save"))
                 if (!Save()) ARC_WARN("InputActionsDocument: save refused for '{}'", path_.generic_string());
             preview_.Sync(model_);
             if (state_.previewArmed)
