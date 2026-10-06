@@ -57,6 +57,17 @@ namespace Arcane::Editor
         CVarVec2 nodePadding{ 10.0f, 6.0f };
     };
 
+    // editor.graph.nodePadding is ApplyMode::Restart (spec s3.4: read once at
+    // boot), so the shader canvas never reads the published snapshot: the
+    // editor captures the value once at startup (EditorApp's boot, after the
+    // early config rungs) and the canvas reads that capture until the next
+    // restart. An edit in Preferences waits behind the "restart required"
+    // badge. A host that never runs the editor's boot latches at the first
+    // GraphNodePaddingAtBoot() read; a test simulating a restart calls the
+    // capture again. Defined in GraphCanvasSettings.cpp.
+    void CaptureGraphNodePaddingAtBoot();
+    [[nodiscard]] CVarVec2 GraphNodePaddingAtBoot();
+
     // editor.graph.pinRing.* -- a pin dot's ring weight, and the OPTIONAL outer
     // ring DrawGraphPinDot adds around a dot (the shader canvas's "adapts to
     // its input" mark on a resolved dynamic pin): its centreline sits outerGap

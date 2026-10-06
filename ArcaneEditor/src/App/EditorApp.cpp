@@ -56,6 +56,7 @@
 #include "Settings/AssetBrowserSettings.hpp"     // EditorOpenOptions: editor.assets.mountDiagnostics (settings S6-38)
 #include "Settings/EditorPlaySettings.hpp"       // ReadPlayModeIniLine: the old [EditorPlayMode] section (settings S6-32)
 #include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
+#include "Settings/GraphCanvasSettings.hpp"        // CaptureGraphNodePaddingAtBoot: editor.graph.nodePadding (Restart; S6-44)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
@@ -554,6 +555,10 @@ namespace Arcane::Editor
         const Arcane::Editor::EditorUiStyleSettings& uiStyle = Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>();
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle(), uiStyle);
         m_appearance.Init(ImGui::GetStyle(), uiStyle);   // the boot look IS the defaults: the first per-frame update applies nothing
+        // editor.graph.nodePadding is Restart: the shader canvas reads THIS
+        // capture (the same early-rung point as the style above) until the
+        // next restart, never the live snapshot.
+        Arcane::Editor::CaptureGraphNodePaddingAtBoot();
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later

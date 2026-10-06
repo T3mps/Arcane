@@ -18,6 +18,7 @@
 #include <imgui_node_editor.h>
 
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>   // Settings<GraphCanvasSettings>: the published (pending-restart) value
 
 #include <cmath>
 #include <optional>
@@ -202,7 +203,8 @@ TEST_CASE("sweep: editor.graph.pinRing.* and editor.graph.nodePadding defaults a
     CHECK(*pad.max == CVarValue::Vec2(CVarVec2{ 24.0f, 24.0f }));
 }
 
-TEST_CASE("sweep: a published pin ring and node padding reach the shader canvas", "[sweep][graph-canvas][graphcanvas]")
+TEST_CASE("sweep: a published pin ring reaches the shader canvas; node padding waits for a restart",
+          "[sweep][graph-canvas][graphcanvas]")
 {
     namespace ed = ax::NodeEditor;
     CVarRegistry& reg = CVarRegistry::Get();
@@ -219,12 +221,16 @@ TEST_CASE("sweep: a published pin ring and node padding reach the shader canvas"
             r.ClearRung(a, SetBy::Code);
             r.ClearRung(b, SetBy::Code);
             r.PublishImmediate();
+            Editor::CaptureGraphNodePaddingAtBoot();   // leave the default boot value for the next test
         }
     } reset{ ring, pad };
+    // "Boot": the editor captures the Restart value once (EditorApp does this
+    // at startup; here, the defaults).
+    Editor::CaptureGraphNodePaddingAtBoot();
+    CHECK(Editor::GraphNodePaddingAtBoot().x == 10.0f); CHECK(Editor::GraphNodePaddingAtBoot().y == 6.0f);
 
-    Test::HeadlessImGui imgui;   // before the doc: its dtor needs the context
-    Editor::ShaderEditorDocument doc(Editor::DocServices{}, "padding.arcmat", Test::SpriteNodeDoc());
-    const auto frame = [&doc]
+    Test::HeadlessImGui imgui;   // before the docs: their dtors need the context
+    const auto frame = [](Editor::ShaderEditorDocument& doc)
     {
         ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
         ImGui::NewFrame();
@@ -232,22 +238,49 @@ TEST_CASE("sweep: a published pin ring and node padding reach the shader canvas"
         doc.Draw(requestClose);
         ImGui::Render();
     };
-    const auto padding = [&doc]
+    const auto padding = [](Editor::ShaderEditorDocument& doc)
     {
         ed::SetCurrentEditor(doc.GraphCanvasContext());
         const ImVec4 v = ed::GetStyle().NodePadding;
         ed::SetCurrentEditor(nullptr);
         return v;
     };
-    frame();
-    REQUIRE(doc.GraphCanvasContext() != nullptr);
-    CHECK(padding().x == 10.0f); CHECK(padding().y == 6.0f); CHECK(padding().z == 10.0f); CHECK(padding().w == 6.0f);
+    {
+        Editor::ShaderEditorDocument doc(Editor::DocServices{}, "padding.arcmat", Test::SpriteNodeDoc());
+        frame(doc);
+        REQUIRE(doc.GraphCanvasContext() != nullptr);
+        CHECK(padding(doc).x == 10.0f); CHECK(padding(doc).y == 6.0f);
+        CHECK(padding(doc).z == 10.0f); CHECK(padding(doc).w == 6.0f);
 
-    REQUIRE(reg.Set(ring, CVarValue::Float32(3.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
-    REQUIRE(reg.Set(pad, CVarValue::Vec2(CVarVec2{ 14.0f, 9.0f }), SetBy::Code, {}, CVarContext::Editor) ==
-            SetResult::Applied);
-    reg.PublishImmediate();
-    CHECK(Editor::GraphPinRingWidth() == 3.0f);
-    frame();   // the open canvas re-applies its style desc when it changed
-    CHECK(padding().x == 14.0f); CHECK(padding().y == 9.0f); CHECK(padding().z == 14.0f); CHECK(padding().w == 9.0f);
+        REQUIRE(reg.Set(ring, CVarValue::Float32(3.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+        REQUIRE(reg.Set(pad, CVarValue::Vec2(CVarVec2{ 14.0f, 9.0f }), SetBy::Code, {}, CVarContext::Editor) ==
+                SetResult::Applied);
+        reg.PublishImmediate();
+        // The pin ring is Live: the next draw reads it.
+        CHECK(Editor::GraphPinRingWidth() == 3.0f);
+        // The padding is Restart (spec s3.4, read once at boot): the edit is
+        // published, but the open canvas keeps the boot value...
+        CHECK(Settings<Editor::GraphCanvasSettings>().nodePadding.x == 14.0f);
+        frame(doc);
+        frame(doc);
+        CHECK(padding(doc).x == 10.0f); CHECK(padding(doc).y == 6.0f);
+        CHECK(padding(doc).z == 10.0f); CHECK(padding(doc).w == 6.0f);
+        CHECK(Editor::GraphNodePaddingAtBoot().x == 10.0f); CHECK(Editor::GraphNodePaddingAtBoot().y == 6.0f);
+    }
+    {
+        // ...and so does a canvas opened later in the same session.
+        Editor::ShaderEditorDocument doc(Editor::DocServices{}, "padding2.arcmat", Test::SpriteNodeDoc());
+        frame(doc);
+        REQUIRE(doc.GraphCanvasContext() != nullptr);
+        CHECK(padding(doc).x == 10.0f); CHECK(padding(doc).y == 6.0f);
+    }
+    {
+        // A restart captures the edited value; the canvas it opens uses it.
+        Editor::CaptureGraphNodePaddingAtBoot();
+        Editor::ShaderEditorDocument doc(Editor::DocServices{}, "padding3.arcmat", Test::SpriteNodeDoc());
+        frame(doc);
+        REQUIRE(doc.GraphCanvasContext() != nullptr);
+        CHECK(padding(doc).x == 14.0f); CHECK(padding(doc).y == 9.0f);
+        CHECK(padding(doc).z == 14.0f); CHECK(padding(doc).w == 9.0f);
+    }
 }

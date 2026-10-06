@@ -399,8 +399,10 @@ namespace Arcane::Editor
         // the Graph lens. The padding pair below is NOT shared -- it is exactly
         // what the two canvases disagree about (the Graph lens lays its rows out
         // by hand with zero NodePadding): editor.graph.nodePadding (S6-44).
-        float NodePadX() { return Settings<GraphCanvasSettings>().nodePadding.x; }
-        float NodePadY() { return Settings<GraphCanvasSettings>().nodePadding.y; }
+        // Restart: its BOOT value (GraphNodePaddingAtBoot), never the published
+        // snapshot, so a pending edit leaves an open canvas alone until restart.
+        float NodePadX() { return GraphNodePaddingAtBoot().x; }
+        float NodePadY() { return GraphNodePaddingAtBoot().y; }
         // Breathing room between the BOTTOM EDGE OF THE TITLE BAND and the first
         // body row. Not the same thing as NodePadY(): that one is the band's own
         // internal padding (how far the band extends past the title text), this
@@ -553,7 +555,8 @@ namespace Arcane::Editor
             d.nodeBorder  = GraphThemeColor(&GraphThemeSettings::nodeBorder);
             d.groupBg     = GraphThemeColor(&GraphThemeSettings::groupBg);       // this canvas HAS group (comment) nodes
             d.groupBorder = GraphThemeColor(&GraphThemeSettings::groupBorder);
-            // Content-driven nodes: ImGui measures them, so they need padding.
+            // Content-driven nodes: ImGui measures them, so they need padding
+            // (the boot value: editor.graph.nodePadding is Restart).
             d.nodePadding = ImVec4(NodePadX(), NodePadY(), NodePadX(), NodePadY());
             return d;
         }

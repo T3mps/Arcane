@@ -7,6 +7,7 @@
 
 #include <charconv>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -197,6 +198,27 @@ namespace Arcane::Editor
             }();
             return stops;
         }
+    }
+
+    namespace
+    {
+        // editor.graph.nodePadding's boot value (CaptureGraphNodePaddingAtBoot).
+        // Main thread only, like every other editor UI read.
+        std::optional<CVarVec2> g_nodePaddingAtBoot;
+    }
+
+    void CaptureGraphNodePaddingAtBoot()
+    {
+        g_nodePaddingAtBoot = Settings<GraphCanvasSettings>().nodePadding;
+    }
+
+    CVarVec2 GraphNodePaddingAtBoot()
+    {
+        // A host that never ran the editor's boot (a test opening a shader
+        // document directly) latches the value at the first read instead.
+        if (!g_nodePaddingAtBoot)
+            CaptureGraphNodePaddingAtBoot();
+        return *g_nodePaddingAtBoot;
     }
 
     std::vector<float> ParseZoomLevels(std::string_view text)
