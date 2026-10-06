@@ -5,6 +5,7 @@
 #include "Input/MenuShortcut.hpp"
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT (the console colours)
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
@@ -1246,6 +1247,7 @@ namespace Arcane::Editor
             const Row& row = rows[static_cast<std::size_t>(i)];
             const ConsoleEntry& e = *row.e;
 
+            ARC_CONSTANT("console info grey; unify with editor.theme.text in the axis re-bless task")
             ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
             if (e.level == Arcane::DiagSeverity::Error)        col = Theme::kError;
             else if (e.level == Arcane::DiagSeverity::Warning) col = Theme::kWarning;
@@ -1351,7 +1353,11 @@ namespace Arcane::Editor
             for (std::size_t i = lines.size() - cvarLines; i < lines.size(); ++i)
             {
                 if (lines[i].ok) ImGui::TextUnformatted(lines[i].text.c_str());
-                else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
+                else
+                {
+                    ARC_CONSTANT("console error-detail red; unify with editor.theme.error in the axis re-bless task")
+                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
+                }
             }
         }
         (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::CVarContext::Editor);

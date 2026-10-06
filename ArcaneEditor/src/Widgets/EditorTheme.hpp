@@ -26,11 +26,12 @@
 // the selected tab's overline, Play presence -- node page phase s6.1).
 // Everything else is neutral gray.
 //
-// Domain color-coding is deliberately NOT monochrome and does not live here:
-// the inspector's X/Y/Z axis bars (EditorWidgets.cpp), the shader graph's
-// typed pin dots and node accents (ShaderEditorDocument.cpp), and the amber
-// viewport selection outline (the NRI outline composite's kSelectColor,
-// Render/Nri/nodes/PickOutlineNodes.cpp:101) all keep their hues.
+// Domain color-coding is deliberately NOT monochrome: the X/Y/Z axes, the
+// inspector header bands, the acting-on frame and the colour picker's channel
+// markers keep their hues as palette tokens below (settings S4-3 / S6-26);
+// the input pills, asset kinds and camera frame are editor.theme.* cvars of
+// their own (Settings/EditorThemeSettings.hpp); the shader graph's typed pin
+// dots and node accents live with the graph (ShaderEditorDocument.cpp).
 // UE does the same -- the monochrome rule governs CHROME, not data.
 //
 // All values are DISPLAY-REFERRED: the editor's ImGui pass draws post-tonemap
@@ -88,7 +89,9 @@ namespace Arcane::Editor
             ImVec4 grab, grabActive, check;
             ImVec4 amber, amberLight, error, warning;
             ImVec4 axisX, axisY, axisZ;
-            ImVec4 modalDim, rowStripe;
+            ImVec4 modalDim, rowStripe, actingOnFrame;
+            ImVec4 headerBand, headerBandHovered, headerBandActive;
+            ImVec4 channelR, channelG, channelB, channelW;
         };
 
         // The three tonal layers, the two hues and the data marks described at
@@ -126,6 +129,14 @@ namespace Arcane::Editor
             ImVec4( 58.0f / 255.0f, 122.0f / 255.0f, 196.0f / 255.0f, 1.0f),   // axisZ
             ImVec4(0.02f, 0.02f, 0.02f, 0.55f),      // modalDim      dims toward black, not stock's 0.80 gray
             ImVec4(1.00f, 1.00f, 1.00f, 0.03f),      // rowStripe     a white wash, halved from stock's 0.06
+            ImVec4(0x7a / 255.0f, 0x5a / 255.0f, 0x20 / 255.0f, 1.0f),   // actingOnFrame #7a5a20  the amber pill / card frame border
+            ImVec4(48.0f / 255.0f, 48.0f / 255.0f, 52.0f / 255.0f, 1.0f),   // headerBand        #303034  inspector component headers
+            ImVec4(58.0f / 255.0f, 58.0f / 255.0f, 64.0f / 255.0f, 1.0f),   // headerBandHovered #3a3a40
+            ImVec4(66.0f / 255.0f, 66.0f / 255.0f, 73.0f / 255.0f, 1.0f),   // headerBandActive  #424249
+            ImVec4(240.0f / 255.0f,  20.0f / 255.0f,  20.0f / 255.0f, 1.0f),   // channelR  the colour picker's channel markers
+            ImVec4( 20.0f / 255.0f, 240.0f / 255.0f,  20.0f / 255.0f, 1.0f),   // channelG  (ImGui's GDefaultRgbaColorMarkers)
+            ImVec4( 20.0f / 255.0f,  20.0f / 255.0f, 240.0f / 255.0f, 1.0f),   // channelB
+            ImVec4(140.0f / 255.0f, 140.0f / 255.0f, 140.0f / 255.0f, 1.0f),   // channelW
         };
 
         namespace Detail { inline constinit Palette g_live = kDarkPalette; }
@@ -183,6 +194,19 @@ namespace Arcane::Editor
         inline constexpr const ImVec4& kAxisZ         = Detail::g_live.axisZ;
         inline constexpr const ImVec4& kModalDim      = Detail::g_live.modalDim;
         inline constexpr const ImVec4& kRowStripe     = Detail::g_live.rowStripe;
+        inline constexpr const ImVec4& kActingOnFrame = Detail::g_live.actingOnFrame;
+        inline constexpr const ImVec4& kHeaderBand        = Detail::g_live.headerBand;
+        inline constexpr const ImVec4& kHeaderBandHovered = Detail::g_live.headerBandHovered;
+        inline constexpr const ImVec4& kHeaderBandActive  = Detail::g_live.headerBandActive;
+        inline constexpr const ImVec4& kChannelR      = Detail::g_live.channelR;
+        inline constexpr const ImVec4& kChannelG      = Detail::g_live.channelG;
+        inline constexpr const ImVec4& kChannelB      = Detail::g_live.channelB;
+        inline constexpr const ImVec4& kChannelW      = Detail::g_live.channelW;
+
+        // The unfocused dock's selected-tab overline: the accent at this
+        // alpha. Dark's value and EditorThemeSettings::unfocusedOverlineAlpha's
+        // default (editor.theme.unfocusedOverlineAlpha).
+        inline constexpr float kDarkUnfocusedOverlineAlpha = 0.45f;
 
         // Fully transparent: "draw nothing here". A CONSTANT, not a token (any change is a bug).
         inline constexpr ImVec4 kNone = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
@@ -193,7 +217,7 @@ namespace Arcane::Editor
     // future upstream entry has a sane value the day it appears, then every
     // entry that exists today is overwritten below. Call once at boot, before
     // the first frame, on the context that will use it.
-    inline void ApplyEditorThemeColors(ImGuiStyle& style)
+    inline void ApplyEditorThemeColors(ImGuiStyle& style, float unfocusedOverlineAlpha = Theme::kDarkUnfocusedOverlineAlpha)
     {
         ImGui::StyleColorsDark(&style);
 
@@ -271,7 +295,7 @@ namespace Arcane::Editor
         // Every dock node marks its active tab; an unfocused one at 45%
         // (composite #374758, 1.85:1 on its #191919 tab: quieter than the
         // focused overline, still brighter than the pre-s6.1 focused one).
-        c[ImGuiCol_TabDimmedSelectedOverline] = Theme::WithAlpha(Theme::kAccent, 0.45f);
+        c[ImGuiCol_TabDimmedSelectedOverline] = Theme::WithAlpha(Theme::kAccent, unfocusedOverlineAlpha);
 
         c[ImGuiCol_DockingPreview]         = Theme::WithAlpha(Theme::kSelection, 0.70f);
         c[ImGuiCol_DockingEmptyBg]         = Theme::kWell;                  // an empty node reads as a void

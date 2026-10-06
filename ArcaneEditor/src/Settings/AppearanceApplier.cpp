@@ -27,7 +27,7 @@ namespace Arcane::Editor
         if (SameThemeSettings(theme, m_appliedTheme))
             return false;
         Theme::SetLivePalette(ToPalette(theme));
-        ApplyEditorThemeColors(style);
+        ApplyEditorThemeColors(style, theme.unfocusedOverlineAlpha);
         m_appliedTheme = theme;
         ++m_themeApplies;
         return true;

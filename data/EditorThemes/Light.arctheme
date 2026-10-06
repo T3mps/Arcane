@@ -34,6 +34,14 @@
     "editor.theme.axisY": "#4f8f2eff",
     "editor.theme.axisZ": "#2f6db5ff",
     "editor.theme.modalDim": "#00000059",
-    "editor.theme.rowStripe": "#00000008"
+    "editor.theme.rowStripe": "#00000008",
+    "editor.theme.actingOnFrame": "#b07a2aff",
+    "editor.theme.headerBand": "#d4d4d4ff",
+    "editor.theme.headerBandHovered": "#c6c6c6ff",
+    "editor.theme.headerBandActive": "#b8b8b8ff",
+    "editor.theme.channelR": "#f01414ff",
+    "editor.theme.channelG": "#14f014ff",
+    "editor.theme.channelB": "#1414f0ff",
+    "editor.theme.channelW": "#8c8c8cff"
   }
 }

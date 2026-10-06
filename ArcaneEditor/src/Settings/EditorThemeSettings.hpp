@@ -12,11 +12,19 @@
 #include <Arcane/Config/CVarTypes.hpp>
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace Arcane::Editor
 {
+    enum class AssetKind : int;   // Panels/AssetPanelModel.hpp
+
+    [[nodiscard]] float SrgbToLinear(float c) noexcept;
+    [[nodiscard]] float LinearToSrgb(float c) noexcept;
+    [[nodiscard]] Arcane::CVarColor ToSettingColor(const ImVec4& display) noexcept;   // display sRGB -> stored linear
+    [[nodiscard]] ImVec4 ToDisplayColor(const Arcane::CVarColor& linear) noexcept;     // stored linear -> display sRGB
+
     struct EditorThemeSettings
     {
         Arcane::CVarColor chromeDeep    { 0.0036714235f, 0.0036714235f, 0.0036714235f, 1.0f };
@@ -51,6 +59,19 @@ namespace Arcane::Editor
         Arcane::CVarColor axisZ         { 0.0423114114f, 0.1946178377f, 0.5520114303f, 1.0f };
         Arcane::CVarColor modalDim      { 0.0015479876f, 0.0015479876f, 0.0015479876f, 0.55f };
         Arcane::CVarColor rowStripe     { 1.0f, 1.0f, 1.0f, 0.03f };
+        // S6-26: the domain palettes. Written from the Dark palette's display
+        // bytes, so the default IS kDarkPalette's value (ToPalette keeps the
+        // constant itself while a value equals its default).
+        Arcane::CVarColor actingOnFrame     = ToSettingColor(Theme::kDarkPalette.actingOnFrame);
+        Arcane::CVarColor headerBand        = ToSettingColor(Theme::kDarkPalette.headerBand);
+        Arcane::CVarColor headerBandHovered = ToSettingColor(Theme::kDarkPalette.headerBandHovered);
+        Arcane::CVarColor headerBandActive  = ToSettingColor(Theme::kDarkPalette.headerBandActive);
+        Arcane::CVarColor channelR          = ToSettingColor(Theme::kDarkPalette.channelR);
+        Arcane::CVarColor channelG          = ToSettingColor(Theme::kDarkPalette.channelG);
+        Arcane::CVarColor channelB          = ToSettingColor(Theme::kDarkPalette.channelB);
+        Arcane::CVarColor channelW          = ToSettingColor(Theme::kDarkPalette.channelW);
+        // Not a colour, so not a ThemeToken: ApplyEditorThemeColors' argument.
+        float unfocusedOverlineAlpha = Theme::kDarkUnfocusedOverlineAlpha;
     };
 
     struct ThemeToken
@@ -63,7 +84,7 @@ namespace Arcane::Editor
     };
 
     // Field order == Palette order == EditorThemeSettings order.
-    inline constexpr std::array<ThemeToken, 32> kThemeTokens = { {
+    inline constexpr std::array<ThemeToken, 40> kThemeTokens = { {
         { "chromeDeep",    "Chrome (deep)",       "Chrome",              &EditorThemeSettings::chromeDeep,    &Theme::Palette::chromeDeep },
         { "chrome",        "Chrome",              "Chrome",              &EditorThemeSettings::chrome,        &Theme::Palette::chrome },
         { "panel",         "Panel",               "Panels",              &EditorThemeSettings::panel,         &Theme::Palette::panel },
@@ -96,6 +117,14 @@ namespace Arcane::Editor
         { "axisZ",         "Z axis",              "Axes",                &EditorThemeSettings::axisZ,         &Theme::Palette::axisZ },
         { "modalDim",      "Modal dim",           "Overlays",            &EditorThemeSettings::modalDim,      &Theme::Palette::modalDim },
         { "rowStripe",     "Row stripe",          "Overlays",            &EditorThemeSettings::rowStripe,     &Theme::Palette::rowStripe },
+        { "actingOnFrame", "Acting-on frame",     "Overlays",            &EditorThemeSettings::actingOnFrame, &Theme::Palette::actingOnFrame },
+        { "headerBand",        "Header band",           "Header bands", &EditorThemeSettings::headerBand,        &Theme::Palette::headerBand },
+        { "headerBandHovered", "Header band (hovered)", "Header bands", &EditorThemeSettings::headerBandHovered, &Theme::Palette::headerBandHovered },
+        { "headerBandActive",  "Header band (pressed)", "Header bands", &EditorThemeSettings::headerBandActive,  &Theme::Palette::headerBandActive },
+        { "channelR",      "Red channel",         "Channel markers",     &EditorThemeSettings::channelR,      &Theme::Palette::channelR },
+        { "channelG",      "Green channel",       "Channel markers",     &EditorThemeSettings::channelG,      &Theme::Palette::channelG },
+        { "channelB",      "Blue channel",        "Channel markers",     &EditorThemeSettings::channelB,      &Theme::Palette::channelB },
+        { "channelW",      "Alpha channel",       "Channel markers",     &EditorThemeSettings::channelW,      &Theme::Palette::channelW },
     } };
 
     // A text/background pair the theme page measures (Theme::ContrastRatio,
@@ -127,11 +156,61 @@ namespace Arcane::Editor
         { "Grab on field",          &Theme::Palette::grab,    &Theme::Palette::well,        3.0f },
     } };
 
-    [[nodiscard]] float SrgbToLinear(float c) noexcept;
-    [[nodiscard]] float LinearToSrgb(float c) noexcept;
-    [[nodiscard]] Arcane::CVarColor ToSettingColor(const ImVec4& display) noexcept;   // display sRGB -> stored linear
-    [[nodiscard]] ImVec4 ToDisplayColor(const Arcane::CVarColor& linear) noexcept;     // stored linear -> display sRGB
     [[nodiscard]] Theme::Palette ToPalette(const EditorThemeSettings& s);
     [[nodiscard]] bool SameThemeSettings(const EditorThemeSettings& a, const EditorThemeSettings& b) noexcept;
     [[nodiscard]] std::string ThemeCvarName(std::string_view field);                   // "editor.theme." + field
+
+    // ---- The domain palettes outside the Palette (settings S6-26) ----------
+    // Category editor.theme.<domain>: a cvar each, Preferences > Appearance >
+    // Domain colours. Not theme-preset tokens: like the axes they are data
+    // hues, so a preset leaves them as they are. Each kX constant is today's
+    // DISPLAY value and the struct default is written from it.
+    inline constexpr ImVec4 kInputPillBlueBorder   = ImVec4(0x3a / 255.0f, 0x4a / 255.0f, 0x5c / 255.0f, 1.0f);
+    inline constexpr ImVec4 kInputPillBlueText     = ImVec4(0x9f / 255.0f, 0xb3 / 255.0f, 0xc8 / 255.0f, 1.0f);
+    inline constexpr ImVec4 kInputPillVioletBorder = ImVec4(0x4a / 255.0f, 0x3a / 255.0f, 0x5c / 255.0f, 1.0f);
+    inline constexpr ImVec4 kInputPillVioletText   = ImVec4(0xb8 / 255.0f, 0xa3 / 255.0f, 0xc8 / 255.0f, 1.0f);
+    // The viewport's camera-bounds frame: a thin desaturated line legible over
+    // bright and dark scene content (drawn by the scene batcher).
+    inline constexpr ImVec4 kCameraFrameColor      = ImVec4(0.45f, 0.62f, 0.78f, 0.75f);
+
+    // The input editor's per-scheme binding pills (input editor spec s2.3):
+    // blue-grey = the KeyboardMouse scheme, violet-grey = every other scheme.
+    struct EditorThemeInputPillSettings
+    {
+        Arcane::CVarColor blueBorder   = ToSettingColor(kInputPillBlueBorder);
+        Arcane::CVarColor blueText     = ToSettingColor(kInputPillBlueText);
+        Arcane::CVarColor violetBorder = ToSettingColor(kInputPillVioletBorder);
+        Arcane::CVarColor violetText   = ToSettingColor(kInputPillVioletText);
+    };
+
+    // The asset graph's per-kind node accents (asset-manager spec s11.3); the
+    // defaults are KindAccentRgb(kind)'s table.
+    struct EditorThemeAssetKindSettings
+    {
+        Arcane::CVarColor texture;
+        Arcane::CVarColor material;
+        Arcane::CVarColor mesh;
+        Arcane::CVarColor sprite;
+        Arcane::CVarColor scene;
+        Arcane::CVarColor inputActions;
+        Arcane::CVarColor model;
+        EditorThemeAssetKindSettings();
+    };
+
+    // editor.theme.viewport.* (the frozen name editor.theme.viewport.cameraFrame).
+    struct EditorThemeViewportSettings
+    {
+        Arcane::CVarColor cameraFrame = ToSettingColor(kCameraFrameColor);
+    };
+
+    // A domain colour to draw: `legacy` itself while the setting equals its
+    // default (bit for bit, so the default never passes through pow()), else
+    // the setting's display value.
+    [[nodiscard]] ImVec4 ResolveDomainColor(const Arcane::CVarColor& value, const Arcane::CVarColor& defaultValue,
+                                            const ImVec4& legacy) noexcept;
+
+    // The asset kind's accent as 0xRRGGBB under `s`; 0 = the kind has no row
+    // (the caller falls back to the theme's grab gray). A user colour that
+    // encodes to pure black also reads as 0 and therefore falls back.
+    [[nodiscard]] std::uint32_t KindAccentRgb(AssetKind kind, const EditorThemeAssetKindSettings& s) noexcept;
 }

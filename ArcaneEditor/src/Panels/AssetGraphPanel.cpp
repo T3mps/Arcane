@@ -8,6 +8,7 @@
 #include "Widgets/CanvasPopupScope.hpp"    // ed::Suspend/Resume around the Graph canvas's node menu
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Settings/EditorThemeSettings.hpp"   // editor.theme.assetKind.*
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
@@ -20,6 +21,7 @@
 #include "Widgets/IconsLucide.h"
 #include "Widgets/UiMetrics.hpp"           // Ui::FontPx -- the canvas font sizes follow editor.ui.fontSize
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>
@@ -544,7 +546,7 @@ namespace Arcane::Editor
         // overflowed from (AssetGraphViewModel.hpp's own field comment).
         ImVec4 KindAccentColor(AssetKind kind) noexcept
         {
-            const std::uint32_t rgb = KindAccentRgb(kind);
+            const std::uint32_t rgb = KindAccentRgb(kind, Arcane::Settings<EditorThemeAssetKindSettings>());
             if (rgb == 0)
                 return Theme::kGrab;   // #9a9a9a -- no row, so no invented hue
             const float s = 1.0f / 255.0f;

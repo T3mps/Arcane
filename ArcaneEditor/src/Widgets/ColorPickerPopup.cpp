@@ -1,5 +1,6 @@
 #include "Widgets/ColorPickerPopup.hpp"
 
+#include "Widgets/EditorTheme.hpp"     // Theme::kChannelR/G/B/W (the channel markers)
 #include "Widgets/EditorWidgets.hpp"   // SrgbToLinear / LinearToSrgb
 
 #include <imgui_internal.h>   // SetNextItemColorMarker, MarkItemEdited, LastItemData (the narrow boxes)
@@ -43,8 +44,9 @@ namespace Arcane::Editor
         bool NarrowColorBoxes(const char* id, float linear[4], float width, bool hdr, const char* format)
         {
             static const char* kIds[4] = { "##X", "##Y", "##Z", "##W" };
-            static const ImU32 kMarkers[4] = { IM_COL32(240, 20, 20, 255), IM_COL32(20, 240, 20, 255),
-                                               IM_COL32(20, 20, 240, 255), IM_COL32(140, 140, 140, 255) };   // GDefaultRgbaColorMarkers
+            // editor.theme.channelR/G/B/W (settings S6-26); Dark = ImGui's GDefaultRgbaColorMarkers.
+            const ImU32 kMarkers[4] = { ImGui::ColorConvertFloat4ToU32(Theme::kChannelR), ImGui::ColorConvertFloat4ToU32(Theme::kChannelG),
+                                        ImGui::ColorConvertFloat4ToU32(Theme::kChannelB), ImGui::ColorConvertFloat4ToU32(Theme::kChannelW) };
             if (ImGui::GetCurrentWindowRead()->SkipItems)   // ColorEdit4's own guard
                 return false;
             ImGuiContext& g = *ImGui::GetCurrentContext();

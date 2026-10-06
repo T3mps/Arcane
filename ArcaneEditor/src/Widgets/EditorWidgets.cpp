@@ -1,9 +1,12 @@
 #include "Widgets/EditorWidgets.hpp"
 
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorThemeSettings.hpp"   // the input-pill domain palette
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
 #include "Widgets/UiMetrics.hpp"     // Ui::Px / FontPx -- the hard pixel sizes follow editor.ui.*
+
+#include <Arcane/Config/Settings.hpp>   // Settings<EditorThemeInputPillSettings>()
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiTable + ImGuiTableColumn + TableSetColumnWidth
@@ -257,9 +260,8 @@ namespace Arcane::Editor
         // lightness so the row still visibly responds to input. They sit ABOVE
         // the theme's panel tone (#1e1e1e, EditorTheme.hpp kPanel), so the band
         // still reads as raised against the body it heads.
-        constexpr ImU32 kHeaderBandColor        = IM_COL32(48, 48, 52, 255);
-        constexpr ImU32 kHeaderBandHoveredColor = IM_COL32(58, 58, 64, 255);
-        constexpr ImU32 kHeaderBandActiveColor  = IM_COL32(66, 66, 73, 255);
+        // The triple is the editor.theme.headerBand* tokens (settings S6-26;
+        // Dark = #303034 / #3a3a40 / #424249).
 
         // Push/pop as a matched pair so every call site pushes and pops the
         // same 3 colors, rather than trusting three inline pushes (and three
@@ -273,9 +275,9 @@ namespace Arcane::Editor
         // HeaderBand is the only public form, so the pair cannot be split.
         void PushHeaderBandColors()
         {
-            ImGui::PushStyleColor(ImGuiCol_Header, kHeaderBandColor);
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kHeaderBandHoveredColor);
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, kHeaderBandActiveColor);
+            ImGui::PushStyleColor(ImGuiCol_Header, Theme::kHeaderBand);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Theme::kHeaderBandHovered);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, Theme::kHeaderBandActive);
         }
 
         void PopHeaderBandColors()
@@ -295,25 +297,21 @@ namespace Arcane::Editor
         // it has an out-of-file consumer (see its doc comment there). The
         // neutral border IS a theme token already -- kSeparator is
         // EditorTheme.hpp's own #333333, used today for table borders -- but
-        // the amber variant's #7a5a20 has no token of its own, so it is
-        // hardcoded here for the same reason kHeaderBandColor
-        // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
-        // oversight.
-        //
-        // SECOND CONSUMER (Plan 2, Task 6): BeginCardFrame's variant 1 --
-        // "the muted-amber acting-on frame" -- reuses this SAME constant for
-        // its border, same TU, no new token. AssetPill and CardFrame are
-        // therefore the two places in the codebase that draw the #7a5a20
-        // acting-on frame; if a third ever needs it, promote it to
-        // EditorTheme.hpp instead of a third hardcode.
-        constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
+        // the amber variant's #7a5a20 is the editor.theme.actingOnFrame token
+        // (settings S6-26). Its two consumers are AssetPill's variant 1 and
+        // BeginCardFrame's variant 1 -- "the muted-amber acting-on frame".
+        // Drawn as a raw ImU32 (no style-alpha modulation), as before.
+        ImU32 ActingOnFrameU32() { return ImGui::ColorConvertFloat4ToU32(Theme::kActingOnFrame); }
+
         // The input editor's per-scheme binding pills (input editor spec s2.3):
         // variant 2 = blue-grey (the KeyboardMouse scheme), 3 = violet-grey
-        // (every other scheme). Spec-pinned hexes with no chrome-ramp token.
-        constexpr ImU32 kPillSchemeBlueBorder   = IM_COL32(0x3a, 0x4a, 0x5c, 255);
-        constexpr ImU32 kPillSchemeBlueText     = IM_COL32(0x9f, 0xb3, 0xc8, 255);
-        constexpr ImU32 kPillSchemeVioletBorder = IM_COL32(0x4a, 0x3a, 0x5c, 255);
-        constexpr ImU32 kPillSchemeVioletText   = IM_COL32(0xb8, 0xa3, 0xc8, 255);
+        // (every other scheme): editor.theme.inputPill.* (settings S6-26).
+        ImU32 InputPillU32(Arcane::CVarColor EditorThemeInputPillSettings::* field, const ImVec4& legacy)
+        {
+            static const EditorThemeInputPillSettings kDefaults{};
+            return ImGui::ColorConvertFloat4ToU32(
+                ResolveDomainColor(Arcane::Settings<EditorThemeInputPillSettings>().*field, kDefaults.*field, legacy));
+        }
 
         // ---------------------------------------------------------------------
         // Status lens vocabulary (Plan 2, asset-manager-redesign-design.md
@@ -720,7 +718,7 @@ namespace Arcane::Editor
     // spec §11.2 pins) and Theme::kGrab for its text (the spec's #9a9a9a --
     // "TextDisabled-ish" in name only; kTextDim is a different gray, #737373,
     // so kGrab is the token that actually matches). variant 1 is the amber
-    // attention pill: kPillAmberBorder (no token exists for #7a5a20) and
+    // attention pill: the editor.theme.actingOnFrame token (#7a5a20) and
     // Theme::kAmber, whose own value already IS the spec's #ffa61a.
     void AssetPill(const char* text, int variant)
     {
@@ -738,9 +736,15 @@ namespace Arcane::Editor
         ImU32 textColor   = ImGui::GetColorU32(Theme::kGrab);
         switch (variant)
         {
-        case 1: borderColor = kPillAmberBorder;        textColor = ImGui::GetColorU32(Theme::kAmber); break;
-        case 2: borderColor = kPillSchemeBlueBorder;   textColor = kPillSchemeBlueText;               break;
-        case 3: borderColor = kPillSchemeVioletBorder; textColor = kPillSchemeVioletText;             break;
+        case 1: borderColor = ActingOnFrameU32(); textColor = ImGui::GetColorU32(Theme::kAmber); break;
+        case 2:
+            borderColor = InputPillU32(&EditorThemeInputPillSettings::blueBorder, kInputPillBlueBorder);
+            textColor   = InputPillU32(&EditorThemeInputPillSettings::blueText, kInputPillBlueText);
+            break;
+        case 3:
+            borderColor = InputPillU32(&EditorThemeInputPillSettings::violetBorder, kInputPillVioletBorder);
+            textColor   = InputPillU32(&EditorThemeInputPillSettings::violetText, kInputPillVioletText);
+            break;
         default: break;
         }
 
@@ -1082,7 +1086,7 @@ namespace Arcane::Editor
         // Merge() below flattens 0-then-1, so this fill+border sits behind
         // the caller's content despite being drawn chronologically after it.
         st.splitter.SetCurrentChannel(st.drawList, 0);
-        const ImU32 borderColor = (st.variant == 1) ? kPillAmberBorder
+        const ImU32 borderColor = (st.variant == 1) ? ActingOnFrameU32()
                                                     : ImGui::GetColorU32(Theme::kSeparator);
         st.drawList->AddRectFilled(frameMin, frameMax, ImGui::GetColorU32(Theme::kChrome));
         st.drawList->AddRect(frameMin, frameMax, borderColor);

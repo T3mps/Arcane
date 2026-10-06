@@ -24,6 +24,7 @@
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
+#include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
 #include "Settings/LayoutPage.hpp"
@@ -1899,7 +1900,11 @@ namespace Arcane::Editor
                     // dark scene content without competing with the selection
                     // outline or the gizmo axes. (Dashed would read better still,
                     // but the batcher has no dash primitive.)
-                    const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                    // editor.theme.viewport.cameraFrame (settings S6-26).
+                    static const EditorThemeViewportSettings kVpDefaults{};
+                    const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
+                                                            kVpDefaults.cameraFrame, kCameraFrameColor);
+                    const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
                     for (int i = 0; i < 4; ++i)
                         b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
                 }

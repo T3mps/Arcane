@@ -8,6 +8,7 @@
 #include "Widgets/IconsLucide.h"
 
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 
 #include <string>
 
@@ -39,6 +40,33 @@ namespace Arcane::Editor
             return true;
         }
 
+        // editor.theme.unfocusedOverlineAlpha: the page's one non-colour
+        // setting (S6-26), saved the same way as a swatch edit.
+        void DrawOverlineAlpha(const Arcane::CVarRegistry& reg)
+        {
+            const std::string name = ThemeCvarName("unfocusedOverlineAlpha");
+            float a = Arcane::Settings<EditorThemeSettings>().unfocusedOverlineAlpha;
+            ImGui::SeparatorText("Tabs");
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
+            if (ImGui::SliderFloat("Unfocused tab overline opacity", &a, 0.0f, 1.0f, "%.2f"))
+            {
+                Arcane::CVarRegistry& mut = Arcane::CVarRegistry::Get();
+                const Arcane::CVarHandle h = mut.Find(name);
+                if (!h.IsStale()
+                    && mut.Set(h, Arcane::CVarValue::Float32(a), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor)
+                           == Arcane::SetResult::Applied)
+                {
+                    mut.Publish();
+                    NoteSettingEdited(Arcane::SetBy::EditorUser, name);
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                const auto info = reg.Explain(name);
+                ImGui::SetTooltip("%s\n%s", info ? info->help.c_str() : "", name.c_str());
+            }
+        }
+
         void DrawSwatches()
         {
             std::string_view group;
@@ -65,6 +93,7 @@ namespace Arcane::Editor
                 }
                 ImGui::PopID();
             }
+            DrawOverlineAlpha(reg);
         }
 
         void DrawPreview(ThemePageState& st)
