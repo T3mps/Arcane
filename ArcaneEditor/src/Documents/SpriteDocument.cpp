@@ -1,6 +1,7 @@
 #include "Documents/SpriteDocument.hpp"
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
+#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData)
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop, the Whole texture untick)
@@ -270,6 +271,16 @@ namespace Arcane::Editor
         data.sourcePos = { 0.0f, 0.0f };
         data.sourceSize = { static_cast<float>(texW), static_cast<float>(texH) };
         return true;
+    }
+
+    Arcane::SpriteAssetData SpriteDocument::NewSpriteData(const Arcane::Guid& texture, std::string name)
+    {
+        Arcane::SpriteAssetData data;
+        data.id      = Arcane::Guid::Generate();
+        data.name    = std::move(name);
+        data.texture = texture;
+        data.ppu     = Arcane::Settings<AssetsSpriteSettings>().defaultPixelsPerUnit;
+        return data;
     }
 
     AssetRefArgs SpriteDocument::TextureRefArgs(const Arcane::SpriteAssetData& data)

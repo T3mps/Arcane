@@ -1454,7 +1454,7 @@ namespace Arcane::Editor
             // in this branch at all are ones ResolveArtifact already found
             // Missing, and the highest-frequency one, NriTextureCache's own
             // PendingCook re-poll, already throttles ITS OWN calls into this
-            // facade via kPendingCookRepollInterval, so this exists() rides
+            // facade via assets.cook.pendingRepollInterval, so this exists() rides
             // an already-throttled ask, not a hot per-frame one). A deleted/
             // renamed source answers false here even while the queue is mid-
             // pass, which is exactly the fix: that guid refuses LOUDLY again,

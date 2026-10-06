@@ -250,7 +250,9 @@ namespace Arcane
             loopCfg.fixedHz = Settings<SimSettings>().fixedHz;
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
-            assets = Assets::Create();
+            // assets.cache.byteBudget (Restart): read once, here, after the
+            // early config rungs.
+            assets = Assets::Create(AssetsDesc{ .byteBudget = Settings<AssetsCacheSettings>().byteBudget });
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.

@@ -24,6 +24,8 @@
 
 #undef ERROR
 
+#include <Arcane/Render/Nri/AssetsCookSettings.hpp>   // assets.cook.pendingRepollInterval (the PendingCook throttle)
+
 #include <string>
 
 namespace Arcane
@@ -201,13 +203,14 @@ namespace Arcane
             // on-screen span, so polling on EVERY ask drove a fresh
             // Assets::ArtifactFor call -- and, downstream, a full
             // Intermediate/Artifacts/** rescan -- every single frame for
-            // every still-uncooked texture. Absorb kPendingCookRepollInterval
-            // asks between polls; see that constant's own comment for the
-            // cost/promptness tradeoff.
+            // every still-uncooked texture. Absorb
+            // assets.cook.pendingRepollInterval asks between polls (read
+            // live, here); AssetsCookSettings.hpp has the cost/promptness
+            // tradeoff.
             if (cached->second.state == ResidentState::PendingCook)
             {
                 if (m_artifactSupply &&
-                    ++cached->second.pendingAsksSincePoll >= kPendingCookRepollInterval)
+                    ++cached->second.pendingAsksSincePoll >= Settings<AssetsCookSettings>().pendingRepollInterval)
                 {
                     cached->second.pendingAsksSincePoll = 0;
                     return ResolveArtifactKey(key, cached->second);

@@ -122,7 +122,6 @@ ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kMaxColorAttachments|CON
 ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
 ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.cpp|kSize|PENDING|inventory:735 SETTING
-ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.hpp|kPendingCookRepollInterval|PENDING|inventory:734 SETTING
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.cpp|kNoTransient|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kGenerationBits|CONSTANT|Handle encoding
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kGenerationMask|CONSTANT|Handle encoding

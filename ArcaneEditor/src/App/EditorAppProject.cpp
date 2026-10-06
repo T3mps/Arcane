@@ -24,6 +24,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Settings/SettingsHost.hpp"
+#include "Documents/SpriteDocument.hpp"   // SpriteDocument::NewSpriteData (MintOrReuseSpriteForTexture)
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // Assets -> Create -> C++ Class (MintCppClass)
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
@@ -1384,10 +1385,7 @@ namespace Arcane::Editor
                           (texPath->stem().string() + "-" + std::to_string(i) + ".arcsprite");
         }
 
-        Arcane::SpriteAssetData data;
-        data.id      = Arcane::Guid::Generate();
-        data.name    = mintPath.stem().string();
-        data.texture = textureGuid;
+        const Arcane::SpriteAssetData data = SpriteDocument::NewSpriteData(textureGuid, mintPath.stem().string());
         if (!Arcane::SaveSpriteAsset(mintPath, data))
         {
             ARC_WARN("Arcane Editor: could not mint a sprite at '{}'", mintPath.generic_string());

@@ -8,6 +8,7 @@
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Assets/ArtifactReader.hpp>   // TextureInfo -- TextureInfoFor's payload
+#include <Arcane/Assets/AssetsSettings.hpp>   // AssetsCacheSettings -- AssetsDesc's default
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface -- MaterialSurfaceFor's payload
 #include <Arcane/Project/AssetId.hpp>
@@ -65,10 +66,11 @@ namespace Arcane
         // larger than the whole budget is served to the caller but swept
         // right back out (never cached). Memoized failures cost ~0 bytes and
         // are never evicted by the sweep. 0 disables eviction (unbounded,
-        // the legacy contract). Default: 256 MiB -- roughly 16 uncompressed
-        // 2048^2 RGBA atlases, generous for the 2D engine while still
-        // bounding growth.
-        uint64_t byteBudget = 256ull * 1024 * 1024;
+        // the legacy contract). Default: assets.cache.byteBudget's (256 MiB
+        // -- roughly 16 uncompressed 2048^2 RGBA atlases, generous for the
+        // 2D engine while still bounding growth); a Runtime passes the
+        // published setting.
+        uint64_t byteBudget = AssetsCacheSettings{}.byteBudget;
     };
 
     // THE FACADE IS DEVICE-FREE. It owns no render device, uploads nothing,
@@ -260,7 +262,7 @@ namespace Arcane
         // scratch and picks up the fresh artifact on its own. (On the render
         // path this is cheap in practice because NriTextureCache::
         // ResolveArtifactKey's own PendingCook branch throttles how often IT
-        // re-asks this facade -- see kPendingCookRepollInterval's comment; a
+        // re-asks this facade -- see assets.cook.pendingRepollInterval; a
         // caller that asks every frame with no throttle of its own pays for a
         // fresh ResolveArtifact scan every time it is still pending, the same
         // cost class InvalidateArtifact's promotion path already accepts.)
