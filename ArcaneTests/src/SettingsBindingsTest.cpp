@@ -7,13 +7,20 @@
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
 #include <Arcane/Config/Bindings/JobsBinding.hpp>
 #include <Arcane/Config/Bindings/Physics2DBinding.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
+#include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SimSettings.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <system_error>
 
 using namespace Arcane;
 
@@ -230,7 +237,7 @@ TEST_CASE("SimSettings: today's 60 Hz step and 0.25 s frame clamp; sim.fixedHz i
     CHECK(before.Loop().FixedHz() == 60.0);                     // NextWorld: a live Runtime keeps its step
 }
 
-TEST_CASE("ResolveWorkerThreads: 0 is enkiTS' hardware default and N is N; a Runtime reads jobs.workerThreads when it is built", "[settings]")
+TEST_CASE("ResolveWorkerThreads: 0 is enkiTS' hardware default and N is N; a Runtime reads a published Code-rung jobs.workerThreads", "[settings]")
 {
     CHECK(JobsSettings{}.workerThreads == 0u);
     {
@@ -256,5 +263,40 @@ TEST_CASE("ResolveWorkerThreads: 0 is enkiTS' hardware default and N is N; a Run
     JobSystem one(1);
     Runtime serial(Test::Process());
     CHECK(serial.Jobs().WorkerCount() == one.WorkerCount());
+}
+
+TEST_CASE("ApplyEarlyConfigRungs: jobs.workerThreads in <project>/Config/jobs.json sizes the first Runtime",
+          "[project][settings]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_s2_10_jobs_json";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Config", ec);
+    std::ofstream(dir / "P.arcproj", std::ios::binary) <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":5},"gameModule":"","plugins":[],"bootScene":""})";
+    std::ofstream(dir / "Config" / "jobs.json", std::ios::binary) << R"({ "workerThreads": 1 })";
+
+    struct RestoreProjectRungs
+    {
+        ~RestoreProjectRungs()
+        {
+            CVarRegistry& r = CVarRegistry::Get();
+            r.RevertLayer(SetBy::Project);
+            r.RevertLayer(SetBy::User);
+            r.RevertLayer(SetBy::EditorUser);
+            r.RevertLayer(SetBy::CommandLine);
+            r.Publish();
+        }
+    } restore;
+
+    HostConfig cfg;
+    cfg.projectPath = dir.string();
+    HostBoot::ApplyEarlyConfigRungs(cfg, CommandLineCVarContext(), /*editor*/ false);
+
+    JobSystem one(1);
+    Runtime serial(Test::Process());
+    CHECK(serial.Jobs().WorkerCount() == one.WorkerCount());
+    fs::remove_all(dir, ec);
 }
 

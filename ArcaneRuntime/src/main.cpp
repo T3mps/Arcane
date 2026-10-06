@@ -6,7 +6,9 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
 #include "RuntimeApp.hpp"
@@ -77,6 +79,9 @@ int main(int argc, char** argv)
     // watchdog is a raw thread stopped from an atexit hook Install registers,
     // so an early `return` is clean and the boot itself is finally covered.
     // AFTER the Log::Init/Mosaic trio above, which is still load-bearing (R16).
+    // I2: engine/project/EditorUser/user/--set rungs before Install and Runtime.
+    Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CommandLineCVarContext(),
+                                            /*editor*/ false);
     {
         Arcane::Diagnostics::Config diag;
         diag.appName     = "ArcaneRuntime";

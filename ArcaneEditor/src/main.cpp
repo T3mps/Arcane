@@ -8,7 +8,9 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
+#include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
@@ -374,6 +376,9 @@ int main(int argc, char** argv)
     // order IS still load-bearing (R16): Install attaches the log file sink
     // and the crash path freezes the log backlog, neither of which exists
     // before Log::Init runs.
+    // I2: engine/project/EditorUser/user/--set rungs before Install and Runtime.
+    Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CVarContext::Editor,
+                                            /*editor*/ true);
     {
         Arcane::Diagnostics::Config diag;
         diag.appName     = "ArcaneEditor";
