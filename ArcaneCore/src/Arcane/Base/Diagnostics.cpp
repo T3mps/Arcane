@@ -940,13 +940,19 @@ namespace
         mei.ExceptionPointers = ep;
         mei.ClientPointers    = FALSE;
 
-        // Not WithFullMemory: for a wedged GPU host that is hundreds of MB and
-        // takes long enough that the user gives up. This set keeps every
-        // thread's stack, the handle table (which lock is held -- the question a
-        // deadlock actually asks), and memory the stacks point at.
-        const auto type = static_cast<MINIDUMP_TYPE>(
+        // MinidumpKind::Default (diagnostics.minidumpKind): not WithFullMemory,
+        // which for a wedged GPU host is hundreds of MB and takes long enough
+        // that the user gives up. This set keeps every thread's stack, the
+        // handle table (which lock is held -- the question a deadlock actually
+        // asks), and memory the stacks point at. Full is the opt-in for deep
+        // debugging; Small is MiniDumpNormal.
+        MINIDUMP_TYPE type = static_cast<MINIDUMP_TYPE>(
             MiniDumpWithThreadInfo | MiniDumpWithHandleData |
             MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory);
+        if (g_cfg.minidumpKind == MinidumpKind::Small)
+            type = MiniDumpNormal;
+        else if (g_cfg.minidumpKind == MinidumpKind::Full)
+            type = static_cast<MINIDUMP_TYPE>(type | MiniDumpWithFullMemory | MiniDumpWithFullMemoryInfo);
 
         const BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
                                           type, ep ? &mei : nullptr, nullptr, nullptr);
@@ -1326,7 +1332,7 @@ namespace
             // faulting thread may have died holding spdlog's mutex), and the
             // hand-off.
             DumpBacklog(logTxtPath);
-            Log::FlushFileSinkBounded(2000);
+            Log::FlushFileSinkBounded(g_cfg.logFlushTimeoutMs);
             spawnOk = SpawnReporter(stem, kind, IsHangProtocolReport(kind, p.exitCode));
         }
 
@@ -2017,7 +2023,7 @@ namespace
 
         while (!g_watchdogStop.load(std::memory_order_acquire))
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::this_thread::sleep_for(std::chrono::milliseconds(g_cfg.watchdogPollMs));
 
 #if defined(_WIN32)
             // A breakpoint stops the main thread by design -- and with it every
@@ -2122,14 +2128,15 @@ namespace
         if (g_watchdogThread)
         {
             // BOUNDED, unlike the old join. The loop observes the stop flag
-            // within its 250 ms poll -- the same latency the join had -- but a
-            // watchdog that is mid-report may be parked on the crash thread
-            // for as long as crashHandlingTimeoutSeconds, and a teardown that
-            // blocks on that is a second hang nobody asked for. Five seconds
-            // covers a report that is actually writing. Past it the thread is
+            // within its poll (watchdogPollMs) -- the same latency the join had
+            // -- but a watchdog that is mid-report may be parked on the crash
+            // thread for as long as crashHandlingTimeoutSeconds, and a teardown
+            // that blocks on that is a second hang nobody asked for.
+            // watchdogJoinTimeoutMs (5 s by default) covers a report that is
+            // actually writing. Past it the thread is
             // ORPHANED, not abandoned: the handle moves to g_watchdogOrphan and
             // StartWatchdog refuses to run a second watchdog until it is gone.
-            if (WaitForSingleObject(g_watchdogThread, 5000) == WAIT_OBJECT_0)
+            if (WaitForSingleObject(g_watchdogThread, g_cfg.watchdogJoinTimeoutMs) == WAIT_OBJECT_0)
             {
                 CloseHandle(g_watchdogThread);
             }
@@ -2549,6 +2556,26 @@ const char* FormatReason(const char* fmt, ...) noexcept
     va_end(args);
     t_reason[sizeof(t_reason) - 1] = '\0';   // NUL even on a truncated write
     return t_reason;
+}
+
+Config ConfigFromSettings(const DiagnosticsSettings& s)
+{
+    Config c;
+    c.dumpDir                     = s.dumpDir;
+    c.hangSeconds                 = s.hangSeconds;
+    c.gpuStallSeconds             = s.gpuStallSeconds;
+    c.installCrashHandler         = s.installCrashHandler;
+    c.startHangWatchdog           = s.hangWatchdog;
+    c.reporterPath                = s.reporterPath;
+    c.spawnReporter               = s.spawnReporter;
+    c.exitSeconds                 = s.exitSeconds;
+    c.crashHandlingTimeoutSeconds = s.crashHandlingTimeoutSeconds;
+    c.minidumpKind                = s.minidumpKind;
+    c.logFlushTimeoutMs           = s.logFlushTimeoutMs;
+    c.watchdogPollMs              = s.watchdogPollMs;
+    c.watchdogJoinTimeoutMs       = s.watchdogJoinTimeoutMs;
+    c.minFatalWaitMs              = s.minFatalWaitMs;
+    return c;
 }
 
 void Install(const Config& cfg)
@@ -3027,9 +3054,7 @@ void SubmitReport(const ReportRequest& request) noexcept
     }
 
     const bool fatal = (request.exitCode != 0);
-    const std::uint32_t timeoutMs = g_cfg.crashHandlingTimeoutSeconds != 0
-                                  ? g_cfg.crashHandlingTimeoutSeconds * 1000u
-                                  : 60u * 1000u;
+    const std::uint32_t timeoutMs = g_cfg.crashHandlingTimeoutSeconds * 1000u;
     // ONE deadline for the lock AND the wait (plan 2, seam 2): plan 1 spent
     // the timeout twice in the worst case -- 60 s behind another submitter's
     // lock, then 60 s more on the crash thread -- and the spec's number is 60.
@@ -3048,8 +3073,9 @@ void SubmitReport(const ReportRequest& request) noexcept
     // the crash thread a real chance to finish. Defence in depth -- plan 1's R4
     // writes the MINIMAL envelope (portable stack included) before anything
     // that can wedge, so a kill mid-report already degrades the report rather
-    // than leaving an unparsable one.
-    constexpr DWORD kMinFatalWaitMs = 5000;
+    // than leaving an unparsable one. The floor is Config::minFatalWaitMs
+    // (diagnostics.minFatalWaitMs, 5 s by default).
+    const DWORD minFatalWaitMs = g_cfg.minFatalWaitMs;
 
     if (fatal)
     {
@@ -3096,8 +3122,8 @@ void SubmitReport(const ReportRequest& request) noexcept
         if (g_crashThread && g_crashEvent && g_handledEvent)
         {
             DWORD waitMs = remainingMs();
-            if (fatal && waitMs < kMinFatalWaitMs)
-                waitMs = kMinFatalWaitMs;
+            if (fatal && waitMs < minFatalWaitMs)
+                waitMs = minFatalWaitMs;
 
             ResetEvent(g_handledEvent);
             SetEvent(g_crashEvent);

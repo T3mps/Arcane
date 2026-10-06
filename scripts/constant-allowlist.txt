@@ -56,7 +56,6 @@ ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kMarginPx|PENDING|inventory:57
 ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kTextRowHeightPx|PENDING|inventory:577 DERIVED
 ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kUserLoadImage|CONSTANT|Window-message IDs (in-process protocol)
 ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kUserSetProgress|CONSTANT|Window-message IDs (in-process protocol)
-ArcaneClient/src/Arcane/Host/HostConfig.hpp|kHangMainSeconds|PENDING|inventory:563 DERIVED
 ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMaxWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
 ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMinWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
 ArcaneClient/src/Arcane/Host/ProjectBoot.cpp|kStride|PENDING|inventory:581 SETTING
@@ -258,7 +257,6 @@ ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kGpuBeatFreshnessCapSeconds|PENDING|i
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kHeaderRsv|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kInjectedMax|CONSTANT|static crash-path capacity
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMaxFrames|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
-ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMinFatalWaitMs|PENDING|inventory:224 SETTING
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMsvcCppException|UNLISTED|line 1507
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kPathMax|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
 ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kReasonMax|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars

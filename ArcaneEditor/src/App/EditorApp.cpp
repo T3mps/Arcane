@@ -102,7 +102,7 @@ namespace Arcane::Editor
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
-        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+        : m_config(std::move(cfg)), m_splash(splash),
           m_splashPresenter(m_splash) {}
 
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,

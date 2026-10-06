@@ -805,6 +805,11 @@ namespace Arcane
         if (m->slots[handle.index].type == CVarType::Enum &&
             (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= m->slots[handle.index].enumNames.size()))
             return SetResult::TypeMismatch;   // an ordinal outside the declared names
+        // Inventory R2: an evidence-capture switch is `--set` only. No file
+        // rung, console, settings window or policy may turn it off.
+        if (HasFlag(m->slots[handle.index].flags, CVarFlags::CommandLineOnly)
+            && by != SetBy::Default && by != SetBy::CommandLine && by != SetBy::Code)
+            return SetResult::Denied;
 
         const Impl::Decision decision = m->Decide(*this, m->slots[handle.index], ctx, caller, true, &value);
         // The policy is game code. It may register a cvar and move the slot

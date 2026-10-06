@@ -6,6 +6,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
 #include <Arcane/Config/CVarTypes.hpp>
@@ -313,10 +314,10 @@ ARC_AGILITY_SDK_EXPORTS();
 //                          FrameDesc::pickPixel instead, so there is nowhere
 //                          for this flag to plug in even if it were wired.
 //   --perf              -- REFUSED at launch on this host (Task 12 audit; see
-//                          the refusal below main()). EditorApp constructs
-//                          FramePerf m_perf(m_config.perf) and never calls
-//                          FrameStart/Add/Tick -- the ctor and the member
-//                          declaration are its ONLY references in this tree, so
+//                          the refusal below main()). EditorApp holds a
+//                          FramePerf m_perf and never calls
+//                          FrameStart/Add/Tick -- the member declaration is
+//                          its ONLY reference in this tree, so
 //                          no [PERF] line is emitted here by any build. The
 //                          runtime drives the same class from RuntimeFrame.cpp
 //                          (Tick is the sole emitter). NOT WIRED because
@@ -380,7 +381,11 @@ int main(int argc, char** argv)
     Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CVarContext::Editor,
                                             /*editor*/ true);
     {
-        Arcane::Diagnostics::Config diag;
+        // The tunables are diagnostics.* (settings arc S6-2), read after the
+        // early rungs above so a project, EditorUser, user or --set value
+        // reaches Install.
+        Arcane::Diagnostics::Config diag =
+            Arcane::Diagnostics::ConfigFromSettings(Arcane::Settings<Arcane::DiagnosticsSettings>());
         diag.appName     = "ArcaneEditor";
         diag.productName = "Arcane Editor";   // the reporter's window title
         // A --headless run has nobody to answer a reporter window: the report
@@ -483,7 +488,7 @@ int main(int argc, char** argv)
 #endif
     // --perf: same reasoning and position as above (and its own #if is not
     // needed -- HostConfig::perf is NOT Dist-guarded, unlike pickProbe).
-    // EditorApp constructs FramePerf m_perf(m_config.perf) and never calls
+    // EditorApp holds a FramePerf m_perf and never calls
     // FrameStart/Add/Tick, so no [PERF] line is ever emitted on this host by
     // any build -- FramePerf's seven fixed buckets do not map onto this
     // host's 19-phase frame.

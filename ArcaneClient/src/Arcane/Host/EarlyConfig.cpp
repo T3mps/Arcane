@@ -8,6 +8,8 @@
 #include <Arcane/Project/Project.hpp>
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace Arcane::HostBoot
 {
@@ -36,7 +38,12 @@ namespace Arcane::HostBoot
                                    SetBy::User, "user");
             }
         }
-        ApplyCVarCommandLine(cvars, cfg.cvarSets, ctx);
+        // --perf is diagnostics.perfLog on the CommandLine rung (settings arc
+        // S6-2), ahead of the --set list so an explicit --set still wins.
+        std::vector<std::string> sets;
+        if (cfg.perf) sets.emplace_back("diagnostics.perfLog=1");
+        sets.insert(sets.end(), cfg.cvarSets.begin(), cfg.cvarSets.end());
+        ApplyCVarCommandLine(cvars, sets, ctx);
         cvars.PublishImmediate();
     }
 }

@@ -85,7 +85,7 @@ namespace Arcane
         cli.Option("backend", "dx12",        "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
-        cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
+        cli.Flag  ("perf",                   "log per-phase ms (sets diagnostics.perfLog; interval: diagnostics.perfLogIntervalFrames)");
         cli.Option("plugin",  "",            "game DLL to host (empty = the project's gameModule; a runtime with nothing to host refuses boot)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");

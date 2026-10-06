@@ -51,6 +51,7 @@
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Base/DiagnosticsSettingsData.hpp>
 #include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Guid.hpp>
 
@@ -62,6 +63,11 @@
 
 namespace Arcane::Diagnostics
 {
+    // Every tunable below takes its default from DiagnosticsSettings (settings
+    // arc S6-2: the diagnostics.* cvars) -- there is no second default. A host
+    // builds its Config with ConfigFromSettings after the early config rungs;
+    // the identity fields (appName, productName, unattended, launchMonitor,
+    // commandLine) stay the host's.
     struct Config
     {
         // Names the report files. Set it per host ("ArcaneEditor").
@@ -75,7 +81,7 @@ namespace Arcane::Diagnostics
         // Main-thread stall that counts as a hang. Generous by default: a cold
         // shader compile or a large project scan can legitimately block the main
         // thread for seconds, and a false report that cries wolf gets ignored.
-        std::uint32_t hangSeconds = 12;
+        std::uint32_t hangSeconds = ::Arcane::Detail::DiagnosticsDefaults().hangSeconds;
 
         // GPU-progress stall that counts as a GPU hang (GpuHeartbeat below).
         //
@@ -104,14 +110,14 @@ namespace Arcane::Diagnostics
         // carries markers/DRED/device-fault. What the kind changes is the CLAIM
         // the report makes about the cause -- "gpu-stall" vs "hang" -- and which
         // of the two a reader should believe.
-        std::uint32_t gpuStallSeconds = 8;
+        std::uint32_t gpuStallSeconds = ::Arcane::Detail::DiagnosticsDefaults().gpuStallSeconds;
 
         // Gates SetUnhandledExceptionFilter ONLY (and, from task 7, the
         // fail-fast family). The crash thread and its events are created by
         // Install either way: they are the report ENGINE, not a handler, and
         // WriteReport/the watchdog need them with no handler installed at all.
-        bool installCrashHandler = true;
-        bool startHangWatchdog   = true;
+        bool installCrashHandler = ::Arcane::Detail::DiagnosticsDefaults().installCrashHandler;
+        bool startHangWatchdog   = ::Arcane::Detail::DiagnosticsDefaults().hangWatchdog;
 
         // ---- crash window plan 1 (spec S5.1) ------------------------------
 
@@ -130,7 +136,7 @@ namespace Arcane::Diagnostics
         // Whether to hand off to the reporter at all. Install FORCES this
         // false when ARCANE_BUILD_MACHINE or CI is set in the environment --
         // a build agent must never leave an interactive process behind.
-        bool spawnReporter = true;
+        bool spawnReporter = ::Arcane::Detail::DiagnosticsDefaults().spawnReporter;
 
         // Pre-launch the reporter in MONITOR mode (spec S5.8): it waits on this
         // process and turns a death the crash path never saw (a __fastfail,
@@ -161,11 +167,30 @@ namespace Arcane::Diagnostics
 
         // Exit sentinel window (task 8): how long a requested exit may take
         // before it is reported as a hang-at-exit.
-        std::uint32_t exitSeconds = 30;
+        std::uint32_t exitSeconds = ::Arcane::Detail::DiagnosticsDefaults().exitSeconds;
 
         // How long the SUBMITTING thread waits for the crash thread to finish
         // a report before giving up and terminating anyway (UE's 60 s).
-        std::uint32_t crashHandlingTimeoutSeconds = 60;
+        std::uint32_t crashHandlingTimeoutSeconds = ::Arcane::Detail::DiagnosticsDefaults().crashHandlingTimeoutSeconds;
+
+        // ---- crash-path snapshot (settings arc S6-2) ----------------------
+        // Copied into g_cfg at Install and read from there: the crash path
+        // never reads the registry (inventory Part 1 note 17).
+
+        // MINIDUMP_TYPE: Default = thread info, handles, unloaded modules and
+        // indirectly referenced memory; Small = MiniDumpNormal; Full adds the
+        // whole address space.
+        MinidumpKind  minidumpKind          = ::Arcane::Detail::DiagnosticsDefaults().minidumpKind;
+        // The bounded log file-sink flush after a report (step 8).
+        std::uint32_t logFlushTimeoutMs     = ::Arcane::Detail::DiagnosticsDefaults().logFlushTimeoutMs;
+        // The watchdog's poll period: its detection resolution.
+        std::uint32_t watchdogPollMs        = ::Arcane::Detail::DiagnosticsDefaults().watchdogPollMs;
+        // How long StopWatchdog waits before orphaning a watchdog parked
+        // mid-report.
+        std::uint32_t watchdogJoinTimeoutMs = ::Arcane::Detail::DiagnosticsDefaults().watchdogJoinTimeoutMs;
+        // The floor under a FATAL report's wait (R49), even past the
+        // crashHandlingTimeoutSeconds deadline.
+        std::uint32_t minFatalWaitMs        = ::Arcane::Detail::DiagnosticsDefaults().minFatalWaitMs;
     };
 
     // Process exit codes this module produces. Stable and small: the monitor,
@@ -255,6 +280,12 @@ namespace Arcane::Diagnostics
     // that it can outlive a host that never reaches Shutdown() (spec S5.7),
     // and something has to stop it when main() simply returns.
     ARC_CORE_API void Install(const Config& cfg);
+
+    // The host's Config from the settings (settings arc S6-2). Every tunable
+    // comes from `s`; the identity fields -- appName, productName, unattended,
+    // launchMonitor, commandLine -- keep Config's defaults for the host to set.
+    // logDir is log.dir's (S6-3), not this struct's.
+    [[nodiscard]] ARC_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
 
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
     // its first statement (crash window plan 1, R23). Install already does this

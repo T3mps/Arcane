@@ -21,8 +21,8 @@
 //   std::uint64_t, float, double, std::string, CVarColor, CVarVec2/3/4, or a
 //   reflected enum. Anything else fails the BUILD (SettingsField.hpp).
 // - Every non-Hidden field needs a Tooltip: the registry refuses empty help.
-// - A PreferencesMachine or PreferencesProject field is Archive (persisted);
-//   Attr::Flags adds Dev/Cheat/Protected.
+// - A PreferencesMachine or PreferencesProject field is Archive (persisted),
+//   unless it is CommandLineOnly; Attr::Flags adds Dev/Cheat/Protected.
 // - Settings<T>() returns a reference into the published snapshot, valid until
 //   at least two more publishes. Read it once per frame or step, and never keep
 //   it. A worker that outlives the frame holds SettingsShared<T>() instead,
@@ -100,7 +100,8 @@ namespace Arcane
                 if (const auto* s = field.GetAttribute<Attr::Scope>()) out.scope = s->scope;
                 out.apply = type->apply;
                 if (const auto* a = field.GetAttribute<Attr::Apply>()) out.apply = a->mode;
-                if (out.scope != SettingScope::Project)
+                // A CommandLineOnly field is never archived: no file rung may set it.
+                if (out.scope != SettingScope::Project && !HasFlag(out.flags, CVarFlags::CommandLineOnly))
                     out.flags = out.flags | CVarFlags::Archive;
                 out.enumNames = codec->enumNames();
                 field.ForEachAttribute<Attr::AliasName>([&](const Attr::AliasName& alias) {

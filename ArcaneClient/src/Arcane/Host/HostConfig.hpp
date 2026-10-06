@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Base/DiagnosticsSettingsData.hpp>   // kHangMainSeconds derives from hangSeconds
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
 namespace Arcane
 {
@@ -382,9 +384,11 @@ namespace Arcane
 
 #if !defined(ARC_BUILD_DIST)
     // DEV ONLY (crash window plan 2, D10): the duration --hang-main blocks the
-    // main thread for. 15 s clears Diagnostics::Config::hangSeconds' 12 s
-    // default by 3 s, so the watchdog's hang report is reliably provoked.
-    inline constexpr std::uint32_t kHangMainSeconds = 15;
+    // main thread for. DERIVED (settings arc S6-2): diagnostics.hangSeconds'
+    // default (12 s) plus a 3 s margin, so the watchdog's hang report is
+    // reliably provoked.
+    ARC_CONSTANT("the --hang-main margin over diagnostics.hangSeconds' default")
+    inline constexpr std::uint32_t kHangMainSeconds = DiagnosticsSettings{}.hangSeconds + 3u;
 #endif
 
     // The RELAUNCH line a host hands to Diagnostics::Config::commandLine (crash
