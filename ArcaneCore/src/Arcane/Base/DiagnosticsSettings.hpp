@@ -83,6 +83,7 @@ namespace Arcane
             ARC_REFLECT_ATTR(Tooltip, "Frames averaged into each [PERF] line.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, logTailLines)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 0.0, 10000.0) ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
-            ARC_REFLECT_ATTR(Tooltip, "Log lines shown with a crash report, in the crash reporter and the editor's crash document.")
+            ARC_REFLECT_ATTR(Tooltip, "Log lines shown with a crash report, in the crash reporter and the editor's crash document. "
+                                      "A change reaches the next crash reporter; a crash monitor already running keeps its launch value.")
     ARC_END_REFLECT_TYPE()
 }

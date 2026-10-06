@@ -55,12 +55,15 @@
 #include <Arcane/Base/ReporterSettingsData.hpp>
 #include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Config/CVarHandle.hpp>
 
 #include <cstdint>
 #include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
+
+namespace Arcane { class CVarRegistry; }
 
 namespace Arcane::Diagnostics
 {
@@ -306,6 +309,17 @@ namespace Arcane::Diagnostics
     // ui.copyFlashSeconds (both Live) publish a change. A test seam; it
     // allocates, so never the crash path. Empty before the first Install.
     [[nodiscard]] ARC_CORE_API std::wstring CurrentReporterSettingsArgs();
+
+    // How the Live reporter-settings watch attaches (S6-5 carried follow-up):
+    // adds `fn` to every names[i] whose attached[i] is still false and that
+    // `reg` has registered, marking it attached. A name not registered yet is
+    // left false for the next call, so a watch armed before a cvar's
+    // registration is not silently latched. True once every name is attached.
+    // Install and RetargetDumpDir call it on the engine's registry; a test
+    // seam on a private one. Main thread (AddCallback's rule).
+    [[nodiscard]] ARC_CORE_API bool AttachMissingCVarCallbacks(CVarRegistry& reg, std::span<const std::string_view> names,
+                                                               std::span<bool> attached,
+                                                               void (*fn)(CVarHandle, void*), void* user);
 
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
     // its first statement (crash window plan 1, R23). Install already does this

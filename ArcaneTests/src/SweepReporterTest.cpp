@@ -216,3 +216,48 @@ TEST_CASE("sweep: a Live reporter setting reaches the next reporter spawn", "[sw
     CHECK(Test::SameBits(after.args->copyFlashSeconds, 1.5));
 }
 #endif
+
+// S6-5 carried follow-up: the Live watch is armed at Install, which can run
+// before a watched cvar is registered. The attach must leave that name for
+// the next Install/RetargetDumpDir rather than latch it as watched, and must
+// never attach twice. Run on a private registry (the engine's has both cvars
+// from static init, so "not registered yet" cannot be staged on it).
+TEST_CASE("sweep: a reporter-settings watch armed before registration attaches on a later call", "[sweep][reporter]")
+{
+    CVarRegistry reg;
+    static constexpr std::string_view kNames[] = { "diagnostics.logTailLines", "ui.copyFlashSeconds" };
+    bool attached[2]{};
+    struct Count { int fired = 0; } count;
+    const auto onChange = +[](CVarHandle, void* user) { ++static_cast<Count*>(user)->fired; };
+
+    // "Install" before either cvar exists: nothing attaches, nothing latches.
+    CHECK_FALSE(Diagnostics::AttachMissingCVarCallbacks(reg, kNames, attached, onChange, &count));
+    CHECK_FALSE(attached[0]);
+    CHECK_FALSE(attached[1]);
+
+    const CVarHandle tail = reg.Register(CVarDesc{ .name = "diagnostics.logTailLines", .type = CVarType::UInt32,
+                                                   .defaultValue = CVarValue::UInt32(200u), .help = "late tail probe",
+                                                   .module = "test" });
+    REQUIRE_FALSE(tail.IsStale());
+    // One registered, one still missing: the first attaches, the watch is not complete.
+    CHECK_FALSE(Diagnostics::AttachMissingCVarCallbacks(reg, kNames, attached, onChange, &count));
+    CHECK(attached[0]);
+    CHECK_FALSE(attached[1]);
+
+    const CVarHandle flash = reg.Register(CVarDesc{ .name = "ui.copyFlashSeconds", .type = CVarType::Float64,
+                                                    .defaultValue = CVarValue::Float64(0.75), .help = "late flash probe",
+                                                    .module = "test" });
+    REQUIRE_FALSE(flash.IsStale());
+    CHECK(Diagnostics::AttachMissingCVarCallbacks(reg, kNames, attached, onChange, &count));
+    CHECK(attached[1]);
+    // A further call (another RetargetDumpDir) adds nothing.
+    CHECK(Diagnostics::AttachMissingCVarCallbacks(reg, kNames, attached, onChange, &count));
+
+    // A change to logTailLines now reaches the callback -- once, not once per call above.
+    REQUIRE(reg.Set(tail, CVarValue::UInt32(123u), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(count.fired == 1);
+    REQUIRE(reg.Set(flash, CVarValue::Float64(1.5), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(count.fired == 2);
+}

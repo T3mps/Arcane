@@ -15,6 +15,7 @@ namespace Arcane
         ARC_REFLECT_FIELD(UiSettings, copyFlashSeconds)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 0.0, 5.0)
             ARC_REFLECT_ATTR(Tooltip, "How long (seconds) a Copy button reads \"Copied\" after a copy. "
-                                         "The crash reporter receives it when it is launched.")
+                                         "The crash reporter receives it when it is launched: a change reaches the next "
+                                         "crash reporter; a crash monitor already running keeps its launch value.")
     ARC_END_REFLECT_TYPE()
 }

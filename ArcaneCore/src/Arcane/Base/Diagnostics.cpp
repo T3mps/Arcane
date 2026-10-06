@@ -302,8 +302,11 @@ namespace
     // The reporter's settings flags (S6-4; ReporterSettingsArgs), formatted
     // from the published settings at Install, at RetargetDumpDir and when a
     // Live one publishes -- before the crash thread exists or under
-    // g_reportMutex, which it holds for a whole report -- and appended
-    // verbatim by both spawns. The reporter has no registry of its own.
+    // g_reportMutex, which it holds for a whole report. SpawnReporter appends
+    // the CURRENT buffer, so a Live change reaches the next crash reporter;
+    // the monitor (LaunchMonitor) was handed the buffer as it stood at its
+    // launch and keeps that tail for its lifetime -- it is not restarted for a
+    // settings change. The reporter has no registry of its own.
     wchar_t g_reporterSettingsArgs[512]{};
 
     // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
@@ -2363,20 +2366,19 @@ namespace
         SnapshotReporterSettingsArgs();
     }
 
-    // Once per process, at the first Install: the cvars are registered by
-    // then (static init of their own TUs). Dist compiles both Dev cvars out,
-    // so there is nothing to watch and Install's snapshot stands.
-    std::atomic<bool> g_reporterSettingCallbacks{ false };
+    // S6-5 carried follow-up: attach the callback at every Install and
+    // RetargetDumpDir until BOTH cvars carry it -- a cvar not registered yet
+    // (an Install that ran before its TU's static init) is retried on the next
+    // call instead of being latched as watched. Dist compiles both Dev cvars
+    // out, so there nothing ever attaches and Install's snapshot stands.
+    std::mutex g_reporterWatchMutex;
+    bool       g_reporterWatchAttached[2]{};
     void WatchLiveReporterSettings()
     {
-        if (g_reporterSettingCallbacks.exchange(true, std::memory_order_acq_rel)) return;
-        CVarRegistry& reg = CVarRegistry::Get();
-        for (const char* name : { "diagnostics.logTailLines", "ui.copyFlashSeconds" })
-        {
-            const CVarHandle h = reg.Find(name);
-            if (!h.IsStale())
-                reg.AddCallback(h, &OnReporterSettingPublished, nullptr);
-        }
+        static constexpr std::string_view kNames[] = { "diagnostics.logTailLines", "ui.copyFlashSeconds" };
+        std::lock_guard<std::mutex> watchLock(g_reporterWatchMutex);
+        (void)AttachMissingCVarCallbacks(CVarRegistry::Get(), kNames, g_reporterWatchAttached,
+                                         &OnReporterSettingPublished, nullptr);
     }
 
     // ---- monitor mode (plan 2, task 9; spec S5.8, D15/D16) ----------------
@@ -2653,6 +2655,21 @@ std::wstring CurrentReporterSettingsArgs()
 #endif
 }
 
+bool AttachMissingCVarCallbacks(CVarRegistry& reg, std::span<const std::string_view> names,
+                                std::span<bool> attached, void (*fn)(CVarHandle, void*), void* user)
+{
+    bool all = true;
+    for (std::size_t i = 0; i < names.size() && i < attached.size(); ++i)
+    {
+        if (attached[i]) continue;
+        const CVarHandle h = reg.Find(names[i]);
+        if (h.IsStale()) { all = false; continue; }
+        reg.AddCallback(h, fn, user);
+        attached[i] = true;
+    }
+    return all && names.size() <= attached.size();
+}
+
 void Install(const Config& cfg)
 {
     if (g_installed.exchange(true, std::memory_order_acq_rel)) return;
@@ -2924,6 +2941,11 @@ void Shutdown() noexcept
 
 void RetargetDumpDir(const std::filesystem::path& dir)
 {
+#if defined(_WIN32)
+    // S6-5 carried follow-up: retry a watch an early Install could not attach
+    // (the registry is main-thread state, as is this call).
+    WatchLiveReporterSettings();
+#endif
     // Same lock RunReportOnCrashThread holds for its ENTIRE body -- a live
     // retarget from a host's main thread must never race a report the crash
     // thread is mid-way through writing.
