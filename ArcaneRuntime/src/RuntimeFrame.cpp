@@ -14,6 +14,7 @@
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/HostSettings.hpp>       // app.window.minimizedSleepMs
+#include <Arcane/Host/RuntimeSettings.hpp>    // runtime.hud.show (BuildHud)
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #include <Arcane/Input/InputActions.hpp>
@@ -307,6 +308,9 @@ void AdvanceSim(FrameIo& io)
 void BuildHud(FrameIo& io)
 {
     io.gpu->Imgui().BeginFrame();
+    // runtime.hud.show (S6-25, inventory R4): on in Debug/Release, where the
+    // goldens are captured; off in Dist unless the player turns it on.
+    if (Arcane::Settings<Arcane::RuntimeHudSettings>().show)
     {
         ImGui::Begin("ArcaneRuntime");
         // There is no RenderDevice to ask -- GpuContext builds none -- so
