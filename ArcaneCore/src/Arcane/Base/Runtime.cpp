@@ -2,6 +2,7 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
+#include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Config.hpp>
@@ -475,10 +476,18 @@ namespace Arcane
             // current Transforms on the next pass (PASS 1 sees every handle
             // invalid against the new world; PASS 2 self-heals).
         }
-        Manifold2D::Physics::WorldDef wd;
+        // physics.* (settings arc S2): NextWorld -- read here, where a world is minted.
+        const Physics2DWorldSettings& settings = Settings<Physics2DWorldSettings>();
+        Manifold2D::Physics::WorldDef wd = ToWorldDef(settings);
         wd.gravityX = g.x;
         wd.gravityY = g.y;
-        reg.SetResource(PhysicsResource{ std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
+        auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
+        // physics.parallelSolver (default OFF: the serial solver, bit-identical
+        // to before). The pool is this Runtime's JobSystem, which outlives every
+        // registry (Impl declares it first).
+        if (settings.parallelSolver)
+            world->SetExecutor(m_impl->sched.get());
+        reg.SetResource(PhysicsResource{ std::move(world), {} });
         reg.SetResource(PhysicsInterpBuffer{});
     }
 

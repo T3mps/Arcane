@@ -3,9 +3,12 @@
 // fixtures and goldens unchanged), and their read sites.
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
+#include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -98,5 +101,102 @@ TEST_CASE("astra.memory.* are registered with the inventory's metadata and defau
     CHECK(reg.Explain("astra.memory.entityReleaseThreshold")->type == CVarType::Float32);
 #endif
     CHECK(Settings<AstraMemorySettings>().maxChunks == 4096u);
+}
+
+namespace
+{
+    // Drops a test's Code record on scope exit, so a failed CHECK cannot leak a value into later cases.
+    struct ClearCodeOnExit
+    {
+        Arcane::CVarHandle handle;
+        ~ClearCodeOnExit()
+        {
+            Arcane::CVarRegistry::Get().ClearRung(handle, Arcane::SetBy::Code);
+            Arcane::CVarRegistry::Get().Publish();
+        }
+    };
+}
+
+TEST_CASE("ToWorldDef: the default settings ARE Manifold2D's WorldDef defaults; gravity is left to EnsurePhysics", "[settings]")
+{
+    const Manifold2D::Physics::WorldDef lib{};
+    const Manifold2D::Physics::WorldDef ours = ToWorldDef(Physics2DWorldSettings{});
+    CHECK(ours.broadphase == lib.broadphase);
+    CHECK(ours.hashCellSize == lib.hashCellSize);
+    CHECK(ours.passability == nullptr);
+    CHECK(ours.tileCellSize == lib.tileCellSize);
+    CHECK(ours.tileOrigin.x == lib.tileOrigin.x);
+    CHECK(ours.tileOrigin.y == lib.tileOrigin.y);
+    CHECK(ours.gravityX == lib.gravityX);                       // DERIVED: Runtime::ResolvedGravity sets it
+    CHECK(ours.gravityY == lib.gravityY);
+    CHECK(ours.substepCount == lib.substepCount);
+    CHECK(ours.contactHertz == lib.contactHertz);
+    CHECK(ours.contactDampingRatio == lib.contactDampingRatio);
+    CHECK(ours.restitutionThreshold == lib.restitutionThreshold);
+    CHECK(ours.contactPushMaxVelocity == lib.contactPushMaxVelocity);
+    CHECK(ours.maxLinearVelocity == lib.maxLinearVelocity);
+    CHECK(ours.sleepThreshold == lib.sleepThreshold);
+    CHECK_FALSE(Physics2DWorldSettings{}.parallelSolver);
+}
+
+TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase maps", "[settings]")
+{
+    Physics2DWorldSettings s;
+    s.broadphase = Physics2DBroadphase::Hash;
+    s.hashCellSize = 2.5f;
+    s.substepCount = 8;
+    s.contactHertz = 60.0f;
+    s.contactDampingRatio = 5.0f;
+    s.restitutionThreshold = 0.5f;
+    s.contactPushMaxVelocity = 6.0f;
+    s.maxLinearVelocity = 100.0f;
+    s.sleepThreshold = 0.1f;
+    const Manifold2D::Physics::WorldDef wd = ToWorldDef(s);
+    CHECK(wd.broadphase == Manifold2D::Physics::BroadphaseKind::Hash);
+    CHECK(wd.hashCellSize == 2.5f);
+    CHECK(wd.substepCount == 8u);
+    CHECK(wd.contactHertz == 60.0f);
+    CHECK(wd.contactDampingRatio == 5.0f);
+    CHECK(wd.restitutionThreshold == 0.5f);
+    CHECK(wd.contactPushMaxVelocity == 6.0f);
+    CHECK(wd.maxLinearVelocity == 100.0f);
+    CHECK(wd.sleepThreshold == 0.1f);
+    CHECK(ToBroadphaseKind(Physics2DBroadphase::Tree) == Manifold2D::Physics::BroadphaseKind::Tree);
+    CHECK(ToBroadphaseKind(Physics2DBroadphase::Sap) == Manifold2D::Physics::BroadphaseKind::Sap);
+    const auto e = CVarRegistry::Get().Explain("physics.broadphase");
+    REQUIRE(e);
+    CHECK(e->type == CVarType::Enum);
+    CHECK(e->published.AsEnum() == 0);                           // Tree
+    CHECK(HasFlag(CVarRegistry::Get().Explain("physics.substepCount")->flags, CVarFlags::Deterministic));
+    CHECK(CVarRegistry::Get().Explain("physics.contactHertz")->apply == ApplyMode::NextWorld);
+}
+
+TEST_CASE("physics.parallelSolver: off by default (the serial solver, as before); on hands the Runtime's job pool to the next world", "[settings]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("physics.parallelSolver");
+#if defined(ARC_BUILD_DIST)
+    if (h.IsStale()) return;   // Dev: compiled out in Dist, so the default (serial) stands
+#endif
+    REQUIRE_FALSE(h.IsStale());
+    ClearCodeOnExit restore{ h };
+    {
+        Runtime rt(Test::Process());
+        rt.EnsurePhysics();
+        const PhysicsResource* res = rt.Registry().GetResource<PhysicsResource>();
+        REQUIRE(res);
+        REQUIRE(res->world);
+        CHECK(res->world->Executor() != rt.WorkScheduler());
+    }
+    REQUIRE(reg.Set(h, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    {
+        Runtime rt(Test::Process());
+        rt.EnsurePhysics();
+        const PhysicsResource* res = rt.Registry().GetResource<PhysicsResource>();
+        REQUIRE(res);
+        REQUIRE(res->world);
+        CHECK(res->world->Executor() == rt.WorkScheduler());
+    }
 }
 
