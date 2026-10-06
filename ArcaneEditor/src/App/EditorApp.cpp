@@ -523,6 +523,7 @@ namespace Arcane::Editor
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
+        m_appearance.Init(ImGui::GetStyle());   // the boot look IS the defaults: the first per-frame update applies nothing
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later

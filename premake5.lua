@@ -1250,6 +1250,7 @@ project "ArcaneTests"
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user

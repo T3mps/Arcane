@@ -44,6 +44,7 @@
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Settings/AppearanceApplier.hpp"
 #include "Settings/ProjectSettingsPage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
@@ -285,6 +286,7 @@ namespace Arcane::Editor
         void ConsumeSceneDialogResults(LoopState& ls);
         void ConsumeProjectDialogResult();
         void ConsumeMaterialDialogResults();
+        void ApplyAppearanceSettings();   // S4: theme/UI cvars -> the editor style, outside the ImGui frame
         void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
         [[nodiscard]] bool IsDesignatedInputAsset(const Arcane::Guid& asset);   // the open project's manifest inputActions names `asset`
         void FrameInput(LoopState& ls, FrameState& fs);
@@ -1135,6 +1137,9 @@ namespace Arcane::Editor
         // Runtime*, dereferenced fresh each call), so it must not outlive it.
         std::optional<Arcane::CommandStack> m_undo;
         Arcane::UndoLimits m_undoLimitsApplied;   // last limits pushed (per-frame change check)
+        // Settings arc S4: editor.theme.* / editor.ui.* -> the editor's ImGui
+        // style, compared per frame against what was last applied.
+        Arcane::Editor::AppearanceApplier m_appearance;
 
         // Editor keybind + mouse edge tracking (architecture pass sec 6). All
         // Updated within FrameInput's phases (6a-6d) at the site each chord's

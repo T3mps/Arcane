@@ -34,6 +34,7 @@
 #include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -58,6 +59,7 @@
 #include "Widgets/EditorTheme.hpp"   // Theme::kTextDim (the start page's dim path / time)
 #include "Widgets/IconsLucide.h"   // the start page's Open Project... / Open Folder... icons
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cctype>
@@ -424,6 +426,9 @@ namespace Arcane::Editor
                     m_undo->SetLimits(limits);
                     m_undoLimitsApplied = limits;
                 }
+            // editor.theme.* / editor.ui.* -> the editor style (settings S4).
+            // After the barrier, before the ImGui frame opens.
+            ApplyAppearanceSettings();
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();
@@ -653,6 +658,16 @@ namespace Arcane::Editor
         {
             m_documents.OpenPath(*materialOpen);
         }
+    }
+
+    void EditorApp::ApplyAppearanceSettings()
+    {
+        if (!m_editorImguiContext)
+            return;
+        // The game context may be current here (the offscreen layer); the
+        // editor's style is the one this writes.
+        ImGuiStyle& style = m_editorImguiContext->Style;
+        m_appearance.UpdateTheme(Arcane::Settings<Arcane::Editor::EditorThemeSettings>(), style);
     }
 
     // Phase 6: input sample + the editor's own keybinds + gizmo interaction.
