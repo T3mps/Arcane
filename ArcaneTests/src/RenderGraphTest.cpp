@@ -6791,7 +6791,7 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
@@ -6800,11 +6800,11 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
     REQUIRE(graph.IsHandleValid(canvas));
 
     // The format is the one the test-local node above created `canvas` with --
-    // AddMeshNode takes it rather than assuming kGraphCanvasFormat, because
+    // AddMeshNode takes it rather than assuming GraphCanvasFormat(), because
     // RenderGraph exposes no way to read a handle's format back and a PSO built
     // for the wrong one is an undefined attachment mismatch on both backends.
     const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas,
-                                                        Arcane::kGraphCanvasFormat,
+                                                        Arcane::GraphCanvasFormat(),
                                                         scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
     CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // declared by AddMeshNode, ahead of cull + mesh
@@ -6883,7 +6883,7 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads four imported buffers wi
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
@@ -6891,7 +6891,7 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads four imported buffers wi
         [](Arcane::RenderGraphNodeContext&) {});
 
     const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas,
-                                                        Arcane::kGraphCanvasFormat,
+                                                        Arcane::GraphCanvasFormat(),
                                                         scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
 
@@ -7190,13 +7190,13 @@ TEST_CASE("nri graph frame: (T10F4) driven directly, the grid node declares Colo
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
 
             Arcane::RgTextureDesc depthDesc;
-            depthDesc.format       = Arcane::kGraphDepthFormat;
+            depthDesc.format       = Arcane::GraphDepthFormat();
             depthDesc.width        = 320;
             depthDesc.height       = 200;
             depthDesc.depthStencil = true;
@@ -7207,7 +7207,7 @@ TEST_CASE("nri graph frame: (T10F4) driven directly, the grid node declares Colo
     REQUIRE(graph.IsHandleValid(depth));
 
     Arcane::GridSceneDesc grid;
-    Arcane::AddGridNode(graph, nullptr, canvas, Arcane::kGraphCanvasFormat, depth, grid, 320, 200);
+    Arcane::AddGridNode(graph, nullptr, canvas, Arcane::GraphCanvasFormat(), depth, grid, 320, 200);
     REQUIRE(graph.NodeCount() == 2);
     CHECK(std::string(graph.NodeName(1)) == "grid");
     CHECK(graph.WasWritten(canvas));

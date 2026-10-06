@@ -45,6 +45,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
+#include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
@@ -2046,14 +2047,13 @@ namespace Arcane::Editor
             m_meshScene.view       = m_meshView->view;
             m_meshScene.projection = m_meshView->projection;
         }
-        // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
-        // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
-        // registers none -- so lightDirection/lightColor/ambient are left at
-        // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
-        // component is future work; inventing one here would land an
-        // unreviewed scene-schema change in a host .cpp with zero test
-        // coverage rather than in a reviewed, tested component.
-        //
+        // NO LIGHT COMPONENT YET: this engine has none anywhere --
+        // Scene/Components.hpp declares none and SceneModule.hpp registers
+        // none -- so the scene's one light is render.mesh.defaultLight.*
+        // (RenderLookSettings.hpp; Live, read once per frame). A light
+        // component is future work and a reviewed scene-schema change.
+        Arcane::ApplyDefaultLight(m_meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
         // the field null" mechanism vp.gameUi just used above.

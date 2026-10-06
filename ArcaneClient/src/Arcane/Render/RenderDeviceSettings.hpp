@@ -4,7 +4,8 @@
 // line", "Renderer device creation", "Swapchain", "Texture and mesh caches").
 // Every field is read once, when the device, its swapchain or the
 // pending-cook placeholder is created (Restart), except render.meshCull
-// (Live, read per frame by MeshCullNode).
+// (Live, read per frame by MeshCullNode) and render.clearColor (Live, read
+// once per frame by the Batch2D node).
 //
 // - render.*         RenderSettings: the player-facing graphics choices
 //                    (backend, vsync, adapter, tearing; PlayerSafe, so a
@@ -15,7 +16,11 @@
 //                    render budgets) and
 //                    the GPU frustum-cull debug switch, folded in from the S2
 //                    one-off struct with its name, type, default, flags and
-//                    help unchanged. --backend and --no-vsync stay as flags:
+//                    help unchanged, and the look (S6-19): the canvas clear
+//                    colour, texture anisotropy and the graph's canvas and
+//                    depth formats (latched once per process by
+//                    NriGraphContext.hpp's GraphCanvasFormat/GraphDepthFormat).
+//                    RenderLookSettings.hpp holds the rest of the look. --backend and --no-vsync stay as flags:
 //                    HostBoot::ApplyEarlyConfigRungs puts them on the
 //                    CommandLine rung, and the HostConfig adopts the
 //                    published values before GpuContext::Create.
@@ -45,6 +50,24 @@ namespace Arcane
         ARC_REFLECT_ENUM_VALUE(GraphicsBackend, Vulkan)
     ARC_END_REFLECT_ENUM()
 
+    // The linear canvas every 2D and 3D node renders into, and every post
+    // target (NriGraphContext.hpp: GraphCanvasFormat).
+    enum class CanvasFormat : std::uint8_t { Rgba16f = 0, R11g11b10f = 1 };
+
+    ARC_REFLECT_ENUM(CanvasFormat)
+        ARC_REFLECT_ENUM_VALUE(CanvasFormat, Rgba16f)
+        ARC_REFLECT_ENUM_VALUE(CanvasFormat, R11g11b10f)
+    ARC_END_REFLECT_ENUM()
+
+    // The frame's depth attachments and the PSOs keyed on them
+    // (NriGraphContext.hpp: GraphDepthFormat).
+    enum class DepthFormat : std::uint8_t { D32 = 0, D24s8 = 1 };
+
+    ARC_REFLECT_ENUM(DepthFormat)
+        ARC_REFLECT_ENUM_VALUE(DepthFormat, D32)
+        ARC_REFLECT_ENUM_VALUE(DepthFormat, D24s8)
+    ARC_END_REFLECT_ENUM()
+
     struct RenderSettings
     {
         GraphicsBackend backend      = GraphicsBackend::D3D12;
@@ -54,6 +77,10 @@ namespace Arcane
         bool            meshCull     = true;
         std::uint32_t   framesInFlight = 2;   // FramePacing.hpp: latched once, clamped to kMaxFramesInFlight
         std::uint64_t   uploadRingBytesPerFrame = 4ull << 20;   // S6-18; NriGraphContext latches it at creation
+        CVarColor       clearColor   = CVarColor{ 0.02f, 0.02f, 0.04f, 1.0f };   // linear; golden-bound
+        std::uint32_t   textureAnisotropy = 16;                  // MeshNode's root sampler (baked into its layout)
+        CanvasFormat    canvasFormat = CanvasFormat::Rgba16f;    // golden-bound
+        DepthFormat     depthFormat  = DepthFormat::D32;
     };
 
     ARC_REFLECT_TYPE(RenderSettings)
@@ -85,6 +112,23 @@ namespace Arcane
             ARC_REFLECT_ATTR(Tooltip, "Bytes of per-frame upload space (sprite geometry, the HUD, pick ids) in each frame slot. "
                                       "A frame that overflows it drops that content with one error; the peak actually used is "
                                       "logged at shutdown, which is the number to size this from.")
+        ARC_REFLECT_FIELD(RenderSettings, clearColor)
+            ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
+            ARC_REFLECT_ATTR(Tooltip, "Background colour the scene canvas is cleared to each frame, before anything is drawn "
+                                      "(linear).")
+        ARC_REFLECT_FIELD(RenderSettings, textureAnisotropy)
+            ARC_REFLECT_ATTR(PlayerSafe) ARC_REFLECT_ATTR(Range, 1.0, 16.0)
+            ARC_REFLECT_ATTR(Tooltip, "Anisotropic filtering for mesh textures: sharper textures at grazing angles for a little "
+                                      "GPU time. 1 turns it off; 16 is the hardware maximum.")
+        ARC_REFLECT_FIELD(RenderSettings, canvasFormat)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Pixel format of the linear scene canvas and the post-process targets. Rgba16f keeps alpha "
+                                      "and full half-float precision; R11g11b10f halves the bandwidth but drops alpha and "
+                                      "negative values.")
+        ARC_REFLECT_FIELD(RenderSettings, depthFormat)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Depth buffer format. D32 is a 32-bit float depth; D24s8 trades depth precision for an "
+                                      "8-bit stencil plane, which nothing in the engine uses yet.")
     ARC_END_REFLECT_TYPE()
 
     // The per-configuration validation default: on in Debug, off in Release

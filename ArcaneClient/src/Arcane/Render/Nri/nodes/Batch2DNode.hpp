@@ -106,6 +106,7 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Config/CVarTypes.hpp>   // CVarColor -- Record's clear colour
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -225,7 +226,9 @@ namespace Arcane
 
         // Records one frame's 2D content into an ALREADY-OPEN raster pass
         // whose single colour attachment is the canvas. In order: clear the
-        // canvas (the clear seam -- graph attachments are LOAD/STORE and a
+        // canvas to `clearColor` (render.clearColor, read once per frame by
+        // AddBatch2DNode, which also made it the canvas's optimized clear
+        // value; the clear seam -- graph attachments are LOAD/STORE and a
         // node that wants a cleared target clears it itself, see
         // NriGraphContext::BuildFrame), then, if the batch drew anything,
         // upload its vertex/index streams through the ring and issue one
@@ -239,7 +242,7 @@ namespace Arcane
         // ring, so this node's constant-buffer arena is double-buffered against
         // exactly the fence the swapchain already waits on.
         void Record(RenderGraphNodeContext& context, const Batch2DDrained& batch,
-                    nri::Format canvasFormat, std::uint32_t frameSlot);
+                    nri::Format canvasFormat, const CVarColor& clearColor, std::uint32_t frameSlot);
 
         // THE CAPS (settings arc S6-18): render.batch2d.* (Restart), LATCHED
         // ONCE by the constructor, so a value published later never resizes a

@@ -21,6 +21,7 @@
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Batcher2D.hpp>        // Batch2DDrained / Batch2DVertex / Batch2DDrawSpan
 #include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderBatch2dSettings -- the caps the constructor latches
+#include <Arcane/Render/RenderLookSettings.hpp>     // render.clearColor, render.sprite.filter
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>  // kVsEntry / kPsEntry
 
@@ -41,17 +42,16 @@ namespace Arcane
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
-        // The engine's canvas clear. It lives HERE, in the only node that
-        // clears the canvas at all, so there is exactly one background
-        // colour in the process.
-        constexpr float kCanvasClear[4] = { 0.02f, 0.02f, 0.04f, 1.0f };
-
-        // The canvas is RGBA16F. Since Task 10 the constant lives beside the
-        // frame's shape (NriGraphContext.hpp's kGraphCanvasFormat), because
-        // the post-chain targets must be the SAME format as the canvas and two
-        // files independently mirroring Canvas.cpp is exactly how they would
-        // drift apart.
-        constexpr nri::Format kCanvasFormat = kGraphCanvasFormat;
+        // The engine's canvas clear is render.clearColor (RenderSettings, Live):
+        // AddBatch2DNode reads it ONCE per frame and the same value is both the
+        // canvas's optimized clear value and Record()'s clear, so the two can
+        // never disagree (D3D12 warns on a clear that differs from the
+        // resource's). This is the only node that clears the canvas at all, so
+        // there is exactly one background colour in the process.
+        //
+        // The canvas format is GraphCanvasFormat() (NriGraphContext.hpp,
+        // render.canvasFormat latched once per process), because the
+        // post-chain targets must be the SAME format as the canvas.
 
         // data/shaders/sprite.hlsl's BatchConstants: float4x4 viewProj +
         // float2 invHalfViewport + uint worldSpace + float pad = 80 bytes (b0
@@ -323,12 +323,15 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
 
-        // Linear + clamp: sprites scale smoothly, and a clamped atlas edge
-        // does not bleed.
+        // render.sprite.filter (Restart, read here, once) + clamp: Linear
+        // scales sprites smoothly, Point keeps pixel art's hard texel edges,
+        // and a clamped atlas edge does not bleed.
+        const nri::Filter filter = Settings<RenderSpriteSettings>().filter == SamplerFilter::Point
+                                       ? nri::Filter::NEAREST : nri::Filter::LINEAR;
         nri::SamplerDesc samplerDesc = {};
-        samplerDesc.filters.min   = nri::Filter::LINEAR;
-        samplerDesc.filters.mag   = nri::Filter::LINEAR;
-        samplerDesc.filters.mip   = nri::Filter::LINEAR;
+        samplerDesc.filters.min   = filter;
+        samplerDesc.filters.mag   = filter;
+        samplerDesc.filters.mip   = filter;
         samplerDesc.addressModes  = { nri::AddressMode::CLAMP_TO_EDGE, nri::AddressMode::CLAMP_TO_EDGE,
                                       nri::AddressMode::CLAMP_TO_EDGE };
         samplerDesc.mipMax        = 16.0f;
@@ -1381,7 +1384,7 @@ namespace Arcane
     }
 
     void Batch2DNode::Record(RenderGraphNodeContext& context, const Batch2DDrained& batch,
-                             nri::Format canvasFormat, std::uint32_t frameSlot)
+                             nri::Format canvasFormat, const CVarColor& clearColor, std::uint32_t frameSlot)
     {
         const nri::CoreInterface& core = context.core;
 
@@ -1394,7 +1397,7 @@ namespace Arcane
         nri::ClearAttachmentDesc clear = {};
         clear.planes               = nri::PlaneBits::COLOR;
         clear.colorAttachmentIndex = 0;
-        clear.value.color.f = { kCanvasClear[0], kCanvasClear[1], kCanvasClear[2], kCanvasClear[3] };
+        clear.value.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
         core.CmdClearAttachments(context.cmd, &clear, 1, nullptr, 0);
 
         if (batch.spans.empty() || batch.vertices.empty() || batch.indices.empty())
@@ -1616,6 +1619,8 @@ namespace Arcane
         // means the exec fn only touches the GPU. The returned spans view the
         // batcher's own storage and stay valid until its next Begin(), which is
         // a whole frame away.
+        const nri::Format canvasFormat = GraphCanvasFormat();
+        const CVarColor clearColor = Settings<RenderSettings>().clearColor;   // once per frame; see the top of this file
         Batch2DDrained drained;
         if (context)
         {
@@ -1628,7 +1633,7 @@ namespace Arcane
                 // resident goes through a helper that submits and waits. See
                 // Prepare.
                 if (Batch2DNode* node = context->Batch2D())
-                    node->Prepare(*batcher, drained, kCanvasFormat);
+                    node->Prepare(*batcher, drained, canvasFormat);
             }
         }
 
@@ -1646,22 +1651,21 @@ namespace Arcane
             [&](RenderGraphBuilder& builder)
             {
                 RgTextureDesc desc;
-                desc.format = kCanvasFormat;
+                desc.format = canvasFormat;
                 desc.width  = width;
                 desc.height = height;
-                desc.optimizedClearValue.color.f = {
-                    kCanvasClear[0], kCanvasClear[1], kCanvasClear[2], kCanvasClear[3] };
+                desc.optimizedClearValue.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
                 desc.hasOptimizedClearValue = true;
                 canvas = builder.CreateTexture("canvas", desc);
                 builder.Write(canvas, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));
             },
-            [context, drained](RenderGraphNodeContext& nodeContext)
+            [context, drained, canvasFormat, clearColor](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
                     return;   // device-less declaration-shape drive: no device, nothing to record
                 if (Batch2DNode* node = context->Batch2D())
-                    node->Record(nodeContext, drained, kCanvasFormat, context->FrameSlot());
+                    node->Record(nodeContext, drained, canvasFormat, clearColor, context->FrameSlot());
             });
         return canvas;
     }

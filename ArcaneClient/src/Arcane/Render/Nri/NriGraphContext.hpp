@@ -234,6 +234,7 @@
 #include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // CanvasFormat, DepthFormat (render.canvasFormat / render.depthFormat)
 #include <Arcane/Scene/ViewTransform.hpp>       // FrameDesc::pickView (held by value)
 // The node types are held BY VALUE-OWNING unique_ptr below, and this class is
 // dllexported -- so every TU that sees this header must see complete node
@@ -267,23 +268,39 @@ namespace Arcane
     struct PostChainDesc;
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
-    // node's canvas, and every post-chain pass's target. RGBA16F -- colours are
-    // LINEAR and may exceed 1.0, and the tonemap node is what turns them
-    // display-referred. It lives HERE, next to the frame's shape, because two
-    // nodes now have to agree on it: a post target that did not match the
-    // canvas would be a pipeline built for one format bound to an attachment
-    // of another.
-    inline constexpr nri::Format kGraphCanvasFormat = nri::Format::RGBA16_SFLOAT;
-
-    // THE FRAME'S DEPTH FORMAT (Task 4 chose it; Task 7 gave it a consumer).
-    // D32_SFLOAT -- depth only, no stencil, and no packed-stencil variant until
-    // something actually needs one. It lives HERE, beside the canvas format,
-    // for exactly the same reason that one does: two places now have to agree
-    // on it -- whoever CREATES the depth transient and whoever keys a PSO on it
-    // (NriPipelineCache::GraphicsKey::depthFormat) -- and a pipeline built for
-    // one format bound to an attachment of another is undefined on both
+    // node's canvas, and every post-chain pass's target. Colours are LINEAR
+    // and may exceed 1.0, and the tonemap node is what turns them
+    // display-referred. render.canvasFormat picks it (RGBA16F by default;
+    // R11G11B10F halves the bandwidth). It lives HERE, next to the frame's
+    // shape, because two nodes have to agree on it: a post target that did
+    // not match the canvas would be a pipeline built for one format bound to
+    // an attachment of another.
+    //
+    // THE FRAME'S DEPTH FORMAT (render.depthFormat; D32_SFLOAT by default,
+    // D24_UNORM_S8_UINT on request). Two places have to agree on it --
+    // whoever CREATES a depth transient and whoever keys a PSO on it
+    // (NriPipelineCache::GraphicsKey::depthFormat) -- and a pipeline built
+    // for one format bound to an attachment of another is undefined on both
     // backends.
-    inline constexpr nri::Format kGraphDepthFormat = nri::Format::D32_SFLOAT;
+    //
+    // BOTH ARE LATCHED ONCE PER PROCESS (settings arc S6-19; Restart), on the
+    // first call, the FramesInFlight() idiom: every graph context, every node
+    // and every pipeline key in the process -- including a node built with no
+    // context -- reads the SAME format, so a value published mid-session can
+    // never split an attachment from the PSOs keyed for it. A host builds no
+    // graph before HostBoot::ApplyEarlyConfigRungs has published the rungs.
+    [[nodiscard]] constexpr nri::Format ToNriFormat(CanvasFormat format) noexcept
+    {
+        return format == CanvasFormat::R11g11b10f ? nri::Format::R11_G11_B10_UFLOAT : nri::Format::RGBA16_SFLOAT;
+    }
+
+    [[nodiscard]] constexpr nri::Format ToNriFormat(DepthFormat format) noexcept
+    {
+        return format == DepthFormat::D24s8 ? nri::Format::D24_UNORM_S8_UINT : nri::Format::D32_SFLOAT;
+    }
+
+    [[nodiscard]] ARC_API nri::Format GraphCanvasFormat() noexcept;
+    [[nodiscard]] ARC_API nri::Format GraphDepthFormat() noexcept;
 
     // THE OFFSCREEN OUTPUT FORMAT. Display-referred: BGRA8_UNORM is exactly
     // the swapchain's own format, and the tonemap already gamma-2.2 encodes,

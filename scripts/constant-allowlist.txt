@@ -125,7 +125,6 @@ ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoCurrentNode|CONSTANT|Senti
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoSlot|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoNode|CONSTANT|Sentinels
 ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoPoolSlot|CONSTANT|Sentinels
-ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kCanvasClear|PENDING|inventory:662 SETTING
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvOffset|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvPrime|CONSTANT|Alignment, math, shader names, IDs, identity texel
 ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kVertexAlign|CONSTANT|Alignment, math, shader names, IDs, identity texel
@@ -201,7 +200,6 @@ ArcaneClient/src/Arcane/Render/PickEmit.hpp|kPickSupersample|PENDING|inventory:7
 ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp|kFnvOffset|CONSTANT|Math
 ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp|kFnvPrime|CONSTANT|Math
 ArcaneClient/src/Arcane/Render/ShaderConventions.hpp|kSpirvArgCount|CONSTANT|Minimum shader model contract
-ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp|kVisibilitySlack|PENDING|inventory:693 SETTING
 ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kArtifactVersion|CONSTANT|file format
 ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kChunkHeaderBytes|CONSTANT|file format
 ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kContentKindMesh|CONSTANT|file format

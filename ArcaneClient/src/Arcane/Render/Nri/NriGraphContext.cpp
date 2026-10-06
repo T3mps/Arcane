@@ -18,7 +18,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>       // RenderDeviceDesc (and GraphicsBackend + ToString behind it)
 #include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderPostSettings -- the device-less post clamp
-#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*, render.uploadRingBytesPerFrame
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*, render.uploadRingBytesPerFrame, the graph formats
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
@@ -41,6 +41,20 @@
 
 namespace Arcane
 {
+    // render.canvasFormat / render.depthFormat, latched on first use (the
+    // header's contract: one format per process, Restart).
+    nri::Format GraphCanvasFormat() noexcept
+    {
+        static const nri::Format latched = ToNriFormat(Settings<RenderSettings>().canvasFormat);
+        return latched;
+    }
+
+    nri::Format GraphDepthFormat() noexcept
+    {
+        static const nri::Format latched = ToNriFormat(Settings<RenderSettings>().depthFormat);
+        return latched;
+    }
+
     namespace
     {
         // The tagged seam RenderGraphExec.cpp reports through -- the VEHICLE's
@@ -1282,11 +1296,11 @@ namespace Arcane
         const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {
-            // kGraphCanvasFormat is passed EXPLICITLY because it is the format
+            // GraphCanvasFormat() is passed EXPLICITLY because it is the format
             // AddBatch2DNode minted `handles.canvas` with, a few lines up.
             // AddMeshNode cannot read a handle's format back and must not
             // assume one -- see its header for what a wrong one costs.
-            handles.depth = AddMeshNode(graph, context, handles.canvas, kGraphCanvasFormat,
+            handles.depth = AddMeshNode(graph, context, handles.canvas, GraphCanvasFormat(),
                                          *shape.mesh, shape.canvasWidth, shape.canvasHeight);
         }
 
@@ -1306,7 +1320,7 @@ namespace Arcane
         // CreateTexture("depth") calls. A frame carrying a mesh scene gets its
         // depth target from MeshNode and never reaches here.
         //
-        // kGraphDepthFormat, canvas-sized, so it can pair with `handles.canvas`
+        // GraphDepthFormat(), canvas-sized, so it can pair with `handles.canvas`
         // as a Raster node's colour + depth attachments the moment something
         // wants to. Nothing on THIS branch is that something: no Read(), no
         // Write(), no SetDepthAttachment().
@@ -1334,7 +1348,7 @@ namespace Arcane
                 [&handles, &shape](RenderGraphBuilder& builder)
                 {
                     RgTextureDesc desc;
-                    desc.format       = kGraphDepthFormat;
+                    desc.format       = GraphDepthFormat();
                     desc.width        = shape.canvasWidth;
                     desc.height       = shape.canvasHeight;
                     desc.depthStencil = true;
@@ -1370,7 +1384,7 @@ namespace Arcane
         // ---------------------------------------------------------------
         if (shape.grid)
         {
-            AddGridNode(graph, context, handles.canvas, kGraphCanvasFormat,
+            AddGridNode(graph, context, handles.canvas, GraphCanvasFormat(),
                         wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
                         shape.canvasWidth, shape.canvasHeight);
         }
@@ -1404,7 +1418,7 @@ namespace Arcane
             {
                 PostChainNode* node = context->PostChain();
                 passCount = node ? node->PrepareChain(*shape.post, context->CurrentGlobals(),
-                                                       kGraphCanvasFormat)
+                                                       GraphCanvasFormat())
                                  : 0;
             }
             if (passCount > 0)

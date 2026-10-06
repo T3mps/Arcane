@@ -21,6 +21,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
+#include <Arcane/Render/RenderLookSettings.hpp>       // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 #include <Arcane/Sim/SimSettings.hpp>
 
@@ -657,13 +658,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         meshScene.view       = meshView->view;
         meshScene.projection = meshView->projection;
     }
-    // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
-    // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
-    // registers none -- so lightDirection/lightColor/ambient are left at
-    // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
-    // component is future work; inventing one here would land an unreviewed
-    // scene-schema change in a host .cpp with zero test coverage rather than
-    // in a reviewed, tested component.
+    // NO LIGHT COMPONENT YET: this engine has none anywhere --
+    // Scene/Components.hpp declares none and SceneModule.hpp registers
+    // none -- so the scene's one light is render.mesh.defaultLight.*
+    // (RenderLookSettings.hpp; Live, read once per frame). A light
+    // component is future work and a reviewed scene-schema change.
+    Arcane::ApplyDefaultLight(meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
     if (!meshScene.Empty())
         graphFrame.mesh = &meshScene;
 

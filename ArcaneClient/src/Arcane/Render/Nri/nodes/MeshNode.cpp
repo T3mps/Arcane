@@ -19,6 +19,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderGpuSceneSettings -- the scratch-row fallback
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderLookSettings.hpp>     // render.textureAnisotropy (RenderSettings)
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 
 #undef ERROR
@@ -99,9 +100,11 @@ namespace Arcane
         struct MeshFrameConstants
         {
             glm::mat4 viewProjection{1.0f};
-            glm::vec4 lightDirection{0.0f, 0.0f, 1.0f, 0.0f};
-            glm::vec4 lightColor{1.0f, 1.0f, 1.0f, 0.0f};
-            glm::vec4 ambient{0.0f, 0.0f, 0.0f, 0.0f};
+            // Zero here: Record writes all three from MeshSceneDesc every
+            // frame (render.mesh.defaultLight.* is where the defaults live).
+            glm::vec4 lightDirection{0.0f};
+            glm::vec4 lightColor{0.0f};
+            glm::vec4 ambient{0.0f};
         };
         static_assert(sizeof(MeshFrameConstants) == 112, "must match mesh.hlsl's MeshFrameCB");
         static_assert(sizeof(MeshFrameConstants) <= MeshNode::kFrameCbMaxBytes,
@@ -376,7 +379,8 @@ namespace Arcane
         // THE ONE IMMUTABLE SAMPLER (Task 10's slice-one sampler strategy,
         // spec section 6): trilinear -- LINEAR min/mag/mip, unchanged from
         // the sampler this replaces -- and REPEAT (a mesh's UVs tile),
-        // anisotropy as the ONE tunable knob. A ROOT/static sampler
+        // anisotropy as the ONE tunable knob (render.textureAnisotropy, read
+        // here, once, when the layout is built: Restart). A ROOT/static sampler
         // (NRIDescs.h:1022's own words), baked into the pipeline layout
         // itself rather than a descriptor-set entry: it consumes no pool
         // budget and needs no per-frame write -- CmdSetPipelineLayout
@@ -393,7 +397,7 @@ namespace Arcane
         rootSampler.desc.filters.mip  = nri::Filter::LINEAR;
         rootSampler.desc.addressModes = { nri::AddressMode::REPEAT, nri::AddressMode::REPEAT,
                                           nri::AddressMode::REPEAT };
-        rootSampler.desc.anisotropy   = 16;    // THE ONE KNOB -- see the comment above
+        rootSampler.desc.anisotropy   = static_cast<std::uint8_t>(Settings<RenderSettings>().textureAnisotropy);   // THE ONE KNOB -- see the comment above
         rootSampler.desc.mipMax       = 16.0f;
         rootSampler.shaderStages      = nri::StageBits::FRAGMENT_SHADER;   // only ps_main samples
 
@@ -758,7 +762,7 @@ namespace Arcane
         // colour formats, and binding one inside a CmdBeginRendering whose
         // depth attachment carries a different format is undefined on both
         // backends.
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = state.blend;
         key.depthWrite      = state.depthWrite;
@@ -1258,7 +1262,7 @@ namespace Arcane
         // Resolved at DECLARATION time on purpose: a PSO compile must not land
         // inside the recording window. See MeshNode::Prepare.
         //
-        // `canvasFormat` is the CALLER's, not kGraphCanvasFormat assumed --
+        // `canvasFormat` is the CALLER's, not GraphCanvasFormat() assumed --
         // see AddMeshNode's header comment for why this function cannot derive
         // it and what a wrong one costs.
         std::span<const GpuInstance> adHoc;
@@ -1296,7 +1300,7 @@ namespace Arcane
             [&](RenderGraphBuilder& builder)
             {
                 RgTextureDesc desc;
-                desc.format       = kGraphDepthFormat;
+                desc.format       = GraphDepthFormat();
                 desc.width        = width;
                 desc.height       = height;
                 desc.depthStencil = true;

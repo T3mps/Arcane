@@ -458,7 +458,7 @@ namespace Arcane
         // The depth attachment is BOUND for the whole pass, so this pipeline
         // must name its format; the 2D silhouettes neither test nor write it
         // (the fill below) -- later-wins by submission order, as before.
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         // No blend: an R32_UINT target is integer and therefore unblendable.
         // Front-most wins by SUBMISSION ORDER -- the output merger is
@@ -550,7 +550,7 @@ namespace Arcane
         key.layoutId        = m_layoutId;
         key.colorFormats[0] = kGraphPickIdFormat;
         key.colorCount      = 1;
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
         key.depthWrite      = true;
@@ -1302,7 +1302,7 @@ namespace Arcane
                 // belongs to the canvas, at 1x). Written and attached here,
                 // read by nothing else -- its whole lifetime is this node.
                 RgTextureDesc depthDesc;
-                depthDesc.format       = kGraphDepthFormat;
+                depthDesc.format       = GraphDepthFormat();
                 depthDesc.width        = width  * PickNode::kSuperSample;
                 depthDesc.height       = height * PickNode::kSuperSample;
                 depthDesc.depthStencil = true;

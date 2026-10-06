@@ -138,6 +138,7 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
+#include <Arcane/Render/RenderLookSettings.hpp>   // RenderMeshDefaultLightSettings -- MeshSceneDesc's light defaults
 
 #include <glm/glm.hpp>
 
@@ -253,6 +254,14 @@ namespace Arcane
         std::uint32_t indexCount  = 0;   // 0 == "the whole mesh", the F2a shape
     };
 
+    namespace Detail
+    {
+        // render.mesh.defaultLight.* as the glm values MeshSceneDesc holds
+        // (the colour's alpha is unused).
+        [[nodiscard]] constexpr glm::vec3 ToGlm(const CVarVec3& v) noexcept { return { v.x, v.y, v.z }; }
+        [[nodiscard]] constexpr glm::vec3 ToGlmRgb(const CVarColor& c) noexcept { return { c.r, c.g, c.b }; }
+    }
+
     struct MeshSceneDesc
     {
         // THE AD-HOC ROWS (see MeshInstance's header): drawn direct, unculled,
@@ -295,9 +304,13 @@ namespace Arcane
         //
         // `ambient` is a flat term added to every lit surface -- the whole of
         // the indirect lighting model here, deliberately.
-        glm::vec3 lightDirection{0.0f, 0.0f, 1.0f};
-        glm::vec3 lightColor{1.0f, 1.0f, 1.0f};
-        glm::vec3 ambient{0.05f, 0.05f, 0.05f};
+        //
+        // The defaults are render.mesh.defaultLight.*'s (settings arc S6-19);
+        // a scene-view host overwrites them every frame from the published
+        // setting with ApplyDefaultLight (Live).
+        glm::vec3 lightDirection = Detail::ToGlm(RenderMeshDefaultLightSettings{}.direction);
+        glm::vec3 lightColor     = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.color);
+        glm::vec3 ambient        = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.ambient);
 
         // THE REGISTRY-BACKED SCENE (F3 plan 1 T6): what GpuSceneSync +
         // BuildGpuSceneFrame produced for this frame -- the staged rows,
@@ -332,6 +345,17 @@ namespace Arcane
                 && !(scene && (scene->HasDraws() || !scene->stage.rows.empty() || scene->stage.fullRebuild));
         }
     };
+
+    // The scene's light from render.mesh.defaultLight.* -- the one
+    // directional light and the ambient term every scene view gets until a
+    // light component exists (the colours' alpha is unused). A host passes
+    // Settings<RenderMeshDefaultLightSettings>() once per frame (Live).
+    inline void ApplyDefaultLight(MeshSceneDesc& scene, const RenderMeshDefaultLightSettings& light) noexcept
+    {
+        scene.lightDirection = Detail::ToGlm(light.direction);
+        scene.lightColor     = Detail::ToGlmRgb(light.color);
+        scene.ambient        = Detail::ToGlmRgb(light.ambient);
+    }
 
     // THE 8-BYTE ROOT BLOCK (F3): `firstOutput` is the batch's start in the
     // visible-index buffer for an indirect draw, or THE ROW ITSELF when
@@ -785,7 +809,7 @@ namespace Arcane
     // undefined on both backends -- and RenderGraph exposes no way to read a
     // handle's format back, so this function cannot derive it. It must be the
     // format `canvas` was CREATED with; the caller that minted the handle is
-    // the one that knows. (It was hardcoded to kGraphCanvasFormat until Task
+    // the one that knows. (It was hardcoded to the graph canvas format until Task
     // 7's first fix round, which made a differently-formatted canvas a silent
     // mismatch with no diagnostic.)
     //

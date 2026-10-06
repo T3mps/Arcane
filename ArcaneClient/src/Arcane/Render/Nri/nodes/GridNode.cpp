@@ -333,7 +333,7 @@ namespace Arcane
         // attaches its D32 depth and the grid tests against it; a frame with
         // none attaches nothing (UNKNOWN), and NRI bakes both facts into the
         // pipeline.
-        key.depthFormat     = hasDepth ? kGraphDepthFormat : nri::Format::UNKNOWN;
+        key.depthFormat     = hasDepth ? GraphDepthFormat() : nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
         // STRAIGHT ALPHA: the shader writes (rgb, coverage * fades) and the
         // canvas keeps the mesh pass's colour underneath -- the grid is a

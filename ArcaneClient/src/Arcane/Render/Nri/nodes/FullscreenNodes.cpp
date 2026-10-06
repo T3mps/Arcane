@@ -1091,7 +1091,7 @@ namespace Arcane
                 [&graph, targets, sources, p, width, height](RenderGraphBuilder& builder)
                 {
                     RgTextureDesc textureDesc;
-                    textureDesc.format = kGraphCanvasFormat;
+                    textureDesc.format = GraphCanvasFormat();
                     textureDesc.width  = width;
                     textureDesc.height = height;
                     // Its OWN transient. The pool allocator is what makes two
