@@ -2,6 +2,7 @@
 
 #include "Documents/DocumentHost.hpp"      // the open route a row's double-click hands to OpenAssetRow
 #include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry/AssetPanelRow -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateKindForAssetKind -- the rail's per-kind "+" (AssetKind -> CreateAssetKind bridge)
 #include "Widgets/EditorFonts.hpp"
@@ -149,14 +150,14 @@ namespace Arcane::Editor
                                          : services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
             // The row drew this frame (its menu is open on it): mark it drawn, or the
             // table's end-of-frame "target row not drawn" check cancels the box at once.
-            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
+            if (MenuVerb("Rename", MenuKey("assets.rename").c_str(), state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
             if (ImGui::IsWindowAppearing())   // T5 s7.7
                 state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = model.selection }) : "unavailable";
-            if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
+            if (MenuVerb("Duplicate", MenuKey("assets.duplicate").c_str(), state.menuRefusal.duplicate))
                 actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
             if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
                 state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
-            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
+            if (MenuVerb("Delete", MenuKey("assets.delete").c_str(), state.menuRefusal.del)) actions.requestDelete = model.selection;
             if (ImGui::IsWindowAppearing())   // T5 s7.8: destination-independent refusals only (MoveVerbRefusal); the modal checks each destination
                 state.menuRefusal.moveTo = services.fileOpRefusal ? MoveVerbRefusal(model.selection, model, services.fileOpRefusal) : "unavailable";
             if (MenuVerb("Move to...", nullptr, state.menuRefusal.moveTo)) actions.requestMoveTo = model.selection;

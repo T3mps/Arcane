@@ -2,6 +2,7 @@
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -173,8 +174,8 @@ namespace Arcane::Editor
             if (ImGui::BeginMenu("File"))
             {
                 requests.fileMenuOpen = true;
-                if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
-                if (ImGui::MenuItem("Open Scene", "Ctrl+O")) requests.openScene = true;
+                if (ImGui::MenuItem("New Scene", MenuKey("file.newScene").c_str())) requests.newScene = true;
+                if (ImGui::MenuItem("Open Scene", MenuKey("file.openScene").c_str())) requests.openScene = true;
                 // Open Recent Scene: PER-PROJECT history (SceneRecents.hpp),
                 // unlike Open Recent Project below (the Hub's shared,
                 // machine-wide list) -- UE's "Recent Levels" shape. Greyed
@@ -206,7 +207,7 @@ namespace Arcane::Editor
                 // of "Save As..." only, and "Save" (the item carrying the Ctrl+S
                 // hint) is the one users reach for.
                 if (ImGui::MenuItem(sceneDirty ? "Save *" : "Save",
-                                    "Ctrl+S", false, !playing))
+                                    MenuKey("file.saveScene").c_str(), false, !playing))
                     requests.saveScene = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
@@ -215,7 +216,7 @@ namespace Arcane::Editor
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
                 if (ImGui::MenuItem("Close Document",
-                                    EditorActions::Get().MenuShortcut("document.close").c_str(),
+                                    MenuKey("document.close").c_str(),
                                     false, closeableDocument))
                     requests.closeDocument = true;
                 ImGui::Separator();
@@ -276,10 +277,10 @@ namespace Arcane::Editor
                                                             undo.ClearedReason(), undo.UndoLabel());
                 const UndoMenuItem redoItem = UndoMenuState(undo.CanRedo(), playing, inTxn,
                                                             {}, undo.RedoLabel(), /*redo*/ true);
-                if (ImGui::MenuItem(undoItem.label.c_str(), "Ctrl+Z", false, undoItem.enabled)) undo.Undo();
+                if (ImGui::MenuItem(undoItem.label.c_str(), MenuKey("edit.undo").c_str(), false, undoItem.enabled)) undo.Undo();
                 if (!undoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", undoItem.tooltip.c_str());
-                if (ImGui::MenuItem(redoItem.label.c_str(), "Ctrl+Y", false, redoItem.enabled)) undo.Redo();
+                if (ImGui::MenuItem(redoItem.label.c_str(), MenuKey("edit.redo").c_str(), false, redoItem.enabled)) undo.Redo();
                 if (!redoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", redoItem.tooltip.c_str());
                 ImGui::Separator();
@@ -294,21 +295,21 @@ namespace Arcane::Editor
                 // Rename stays enabled: the root is renameable.
                 const bool structural     = hasSelection && !selectionRootOnly && !playing;
                 const bool showRootReason = selectionRootOnly && !playing;
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, structural))
+                if (ImGui::MenuItem("Cut", MenuKey("edit.cut").c_str(), false, structural))
                     requests.cutSelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Cut);
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, structural))
+                if (ImGui::MenuItem("Copy", MenuKey("edit.copy").c_str(), false, structural))
                     requests.copySelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Copy);
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, !playing))
+                if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str(), false, !playing))
                     requests.paste = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, structural))
+                if (ImGui::MenuItem("Duplicate", MenuKey("edit.duplicate").c_str(), false, structural))
                     requests.duplicateSelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Duplicate);
                 // Same code paths as the Outliner's F2/Del bindings.
-                if (ImGui::MenuItem("Rename", "F2", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Rename", MenuKey("outliner.rename").c_str(), false, hasSelection && !playing))
                     requests.renameSelected = true;
-                if (ImGui::MenuItem("Delete", "Del", false, structural))
+                if (ImGui::MenuItem("Delete", MenuKey("outliner.delete").c_str(), false, structural))
                     requests.deleteSelected = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Delete);
                 ImGui::Separator();
@@ -1321,7 +1322,7 @@ namespace Arcane::Editor
         // Clear Log (SOutputLog::ExtendTextBoxMenu).
         if (ImGui::BeginPopupContextWindow("##consolectx"))
         {
-            if (ImGui::MenuItem("Copy", "Ctrl+C", false, s_selection.Size > 0))
+            if (ImGui::MenuItem("Copy", MenuKey("console.copy").c_str(), false, s_selection.Size > 0))
                 copyRows(true);
             if (ImGui::MenuItem("Copy All"))
                 copyRows(false);
@@ -2306,15 +2307,15 @@ namespace Arcane::Editor
                         // Edit-menu parity via the shared functions above.
                         // Acts on the SELECTION -- the right-click already
                         // selected this row when it was outside it.
-                        if (ImGui::MenuItem("Cut", "Ctrl+X", false, !rootOnly))
+                        if (ImGui::MenuItem("Cut", MenuKey("edit.cut").c_str(), false, !rootOnly))
                             CutSelection(registry, sel, undo, binding);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Cut);
-                        if (ImGui::MenuItem("Copy", "Ctrl+C", false, !rootOnly))
+                        if (ImGui::MenuItem("Copy", MenuKey("edit.copy").c_str(), false, !rootOnly))
                             CopySelectionToClipboard(registry, sel);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Copy);
-                        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                        if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str()))
                             PasteFromClipboard(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !rootOnly))
+                        if (ImGui::MenuItem("Duplicate", MenuKey("edit.duplicate").c_str(), false, !rootOnly))
                             DuplicateSelection(registry, sel, undo, binding);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Duplicate);
                         ImGui::Separator();
@@ -2326,7 +2327,7 @@ namespace Arcane::Editor
                         // is what lets the explanation reach a greyed item.
                         const Arcane::Identity* rowInfo =
                             std::as_const(registry).GetComponent<Arcane::Identity>(row.entity);
-                        if (ImGui::MenuItem("Rename", "F2", false, rowInfo != nullptr))
+                        if (ImGui::MenuItem("Rename", MenuKey("outliner.rename").c_str(), false, rowInfo != nullptr))
                             BeginRename(state, row.entity, rowInfo->name);
                         if (rowInfo == nullptr
                             && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
@@ -2336,7 +2337,7 @@ namespace Arcane::Editor
                         // scope below (the standard deferred-OpenPopup pattern).
                         if (ImGui::MenuItem("Add Component..."))
                             state.addComponentPending = true;
-                        if (ImGui::MenuItem("Delete", "Del", false, !rootOnly))
+                        if (ImGui::MenuItem("Delete", MenuKey("outliner.delete").c_str(), false, !rootOnly))
                         {
                             if (!sel.Contains(row.entity))
                                 sel.Select(row.entity);
@@ -2451,7 +2452,7 @@ namespace Arcane::Editor
             // SceneRoot (the same Invalid-parent rule "New Entity" takes).
             DrawAddPrimitiveSubmenu(state, Astra::Entity::Invalid());
             ImGui::Separator();
-            if (ImGui::MenuItem("Paste", "Ctrl+V"))
+            if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str()))
                 PasteFromClipboard(registry, sel, undo, binding);
             ImGui::EndPopup();
         }

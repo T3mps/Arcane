@@ -2,6 +2,7 @@
 
 #include "Documents/InputActionsJson.hpp"
 #include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -310,14 +311,14 @@ namespace Arcane::Editor
             if (model.SelectedMap() == id && state.scrollMapToSelection) { ImGui::SetScrollHereY(); state.scrollMapToSelection = false; }
             if (ImGui::BeginPopupContextItem("##mapmenu"))
             {
-                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, id);
+                if (ImGui::MenuItem("Rename", MenuKey("input.rename").c_str())) OpenRenameOn(model, state, id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollMapToSelection = true; };
                 if (ImGui::MenuItem("Set as default", nullptr, Str(draft, "defaultMap") == id.ToString()))
                     edit = [&model, id] { (void)model.SetDefaultMap(id); };
                 ImGui::Separator();
                 MoveRowMenu(model, id, edit);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, id] { (void)model.RemoveMap(id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, id] { (void)model.RemoveMap(id); };
                 ImGui::EndPopup();
             }
             ImGui::SetCursorScreenPos(row.trailingPos);
@@ -522,7 +523,7 @@ namespace Arcane::Editor
         {
             if (row.kind == InputRowKind::Action)
             {
-                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
+                if (ImGui::MenuItem("Rename", MenuKey("input.rename").c_str())) OpenRenameOn(model, state, row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollRowToSelection = true; };
                 const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
                 if (ImGui::MenuItem("Add binding") && services.beginAdd) services.beginAdd(MakeAddBinding(map, row.id, groups));
@@ -533,7 +534,7 @@ namespace Arcane::Editor
                     ImGui::EndMenu();
                 }
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, id = row.id] { (void)model.RemoveAction(map, id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, map, id = row.id] { (void)model.RemoveAction(map, id); };
             }
             else if (row.kind == InputRowKind::CompositeHeader)
             {
@@ -551,14 +552,14 @@ namespace Arcane::Editor
                 }
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
             }
             else   // Binding / Part
             {
-                if (ImGui::MenuItem("Rebind...", "Enter") && services.beginRebind) services.beginRebind(row.id);
+                if (ImGui::MenuItem("Rebind...", MenuKey("input.rebind").c_str()) && services.beginRebind) services.beginRebind(row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del"))
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str()))
                 {
                     if (row.kind == InputRowKind::Part) edit = [&model, composite = row.bindingId, id = row.id] { (void)model.RemovePart(composite, id); };
                     else edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
