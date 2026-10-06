@@ -2,6 +2,7 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
+#include <Arcane/Config/Bindings/JobsBinding.hpp>
 #include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -75,6 +76,18 @@ namespace Arcane
             return std::filesystem::current_path();
         }
 
+        // The EngineConfig cvar rung, applied BEFORE Impl reads any setting
+        // (settings arc S2). JobSystem's size (jobs.workerThreads, Restart) and
+        // the first registry's Astra config (astra.memory.*, NextWorld) are read
+        // while Impl constructs, so the shipped data/EngineConfig values must
+        // already be published. Returns the JobSystem ctor argument.
+        std::uint32_t ApplyEngineRungAndResolveWorkers()
+        {
+            ApplyCVarDirectory(CVarRegistry::Get(), ExeDir() / "data" / "EngineConfig", SetBy::EngineConfig, "engine-config");
+            CVarRegistry::Get().Publish();
+            return ResolveWorkerThreads(Settings<JobsSettings>());
+        }
+
         // Paths follows the OPEN project (settings spec s11.0). It is cleared
         // only when the project being dropped is still the configured one,
         // because another Runtime may own the current project.
@@ -142,7 +155,7 @@ namespace Arcane
         // ComponentRegistry (spec s4; Runtime.hpp's three-argument ctor explains
         // why a per-world registry would break every module-defined type).
         Impl(ProcessContext& proc, NetMode netMode, std::shared_ptr<Astra::ComponentRegistry> sharedComponents)
-            : jobs(), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
+            : jobs(ApplyEngineRungAndResolveWorkers()), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
         {
             context = &proc.TypeContext();
 
@@ -244,6 +257,9 @@ namespace Arcane
             // Arcane::Paths names the engine dir once per process (settings spec
             // s11.0): the first Runtime sets it to the exe dir -- where the shipped
             // data/EngineConfig defaults sit -- unless a host already did.
+            // The EngineConfig cvar rung was applied at the top of Impl (before
+            // JobSystem and the first registry), so only the JSON Config layer
+            // remains here.
             Paths::Config paths = Paths::Current();
             if (paths.engineDir.empty())
             {
@@ -252,8 +268,6 @@ namespace Arcane
             }
             engineConfigDir = Paths::Get(Paths::Location::EngineConfig);
             config.LoadEngineDefaults(engineConfigDir);
-            ApplyCVarDirectory(CVarRegistry::Get(), engineConfigDir, SetBy::EngineConfig, "engine-config");
-            CVarRegistry::Get().Publish();
             // The audio device that used to be initialized here is ClientRuntime's
             // (its RuntimePresentation member, initialized from its own ctor with
             // the enableAudioDevice flag that moved there with it).

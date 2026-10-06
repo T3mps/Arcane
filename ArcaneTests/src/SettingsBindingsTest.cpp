@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
+#include <Arcane/Config/Bindings/JobsBinding.hpp>
 #include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
@@ -227,5 +228,33 @@ TEST_CASE("SimSettings: today's 60 Hz step and 0.25 s frame clamp; sim.fixedHz i
     Runtime after(Test::Process());
     CHECK(after.Loop().FixedHz() == 30.0);
     CHECK(before.Loop().FixedHz() == 60.0);                     // NextWorld: a live Runtime keeps its step
+}
+
+TEST_CASE("ResolveWorkerThreads: 0 is enkiTS' hardware default and N is N; a Runtime reads jobs.workerThreads when it is built", "[settings]")
+{
+    CHECK(JobsSettings{}.workerThreads == 0u);
+    {
+        JobSystem byDefault(0);
+        JobSystem resolved(ResolveWorkerThreads(JobsSettings{}));
+        CHECK(resolved.WorkerCount() == byDefault.WorkerCount());   // identical pool
+    }
+    CHECK(ResolveWorkerThreads(JobsSettings{ .workerThreads = 3 }) == 3u);
+    CHECK(ResolveWorkerThreads(JobsSettings{ .workerThreads = 1 }) == 1u);
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    const auto e = reg.Explain("jobs.workerThreads");
+    REQUIRE(e);
+    CHECK(e->type == CVarType::UInt32);
+    CHECK(e->apply == ApplyMode::Restart);
+    CHECK(e->scope == SettingScope::PreferencesProject);
+    CHECK(HasFlag(e->flags, CVarFlags::Archive));
+
+    const CVarHandle h = reg.Find("jobs.workerThreads");
+    ClearCodeOnExit restore{ h };
+    REQUIRE(reg.Set(h, CVarValue::UInt32(1), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    JobSystem one(1);
+    Runtime serial(Test::Process());
+    CHECK(serial.Jobs().WorkerCount() == one.WorkerCount());
 }
 
