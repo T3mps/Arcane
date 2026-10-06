@@ -28,6 +28,8 @@ namespace Arcane::HostBoot
                 const Paths::Config projectPaths = Paths::ForProject(root);
                 ApplyCVarDirectory(cvars, Paths::Resolve(Paths::Location::ProjectConfig, projectPaths),
                                    SetBy::Project, "project");
+                if (const auto projectManifest = ProjectManifest::LoadFile(*manifest))
+                    ApplyLegacyManifestSettings(cvars, *projectManifest);
                 if (editor)
                 {
                     const std::filesystem::path editorUser = Paths::Get(Paths::Location::EditorUserDir);

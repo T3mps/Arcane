@@ -85,19 +85,16 @@ TEST_CASE("ProjectManifest returns nullopt (never throws) on type-mismatched opt
         })")).has_value());
 }
 
-TEST_CASE("a manifest with no splash block defaults showProgress to false", "[project]")
+TEST_CASE("a manifest with no splash block has no legacy settings (legacy block)", "[project]")
 {
-    // Absent block: engine branding, no progress -- a player does not care that
-    // we are scanning asset 412 of 1180. UE reaches the same conclusion.
     const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 1, "name": "T", "engine": { "abi": 9 }
     })"));
     REQUIRE(m.has_value());
-    CHECK(m->splash.enabled);
-    CHECK_FALSE(m->splash.showProgress);
+    CHECK(m->legacySettings.empty());
 }
 
-TEST_CASE("a manifest splash block round-trips its fields", "[project]")
+TEST_CASE("a manifest splash block round-trips its fields (legacy block)", "[project]")
 {
     const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 1, "name": "T", "engine": { "abi": 9 },
@@ -105,23 +102,23 @@ TEST_CASE("a manifest splash block round-trips its fields", "[project]")
                     "minDurationSeconds": 1.5 }
     })"));
     REQUIRE(m.has_value());
-    CHECK_FALSE(m->splash.enabled);
-    CHECK(m->splash.image == "game://B/s.png");
-    CHECK(m->splash.showProgress);
-    CHECK(m->splash.minDurationSeconds == 1.5f);
+    const auto& splash = m->legacySettings["app"]["splash"];
+    CHECK_FALSE(splash["enabled"].get<bool>());
+    CHECK(splash["image"].get<std::string>() == "game://B/s.png");
+    CHECK(splash["showProgress"].get<bool>());
+    CHECK(splash["minDurationSeconds"].get<float>() == 1.5f);
 }
 
-TEST_CASE("a splash block present but not an object yields defaults, not manifest failure", "[project]")
+TEST_CASE("a splash block present but not an object yields no legacy block, not manifest failure (legacy block)", "[project]")
 {
     const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 1, "name": "T", "engine": { "abi": 9 }, "splash": 42
     })"));
     REQUIRE(m.has_value());
-    CHECK(m->splash.enabled);          // untouched default
-    CHECK_FALSE(m->splash.showProgress);
+    CHECK(m->legacySettings.empty());
 }
 
-TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not just that field", "[project]")
+TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not just that field (legacy block)", "[project]")
 {
     // Same contract as description/gameModule/plugins[].enabled above:
     // .value() throws json::type_error on a type mismatch, caught by
@@ -132,24 +129,24 @@ TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not
     })")).has_value());
 }
 
-TEST_CASE("a manifest physics block sets gravity; absent keeps the default", "[project]")
+TEST_CASE("a manifest physics block captures gravity; absent has no legacy block (legacy block)", "[project]")
 {
     const auto with = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 2, "name": "T", "engine": { "abi": 28 },
         "physics": { "gravity": [0.0, 12.5] }
     })"));
     REQUIRE(with.has_value());
-    CHECK(with->physics.gravity.x == 0.0f);
-    CHECK(with->physics.gravity.y == Catch::Approx(12.5f));
+    CHECK(with->legacySettings["physics"]["gravity"][0].get<float>() == 0.0f);
+    CHECK(with->legacySettings["physics"]["gravity"][1].get<float>() == Catch::Approx(12.5f));
 
     const auto without = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 1, "name": "T", "engine": { "abi": 28 }
     })"));
     REQUIRE(without.has_value());
-    CHECK(without->physics.gravity.y == Catch::Approx(-9.81f));   // +Y up (F4 plan 1 T2)
+    CHECK(without->legacySettings.empty());
 }
 
-TEST_CASE("formatVersion 2 negates a v1 physics.gravity stamp; v2 and an absent block read as-is", "[project]")
+TEST_CASE("formatVersion 2 negates a v1 physics.gravity legacy block; v2 reads as-is (legacy block)", "[project]")
 {
     // F4 plan 1 final review, F2a: the Hub stamped "physics": {"gravity":
     // [0, 9.81]} (+Y DOWN) into every manifest it created between 2026-09-11
@@ -162,8 +159,8 @@ TEST_CASE("formatVersion 2 negates a v1 physics.gravity stamp; v2 and an absent 
     })"));
     REQUIRE(v1.has_value());
     CHECK(v1->formatVersion == 1);
-    CHECK(v1->physics.gravity.x == Catch::Approx(0.0f));
-    CHECK(v1->physics.gravity.y == Catch::Approx(-9.81f));
+    CHECK(v1->legacySettings["physics"]["gravity"][0].get<float>() == Catch::Approx(0.0f));
+    CHECK(v1->legacySettings["physics"]["gravity"][1].get<float>() == Catch::Approx(-9.81f));
 
     const auto v2 = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 2, "name": "T", "engine": { "abi": 32 },
@@ -171,17 +168,16 @@ TEST_CASE("formatVersion 2 negates a v1 physics.gravity stamp; v2 and an absent 
     })"));
     REQUIRE(v2.has_value());
     CHECK(v2->formatVersion == Arcane::ProjectManifest::kFormatVersion);
-    CHECK(v2->physics.gravity.y == Catch::Approx(-9.81f));
+    CHECK(v2->legacySettings["physics"]["gravity"][1].get<float>() == Catch::Approx(-9.81f));
 
     const auto v1Bare = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
         "formatVersion": 1, "name": "T", "engine": { "abi": 32 }
     })"));
     REQUIRE(v1Bare.has_value());
-    CHECK(v1Bare->physics.gravity.x == Catch::Approx(0.0f));
-    CHECK(v1Bare->physics.gravity.y == Catch::Approx(-9.81f));
+    CHECK(v1Bare->legacySettings.empty());
 }
 
-TEST_CASE("a malformed physics gravity leaves the default rather than failing the manifest", "[project]")
+TEST_CASE("a malformed physics gravity yields no legacy block rather than failing the manifest (legacy block)", "[project]")
 {
     // Same lenient spirit as splash.backgroundColor: present-but-malformed
     // (wrong type, too short, a non-number element) keeps the default.
@@ -190,7 +186,7 @@ TEST_CASE("a malformed physics gravity leaves the default rather than failing th
         const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(
             std::string(R"({"formatVersion": 1, "name": "T", "engine": { "abi": 28 }, "physics": {)") + body + "}}"));
         REQUIRE(m.has_value());
-        CHECK(m->physics.gravity.y == Catch::Approx(-9.81f));   // +Y up (F4 plan 1 T2)
+        CHECK(m->legacySettings.empty());
     }
 }
 

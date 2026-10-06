@@ -3,6 +3,7 @@
 #include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8() -- exe-relative image path resolution
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/NativeWindow.hpp>
+#include <Arcane/Project/AppSplashSettings.hpp>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -387,7 +388,7 @@ namespace Arcane
             // Consequence, taken deliberately: the splash has a taskbar
             // button and appears in Alt-Tab, matching UE's editor behaviour.
             d.appWindow     = true;
-            d.backgroundRgb = 0x0D0D0F;              // RGB(13, 13, 15), the brush PaintSplash reads back via GCLP_HBRBACKGROUND
+            d.backgroundRgb = ToSrgb8(Settings<AppSplashSettings>().backgroundColor);
             m_impl->window.Open(d, m_impl.get());
         }
         catch (...) { m_impl.reset(); }   // never fail boot for a splash

@@ -2,6 +2,8 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN, ARC_ERROR
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/Diagnostics and editor.lock resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 
@@ -26,6 +28,22 @@ namespace Arcane
 {
     namespace
     {
+        bool ReplaceConfigFile(const std::filesystem::path& tmp, const std::filesystem::path& file)
+        {
+#ifdef _WIN32
+            if (MoveFileExW(tmp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                return true;
+#else
+            std::error_code ec;
+            std::filesystem::rename(tmp, file, ec);
+            if (!ec)
+                return true;
+#endif
+            std::error_code ignored;
+            std::filesystem::remove(tmp, ignored);
+            return false;
+        }
+
         // Read a .arcproj, apply ONE edit, write it back atomically. Shared by
         // SetBootScene, the Open-time guid self-heal, and RestampEngineAbi
         // (whose target is NESTED -- engine.abi -- which is why this takes an
@@ -162,6 +180,12 @@ namespace Arcane
         }
     }
 
+    void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest)
+    {
+        for (const auto& [category, block] : manifest.legacySettings.items())
+            ApplyCVarCategory(registry, category, block, SetBy::Project, false, "project-manifest");
+    }
+
     std::optional<std::filesystem::path> Project::ResolveManifestFile(const std::filesystem::path& pathOrFile)
     {
         std::error_code ec;
@@ -198,6 +222,61 @@ namespace Arcane
         return manifestFile;
     }
 
+    bool Project::MigrateLegacySettingsAt(const std::filesystem::path& manifestFile)
+    {
+        const auto manifest = ProjectManifest::LoadFile(manifestFile);
+        if (!manifest || manifest->legacySettings.empty())
+            return false;
+
+        const std::filesystem::path config = manifestFile.parent_path() / "Config";
+        std::error_code ec;
+        std::filesystem::create_directories(config, ec);
+        if (ec)
+            return false;
+
+        for (const auto& [category, block] : manifest->legacySettings.items())
+        {
+            const std::filesystem::path file = config / (category + ".json");
+            nlohmann::json doc = nlohmann::json::object();
+            if (std::ifstream in(file); in)
+            {
+                try { doc = nlohmann::json::parse(in); }
+                catch (...) { doc = nlohmann::json::object(); }
+            }
+            doc.merge_patch(block);
+
+            const std::filesystem::path tmp = file.string() + ".tmp";
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            out << doc.dump(2) << '\n';
+            if (!out.good())
+            {
+                out.close();
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
+                return false;
+            }
+            out.close();
+            if (!ReplaceConfigFile(tmp, file))
+                return false;
+        }
+
+        return RewriteManifest(manifestFile, "Project::MigrateLegacySettings",
+                               [](nlohmann::ordered_json& doc)
+                               {
+                                   doc.erase("physics");
+                                   doc.erase("splash");
+                               });
+    }
+
+    bool Project::MigrateLegacySettings()
+    {
+        if (!MigrateLegacySettingsAt(m_manifestFile))
+            return false;
+        m_manifest.legacySettings = nlohmann::json::object();
+        m_manifest.formatVersion = ProjectManifest::kFormatVersion;
+        return true;
+    }
+
     std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
                                          AssetRegistry::ScanProgressFn onProgress,
                                          ProjectOpenOptions opts)
@@ -227,6 +306,21 @@ namespace Arcane
         auto manifest = ProjectManifest::LoadFile(*manifestFile);
         if (!manifest)
             return std::nullopt;   // LoadFile already logged
+
+        if (!manifest->legacySettings.empty())
+        {
+            if (MigrateLegacySettingsAt(*manifestFile))
+            {
+                manifest->legacySettings = nlohmann::json::object();
+                manifest->formatVersion = ProjectManifest::kFormatVersion;
+            }
+            else
+            {
+                // Read-only shipped projects still get the legacy values for
+                // this process; nothing attempts to mutate their manifest.
+                ApplyLegacyManifestSettings(CVarRegistry::Get(), *manifest);
+            }
+        }
 
         // Self-heal the project's durable identity: a manifest that predates
         // the guid field (or carries a mangled one) gets a fresh Guid stamped
@@ -426,7 +520,6 @@ namespace Arcane
         manifestJson["gameModule"]    = "";
         manifestJson["plugins"]       = nlohmann::json::array();
         manifestJson["bootScene"]     = "";
-        manifestJson["physics"]       = { { "gravity", { 0.0, -9.81 } } };   // stamped at birth with the engine default (+Y up, F4)
         // Stamped at birth so the Open() below never needs its self-heal write.
         manifestJson["guid"]          = Guid::Generate().ToString();
 
