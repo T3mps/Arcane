@@ -2268,6 +2268,7 @@ namespace Arcane::Editor
         // with no gameModule (content-only, or none open).
         const Arcane::Project* menuProj = m_runtime->CurrentProject();
         const bool hasGameModule = menuProj && !menuProj->Manifest().gameModule.empty();
+        if (menuProj) RefreshDevenv();   // build.ideExecutable is Live: one string compare unless it changed
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        InPlayMode(),
                                        m_moduleBuild.Running(), hasGameModule,

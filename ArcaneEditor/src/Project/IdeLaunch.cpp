@@ -3,6 +3,7 @@
 #include "Project/RuntimeLaunch.hpp"   // QuoteArg (the one Win32 argv escaper)
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Build/BuildToolSettings.hpp>  // build.ideExecutable (DevenvCache's key)
 #include <Arcane/Build/Toolchain.hpp>  // ResolveDevenv (the one vswhere probe, shared with arcbuild)
 
 #include <cwctype>
@@ -107,6 +108,17 @@ namespace Arcane::Editor::IdeLaunch
     std::filesystem::path ResolveDevenv()
     {
         return Arcane::Toolchain::ResolveDevenv();
+    }
+
+    bool DevenvCache::Refresh()
+    {
+        const std::string& configured = Arcane::Settings<Arcane::BuildToolSettings>().ideExecutable;
+        if (m_resolved && configured == m_resolvedFor)
+            return false;
+        m_resolvedFor = configured;
+        m_resolved = true;
+        m_path = ResolveDevenv();
+        return true;
     }
 
 #ifdef _WIN32

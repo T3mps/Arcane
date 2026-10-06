@@ -2939,24 +2939,22 @@ namespace Arcane::Editor
 
     // ---- Build -> Open Visual Studio / open source in VS (see EditorApp.hpp) ---
 
-    void EditorApp::ResolveDevenvOnce()
+    void EditorApp::RefreshDevenv()
     {
-        if (m_devenvResolved)
+        if (!m_devenv.Refresh())
             return;
-        m_devenvResolved = true;
-        m_devenv = IdeLaunch::ResolveDevenv();
-        if (m_devenv.empty())
+        if (m_devenv.Path().empty())
             ARC_WARN("IDE: no Visual Studio install found (vswhere found no devenv.exe) -- "
                      "Build > Open Visual Studio stays greyed");
         else
-            ARC_INFO("IDE: Visual Studio at {}", m_devenv.string());
+            ARC_INFO("IDE: Visual Studio at {}", m_devenv.Path().string());
     }
 
     Arcane::Editor::IdeMenuState EditorApp::IdeMenuStateNow() const
     {
         if (!m_runtime->CurrentProject())
             return IdeMenuState::NoProject;
-        if (m_devenv.empty())
+        if (m_devenv.Path().empty())
             return IdeMenuState::NoVisualStudio;
         return IdeMenuState::Available;
     }
@@ -2969,7 +2967,7 @@ namespace Arcane::Editor
             ARC_ERROR("IDE: no open project -- nothing to open");
             return IdeLaunch::Outcome::NoSolution;
         }
-        ResolveDevenvOnce();
+        RefreshDevenv();
 
         // The solution to hand devenv, or to find in a running instance. A
         // project that has never been generated has none yet: run premake
@@ -2983,8 +2981,8 @@ namespace Arcane::Editor
         }
 
         const IdeLaunch::Outcome outcome = file.empty()
-            ? IdeLaunch::OpenSolution(m_devenv, solution)
-            : IdeLaunch::OpenFileAtLine(m_devenv, solution, file, line);
+            ? IdeLaunch::OpenSolution(m_devenv.Path(), solution)
+            : IdeLaunch::OpenFileAtLine(m_devenv.Path(), solution, file, line);
 
         // One Console line per click, its severity by whether the click did
         // what it asked: the three "it worked" outcomes are info, the

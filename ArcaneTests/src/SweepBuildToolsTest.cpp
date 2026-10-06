@@ -3,6 +3,7 @@
 #include <Arcane/Build/BuildToolSettings.hpp>
 #include <Arcane/Build/Toolchain.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
+#include <Project/IdeLaunch.hpp>   // the editor's DevenvCache (source-compiled into ArcaneTests)
 #include <Request.hpp>   // arcbuild's Cli (source-compiled into ArcaneTests)
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,35 @@ TEST_CASE("sweep: build.msbuildPath/makePath/ninjaPath/ideExecutable win over di
     CHECK(std::filesystem::equivalent(Toolchain::ResolveDevenv(), fake));
     reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
     std::filesystem::remove(fake);
+}
+
+TEST_CASE("sweep: a changed build.ideExecutable is what the next IDE launch resolves (Live)", "[sweep][build]")
+{
+    // S6-15 carried gap: the editor cached its devenv answer for the whole
+    // session, so a changed setting reached "Open Visual Studio" only on the
+    // next launch. Both values are real files, so no vswhere is spawned.
+    const auto first  = std::filesystem::temp_directory_path() / "fake-devenv-a.exe";
+    const auto second = std::filesystem::temp_directory_path() / "fake-devenv-b.exe";
+    std::ofstream(first) << "x";
+    std::ofstream(second) << "x";
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("build.ideExecutable");
+    reg.Set(h, CVarValue::String(first.string()), SetBy::Code);
+    reg.PublishImmediate();
+
+    Editor::IdeLaunch::DevenvCache cache;
+    CHECK(cache.Refresh());
+    CHECK(std::filesystem::equivalent(cache.Path(), first));
+    CHECK_FALSE(cache.Refresh());   // unchanged: the cached answer, no re-resolve
+
+    reg.Set(h, CVarValue::String(second.string()), SetBy::Code);
+    reg.PublishImmediate();
+    CHECK(cache.Refresh());
+    CHECK(std::filesystem::equivalent(cache.Path(), second));
+
+    reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
+    std::filesystem::remove(first);
+    std::filesystem::remove(second);
 }
 
 TEST_CASE("sweep: a build.ninjaPath that is not a file falls back to discovery", "[sweep][build]")

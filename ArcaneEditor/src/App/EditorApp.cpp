@@ -1370,9 +1370,10 @@ namespace Arcane::Editor
 
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
-        // once per process, here, rather than spawning vswhere from the menu
-        // path. See OpenInIde (EditorAppProject.cpp).
-        ResolveDevenvOnce();
+        // here, rather than spawning vswhere from the first menu draw. The
+        // frame re-checks build.ideExecutable before each menu draw (Live).
+        // See OpenInIde (EditorAppProject.cpp).
+        RefreshDevenv();
 
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
