@@ -7,13 +7,13 @@
 //
 // MODERNIZATION: dynamic bodies are colored by island (IslandRootOf keyed
 // into a small hue palette) instead of the Lua's uniform kinematic green.
-// Sleeping dynamics are drawn at 35% brightness (Lua dim = 0.35 branch).
+// Sleeping dynamics are drawn at 35% brightness (Lua dim = 0.35 branch; now
+// debug.physics.style.sleepingDim).
 //
 // PRESENTATION BOUNDARY (one-way): Core -> never includes Render. This file
 // lives in Arcane.dll and is the only permitted side to couple physics + render.
 
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
-#include <Arcane/Core/Constant.hpp>
 
 #include <algorithm>   // std::clamp (emphasis floor)
 #include <cmath>
@@ -145,17 +145,18 @@ namespace Arcane
         // Draw a short arrow head at `tip`, opening back toward `from`.
         inline void DrawArrowHead(Batcher2D& b, const glm::vec2& from,
                                   const glm::vec2& tip, float thickness,
-                                  const glm::vec4& color)
+                                  const glm::vec4& color,
+                                  const DebugPhysicsStyleSettings& st)
         {
             glm::vec2 dir = tip - from;
             const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
             if (len < 1e-4f) return;
             dir /= len;
             const glm::vec2 perp(-dir.y, dir.x);
-            const float head = (len < 12.0f) ? len * 0.5f : 6.0f; // px
+            const float head = (len < st.arrowShortLen) ? len * 0.5f : st.arrowHeadLen; // px
             const glm::vec2 base = tip - dir * head;
-            b.Line(tip, base + perp * (head * 0.6f), thickness, color);
-            b.Line(tip, base - perp * (head * 0.6f), thickness, color);
+            b.Line(tip, base + perp * (head * st.arrowHeadSpread), thickness, color);
+            b.Line(tip, base - perp * (head * st.arrowHeadSpread), thickness, color);
         }
 
         // Transform a Phys::Vec2 in the shape's LOCAL frame through a
@@ -313,6 +314,7 @@ namespace Arcane
         const glm::vec4  colOrient   = ToVec4(opts.orient);
         const glm::vec4  colCom      = ToVec4(opts.com);
         const glm::vec4  colContact  = ToVec4(opts.contact);
+        const DebugPhysicsStyleSettings& style = Settings<DebugPhysicsStyleSettings>();
 
         // ---- per-body shape outlines ----------------------------------------
         for (std::uint32_t i = 0; i < n; ++i)
@@ -360,14 +362,13 @@ namespace Arcane
                 const std::uint32_t root = world.IslandRootOf(i);
                 col = IslandColor(opts, root);
 
-                // Sleeping dynamic bodies drawn dim (Lua dim = 0.35).
+                // Sleeping dynamic bodies drawn dim (debug.physics.style.sleepingDim;
+                // Lua dim = 0.35).
                 if (!awake)
                 {
-                    ARC_CONSTANT("base style: debug.physics overlay styling; DERIVED px/factor, not a setting (S5-1 L9)")
-                    constexpr float kDim = 0.35f;
-                    col.r *= kDim;
-                    col.g *= kDim;
-                    col.b *= kDim;
+                    col.r *= style.sleepingDim;
+                    col.g *= style.sleepingDim;
+                    col.b *= style.sleepingDim;
                 }
             }
             else
@@ -447,7 +448,7 @@ namespace Arcane
                     const glm::vec2 tip =
                         view.Point(comW + glm::vec2(vx, vy) * opts.velocityScale);
                     batcher.Line(comS, tip, thick, colVelocity);
-                    DrawArrowHead(batcher, comS, tip, thick, colVelocity);
+                    DrawArrowHead(batcher, comS, tip, thick, colVelocity, style);
                 }
             }
 
@@ -611,7 +612,7 @@ namespace Arcane
                         // Normal arrow: contact point -> point + normal * len.
                         const glm::vec2 tip = view.Point(wpt + nrm * opts.manifoldNormalLength);
                         batcher.Line(spt, tip, thick, col);
-                        DrawArrowHead(batcher, spt, tip, thick, col);
+                        DrawArrowHead(batcher, spt, tip, thick, col, style);
                     }
                 });
         }
@@ -632,11 +633,13 @@ namespace Arcane
 
         const DebugPhysicsTraceSettings& trc = Settings<DebugPhysicsTraceSettings>();
         const DebugPhysicsColorSettings& pal = Settings<DebugPhysicsColorSettings>();
+        const DebugPhysicsStyleSettings& style = Settings<DebugPhysicsStyleSettings>();
         const float thick = lineThickness.value_or(trc.traceLineThickness);
 
         // Emphasis scales alpha so the SELECTED contact (emphasis 1) reads bold/bright and
-        // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor.
-        const float em = std::clamp(emphasis.value_or(trc.emphasis), 0.15f, 1.0f);
+        // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor
+        // (debug.physics.style.emphasisFloor, range 0..1 so the clamp stays ordered).
+        const float em = std::clamp(emphasis.value_or(trc.emphasis), style.emphasisFloor, 1.0f);
         const auto Dim = [em](glm::vec4 c) noexcept -> glm::vec4
         {
             c.a *= em;
@@ -648,7 +651,7 @@ namespace Arcane
         // focused contact's subject outline is the boldest.
         const glm::vec4 colSubject = ToVec4(pal.subject); // bright gold = subject
         DrawTraceShape(batcher, trace.shapeA, trace.xfA, view,
-                       em >= 1.0f ? thick * 1.3f : thick, Dim(colSubject));
+                       em >= 1.0f ? thick * style.subjectThicknessScale : thick, Dim(colSubject));
         DrawTraceShape(batcher, trace.shapeB, trace.xfB, view, thick, Dim(ToVec4(pal.traceShapeB)));
 
         // Anchor world point for axis/normal drawing: the first manifold contact
@@ -679,8 +682,6 @@ namespace Arcane
         {
             const int n = static_cast<int>(trace.satAxes.size());
             const int sel = (stepIndex >= 0 && stepIndex < n) ? stepIndex : -1;
-            ARC_CONSTANT("base style: debug.physics overlay styling; DERIVED px/factor, not a setting (S5-1 L9)")
-            constexpr float kAxisHalfLenPx = 60.0f;  // half-length of the drawn segment
 
             for (int i = 0; i < n; ++i)
             {
@@ -699,10 +700,10 @@ namespace Arcane
                 const float     alongL = std::sqrt(alongS.x * alongS.x + alongS.y * alongS.y);
                 if (alongL < 1e-6f) continue;
                 const glm::vec2 alongN = alongS / alongL;
-                const glm::vec2 a = anchorS - alongN * kAxisHalfLenPx;
-                const glm::vec2 c = anchorS + alongN * kAxisHalfLenPx;
+                const glm::vec2 a = anchorS - alongN * style.axisHalfLenPx;
+                const glm::vec2 c = anchorS + alongN * style.axisHalfLenPx;
                 const bool hi = ax.chosen || i == sel;
-                batcher.Line(a, c, hi ? thick * 1.8f : thick,
+                batcher.Line(a, c, hi ? thick * style.axisHiThicknessScale : thick,
                              Dim(ToVec4(hi ? pal.traceAxisHi : pal.traceAxis)));
             }
         }
@@ -716,7 +717,7 @@ namespace Arcane
         // series is the inset's job. (Drawing MD points in world space would be
         // meaningless.) We mark the support-region anchor with a small ring so
         // the contact is unmistakable in the world view.
-        batcher.Circle(anchorS, 4.0f, Dim(ToVec4(pal.tracePoint)));
+        batcher.Circle(anchorS, style.anchorDiscRadius, Dim(ToVec4(pal.tracePoint)));
 
         // ---- final representative normal arrow (B -> A) ---------------------
         const glm::vec2 nrm(static_cast<float>(trace.manifold.normal.x),
@@ -725,8 +726,8 @@ namespace Arcane
         if (nlen > 1e-5f)
         {
             const glm::vec2 tip = view.Point(anchorW + (nrm / nlen) * trc.normalLength);   // "world units"
-            batcher.Line(anchorS, tip, thick * 1.4f, Dim(ToVec4(pal.traceNormal)));
-            DrawArrowHead(batcher, anchorS, tip, thick * 1.4f, Dim(ToVec4(pal.traceNormal)));
+            batcher.Line(anchorS, tip, thick * style.normalThicknessScale, Dim(ToVec4(pal.traceNormal)));
+            DrawArrowHead(batcher, anchorS, tip, thick * style.normalThicknessScale, Dim(ToVec4(pal.traceNormal)), style);
         }
 
         // ---- manifold contact points (white discs) -------------------------
@@ -734,7 +735,7 @@ namespace Arcane
         {
             const Vec2& p = trace.manifold.points[pi].point;
             const glm::vec2 sp = ToScreen(p, view);
-            batcher.Circle(sp, 3.0f, Dim(ToVec4(pal.tracePoint)));
+            batcher.Circle(sp, style.contactDiscRadius, Dim(ToVec4(pal.tracePoint)));
         }
     }
 

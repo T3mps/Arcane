@@ -69,6 +69,9 @@ namespace Arcane
     //   DebugPhysicsColorSettings the palette (per body type, island, overlay
     //                             and NarrowphaseKind);
     //   DebugPhysicsTraceSettings DrawNarrowphaseWorldOverlay's defaults.
+    // NOT inherited: DebugPhysicsStyleSettings (debug.physics.style.*: arrow
+    // heads, sleeping dim, emphasis floor, thickness scales, px radii); both
+    // overlays read its published values directly.
     struct PhysicsDebugDrawOptions : DebugPhysicsSettings, DebugPhysicsDrawSettings,
                                      DebugPhysicsColorSettings, DebugPhysicsTraceSettings
     {
@@ -185,7 +188,8 @@ namespace Arcane
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
     // emphasis. The caller brackets batcher.Begin()..Drain() (this only submits primitives).
     // An absent lineThickness / emphasis takes the published debug.physics.trace
-    // value (1.5 / 1.0 by default); the colours and the normal length always do.
+    // value (1.5 / 1.0 by default); the colours, the normal length and the
+    // debug.physics.style.* block always do.
     ARC_API void DrawNarrowphaseWorldOverlay(
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,

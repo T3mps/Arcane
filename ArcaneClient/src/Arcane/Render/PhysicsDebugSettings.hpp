@@ -8,8 +8,11 @@
 // - The defaults are the pre-sweep literals of PhysicsDebugDraw.hpp/.cpp, bit
 //   for bit; SweepPhysicsDebugTest pins them.
 // - Colours are linear RGBA (the batcher's glm::vec4, may be HDR).
-// - debug.physics.style.* (arrow heads, dim, emphasis floor, px radii) stays
-//   in PhysicsDebugDraw.cpp: it is DERIVED px styling (S6-43).
+// - debug.physics.style.* (arrow heads, sleeping dim, emphasis floor, line
+//   thickness scales, px radii; inventory "Physics debug draw" SETTING row,
+//   landed in S6-43 fix round 1) is NOT inherited by PhysicsDebugDrawOptions:
+//   both overlays read the published block directly, so the options layout is
+//   unchanged.
 
 #include <Arcane/Config/Settings.hpp>
 
@@ -85,6 +88,23 @@ namespace Arcane
                                            // member name keeps it apart from the inherited overlay lineThickness)
         float emphasis           = 1.0f;    // alpha scale when the caller passes none (1 = the selected contact)
         float normalLength       = 28.0f;   // "world units": a pre-metres leftover, converted as is
+    };
+
+    // Fine styling shared by both overlays (DrawPhysicsDebug and
+    // DrawNarrowphaseWorldOverlay). Px values are canvas px.
+    struct DebugPhysicsStyleSettings
+    {
+        float arrowShortLen         = 12.0f;  // px; a shorter shaft gets a head of half its length
+        float arrowHeadLen          = 6.0f;   // px, arrow head length along the shaft
+        float arrowHeadSpread       = 0.6f;   // head half-width as a fraction of its length
+        float sleepingDim           = 0.35f;  // RGB scale of sleeping dynamic bodies (Lua dim = 0.35)
+        float emphasisFloor         = 0.15f;  // lowest trace emphasis (alpha scale) a dimmed contact keeps
+        float subjectThicknessScale = 1.3f;   // inspected shape's outline at full emphasis, x line thickness
+        float axisHiThicknessScale  = 1.8f;   // chosen / stepped SAT axis, x line thickness
+        float normalThicknessScale  = 1.4f;   // contact normal arrow, x line thickness
+        float axisHalfLenPx         = 60.0f;  // px, half-length of each drawn SAT axis segment
+        float anchorDiscRadius      = 4.0f;   // px, the contact-anchor ring
+        float contactDiscRadius     = 3.0f;   // px, each manifold contact-point disc
     };
 
     ARC_REFLECT_TYPE(DebugPhysicsSettings)
@@ -182,5 +202,43 @@ namespace Arcane
         ARC_REFLECT_FIELD(DebugPhysicsTraceSettings, normalLength)
             ARC_REFLECT_ATTR(Range, 0.01, 100.0)
             ARC_REFLECT_ATTR(Tooltip, "Length (world units) of the inspector's contact normal arrow.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_REFLECT_TYPE(DebugPhysicsStyleSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics.style", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, arrowShortLen)
+            ARC_REFLECT_ATTR(Range, 0.0, 64.0)
+            ARC_REFLECT_ATTR(Tooltip, "Arrows shorter than this (px) get a head half their length instead of the full head.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, arrowHeadLen)
+            ARC_REFLECT_ATTR(Range, 0.0, 32.0)
+            ARC_REFLECT_ATTR(Tooltip, "Length (px) of an arrow head along its shaft.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, arrowHeadSpread)
+            ARC_REFLECT_ATTR(Range, 0.0, 2.0)
+            ARC_REFLECT_ATTR(Tooltip, "Half-width of an arrow head as a fraction of its length.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, sleepingDim)
+            ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Tooltip, "Brightness of sleeping dynamic bodies (1 = same as awake).")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, emphasisFloor)
+            ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Tooltip, "Lowest opacity the narrowphase inspector dims a non-selected contact to.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, subjectThicknessScale)
+            ARC_REFLECT_ATTR(Range, 0.5, 4.0)
+            ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the inspected shape's outline on the selected contact.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, axisHiThicknessScale)
+            ARC_REFLECT_ATTR(Range, 0.5, 4.0)
+            ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the chosen (or stepped) separating axis.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, normalThicknessScale)
+            ARC_REFLECT_ATTR(Range, 0.5, 4.0)
+            ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the inspector's contact normal arrow.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, axisHalfLenPx)
+            ARC_REFLECT_ATTR(Range, 1.0, 500.0)
+            ARC_REFLECT_ATTR(Tooltip, "Half-length (px) of each separating-axis segment the inspector draws.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, anchorDiscRadius)
+            ARC_REFLECT_ATTR(Range, 0.5, 32.0)
+            ARC_REFLECT_ATTR(Tooltip, "Radius (px) of the ring marking the inspected contact's anchor.")
+        ARC_REFLECT_FIELD(DebugPhysicsStyleSettings, contactDiscRadius)
+            ARC_REFLECT_ATTR(Range, 0.5, 32.0)
+            ARC_REFLECT_ATTR(Tooltip, "Radius (px) of each manifold contact-point disc in the inspector.")
     ARC_END_REFLECT_TYPE()
 }

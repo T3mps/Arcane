@@ -8,9 +8,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsSweep.hpp"
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
+#include <Manifold2D/Physics/Narrowphase/NarrowphaseTrace.hpp>
 
+#include <array>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace Arcane;
 
@@ -67,7 +72,8 @@ TEST_CASE("sweep: debug.physics.* descriptors are Game Dev, per-project preferen
     CVarRegistry& reg = CVarRegistry::Get();
     for (const char* name : { "debug.physics.lineThickness", "debug.physics.draw.contacts",
                               "debug.physics.color.kinematic", "debug.physics.color.narrowphase3",
-                              "debug.physics.trace.emphasis" })
+                              "debug.physics.trace.emphasis", "debug.physics.style.sleepingDim",
+                              "debug.physics.style.axisHalfLenPx" })
     {
         INFO(name);
         const auto d = reg.Explain(name);
@@ -80,4 +86,79 @@ TEST_CASE("sweep: debug.physics.* descriptors are Game Dev, per-project preferen
         CHECK_FALSE(HasFlag(d->flags, CVarFlags::Deterministic));
         CHECK_FALSE(d->help.empty());
     }
+}
+
+// S6-43 fix round 1: the debug.physics.style.* row (inventory "Physics debug
+// draw", SETTING; frozen names) is a settings block, not ARC_CONSTANT bases.
+TEST_CASE("sweep: debug.physics.style defaults are the pre-sweep literals", "[sweep][physics-debug]")
+{
+    const DebugPhysicsStyleSettings st{};
+    CHECK(Test::SameBits(st.arrowShortLen, 12.0f));
+    CHECK(Test::SameBits(st.arrowHeadLen, 6.0f));
+    CHECK(Test::SameBits(st.arrowHeadSpread, 0.6f));
+    CHECK(Test::SameBits(st.sleepingDim, 0.35f));
+    CHECK(Test::SameBits(st.emphasisFloor, 0.15f));
+    CHECK(Test::SameBits(st.subjectThicknessScale, 1.3f));
+    CHECK(Test::SameBits(st.axisHiThicknessScale, 1.8f));
+    CHECK(Test::SameBits(st.normalThicknessScale, 1.4f));
+    CHECK(Test::SameBits(st.axisHalfLenPx, 60.0f));
+    CHECK(Test::SameBits(st.anchorDiscRadius, 4.0f));
+    CHECK(Test::SameBits(st.contactDiscRadius, 3.0f));
+    Test::RequireDefault("debug.physics.style.arrowShortLen", CVarValue::Float32(12.0f));
+    Test::RequireDefault("debug.physics.style.arrowHeadLen", CVarValue::Float32(6.0f));
+    Test::RequireDefault("debug.physics.style.arrowHeadSpread", CVarValue::Float32(0.6f));
+    Test::RequireDefault("debug.physics.style.sleepingDim", CVarValue::Float32(0.35f));
+    Test::RequireDefault("debug.physics.style.emphasisFloor", CVarValue::Float32(0.15f));
+    Test::RequireDefault("debug.physics.style.subjectThicknessScale", CVarValue::Float32(1.3f));
+    Test::RequireDefault("debug.physics.style.axisHiThicknessScale", CVarValue::Float32(1.8f));
+    Test::RequireDefault("debug.physics.style.normalThicknessScale", CVarValue::Float32(1.4f));
+    Test::RequireDefault("debug.physics.style.axisHalfLenPx", CVarValue::Float32(60.0f));
+    Test::RequireDefault("debug.physics.style.anchorDiscRadius", CVarValue::Float32(4.0f));
+    Test::RequireDefault("debug.physics.style.contactDiscRadius", CVarValue::Float32(3.0f));
+}
+
+namespace
+{
+    // Records the radius of every Circle the overlay submits.
+    struct CircleRecorder final : Batcher2D
+    {
+        std::vector<float> radii;
+        void Begin(uint32_t, uint32_t) override {}
+        void SetLayer(uint16_t, uint16_t) override {}
+        void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4, float) override {}
+        void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override {}
+        void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
+        void Circle(glm::vec2, float r, glm::vec4) override { radii.push_back(r); }
+        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
+        void End() override {}
+        Batch2DStats Stats() const override { return {}; }
+        void QuadWorld(uint16_t, const Guid&, const std::array<glm::vec3, 4>&,
+                       glm::vec2, glm::vec2, glm::vec4) override {}
+        void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
+        void SetViewProjection(const glm::mat4&) override {}
+    };
+}
+
+TEST_CASE("sweep: the narrowphase overlay draws with the published debug.physics.style", "[sweep][physics-debug]")
+{
+    // A separated trace of two point shapes (no manifold points, no axes): the
+    // overlay emits the two shape discs (2 px) and the contact-anchor ring.
+    const Manifold2D::Physics::NarrowphaseTrace trace{};
+    const Affine2D view{};
+
+    CircleRecorder before;
+    DrawNarrowphaseWorldOverlay(trace, -1, before, view);
+    REQUIRE(before.radii.size() == 3);
+    CHECK(Test::SameBits(before.radii.back(), 4.0f));   // the default anchorDiscRadius
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    reg.Set(reg.Find("debug.physics.style.anchorDiscRadius"), CVarValue::Float32(9.0f), SetBy::Code);
+    reg.PublishImmediate();
+    CircleRecorder after;
+    DrawNarrowphaseWorldOverlay(trace, -1, after, view);
+    reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
+
+    REQUIRE(after.radii.size() == 3);
+    CHECK(Test::SameBits(after.radii.back(), 9.0f));
 }
