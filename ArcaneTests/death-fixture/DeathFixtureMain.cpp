@@ -35,10 +35,25 @@
 #include <string>
 #include <thread>
 
+namespace DeathFixturePureCall
+{
+    // A pure virtual call, made so no optimizer can remove it:
+    //  - from Base's CONSTRUCTOR, where the vptr is Base's and stays so (the
+    //    old destructor shape loses its vptr reset to GCC's lifetime DSE);
+    //  - through a volatile-laundered `this`, so the call cannot be resolved
+    //    statically;
+    //  - in a NAMED namespace: inside the anonymous one the hierarchy is
+    //    closed, GCC -O2 proves the only concrete type is Derived and
+    //    devirtualizes the call into Derived::Pure -- a no-op, and the
+    //    Release fixture exited 0.
+    struct Base;
+    inline Base* volatile g_pureTarget = nullptr;
+    struct Base { Base() { g_pureTarget = this; g_pureTarget->Pure(); } virtual ~Base() = default; virtual void Pure() = 0; };
+    struct Derived : Base { void Pure() override {} };
+}
+
 namespace
 {
-    struct Base { virtual ~Base() { Call(); } virtual void Pure() = 0; void Call() { Pure(); } };
-    struct Derived : Base { void Pure() override {} };
     volatile int g_sink = 0;
     // The frame ESCAPES (its address is published), so no compiler may turn
     // this accumulator recursion into a loop -- Clang's tail-recursion
@@ -126,7 +141,7 @@ int main(int argc, char** argv)
         g_sink += buf[0];
     }
 #endif
-    else if (die == "purecall")     { Derived d; (void)d; }   // the dtor's virtual call is pure
+    else if (die == "purecall")     { DeathFixturePureCall::Derived d; (void)d; }   // Base's ctor makes a pure virtual call
     else if (die == "stack-overflow") { return Recurse(0); }
 #if defined(_WIN32)
     // Task 9, the monitor's row (spec s5.8): __fastfail raises a
@@ -159,6 +174,10 @@ int main(int argc, char** argv)
         // being optimized away.
         std::size_t n = std::numeric_limits<std::size_t>::max() / 2;
         volatile char* p = new char[n];
+        // ...and the pointer ESCAPES: Clang -O2 elides even a runtime-sized
+        // new whose result is only null-tested (it can never be null, so the
+        // whole allocation folds away and the fixture exits 0).
+        g_escape = p;
         g_sink += p ? 1 : 0;
     }
     if (hangSeconds > 0)
