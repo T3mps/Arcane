@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 // AssetBrowserPanel (panel-split arc): the "Asset Browser" window. Task 6
 // moved the BODY here as pure motion out of AssetsPanel.cpp's DrawBrowseLens
@@ -64,12 +65,14 @@ namespace Arcane::Editor
         // The rail's row pitch tracks text like the tables' (settings S6-28;
         // the S4-16 follow-up): 26 px at scale 1 and font 16.
         float RailRowHeight() { return Ui::TextPx(26.0f); }
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kChildIndent      = 20.0f;
         // 2026-09-07 nested folder groups (spec s6/s11.2): 20px per nesting
         // depth, stacked with kChildIndent above rather than merged into it --
         // the two are independently-motivated 20px units that happen to share
         // a value and COMPOUND (a fold child inside a depth-1 group sits at
         // depth*kGroupIndent + kChildIndent from the row's own base).
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGroupIndent      = 20.0f;
 
         // Rail "+" gate (spec s6): only kinds with a Create-menu entry get
@@ -444,7 +447,7 @@ namespace Arcane::Editor
             // count) shifts right by 20px per nesting depth (spec s6/s11.2).
             // Top-level groups keep depth 0 -> groupIndent 0 -> pixel-identical
             // to before this pass.
-            const float groupIndent = static_cast<float>(row.groupDepth) * kGroupIndent;
+            const float groupIndent = static_cast<float>(row.groupDepth) * Ui::Px(kGroupIndent);
 
             const char* chevron = effectiveOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
             dl->AddText(ImVec2(rowMin.x + groupIndent + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
@@ -471,18 +474,19 @@ namespace Arcane::Editor
             // plainly is not (the very rows under it prove that). Suppressed
             // for groupCount == 0 only -- a real, populated group's count
             // still always shows, including a single-item "1".
+            ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
             constexpr float kGroupCountGap = 6.0f;
             if (row.groupCount > 0)
             {
                 char countBuf[16];
                 std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
-                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
+                dl->AddText(ImVec2(nameX + nameW + Ui::Px(kGroupCountGap), textY),
                            ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
             }
             // T5 s7.8: an empty folder (no asset beneath it) has no count; it
             // says so, dim, in the count's place.
             if (row.empty)
-                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
+                dl->AddText(ImVec2(nameX + nameW + Ui::Px(kGroupCountGap), textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
 
             ImGui::PopID();
         }
@@ -633,12 +637,12 @@ namespace Arcane::Editor
             // own indent X (still `groupDepth * kGroupIndent`, DrawGroupRow
             // above -- UNCHANGED) now starts at X+20; this is draw-side
             // geometry only, `groupDepth` itself (the DATA) is untouched.
-            const float groupIndentPx = static_cast<float>(groupDepth + 1) * kGroupIndent;
+            const float groupIndentPx = static_cast<float>(groupDepth + 1) * Ui::Px(kGroupIndent);
             // The expander gutter is reserved only for textures with a
             // folded child -- refused now wears its OWN corner badge on the
             // thumb below (fix round 1, Important 5), so it never competes
             // with the expander for the same slot.
-            const float indent = groupIndentPx + (hasChildren ? kChildIndent : 0.0f);
+            const float indent = groupIndentPx + (hasChildren ? Ui::Px(kChildIndent) : 0.0f);
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
@@ -673,7 +677,7 @@ namespace Arcane::Editor
             {
                 ImGui::SetCursorScreenPos(ImVec2(rowMin.x + groupIndentPx, rowMin.y));
                 const std::string expId = "##exp_" + e.guid.ToString();
-                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, TableRowHeight())))
+                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(Ui::Px(kChildIndent), TableRowHeight())))
                 {
                     const bool newOpen = !childrenOpen;
                     state.childrenOpen[e.guid] = newOpen;
@@ -682,7 +686,7 @@ namespace Arcane::Editor
                 const char* chevron = effectiveChildrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
                 const ImVec2 cs = ImGui::CalcTextSize(chevron);
                 ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(rowMin.x + groupIndentPx + (kChildIndent - cs.x) * 0.5f,
+                    ImVec2(rowMin.x + groupIndentPx + (Ui::Px(kChildIndent) - cs.x) * 0.5f,
                           rowMin.y + (TableRowHeight() - cs.y) * 0.5f),
                     ImGui::GetColorU32(ImGuiCol_Text), chevron);
             }
@@ -781,7 +785,7 @@ namespace Arcane::Editor
             // `groupIndentPx` just got -- the `+ 1` is the entire change. A
             // fold child under a band at indent X now sits at X+40 (X+20 for
             // the level shift, +20 more for its own existing fold indent).
-            const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
+            const float indent = static_cast<float>(groupDepth + 1) * Ui::Px(kGroupIndent) + Ui::Px(kChildIndent);
             if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             SetRowSelectionUserData(rowIndex);
@@ -1142,7 +1146,7 @@ namespace Arcane::Editor
         {
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
+                                ImVec2(style.FramePadding.x, Ui::Px(kAssetPanelToolbarFramePadY)));
 
             ImGui::BeginDisabled(project == nullptr);
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
@@ -1188,7 +1192,7 @@ namespace Arcane::Editor
         // own SameLine(0,0) chain established are untouched.
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
-        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(kAssetPanelToolbarBodyGapPx)));
         ImGui::PopStyleVar();
 
         // T5 s7.10: the Browser's key guard, computed ONCE per frame while
@@ -1204,7 +1208,7 @@ namespace Arcane::Editor
         if (actions.ownsEditKeys) EditorActions::Get().MarkContextActive(ActionContext::AssetBrowser);
 
         // ---- body band -----------------------------------------------
-        if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -Ui::Px(kAssetPanelBottomBarHeight))))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();

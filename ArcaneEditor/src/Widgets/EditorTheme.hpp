@@ -51,6 +51,7 @@
 
 #include <imgui.h>
 #include <cmath>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -100,6 +101,7 @@ namespace Arcane::Editor
 
         // The three tonal layers, the two hues and the data marks described at
         // the top of this file. Every value is today's, verbatim.
+        ARC_CONSTANT("a change would be a bug: the Dark preset, the one spelling every editor.theme.* default is written from")
         inline constexpr Palette kDarkPalette = {
             ImVec4(0.047f, 0.047f, 0.047f, 1.00f),   // chromeDeep    #0c0c0c  title bars, scrollbar track
             ImVec4(0.098f, 0.098f, 0.098f, 1.00f),   // chrome        #191919  menu bar, popups, table headers
@@ -210,9 +212,11 @@ namespace Arcane::Editor
         // The unfocused dock's selected-tab overline: the accent at this
         // alpha. Dark's value and EditorThemeSettings::unfocusedOverlineAlpha's
         // default (editor.theme.unfocusedOverlineAlpha).
+        ARC_CONSTANT("a change would be a bug: Dark's value, the one spelling of editor.theme.unfocusedOverlineAlpha's default")
         inline constexpr float kDarkUnfocusedOverlineAlpha = 0.45f;
 
         // Fully transparent: "draw nothing here". A CONSTANT, not a token (any change is a bug).
+        ARC_CONSTANT("math identity: draw nothing (fully transparent); any change is a bug")
         inline constexpr ImVec4 kNone = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
     }
 

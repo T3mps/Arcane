@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -73,6 +74,7 @@ namespace Arcane::Editor
     //
     // The index is only meaningful DURING submission -- End swaps the channels
     // into their final z-order -- so a caller must be inside ed::Begin/End.
+    ARC_CONSTANT("vendored-library constant: imgui-node-editor's links draw channel (c_LinkChannel_Links)")
     inline constexpr int kGraphLinkChannel = 7;
 
     // ---- Curve + colour math ---------------------------------------------
@@ -149,6 +151,7 @@ namespace Arcane::Editor
             // Guarded against a zero strength the library never divides by
             // (its own branch is only entered when halfDistance < strength,
             // which a zero strength cannot satisfy).
+            ARC_CONSTANT("math identity")
             constexpr float kPi = 3.14159265358979323846f;
             if (strength > 0.0f && halfDistance < strength)
                 return strength * std::sin(kPi * 0.5f * halfDistance / strength);

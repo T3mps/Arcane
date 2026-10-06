@@ -18,6 +18,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -42,6 +43,7 @@ namespace Arcane::Editor
     // The pin is never clipped: it ends row 1, or leads the breadcrumb row
     // when even arrows + combo + pin do not fit. Pure, so the thresholds are
     // unit-tested.
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kInspectorHeaderMinCrumbWidth = 120.0f;
     struct InspectorHeaderMetrics
     {

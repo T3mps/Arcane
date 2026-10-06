@@ -1442,7 +1442,9 @@ namespace Arcane::Editor
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImU32  col = ImGui::GetColorU32(Theme::kAccent);
-            constexpr float t = 2.0f;
+            ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
+            constexpr float kPlayBandPx = 2.0f;
+            const float t = Ui::Px(kPlayBandPx);
             const ImVec2 a = origin;
             const ImVec2 b(origin.x + (float)texW, origin.y + (float)texH);
             dl->AddRectFilled(a, ImVec2(b.x, a.y + t), col);                          // top

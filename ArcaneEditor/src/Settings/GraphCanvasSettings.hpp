@@ -4,8 +4,10 @@
 // "Graph/Node editor"): editor.graph.* (the zoom table, the node / wire / pin
 // chrome metrics, the wire vertex budget, the shader canvas's header gap, cull
 // guard band and pin dot, the selection modifier, the frame-to-fit range and
-// the pin legend), editor.graph.lod.* (the rendering LOD tier boundaries) and
-// editor.graph.grid.* (the backdrop grid). Per-machine editor preferences.
+// the pin legend, the shader canvas's node padding), editor.graph.lod.* (the
+// rendering LOD tier boundaries), editor.graph.grid.* (the backdrop grid) and
+// editor.graph.pinRing.* (a pin dot's ring weights; S6-44). Per-machine editor
+// preferences.
 //
 // Plain structs, no settings machinery: the pure canvas headers
 // (GraphNodeLod.hpp, GraphGridPhase.hpp) take a block by reference, so a
@@ -14,6 +16,8 @@
 //
 // Every default is the pre-sweep literal it replaced; the colours of the same
 // canvases are editor.theme.graph.* (GraphThemeSettings.hpp).
+
+#include <Arcane/Config/CVarTypes.hpp>
 
 #include <cstdint>
 #include <string>
@@ -46,6 +50,23 @@ namespace Arcane::Editor
         float fitMaxZoom              = 1.0f;
         float fitMinZoom              = 0.5f;
         bool  showPinLegend           = true;
+        // The shader canvas's node padding, canvas units at zoom 1 (x left and
+        // right, y top and bottom): ImGui measures those nodes from their
+        // content, so they need it; the Graph lens lays its rows out by hand
+        // with none (S6-44; the S5-2 review restored it from DERIVED).
+        CVarVec2 nodePadding{ 10.0f, 6.0f };
+    };
+
+    // editor.graph.pinRing.* -- a pin dot's ring weight, and the OPTIONAL outer
+    // ring DrawGraphPinDot adds around a dot (the shader canvas's "adapts to
+    // its input" mark on a resolved dynamic pin): its centreline sits outerGap
+    // outside the dot's radius, at outerWidth -- thin, so it reads as a halo
+    // and not as a second, hollow pin. Canvas units at zoom 1 (S6-44).
+    struct GraphPinRingSettings
+    {
+        float width      = 1.6f;
+        float outerGap   = 2.2f;
+        float outerWidth = 1.0f;
     };
 
     // editor.graph.lod.* -- the LAST zoom stop of each tier (GraphNodeLod.hpp);

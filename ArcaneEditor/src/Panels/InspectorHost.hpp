@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -56,6 +57,7 @@ namespace Arcane::Editor
         // free slot. The pool size is latched at construction (Restart), so
         // persisted Ids= at or above it are dropped on restore.
         // The default layout's "Assets only" instance ("Inspector 2", spec s6).
+        ARC_CONSTANT("ID space: the window-id contract ('###inspector_1') saved layouts refer to")
         static constexpr int kAssetsInstanceId = 1;
 
         struct Instance

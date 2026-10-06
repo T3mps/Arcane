@@ -21,9 +21,10 @@
 #include "Widgets/GraphWire.hpp"           // bezier/lerp/brighten/view-scale + the links channel
 #include "Widgets/GraphZoomLevels.hpp"     // ApplyZoomLevels -- same table the shader editor's canvases use
 #include "Widgets/IconsLucide.h"
-#include "Widgets/UiMetrics.hpp"           // Ui::FontPx -- the canvas font sizes follow editor.ui.fontSize
+#include "Widgets/UiMetrics.hpp"           // Ui::FontPx / Ui::Px -- the canvas fonts and the screen chrome follow editor.ui.*
 
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>
@@ -111,6 +112,7 @@ namespace Arcane::Editor
         // the BOARD's own value, read off `OptionD.dc.html`'s focus well
         // (`width: 230px`) rather than guessed -- longer names ellipsize
         // inside the combo rather than widening it.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGraphFocusComboWidth = 280.0f;
         // The popup's file-row cap is editor.assetGraph.focusHitCap (S6-36);
         // keywords always fit.
@@ -361,19 +363,23 @@ namespace Arcane::Editor
             return e ? e->fileName.c_str() : kGraphFocusMissing;
         }
 
-        // ---- Fixed geometry: spec §11.2's "graph nodes" row, VERBATIM -----
-        // "graph nodes | w 180-220, header 24px, accent bar 3px, pins 9px"
-        constexpr float kGraphNodeMinWidth   = 180.0f;
-        constexpr float kGraphNodeMaxWidth   = 220.0f;
-        constexpr float kGraphHeaderHeight   = 24.0f;
-        constexpr float kGraphAccentBarWidth = 3.0f;
+        // ---- Node geometry: spec §11.2's "graph nodes" row ----------------
+        // "graph nodes | w 180-220, header 24px, accent bar 3px, pins 9px" --
+        // the defaults of editor.assetGraph.node.* (S6-44), canvas units at
+        // zoom 1, read from the published snapshot.
+        [[nodiscard]] const AssetGraphNodeSettings& NodeGeometry() { return Arcane::Settings<AssetGraphNodeSettings>(); }
+        [[nodiscard]] float GraphNodeMinWidth()   { return NodeGeometry().minWidth; }
+        // Never below the minimum: std::clamp's bounds must be ordered.
+        [[nodiscard]] float GraphNodeMaxWidth()   { return (std::max)(NodeGeometry().minWidth, NodeGeometry().maxWidth); }
+        [[nodiscard]] float GraphHeaderHeight()   { return NodeGeometry().headerHeight; }
+        [[nodiscard]] float GraphAccentBarWidth() { return NodeGeometry().accentBarWidth; }
         // 9px ACROSS: the radius is half the spec's diameter, exactly as the
         // plan spells out ("DrawPinDot -- radius becomes 4.5f for §11.2's
-        // 9px").
-        constexpr float kGraphPinRadius      = 4.5f;
+        // 9px"): editor.assetGraph.pinRadius.
+        [[nodiscard]] float GraphPinRadius() { return Arcane::Settings<AssetGraphSettings>().pinRadius; }
         // The dot's segment count and ring width are the canvas's own language,
         // identical on both canvases, so they live once in
-        // Widgets/GraphCanvasStyle.hpp (GraphPinSegments() / kGraphPinRingWidth).
+        // Widgets/GraphCanvasStyle.hpp (GraphPinSegments() / GraphPinRingWidth()).
         // Only the RADIUS above is this lens's -- §11.2's 9px across.
 
         // ---- Layout pitch: editor.assetGraph.layoutColumnPitch / .layoutRowPitch
@@ -398,12 +404,16 @@ namespace Arcane::Editor
         // ---- Node internals, read off the board (OptionD.dc.html) ---------
         // `.nhead { height: 24px; padding: 0 8px 0 11px; gap: 6px }` -- the
         // 11px left inset is the 3px accent bar plus 8px of air, which is why
-        // it is spelled as those two terms rather than as a bare literal.
-        constexpr float kGraphNodePadLeft  = kGraphAccentBarWidth + 8.0f;
-        constexpr float kGraphNodePadRight = 8.0f;
-        constexpr float kGraphNodeBodyPadY = 6.0f;
-        constexpr float kGraphNodeIconGap  = 6.0f;
+        // it is spelled as those two terms rather than as a bare literal. The
+        // insets are editor.assetGraph.node.padding (S6-44): x left (after the
+        // bar), y right, z the body row's vertical pad, w the icon/pill gap.
+        [[nodiscard]] float GraphNodePadLeft()  { return GraphAccentBarWidth() + NodeGeometry().padding.x; }
+        [[nodiscard]] float GraphNodePadRight() { return NodeGeometry().padding.y; }
+        [[nodiscard]] float GraphNodeBodyPadY() { return NodeGeometry().padding.z; }
+        [[nodiscard]] float GraphNodeIconGap()  { return NodeGeometry().padding.w; }
+        ARC_CONSTANT("base font px; drawn as Ui::FontPx(base) (s16.11)")
         constexpr float kGraphHeaderFontPx = 14.0f;   // §11.3: "13-14px secondary via PushFont"
+        ARC_CONSTANT("base font px; drawn as Ui::FontPx(base) (s16.11)")
         constexpr float kGraphMetaFontPx   = 13.0f;
 
         // ---- Canvas palette ----------------------------------------------
@@ -482,8 +492,8 @@ namespace Arcane::Editor
         // shader canvas onto them.
 
         // The subtle anchor -> "+N more" connector: thinner than a data edge
-        // on purpose (it is NOT one -- see DrawAssetGraphBody's own comment).
-        constexpr float kGraphOverflowWireThickness = 1.5f;
+        // on purpose (it is NOT one -- see DrawAssetGraphBody's own comment):
+        // editor.assetGraph.overflowWireThickness (S6-44, default 1.5).
         // editor.assetGraph.wireDim (S6-36, default 0.62): how far a wire's
         // colour is pulled toward the canvas when the edge is NOT emphasized.
         // The board's edges read as a mid-gray against the
@@ -501,12 +511,15 @@ namespace Arcane::Editor
         // (OptionD.dc.html / Demo.dc.html: the `M230,330 C320,330 390,402
         // 462,402` path), in SCREEN pixels -- the walk below divides by the
         // view scale so a dash keeps that reading at every zoom stop.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGraphDashOnPx  = 6.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGraphDashOffPx = 5.0f;
         // The board's `<circle cx="462" cy="402" r="4">` -- the cursor end of
         // the drag wears a solid amber dot, which is what makes the free end
         // read as "attached to the pointer" rather than as a wire that just
         // stops.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGraphDashEndDotRadius = 4.0f;
         // LOD floor: editor.assetGraph.dashMaxCells (S6-36, default 256). The
         // dash walk splits the curve at every on/off boundary,
@@ -524,6 +537,7 @@ namespace Arcane::Editor
         // a comment; it now reads the table itself
         // (Widgets/GraphNodeLod.hpp, NodeLODForScale). At LowDetail and below,
         // labels are skipped; MediumDetail and up draw them.
+        ARC_CONSTANT("base font px; drawn as Ui::FontPx(base) (s16.11)")
         constexpr float kGraphLabelFontPx   = 12.0f;   // §11.2's pill/label text size
 
         // c_LinkChannel_Links (= 7) and the WHOLE two-layer rationale behind it
@@ -655,6 +669,7 @@ namespace Arcane::Editor
         // gives a link an ImGui item at all (it hit-tests links by hand
         // through FindLinkAt, imgui_node_editor.cpp:2495-2503), so they cannot
         // take part in this collision.
+        ARC_CONSTANT("ID space: the Graph lens's pin ids start above every node id")
         inline constexpr std::uint64_t kGraphPinIdBase = 1ull << 32;
         // ...and the base has to SURVIVE the trip through the library, which
         // carries every id as a uintptr_t (ed::PinId is Details::SafePointerType
@@ -763,8 +778,8 @@ namespace Arcane::Editor
 
             // Cell lengths in CANVAS units, so the dash reads 6-on/5-off on
             // screen at any zoom -- then the LOD floor (editor.assetGraph.dashMaxCells).
-            float on  = kGraphDashOnPx  / scale;
-            float off = kGraphDashOffPx / scale;
+            float on  = Ui::Px(kGraphDashOnPx)  / scale;
+            float off = Ui::Px(kGraphDashOffPx) / scale;
             const int maxCells = Arcane::Settings<AssetGraphSettings>().dashMaxCells;
             if (const float floorLen = polyLen / static_cast<float>(maxCells);
                 on + off < floorLen && on + off > 0.0f)
@@ -828,7 +843,7 @@ namespace Arcane::Editor
                 return;
             const int prevChannel = dl->_Splitter._Current;
             dl->ChannelsSetCurrent(kGraphLinkChannel);
-            dl->AddCircleFilled(centre, kGraphDashEndDotRadius,
+            dl->AddCircleFilled(centre, Ui::Px(kGraphDashEndDotRadius),
                                 ImGui::GetColorU32(color), GraphPinSegments());
             dl->ChannelsSetCurrent(prevChannel);
         }
@@ -899,7 +914,7 @@ namespace Arcane::Editor
 
         float GraphNodeHeight()
         {
-            return kGraphHeaderHeight + kGraphNodeBodyPadY + GraphBodyRowHeight() + kGraphNodeBodyPadY;
+            return GraphHeaderHeight() + GraphNodeBodyPadY() + GraphBodyRowHeight() + GraphNodeBodyPadY();
         }
 
         // Chrome drawn AFTER ed::EndNode, in the node's own user-background
@@ -927,7 +942,7 @@ namespace Arcane::Editor
             const ImVec2 innerMax(v.pos.x + v.width - b, v.pos.y + v.height - b);
 
             if (drawBand)
-                bg->AddRectFilled(innerMin, ImVec2(innerMax.x, v.pos.y + kGraphHeaderHeight),
+                bg->AddRectFilled(innerMin, ImVec2(innerMax.x, v.pos.y + GraphHeaderHeight()),
                                   ImGui::GetColorU32(kGraphNodeTitleColor),
                                   GraphNodeRounding(), ImDrawFlags_RoundCornersTop);
 
@@ -935,7 +950,7 @@ namespace Arcane::Editor
                 // Drawn AFTER the band so it runs the node's FULL height, the
                 // way the board's `.accent { top: 0; bottom: 0 }` does -- the
                 // header is not a separate region the bar stops at.
-                bg->AddRectFilled(innerMin, ImVec2(innerMin.x + kGraphAccentBarWidth, innerMax.y),
+                bg->AddRectFilled(innerMin, ImVec2(innerMin.x + GraphAccentBarWidth(), innerMax.y),
                                   ImGui::GetColorU32(*accent),
                                   GraphNodeRounding(), ImDrawFlags_RoundCornersLeft);
 
@@ -1003,8 +1018,8 @@ namespace Arcane::Editor
                 {
                     ImGui::SetCursorScreenPos(origin);
                     ed::BeginPin(ed::PinId(pinId), kind);
-                    ed::PinRect(ImVec2(centre.x - kGraphPinRadius, centre.y - kGraphPinRadius),
-                                ImVec2(centre.x + kGraphPinRadius, centre.y + kGraphPinRadius));
+                    ed::PinRect(ImVec2(centre.x - GraphPinRadius(), centre.y - GraphPinRadius()),
+                                ImVec2(centre.x + GraphPinRadius(), centre.y + GraphPinRadius()));
                     ed::PinPivotRect(centre, centre);
                     // BeginPin's group needs one item to close over. Zero
                     // size, at the node's own origin, so it can add nothing
@@ -1014,7 +1029,7 @@ namespace Arcane::Editor
                     // "SetCursorPos to extend boundaries" check quiet.
                     ImGui::Dummy(ImVec2(0.0f, 0.0f));
                     DrawGraphPinDot(ImGui::GetWindowDrawList(), centre, accent,
-                                    kGraphNodeBodyColor, kGraphPinRadius, connected);
+                                    kGraphNodeBodyColor, GraphPinRadius(), connected);
                     ed::EndPin();
                 };
                 if (v.hasLeftPin)
@@ -1032,17 +1047,17 @@ namespace Arcane::Editor
             {
                 ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphHeaderFontPx));
                 const float lineH  = ImGui::GetTextLineHeight();
-                const float rowY   = origin.y + (kGraphHeaderHeight - lineH) * 0.5f;
-                float x = origin.x + kGraphNodePadLeft;
+                const float rowY   = origin.y + (GraphHeaderHeight() - lineH) * 0.5f;
+                float x = origin.x + GraphNodePadLeft();
 
-                float rightEdge = origin.x + v.width - kGraphNodePadRight;
+                float rightEdge = origin.x + v.width - GraphNodePadRight();
                 if (headerPill)
-                    rightEdge -= PillWidth(headerPill) + kGraphNodeIconGap;
+                    rightEdge -= PillWidth(headerPill) + GraphNodeIconGap();
 
                 if (headerIcon)
                 {
                     dl->AddText(ImVec2(x, rowY), dimCol, headerIcon);
-                    x += ImGui::CalcTextSize(headerIcon).x + kGraphNodeIconGap;
+                    x += ImGui::CalcTextSize(headerIcon).x + GraphNodeIconGap();
                 }
                 const std::string shown = GraphEllipsize(headerLabel, rightEdge - x);
                 dl->AddText(ImVec2(x, rowY), textCol, shown.c_str());
@@ -1054,17 +1069,17 @@ namespace Arcane::Editor
                     // AssetPill's own Dummy lands inside the node's width --
                     // `rightEdge` above already reserved its slot.
                     ImGui::SetCursorScreenPos(
-                        ImVec2(origin.x + v.width - kGraphNodePadRight - PillWidth(headerPill),
-                               origin.y + (kGraphHeaderHeight - PillLineHeight()) * 0.5f));
+                        ImVec2(origin.x + v.width - GraphNodePadRight() - PillWidth(headerPill),
+                               origin.y + (GraphHeaderHeight() - PillLineHeight()) * 0.5f));
                     AssetPill(headerPill, 1);
                 }
             }
 
             // ---- body row ----
             {
-                const float rowTop = origin.y + kGraphHeaderHeight + kGraphNodeBodyPadY;
+                const float rowTop = origin.y + GraphHeaderHeight() + GraphNodeBodyPadY();
                 const float rowH   = GraphBodyRowHeight();
-                float x = origin.x + kGraphNodePadLeft;
+                float x = origin.x + GraphNodePadLeft();
 
                 if (body.thumb != 0)
                 {
@@ -1081,7 +1096,7 @@ namespace Arcane::Editor
                 if (body.thumb != 0 || body.icon)
                     x += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
 
-                const float budgetEnd = origin.x + v.width - kGraphNodePadRight;
+                const float budgetEnd = origin.x + v.width - GraphNodePadRight();
                 if (!body.pills.empty())
                 {
                     bool first = true;
@@ -1230,7 +1245,7 @@ namespace Arcane::Editor
                     bool ink = true;
                     while (cx < x + GraphLegendSwatchW())
                     {
-                        const float step = (std::min)(ink ? kGraphDashOnPx : kGraphDashOffPx,
+                        const float step = (std::min)(Ui::Px(ink ? kGraphDashOnPx : kGraphDashOffPx),
                                                       x + GraphLegendSwatchW() - cx);
                         if (ink)
                             dl->AddRectFilled(ImVec2(cx, y0),
@@ -1386,7 +1401,7 @@ namespace Arcane::Editor
         // inside the body, so nodes, the legend and the hover surface all end
         // above it. Clamped before the early-out.
         const ImVec2 bodyAvail = ImGui::GetContentRegionAvail();
-        const ImVec2 canvasSize(bodyAvail.x, std::max(0.0f, bodyAvail.y - kAssetGraphSelectionStripH));
+        const ImVec2 canvasSize(bodyAvail.x, std::max(0.0f, bodyAvail.y - Ui::Px(kAssetGraphSelectionStripH)));
         if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
         {
             ed::SetCurrentEditor(nullptr);
@@ -1645,17 +1660,17 @@ namespace Arcane::Editor
             }
 
             // Width: what the content wants, clamped into §11.2's band.
-            float wantHeader = kGraphNodePadLeft + kGraphNodePadRight;
+            float wantHeader = GraphNodePadLeft() + GraphNodePadRight();
             {
                 ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(kGraphHeaderFontPx));
                 if (headerIcon)
-                    wantHeader += ImGui::CalcTextSize(headerIcon).x + kGraphNodeIconGap;
+                    wantHeader += ImGui::CalcTextSize(headerIcon).x + GraphNodeIconGap();
                 wantHeader += ImGui::CalcTextSize(headerLabel.c_str()).x;
                 ImGui::PopFont();
                 if (headerPill)
-                    wantHeader += kGraphNodeIconGap + PillWidth(headerPill);
+                    wantHeader += GraphNodeIconGap() + PillWidth(headerPill);
             }
-            float wantBody = kGraphNodePadLeft + kGraphNodePadRight;
+            float wantBody = GraphNodePadLeft() + GraphNodePadRight();
             if (body.thumb != 0 || body.icon)
                 wantBody += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
             if (!body.pills.empty())
@@ -1676,7 +1691,7 @@ namespace Arcane::Editor
             }
 
             v.width  = std::clamp((std::max)(wantHeader, wantBody),
-                                  kGraphNodeMinWidth, kGraphNodeMaxWidth);
+                                  GraphNodeMinWidth(), GraphNodeMaxWidth());
             v.height = nodeHeight;
             v.pos    = ImVec2(static_cast<float>(n.layer) * graphSettings.layoutColumnPitch,
                               static_cast<float>(n.row)   * graphSettings.layoutRowPitch);
@@ -1835,7 +1850,8 @@ namespace Arcane::Editor
                 {
                     const int prevChannel = dl->_Splitter._Current;
                     dl->ChannelsSetCurrent(kGraphLinkChannel);
-                    dl->AddRectFilled(ImVec2(tl.x - 3.0f, tl.y), ImVec2(tl.x + size.x + 3.0f, tl.y + size.y),
+                    const float labelPad = Arcane::Settings<AssetGraphSettings>().labelPad;   // editor.assetGraph.labelPad
+                    dl->AddRectFilled(ImVec2(tl.x - labelPad, tl.y), ImVec2(tl.x + size.x + labelPad, tl.y + size.y),
                                       ImGui::GetColorU32(kGraphCanvasColor));
                     dl->AddText(tl, ImGui::GetColorU32(Theme::kTextDim), e.label);
                     dl->ChannelsSetCurrent(prevChannel);
@@ -1876,7 +1892,7 @@ namespace Arcane::Editor
                 // stacks one column to the RIGHT.
                 DrawGraphWire(ImVec2(av.pos.x + av.width, av.pos.y + av.height * 0.5f),
                               ImVec2(ov.pos.x,            ov.pos.y + ov.height * 0.5f),
-                              col, col, kGraphOverflowWireThickness, viewScale);
+                              col, col, Arcane::Settings<AssetGraphSettings>().overflowWireThickness, viewScale);
             else
                 // Truncated on the anchor's OUTBOUND side: one column to
                 // the LEFT. (When the anchor is already in column 0 the
@@ -1886,7 +1902,7 @@ namespace Arcane::Editor
                 // hidden.)
                 DrawGraphWire(ImVec2(ov.pos.x + ov.width, ov.pos.y + ov.height * 0.5f),
                               ImVec2(av.pos.x,            av.pos.y + av.height * 0.5f),
-                              col, col, kGraphOverflowWireThickness, viewScale);
+                              col, col, Arcane::Settings<AssetGraphSettings>().overflowWireThickness, viewScale);
         }
 
         // ---- 7b. The pin-drag create query (Task 6) -------------------
@@ -2504,9 +2520,9 @@ namespace Arcane::Editor
         {
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
+                                ImVec2(style.FramePadding.x, Ui::Px(kAssetPanelToolbarFramePadY)));
 
-            ImGui::SetNextItemWidth(kGraphFocusComboWidth);
+            ImGui::SetNextItemWidth(Ui::Px(kGraphFocusComboWidth));
             char focusPreview[160];
             if (!state.graphFocus.IsValid() && state.graphKindFilter)
                 std::snprintf(focusPreview, sizeof(focusPreview), "focus: @%s",
@@ -2601,7 +2617,7 @@ namespace Arcane::Editor
         // came from, and kAssetPanelToolbarBodyGapPx for the measured value.
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
-        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(kAssetPanelToolbarBodyGapPx)));
         ImGui::PopStyleVar();
 
         // ---- body band -----------------------------------------------
@@ -2610,7 +2626,7 @@ namespace Arcane::Editor
         // DrawAssetGraphBody leaves free by shrinking the canvas (node page
         // phase s6.9), so it neither pushes the digest off the window nor
         // covers canvas.
-        if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -Ui::Px(kAssetPanelBottomBarHeight))))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();
@@ -2619,8 +2635,8 @@ namespace Arcane::Editor
 
             const ImVec2 bodyPos  = ImGui::GetWindowPos();
             const ImVec2 bodySize = ImGui::GetWindowSize();
-            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kAssetGraphSelectionStripH));
-            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kAssetGraphSelectionStripH),
+            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - Ui::Px(kAssetGraphSelectionStripH)));
+            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, Ui::Px(kAssetGraphSelectionStripH)),
                                  ImGuiChildFlags_None,
                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
             {

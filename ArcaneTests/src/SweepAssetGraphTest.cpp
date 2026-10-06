@@ -64,3 +64,38 @@ TEST_CASE("sweep: a published depth/breadth reaches the Graph lens's query", "[s
     CHECK(Editor::MakeAssetGraphQuery().depthLimit == 2);
     CHECK(Editor::MakeAssetGraphQuery().breadthCap == 20);
 }
+
+// S6-44: the Graph lens's canvas-space node geometry (the S5-2 review restored
+// these from DERIVED; they scale with the graph zoom, not with editor.ui.scale).
+TEST_CASE("sweep: asset graph node geometry defaults are the pre-sweep literals", "[sweep][asset-graph]")
+{
+    const Editor::AssetGraphNodeSettings n{};
+    CHECK(n.minWidth == 180.0f); CHECK(n.maxWidth == 220.0f);
+    CHECK(n.headerHeight == 24.0f); CHECK(n.accentBarWidth == 3.0f);
+    CHECK(n.padding.x == 8.0f); CHECK(n.padding.y == 8.0f); CHECK(n.padding.z == 6.0f); CHECK(n.padding.w == 6.0f);
+    const Editor::AssetGraphSettings a{};
+    CHECK(a.pinRadius == 4.5f); CHECK(a.overflowWireThickness == 1.5f); CHECK(a.labelPad == 3.0f);
+
+    Test::RequireDefault("editor.assetGraph.node.minWidth",       CVarValue::Float32(180.0f));
+    Test::RequireDefault("editor.assetGraph.node.maxWidth",       CVarValue::Float32(220.0f));
+    Test::RequireDefault("editor.assetGraph.node.headerHeight",   CVarValue::Float32(24.0f));
+    Test::RequireDefault("editor.assetGraph.node.accentBarWidth", CVarValue::Float32(3.0f));
+    Test::RequireDefault("editor.assetGraph.node.padding",        CVarValue::Vec4(CVarVec4{ 8.0f, 8.0f, 6.0f, 6.0f }));
+    Test::RequireDefault("editor.assetGraph.pinRadius",             CVarValue::Float32(4.5f));
+    Test::RequireDefault("editor.assetGraph.overflowWireThickness", CVarValue::Float32(1.5f));
+    Test::RequireDefault("editor.assetGraph.labelPad",              CVarValue::Float32(3.0f));
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    for (std::string_view name : { "editor.assetGraph.node.minWidth", "editor.assetGraph.node.padding",
+                                   "editor.assetGraph.pinRadius", "editor.assetGraph.labelPad" })
+    {
+        const std::optional<CVarDescInfo> d = reg.Describe(name);
+        INFO("cvar " << std::string(name));
+        REQUIRE(d.has_value());
+        CHECK(d->audience == Audience::Editor);
+        CHECK(d->scope == SettingScope::PreferencesMachine);
+        CHECK(d->apply == ApplyMode::Live);
+        CHECK(HasFlag(d->flags, CVarFlags::Dev));
+        CHECK_FALSE(d->help.empty());
+    }
+}

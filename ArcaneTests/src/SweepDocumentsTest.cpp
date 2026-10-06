@@ -12,6 +12,8 @@
 
 #include <Arcane/Config/CVarRegistry.hpp>
 
+#include <optional>
+
 using namespace Arcane;
 
 TEST_CASE("sweep: one preview light; document defaults are the pre-sweep literals", "[sweep][documents]")
@@ -118,4 +120,21 @@ TEST_CASE("sweep: the Custom body preview honours a non-default line cap and mar
     CHECK(clipped.lines[0] == "abcd...");
     CHECK(clipped.lines[1] == "xy");
     CHECK_FALSE(clipped.truncated);
+}
+
+// S6-44: the preview checkerboard's cell is a render-target texel count, not
+// UI chrome (the S5-2 review restored it from DERIVED).
+TEST_CASE("sweep: editor.shader.previewCheckerCell is the pre-sweep 32 texels", "[sweep][documents]")
+{
+    CHECK(Editor::ShaderEditorSettings{}.previewCheckerCell == 32.0f);
+    Test::RequireDefault("editor.shader.previewCheckerCell", CVarValue::Float32(32.0f));
+    const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("editor.shader.previewCheckerCell");
+    REQUIRE(d.has_value());
+    CHECK(d->scope == SettingScope::PreferencesMachine);
+    CHECK(d->apply == ApplyMode::Live);
+    CHECK(HasFlag(d->flags, CVarFlags::Dev));
+    REQUIRE(d->min.has_value());
+    REQUIRE(d->max.has_value());
+    CHECK(*d->min == CVarValue::Float32(4.0f));
+    CHECK(*d->max == CVarValue::Float32(128.0f));
 }

@@ -2,6 +2,7 @@
 #include "Settings/EditorConsoleSettings.hpp"   // editor.recents.maxProjectsShown (settings S6-41)
 
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Paths::UserRoot -- the Hub's store sits under it (DefaultFile; settings spec s11.0)
 
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
@@ -35,6 +36,7 @@ namespace
     // Mirrors store.rs STATE_FORMAT_VERSION. A document numbered ABOVE this was
     // written by a newer Hub: we read it as empty and never rewrite it, which is
     // that file's own rule applied from this side.
+    ARC_CONSTANT("file format: the Hub's shared recents file version")
     constexpr std::uint32_t kFormatVersion = 1;
 
     constexpr std::string_view kProjExt = ".arcproj";

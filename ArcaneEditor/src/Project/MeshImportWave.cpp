@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <fstream>
 #include <optional>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -358,6 +359,7 @@ namespace Arcane::Editor
         // exactly 0, putting `eye` on top of `target` -- and glm::lookAtRH normalizes
         // (target - eye), so a zero-length look vector is the NaN transform this
         // function exists to rule out, not a merely-imprecise camera.
+        ARC_CONSTANT("a change would be a bug: mirrors BuildUvSphere's 0.5 m radius guard")
         constexpr float kMinRadius = 0.5f;
         const float radius = std::max(glm::length((bounds.max - bounds.min) * 0.5f), kMinRadius);
 

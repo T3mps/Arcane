@@ -51,6 +51,9 @@ namespace Arcane::Editor
         float        nodePreviewMinPx  = 96.0f;
         float        dragSpeed         = 0.01f;
         float        rangeDragSpeed    = 0.05f;
+        // The preview checkerboard's square side in render-target texels (32 at
+        // the default 512 preview = 16 cells), not UI chrome (S6-44).
+        float        previewCheckerCell = 32.0f;
     };
 
     // editor.mesh.* -- the preview and the authoring maxima of the procedural

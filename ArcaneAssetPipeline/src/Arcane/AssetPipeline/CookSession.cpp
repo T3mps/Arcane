@@ -4,6 +4,8 @@
 #include "Arcane/AssetPipeline/ArtifactStore.hpp"
 #include "Arcane/AssetPipeline/CookKey.hpp"
 
+#include <Arcane/Core/Constant.hpp>
+
 #include <Json.hpp>
 
 #include <algorithm>
@@ -195,6 +197,7 @@ namespace Arcane::AssetPipeline
         // cook key already encodes which kind's importer/settings produced it, and this
         // file only ever reads/writes by key, never by kind.
 
+        ARC_CONSTANT("file format: a cook key (u64) as 16 hex digits in memo file names")
         constexpr std::size_t kHexDigits = 16;
 
         std::string ToHex16(std::uint64_t v)

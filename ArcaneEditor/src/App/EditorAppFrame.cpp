@@ -96,6 +96,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -120,11 +121,17 @@ namespace Arcane::Editor
         // Modifier scancodes still read here for camera orbit (Alt) and the
         // gizmo snap / fly-boost (Ctrl / Shift). Letter keys go through
         // EditorActions (settings S4, spec s7.2).
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScRCtrl  = 228;  // SDL_SCANCODE_RCTRL
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScLShift = 225;  // SDL_SCANCODE_LSHIFT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScLAlt   = 226;  // SDL_SCANCODE_LALT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScRAlt   = 230;  // SDL_SCANCODE_RALT
 
         // ASCII-lowercased extension, for a case-insensitive suffix check: a

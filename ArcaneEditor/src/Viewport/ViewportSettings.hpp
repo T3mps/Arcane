@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 struct ImGuiTextBuffer;
 
@@ -46,9 +47,12 @@ namespace Arcane::Editor
     {
         // Accepted vertical field of view, degrees: the open interval (0, 180)
         // held away from both ends so the projection stays finite.
+        ARC_CONSTANT("math identity: the projection is finite only inside (0, 180) degrees")
         static constexpr float kMinFovYDeg = 1.0f;
+        ARC_CONSTANT("math identity: the projection is finite only inside (0, 180) degrees")
         static constexpr float kMaxFovYDeg = 179.0f;
         // Strictly inside the +-90 pitch lock EditorCamera::Look/Orbit apply.
+        ARC_CONSTANT("math identity: Right()/Up() are NaN at +-90 degrees of pitch")
         static constexpr float kMaxPitchDeg = 90.0f - 1e-3f;
 
         // The ini section: "[EditorViewport][Camera]".

@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane { class Project; }
 
@@ -392,7 +393,9 @@ namespace Arcane::Editor
     // EditorTheme.hpp's own comment) stands 22px tall; bumping
     // FramePadding.y to 4 for just the toolbar row (pushed/popped around
     // its controls) is what closes the last 2px to the pinned 24.
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kAssetPanelToolbarFramePadY = 4.0f;
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kAssetPanelBottomBarHeight  = 24.0f;
     // 2026-09-07 fix (mock parity, automation-measured): the vertical
     // gap between the toolbar row's bottom edge and the Browse body's
@@ -403,6 +406,7 @@ namespace Arcane::Editor
     // this seam -- see DrawAssetBrowserPanel's own comment for why it had
     // silently collapsed to 0px live. Applied by the Browser and Graph
     // panels; Status has no toolbar to gap from (spec s9.1).
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kAssetPanelToolbarBodyGapPx = 7.0f;
 
     // The Task 10 (spec s6/s11.2) row pitch that lived here is now

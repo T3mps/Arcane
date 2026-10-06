@@ -3,6 +3,7 @@
 #include "Widgets/IconsLucide.h"
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <imgui.h>
 
@@ -83,6 +84,7 @@ namespace Arcane::Editor
         ImFont* AddFaceWithIcons(ImGuiIO& io, const std::string& facePath,
                                  const std::string& lucidePath, float sizePx)
         {
+            ARC_CONSTANT("vendored-library constant: the Lucide icon font's codepoint block (ICON_LC_MIN..MAX)")
             static const ImWchar kIconRange[] = { ICON_LC_MIN, ICON_LC_MAX, 0 };
 
             // ImGui 1.92's font system loads glyphs on-demand and no longer clips a font

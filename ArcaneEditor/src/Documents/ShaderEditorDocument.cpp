@@ -70,6 +70,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -125,8 +126,11 @@ namespace Arcane::Editor
         // rewrote its `kind` to match, silently re-kinding the asset. An int is
         // exactly the laundering MaterialSource.cpp's two ARC_ENSURE guards
         // cannot catch: the enum is already gone before they see it.
+        ARC_CONSTANT("ID space: the Surface combo's item indices (MaterialSurface <-> row)")
         constexpr int kSurfaceFullscreen = 0;
+        ARC_CONSTANT("ID space: the Surface combo's item indices (MaterialSurface <-> row)")
         constexpr int kSurfaceSprite     = 1;
+        ARC_CONSTANT("ID space: the Surface combo's item indices (MaterialSurface <-> row)")
         constexpr int kSurfaceMesh       = 2;
 
         Arcane::MaterialSurface SurfaceOf(int surface)
@@ -298,12 +302,16 @@ namespace Arcane::Editor
 
         // Pass-canvas fixed ids (chain index c = node id c+1; these sit far
         // above any realistic pass count).
+        ARC_CONSTANT("ID space: the pass canvas node and link id bases")
         constexpr std::uint32_t kPassOutputNodeId = 900000;
+        ARC_CONSTANT("ID space: the pass canvas node and link id bases")
         constexpr std::uint32_t kPassSceneNodeId  = 900001;   // the Scene source
+        ARC_CONSTANT("ID space: the pass canvas node and link id bases")
         constexpr std::uint32_t kPassOutputLinkId = 800000;
 
         // Pin id encoding: node id * 1000 + slot band. Inputs at +1.., outputs
         // at +501.. (a node type never has anywhere near 500 pins).
+        ARC_CONSTANT("ID space: input and output pin id bases inside a node's 1000-id block")
         constexpr std::uint64_t kPinInBase = 1, kPinOutBase = 501;
         ed::PinId InPin(std::uint32_t node, std::uint32_t pin)
         { return ed::PinId(node * 1000ull + kPinInBase + pin); }
@@ -390,16 +398,16 @@ namespace Arcane::Editor
         // language, not this canvas's taste, and were the same four literals in
         // the Graph lens. The padding pair below is NOT shared -- it is exactly
         // what the two canvases disagree about (the Graph lens lays its rows out
-        // by hand with zero NodePadding).
-        constexpr float kNodePadX = 10.0f;
-        constexpr float kNodePadY = 6.0f;
+        // by hand with zero NodePadding): editor.graph.nodePadding (S6-44).
+        float NodePadX() { return Settings<GraphCanvasSettings>().nodePadding.x; }
+        float NodePadY() { return Settings<GraphCanvasSettings>().nodePadding.y; }
         // Breathing room between the BOTTOM EDGE OF THE TITLE BAND and the first
-        // body row. Not the same thing as kNodePadY: that one is the band's own
+        // body row. Not the same thing as NodePadY(): that one is the band's own
         // internal padding (how far the band extends past the title text), this
         // one is body space below the band. Without it the first pin row does
         // not merely sit flush -- it renders INSIDE the band, because ImGui
         // places the next item one ItemSpacing.y (4 px) under the title text
-        // while the band reaches kNodePadY (6 px) under it.
+        // while the band reaches NodePadY() (6 px) under it.
         //
         // Canvas units, like every other constant here: everything inside
         // ed::Begin/End is authored in canvas space, so this scales with zoom on
@@ -523,7 +531,7 @@ namespace Arcane::Editor
                 bg->AddRectFilled(
                     ImVec2(nodePos.x + GraphNodeBorderWidth(), nodePos.y + GraphNodeBorderWidth()),
                     ImVec2(nodePos.x + nodeSize.x - GraphNodeBorderWidth(),
-                           headerMaxY + kNodePadY),
+                           headerMaxY + NodePadY()),
                     ImGui::GetColorU32(color),
                     GraphNodeRounding(), ImDrawFlags_RoundCornersTop);
             return nodeSize;
@@ -546,7 +554,7 @@ namespace Arcane::Editor
             d.groupBg     = GraphThemeColor(&GraphThemeSettings::groupBg);       // this canvas HAS group (comment) nodes
             d.groupBorder = GraphThemeColor(&GraphThemeSettings::groupBorder);
             // Content-driven nodes: ImGui measures them, so they need padding.
-            d.nodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
+            d.nodePadding = ImVec4(NodePadX(), NodePadY(), NodePadX(), NodePadY());
             return d;
         }
 
@@ -708,7 +716,7 @@ namespace Arcane::Editor
 
         // The chip's dot slot: it fits a dot WITH its outer ring, ringed or
         // not, so the type words of a section line up.
-        float PinChipSlot() { return 2.0f * (PinDotRadius() + kGraphPinOuterRingGap + kGraphPinOuterRingWidth); }
+        float PinChipSlot() { return 2.0f * (PinDotRadius() + GraphPinOuterRingGap() + GraphPinOuterRingWidth()); }
 
         // The value-cell width the chip needs to show its word (T3-D2), from
         // the CURRENT font: the dot slot, the widest word ANY pin shows (so
@@ -1687,15 +1695,15 @@ namespace Arcane::Editor
 
         // The checkerboard. On the fullscreen surface it is ALSO what
         // kSceneInput samples, which is what makes it the scene stand-in.
-        constexpr float kCell = 32.0f;
         const float extent = static_cast<float>(m_graphPreviewSize);
         const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
+        const float cell = Arcane::Settings<ShaderEditorSettings>().previewCheckerCell;   // editor.shader.previewCheckerCell
         const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
                               preview.checkerLight.a);
-        for (int y = 0; y * kCell < extent; ++y)
-            for (int x = 0; x * kCell < extent; ++x)
+        for (int y = 0; y * cell < extent; ++y)
+            for (int x = 0; x * cell < extent; ++x)
                 if ((x + y) & 1)
-                    b.Rect(glm::vec2(x * kCell, y * kCell), glm::vec2(kCell, kCell), light);
+                    b.Rect(glm::vec2(x * cell, y * cell), glm::vec2(cell, cell), light);
 
         if (haveSprite)
         {
@@ -2863,6 +2871,7 @@ namespace Arcane::Editor
         if (!grid.Section("Settings"))
             return;
         static constexpr const char* kWidthNames[] = { "float", "float2", "float4" };
+        ARC_CONSTANT("shader contract: the float / float2 / float4 widths a Custom node pin can take")
         static constexpr int kWidths[] = { 1, 2, 4 };
         const auto widthIndex = [](int w) { return w == 1 ? 0 : w == 2 ? 1 : 2; };
         // Combos, checkboxes and buttons queue ONE discrete step each (s5.1.4 step 5).
@@ -3476,8 +3485,8 @@ namespace Arcane::Editor
                 // culled draw, and GetContentBounds (F, the s4.5 fit) then
                 // framed phantom bounds once the view came back.
                 const float usedY = ImGui::GetCursorPosY() - startY;
-                const float wantY = size.y - 2.0f * kNodePadY;
-                ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
+                const float wantY = size.y - 2.0f * NodePadY();
+                ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * NodePadX()),
                                     (std::max)(0.0f, wantY - usedY)));
                 ImGui::PopID();
                 ed::EndNode();
@@ -3510,7 +3519,7 @@ namespace Arcane::Editor
             // reasoning as a graph node (DrawNodeTitleBand).
             const float headerMaxY = ImGui::GetItemRectMax().y;
             {
-                const float fill = (kNodePadY + NodeHeaderGap()) -
+                const float fill = (NodePadY() + NodeHeaderGap()) -
                                    2.0f * ImGui::GetStyle().ItemSpacing.y;
                 if (fill > 0.0f)
                     ImGui::Dummy(ImVec2(0.0f, fill));
@@ -3522,7 +3531,7 @@ namespace Arcane::Editor
             const float passContentW =
                 passWidthIt == m_passNodeWidths.end()
                     ? 0.0f
-                    : passWidthIt->second - 2.0f * kNodePadX;
+                    : passWidthIt->second - 2.0f * NodePadX();
 
             // Extra passes rename in-node (StableTextEdit's stable-buffer
             // commit; one undo step on deactivate-after-edit -- renames are not
@@ -3619,7 +3628,7 @@ namespace Arcane::Editor
         ImGui::TextColored(NodeTitleText(), "Scene");
         const float sceneHeaderY = ImGui::GetItemRectMax().y;
         {
-            const float fill = (kNodePadY + NodeHeaderGap()) -
+            const float fill = (NodePadY() + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
@@ -3652,7 +3661,7 @@ namespace Arcane::Editor
         ImGui::TextColored(NodeTitleText(), "Output");
         const float outHeaderY = ImGui::GetItemRectMax().y;
         {
-            const float fill = (kNodePadY + NodeHeaderGap()) -
+            const float fill = (NodePadY() + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
@@ -5612,7 +5621,7 @@ namespace Arcane::Editor
         const auto widthIt = m_nodeWidths.find(n.id);
         const float contentW = widthIt == m_nodeWidths.end()
                                    ? 0.0f
-                                   : widthIt->second - 2.0f * kNodePadX;
+                                   : widthIt->second - 2.0f * NodePadX();
 
         // ---- OFF-SCREEN CULL (UE's mechanism, ported) ----
         // The node is still SUBMITTED -- BeginNode/EndNode, and every pin --
@@ -5657,8 +5666,8 @@ namespace Arcane::Editor
             // Pad out to the remembered footprint (node size minus the padding
             // the editor adds back around the content).
             const float usedY = ImGui::GetCursorPosY() - startY;
-            const float wantY = size.y - 2.0f * kNodePadY;
-            ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
+            const float wantY = size.y - 2.0f * NodePadY();
+            ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * NodePadX()),
                                 (std::max)(0.0f, wantY - usedY)));
             ImGui::PopID();
             ed::EndNode();
@@ -5694,7 +5703,7 @@ namespace Arcane::Editor
         // guessed, because ImGui's automatic spacing is already in play at both
         // ends of the dummy: the next real item lands at
         // headerMaxY + 2*ItemSpacing.y + fill, and it needs to land at the
-        // band's bottom edge (headerMaxY + kNodePadY) plus the gap.
+        // band's bottom edge (headerMaxY + NodePadY()) plus the gap.
         //
         // Clamped at zero: a theme with generous ItemSpacing may already place
         // the row far enough down, and a negative dummy would be nonsense.
@@ -5706,7 +5715,7 @@ namespace Arcane::Editor
         // height for no reading. The band-only tier wants no gap at all.
         if (showPinRows)
         {
-            const float fill = (kNodePadY + NodeHeaderGap()) -
+            const float fill = (NodePadY() + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));

@@ -60,13 +60,14 @@ namespace Arcane::Editor
     // shader canvas, 4.5 for spec §11.2's 9px on the Graph lens), so it stays
     // a parameter at the call.
     [[nodiscard]] inline int GraphPinSegments() { return Settings<GraphCanvasSettings>().pinSegments; }
-    inline constexpr float kGraphPinRingWidth = 1.6f;
+    [[nodiscard]] inline float GraphPinRingWidth() { return Settings<GraphPinRingSettings>().width; }
     // The OPTIONAL outer ring DrawGraphPinDot adds around a dot (the shader
     // canvas's "adapts to its input" mark on a resolved dynamic pin): its
     // centreline sits this far outside the dot's radius, at this weight --
-    // thin, so it reads as a halo and not as a second, hollow pin.
-    inline constexpr float kGraphPinOuterRingGap   = 2.2f;
-    inline constexpr float kGraphPinOuterRingWidth = 1.0f;
+    // thin, so it reads as a halo and not as a second, hollow pin
+    // (editor.graph.pinRing.outerGap / .outerWidth, S6-44).
+    [[nodiscard]] inline float GraphPinOuterRingGap()   { return Settings<GraphPinRingSettings>().outerGap; }
+    [[nodiscard]] inline float GraphPinOuterRingWidth() { return Settings<GraphPinRingSettings>().outerWidth; }
 
     // ---- Grid palette -----------------------------------------------------
     // The theme cvars editor.theme.graph.gridMinor / gridMajor (settings

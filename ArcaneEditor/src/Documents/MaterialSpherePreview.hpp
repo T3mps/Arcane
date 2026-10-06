@@ -28,10 +28,12 @@
 
 #include <cstdint>
 #include <span>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
     // The sphere's mesh-supply key ('SPHR'): never a project asset Guid.
+    ARC_CONSTANT("ID space: the fixed GUID of the material preview sphere mesh")
     inline constexpr Arcane::Guid kMaterialPreviewSphereId{ 0x53504852ull, 1ull };
 
     // A 0.5 m sphere: 2.0 m back at the default 35 degrees it fills ~78% of

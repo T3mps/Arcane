@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -106,6 +107,7 @@ namespace Arcane::Editor
         // all, which routes the update through the pure-pan branch. The zoom
         // branch divides by (scaleOld - scaleNew), so this is also what keeps
         // that division away from zero.
+        ARC_CONSTANT("math tolerance: divide-by-zero guard")
         static constexpr float kScaleEpsilon = 1e-4f;
 
         // The grid's own screen scale -- the sublinear answer to view zoom.

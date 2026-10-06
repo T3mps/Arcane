@@ -31,6 +31,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane { class Project; }
 
@@ -41,6 +42,7 @@ namespace Arcane::Editor
 
     // The Graph window's selection strip height (node page phase s6.9): the
     // strip draws it and the canvas is shrunk by it, so neither covers the other.
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kAssetGraphSelectionStripH = 48.0f;
 
     // The Asset Graph window's session-only UI state (spec s6). Panel-split

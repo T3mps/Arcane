@@ -38,6 +38,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -74,6 +75,7 @@ namespace Arcane::Editor
         InputActions,
         Other,
     };
+    ARC_CONSTANT("enum and array arity: one per AssetKind")
     inline constexpr int kAssetKindCount = 13;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's

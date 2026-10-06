@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -21,7 +22,9 @@ namespace Arcane::Editor
         // The decade range PlanGrid2D searches. Nothing an editor viewport can
         // show falls outside 1e-9 .. 1e12 m; the bounds just keep the scan
         // finite for an absurd ppm (count < 3 only at those extremes).
+        ARC_CONSTANT("math tolerance: the float-precision bounds of the decade LOD")
         constexpr int kMinDecade = -9;
+        ARC_CONSTANT("math tolerance: the float-precision bounds of the decade LOD")
         constexpr int kMaxDecade = 12;
 
         // 10^k as the nearest float, from EXACT integer powers: a positive

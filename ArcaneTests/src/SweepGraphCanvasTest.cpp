@@ -9,10 +9,20 @@
 #include "Widgets/GraphZoomLevels.hpp"
 #include "Widgets/GraphGridPhase.hpp"
 #include "Widgets/GraphNodeLod.hpp"
+#include "Widgets/GraphCanvasStyle.hpp"   // GraphPinRingWidth() / GraphPinOuterRingGap() / GraphPinOuterRingWidth()
+#include "Documents/DocumentHost.hpp"
+#include "Documents/ShaderEditorDocument.hpp"
+#include "Helpers/NodePageDocs.hpp"      // HeadlessImGui + SpriteNodeDoc: an open graph document
+
+#include <imgui.h>
+#include <imgui_node_editor.h>
 
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <cmath>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Arcane;
@@ -152,4 +162,92 @@ TEST_CASE("sweep: the LOD tiers and the grid read their settings and match the o
         const float oldPm = oldBase * std::exp2(std::floor(std::log2(22.0f / oldBase)));
         CHECK(Test::SameBits(phase.MinorPeriod(phase.GridScale(scale)), oldPm));
     }
+}
+
+// S6-44: the pin rings and the shader canvas's node padding (the S5-2 review
+// restored them from DERIVED: canvas units, scaled by the graph zoom).
+TEST_CASE("sweep: editor.graph.pinRing.* and editor.graph.nodePadding defaults are the pre-sweep literals",
+          "[sweep][graph-canvas]")
+{
+    const Editor::GraphPinRingSettings r{};
+    CHECK(r.width == 1.6f); CHECK(r.outerGap == 2.2f); CHECK(r.outerWidth == 1.0f);
+    const Editor::GraphCanvasSettings g{};
+    CHECK(g.nodePadding.x == 10.0f); CHECK(g.nodePadding.y == 6.0f);
+    Test::RequireDefault("editor.graph.pinRing.width",      CVarValue::Float32(1.6f));
+    Test::RequireDefault("editor.graph.pinRing.outerGap",   CVarValue::Float32(2.2f));
+    Test::RequireDefault("editor.graph.pinRing.outerWidth", CVarValue::Float32(1.0f));
+    Test::RequireDefault("editor.graph.nodePadding",        CVarValue::Vec2(CVarVec2{ 10.0f, 6.0f }));
+    // The published accessors read them.
+    CHECK(Editor::GraphPinRingWidth() == 1.6f);
+    CHECK(Editor::GraphPinOuterRingGap() == 2.2f);
+    CHECK(Editor::GraphPinOuterRingWidth() == 1.0f);
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    const auto describe = [&](std::string_view name)
+    {
+        const std::optional<CVarDescInfo> d = reg.Describe(name);
+        INFO("cvar " << std::string(name));
+        REQUIRE(d.has_value());
+        CHECK(d->audience == Audience::Editor);
+        CHECK(d->scope == SettingScope::PreferencesMachine);
+        CHECK(HasFlag(d->flags, CVarFlags::Dev));
+        CHECK_FALSE(d->help.empty());
+        return *d;
+    };
+    CHECK(describe("editor.graph.pinRing.width").apply == ApplyMode::Live);
+    CHECK(describe("editor.graph.pinRing.outerGap").apply == ApplyMode::Live);
+    const CVarDescInfo pad = describe("editor.graph.nodePadding");
+    CHECK(pad.apply == ApplyMode::Restart);
+    REQUIRE(pad.max.has_value());
+    CHECK(*pad.max == CVarValue::Vec2(CVarVec2{ 24.0f, 24.0f }));
+}
+
+TEST_CASE("sweep: a published pin ring and node padding reach the shader canvas", "[sweep][graph-canvas][graphcanvas]")
+{
+    namespace ed = ax::NodeEditor;
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle ring = reg.Find("editor.graph.pinRing.width");
+    const CVarHandle pad  = reg.Find("editor.graph.nodePadding");
+    REQUIRE_FALSE(ring.IsStale());
+    REQUIRE_FALSE(pad.IsStale());
+    struct Reset
+    {
+        CVarHandle a, b;
+        ~Reset()
+        {
+            CVarRegistry& r = CVarRegistry::Get();
+            r.ClearRung(a, SetBy::Code);
+            r.ClearRung(b, SetBy::Code);
+            r.PublishImmediate();
+        }
+    } reset{ ring, pad };
+
+    Test::HeadlessImGui imgui;   // before the doc: its dtor needs the context
+    Editor::ShaderEditorDocument doc(Editor::DocServices{}, "padding.arcmat", Test::SpriteNodeDoc());
+    const auto frame = [&doc]
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        bool requestClose = false;
+        doc.Draw(requestClose);
+        ImGui::Render();
+    };
+    const auto padding = [&doc]
+    {
+        ed::SetCurrentEditor(doc.GraphCanvasContext());
+        const ImVec4 v = ed::GetStyle().NodePadding;
+        ed::SetCurrentEditor(nullptr);
+        return v;
+    };
+    frame();
+    REQUIRE(doc.GraphCanvasContext() != nullptr);
+    CHECK(padding().x == 10.0f); CHECK(padding().y == 6.0f); CHECK(padding().z == 10.0f); CHECK(padding().w == 6.0f);
+
+    REQUIRE(reg.Set(ring, CVarValue::Float32(3.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(pad, CVarValue::Vec2(CVarVec2{ 14.0f, 9.0f }), SetBy::Code, {}, CVarContext::Editor) ==
+            SetResult::Applied);
+    reg.PublishImmediate();
+    CHECK(Editor::GraphPinRingWidth() == 3.0f);
+    frame();   // the open canvas re-applies its style desc when it changed
+    CHECK(padding().x == 14.0f); CHECK(padding().y == 9.0f); CHECK(padding().z == 14.0f); CHECK(padding().w == 9.0f);
 }

@@ -34,6 +34,7 @@
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState, DrawAssetGraphPanel, DestroyAssetGraphPanelCanvas
 #include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders (the faked seam below)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
+#include "Widgets/UiMetrics.hpp"         // Ui::ScopedMetrics -- the strip at a non-default UI scale
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -811,6 +812,73 @@ TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts,
     CHECK(rig.state.graphLegendMin.y >= rig.state.graphCanvasMin.y);
     CHECK(rig.state.graphLegendMax.x <= rig.state.graphCanvasMax.x);
     CHECK(rig.state.graphLegendMax.y <= rig.state.graphCanvasMax.y);
+}
+
+// S6-44: editor.assetGraph.node.* reach the canvas (canvas units), and the
+// screen-space chrome -- the selection strip -- is drawn at Ui::Px(base).
+TEST_CASE("Asset Graph (S6-44): a published node width band sizes every node", "[editor][graphcanvas][sweep]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle minW = reg.Find("editor.assetGraph.node.minWidth");
+    const CVarHandle maxW = reg.Find("editor.assetGraph.node.maxWidth");
+    REQUIRE_FALSE(minW.IsStale());
+    REQUIRE_FALSE(maxW.IsStale());
+    struct Reset
+    {
+        CVarHandle a, b;
+        ~Reset()
+        {
+            CVarRegistry& r = CVarRegistry::Get();
+            r.ClearRung(a, SetBy::Code);
+            r.ClearRung(b, SetBy::Code);
+            r.PublishImmediate();
+        }
+    } reset{ minW, maxW };
+
+    const auto nodeWidths = [](StripCanvasRig& rig)
+    {
+        std::vector<float> widths;
+        auto* edCtx = static_cast<ax::NodeEditor::EditorContext*>(rig.state.graphCanvas);
+        ax::NodeEditor::SetCurrentEditor(edCtx);
+        for (std::uint64_t id = 1; id <= 5; ++id)   // a hub + four referencers; ids are index + 1
+            widths.push_back(ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(id)).x);
+        ax::NodeEditor::SetCurrentEditor(nullptr);
+        return widths;
+    };
+    {
+        StripCanvasRig rig("arcane_assets_graph_nodewidth_default");
+        for (int i = 0; i < 4; ++i)
+            rig.hw.Frame();
+        for (float w : nodeWidths(rig))
+        {
+            CHECK(w >= 180.0f);
+            CHECK(w <= 220.0f);
+        }
+    }
+
+    REQUIRE(reg.Set(minW, CVarValue::Float32(300.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(maxW, CVarValue::Float32(320.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+    reg.PublishImmediate();
+    StripCanvasRig rig("arcane_assets_graph_nodewidth_wide");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    for (float w : nodeWidths(rig))
+    {
+        CHECK(w >= 300.0f);
+        CHECK(w <= 320.0f);
+    }
+}
+
+TEST_CASE("Asset Graph (S6-44): the selection strip is Ui::Px(48) at a non-default UI scale", "[editor][graphcanvas][sweep]")
+{
+    const Ui::ScopedMetrics big(Ui::Metrics{ 1.5f, 16.0f });
+    StripCanvasRig rig("arcane_assets_graph_strip_scaled");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    ImGuiWindow* strip = FindWindowContaining("##graphsel");
+    REQUIRE(strip != nullptr);
+    CHECK(strip->Size.y == 72.0f);
+    CHECK(rig.state.graphCanvasMax.y == strip->Pos.y);
 }
 
 // ---------------------------------------------------------------------------

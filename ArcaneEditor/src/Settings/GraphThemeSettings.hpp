@@ -26,6 +26,7 @@
 
 #include <span>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -36,38 +37,62 @@ namespace Arcane::Editor
         // Shader canvas node chrome: the Unity Shader Graph reference tones --
         // a body one step above the canvas, a title band one step below the
         // body, a border one step above the body again.
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kNodeBody      = ImVec4(0.176f, 0.176f, 0.188f, 1.0f);   // #2d2d30
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kNodeTitle     = ImVec4(0.137f, 0.137f, 0.149f, 1.0f);   // #232326
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kNodeBorder    = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kNodeTitleText = ImVec4(0.808f, 0.808f, 0.831f, 1.0f);   // #cecfd4
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kNodeBadgeText = ImVec4(1.0f,   0.4f,   0.3f,   1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kGroupBg       = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kGroupBorder   = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
         // Pins by width (Documents/ShaderGraphPinTypes.hpp) and the pass
         // canvas's one render-target pin colour (red-orange).
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kPinTexture    = ImVec4(0.949f, 0.549f, 0.251f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kPinScalar     = ImVec4(0.502f, 0.808f, 1.0f,   1.0f);   // pale azure
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kPinVec2       = ImVec4(0.549f, 0.863f, 0.549f, 1.0f);   // green
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kPinVec4       = ImVec4(0.941f, 0.549f, 0.863f, 1.0f);   // magenta
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kPinDynamic    = ImVec4(0.745f, 0.745f, 0.765f, 1.0f);   // gray
         // Both canvases' two-tier grid; the alphas are each octave's peak
         // strength (GraphGridPhase.hpp), not image opacity.
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kGridMinor     = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kGridMajor     = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
         // The hover accent of both canvases and of the viewport outline's
         // hover role (AxisColors.cpp).
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kHoverBorder   = ImVec4(0.25f, 0.70f, 1.0f, 1.0f);
         // Node page spec 2026-09-30 s5.1.4: the per-category title band; the
         // Output sink is the one red, Uncategorized is kNodeTitle's #232326.
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryInput         = ImVec4(0x24 / 255.0f, 0x38 / 255.0f, 0x4a / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryMath          = ImVec4(0x26 / 255.0f, 0x40 / 255.0f, 0x2f / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryVector        = ImVec4(0x3a / 255.0f, 0x2a / 255.0f, 0x4a / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryProcedural    = ImVec4(0x4a / 255.0f, 0x3a / 255.0f, 0x22 / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryOutput        = ImVec4(0x5a / 255.0f, 0x26 / 255.0f, 0x26 / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryUtility       = ImVec4(0x2e / 255.0f, 0x2e / 255.0f, 0x33 / 255.0f, 1.0f);
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.graph.* cvar's default")
         inline constexpr ImVec4 kCategoryUncategorized = ImVec4(0x23 / 255.0f, 0x23 / 255.0f, 0x26 / 255.0f, 1.0f);
         // The asset graph legend's two edge swatches.
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.assetGraph.* cvar's default")
         inline constexpr ImVec4 kLegendEdge    = ImVec4(0.361f, 0.361f, 0.361f, 1.0f);   // #5c5c5c
+        ARC_CONSTANT("a change would be a bug: the one spelling of its editor.theme.assetGraph.* cvar's default")
         inline constexpr ImVec4 kLegendUsedBy  = ImVec4(0.290f, 0.290f, 0.290f, 1.0f);   // #4a4a4a
     }
 

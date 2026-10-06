@@ -5,8 +5,11 @@
 // from them. Set once per frame by AppearanceApplier::UpdateUi. At scale 1.0
 // and font 16 every helper returns its argument exactly.
 
+#include <Arcane/Core/Constant.hpp>
+
 namespace Arcane::Editor::Ui
 {
+    ARC_CONSTANT("a change would be a bug: the font size every base px / font px was tuned at; Ui::FontPx divides by it")
     inline constexpr float kReferenceFontSize = 16.0f;   // the size the editor's pixel constants were tuned at
 
     struct Metrics

@@ -20,6 +20,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -387,6 +388,7 @@ namespace Arcane::Editor
         // wrote", so it must not paper over a genuine external change.
         bool QuatNearlySameRotation(const glm::quat& a, const glm::quat& b) noexcept
         {
+            ARC_CONSTANT("math tolerance: the float-equality epsilon that decides 'mixed values'")
             constexpr float kTolerance = 1e-5f;
             const float d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
             return std::fabs(std::fabs(d) - 1.0f) < kTolerance;

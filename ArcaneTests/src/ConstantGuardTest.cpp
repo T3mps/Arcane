@@ -213,6 +213,18 @@ TEST_CASE("constant guard: no allow-listed constants remain under Client, Runtim
     CHECK(left.empty());
 }
 
+TEST_CASE("constant guard: no allow-listed constants remain under Editor or AssetPipeline", "[sweep][guard][markers]")
+{
+    constexpr std::string_view kPrefixes[] = { "ArcaneEditor/", "ArcaneAssetPipeline/" };
+    std::ifstream in(RepoRoot() / "scripts" / "constant-allowlist.txt");
+    std::string line, left;
+    while (std::getline(in, line))
+        for (std::string_view prefix : kPrefixes)
+            if (line.starts_with(prefix)) left += "  " + line + "\n";
+    INFO("Mark these with ARC_CONSTANT(\"why\") and delete the lines:\n" << left);
+    CHECK(left.empty());
+}
+
 TEST_CASE("constant guard: the D3D12 Agility SDK version is spelled once", "[sweep][guard][markers]")
 {
     int literal = 0;

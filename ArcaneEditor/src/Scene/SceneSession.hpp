@@ -18,6 +18,7 @@
 
 #include <filesystem>
 #include <string>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -73,6 +74,7 @@ namespace Arcane::Editor
             if (wasDirty) m_savedStateId = kUnreachableStateId;
             else          MarkSaved(stack);
         }
+        ARC_CONSTANT("ID space / sentinel: a state id no undo state ever has")
         static constexpr std::uint64_t kUnreachableStateId = ~std::uint64_t{0};   // m_nextId never gets there
 
         // ---- retargeting -------------------------------------------------

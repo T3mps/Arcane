@@ -21,6 +21,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
@@ -45,7 +47,9 @@ namespace Arcane::Editor
         // kPreviewCompactTextColumnMin is the floor the thumb yields to when
         // the page is between this breakpoint and comfortably wide -- the
         // "~110px text column" figure from the same directive.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kPreviewCompactHeaderMinWidth = 250.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kPreviewCompactTextColumnMin  = 110.0f;
 
         // Ruling 5 (2026-09-07): the path row shows the CONTENT-RELATIVE
@@ -103,7 +107,7 @@ namespace Arcane::Editor
                              float heightFraction, float floorPx, float maxPx) noexcept
     {
         const float byHeight = std::clamp(heightFraction * innerHeight, std::min(floorPx, maxPx), maxPx);
-        const float byWidth = compact ? std::max(0.0f, availX - spacing - kPreviewCompactTextColumnMin)
+        const float byWidth = compact ? std::max(0.0f, availX - spacing - Ui::Px(kPreviewCompactTextColumnMin))
                                       : std::max(0.0f, availX);
         return std::min({ maxPx, byWidth, byHeight });
     }
@@ -335,7 +339,7 @@ namespace Arcane::Editor
         const float thumbFloor = AssetPageThumbFloor(inspector.assetThumbMinPx, thumbMax);
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
         const float avail = ImGui::GetContentRegionAvail().x;
-        const bool compactHeader = avail >= kPreviewCompactHeaderMinWidth;
+        const bool compactHeader = avail >= Ui::Px(kPreviewCompactHeaderMinWidth);
         float thumbSize = AssetPageThumbSize(compactHeader, avail, spacing, innerHeight,
                                              inspector.assetThumbHeightFraction, thumbFloor, thumbMax);
         if (compactHeader)

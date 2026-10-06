@@ -39,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane { class Project; }
 
@@ -62,6 +63,7 @@ namespace Arcane::Editor
     enum class CreateAssetKind : std::uint8_t
     { Material, MaterialInstance, Mesh, Sprite, Scene, CppClass, InputActions };
 
+    ARC_CONSTANT("enum and array arity: one per CreateAssetKind")
     inline constexpr int kCreateAssetKindCount = 7;
 
     // A request to create something. Raised by producers, consumed by
@@ -197,6 +199,7 @@ namespace Arcane::Editor
         Arcane::MeshSource::Cube,     Arcane::MeshSource::Plane,   Arcane::MeshSource::UvSphere,
         Arcane::MeshSource::Cylinder, Arcane::MeshSource::Capsule,
     };
+    ARC_CONSTANT("enum and array arity: one per primitive mesh source")
     inline constexpr int kPrimitiveMeshSourceCount = 5;
 
     // The primitive's name: the submenu label, the .arcmesh stem, and the
@@ -245,6 +248,7 @@ namespace Arcane::Editor
     // discipline CreateKindForAssetKind above applies to the other enum pair
     // this task had to reconcile.
     inline constexpr const char* kMaterialSurfaceLabels[] = { "sprite", "mesh", "post" };
+    ARC_CONSTANT("enum and array arity: one per MaterialSurface")
     inline constexpr int kMaterialSurfaceCount = 3;
 
     [[nodiscard]] inline int MaterialSurfaceComboIndex(Arcane::MaterialSurface s)
@@ -331,6 +335,7 @@ namespace Arcane::Editor
     // Artifacts/ path keyed off it, a ".meta" sidecar -- are longer than the
     // asset itself, so the asset needs headroom under the real ceiling, not
     // to sit exactly on it.
+    ARC_CONSTANT("hardware/OS/API limit: Windows MAX_PATH, less a margin for the folder")
     inline constexpr std::size_t kCreateNameMaxPathChars = 240;
 
     // Rules 0-2 only (syntax + length) -- no filesystem. The asset file-op planner

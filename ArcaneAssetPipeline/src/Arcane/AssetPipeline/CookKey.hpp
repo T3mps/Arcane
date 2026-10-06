@@ -26,11 +26,13 @@
 
 #include "Arcane/AssetPipeline/MeshMetaSettings.hpp"
 #include "Arcane/AssetPipeline/TextureMetaSettings.hpp"
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::AssetPipeline
 {
     // COMPOSITE version: bump when importer logic, bc7enc_rdo, or stb change. Constituents
     // named here so no one forgets the third term of the triple.
+    ARC_CONSTANT("file format: the texture importer version folded into every cook key; bump on importer/library change")
     inline constexpr std::uint32_t kTextureImporterVersion = 1;   // {importer v1, bc7enc_rdo b943862, stb 31c1ad3}
 
     [[nodiscard]] std::uint64_t ComputeCookKey(std::span<const std::byte> sourceBytes,
@@ -38,6 +40,7 @@ namespace Arcane::AssetPipeline
                                                 std::uint32_t importerVersion);
 
     // COMPOSITE version: bump when importer logic, cgltf, or meshoptimizer change.
+    ARC_CONSTANT("file format: the mesh importer version folded into every cook key; bump on importer/library change")
     inline constexpr std::uint32_t kMeshImporterVersion = 1;   // {importer v1, cgltf bbeb5b0, meshoptimizer v1.2}
 
     // hash(u32 source length + source bytes + EVERY external buffer's bytes (each its own

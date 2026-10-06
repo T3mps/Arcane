@@ -37,6 +37,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -49,6 +50,7 @@ namespace Arcane::Editor
         // one of the three is missing, so it is a constant rather than three literals
         // that can drift. NOT an asset guid: nothing in the project registry mints
         // it, and it never leaves this document's vehicle.
+        ARC_CONSTANT("ID space: the fixed GUID of the mesh preview")
         inline constexpr Arcane::Guid kPreviewMeshGuid{ 0x50525657ull, 1ull };
 
         // One completed field gesture (or single-frame commit) as an undo

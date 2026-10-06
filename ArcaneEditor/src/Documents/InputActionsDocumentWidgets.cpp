@@ -16,12 +16,16 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
     namespace
     {
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kMapsColumnWidth = 180.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kIndent = 16.0f;
         constexpr const char* kDragPayload = "ARC_INPUT_ROW";
 
@@ -160,7 +164,7 @@ namespace Arcane::Editor
             if (headed) line(0.0f, Theme::kText, p.composite == "1DAxis" ? "1D Axis" : "2D Vector");
             for (std::size_t i = 0; i < p.roles.size(); ++i)
             {
-                const float extra = headed ? kIndent : 0.0f;
+                const float extra = headed ? Ui::Px(kIndent) : 0.0f;
                 if (i < p.captured.size())       line(extra, Theme::kText, p.roles[i] + ": " + InputActions::DisplayForPath(p.captured[i]).control);
                 else if (i == p.captured.size()) line(extra, Theme::kAmber, p.roles[i] + ": " + countdown);
                 else                             line(extra, Theme::kTextDim, p.roles[i] + " -- waiting");
@@ -214,7 +218,7 @@ namespace Arcane::Editor
         ImGui::EndDisabled();
         ImGui::Separator();
         const ImGuiWindowFlags colFlags = swallowed ? ImGuiWindowFlags_NoInputs : 0;
-        ImGui::BeginChild("##input_maps", ImVec2(kMapsColumnWidth, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX, colFlags);
+        ImGui::BeginChild("##input_maps", ImVec2(Ui::Px(kMapsColumnWidth), 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX, colFlags);
         DrawMaps(model, state, services, edit);
         ImGui::EndChild();
         ImGui::SameLine();
@@ -385,7 +389,7 @@ namespace Arcane::Editor
         (void)rows;   // the keyboard nav (HandleKeys) reads the sibling rows; the row draw does not
         ImGui::PushID(row.id.ToString().c_str());
         ImGui::PushID(static_cast<int>(row.kind));
-        const float indent = (row.depth > 0 ? ChevronCell() : 0.0f) + kIndent * static_cast<float>(row.depth);
+        const float indent = (row.depth > 0 ? ChevronCell() : 0.0f) + Ui::Px(kIndent) * static_cast<float>(row.depth);
         const bool swallowed = services.inputSwallowed && services.inputSwallowed();
         const Guid map = model.SelectedMap();
         if (row.kind == InputRowKind::AddBinding)

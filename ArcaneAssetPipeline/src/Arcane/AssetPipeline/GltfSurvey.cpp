@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::AssetPipeline
 {
@@ -210,6 +211,7 @@ namespace Arcane::AssetPipeline
                 // SETS it, never unconditionally (a list naming inputs the file never
                 // used would train users to ignore the warning it feeds, Task 13's
                 // own brief).
+                ARC_CONSTANT("file format: glTF 2.0's default metallic/roughness factor (1.0)")
                 constexpr float kDefaultFactor = 1.0f;
                 const bool metallicRoughnessSet =
                     pbr.metallic_factor != kDefaultFactor ||

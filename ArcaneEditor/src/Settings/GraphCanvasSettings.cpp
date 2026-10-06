@@ -92,6 +92,13 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(GraphCanvasSettings, showPinLegend)
             ARC_REFLECT_ATTR(DisplayName, "Show pin legend") ARC_REFLECT_ATTR(Category, "Pins")
             ARC_REFLECT_ATTR(Tooltip, "Show the shader graph's pin colour legend (false folds it to a ? chip).")
+        ARC_REFLECT_FIELD(GraphCanvasSettings, nodePadding)
+            ARC_REFLECT_ATTR(DisplayName, "Node padding") ARC_REFLECT_ATTR(Category, "Nodes")
+            ARC_REFLECT_ATTR(Range, 0.0, 24.0) ARC_REFLECT_ATTR(Apply, ApplyMode::Restart)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "inset margin")
+            ARC_REFLECT_ATTR(Tooltip, "Space between a shader graph node's edge and its content, in canvas units at zoom 1: "
+                                      "x = left and right, y = top and bottom.")
     ARC_END_REFLECT_TYPE()
 
     ARC_REFLECT_TYPE(GraphLodSettings)
@@ -129,7 +136,27 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(Tooltip, "Minor lines per major line: a power of two (2, 4, 8 or 16); another value rounds down to one.")
     ARC_END_REFLECT_TYPE()
 
+    ARC_REFLECT_TYPE(GraphPinRingSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.graph.pinRing", SettingScope::PreferencesMachine, ApplyMode::Live,
+                              Audience::Editor)
+        ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
+        ARC_REFLECT_FIELD(GraphPinRingSettings, width)
+            ARC_REFLECT_ATTR(DisplayName, "Ring width") ARC_REFLECT_ATTR(Range, 0.25, 8.0)
+            ARC_REFLECT_ATTR(Keywords, "pin outline hollow")
+            ARC_REFLECT_ATTR(Tooltip, "Line weight of an unwired (hollow) pin dot's ring, in canvas units at zoom 1.")
+        ARC_REFLECT_FIELD(GraphPinRingSettings, outerGap)
+            ARC_REFLECT_ATTR(DisplayName, "Outer ring gap") ARC_REFLECT_ATTR(Range, 0.0, 16.0)
+            ARC_REFLECT_ATTR(Keywords, "pin halo dynamic adapts")
+            ARC_REFLECT_ATTR(Tooltip, "How far outside a pin dot the \"adapts to its input\" halo ring sits, in canvas "
+                                      "units at zoom 1.")
+        ARC_REFLECT_FIELD(GraphPinRingSettings, outerWidth)
+            ARC_REFLECT_ATTR(DisplayName, "Outer ring width") ARC_REFLECT_ATTR(Range, 0.25, 8.0)
+            ARC_REFLECT_ATTR(Keywords, "pin halo dynamic adapts")
+            ARC_REFLECT_ATTR(Tooltip, "Line weight of the \"adapts to its input\" halo ring, in canvas units at zoom 1.")
+    ARC_END_REFLECT_TYPE()
+
     ARC_SETTINGS(GraphCanvasSettings);
+    ARC_SETTINGS(GraphPinRingSettings);
     ARC_SETTINGS(GraphLodSettings);
     ARC_SETTINGS(GraphGridSettings);
 

@@ -24,6 +24,7 @@
 #include "Settings/GraphCanvasSettings.hpp"   // GraphLodSettings (plain struct)
 
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -79,6 +80,7 @@ namespace Arcane::Editor
     // stops.
     inline NodeLOD NodeLODForScale(float scale, const GraphLodSettings& lod) noexcept
     {
+        ARC_CONSTANT("math tolerance: float-compare epsilon for the zoom-stop boundaries")
         constexpr float kEps = 1e-4f;
         if (scale <= lod.lowestMax  + kEps) return NodeLOD::LowestDetail;
         if (scale <= lod.lowMax     + kEps) return NodeLOD::LowDetail;

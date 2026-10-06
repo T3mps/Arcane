@@ -21,6 +21,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
@@ -31,6 +33,7 @@ namespace Arcane::Editor
         // size-constraint with equal min/max on x), height auto-fits its
         // content -- the field count varies by kind and by whether the parent
         // picker is expanded.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kDialogWidth = 380.0f;
         // Picker rows reuse the table row pitch (s11.2: "table rows | 24px",
         // now editor.ui.tableRowHeight at the UI scale, settings S6-28), the
@@ -40,8 +43,10 @@ namespace Arcane::Editor
         // Six rows before the picker scrolls: enough to browse a small
         // project's materials without the modal growing past a comfortable
         // height on a big one.
+        ARC_CONSTANT("layout count, not px: rows the picker shows before it scrolls; each row is the scaled row height (s16.11)")
         constexpr int   kPickerVisibleRows = 6;
         // The mock's footer buttons.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kFooterButtonWidth = 92.0f;
 
         int IndexOfRelativeFolder(const std::vector<FolderChoice>& choices, std::string_view relative)
@@ -431,6 +436,7 @@ namespace Arcane::Editor
 
     int MaterialSurfaceDefaultIndex()
     {
+        ARC_CONSTANT("enum and array arity: the last kMaterialSurfaceLabels index")
         constexpr int kLast = static_cast<int>(std::size(kMaterialSurfaceLabels)) - 1;
         return std::clamp(Arcane::Settings<AssetBrowserSettings>().newMaterialDefaultSurface, 0, kLast);
     }
@@ -552,8 +558,8 @@ namespace Arcane::Editor
         // Width pinned to spec s11.2's ~380px EXACTLY (equal min/max on x);
         // height auto-fits, because the field count varies by kind and by
         // whether the parent picker is expanded.
-        ImGui::SetNextWindowSizeConstraints(ImVec2(kDialogWidth, 0.0f),
-                                            ImVec2(kDialogWidth, FLT_MAX));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(Ui::Px(kDialogWidth), 0.0f),
+                                            ImVec2(Ui::Px(kDialogWidth), FLT_MAX));
 
         std::optional<CreateAssetResult> result;
         bool keepOpen = true;   // the title bar's x
@@ -653,15 +659,15 @@ namespace Arcane::Editor
             }
 
             // Footer: Cancel then Create, right-aligned (the mock's order).
-            const float footerWidth = kFooterButtonWidth * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            const float footerWidth = Ui::Px(kFooterButtonWidth) * 2.0f + ImGui::GetStyle().ItemSpacing.x;
             ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
                                           ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x
                                           - footerWidth));
-            if (ImGui::Button("Cancel", ImVec2(kFooterButtonWidth, 0.0f)))
+            if (ImGui::Button("Cancel", ImVec2(Ui::Px(kFooterButtonWidth), 0.0f)))
                 keepOpen = false;
             ImGui::SameLine();
             ImGui::BeginDisabled(!ready);
-            if (ImGui::Button("Create", ImVec2(kFooterButtonWidth, 0.0f)))
+            if (ImGui::Button("Create", ImVec2(Ui::Px(kFooterButtonWidth), 0.0f)))
             {
                 CreateAssetResult r;
                 r.kind      = st.request.kind;

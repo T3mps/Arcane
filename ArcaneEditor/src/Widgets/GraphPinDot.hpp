@@ -18,7 +18,7 @@
 // GraphCanvasStyle.hpp / GraphWire.hpp, on the same one-named-concern rule and
 // the same refusal to grow EditorWidgets.hpp into the canvas family.
 
-#include "Widgets/GraphCanvasStyle.hpp"   // GraphPinSegments() / kGraphPinRingWidth
+#include "Widgets/GraphCanvasStyle.hpp"   // GraphPinSegments() / GraphPinRingWidth()
 
 #include <imgui.h>
 
@@ -36,7 +36,7 @@ namespace Arcane::Editor
     // now have one definition (GraphCanvasStyle.hpp).
     //
     // `outerRing` (optional, null = none): a thin second ring just outside the
-    // dot, in that colour (kGraphPinOuterRingGap / kGraphPinOuterRingWidth).
+    // dot, in that colour (GraphPinOuterRingGap() / GraphPinOuterRingWidth()).
     // The shader canvas marks a resolved dynamic pin with it ("adapts to its
     // input", ShaderGraphPinTypes.hpp); the node page and the canvas legend
     // paint their swatches through this same call so the three agree.
@@ -46,8 +46,8 @@ namespace Arcane::Editor
                                 const ImVec4* outerRing = nullptr)
     {
         if (outerRing)
-            dl->AddCircle(centre, radius + kGraphPinOuterRingGap, ImGui::GetColorU32(*outerRing),
-                          GraphPinSegments(), kGraphPinOuterRingWidth);
+            dl->AddCircle(centre, radius + GraphPinOuterRingGap(), ImGui::GetColorU32(*outerRing),
+                          GraphPinSegments(), GraphPinOuterRingWidth());
         const ImU32 col = ImGui::GetColorU32(color);
         if (connected)
         {
@@ -57,7 +57,7 @@ namespace Arcane::Editor
         {
             dl->AddCircleFilled(centre, radius,
                                 ImGui::GetColorU32(bodyColor), GraphPinSegments());
-            dl->AddCircle(centre, radius, col, GraphPinSegments(), kGraphPinRingWidth);
+            dl->AddCircle(centre, radius, col, GraphPinSegments(), GraphPinRingWidth());
         }
     }
 }

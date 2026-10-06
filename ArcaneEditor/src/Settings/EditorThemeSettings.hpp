@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -137,6 +138,7 @@ namespace Arcane::Editor
         float minRatio;
     };
 
+    ARC_CONSTANT("a change would be a bug: the WCAG 2.x contrast minima (4.5:1 text, 3:1 marks) the theme page checks against")
     inline constexpr std::array<ThemeContrastPair, 16> kThemeContrastPairs = { {
         { "Text on panel",          &Theme::Palette::text,    &Theme::Palette::panel,       4.5f },
         { "Text on chrome",         &Theme::Palette::text,    &Theme::Palette::chrome,      4.5f },
@@ -165,12 +167,17 @@ namespace Arcane::Editor
     // Domain colours. Not theme-preset tokens: like the axes they are data
     // hues, so a preset leaves them as they are. Each kX constant is today's
     // DISPLAY value and the struct default is written from it.
+    ARC_CONSTANT("a change would be a bug: the one spelling of this cvar's default (editor.theme.inputPill.*)")
     inline constexpr ImVec4 kInputPillBlueBorder   = ImVec4(0x3a / 255.0f, 0x4a / 255.0f, 0x5c / 255.0f, 1.0f);
+    ARC_CONSTANT("a change would be a bug: the one spelling of this cvar's default (editor.theme.inputPill.*)")
     inline constexpr ImVec4 kInputPillBlueText     = ImVec4(0x9f / 255.0f, 0xb3 / 255.0f, 0xc8 / 255.0f, 1.0f);
+    ARC_CONSTANT("a change would be a bug: the one spelling of this cvar's default (editor.theme.inputPill.*)")
     inline constexpr ImVec4 kInputPillVioletBorder = ImVec4(0x4a / 255.0f, 0x3a / 255.0f, 0x5c / 255.0f, 1.0f);
+    ARC_CONSTANT("a change would be a bug: the one spelling of this cvar's default (editor.theme.inputPill.*)")
     inline constexpr ImVec4 kInputPillVioletText   = ImVec4(0xb8 / 255.0f, 0xa3 / 255.0f, 0xc8 / 255.0f, 1.0f);
     // The viewport's camera-bounds frame: a thin desaturated line legible over
     // bright and dark scene content (drawn by the scene batcher).
+    ARC_CONSTANT("a change would be a bug: the one spelling of this cvar's default (editor.theme.viewport.cameraFrame)")
     inline constexpr ImVec4 kCameraFrameColor      = ImVec4(0.45f, 0.62f, 0.78f, 0.75f);
 
     // The input editor's per-scheme binding pills (input editor spec s2.3):

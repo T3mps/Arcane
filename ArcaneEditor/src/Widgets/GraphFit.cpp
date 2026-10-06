@@ -17,6 +17,7 @@
 #include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -24,6 +25,7 @@ namespace Arcane::Editor
     {
         // Mirrors the vendored c_NavigationZoomMargin (imgui_node_editor.cpp:144,
         // file-static there): a fact of the library, not a tunable.
+        ARC_CONSTANT("vendored-library constant: mirrors imgui-node-editor's file-static navigation zoom margin")
         constexpr float kNavigationZoomMargin = 0.1f;
     }
 

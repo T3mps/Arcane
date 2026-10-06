@@ -76,6 +76,12 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(ShaderEditorSettings, rangeDragSpeed)
             ARC_REFLECT_ATTR(DisplayName, "Range drag speed") ARC_REFLECT_ATTR(Range, 0.0001, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "How much a parameter's min/max range changes per pixel dragged on a graph node.")
+        ARC_REFLECT_FIELD(ShaderEditorSettings, previewCheckerCell)
+            ARC_REFLECT_ATTR(DisplayName, "Preview checker cell") ARC_REFLECT_ATTR(Range, 4.0, 128.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "checkerboard square size")
+            ARC_REFLECT_ATTR(Tooltip, "Side, in preview pixels, of one square of the checkerboard behind the shader "
+                                      "editor's preview.")
     ARC_END_REFLECT_TYPE()
 
     ARC_REFLECT_TYPE(MeshDocSettings)

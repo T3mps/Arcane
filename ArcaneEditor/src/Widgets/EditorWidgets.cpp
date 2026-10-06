@@ -26,6 +26,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -254,6 +255,7 @@ namespace Arcane::Editor
         // How wide the strip is, in pixels. Matches ImGuiStyle::ColorMarkerSize's
         // own default (imgui.cpp:1564), which is the width the vendored marker
         // renderer would have used.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base), matching ImGuiStyle::ColorMarkerSize after ScaleAllSizes (s16.11)")
         constexpr float kAxisBarWidth = 3.0f;
 
         // ---------------------------------------------------------------------
@@ -495,7 +497,7 @@ namespace Arcane::Editor
         const ImU32 colour = DeriveAxisRoles(Theme::Live()).inspectorBar[component];
         const ImVec2 min = ImGui::GetItemRectMin();
         const ImVec2 max = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + kAxisBarWidth, max.y), colour);
+        ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + Ui::Px(kAxisBarWidth), max.y), colour);
     }
 
     // WHY NOT DragFloat2/3: the bar needs each component's OWN frame rect,

@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor::SceneRecents
 {
@@ -30,6 +31,7 @@ namespace Arcane::Editor::SceneRecents
     // Bumped only if the on-disk schema changes shape. A document numbered
     // above this was written by a newer editor build; read as empty rather
     // than misinterpreted.
+    ARC_CONSTANT("file format: the scene recents file version")
     inline constexpr int kFormatVersion = 1;
 
     // Newest-first, lexically-normal generic strings (scenePath.
