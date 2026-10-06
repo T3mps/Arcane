@@ -18,7 +18,7 @@ namespace Arcane::Editor
         ImVec4      color;
     };
 
-    [[nodiscard]] constexpr SeverityStyle StyleFor(Arcane::DiagSeverity s) noexcept
+    [[nodiscard]] inline SeverityStyle StyleFor(Arcane::DiagSeverity s) noexcept
     {
         switch (s)
         {

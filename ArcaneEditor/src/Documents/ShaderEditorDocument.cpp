@@ -341,7 +341,7 @@ namespace Arcane::Editor
         // other panel body is. Referencing the theme constant keeps them from
         // drifting apart; the value is unchanged (#1e1e1e), so the approved
         // canvas look is untouched.
-        constexpr ImVec4 kCanvasColor      = Theme::kPanel;                        // #1e1e1e
+        constexpr const ImVec4& kCanvasColor      = Theme::kPanel;                        // #1e1e1e
         // The grid palette moved to Widgets/GraphCanvasStyle.hpp
         // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09): the pair
         // was byte-identical to the Graph lens's, which had inherited it rather

@@ -459,10 +459,10 @@ namespace Arcane::Editor
         // byte-identical to on the shader canvas is now the same pair, so the
         // "inherited, not chosen" state has one home instead of two copies with
         // nothing between them.
-        constexpr ImVec4 kGraphCanvasColor    = Theme::kWell;                          // #121212
-        constexpr ImVec4 kGraphNodeBodyColor  = Theme::kPanel;                         // #1e1e1e
-        constexpr ImVec4 kGraphNodeTitleColor = Theme::kChrome;                        // #191919
-        constexpr ImVec4 kGraphNodeBorder     = Theme::kBorder;                        // #0d0d0d
+        constexpr const ImVec4& kGraphCanvasColor    = Theme::kWell;                          // #121212
+        constexpr const ImVec4& kGraphNodeBodyColor  = Theme::kPanel;                         // #1e1e1e
+        constexpr const ImVec4& kGraphNodeTitleColor = Theme::kChrome;                        // #191919
+        constexpr const ImVec4& kGraphNodeBorder     = Theme::kBorder;                        // #0d0d0d
         // Selection amber / hover cyan and the four node chrome metrics
         // (rounding + the three border widths) are the editor-wide canvas
         // language, not this lens's taste -- they were the same literals on both
