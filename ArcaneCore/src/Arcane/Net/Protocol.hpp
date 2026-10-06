@@ -1,12 +1,15 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "Json.hpp"
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
 
@@ -87,6 +90,9 @@ namespace Arcane
             bool debugOnly = false;
         };
 
+        // A by-value view over net.* (settings arc S6-12): GetSettings() builds
+        // it from Settings<NetSettings>() plus the file's message_format, which
+        // stays a protocol-file field (the wire format string).
         struct Settings
         {
             int defaultPort = 0;
@@ -97,13 +103,8 @@ namespace Arcane
             int idleTimeoutSeconds = 0;
             int heartbeatIntervalSeconds = 0;
             // Audit M-V5-6 networking (2026-06-04): public-facing TCP
-            // connection caps, formerly compile-time constants in
-            // TcpSocket.hpp::ServerConfig. Configurable so a launch-day
-            // topology change (CGNAT presence, reverse-proxy, etc.)
-            // doesn't require a rebuild. Missing keys in protocol.json
-            // fall back to net.maxConnectionsPerIp / net.maxConnectionsTotal
-            // (NetSettings) at load time, so pre-existing protocol.json
-            // files keep working unchanged.
+            // connection caps (net.maxConnectionsPerIp / net.maxConnectionsTotal).
+            // A protocol.json without the keys leaves the net defaults.
             int maxConnectionsPerIp = 0;
             int maxConnectionsTotal = 0;
         };
@@ -171,27 +172,13 @@ namespace Arcane
                     return false;
                 }
 
-                Settings newSettings{};
-                newSettings.defaultPort = settings["default_port"].get<int>();
-                newSettings.maxMessageSize = settings["max_message_size"].get<int>();
-                newSettings.messageFormat = settings["message_format"].get<std::string>();
-                newSettings.tokenLength = settings["token_length"].get<int>();
-                newSettings.sessionLifetimeSeconds = settings["session_lifetime_seconds"].get<int>();
-                newSettings.idleTimeoutSeconds = settings["idle_timeout_seconds"].get<int>();
-                newSettings.heartbeatIntervalSeconds = settings["heartbeat_interval_seconds"].get<int>();
-
-                // Audit M-V5-6 networking (2026-06-04): optional keys.
-                // Default to net.maxConnectionsPerIp / net.maxConnectionsTotal
-                // when absent so existing protocol.json files keep working
-                // without modification. Casting through int is safe -- the
-                // settings' ranges top out at 1e4 and 1e6.
-                const NetSettings& net = ::Arcane::Settings<NetSettings>();
-                newSettings.maxConnectionsPerIp = settings.value(
-                    "max_connections_per_ip",
-                    static_cast<int>(net.maxConnectionsPerIp));
-                newSettings.maxConnectionsTotal = settings.value(
-                    "max_connections_total",
-                    static_cast<int>(net.maxConnectionsTotal));
+                // Type validation, as before the sweep: a non-numeric value
+                // throws here and the load fails with the prior definition intact.
+                std::string messageFormat = settings["message_format"].get<std::string>();
+                for (const char* key : { "default_port", "max_message_size", "token_length",
+                                         "session_lifetime_seconds", "idle_timeout_seconds",
+                                         "heartbeat_interval_seconds" })
+                    (void)settings[key].get<int>();
 
                 std::unordered_map<std::string, MessageDef> newMessages;
                 std::unordered_map<int, std::string> newIdToName;
@@ -255,9 +242,26 @@ namespace Arcane
 
                 // Commit -- all validation passed. Replace the definition
                 // wholesale (reload-replace, never merge).
+                //
+                // Settings arc S6-12 (inventory R3): protocol.json's settings are a
+                // Project-rung layer over net.* during the migration window. Applied
+                // here, after every check, so a failed load leaves the cvars untouched.
+                // An optional key the file omits (max_connections_*) keeps the net
+                // default, as before the sweep.
+                static constexpr std::pair<const char*, const char*> kNetKeys[] = {
+                    { "default_port", "defaultPort" }, { "max_message_size", "maxPayloadBytes" },
+                    { "token_length", "tokenLength" }, { "session_lifetime_seconds", "sessionLifetimeSeconds" },
+                    { "idle_timeout_seconds", "idleTimeoutSeconds" }, { "heartbeat_interval_seconds", "heartbeatIntervalSeconds" },
+                    { "max_connections_per_ip", "maxConnectionsPerIp" }, { "max_connections_total", "maxConnectionsTotal" } };
+                Json layer = Json::object();
+                for (const auto& [fileKey, cvarKey] : kNetKeys)
+                    if (settings.contains(fileKey)) layer[cvarKey] = settings[fileKey];
+                ApplyCVarCategory(CVarRegistry::Get(), "net", layer, SetBy::Project, false, "protocol.json");
+                CVarRegistry::Get().PublishImmediate();
+
                 m_version = version;
                 m_name = protoName;
-                m_settings = newSettings;
+                m_messageFormat = std::move(messageFormat);
                 m_messages = std::move(newMessages);
                 m_idToName = std::move(newIdToName);
                 m_enums = std::move(newEnums);
@@ -342,7 +346,16 @@ namespace Arcane
         bool IsLoaded() const { return m_loaded; }
         int GetVersion() const { return m_version; }
         const std::string& GetName() const { return m_name; }
-        const Settings& GetSettings() const { return m_settings; }
+        // By value: a view over net.* (Settings<NetSettings>()) and the file's
+        // message_format. Casting through int is safe -- the net.* ranges top
+        // out at 1048576 (payload), 1e4 and 1e6 (connections).
+        Settings GetSettings() const
+        {
+            const NetSettings& n = ::Arcane::Settings<NetSettings>();
+            return Settings{ n.defaultPort, static_cast<int>(n.maxPayloadBytes), m_messageFormat, n.tokenLength,
+                             n.sessionLifetimeSeconds, n.idleTimeoutSeconds, n.heartbeatIntervalSeconds,
+                             static_cast<int>(n.maxConnectionsPerIp), static_cast<int>(n.maxConnectionsTotal) };
+        }
         const std::unordered_map<std::string, MessageDef>& GetAllMessages() const { return m_messages; }
 
     private:
@@ -353,7 +366,7 @@ namespace Arcane
         bool m_loaded = false;
         int m_version = 0;
         std::string m_name;
-        Settings m_settings;
+        std::string m_messageFormat;   // the wire format string: a protocol-file field, not a cvar
         std::unordered_map<std::string, MessageDef> m_messages;
         std::unordered_map<int, std::string> m_idToName;
         std::unordered_map<std::string, std::unordered_map<std::string, int>> m_enums;
@@ -430,7 +443,8 @@ namespace Arcane
 
         bool HasToken() const
         {
-            return !token.empty() && token.length() >= 64;
+            return !token.empty() &&
+                   token.length() >= static_cast<std::size_t>(::Arcane::Settings<NetSettings>().tokenLength);
         }
     };
 

@@ -55,6 +55,14 @@ namespace Arcane
         std::uint64_t maxConnectionsPerIp   = 16;      // open public connections from one peer address
         std::int32_t  listenBacklog         = 10;      // listen() backlog of a listening socket
         std::string   protocolPath          = "data/protocol.json";   // ProtocolLoader::Load()'s file
+        // protocol.json's `settings` (settings arc S6-12, inventory R3): the
+        // loader applies the file as a Project-rung layer over these. 0 = "the
+        // file must say", as ProtocolLoader::Settings held before the sweep.
+        std::int32_t  defaultPort              = 0;    // a service's public TCP port when -p is absent
+        std::int32_t  tokenLength              = 64;   // session token length; Message::HasToken's minimum
+        std::int32_t  sessionLifetimeSeconds   = 0;    // a session's absolute lifetime (s)
+        std::int32_t  idleTimeoutSeconds       = 0;    // a session's idle timeout (s)
+        std::int32_t  heartbeatIntervalSeconds = 0;    // client heartbeat cadence (s)
     };
 
     struct NetKeepaliveSettings
@@ -81,7 +89,7 @@ namespace Arcane
         ARC_REFLECT_TYPE_ATTR(Settings, "net", SettingScope::Project, ApplyMode::Restart, Audience::Server)
         ARC_REFLECT_FIELD(NetSettings, maxPayloadBytes)
             ARC_REFLECT_ATTR(Range, 1024.0, 1048576.0)
-            ARC_REFLECT_ATTR(Tooltip, "Largest message payload a service accepts, in bytes.")
+            ARC_REFLECT_ATTR(Tooltip, "Largest message payload a service accepts, in bytes. protocol.json's max_message_size sets it.")
         ARC_REFLECT_FIELD(NetSettings, maxReceiveBufferBytes)
             ARC_REFLECT_ATTR(Range, 4096.0, 16777216.0)
             ARC_REFLECT_ATTR(Tooltip, "Per-connection receive buffer, and the largest length-framed body, in bytes. A peer that overruns it is dropped.")
@@ -101,6 +109,22 @@ namespace Arcane
         ARC_REFLECT_FIELD(NetSettings, protocolPath)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Widget, "path:file")
             ARC_REFLECT_ATTR(Tooltip, "The protocol definition the services load, relative to the working directory.")
+        ARC_REFLECT_FIELD(NetSettings, defaultPort)
+            ARC_REFLECT_ATTR(Range, 0.0, 65535.0)
+            ARC_REFLECT_ATTR(Tooltip, "Public TCP port a service listens on when no -p is given. protocol.json's default_port sets it.")
+        ARC_REFLECT_FIELD(NetSettings, tokenLength)
+            ARC_REFLECT_ATTR(Range, 1.0, 1024.0)
+            ARC_REFLECT_ATTR(Tooltip, "Length of a session token, in characters; a shorter token is treated as absent. "
+                                      "protocol.json's token_length sets it.")
+        ARC_REFLECT_FIELD(NetSettings, sessionLifetimeSeconds)
+            ARC_REFLECT_ATTR(Range, 0.0, 31536000.0)
+            ARC_REFLECT_ATTR(Tooltip, "Absolute lifetime of a session, in seconds. protocol.json's session_lifetime_seconds sets it.")
+        ARC_REFLECT_FIELD(NetSettings, idleTimeoutSeconds)
+            ARC_REFLECT_ATTR(Range, 0.0, 31536000.0)
+            ARC_REFLECT_ATTR(Tooltip, "Seconds of inactivity after which a session expires. protocol.json's idle_timeout_seconds sets it.")
+        ARC_REFLECT_FIELD(NetSettings, heartbeatIntervalSeconds)
+            ARC_REFLECT_ATTR(Range, 0.0, 86400.0)
+            ARC_REFLECT_ATTR(Tooltip, "Seconds between client heartbeats. protocol.json's heartbeat_interval_seconds sets it.")
     ARC_END_REFLECT_TYPE()
 
     ARC_REFLECT_TYPE(NetKeepaliveSettings)
