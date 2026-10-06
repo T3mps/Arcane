@@ -20,8 +20,12 @@ namespace Arcane::Editor
     // "defaults" -- never throws. A DISPLAY read only: the cook pipeline
     // re-reads the file itself at cook time, so this never becomes a second
     // authority on the settings.
+    // Settings arc S6-6: a field the block leaves out resolves to `defaults` (the
+    // project's assets.import.texture.*, as the cook resolves it); `set`, when given,
+    // says which fields the .meta itself carries.
     [[nodiscard]] Arcane::AssetPipeline::TextureMetaSettings ReadTextureMetaSettingsDisplay(
-        const std::filesystem::path& metaPath);
+        const std::filesystem::path& metaPath, const Arcane::AssetPipeline::TextureMetaSettings& defaults,
+        Arcane::AssetPipeline::TextureMetaSettings::FieldsSet* set = nullptr);
 
     // MERGE-PRESERVING write: re-reads the CURRENT file on disk (never trusts
     // a cached copy -- a hand-edit or the watcher's own recook could have
@@ -38,6 +42,9 @@ namespace Arcane::Editor
     // (already wired, no further plumbing needed here) treats the mtime
     // change as a cook trigger exactly like a source edit -- the contract's
     // ergonomic #2.
+    // `only`, when given (S6-6), limits the written block to those fields, so a field
+    // left at the project default stays absent and keeps following it.
     void WriteTextureMetaSettingsMerged(const std::filesystem::path& metaPath,
-                                        const Arcane::AssetPipeline::TextureMetaSettings& settings);
+                                        const Arcane::AssetPipeline::TextureMetaSettings& settings,
+                                        const Arcane::AssetPipeline::TextureMetaSettings::FieldsSet* only = nullptr);
 }

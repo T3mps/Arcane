@@ -655,3 +655,39 @@ TEST_CASE("cook session: a second pass over an unchanged source reports its guid
     REQUIRE(second.upToDateGuids.size() == 1u);   // the count and the list agree
     CHECK(second.upToDateGuids[0] == meshGuid);
 }
+
+// ---- Project texture defaults (settings arc S6-6) -----------------------------------------
+
+TEST_CASE("pipeline: an absent .meta texture field cooks with the session's project defaults",
+          "[pipeline][sweep][texture-import]")
+{
+    const fs::path project = TempProjectDir("project-texture-defaults");
+    const fs::path pngAbsent = project / "Content" / "textures" / "absent.png";
+    const fs::path pngSet = project / "Content" / "textures" / "set.png";
+    WritePngFile(pngAbsent, 4, 4, SolidPixels(4, 4, 10, 20, 30, 255));
+    WritePngFile(pngSet, 4, 4, SolidPixels(4, 4, 40, 50, 60, 255));
+    WriteMetaSidecar(pngAbsent, Guid::Generate());                                    // no "texture" block
+    WriteMetaSidecar(pngSet, Guid::Generate(), nlohmann::json{ { "srgb", true } });  // overrides srgb only
+
+    TextureMetaSettings projectDefaults{};
+    projectDefaults.srgb = false;
+    CookSession session;
+    session.SetTextureDefaults(projectDefaults);
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 2u);
+    CHECK(result.failed == 0u);
+
+    TextureMetaSettings overridden = projectDefaults;
+    overridden.srgb = true;
+    CHECK(fs::exists(ExpectedArtifactPath(project, pngAbsent, projectDefaults)));   // resolved to the project
+    CHECK(fs::exists(ExpectedArtifactPath(project, pngSet, overridden)));          // the .meta wins
+    CHECK_FALSE(fs::exists(ExpectedArtifactPath(project, pngAbsent, TextureMetaSettings{})));
+
+    // A session with the same defaults agrees the project is current; one with
+    // other defaults sees the absent-field texture as needing a cook.
+    CookSession same;
+    same.SetTextureDefaults(projectDefaults);
+    CHECK_FALSE(same.CheckProject(project));
+    CookSession structDefaults;
+    CHECK(structDefaults.CheckProject(project));
+}

@@ -249,6 +249,7 @@ namespace Arcane::Editor
             if (!cookProjectRoot.empty())
             {
                 Arcane::AssetPipeline::CookSession cookGate;
+                cookGate.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6
                 const Arcane::AssetPipeline::CookResult cookResult =
                     cookGate.CookProject(cookProjectRoot);
                 if (cookResult.failed > 0)

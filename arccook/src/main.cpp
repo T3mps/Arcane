@@ -15,6 +15,9 @@
 #include <Arcane/AssetPipeline/ArtifactFormat.hpp>
 #include <Arcane/AssetPipeline/CookSession.hpp>
 #include <Arcane/Cli/Cli.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <cstdio>
@@ -56,7 +59,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // Settings arc S6-6: the project's own assets.import.texture.* (its Project
+    // rung, <project>/Config) is what a .meta field left out resolves to -- the same
+    // values the editor cooks with, so both produce the same cook keys.
+    (void)ApplyCVarDirectory(CVarRegistry::Get(),
+                             Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(projectDir)),
+                             SetBy::Project, "project");
+    CVarRegistry::Get().PublishImmediate();
+
     CookSession session;
+    session.SetTextureDefaults(Settings<TextureMetaSettings>());
     if (r.Flag("verbose"))
         session.SetProgress(&PrintLine);
 

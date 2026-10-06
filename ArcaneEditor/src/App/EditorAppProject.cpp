@@ -746,8 +746,12 @@ namespace Arcane::Editor
 
     void EditorApp::PollCookQueue()
     {
-        if (m_cookQueue)
-            m_cookQueue->Pump();   // -> OnCookCompleted, once per finished pass
+        if (!m_cookQueue)
+            return;
+        // S6-6: assets.import.texture.* is Live -- a changed project default re-cooks
+        // (the queue no-ops an unchanged value, so this is a 4-field compare a frame).
+        m_cookQueue->SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());
+        m_cookQueue->Pump();   // -> OnCookCompleted, once per finished pass
     }
 
     void EditorApp::OnCookCompleted(const Arcane::AssetPipeline::CookResult& result)
@@ -1123,6 +1127,7 @@ namespace Arcane::Editor
         }
 
         Arcane::AssetPipeline::CookSession oracle;
+        oracle.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6: the cooker's key
         return !oracle.ResolveCurrentArtifactPath(project->Root(), cookGuid).has_value();
     }
 

@@ -1412,7 +1412,8 @@ namespace Arcane::Editor
             m_cookQueueSettling = true;
 
             m_cookQueue.emplace(proj->Root(),
-                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); });
+                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); },
+                Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6: the project's import defaults
             m_cookQueue->SetOnCookComplete(
                 [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
 
