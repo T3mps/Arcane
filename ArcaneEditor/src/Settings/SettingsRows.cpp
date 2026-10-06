@@ -417,7 +417,7 @@ namespace Arcane::Editor
             case RowWidget::Text:
             case RowWidget::Path:
             case RowWidget::KeyChord:   // raw text; a custom page (Keyboard) owns these rows on its node
-            case RowWidget::Font:       // S4 replaces with the family combo
+            case RowWidget::Font:       // raw text; a custom page (Fonts and Scale) owns these rows on its node
             {
                 const std::optional<std::string> text = TextField(ctx, d, label, f.effective.AsString());
                 return text && Commit(ctx, d, CVarValue::String(*text));

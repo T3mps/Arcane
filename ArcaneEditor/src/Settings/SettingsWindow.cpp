@@ -216,13 +216,16 @@ namespace Arcane::Editor
                 t_pageRow = nullptr;
                 t_pageGrid = nullptr;
             }
-            // A custom page owns its node's keychord rows (Preferences >
-            // Keyboard: the chord-listener table, S4-14); the generic text
-            // field would only repeat each binding below the page.
+            // A custom page owns its node's keychord and font rows (Preferences >
+            // Keyboard: the chord-listener table, S4-14; Appearance > Fonts and
+            // Scale: the family pickers, S4-17); the generic text field would
+            // only repeat each value below the page.
             const auto ownedByPage = [&](const std::string& name)
             {
                 const CVarDescInfo* desc = st.model.Desc(name);
-                return desc && RowWidgetFor(*desc) == RowWidget::KeyChord;
+                if (!desc) return false;
+                const RowWidget w = RowWidgetFor(*desc);
+                return w == RowWidget::KeyChord || w == RowWidget::Font;
             };
             if (custom && std::any_of(node->cvars.begin(), node->cvars.end(), ownedByPage))
             {

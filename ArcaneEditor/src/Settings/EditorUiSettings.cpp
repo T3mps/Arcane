@@ -8,7 +8,8 @@
 namespace Arcane::Editor
 {
     ARC_REFLECT_TYPE(EditorUiSettings)
-        ARC_REFLECT_TYPE_ATTR(Settings, "editor.ui", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.ui", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
+                             "Appearance/Fonts and Scale")   // FontsPage.hpp kFontsPageCategory
         ARC_REFLECT_FIELD(EditorUiSettings, fontFamily)
             ARC_REFLECT_ATTR(DisplayName, "UI font") ARC_REFLECT_ATTR(Widget, "font")
             ARC_REFLECT_ATTR(Tooltip, "The editor's text face: a bundled family or any .ttf/.otf in your Fonts folder. Rebuilds the font atlas at the next frame.")

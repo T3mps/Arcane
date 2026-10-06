@@ -1,7 +1,9 @@
 #pragma once
 
 // editor.ui.* (settings arc S4, spec s7.3): fonts and scale, Preferences >
-// Appearance, machine-wide. S6 adds the inventory's other editor.ui.* rows.
+// Appearance > Fonts and Scale (the type's tree path, shared with the S4-17
+// page), machine-wide. S6 adds the inventory's other editor.ui.* rows; a row
+// that is not about fonts or scale belongs in a struct with its own path.
 
 #include <string>
 

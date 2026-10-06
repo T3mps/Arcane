@@ -279,3 +279,25 @@ TEST_CASE("Settings window: a custom page owns its node's keychord rows; the oth
     CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Custom);
     CHECK((h.st.last.rows == std::vector<std::string>{ "editor.keys.repeatDelay" }));
 }
+
+TEST_CASE("Settings window: a custom page owns its node's font-family rows; the size and scale rows still draw", "[settings-ui]")
+{
+    WindowHarness h;
+    h.kind = SettingsWindowKind::Preferences;
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.ui.fontFamily", { .type = CVarType::String, .def = CVarValue::String("Inter"),
+        .scope = SettingScope::PreferencesMachine, .widget = "font", .categoryPath = "Appearance/Fonts and Scale" }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.ui.scale", { .type = CVarType::Float32, .def = CVarValue::Float32(1.0f),
+        .scope = SettingScope::PreferencesMachine, .categoryPath = "Appearance/Fonts and Scale" }).IsStale());
+    h.st.selected = "Appearance/Fonts and Scale";
+    h.Frame();
+    h.Frame();
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Rows);   // no page: the generic text row draws
+    CHECK(h.st.last.rows.size() == 2);
+
+    h.pages = { SettingsPageRef{ SettingScope::PreferencesMachine, "Appearance/Fonts and Scale", "Fonts and Scale" } };
+    h.drawPage = [](const std::string&) {};
+    h.Frame();
+    h.Frame();
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Custom);
+    CHECK((h.st.last.rows == std::vector<std::string>{ "editor.ui.scale" }));
+}
