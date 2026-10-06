@@ -36,6 +36,7 @@
 #include <Astra/Serialization/SerializationError.hpp>
 
 #include <exception>   // ~Runtime / ReleaseProjectCVarLayers guard the release (S4-GATE)
+#include <mutex>      // the process-wide snapshot SaveConfig (S6-45)
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -437,15 +438,41 @@ namespace Arcane
     // bind has been a no-op and the facade stays device-less for its whole life.
     // Deleted at Task 9 -- ABI 14.
 
+    namespace
+    {
+        std::mutex& SnapshotSaveConfigMutex()
+        {
+            static std::mutex m;
+            return m;
+        }
+        Astra::Registry::SaveConfig& SnapshotSaveConfigSlot()
+        {
+            static Astra::Registry::SaveConfig config{};   // Astra's default until the editor pushes its setting
+            return config;
+        }
+    }
+
+    void Runtime::SetSnapshotSaveConfig(const Astra::Registry::SaveConfig& config)
+    {
+        std::lock_guard lock(SnapshotSaveConfigMutex());
+        SnapshotSaveConfigSlot() = config;
+    }
+
+    Astra::Registry::SaveConfig Runtime::SnapshotSaveConfig()
+    {
+        std::lock_guard lock(SnapshotSaveConfigMutex());
+        return SnapshotSaveConfigSlot();
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"
         // snapshot would resurface much later as a generic "reload lost state"
         // with the root cause erased. FinishSnapshot propagates the exact
         // SerializationError; log it here so the hot-reload path names the cause.
-        // astra.snapshot.compression (S6-45): the snapshot's compression.
-        auto save = Serialization::FinishSnapshot(
-            m_impl->registry->Save(ToAstraSaveConfig(Settings<AstraSnapshotSettings>())));
+        // The Save configuration is the process-wide one (SetSnapshotSaveConfig:
+        // the editor's astra.snapshot.compression, S6-45).
+        auto save = Serialization::FinishSnapshot(m_impl->registry->Save(SnapshotSaveConfig()));
         if (save.IsErr())
         {
             const Astra::SerializationError err =

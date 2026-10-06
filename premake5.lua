@@ -1262,6 +1262,8 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
+        -- astra.snapshot.compression (S6-45 fix): the Editor setting + its push into Runtime::SetSnapshotSaveConfig.
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorSnapshotSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",

@@ -24,6 +24,8 @@
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/SettingsSweep.hpp"   // Test::ScopedCodeRung
+#include "Settings/EditorSnapshotSettings.hpp"   // astra.snapshot.compression (an Editor setting)
 
 #include <filesystem>
 #include <fstream>
@@ -409,18 +411,31 @@ TEST_CASE("render.meshCull and diagnostics.drawMarkers keep their names, types, 
 }
 
 
-// S6-45: astra.snapshot.compression -- the registry snapshot's Save config.
+// S6-45: astra.snapshot.compression -- the registry snapshot's Save config. An
+// Editor setting, so ArcaneEditor declares it (spec s3.2); Core owns only the
+// Save path's process-wide SaveConfig, which the editor's publish callback sets.
+namespace
+{
+    struct SnapshotFill { std::int32_t a = 7, b = 7, c = 7, d = 7; };
+    ASTRA_REFLECT_TYPE(SnapshotFill)
+        ASTRA_REFLECT_FIELD(SnapshotFill, a) ASTRA_REFLECT_FIELD(SnapshotFill, b)
+        ASTRA_REFLECT_FIELD(SnapshotFill, c) ASTRA_REFLECT_FIELD(SnapshotFill, d)
+    ASTRA_END_REFLECT_TYPE()
+}
+
 TEST_CASE("ToAstraSaveConfig: the default is Astra's SaveConfig; None turns compression off", "[settings]")
 {
+    using Editor::AstraSnapshotCompression;
+    using Editor::AstraSnapshotSettings;
     const Astra::Registry::SaveConfig lib{};
-    const Astra::Registry::SaveConfig ours = ToAstraSaveConfig(AstraSnapshotSettings{});
+    const Astra::Registry::SaveConfig ours = Editor::ToAstraSaveConfig(AstraSnapshotSettings{});
     CHECK(ours.compressionMode == lib.compressionMode);
     CHECK(ours.compressionLevel == lib.compressionLevel);
     CHECK(ours.compressionThreshold == lib.compressionThreshold);
 
     AstraSnapshotSettings off;
     off.compression = AstraSnapshotCompression::None;
-    CHECK(ToAstraSaveConfig(off).compressionMode == Astra::CompressionMode::None);
+    CHECK(Editor::ToAstraSaveConfig(off).compressionMode == Astra::CompressionMode::None);
 
     const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("astra.snapshot.compression");
     REQUIRE(d.has_value());
@@ -430,4 +445,32 @@ TEST_CASE("ToAstraSaveConfig: the default is Astra's SaveConfig; None turns comp
     CHECK(d->audience == Audience::Editor);
     CHECK(d->scope == SettingScope::PreferencesProject);
     CHECK(HasFlag(d->flags, CVarFlags::Dev));
+    CHECK(d->module != "ArcaneCore");   // declared by an editor TU (here compiled into the test exe), never Core (spec s3.2)
+}
+
+TEST_CASE("astra.snapshot.compression reaches Runtime::SnapshotRegistry through the editor's publish callback", "[settings]")
+{
+    // Core's own default, before and after: Astra's SaveConfig{}.
+    REQUIRE(Runtime::SnapshotSaveConfig().compressionMode == Astra::Registry::SaveConfig{}.compressionMode);
+
+    Runtime rt(Test::Process());
+    rt.Components()->RegisterComponent<SnapshotFill>();
+    for (int i = 0; i < 4096; ++i)
+        rt.Registry().CreateEntityWith(SnapshotFill{});
+
+    auto lz4 = rt.SnapshotRegistry();
+    REQUIRE(lz4.IsOk());
+    std::size_t noneSize = 0;
+    {
+        const Test::ScopedCodeRung none("astra.snapshot.compression", CVarValue::Enum(0));
+        CHECK(Runtime::SnapshotSaveConfig().compressionMode == Astra::CompressionMode::None);
+        auto raw = rt.SnapshotRegistry();
+        REQUIRE(raw.IsOk());
+        noneSize = raw.GetValue()->size();
+        CHECK(rt.RestoreRegistry(*raw.GetValue()));   // an uncompressed snapshot still restores
+    }
+    // The rung cleared: the callback pushed LZ4 back.
+    CHECK(Runtime::SnapshotSaveConfig().compressionMode == Astra::CompressionMode::LZ4);
+    INFO("LZ4 " << lz4.GetValue()->size() << " bytes, None " << noneSize << " bytes");
+    CHECK(noneSize > lz4.GetValue()->size());
 }

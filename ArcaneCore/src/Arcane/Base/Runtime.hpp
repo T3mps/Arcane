@@ -316,6 +316,15 @@ namespace Arcane
         // empty-but-"ok" vector that masks data loss as a later reload failure.
         ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const;
 
+        // The Save configuration every SnapshotRegistry uses, process-wide
+        // (settings arc S6-45). Core's default is Astra's SaveConfig{}. The knob
+        // that changes it, astra.snapshot.compression, is an Editor setting, so
+        // ArcaneEditor declares it (spec s3.2: a shipped game holds no Editor
+        // settings) and pushes its choice here from the setting's publish
+        // callback; a game keeps the default. Guarded: any thread may read.
+        static void SetSnapshotSaveConfig(const ::Arcane::Registry::SaveConfig& config);
+        [[nodiscard]] static ::Arcane::Registry::SaveConfig SnapshotSaveConfig();
+
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
         // (ClearSystems before the plugin's Init). Engine systems receive Registry& per Execute, so running
