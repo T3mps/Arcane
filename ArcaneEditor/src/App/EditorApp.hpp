@@ -46,6 +46,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Settings/AppearanceApplier.hpp"
 #include "Settings/ProjectSettingsPage.hpp"
+#include "Settings/ThemePage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
 #include "Panels/LocatorRoute.hpp"           // RouteFacts (MakeRouteFacts, s8.2)
@@ -286,6 +287,7 @@ namespace Arcane::Editor
         void ConsumeSceneDialogResults(LoopState& ls);
         void ConsumeProjectDialogResult();
         void ConsumeMaterialDialogResults();
+        void ConsumeSettingsDialogResults();
         void ApplyAppearanceSettings();   // S4: theme/UI cvars -> the editor style, outside the ImGui frame
         void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
         [[nodiscard]] bool IsDesignatedInputAsset(const Arcane::Guid& asset);   // the open project's manifest inputActions names `asset`
@@ -1140,6 +1142,7 @@ namespace Arcane::Editor
         // Settings arc S4: editor.theme.* / editor.ui.* -> the editor's ImGui
         // style, compared per frame against what was last applied.
         Arcane::Editor::AppearanceApplier m_appearance;
+        Arcane::Editor::ThemePageState m_themePage;
 
         // Editor keybind + mouse edge tracking (architecture pass sec 6). All
         // Updated within FrameInput's phases (6a-6d) at the site each chord's

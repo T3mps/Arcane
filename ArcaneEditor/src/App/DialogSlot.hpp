@@ -88,10 +88,13 @@ namespace Arcane::Editor
         DialogSlot<std::string> projectOpen;
         DialogSlot<std::string> materialOpen;
         DialogSlot<std::string> settingsPath;
+        DialogSlot<std::string> themeImport;
+        DialogSlot<std::string> themeExport;
         void ClearAll()
         {
             sceneOpen.Clear(); sceneSave.Clear(); projectOpen.Clear();
             materialOpen.Clear(); settingsPath.Clear();
+            themeImport.Clear(); themeExport.Clear();
         }
     };
 }

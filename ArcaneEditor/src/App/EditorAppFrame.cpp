@@ -372,6 +372,7 @@ namespace Arcane::Editor
             ConsumeSceneDialogResults(ls);
             ConsumeProjectDialogResult();
             ConsumeMaterialDialogResults();
+            ConsumeSettingsDialogResults();
             // Worker -> main-thread drain of the module rebuild, at the same
             // safe point the dialog results land at: its finish path can run
             // effects (plugin re-engage, scene reload) that must never land
@@ -660,6 +661,13 @@ namespace Arcane::Editor
         {
             m_documents.OpenPath(*materialOpen);
         }
+    }
+
+    // Settings arc S4: the OS pickers the settings pages opened.
+    void EditorApp::ConsumeSettingsDialogResults()
+    {
+        if (const auto path = m_dialogs.themeImport.Take()) (void)Arcane::Editor::ImportThemeFrom(m_themePage, *path);
+        if (const auto path = m_dialogs.themeExport.Take()) (void)Arcane::Editor::ExportThemeTo(m_themePage, *path);
     }
 
     void EditorApp::ApplyAppearanceSettings()

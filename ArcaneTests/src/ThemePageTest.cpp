@@ -1,0 +1,109 @@
+// Settings arc S4 (spec s7.1): the theme page -- presets, import/export, live
+// swatches and the contrast warnings. The page writes cvars; the applier (S4-2)
+// re-themes, so these tests read the registry and the draw list.
+#include <catch2/catch_test_macros.hpp>
+#include "Settings/EditorThemeSettings.hpp"
+#include "Settings/ThemePage.hpp"
+#include "Settings/ThemePresets.hpp"
+#include "Widgets/EditorTheme.hpp"
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
+#include <imgui.h>
+#include <imgui_internal.h>
+#include <filesystem>
+
+using namespace Arcane::Editor;
+
+namespace
+{
+    struct PageHarness
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = ImGui::CreateContext();
+        int stackDrift = 0;
+        PageHarness()
+        {
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280, 900);
+            io.IniFilename = nullptr;
+            unsigned char* px = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        }
+        ~PageHarness() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+        template <class F> void Frame(F&& body)
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(1260, 880));
+            ImGui::Begin("Page");
+            const ImGuiContext& g = *ImGui::GetCurrentContext();
+            const int c0 = g.ColorStack.Size, v0 = g.StyleVarStack.Size, f0 = g.FontStack.Size;
+            body();
+            stackDrift += (g.ColorStack.Size - c0) + (g.StyleVarStack.Size - v0) + (g.FontStack.Size - f0);
+            ImGui::End();
+            ImGui::Render();
+        }
+        bool Drew(const ImVec4& c) const
+        {
+            const ImU32 want = ImGui::ColorConvertFloat4ToU32(c);
+            for (ImGuiWindow* w : ctx->Windows)
+                for (const ImDrawVert& v : w->DrawList->VtxBuffer)
+                    if (v.col == want) return true;
+            return false;
+        }
+    };
+
+    void RevertEditorUser()
+    {
+        Arcane::CVarRegistry::Get().RevertLayer(Arcane::SetBy::EditorUser);
+        Arcane::CVarRegistry::Get().PublishImmediate();
+    }
+}
+
+TEST_CASE("Theme page: a preset button's path writes every theme cvar and reports it", "[theme][settings-ui]")
+{
+    ThemePageState st;
+    REQUIRE(ApplyThemePresetByName(st, "HighContrast"));
+    CHECK(st.status.find("High Contrast") != std::string::npos);
+    CHECK(ImGui::ColorConvertFloat4ToU32(ToPalette(Arcane::Settings<EditorThemeSettings>()).panel) == IM_COL32(0, 0, 0, 255));
+    CHECK_FALSE(ApplyThemePresetByName(st, "NoSuchTheme"));
+    CHECK(st.status.find("NoSuchTheme") != std::string::npos);
+    RevertEditorUser();
+}
+
+TEST_CASE("Theme page: export appends .arctheme; import reads it back; a swatch edit sets one token", "[theme][settings-ui]")
+{
+    ThemePageState st;
+    const std::filesystem::path base = std::filesystem::temp_directory_path() / "s4-export";
+    REQUIRE(ExportThemeTo(st, base));
+    const std::filesystem::path written = std::filesystem::temp_directory_path() / "s4-export.arctheme";
+    CHECK(std::filesystem::exists(written));
+    REQUIRE(SetThemeToken("error", ImVec4(0.0f, 1.0f, 0.0f, 1.0f)));
+    CHECK(ImGui::ColorConvertFloat4ToU32(ToPalette(Arcane::Settings<EditorThemeSettings>()).error) == IM_COL32(0, 255, 0, 255));
+    REQUIRE(ImportThemeFrom(st, written));   // the export was Dark: error comes back
+    CHECK(ImGui::ColorConvertFloat4ToU32(ToPalette(Arcane::Settings<EditorThemeSettings>()).error)
+          == ImGui::ColorConvertFloat4ToU32(Theme::kDarkPalette.error));
+    CHECK_FALSE(ImportThemeFrom(st, std::filesystem::temp_directory_path() / "missing.arctheme"));
+    CHECK(st.status.find("missing.arctheme") != std::string::npos);
+    std::filesystem::remove(written);
+    RevertEditorUser();
+}
+
+TEST_CASE("Theme page: draws balanced, and warns in the warning colour when a pair falls under its bar", "[theme][settings-ui]")
+{
+    ThemePageState st;
+    PageHarness h;
+    h.Frame([&] { DrawThemePage(&st); });
+    h.Frame([&] { DrawThemePage(&st); });
+    CHECK(h.stackDrift == 0);
+    for (const ContrastRow& row : ContrastReport(Theme::kDarkPalette)) CHECK(row.ok);   // Dark: no warning row
+    Theme::Palette bad = Theme::kDarkPalette;
+    bad.text = bad.panel;                                                               // 1:1
+    bad.warning = ImVec4(0.9f, 0.6f, 0.1f, 1.0f);                                       // a colour nothing else uses
+    const Theme::ScopedLivePalette scope(bad);
+    h.Frame([&] { DrawThemePage(&st); });
+    CHECK(h.Drew(bad.warning));
+    CHECK(h.stackDrift == 0);
+}

@@ -536,6 +536,19 @@ namespace Arcane::Editor
         // switch's ReleaseAll (its history entries and pins still drop).
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
         RegisterViewportSettings();
+        // Settings arc S4: Preferences > Appearance > Theme.
+        m_themePage.requestImport = [this]
+        {
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeImport, m_dialogs.themeImport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        m_themePage.requestExport = [this]
+        {
+            m_gpu->Win().ShowSaveFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeExport, m_dialogs.themeExport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "editor.theme", "Theme",
+                                             &Arcane::Editor::DrawThemePage, &m_themePage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
