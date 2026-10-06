@@ -74,8 +74,10 @@ namespace Arcane::Log
     //
     // Attach a rotating file sink beside the stderr one. Whatever file
     // currently sits at `file` is rotated out of the way first: delete
-    // <stem>.5.log, shift .4->.5 ... .1->.2, then <file> -> <stem>.1.log
-    // (keep = 5); a fresh, truncated file is then opened at `file`. Safe to
+    // <stem>.N.log (and any stray past it), shift .N-1->.N ... .1->.2, then
+    // <file> -> <stem>.1.log, N = log.file.keepCount (default 5; 0 deletes
+    // the old file instead); a fresh, truncated file is then opened at
+    // `file`, flushing at log.file.flushLevel (default warn). Safe to
     // call repeatedly with the same path (each call rotates again) or with a
     // different one (the old sink is simply detached first). Returns false
     // if Log::Init() has not run yet (no engine logger to attach to) or if

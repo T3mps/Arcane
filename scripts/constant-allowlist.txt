@@ -268,7 +268,6 @@ ArcaneCore/src/Arcane/Base/Diagnostics.hpp|kHangTerminated|CONSTANT|monitor/CI/r
 ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierDestabilising|CONSTANT|catalogue data, not tunables
 ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierPresentHook|CONSTANT|catalogue data, not tunables
 ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierUncatalogued|CONSTANT|catalogue data, not tunables
-ArcaneCore/src/Arcane/Base/Log.cpp|keep|PENDING|inventory:246 SETTING
 ArcaneCore/src/Arcane/Base/Log.hpp|kBacklogLineBytes|CONSTANT|static lock-free crash-path ring (could become Restart only if heap-sized at Init)
 ArcaneCore/src/Arcane/Base/Log.hpp|kBacklogLines|CONSTANT|static lock-free crash-path ring (could become Restart only if heap-sized at Init)
 ArcaneCore/src/Arcane/Base/ModuleTable.hpp|kMax|CONSTANT|static crash-path module table

@@ -172,3 +172,51 @@ TEST_CASE("sweep: FramePerf follows diagnostics.perfLog and perfLogIntervalFrame
     CHECK_FALSE(perf.On());
     CHECK(perf.accSim == 0.0);      // switching off drops the partial window
 }
+
+TEST_CASE("sweep: --perf's settings are not Dev, so they resolve in every configuration (Dist included)", "[sweep][diag]")
+{
+    // User decision 2026-10-06: perf logging stays usable in Dist (the
+    // 1080p/144 fps floor is measured on shipping builds). A Dev cvar is
+    // compiled out of Dist, where --perf would only warn.
+    for (const char* name : { "diagnostics.perfLog", "diagnostics.perfLogIntervalFrames" })
+    {
+        INFO("cvar " << name);
+        REQUIRE_FALSE(CVarRegistry::Get().Find(name).IsStale());
+        const auto e = CVarRegistry::Get().Explain(name);
+        REQUIRE(e.has_value());
+        CHECK_FALSE(HasFlag(e->flags, CVarFlags::Dev));
+        CHECK(e->audience == Audience::Game);
+        CHECK(e->scope == SettingScope::PreferencesProject);
+        CHECK(e->apply == ApplyMode::Live);
+    }
+    Test::RequireDefault("diagnostics.perfLog", CVarValue::Bool(false));
+    Test::RequireDefault("diagnostics.perfLogIntervalFrames", CVarValue::UInt32(60u));
+}
+
+TEST_CASE("sweep: --perf turns perf logging on in Dist's command-line context too", "[sweep][diag]")
+{
+    // Dist runs --set in the LocalHost context, whose table refuses a Game
+    // setting. --perf is the host's own flag, not a player's free-form --set,
+    // so it must still land there (user decision 2026-10-06).
+    struct RestoreCommandLine
+    {
+        ~RestoreCommandLine()
+        {
+            CVarRegistry::Get().RevertLayer(SetBy::CommandLine);
+            CVarRegistry::Get().PublishImmediate();
+        }
+    } restore;
+
+    HostConfig cfg;
+    cfg.perf = true;
+    HostBoot::ApplyEarlyConfigRungs(cfg, CVarContext::LocalHost, /*editor*/ false);
+    CHECK(Settings<DiagnosticsSettings>().perfLog);
+
+    // A free-form --set of the same Game setting is still the player's, and
+    // LocalHost still refuses it.
+    CVarRegistry::Get().RevertLayer(SetBy::CommandLine);
+    cfg.perf = false;
+    cfg.cvarSets = { "diagnostics.perfLog=1" };
+    HostBoot::ApplyEarlyConfigRungs(cfg, CVarContext::LocalHost, /*editor*/ false);
+    CHECK_FALSE(Settings<DiagnosticsSettings>().perfLog);
+}

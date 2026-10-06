@@ -13,7 +13,9 @@
 // Diagnostics::Install, after HostBoot::ApplyEarlyConfigRungs, and snapshotted
 // into Diagnostics::Config (the crash path never reads the registry).
 // drawMarkers keeps its S2 scope (Project) and apply (Live); perfLog and
-// perfLogIntervalFrames are Live (FramePerf reads them every frame).
+// perfLogIntervalFrames are Live (FramePerf reads them every frame) and NOT
+// Dev: --perf stays usable in Dist, where the frame-time floor is measured
+// (user decision 2026-10-06).
 
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>
 #include <Arcane/Config/Settings.hpp>
@@ -74,10 +76,10 @@ namespace Arcane
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 1000.0, 60000.0)
             ARC_REFLECT_ATTR(Tooltip, "The least time (ms) a fatal report is given to finish, even past the crash-handling deadline.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, perfLog)
-            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
+            ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
             ARC_REFLECT_ATTR(Tooltip, "Log per-phase frame timings ([PERF]) on the runtime host. --perf sets it.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, perfLogIntervalFrames)
-            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 1.0, 10000.0) ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
+            ARC_REFLECT_ATTR(Range, 1.0, 10000.0) ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
             ARC_REFLECT_ATTR(Tooltip, "Frames averaged into each [PERF] line.")
     ARC_END_REFLECT_TYPE()
 }

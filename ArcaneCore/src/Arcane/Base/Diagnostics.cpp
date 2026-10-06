@@ -7,6 +7,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ModuleTable.hpp>    // address -> module+offset, lock-free (Task 3)
 #include <Arcane/Base/PortableStack.hpp>  // RtlVirtualUnwind walk -- no DbgHelp anywhere below
+#include <Arcane/Config/Bindings/LogBinding.hpp>   // log.dir (ConfigFromSettings) -- never read on the crash path
 
 #include <Json.hpp>                        // the session record (plan 2, task 9) -- written OFF the crash path only
 
@@ -2575,6 +2576,7 @@ Config ConfigFromSettings(const DiagnosticsSettings& s)
     c.watchdogPollMs              = s.watchdogPollMs;
     c.watchdogJoinTimeoutMs       = s.watchdogJoinTimeoutMs;
     c.minFatalWaitMs              = s.minFatalWaitMs;
+    c.logDir                      = Settings<LogSettings>().dir;
     return c;
 }
 

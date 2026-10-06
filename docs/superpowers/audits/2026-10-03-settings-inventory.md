@@ -540,7 +540,7 @@ Creation sites:
 | ArcaneClient/src/Arcane/Host/HostConfig.cpp:85, HostConfig.hpp:16 | backend (`--backend`) | dx12 (enum) | SETTING | render.backend | RenderSettings | PlayerSafe | Project | Restart | dx12 \| vulkan | N | BOTH: keep the flag (scripts, the Hub's saved arguments), add the cvar for a graphics menu |
 | HostConfig.cpp:86, HostConfig.hpp:17 | maxFrames (`--frames`) | 0 (frames, 0 = unbounded) | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: automation run budget; a saved value would make every launch quit |
 | HostConfig.cpp:87, HostConfig.hpp:18 | vsync (`--no-vsync`) | true (bool) | SETTING | render.vsync | RenderSettings | PlayerSafe | Project | Restart (Live once a swapchain recreate reads it) | bool | N | BOTH: a standard graphics-menu option |
-| HostConfig.cpp:88, HostConfig.hpp:19 | perf (`--perf`) | false (bool) | SETTING | diagnostics.perfLog | DiagnosticsSettings | Game Dev | Pref-P | Live | bool | N | BOTH: the console should be able to toggle it mid-session |
+| HostConfig.cpp:88, HostConfig.hpp:19 | perf (`--perf`) | false (bool) | SETTING | diagnostics.perfLog | DiagnosticsSettings | Game | Pref-P | Live | bool | N | BOTH: the console should be able to toggle it mid-session; user 2026-10-06: --perf stays usable in Dist |
 | HostConfig.cpp:89, HostConfig.hpp:22 | pluginPath (`--plugin`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: overrides the manifest's gameModule, which is where the persisted value lives |
 | HostConfig.cpp:90, HostConfig.hpp:23 | projectPath (`--project`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: chooses what to open; the settings layers depend on it |
 | HostConfig.cpp:91, HostConfig.hpp:26 | sceneOverride (`--scene`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: the manifest's bootScene is the persisted home |
@@ -561,7 +561,7 @@ Creation sites:
 | HostConfig.cpp:176, HostConfig.hpp:342 | hangMainFrame | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: dev hang trigger |
 | HostConfig.cpp:180, HostConfig.hpp:365-367 | pickProbe / X / Y | false / 0 / 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: dev desk check |
 | HostConfig.hpp:387 | kHangMainSeconds | 15 (s) | DERIVED | (diagnostics.hangSeconds + 3) | — | — | — | — | — | N | Defined as Core's hangSeconds (12) plus 3; should be computed from it |
-| ArcaneClient/src/Arcane/Host/FramePerf.hpp:34 | `--perf` report interval | 60 (frames) | SETTING | diagnostics.perfLogIntervalFrames | DiagnosticsSettings | Game Dev | Pref-P | Live | 1..10000 | N | Averaging window; the help text at HostConfig.cpp:88 repeats "60" |
+| ArcaneClient/src/Arcane/Host/FramePerf.hpp:34 | `--perf` report interval | 60 (frames) | SETTING | diagnostics.perfLogIntervalFrames | DiagnosticsSettings | Game | Pref-P | Live | 1..10000 | N | Averaging window; the help text at HostConfig.cpp:88 repeats "60"; user 2026-10-06: --perf stays usable in Dist |
 
 ### Host boot, window and splash
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |

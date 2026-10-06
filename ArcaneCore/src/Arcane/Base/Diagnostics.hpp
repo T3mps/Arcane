@@ -162,7 +162,8 @@ namespace Arcane::Diagnostics
         std::string commandLine;
 
         // Where the engine log file sink writes. Empty => "<report dir>/../Logs",
-        // which FOLLOWS RetargetDumpDir; an explicit path never moves.
+        // which FOLLOWS RetargetDumpDir; an explicit path never moves. The
+        // setting is log.dir (LogSettings::dir); ConfigFromSettings copies it.
         std::string logDir;
 
         // Exit sentinel window (task 8): how long a requested exit may take
@@ -284,7 +285,8 @@ namespace Arcane::Diagnostics
     // The host's Config from the settings (settings arc S6-2). Every tunable
     // comes from `s`; the identity fields -- appName, productName, unattended,
     // launchMonitor, commandLine -- keep Config's defaults for the host to set.
-    // logDir is log.dir's (S6-3), not this struct's.
+    // logDir is log.dir (S6-3), read from the published LogSettings: it lives
+    // in the log category, not in `s`.
     [[nodiscard]] ARC_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
 
     // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
