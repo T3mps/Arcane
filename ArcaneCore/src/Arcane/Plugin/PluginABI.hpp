@@ -1065,7 +1065,20 @@ namespace Arcane
     //     removed, and every module registers under its own ARC_MODULE_NAME.
     // A v51 module was compiled against the old layouts and signatures; reject
     // the pairing. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 52;
+    // v53 (2026-10-03, settings arc S2): settings structs. CVarSnapshot gained
+    //     `settings` (typed blocks, read INLINE by Settings<T>/SettingsShared<T>),
+    //     and CVarExplain gained audience/scope/apply (returned by value). New
+    //     ArcaneCore exports reached from inline headers: CVarRegistry::
+    //     RegisterSettings/SettingsBlock/ClearRung (ARC_SETTINGS), the
+    //     Log::*MosaicLevel* family (InstallMosaicSink and GameModule::Shutdown
+    //     now call them), WriteCVarArchive(dir, SetBy), the PreferenceScope API,
+    //     ResolveWorkerThreads, ApplyLogSettings and Runtime::SetEditorUserConfigDir.
+    //     ARC_REFLECT_FIELD routes through Arcane::Detail::ReflectField. Also
+    //     covers S3: CVarDesc gained `group` (passed through CVarRegistry::
+    //     Register); S3-GATE deferred its bump here. A v52 module was compiled
+    //     against the old layouts and lacks the new imports; reject the pairing.
+    //     ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 53;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
