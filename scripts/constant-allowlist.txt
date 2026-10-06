@@ -1,0 +1,627 @@
+# Numeric-constant allow-list (settings arc S6-1). path|symbol|status|note.
+# CONSTANT: reviewed, awaiting its ARC_CONSTANT marker (S6-42..44). PENDING: a SETTING/DERIVED row its S6 task deletes.
+# UNLISTED: not in the inventory; S6-42..44 classify it. S6-45 requires zero PENDING and zero UNLISTED.
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.cpp|kArtifactVersion|UNLISTED|line 12
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.cpp|kMeshSectionEntrySize|UNLISTED|line 26
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.cpp|kMipEntrySize|UNLISTED|line 22
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.cpp|kPrefixProbeBytes|UNLISTED|line 158
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.cpp|kSectionEntrySize|UNLISTED|line 20
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactStore.cpp|kHexDigits|UNLISTED|line 25
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.cpp|kFnvOffsetBasis|UNLISTED|line 10
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.cpp|kFnvPrime|UNLISTED|line 11
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.hpp|kMeshImporterVersion|UNLISTED|line 41
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.hpp|kTextureImporterVersion|UNLISTED|line 34
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookSession.cpp|kHexDigits|UNLISTED|line 198
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/GltfSurvey.cpp|kDefaultFactor|UNLISTED|line 213
+ArcaneAssetPipeline/src/Arcane/AssetPipeline/SourceHash.hpp|prime|UNLISTED|line 39
+ArcaneClient/src/Arcane/Audio/AudioDevice.cpp|kChunkFrames|CONSTANT|capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Scratch-chunk size hint
+ArcaneClient/src/Arcane/Audio/AudioTypes.hpp|kInvalidBus|UNLISTED|line 58
+ArcaneClient/src/Arcane/Audio/AudioTypes.hpp|kInvalidSound|UNLISTED|line 56
+ArcaneClient/src/Arcane/Audio/AudioTypes.hpp|kInvalidVoice|UNLISTED|line 57
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kArcSegments|PENDING|inventory:780 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kAxisLenPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kAxisTipPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kCentrePx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorCentre|PENDING|inventory:787 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorHot|PENDING|inventory:787 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorScreenArc|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorScreen|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorX|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorY|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kColorZ|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kEps|CONSTANT|Math
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kHeadHalfPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kHeadLenPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kHitThreshPx|PENDING|inventory:779 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kMinQuadAreaPx2|PENDING|inventory:781 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kMinScale|PENDING|inventory:785 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kPi|CONSTANT|Math
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kPlaneBarPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kPlaneBarWidthPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kPlaneCornerPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kPlaneEdgeOnCos|PENDING|inventory:782 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kRingHitSlackPx|PENDING|inventory:780 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kRingInnerPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kRingOuterPx|PENDING|inventory:779 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kRingSegments|PENDING|inventory:784 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScaleCubeCentrePx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScaleCubeHalfPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScaleShaftFromPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScaleShaftToPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScreenRingPx|PENDING|inventory:779 SETTING
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kScreenRingWidthPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kShaftPx|PENDING|inventory:778 DERIVED
+ArcaneClient/src/Arcane/Edit/Gizmo.cpp|kTau|CONSTANT|Math
+ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kMarginPx|PENDING|inventory:577 DERIVED
+ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kTextRowHeightPx|PENDING|inventory:577 DERIVED
+ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kUserLoadImage|CONSTANT|Window-message IDs (in-process protocol)
+ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kUserSetProgress|CONSTANT|Window-message IDs (in-process protocol)
+ArcaneClient/src/Arcane/Host/HostConfig.hpp|kHangMainSeconds|PENDING|inventory:563 DERIVED
+ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMaxWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
+ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMinWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
+ArcaneClient/src/Arcane/Host/ProjectBoot.cpp|kStride|PENDING|inventory:581 SETTING
+ArcaneClient/src/Arcane/Host/SettleBound.hpp|kSettleIntervalMs|CONSTANT|Test-only verification harness
+ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kOldestSupportedSchemaVersion|CONSTANT|Report format
+ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kSchemaVersion|CONSTANT|Report format
+ArcaneClient/src/Arcane/ImGui/ImGuiNri.cpp|kVertexAlign|CONSTANT|Layout, IDs
+ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kFirstPoolSets|PENDING|inventory:752 SETTING
+ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kMaxPoolSets|PENDING|inventory:753 SETTING
+ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp|kShaderPairId|CONSTANT|Layout, IDs
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kBtnThreshold|PENDING|inventory:821 SETTING
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadAxisTokens|UNLISTED|line 156
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadButtonTokens|UNLISTED|line 138
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kGamepadStickTokens|UNLISTED|line 166
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kMaxTransitions|PENDING|inventory:826 SETTING
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kMouseButtonCount|CONSTANT|SDL vocabulary; sentinel
+ArcaneClient/src/Arcane/Input/InputActions.cpp|kNoGamepadToken|CONSTANT|SDL vocabulary; sentinel
+ArcaneClient/src/Arcane/Input/InputActions.hpp|kDefaultHoldSeconds|PENDING|inventory:824 SETTING
+ArcaneClient/src/Arcane/Input/InputActions.hpp|kDefaultTapSeconds|PENDING|inventory:825 SETTING
+ArcaneClient/src/Arcane/Input/InputSnapshot.hpp|kMaxKeycodesDown|CONSTANT|SDL_SCANCODE_COUNT; fixed arrays in InputSnapshot, which crosses the plugin ABI
+ArcaneClient/src/Arcane/Input/InputSnapshot.hpp|kScancodeWords|CONSTANT|SDL_SCANCODE_COUNT; fixed arrays in InputSnapshot, which crosses the plugin ABI
+ArcaneClient/src/Arcane/Render/AgilitySdk.hpp|kVersion|CONSTANT|Must match the vendored Agility redistributable (inventory D3D12SDKVersion row; moved here by S1-11)
+ArcaneClient/src/Arcane/Render/Batcher2D.cpp|kBuiltInMaterialCount|CONSTANT|ID scheme and key encoding
+ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kInvalidMaterialId|CONSTANT|ID scheme and key encoding
+ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialCircle|CONSTANT|ID scheme and key encoding
+ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialSprite|CONSTANT|ID scheme and key encoding
+ArcaneClient/src/Arcane/Render/Batcher2D.hpp|kMaterialText|CONSTANT|ID scheme and key encoding
+ArcaneClient/src/Arcane/Render/DeviceCreationD3D12.cpp|kDeviceArmorRefs|PENDING|inventory:630 SETTING
+ArcaneClient/src/Arcane/Render/FramePacing.hpp|kSwapchainFramesInFlight|PENDING|inventory:635 SETTING
+ArcaneClient/src/Arcane/Render/GpuBreadcrumbs.hpp|kRingCapacity|PENDING|inventory:762 SETTING
+ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp|kGpuMarkerUnwritten|CONSTANT|Marker record layout
+ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp|kGpuMarkerValuesPerSlot|PENDING|inventory:763 DERIVED
+ArcaneClient/src/Arcane/Render/GpuInstrumentation.cpp|kSlotPollSleepNs|PENDING|inventory:770 SETTING
+ArcaneClient/src/Arcane/Render/GpuInstrumentation.cpp|kSlotPollWindow|CONSTANT|OS timer floor; smaller is a spin
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInstanceFlagBlendMask|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInstanceFlagBlendShift|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInstanceFlagLive|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInstanceFlagTeleported|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInstanceFlagTwoSided|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp|kGpuInvalidMaterialSlot|CONSTANT|Shader contract (gpu_scene.hlsli)
+ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp|kGpuDumpEntryBytes|CONSTANT|Dump file format
+ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp|kGpuDumpHeaderBytes|CONSTANT|Dump file format
+ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp|kGpuDumpTagBytes|CONSTANT|Dump file format
+ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp|kGpuDumpVersion|CONSTANT|Dump file format
+ArcaneClient/src/Arcane/Render/Nri/BindlessTable.hpp|kInvalidSlot|CONSTANT|Sentinels (0xFFFFFFFF markers)
+ArcaneClient/src/Arcane/Render/Nri/GpuScene.cpp|kRingAlign|CONSTANT|Hardware alignment
+ArcaneClient/src/Arcane/Render/Nri/GpuScene.cpp|kVisibilityRegionAlign|CONSTANT|Hardware alignment
+ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp|kInitialRows|PENDING|inventory:688 SETTING
+ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp|kScratchRows|PENDING|inventory:689 SETTING
+ArcaneClient/src/Arcane/Render/Nri/MeshResidencyBudget.hpp|kMeshResidencyBudgetBytes|PENDING|inventory:694 SETTING
+ArcaneClient/src/Arcane/Render/Nri/NriDevice.cpp|kNoShift|UNLISTED|line 45
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultCBSize|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultIterations|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultOobElement|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultSinkElements|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kFaultThreadGroups|CONSTANT|Test-only: values chosen to guarantee a TDR or out-of-bounds fault
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalBudget|PENDING|inventory:768 SETTING
+ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp|kRemovalPoll|PENDING|inventory:769 SETTING
+ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
+ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
+ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp|kUploadRingBytesPerFrame|PENDING|inventory:647 SETTING
+ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kInvalidLayout|CONSTANT|Sentinel
+ArcaneClient/src/Arcane/Render/Nri/NriPipelineCache.hpp|kMaxColorAttachments|CONSTANT|Fixed array size in the exported pipeline key (ABI); the hardware maximum is 8
+ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollSleepNs|CONSTANT|OS timer floor; smaller is a spin
+ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp|kFencePollWindow|CONSTANT|OS timer floor; smaller is a spin
+ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.cpp|kSize|PENDING|inventory:735 SETTING
+ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.hpp|kPendingCookRepollInterval|PENDING|inventory:734 SETTING
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.cpp|kNoTransient|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kGenerationBits|CONSTANT|Handle encoding
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kGenerationMask|CONSTANT|Handle encoding
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kIndexBits|CONSTANT|Handle encoding
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kIndexMask|CONSTANT|Handle encoding
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kInvalid|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoCurrentNode|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kNoSlot|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoNode|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/RenderGraph.hpp|kRgNoPoolSlot|CONSTANT|Sentinels
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kBuiltInSets|PENDING|inventory:670 DERIVED
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kCanvasClear|PENDING|inventory:662 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvOffset|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kFnvPrime|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kMaterialSets|PENDING|inventory:670 DERIVED
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp|kVertexAlign|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kBuiltInCount|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kCbRegionsPerFrame|PENDING|inventory:670 DERIVED
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaterialCbMaxBytes|PENDING|inventory:669 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxMaterialSlots|PENDING|inventory:666 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxMaterialTextures|PENDING|inventory:667 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kMaxSpriteTextures|PENDING|inventory:668 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kNoRange|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.hpp|kShaderPairBase|CONSTANT|Alignment, math, shader names, IDs, identity texel
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.cpp|kFnvOffset|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.cpp|kFnvPrime|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kCbMaxBytes|PENDING|inventory:702 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kCbRegionsPerFrame|PENDING|inventory:702 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kGlobalsRegion|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaterialRegion|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxInputs|CONSTANT|static_assert equal to kMaxPassInputs (FullscreenNodes.cpp:158), the post asset format's ceiling
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxPasses|PENDING|inventory:699 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kMaxTextures|PENDING|inventory:700 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kNoRange|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kShaderPairId|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp|kShaderPairMark|CONSTANT|Layout, IDs, math
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.cpp|kHalfExtentPerMetre|PENDING|inventory:711 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.cpp|kMinHalfExtent|PENDING|inventory:710 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp|kAxisXColor|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the 3D grid axis colours stay values until a post-sweep task unifies them with the gizmo and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp|kAxisYColor|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the 3D grid axis colours stay values until a post-sweep task unifies them with the gizmo and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp|kAxisZColor|CONSTANT|ARC_CONSTANT("pending axis unification re-bless"): the 3D grid axis colours stay values until a post-sweep task unifies them with the gizmo and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4)
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp|kFrameCbMaxBytes|CONSTANT|Constant-buffer placement alignment; the struct must fit
+ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp|kShaderPairId|CONSTANT|IDs
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshCullNode.hpp|kMeshCullThreads|CONSTANT|Must match numthreads(64) in data/shaders/mesh_cull.hlsl:60
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.cpp|kDepthClear|CONSTANT|Standard-Z depth with a LESS compare; changing it is a bug
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp|kBindlessCapacity|CONSTANT|Must equal kMeshBindlessCapacity in data/shaders/mesh.hlsl:155
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp|kFrameCbMaxBytes|CONSTANT|Constant-buffer placement alignment; the struct must fit
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp|kInitialResidentSlots|CONSTANT|capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint only
+ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp|kMeshRootDirect|CONSTANT|Root layout index; identity colour
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kEdgeSoftPx|PENDING|inventory:722 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kHoverColor|PENDING|inventory:719 DERIVED
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kHoverThickPx|PENDING|inventory:721 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kSelectColor|PENDING|inventory:718 DERIVED
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kSelectThickPx|PENDING|inventory:720 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp|kVertexAlign|CONSTANT|Depth convention; alignment
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kCbMaxBytes|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kCompositePairId|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kCompositeRegion|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kJfaPairId|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kJfaRegionBase|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kMaxJfaSteps|CONSTANT|Constant-buffer region layout; log2 ceiling of the schedule
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kMaxSelectedIds|CONSTANT|static_assert to a 256-byte cbuffer array the outline shader reads (PickOutlineNodes.cpp:74)
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kMeshShaderPairId|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kOutlineMaxThicknessPx|PENDING|inventory:723 SETTING
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kSeedPairId|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kSeedRegion|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.hpp|kShaderPairId|CONSTANT|Layout, IDs, shader encoding
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kAxisHalfLenPx|PENDING|inventory:816 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColAabb|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColCom|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColContact|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColKinematic|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColOrient|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColResidencyGrid|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColSensor|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColStaticGrid|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColStatic|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceAxisHi|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceAxis|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceNormal|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTracePoint|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTraceShapeB|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreeFat|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreePair|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColTreeTight|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kColVelocity|PENDING|inventory:810 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kDim|PENDING|inventory:816 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kIslandPalette|PENDING|inventory:811 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kManifoldNormalLen|PENDING|inventory:813 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kManifoldPointPx|PENDING|inventory:814 SETTING
+ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.cpp|kNormalLen|PENDING|inventory:815 SETTING
+ArcaneClient/src/Arcane/Render/PickEmit.cpp|kSigns|UNLISTED|line 253
+ArcaneClient/src/Arcane/Render/PickEmit.hpp|kPickSupersample|PENDING|inventory:724 SETTING
+ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp|kFnvOffset|CONSTANT|Math
+ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp|kFnvPrime|CONSTANT|Math
+ArcaneClient/src/Arcane/Render/ShaderConventions.hpp|kSpirvArgCount|CONSTANT|Minimum shader model contract
+ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp|kVisibilitySlack|PENDING|inventory:693 SETTING
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kArtifactVersion|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kChunkHeaderBytes|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kContentKindMesh|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kContentKindTexture|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kGlbVersion|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kHeaderBytes|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kHeaderProbeBytes|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kJsonChunkType|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kMeshSectionEntrySize|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kMipEntrySize|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kSectionEntrySize|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|kVertexStride|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp|prime|CONSTANT|file format
+ArcaneCore/src/Arcane/Assets/ArtifactReader.hpp|kClientMeshImporterVersionMirror|CONSTANT|cook/format version
+ArcaneCore/src/Arcane/Assets/ArtifactReader.hpp|kClientTextureImporterVersionMirror|CONSTANT|cook/format version
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|c1|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|c2|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|k1|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kDynamicRange|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kL|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSigmaPow2|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSigmaPow3|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSsimAntialiasing|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSsimWindowRadius|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kVarianceWindowRadius|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Base/CrashArena.hpp|kCapacity|CONSTANT|static crash arena
+ArcaneCore/src/Arcane/Base/DiagEnvelope.hpp|kFormatVersion|CONSTANT|file format
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kD3D12DebugLayerFailFast|UNLISTED|line 1498
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kEnvLeanRsv|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kEnvRsv|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kGpuBeatFreshnessCapSeconds|PENDING|inventory:219 DERIVED
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kHeaderRsv|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kInjectedMax|CONSTANT|static crash-path capacity
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMaxFrames|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMinFatalWaitMs|PENDING|inventory:224 SETTING
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kMsvcCppException|UNLISTED|line 1507
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kPathMax|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kReasonMax|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.cpp|kSectionRsv|CONSTANT|static crash-path capacity; the crash path cannot allocate or read cvars
+ArcaneCore/src/Arcane/Base/Diagnostics.hpp|kCrashInCrashPath|CONSTANT|monitor/CI/reporter contract
+ArcaneCore/src/Arcane/Base/Diagnostics.hpp|kCrashed|CONSTANT|monitor/CI/reporter contract
+ArcaneCore/src/Arcane/Base/Diagnostics.hpp|kExitSentinel|CONSTANT|monitor/CI/reporter contract
+ArcaneCore/src/Arcane/Base/Diagnostics.hpp|kHangTerminated|CONSTANT|monitor/CI/reporter contract
+ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierDestabilising|CONSTANT|catalogue data, not tunables
+ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierPresentHook|CONSTANT|catalogue data, not tunables
+ArcaneCore/src/Arcane/Base/ForeignModules.hpp|kTierUncatalogued|CONSTANT|catalogue data, not tunables
+ArcaneCore/src/Arcane/Base/Log.cpp|keep|PENDING|inventory:246 SETTING
+ArcaneCore/src/Arcane/Base/Log.hpp|kBacklogLineBytes|CONSTANT|static lock-free crash-path ring (could become Restart only if heap-sized at Init)
+ArcaneCore/src/Arcane/Base/Log.hpp|kBacklogLines|CONSTANT|static lock-free crash-path ring (could become Restart only if heap-sized at Init)
+ArcaneCore/src/Arcane/Base/ModuleTable.hpp|kMax|CONSTANT|static crash-path module table
+ArcaneCore/src/Arcane/Crypto/Crypto.hpp|BLOCK_SIZE|CONSTANT|SHA-256 block
+ArcaneCore/src/Arcane/Crypto/Crypto.hpp|DEFAULT_ITERATIONS|PENDING|inventory:363 SETTING
+ArcaneCore/src/Arcane/Crypto/Crypto.hpp|ENTROPY_SAMPLE_BYTES|CONSTANT|RNG self-test parameter
+ArcaneCore/src/Arcane/Crypto/Crypto.hpp|HASH_LENGTH|CONSTANT|SHA-256 output size
+ArcaneCore/src/Arcane/Crypto/Crypto.hpp|SALT_LENGTH|CONSTANT|security parameter
+ArcaneCore/src/Arcane/Material/GlobalParams.hpp|kGlobalCbSlot|CONSTANT|shader contract
+ArcaneCore/src/Arcane/Material/GlobalParams.hpp|kMaterialCbSlot|CONSTANT|shader contract
+ArcaneCore/src/Arcane/Material/GlobalParams.hpp|kSpriteGlobalCbSlot|CONSTANT|shader contract
+ArcaneCore/src/Arcane/Material/GlobalParams.hpp|kSpriteMaterialCbSlot|CONSTANT|shader contract
+ArcaneCore/src/Arcane/Material/GlobalParams.hpp|kSpriteMaterialTextureBase|CONSTANT|shader contract
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kBiasScaleIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kBinaryIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kClampIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kCombineIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kLerpIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kNoPins|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kNoiseIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOne|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOut1|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOut2|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOut4|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOutDyn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kOutputIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kPannerIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kRemapIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kSampleOut|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kSmoothIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kSplitOut|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kStepIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kTileIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kUnaryIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kUvIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kUv|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialGraph.cpp|kVertexOutIn|CONSTANT|graph semantics: saved graphs with unwired pins depend on them
+ArcaneCore/src/Arcane/Material/MaterialSource.hpp|kMaxPassInputs|CONSTANT|shader contract (reserved InputTexture..3)
+ArcaneCore/src/Arcane/Material/MaterialSource.hpp|kSceneInput|CONSTANT|sentinels
+ArcaneCore/src/Arcane/Material/MaterialTemplate.cpp|kRegister|CONSTANT|HLSL cbuffer packing
+ArcaneCore/src/Arcane/Material/MaterialTypes.hpp|kNoSlot|CONSTANT|sentinels
+ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kCubeFaces|CONSTANT|unit-primitive contract (scale via Transform); thumbnail goldens
+ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kHalfHeight|CONSTANT|unit-primitive contract (scale via Transform); thumbnail goldens
+ArcaneCore/src/Arcane/Mesh/MeshBuilder.cpp|kRadius|CONSTANT|unit-primitive contract (scale via Transform); thumbnail goldens
+ArcaneCore/src/Arcane/Net/Protocol.hpp|kInvalidMsgId|CONSTANT|wire sentinel
+ArcaneCore/src/Arcane/Net/RateLimiter.hpp|MAX_RECORDS|PENDING|inventory:347 SETTING
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_CONNECTIONS_PER_IP|PENDING|inventory:343 SETTING
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_CONNECTIONS_TOTAL|PENDING|inventory:342 SETTING
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_PAYLOAD_SIZE|PENDING|inventory:338 SETTING
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|MAX_RECEIVE_BUFFER_SIZE|PENDING|inventory:339 SETTING
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|RECV_CHUNK_SIZE|CONSTANT|capacity hint (R2): a stack-array bound in the Aphelyon services (ServiceClient.hpp:229); ARC_CONSTANT marker
+ArcaneCore/src/Arcane/Net/TcpSocket.hpp|RECV_TIMEOUT_MS|PENDING|inventory:341 SETTING
+ArcaneCore/src/Arcane/Platform/NativeWindow.cpp|kMsgSetTitle|CONSTANT|Win32 / OS baseline DPI
+ArcaneCore/src/Arcane/Plugin/PluginABI.hpp|kGamePluginABIVersion|CONSTANT|ABI
+ArcaneCore/src/Arcane/Project/AssetRegistry.cpp|kSourceIdNamespace|CONSTANT|stable identity namespace
+ArcaneCore/src/Arcane/Project/ProjectManifest.hpp|kFormatVersion|CONSTANT|file format
+ArcaneCore/src/Arcane/Scene/BoundsSystem.hpp|kSpriteDepthEpsilon|CONSTANT|degenerate-frustum guard; editor goldens depend on it
+ArcaneCore/src/Arcane/Scene/PhysicsSystem.hpp|kAuthorPosEps|CONSTANT|numeric round-trip noise tolerance
+ArcaneCore/src/Arcane/Scene/PhysicsSystem.hpp|kAuthorRotEps|CONSTANT|numeric round-trip noise tolerance
+ArcaneCore/src/Arcane/Scene/PhysicsSystem.hpp|kPi|CONSTANT|math identity
+ArcaneCore/src/Arcane/Scene/PhysicsSystem.hpp|kTau|CONSTANT|math identity
+ArcaneCore/src/Arcane/Scene/SceneResources.hpp|kPi|CONSTANT|math identity
+ArcaneCore/src/Arcane/Scene/SceneResources.hpp|kTau|CONSTANT|math identity
+ArcaneCore/src/Arcane/Scene/TransformSystems.hpp|kNoParent|CONSTANT|sentinel
+ArcaneCore/src/Arcane/Serialization/ReflectionJson.hpp|kQuatNormTolerance2|CONSTANT|file acceptance must not vary per machine
+ArcaneCore/src/Arcane/Serialization/RegistrySnapshot.hpp|kSnapshotMagic|CONSTANT|blob format
+ArcaneCore/src/Arcane/Serialization/RegistrySnapshot.hpp|kSnapshotVersion|CONSTANT|blob format
+ArcaneCore/src/Arcane/Serialization/SceneSerializer.hpp|kSceneJsonVersionMin|CONSTANT|file format
+ArcaneCore/src/Arcane/Serialization/SceneSerializer.hpp|kSceneJsonVersion|CONSTANT|file format
+ArcaneCore/src/Arcane/Version.hpp|kVersionMajor|CONSTANT|identity
+ArcaneCore/src/Arcane/Version.hpp|kVersionMinor|CONSTANT|identity
+ArcaneCrashReporter/src/ReporterArgs.hpp|kBadArgs|CONSTANT|Protocol and IDs
+ArcaneCrashReporter/src/ReporterArgs.hpp|kDeadline|CONSTANT|Protocol and IDs
+ArcaneCrashReporter/src/ReporterArgs.hpp|kHostMismatch|CONSTANT|Protocol and IDs
+ArcaneCrashReporter/src/ReporterArgs.hpp|kNoEnvelope|CONSTANT|Protocol and IDs
+ArcaneCrashReporter/src/ReporterArgs.hpp|kOk|CONSTANT|Protocol and IDs
+ArcaneCrashReporter/src/ReporterArgs.hpp|kWriteFailed|CONSTANT|Protocol and IDs
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScA|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScC|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScD|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScE|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScF|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScG|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScHome|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScJ|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScLAlt|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScLCtrl|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScLShift|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScN|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScO|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScQ|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScRAlt|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScRCtrl|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScRShift|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScR|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScS|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScV|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScW|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScX|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScY|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppFrame.cpp|kScZ|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
+ArcaneEditor/src/App/EditorAppProject.cpp|kStride|PENDING|inventory:581 SETTING
+ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp|kIndent|PENDING|inventory:1321 DERIVED
+ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp|kMapsColumnWidth|PENDING|inventory:1320 DERIVED
+ArcaneEditor/src/Documents/MaterialSpherePreview.hpp|kMaterialPreviewSphereId|CONSTANT|fixed preview GUID
+ArcaneEditor/src/Documents/MeshDocument.cpp|kFovYDegrees|PENDING|inventory:1334 SETTING
+ArcaneEditor/src/Documents/MeshDocument.cpp|kMargin|PENDING|inventory:1334 SETTING
+ArcaneEditor/src/Documents/MeshDocument.cpp|kPreviewMeshGuid|CONSTANT|fixed preview GUID
+ArcaneEditor/src/Documents/MeshDocument.hpp|kPreviewSize|PENDING|inventory:1333 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kCell|PENDING|inventory:1192 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kCullGuardBand|PENDING|inventory:1188 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kGroupBgColor|PENDING|inventory:1053 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kGroupBorderColor|PENDING|inventory:1054 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeBadgeText|PENDING|inventory:1053 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeBodyColor|PENDING|inventory:1052 DERIVED
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeBorderColor|PENDING|inventory:1053 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeHeaderGap|PENDING|inventory:1187 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodePadX|PENDING|inventory:1186 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodePadY|PENDING|inventory:1186 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeTitleColor|PENDING|inventory:1053 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kNodeTitleText|PENDING|inventory:1053 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPassOutputLinkId|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPassOutputNodeId|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPassSceneNodeId|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinChipSlot|PENDING|inventory:1190 DERIVED
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinDotRadius|PENDING|inventory:1189 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinInBase|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinTextureColor|PENDING|inventory:1055 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kSurfaceFullscreen|UNLISTED|line 122
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kSurfaceMesh|UNLISTED|line 124
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kSurfaceSprite|UNLISTED|line 123
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kThumbMin|PENDING|inventory:1194 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kWidths|UNLISTED|line 2863
+ArcaneEditor/src/Documents/ShaderEditorDocument.hpp|kGraphPreviewSize|PENDING|inventory:1196 SETTING
+ArcaneEditor/src/Documents/ShaderEditorDocument.hpp|kNavHistoryMax|PENDING|inventory:1195 SETTING
+ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp|kLegendDotPairGap|PENDING|inventory:1185 DERIVED
+ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp|kLegendDotRadius|PENDING|inventory:1184 DERIVED
+ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp|kLegendDotSlot|PENDING|inventory:1184 DERIVED
+ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp|kLegendRowGap|PENDING|inventory:1185 DERIVED
+ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp|kTypeWidths|UNLISTED|line 36
+ArcaneEditor/src/Documents/ShaderGraphPinTypes.hpp|kPinDynamicColor|PENDING|inventory:1056 SETTING
+ArcaneEditor/src/Documents/ShaderGraphPinTypes.hpp|kPinScalarColor|PENDING|inventory:1056 SETTING
+ArcaneEditor/src/Documents/ShaderGraphPinTypes.hpp|kPinVec2Color|PENDING|inventory:1056 SETTING
+ArcaneEditor/src/Documents/ShaderGraphPinTypes.hpp|kPinVec4Color|PENDING|inventory:1056 SETTING
+ArcaneEditor/src/Panels/AssetActivityLog.hpp|kCapacity|PENDING|inventory:1289 SETTING
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kBadgeFontSize|PENDING|inventory:1091 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kBadgeMargin|PENDING|inventory:1275 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kChildIndent|PENDING|inventory:1273 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kGroupCountGap|PENDING|inventory:1274 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kGroupIndent|PENDING|inventory:1273 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kRailRowHeight|PENDING|inventory:1272 DERIVED
+ArcaneEditor/src/Panels/AssetBrowserPanel.cpp|kRailWidth|PENDING|inventory:1271 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphAccentBarWidth|PENDING|inventory:1220 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphColumnPitch|PENDING|inventory:1222 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphDashEndDotRadius|PENDING|inventory:1226 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphDashMaxCells|PENDING|inventory:1227 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphDashOffPx|PENDING|inventory:1226 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphDashOnPx|PENDING|inventory:1226 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphFocusComboWidth|PENDING|inventory:1218 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphFocusHitCap|PENDING|inventory:1219 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphGhostWash|PENDING|inventory:1225 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphHeaderFontPx|PENDING|inventory:1087 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphHeaderHeight|PENDING|inventory:1220 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphLabelFontPx|PENDING|inventory:1089 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphLegendEdgeColor|PENDING|inventory:1062 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphLegendSwatchH|PENDING|inventory:1062 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphLegendSwatchW|PENDING|inventory:1062 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphLegendUsedByColor|PENDING|inventory:1062 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphMetaFontPx|PENDING|inventory:1088 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodeBodyPadY|PENDING|inventory:1087 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodeIconGap|PENDING|inventory:1087 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodeMaxWidth|PENDING|inventory:1220 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodeMinWidth|PENDING|inventory:1220 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodePadLeft|PENDING|inventory:1223 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphNodePadRight|PENDING|inventory:1087 DERIVED
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphOverflowWireDim|PENDING|inventory:1225 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphOverflowWireThickness|PENDING|inventory:1224 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphPinIdBase|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphPinRadius|PENDING|inventory:1221 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphRowPitch|PENDING|inventory:1222 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.cpp|kGraphWireDim|PENDING|inventory:1225 SETTING
+ArcaneEditor/src/Panels/AssetGraphPanel.hpp|kAssetGraphSelectionStripH|PENDING|inventory:1231 DERIVED
+ArcaneEditor/src/Panels/AssetInspectorSource.cpp|kAssetPageThumbSize|PENDING|inventory:1246 SETTING
+ArcaneEditor/src/Panels/AssetInspectorSource.cpp|kPreviewCompactHeaderMinWidth|PENDING|inventory:1247 DERIVED
+ArcaneEditor/src/Panels/AssetInspectorSource.cpp|kPreviewCompactTextColumnMin|PENDING|inventory:1247 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.cpp|kNamedTargets|PENDING|inventory:1282 SETTING
+ArcaneEditor/src/Panels/AssetPanelCommon.cpp|kTooltipThumbSize|PENDING|inventory:1281 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.cpp|kTooltipWidth|PENDING|inventory:1281 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.hpp|kAssetPanelBottomBarHeight|PENDING|inventory:1278 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.hpp|kAssetPanelToolbarBodyGapPx|PENDING|inventory:1279 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.hpp|kAssetPanelToolbarFramePadY|PENDING|inventory:1277 DERIVED
+ArcaneEditor/src/Panels/AssetPanelCommon.hpp|kTableRowHeight|PENDING|inventory:1280 SETTING
+ArcaneEditor/src/Panels/AssetPanelModel.hpp|kAssetKindCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Panels/AssetReferenceField.cpp|kAssetRefThumbSize|PENDING|inventory:1283 SETTING
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusProgressCaptionGap|PENDING|inventory:1286 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusProgressHeight|PENDING|inventory:1285 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusRightColumnWidth|PENDING|inventory:1286 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusSectionGap|PENDING|inventory:1285 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusSelectionBorder|PENDING|inventory:1285 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusTileHeight|PENDING|inventory:1285 DERIVED
+ArcaneEditor/src/Panels/AssetStatusPanel.cpp|kStatusTileMinWidth|PENDING|inventory:1285 DERIVED
+ArcaneEditor/src/Panels/CreateAssetDialog.cpp|kDialogWidth|PENDING|inventory:1290 DERIVED
+ArcaneEditor/src/Panels/CreateAssetDialog.cpp|kFooterButtonWidth|PENDING|inventory:1290 DERIVED
+ArcaneEditor/src/Panels/CreateAssetDialog.cpp|kPickerRowHeight|PENDING|inventory:1290 DERIVED
+ArcaneEditor/src/Panels/CreateAssetDialog.cpp|kPickerVisibleRows|PENDING|inventory:1290 DERIVED
+ArcaneEditor/src/Panels/CreateAssetDialog.hpp|kCreateAssetKindCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Panels/CreateAssetDialog.hpp|kCreateNameMaxPathChars|CONSTANT|Windows MAX_PATH margin
+ArcaneEditor/src/Panels/CreateAssetDialog.hpp|kMaterialSurfaceCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Panels/CreateAssetDialog.hpp|kMaterialSurfaceDefaultIndex|PENDING|inventory:1291 SETTING
+ArcaneEditor/src/Panels/CreateAssetDialog.hpp|kPrimitiveMeshSourceCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultAssetsInspectorRefPx|PENDING|inventory:1401 SETTING
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultBandBrowserRefPx|PENDING|inventory:1400 SETTING
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultBottomBandPx|PENDING|inventory:1400 SETTING
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultCentralMinFraction|PENDING|inventory:1401 SETTING
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultInspectorWidthPx|PENDING|inventory:1398 SETTING
+ArcaneEditor/src/Panels/DefaultLayout.hpp|kDefaultOutlinerWidthPx|PENDING|inventory:1399 SETTING
+ArcaneEditor/src/Panels/EditorPanels.cpp|kCaretPadX|PENDING|inventory:1101 DERIVED
+ArcaneEditor/src/Panels/EditorPanels.cpp|kInspectorFramePaddingY|PENDING|inventory:1240 SETTING
+ArcaneEditor/src/Panels/EditorPanels.cpp|kInspectorItemSpacingY|PENDING|inventory:1241 SETTING
+ArcaneEditor/src/Panels/EditorPanels.cpp|kTransportGap|PENDING|inventory:1101 DERIVED
+ArcaneEditor/src/Panels/EditorPanels.cpp|t|UNLISTED|line 1414
+ArcaneEditor/src/Panels/InspectorFields.cpp|kTolerance|CONSTANT|float-equality epsilon for mixed values
+ArcaneEditor/src/Panels/InspectorHost.hpp|kAssetsInstanceId|CONSTANT|window-id contract ("###inspector_1")
+ArcaneEditor/src/Panels/InspectorHost.hpp|kHistoryDepth|PENDING|inventory:1250 SETTING
+ArcaneEditor/src/Panels/InspectorHost.hpp|kMaxInstances|PENDING|inventory:1251 SETTING
+ArcaneEditor/src/Panels/InspectorWindows.hpp|kInspectorHeaderMinCrumbWidth|PENDING|inventory:1253 DERIVED
+ArcaneEditor/src/Project/ClassTemplates.hpp|kSystemPhaseChoiceCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Project/ClassTemplates.hpp|kSystemRoleChoiceCount|CONSTANT|enum and array arity
+ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp|kCheckerCell|PENDING|inventory:1301 DERIVED
+ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp|kMaxVehicleDrops|PENDING|inventory:1303 SETTING
+ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp|kMeshThumbFovDegrees|PENDING|inventory:1304 SETTING
+ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp|kThumbSize|PENDING|inventory:1300 SETTING
+ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp|kThumbTime|PENDING|inventory:1302 SETTING
+ArcaneEditor/src/Project/MeshImportWave.cpp|kMargin|PENDING|inventory:1308 SETTING
+ArcaneEditor/src/Project/MeshImportWave.cpp|kMinRadius|PENDING|inventory:1307 DERIVED
+ArcaneEditor/src/Project/RecentProjects.cpp|kFormatVersion|CONSTANT|Hub file format
+ArcaneEditor/src/Project/RecentProjects.hpp|kMaxShown|PENDING|inventory:1374 SETTING
+ArcaneEditor/src/Project/SceneRecents.hpp|kFormatVersion|CONSTANT|file format
+ArcaneEditor/src/Project/SceneRecents.hpp|kMaxEntries|PENDING|inventory:1375 SETTING
+ArcaneEditor/src/Scene/SceneSession.hpp|kUnreachableStateId|CONSTANT|sentinel
+ArcaneEditor/src/Viewport/DeferredPick.hpp|kMaxFramesInFlight|PENDING|inventory:1156 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kBaseFlySpeed|PENDING|inventory:1135 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kFarZ|PENDING|inventory:1134 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kFrameFill|PENDING|inventory:1131 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kMaxDistance|PENDING|inventory:1132 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kMaxHalfHeight|PENDING|inventory:1129 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kMinDistance|PENDING|inventory:1132 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kMinHalfHeight|PENDING|inventory:1129 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kNearZ|PENDING|inventory:1133 SETTING
+ArcaneEditor/src/Viewport/EditorCamera.hpp|kWheelStep|PENDING|inventory:1130 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.cpp|kMaxDecade|CONSTANT|float-precision bounds of the decade LOD
+ArcaneEditor/src/Viewport/ViewportGrid.cpp|kMaxLinesPerAxis|PENDING|inventory:1153 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.cpp|kMinDecade|CONSTANT|float-precision bounds of the decade LOD
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridAxisXColor|PENDING|inventory:1064 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridAxisYColor|PENDING|inventory:1064 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridFadeFullPx|PENDING|inventory:1149 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridFadeInPx|PENDING|inventory:1149 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridLineRgb|PENDING|inventory:1064 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridLineThicknessPx|PENDING|inventory:1151 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridMajorAlpha|PENDING|inventory:1150 SETTING
+ArcaneEditor/src/Viewport/ViewportGrid.hpp|kGridMinorAlpha|PENDING|inventory:1149 SETTING
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMaxFovYDeg|CONSTANT|projection finite only inside (0,180)
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMaxGizmoSize|PENDING|inventory:1118 DERIVED
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMaxPitchDeg|CONSTANT|Right()/Up() are NaN at ±90
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMaxSpeedScalar|CONSTANT|projection finite only inside (0,180)
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMinFovYDeg|PENDING|inventory:1118 DERIVED
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMinGizmoSize|PENDING|inventory:1118 DERIVED
+ArcaneEditor/src/Viewport/ViewportSettings.hpp|kMinSpeedScalar|CONSTANT|projection finite only inside (0,180)
+ArcaneEditor/src/Widgets/ColorPickerPopup.cpp|kMarkers|PENDING|inventory:1051 SETTING
+ArcaneEditor/src/Widgets/EditorFonts.cpp|kIconRange|UNLISTED|line 38
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kAccentActive|PENDING|inventory:1020 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kAccentHovered|PENDING|inventory:1019 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kAccent|PENDING|inventory:1018 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kAmberLight|PENDING|inventory:1034 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kAmber|PENDING|inventory:1033 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kBorder|PENDING|inventory:1026 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kButtonActive|PENDING|inventory:1016 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kButtonHovered|PENDING|inventory:1015 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kButton|PENDING|inventory:1014 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kCheck|PENDING|inventory:1032 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kChromeDeep|PENDING|inventory:1007 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kChrome|PENDING|inventory:1008 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kError|PENDING|inventory:1035 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kGrabActive|PENDING|inventory:1031 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kGrab|PENDING|inventory:1030 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kNone|CONSTANT|"draw nothing" identity; any change is a bug
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kPanelRaised|PENDING|inventory:1010 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kPanel|PENDING|inventory:1009 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kSelection|PENDING|inventory:1017 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kSeparatorHeld|PENDING|inventory:1029 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kSeparatorHot|PENDING|inventory:1028 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kSeparator|PENDING|inventory:1027 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kTextDim|PENDING|inventory:1025 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kText|PENDING|inventory:1024 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kWarning|PENDING|inventory:1036 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kWellActive|PENDING|inventory:1013 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kWellHovered|PENDING|inventory:1012 SETTING
+ArcaneEditor/src/Widgets/EditorTheme.hpp|kWell|PENDING|inventory:1011 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kAxisBarColors|PENDING|inventory:1047 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kAxisBarWidth|PENDING|inventory:1244 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kBarHeight|PENDING|inventory:1105 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kCardFramePadding|PENDING|inventory:1104 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kDotRadius|PENDING|inventory:1106 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kDotSize|PENDING|inventory:1106 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kEntryGap|PENDING|inventory:1106 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kHeaderBandActiveColor|PENDING|inventory:1048 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kHeaderBandColor|PENDING|inventory:1048 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kHeaderBandHoveredColor|PENDING|inventory:1048 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kLabelColumnFraction|PENDING|inventory:1242 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kLabelSeedMinAvailEm|PENDING|inventory:1243 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kLegendGapX|PENDING|inventory:1105 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kLegendGapY|PENDING|inventory:1105 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kLineGap|PENDING|inventory:1106 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPad|PENDING|inventory:1104 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPillAmberBorder|PENDING|inventory:1049 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPillSchemeBlueBorder|PENDING|inventory:1050 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPillSchemeBlueText|PENDING|inventory:1050 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPillSchemeVioletBorder|PENDING|inventory:1050 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kPillSchemeVioletText|PENDING|inventory:1050 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kSegmentGap|PENDING|inventory:1105 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kSwatchSize|PENDING|inventory:1105 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.cpp|kTextGap|PENDING|inventory:1106 DERIVED
+ArcaneEditor/src/Widgets/EditorWidgets.hpp|kAssetRowThumbSize|PENDING|inventory:1245 SETTING
+ArcaneEditor/src/Widgets/EditorWidgets.hpp|kPillLineHeight|PENDING|inventory:1102 DERIVED
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphGridMajorColor|PENDING|inventory:1058 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphGridMinorColor|PENDING|inventory:1058 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphNodeBorderWidth|PENDING|inventory:1175 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphNodeHovBorderColor|PENDING|inventory:1060 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphNodeHovBorderWidth|PENDING|inventory:1175 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphNodeRounding|PENDING|inventory:1175 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphNodeSelBorderWidth|PENDING|inventory:1175 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphPinOuterRingGap|PENDING|inventory:1179 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphPinOuterRingWidth|PENDING|inventory:1179 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphPinRingWidth|PENDING|inventory:1178 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphPinSegments|PENDING|inventory:1178 SETTING
+ArcaneEditor/src/Widgets/GraphCanvasStyle.hpp|kGraphWireThickness|PENDING|inventory:1177 SETTING
+ArcaneEditor/src/Widgets/GraphFit.cpp|kNavigationZoomMargin|CONSTANT|mirrors the library's file-static value
+ArcaneEditor/src/Widgets/GraphGridPhase.hpp|kBaseSpacingPx|PENDING|inventory:1171 SETTING
+ArcaneEditor/src/Widgets/GraphGridPhase.hpp|kMajorEvery|PENDING|inventory:1173 SETTING
+ArcaneEditor/src/Widgets/GraphGridPhase.hpp|kMinorTargetPx|PENDING|inventory:1172 SETTING
+ArcaneEditor/src/Widgets/GraphGridPhase.hpp|kScaleEpsilon|CONSTANT|divide-by-zero guard
+ArcaneEditor/src/Widgets/GraphGridPhase.hpp|kZoomExponent|PENDING|inventory:1170 SETTING
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendEntryGap|PENDING|inventory:1090 DERIVED
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendFontPx|PENDING|inventory:1090 DERIVED
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendInset|PENDING|inventory:1183 DERIVED
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendPadX|PENDING|inventory:1183 DERIVED
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendPadY|PENDING|inventory:1090 DERIVED
+ArcaneEditor/src/Widgets/GraphLegend.hpp|kGraphLegendSwatchGap|PENDING|inventory:1090 DERIVED
+ArcaneEditor/src/Widgets/GraphNodeLod.hpp|kEps|CONSTANT|float-compare epsilon
+ArcaneEditor/src/Widgets/GraphNodeLod.hpp|kLodDefaultMax|PENDING|inventory:1168 SETTING
+ArcaneEditor/src/Widgets/GraphNodeLod.hpp|kLodLowMax|PENDING|inventory:1168 SETTING
+ArcaneEditor/src/Widgets/GraphNodeLod.hpp|kLodLowestMax|PENDING|inventory:1168 SETTING
+ArcaneEditor/src/Widgets/GraphNodeLod.hpp|kLodMediumMax|PENDING|inventory:1168 SETTING
+ArcaneEditor/src/Widgets/GraphWire.hpp|kGraphLinkChannel|CONSTANT|the library's draw-channel index
+ArcaneEditor/src/Widgets/GraphWire.hpp|kPi|CONSTANT|math identity
+ArcaneEditor/src/Widgets/GraphZoomLevels.hpp|kZoomLevels|PENDING|inventory:1166 SETTING
+ArcaneServer/src/ServerReport.hpp|kSchemaVersion|CONSTANT|Relaunch-line rule; report format
