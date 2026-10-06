@@ -1788,6 +1788,19 @@ project "ArcaneTests"
         '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        -- The editor's bundled fonts at the editor's exe-relative paths, so
+        -- EditorFontsTest's InstallEditorFonts falls back to the real bundled
+        -- faces (mirrors ArcaneEditor's font lines).
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/jetbrainsmono"',
+        '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',

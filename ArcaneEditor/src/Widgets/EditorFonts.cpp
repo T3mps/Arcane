@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,48 @@ namespace Arcane::Editor
         EditorFontSet g_fonts;   // handles from the most recent InstallEditorFonts
         int g_installCount = 0;  // InstallEditorFonts calls since process start
 
+        // A cheap probe before ImGui sees the bytes, for the failures NO error-
+        // recovery setting can catch: AddFontFromMemoryTTF hard-IM_ASSERTs
+        // font_data_size > 100 (imgui_draw.cpp, a plain assert, not a user
+        // error), and stb_truetype reads the sfnt / TTC header with no bounds
+        // check. So a short or non-font file (e.g. a 1-byte .ttf in the user's
+        // Fonts folder) never reaches ImGui. This only rejects obvious
+        // non-fonts; LoadFontQuiet's scoped assert covers the parse failures
+        // the font loader itself detects.
+        bool LooksLikeFontFile(const std::string& path)
+        {
+            std::error_code ec;
+            const auto size = std::filesystem::file_size(std::filesystem::path(path), ec);
+            if (ec || size <= 100)
+                return false;   // missing, unreadable, or below ImGui's size floor
+            std::ifstream in(std::filesystem::path(path), std::ios::binary);
+            unsigned char h[16]{};
+            if (!in.read(reinterpret_cast<char*>(h), sizeof(h)))
+                return false;   // missing, unreadable, or shorter than the header
+            const auto tag = [&](const char* t) { return std::memcmp(h, t, 4) == 0; };
+            const bool sfnt1 = h[0] == 0x00 && h[1] == 0x01 && h[2] == 0x00 && h[3] == 0x00;
+            return sfnt1 || tag("OTTO") || tag("true") || tag("typ1") || tag("ttcf");
+        }
+
+        // AddFontFromFileTTF that NEVER asserts: a missing or unparseable file
+        // returns null. ImFontFlags_NoLoadError covers the missing-file path
+        // (ImFontAtlas::AddFontFromFileTTF); the font loader's parse errors are
+        // IM_ASSERT_USER_ERRORs, which assert while io.ConfigErrorRecoveryEnableAssert
+        // is set (its default), so that is cleared for this one call and restored.
+        // On failure ImFontAtlas::AddFont rolls the font back out of Fonts[].
+        ImFont* LoadFontQuiet(ImGuiIO& io, const std::string& path, float sizePx,
+                              ImFontConfig cfg, const ImWchar* ranges = nullptr)
+        {
+            if (!LooksLikeFontFile(path))
+                return nullptr;
+            cfg.Flags |= ImFontFlags_NoLoadError;
+            const bool assertWas = io.ConfigErrorRecoveryEnableAssert;
+            io.ConfigErrorRecoveryEnableAssert = false;
+            ImFont* font = io.Fonts->AddFontFromFileTTF(path.c_str(), sizePx, &cfg, ranges);
+            io.ConfigErrorRecoveryEnableAssert = assertWas;
+            return font;
+        }
+
         // Add one TTF at sizePx as a fresh base face, then MERGE the lucide icon range
         // into it (merge attaches to the last-added base font), so ICON_LC_* renders
         // under this face. Returns the base ImFont* (null + WARN on load failure).
@@ -49,7 +93,7 @@ namespace Arcane::Editor
             // removes the icon block from the base so the lucide merge below owns it.
             ImFontConfig baseCfg;
             baseCfg.GlyphExcludeRanges = kIconRange;
-            ImFont* face = io.Fonts->AddFontFromFileTTF(facePath.c_str(), sizePx, &baseCfg);
+            ImFont* face = LoadFontQuiet(io, facePath, sizePx, baseCfg);
             if (!face)
             {
                 ARC_WARN("Arcane Editor: failed to load font '{}'", facePath);
@@ -60,10 +104,27 @@ namespace Arcane::Editor
             cfg.MergeMode        = true;
             cfg.GlyphMinAdvanceX = sizePx;   // monospace icon cell
             cfg.GlyphOffset.y    = 3.0f * sizePx / 16.0f;   // the baseline nudge scales with the face (3 px at 16, unchanged)
-            if (!io.Fonts->AddFontFromFileTTF(lucidePath.c_str(), sizePx, &cfg, kIconRange))
+            if (!LoadFontQuiet(io, lucidePath, sizePx, cfg, kIconRange))
                 ARC_WARN("Arcane Editor: failed to merge icon font '{}' into '{}'", lucidePath, facePath);
 
             return face;
+        }
+
+        // A requested face that fails to load falls back to the bundled default at
+        // once: a persisted user font that went missing or is corrupt must not cost
+        // the editor its UI or mono face. The failed AddFont already popped itself,
+        // so the fallback takes its place in Fonts[].
+        ImFont* AddFaceOrBundled(ImGuiIO& io, const std::filesystem::path& requested,
+                                 const std::filesystem::path& bundled,
+                                 const std::string& lucidePath, float sizePx)
+        {
+            if (ImFont* face = AddFaceWithIcons(io, requested.string(), lucidePath, sizePx))
+                return face;
+            if (requested == bundled)
+                return nullptr;
+            ARC_WARN("Arcane Editor: font '{}' did not load; using the bundled '{}'",
+                     requested.string(), bundled.string());
+            return AddFaceWithIcons(io, bundled.string(), lucidePath, sizePx);
         }
     }
 
@@ -133,14 +194,15 @@ namespace Arcane::Editor
         const std::string brand =
             (dir / "data" / "font" / "aldotheapache" / "AldotheApache.ttf").string();
 
+        const EditorFontRequest bundled = DefaultEditorFontRequest(dir);
         g_fonts = EditorFontSet{};
-        g_fonts.interRegular = AddFaceWithIcons(io, r.uiFace.string(), lucide, r.sizePx);
+        g_fonts.interRegular = AddFaceOrBundled(io, r.uiFace, bundled.uiFace, lucide, r.sizePx);
         g_fonts.roboto       = AddFaceWithIcons(io, roboto, lucide, r.sizePx);
         // Mono AFTER Roboto (Fonts[0] stays the UI face), merged with lucide at the UI
         // size so ICON_LC_* work in mono rows; AddFaceWithIcons' GlyphExcludeRanges
         // keeps any PUA glyph of its own out of the icon block, as for Inter.
-        g_fonts.mono         = AddFaceWithIcons(io, r.monoFace.string(), lucide, r.sizePx);
-        g_fonts.brand        = io.Fonts->AddFontFromFileTTF(brand.c_str(), r.sizePx);
+        g_fonts.mono         = AddFaceOrBundled(io, r.monoFace, bundled.monoFace, lucide, r.sizePx);
+        g_fonts.brand        = LoadFontQuiet(io, brand, r.sizePx, ImFontConfig{});
         if (!g_fonts.brand)
             ARC_WARN("Arcane Editor: failed to load brand font '{}'", brand);
         ++g_installCount;
@@ -162,6 +224,8 @@ namespace Arcane::Editor
                 io.Fonts->RemoveFont(f);   // the NRI backend re-uploads the atlas textures (RendererHasTextures)
         return InstallEditorFonts(request);
     }
+
+    void ForgetEditorFonts() { g_fonts = EditorFontSet{}; }
 
     int EditorFontInstallCount() { return g_installCount; }
 

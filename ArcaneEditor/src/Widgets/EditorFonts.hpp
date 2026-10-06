@@ -45,11 +45,16 @@ namespace Arcane::Editor
 
     // Install on the CURRENT context: the UI face (Fonts[0]), Roboto, the mono
     // face, each with merged lucide icons, then the brand face. Before the first
-    // frame. The bundled faces resolve exe-relative.
+    // frame. The bundled faces resolve exe-relative. A requested face that is
+    // missing or unparseable never asserts: it WARNs and the bundled default
+    // (Inter / JetBrains Mono) loads in its place, so Fonts[0] stays the UI face.
     const EditorFontSet& InstallEditorFonts(const EditorFontRequest& request);
     const EditorFontSet& InstallEditorFonts(float sizePx = 16.0f);   // DefaultEditorFontRequest(exe dir) at sizePx: the boot path
     // Remove the installed set and install `request` (settings S4). OUTSIDE an ImGui frame only.
     const EditorFontSet& ReinstallEditorFonts(const EditorFontRequest& request);
+    // Drop the installed handles (GetEditorFonts() all-null again) WITHOUT touching
+    // any atlas: for whoever destroys the context that owns them, and tests.
+    void ForgetEditorFonts();
     [[nodiscard]] int EditorFontInstallCount();   // installs since process start (tests: "once")
 
     // The set installed by the most recent InstallEditorFonts call (all-null before that).
