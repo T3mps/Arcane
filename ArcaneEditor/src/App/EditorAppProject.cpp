@@ -46,6 +46,7 @@
 #include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Publish/Clear (the Build failure row)
+#include <Arcane/Host/HostSettings.hpp>   // HostBoot::ShouldReportScanProgress (the boot stage's scan throttle)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>   // NriDiagnostics::FireFault (--crash-gpu on the graph arm)
 
@@ -2593,8 +2594,7 @@ namespace Arcane::Editor
                 return m_runtime->OpenProject(path,
                     [scanDetail](std::size_t done, std::size_t total)
                     {
-                        constexpr std::size_t kStride = 32;
-                        if (done != 1 && done != total && done % kStride != 0)
+                        if (!Arcane::HostBoot::ShouldReportScanProgress(done, total))
                             return;
                         scanDetail->Set("Scanning content... " + std::to_string(done) +
                                          " / " + std::to_string(total));

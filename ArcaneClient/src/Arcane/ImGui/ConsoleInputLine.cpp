@@ -1,5 +1,7 @@
 #include <Arcane/ImGui/ConsoleInputLine.hpp>
 
+#include <Arcane/Config/ConsoleSettings.hpp>
+
 #include <imgui.h>
 
 #include <cstdio>
@@ -36,16 +38,19 @@ namespace Arcane
 
     bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry, CVarContext ctx)
     {
-        char buffer[512];
-        std::snprintf(buffer, sizeof(buffer), "%s", model.Input().c_str());
+        // console.maxLineChars (Restart): the line's capacity is latched at the
+        // first draw. One buffer serves every console; it is refilled from the
+        // model on every call, on the ImGui (main) thread.
+        static std::string buffer(std::size_t{ Settings<ConsoleSettings>().maxLineChars } + 1u, '\0');
+        std::snprintf(buffer.data(), buffer.size(), "%s", model.Input().c_str());
         LineContext lineCtx{ &model, &registry, ctx };
         const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
                                           ImGuiInputTextFlags_CallbackCompletion |
                                           ImGuiInputTextFlags_CallbackHistory;
         ImGui::SetNextItemWidth(-1.0f);
         const bool entered = ImGui::InputTextWithHint(id, "cvar or command -- Tab completes, Up/Down history",
-                                                      buffer, sizeof(buffer), flags, &ConsoleLineCallback, &lineCtx);
-        model.SetInput(buffer);
+                                                      buffer.data(), buffer.size(), flags, &ConsoleLineCallback, &lineCtx);
+        model.SetInput(buffer.c_str());
         if (!entered)
             return false;
         model.Submit(registry, ctx);

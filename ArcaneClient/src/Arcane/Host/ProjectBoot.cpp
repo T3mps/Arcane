@@ -1,4 +1,5 @@
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Host/HostSettings.hpp>   // ShouldReportScanProgress (boot.scanProgressStride)
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Input/InputActionAsset.hpp>
 
@@ -118,21 +119,20 @@ namespace Arcane::HostBoot
         // referent has to be a named local at the actual OpenProject call
         // site, not a temporary this factory would return).
         //
-        // Throttled to roughly every 32 files, plus always the first and the
+        // Throttled to every boot.scanProgressStride files (32), plus the first and the
         // final tick: IBootPresenter's contract (BootSequence.hpp) requires a
         // presenter to stay cheap and non-blocking, and BootStageDetail::Set
         // is not free (a mutex lock plus a std::string format+allocation) --
         // ScanContent's own callback fires once per file, so reporting EVERY
         // one of a content tree's files would put that cost on the worker
         // thread for a status line nothing reads faster than present()'s own
-        // ~8ms pump cadence (BootSequence.cpp) actually repaints it.
-        // LOCKSTEP: the editor's SwitchProject hand-mirrors this throttle in
-        // its switch-local project_open body (EditorAppProject.cpp) -- this
-        // helper is TU-private, so a change here must be mirrored there.
+        // boot.splashPumpMs cadence (8 ms by default) actually repaints it.
+        // The throttle itself is ShouldReportScanProgress (HostSettings.hpp,
+        // boot.scanProgressStride), which the editor's SwitchProject
+        // project_open body calls too.
         void ReportScanProgress(BootStageDetail& box, std::size_t done, std::size_t total)
         {
-            constexpr std::size_t kStride = 32;
-            if (done != 1 && done != total && done % kStride != 0)
+            if (!ShouldReportScanProgress(done, total))
                 return;
             box.Set("Scanning content... " + std::to_string(done) + " / " + std::to_string(total));
         }

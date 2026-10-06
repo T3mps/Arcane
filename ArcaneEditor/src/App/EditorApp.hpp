@@ -279,6 +279,9 @@ namespace Arcane::Editor
         };
 
         FramePump PumpFrameEvents();
+        // editor.perf.backgroundFps: when the previous frame's pump ran, so an
+        // unfocused frame can be held to the configured rate.
+        std::chrono::steady_clock::time_point m_lastFramePump{};
         void RunSceneAction(const Arcane::Editor::SceneSession::PendingRequest& req,
                             LoopState& ls);
         void ConsumeDeferredSceneAction(LoopState& ls);

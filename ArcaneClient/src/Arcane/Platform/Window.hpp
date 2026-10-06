@@ -16,6 +16,11 @@ namespace Arcane
     struct WindowDesc
     {
         std::string title = "Arcane";
+        // The host window's extent comes from render.window.* (GpuContext);
+        // these equal RenderWindowSettings{} (SweepHostTest pins it). Not read
+        // from it here: Window.hpp stays free of the settings headers, which
+        // NRI's headers cannot follow (they pull Astra's windows.h, whose
+        // wingdi ERROR macro breaks NRI's Message enum).
         uint32_t width    = 1280;
         uint32_t height   = 720;
         bool resizable    = true;
@@ -86,6 +91,7 @@ namespace Arcane
 
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
+        bool IsFocused() const;                           // holds keyboard input focus (false for a hidden window)
 
         void* NativeHandle() const;                       // HWND on Windows
         SDL_Window* SdlWindow() const { return m_window; }

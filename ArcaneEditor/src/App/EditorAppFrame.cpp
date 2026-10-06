@@ -50,6 +50,8 @@
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>
+#include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
+#include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -526,9 +528,20 @@ namespace Arcane::Editor
         }
         if (m_gpu->Win().IsMinimized())
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return FramePump::SkipFrame;
         }
+        // editor.perf.backgroundFps (0 = off, the default): an unfocused
+        // editor sleeps out the rest of its 1000 / fps ms frame. Never under
+        // --headless, whose never-shown window has no input focus.
+        const std::uint32_t backgroundFps = Arcane::Settings<Arcane::Editor::EditorPerfSettings>().backgroundFps;
+        if (backgroundFps != 0 && !m_config.headless && !m_gpu->Win().IsFocused())
+        {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - m_lastFramePump);
+            std::this_thread::sleep_for(Arcane::Editor::BackgroundFrameWait(backgroundFps, elapsed));
+        }
+        m_lastFramePump = std::chrono::steady_clock::now();
         return FramePump::Continue;
     }
 
@@ -4056,8 +4069,8 @@ namespace Arcane::Editor
             // presented, so nothing downstream should count one. The sleep
             // matches RuntimeFrame::RenderGraph's: without a presented frame
             // there is no pacing wait, and a zero-sized window would
-            // otherwise spin.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // otherwise spin. Both read app.window.minimizedSleepMs.
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return false;
         }
 

@@ -9,9 +9,11 @@
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Config/ConsoleSettings.hpp>   // console.windowWidth/windowHeight (first-open size)
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/HostSettings.hpp>       // app.window.minimizedSleepMs
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #include <Arcane/Input/InputActions.hpp>
@@ -181,7 +183,7 @@ bool PumpAndResize(FrameIo& io)
     // there is nothing to gate.
     if (eventWindow.IsMinimized())
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
         io.skipFrame = true;
         return false;
     }
@@ -354,7 +356,9 @@ void BuildHud(FrameIo& io)
         static Arcane::ConsoleModel console;
         if (g_runtimeConsoleOpen)
         {
-            ImGui::SetNextWindowSize(ImVec2(640.0f, 280.0f), ImGuiCond_FirstUseEver);
+            const Arcane::ConsoleSettings& consoleSettings = Arcane::Settings<Arcane::ConsoleSettings>();
+            ImGui::SetNextWindowSize(ImVec2(float(consoleSettings.windowWidth), float(consoleSettings.windowHeight)),
+                                     ImGuiCond_FirstUseEver);
             bool open = g_runtimeConsoleOpen;
             if (ImGui::Begin("Console##runtime", &open))
             {
@@ -755,7 +759,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         // deliberately does NOT advance -- the vehicle's own frame
         // counter did not either, and the two must stay in lockstep
         // for the command-slot recycling to be safe.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // app.window.minimizedSleepMs: the editor's skipped-frame twin reads it too.
+        std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
         return outcome;
     }
     return outcome;

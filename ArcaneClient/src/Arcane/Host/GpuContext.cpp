@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/HostSettings.hpp>   // render.window.* (Restart: read at window creation)
 #include <Arcane/Render/RenderDeviceSettings.hpp>   // render.vulkan.foreignModuleFallback
 
 #include <string>
@@ -26,8 +27,14 @@ namespace Arcane
             wd.title  = "Arcane Runtime";
             wd.vulkan = (cfg.backend == GraphicsBackend::Vulkan);
             wd.hidden = true;
+            // render.window.* (settings arc S6-24): the configured extent; its
+            // default is the load-bearing 1280x720 above.
+            const RenderWindowSettings& window = Settings<RenderWindowSettings>();
+            wd.width     = window.width;
+            wd.height    = window.height;
+            wd.resizable = window.resizable;
             // --window-size WxH (automation only, T3-D6 fix round 1): the
-            // explicit extent; unset keeps the load-bearing default above.
+            // explicit extent, over the setting.
             if (cfg.windowWidth != 0 && cfg.windowHeight != 0)
             {
                 wd.width  = cfg.windowWidth;

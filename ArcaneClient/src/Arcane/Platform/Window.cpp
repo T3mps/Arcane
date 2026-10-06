@@ -374,6 +374,12 @@ namespace Arcane
         return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) != 0;
     }
 
+    bool Window::IsFocused() const
+    {
+        if (!m_window) return false;
+        return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    }
+
     void* Window::NativeHandle() const
     {
         if (!m_window) return nullptr;

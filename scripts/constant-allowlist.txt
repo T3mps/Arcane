@@ -59,7 +59,6 @@ ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp|kUserSetProgress|CONSTANT|Wind
 ArcaneClient/src/Arcane/Host/HostConfig.hpp|kHangMainSeconds|PENDING|inventory:563 DERIVED
 ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMaxWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
 ArcaneClient/src/Arcane/Host/HostConfig.hpp|kMinWindowSide|CONSTANT|Flag validation bounds; they become the range metadata of render.window.*, not settings
-ArcaneClient/src/Arcane/Host/ProjectBoot.cpp|kStride|PENDING|inventory:581 SETTING
 ArcaneClient/src/Arcane/Host/SettleBound.hpp|kSettleIntervalMs|CONSTANT|Test-only verification harness
 ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kOldestSupportedSchemaVersion|CONSTANT|Report format
 ArcaneClient/src/Arcane/Host/VerifyReport.hpp|kSchemaVersion|CONSTANT|Report format
@@ -344,7 +343,6 @@ ArcaneEditor/src/App/EditorAppFrame.cpp|kScW|CONSTANT|SDL's table; the bindings 
 ArcaneEditor/src/App/EditorAppFrame.cpp|kScX|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
 ArcaneEditor/src/App/EditorAppFrame.cpp|kScY|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
 ArcaneEditor/src/App/EditorAppFrame.cpp|kScZ|CONSTANT|SDL's table; the bindings become `editor.keys.*` cvars, the codes do not
-ArcaneEditor/src/App/EditorAppProject.cpp|kStride|PENDING|inventory:581 SETTING
 ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp|kIndent|PENDING|inventory:1321 DERIVED
 ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp|kMapsColumnWidth|PENDING|inventory:1320 DERIVED
 ArcaneEditor/src/Documents/MaterialSpherePreview.hpp|kMaterialPreviewSphereId|CONSTANT|fixed preview GUID
