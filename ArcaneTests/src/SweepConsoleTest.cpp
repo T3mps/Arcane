@@ -7,9 +7,14 @@
 #include "Helpers/SettingsSweep.hpp"
 #include <Arcane/Config/ConsoleModel.hpp>
 #include "Settings/EditorConsoleSettings.hpp"
+#include "Settings/SettingsEdit.hpp"
+#include "Settings/SettingsHost.hpp"
 
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 
+#include <cstdlib>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -83,4 +88,58 @@ TEST_CASE("sweep: editor.console / editor.recents register as per-machine editor
     REQUIRE(maxLines.has_value());
     CHECK(maxLines->audience == Audience::Game);
     CHECK(maxLines->scope == SettingScope::PreferencesProject);
+}
+
+TEST_CASE("sweep: a Console toolbar toggle replaces the loaded User record and is queued for the archive",
+          "[sweep][console]")
+{
+    // The archive folders are redirected so a flush never touches the real
+    // per-user Editor/Config (as ThemePageTest does).
+    const std::filesystem::path local = std::filesystem::temp_directory_path() / "s6-41-console-toggle-archive";
+    std::filesystem::remove_all(local);
+    std::filesystem::create_directories(local);
+    std::wstring saved;
+    bool had = false;
+    if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
+    _wputenv_s(L"LOCALAPPDATA", local.wstring().c_str());
+    Editor::FlushSettingsArchives();   // whatever an earlier test left queued lands in the scratch folder
+    REQUIRE_FALSE(Editor::SettingsHostArchivePending());
+
+    CVarRegistry& reg = CVarRegistry::Get();
+    const std::string name(Editor::kConsoleWrapCVar);
+    // The User file's loader (EarlyConfig ApplyCVarDirectory(..., SetBy::User, "user")) put a record here.
+    REQUIRE(Editor::RungSource(SetBy::User) == "user");
+    REQUIRE(reg.SetRung(name, SetBy::User, CVarValue::Bool(true), "user"));
+    reg.PublishImmediate();
+
+    Editor::SetConsoleToggle(Editor::kConsoleWrapCVar, false);
+    reg.PublishImmediate();
+
+    const std::optional<CVarValue> rung = reg.RungValue(name, SetBy::User);
+    REQUIRE(rung.has_value());
+    CHECK_FALSE(rung->AsBool());
+    CHECK_FALSE(Settings<Editor::EditorConsoleSettings>().wrap);
+    // Replaced, not stacked: one User record, tagged as the loader tags it.
+    const std::optional<CVarExplain> ex = reg.Explain(name);
+    REQUIRE(ex.has_value());
+    int userRecords = 0;
+    for (const CVarHistoryRecord& rec : ex->history)
+        if (rec.by == SetBy::User)
+        {
+            ++userRecords;
+            CHECK(rec.module == "user");
+        }
+    CHECK(userRecords == 1);
+    // Queued for the debounced / exit-time archive write (FlushSettingsArchives).
+    CHECK(Editor::SettingsHostArchivePending());
+
+    // Cleanup: the User rung goes back to empty and the queue drains (no project
+    // is open in the test host, so the User rung has no folder to write).
+    CHECK(reg.RevertRung(name, SetBy::User));
+    reg.PublishImmediate();
+    CHECK(Settings<Editor::EditorConsoleSettings>().wrap);
+    Editor::FlushSettingsArchives();
+    CHECK_FALSE(Editor::SettingsHostArchivePending());
+    _wputenv_s(L"LOCALAPPDATA", had ? saved.c_str() : L"");
+    std::filesystem::remove_all(local);
 }

@@ -1,5 +1,8 @@
 #include "Settings/EditorConsoleSettings.hpp"
 
+#include "Settings/SettingsEdit.hpp"   // RungSource
+#include "Settings/SettingsHost.hpp"   // NoteSettingEdited
+
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Reflection.hpp>
@@ -70,7 +73,15 @@ namespace Arcane::Editor
 
     void SetConsoleToggle(std::string_view cvar, bool value)
     {
+        // As SetViewportPref: tagged as the User file's own loader, so the click
+        // replaces the record that file produced rather than stacking a second
+        // User record, and queued for the archive so the choice outlives the
+        // session (FlushSettingsArchives writes dirty-marked names only).
+        // RefusedWeaker still holds the User record (a stronger rung wins for
+        // now): it is archived all the same.
         CVarRegistry& reg = CVarRegistry::Get();
-        (void)reg.Set(reg.Find(cvar), CVarValue::Bool(value), SetBy::User, "editor");
+        const SetResult r = reg.Set(reg.Find(cvar), CVarValue::Bool(value), SetBy::User, RungSource(SetBy::User));
+        if (r == SetResult::Applied || r == SetResult::RefusedWeaker)
+            NoteSettingEdited(SetBy::User, std::string(cvar));
     }
 }
