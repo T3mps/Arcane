@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/UiSettings.hpp>   // ui.copyFlashSeconds -- the Copy All flash
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
@@ -1220,7 +1221,7 @@ namespace Arcane::Editor
         // empty console (or a filter that hides everything) writes nothing to
         // the clipboard and must not claim otherwise.
         if (wantCopyAll && copyRows(false))
-            ui.copyFlashUntil = ImGui::GetTime() + 0.75;
+            ui.copyFlashUntil = ImGui::GetTime() + Arcane::Settings<Arcane::UiSettings>().copyFlashSeconds;
 
         // Selection ids are entry seqs, not row indices: the ring evicts from
         // the front and the filter hides rows, so an index would name a

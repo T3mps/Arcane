@@ -100,6 +100,12 @@ inline constexpr bool ArcaneReflectTypeAttr_Settings = false;
 #define ARC_REFLECT_TYPE(Type)                    ASTRA_REFLECT_TYPE(Type)
 #define ARC_REFLECT_FIELD(Type, FieldName) \
     ; ::Arcane::Detail::ReflectField<ArcaneReflectTypeAttr_Settings, Type, decltype(Type::FieldName), &Type::FieldName>(_astra_builder_, #FieldName)
+// The field reflects under `NameLit` (a string literal) instead of its member
+// name: for a frozen cvar name that cannot be the member's own -- a C++ keyword
+// (debug.physics.color.static is the member staticBody), or a name an inheriting
+// struct would see twice (debug.physics.trace.lineThickness is traceLineThickness).
+#define ARC_REFLECT_FIELD_NAMED(Type, FieldName, NameLit) \
+    ; ::Arcane::Detail::ReflectField<ArcaneReflectTypeAttr_Settings, Type, decltype(Type::FieldName), &Type::FieldName>(_astra_builder_, NameLit)
 #define ARC_REFLECT_ATTR(AttrType, ...)           .Attr<::Arcane::Attr::AttrType>(__VA_ARGS__)
 #define ARC_REFLECT_TYPE_ATTR(AttrType, ...) \
     ; _astra_builder_.TypeAttr<::Arcane::Attr::AttrType>(__VA_ARGS__) \

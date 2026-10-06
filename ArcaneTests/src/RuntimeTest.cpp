@@ -217,7 +217,7 @@ TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[
 TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSettings override", "[runtime][physics]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
-    CHECK(rt.ResolvedGravity().y == Catch::Approx(-9.81f));      // no project open: PhysicsConfig's default (+Y up, F4)
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(-9.81f));      // no project open: physics.gravity default (+Y up, F4)
 
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity root  = reg.CreateEntity();

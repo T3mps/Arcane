@@ -5,6 +5,7 @@
 #include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
 #include <algorithm>   // std::find -- SanitizeRelaunchLine's strip-set lookups
 #include <cstdio>
+#include <format>
 #include <string_view>
 namespace Arcane
 {
@@ -85,7 +86,7 @@ namespace Arcane
         cli.Option("backend", "dx12",        "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
-        cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
+        cli.Flag  ("perf",                   "log per-phase ms (sets diagnostics.perfLog; interval: diagnostics.perfLogIntervalFrames)");
         cli.Option("plugin",  "",            "game DLL to host (empty = the project's gameModule; a runtime with nothing to host refuses boot)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
@@ -93,7 +94,8 @@ namespace Arcane
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
         cli.Flag  ("headless",           "render with no window shown and no swapchain; "
                                          "pairs with --frames/--probe/--report");
-        cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
+        // 17 significant digits round-trip the default step's double exactly.
+        cli.Option("fixed-dt", std::format("{:.17g}", 1.0 / SimSettings{}.fixedHz), "seconds per simulated frame "
                                          "(--headless only)").Type(CliType::Double);
         cli.Option("fixed-time", "", "pin the absolute scene clock to this many seconds, so "
                                      "Time is independent of the frame count (--headless only; "

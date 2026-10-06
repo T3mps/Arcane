@@ -73,7 +73,7 @@ namespace
 }
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
-    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+    : m_config(std::move(cfg)), m_splash(splash),
       m_splashPresenter(m_splash) {}
 
 // ---- Boot stages (Task 8: RuntimeApp::Init folded into RuntimeStages) ----

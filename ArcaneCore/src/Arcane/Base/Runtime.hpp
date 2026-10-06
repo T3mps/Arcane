@@ -368,12 +368,11 @@ namespace Arcane
         // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
-        // Scene-root PhysicsSettings when present, else the project's physics
-        // block, else PhysicsConfig's default (0, -9.81; +Y up, F4).
-        // Layered on purpose, unlike the engine-wide settings structs: gravity
-        // is authored content, so the built-in default yields to the project
-        // (the manifest's physics block; the `physics.gravity` setting after
-        // S6-7) and the project to the per-scene PhysicsSettings component.
+        // The scene-root PhysicsSettings component when present, else the
+        // `physics.gravity` setting (its project rung, else
+        // its default (0, -9.81; +Y up, F4)). Layered on purpose: gravity is
+        // authored content, so the built-in default yields to the project and
+        // the project to the per-scene PhysicsSettings component.
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:

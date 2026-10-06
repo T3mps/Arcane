@@ -22,7 +22,7 @@
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
-#include <Arcane/Sim/SimSettings.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 
 #include <imgui.h>
 #include <cstdio>
@@ -286,11 +286,11 @@ void AdvanceSim(FrameIo& io)
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - io.simPrev).count();
             io.simPrev = now;
-            const double maxFrameDelta = Arcane::Settings<Arcane::SimSettings>().maxFrameDeltaSeconds;   // settings arc S2: shared with editor Play
-            if (simDt > maxFrameDelta) simDt = maxFrameDelta;
+            simDt = Arcane::ClampFrameDelta(simDt);   // sim.maxFrameDeltaSeconds: the one clamp editor Play shares
         }
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->EnsurePhysics();   // engine-owned physics (spec s4.3): mint/refresh the world before the step
+        Arcane::ApplySimStepCap(io.runtime->Loop());   // sim.maxStepsPerFrame (Live)
         io.runtime->Loop().Advance(simDt,
             [&](double dt)          { io.runtime->BeginGameInputFixedStep(); io.plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ io.plugin->UpdateAll(dt, a); });

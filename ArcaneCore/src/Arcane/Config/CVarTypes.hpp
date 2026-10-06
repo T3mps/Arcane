@@ -52,6 +52,7 @@ namespace Arcane
         ReloadShaders       = 1u << 11,
         ReloadMaterials     = 1u << 12,
         Deterministic       = 1u << 13,
+        CommandLineOnly     = 1u << 14,  // only the Default, CommandLine and Code rungs may set it (inventory R2: evidence-capture switches)
     };
 
     constexpr CVarFlags operator|(CVarFlags a, CVarFlags b) noexcept

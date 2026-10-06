@@ -46,7 +46,7 @@ TEST_CASE("ReadTextureMetaSettingsDisplay defaults on a missing or texture-less 
 
     // Missing file entirely.
     const auto missing = dir / "nope.png.meta";
-    const AssetPipeline::TextureMetaSettings none = ReadTextureMetaSettingsDisplay(missing);
+    const AssetPipeline::TextureMetaSettings none = ReadTextureMetaSettingsDisplay(missing, {});
     CHECK(none.format == AssetPipeline::TextureMetaSettings::Format::Auto);
     CHECK(none.srgb == true);
     CHECK(none.generateMips == true);
@@ -63,7 +63,7 @@ TEST_CASE("ReadTextureMetaSettingsDisplay defaults on a missing or texture-less 
         std::ofstream out(plain, std::ios::binary);
         out << j.dump(2);
     }
-    const AssetPipeline::TextureMetaSettings fromPlain = ReadTextureMetaSettingsDisplay(plain);
+    const AssetPipeline::TextureMetaSettings fromPlain = ReadTextureMetaSettingsDisplay(plain, {});
     CHECK(fromPlain.format == AssetPipeline::TextureMetaSettings::Format::Auto);
     CHECK(fromPlain.srgb == true);
     CHECK(fromPlain.generateMips == true);
@@ -105,7 +105,7 @@ TEST_CASE("WriteTextureMetaSettingsMerged preserves guid/version/extra fields", 
     CHECK(raw["texture"]["maxSize"] == 512);
 
     // Round-trips back through the reader too.
-    const AssetPipeline::TextureMetaSettings back = ReadTextureMetaSettingsDisplay(meta);
+    const AssetPipeline::TextureMetaSettings back = ReadTextureMetaSettingsDisplay(meta, {});
     CHECK(back.format == AssetPipeline::TextureMetaSettings::Format::Bc7);
     CHECK(back.srgb == false);
     CHECK(back.generateMips == false);

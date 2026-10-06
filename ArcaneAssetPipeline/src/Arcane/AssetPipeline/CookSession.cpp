@@ -317,7 +317,8 @@ namespace Arcane::AssetPipeline
                 {
                 case CookKind::Texture:
                 {
-                    textureSettings = TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                    textureSettings = TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey),
+                                                                        m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, textureSettings, kTextureImporterVersion);
                     break;
                 }
@@ -520,7 +521,7 @@ namespace Arcane::AssetPipeline
                 case CookKind::Texture:
                 {
                     const TextureMetaSettings settings =
-                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey), m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, settings, kTextureImporterVersion);
                     break;
                 }
@@ -584,7 +585,7 @@ namespace Arcane::AssetPipeline
                 case CookKind::Texture:
                 {
                     const TextureMetaSettings settings =
-                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey), m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, settings, kTextureImporterVersion);
                     break;
                 }

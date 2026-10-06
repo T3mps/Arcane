@@ -9,7 +9,9 @@
 #include "FileText.hpp"   // ArcaneCrashReporter/src: Slurp
 #include "LogTail.hpp"    // ResolveLogPath / ReadLogTail
 
+#include <Arcane/Base/DiagnosticsSettings.hpp>   // diagnostics.logTailLines -- one tail length with the reporter
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/UiSettings.hpp>             // ui.copyFlashSeconds -- one flash with the reporter
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // Diag::ReadGpuDump / ParseGpuDump
 
@@ -76,7 +78,7 @@ namespace Arcane::Editor
         args.product      = R::DisplayProduct(m_envelope.appName);
         args.envelopePath = m_path.string();
         m_view = R::BuildReportView(m_envelope, args, m_symbolized ? &m_symbolized->sym : nullptr,
-                                    R::ReadLogTail(stem, livePath, 200));
+                                    R::ReadLogTail(stem, livePath, Arcane::Settings<Arcane::DiagnosticsSettings>().logTailLines));
 
         m_frameFileExists.assign(m_view.threads.size(), {});
         for (std::size_t t = 0; t < m_view.threads.size(); ++t)
@@ -199,7 +201,7 @@ namespace Arcane::Editor
         if (ImGui::Button(copyLabel.c_str(), ImVec2(copyW, 0.0f)))
         {
             ImGui::SetClipboardText(R::DetailsText(v, m_threadIndex).c_str());
-            m_copyFlashUntil = ImGui::GetTime() + 0.75;
+            m_copyFlashUntil = ImGui::GetTime() + Arcane::Settings<Arcane::UiSettings>().copyFlashSeconds;
         }
         const auto shellOpen = [](const std::filesystem::path& p)
         {

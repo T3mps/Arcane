@@ -8,6 +8,8 @@
 #include <Arcane/Project/Project.hpp>
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace Arcane::HostBoot
 {
@@ -27,6 +29,8 @@ namespace Arcane::HostBoot
                 const Paths::Config projectPaths = Paths::ForProject(root);
                 ApplyCVarDirectory(cvars, Paths::Resolve(Paths::Location::ProjectConfig, projectPaths),
                                    SetBy::Project, "project");
+                if (const auto projectManifest = ProjectManifest::LoadFile(*manifest))
+                    ApplyLegacyManifestSettings(cvars, *projectManifest);
                 if (editor)
                 {
                     const std::filesystem::path editorUser = Paths::Get(Paths::Location::EditorUserDir);
@@ -37,6 +41,14 @@ namespace Arcane::HostBoot
                                    SetBy::User, "user");
             }
         }
+        // --perf is diagnostics.perfLog on the CommandLine rung (settings arc
+        // S6-2), ahead of the --set list so an explicit --set still wins. It is
+        // the host's own flag, not a free-form --set, so it applies in the
+        // Editor context in every build: in Dist `ctx` is LocalHost, whose
+        // table refuses a Game setting, and perf logging stays usable there
+        // (user decision 2026-10-06). The --set list keeps `ctx`.
+        if (cfg.perf)
+            ApplyCVarCommandLine(cvars, { "diagnostics.perfLog=1" }, CVarContext::Editor);
         ApplyCVarCommandLine(cvars, cfg.cvarSets, ctx);
         cvars.PublishImmediate();
     }

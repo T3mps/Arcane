@@ -56,7 +56,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // Settings arc S6-6: the project's own assets.import.texture.* (its Project
+    // rung, <project>/Config) is what a .meta field left out resolves to -- the same
+    // values the editor cooks with, so both produce the same cook keys.
     CookSession session;
+    session.SetTextureDefaults(ApplyProjectCookConfig(projectDir));
     if (r.Flag("verbose"))
         session.SetProgress(&PrintLine);
 

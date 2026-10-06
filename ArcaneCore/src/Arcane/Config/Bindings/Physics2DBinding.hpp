@@ -6,9 +6,9 @@
 //   already replaces the world.
 // - Every field except parallelSolver is Deterministic: changing one changes
 //   replays, the [trajectory] fixture and goldens.
-// - Gravity is DERIVED (Runtime::ResolvedGravity: the .arcproj block, then the
-//   scene's PhysicsSettings component; R3 moves the former to
-//   Config/physics.json in S6), so ToWorldDef leaves it alone.
+// - Runtime::ResolvedGravity reads physics.gravity, then applies the scene's
+//   PhysicsSettings component override. ToWorldDef leaves gravity alone so
+//   that one resolver remains the path into a newly minted world.
 // - The literals are WorldDef's defaults; SettingsBindingsTest pins equality.
 
 #include <Arcane/Config/Settings.hpp>
@@ -31,6 +31,7 @@ namespace Arcane
 
     struct Physics2DWorldSettings
     {
+        CVarVec2            gravity{0.0f, -9.81f};
         Physics2DBroadphase broadphase             = Physics2DBroadphase::Tree;
         float               hashCellSize           = 1.0f;
         std::uint32_t       substepCount           = 4u;
@@ -45,6 +46,10 @@ namespace Arcane
 
     ARC_REFLECT_TYPE(Physics2DWorldSettings)
         ARC_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, gravity)
+            ARC_REFLECT_ATTR(Range, -1000.0, 1000.0)
+            ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Project gravity in metres per second squared (+Y is up); a scene-root PhysicsSettings component overrides it.")
         ARC_REFLECT_FIELD(Physics2DWorldSettings, broadphase)
             ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "2D broadphase: dynamic tree, spatial hash or sweep-and-prune.")

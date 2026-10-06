@@ -8,7 +8,10 @@
 #include <string>
 #include <vector>
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Base/DiagnosticsSettingsData.hpp>   // kHangMainSeconds derives from hangSeconds
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
+#include <Arcane/Sim/SimSettingsData.hpp>   // fixedDtSeconds' default is one sim.fixedHz step
 namespace Arcane
 {
     struct ARC_API HostConfig
@@ -70,7 +73,9 @@ namespace Arcane
         // host loop is otherwise wall-clock (RuntimeApp.cpp:331), which makes
         // `--frames N` advance the sim by however long those N frames happened to
         // take -- different on a loaded CI box than an idle desk.
-        double          fixedDtSeconds = 1.0 / 60.0;
+        // Defaults to one sim.fixedHz step at its declared default (settings
+        // arc S6-8): the same double as the old 1.0 / 60.0 literal.
+        double          fixedDtSeconds = 1.0 / SimSettings{}.fixedHz;
 
         // Whether --fixed-dt was actually typed on the command line, as opposed
         // to fixedDtSeconds simply holding its registered default. Needed
@@ -382,9 +387,11 @@ namespace Arcane
 
 #if !defined(ARC_BUILD_DIST)
     // DEV ONLY (crash window plan 2, D10): the duration --hang-main blocks the
-    // main thread for. 15 s clears Diagnostics::Config::hangSeconds' 12 s
-    // default by 3 s, so the watchdog's hang report is reliably provoked.
-    inline constexpr std::uint32_t kHangMainSeconds = 15;
+    // main thread for. DERIVED (settings arc S6-2): diagnostics.hangSeconds'
+    // default (12 s) plus a 3 s margin, so the watchdog's hang report is
+    // reliably provoked.
+    ARC_CONSTANT("the --hang-main margin over diagnostics.hangSeconds' default")
+    inline constexpr std::uint32_t kHangMainSeconds = DiagnosticsSettings{}.hangSeconds + 3u;
 #endif
 
     // The RELAUNCH line a host hands to Diagnostics::Config::commandLine (crash

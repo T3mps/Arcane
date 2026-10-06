@@ -14,6 +14,7 @@
 
 #include <Arcane/Base/Log.hpp>              // ARC_WARN (degenerate-basis fallback, Task 7/F2a)
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView: render.ortho2D.depthRange (S6-9)
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -105,8 +106,9 @@ namespace Arcane
         // half-height spans half the viewport, which is what makes the framing
         // resolution-independent (F4 plan 1 T3: the ViewTransform replaces the
         // zoom/offset pair; its AsAffine2D() recovers the same px-per-metre in X
-        // and the NEGATED one in Y -- +Y up on a y-down canvas).
-        v.view = ViewTransform::Orthographic(center, halfH, viewport);
+        // and the NEGATED one in Y -- +Y up on a y-down canvas). The depth slab
+        // is render.ortho2D.depthRange.
+        v.view = Ortho2DView(center, halfH, viewport);
         return v;
     }
 

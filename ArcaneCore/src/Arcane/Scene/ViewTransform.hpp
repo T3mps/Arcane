@@ -126,8 +126,10 @@ namespace Arcane
             return a;
         }
 
+        // The depth slab is required (settings arc S6-9): 2D views take it from
+        // render.ortho2D.depthRange through Ortho2DView (RenderViewSettings.hpp).
         [[nodiscard]] static ViewTransform Orthographic(glm::vec2 center, float halfHeight, glm::uvec2 viewport,
-                                                        float nearZ = -1000.0f, float farZ = 1000.0f) noexcept
+                                                        float nearZ, float farZ) noexcept
         {
             ViewTransform v;
             v.viewport = viewport;

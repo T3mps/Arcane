@@ -18,8 +18,11 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile (the openOptions wiring test needs a REAL .arcdiag)
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
+#include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 
@@ -297,28 +300,32 @@ TEST_CASE("RuntimeStages' project_open .run() reuses CoreStages' attached detail
     splash.Close();
 }
 
-TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before OpenProject, "
+TEST_CASE("RuntimeStages' project_open .run() uses early app.splash.showProgress before OpenProject, "
           "even when OpenProject itself fails", "[boot][project]")
 {
-    // HISTORY: a manifest ABI mismatch used to make Runtime::OpenProject fail,
-    // and this test proved the PEEK had already set showProgress by then. The
-    // mismatch no longer fails the open (the plugin gate owns ABI refusal;
-    // data is ABI-agnostic), so the failed-open half of the property is
-    // extinct: any manifest the peek can parse, OpenProject can now open.
-    // What remains pinned here: the stage still runs the peek path without
-    // error on a stale-ABI manifest, SUCCEEDS, and both the peek and the
-    // authoritative post-open re-set agree on showProgress.
-    const auto dir = TempProjectDir("peek_abi_mismatch");
-    std::ofstream(dir / "Bad.arcproj") <<
+    // EarlyConfig reads the legacy block into the Project rung before Runtime
+    // and the splash exist. Remove the manifest afterward so OpenProject must
+    // fail: ShowProgress can then only be true if the stage consumed that
+    // already-published app.splash setting before it attempted the open.
+    const auto dir = TempProjectDir("early_splash_open_failure");
+    const auto manifest = dir / "Bad.arcproj";
+    std::ofstream(manifest) <<
         R"({"formatVersion":1,"name":"Bad","engine":{"abi":9999},)"
         R"("splash":{"showProgress":true}})";
+
+    const std::string projectPath = dir.string();
+    Arcane::HostConfig config;
+    config.projectPath = projectPath;
+    Arcane::HostBoot::ApplyEarlyConfigRungs(config, Arcane::CVarContext::LocalHost, false);
+    std::error_code ec;
+    std::filesystem::remove(manifest, ec);
+    REQUIRE_FALSE(ec);
 
     Arcane::Runtime rt(Arcane::Test::Process());
     Arcane::BootSplashWindow splash("");
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime = &rt;
     ctx.splash  = &splash;
-    const std::string projectPath = dir.string();
     ctx.projectPath = projectPath.c_str();
     ctx.moduleName  = "Test";
 
@@ -326,11 +333,13 @@ TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before O
     const Arcane::BootStage* stage = FindStage(stages, "project_open");
     REQUIRE(stage != nullptr);
 
-    CHECK(stage->run());                     // stale ABI opens (warn, not refuse)
-    CHECK(rt.CurrentProject() != nullptr);
-    CHECK(splash.ShowProgress());            // peek + post-open re-set agree
+    CHECK_FALSE(stage->run());
+    CHECK(rt.CurrentProject() == nullptr);
+    CHECK(splash.ShowProgress());
 
     splash.Close();
+    Arcane::CVarRegistry::Get().RevertLayer(Arcane::SetBy::Project);
+    Arcane::CVarRegistry::Get().PublishImmediate();
 }
 
 // ---- ProjectOpenOptions: the verify-run diag:// opt-out ---------------------

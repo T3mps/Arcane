@@ -312,10 +312,17 @@ namespace Arcane
             schedulers = std::make_unique<SystemSchedulers>(sched);
             // sim.fixedHz (settings arc S2, NextWorld): this Runtime's step,
             // read once. InstallEngineSystems and PhysicsEditPass read loopCfg.
-            loopCfg.fixedHz = Settings<SimSettings>().fixedHz;
+            // Restore/ResetRegistry REBIND this loop, so a changed fixedHz
+            // waits for the next Runtime. sim.maxStepsPerFrame (S6-8) is Live:
+            // read here for the first frame, then each frame by the hosts
+            // (ApplySimStepCap).
+            loopCfg.fixedHz          = Settings<SimSettings>().fixedHz;
+            loopCfg.maxStepsPerFrame = Settings<SimSettings>().maxStepsPerFrame;
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
-            assets = Assets::Create();
+            // assets.cache.byteBudget (Restart): read once, here, after the
+            // early config rungs.
+            assets = Assets::Create(AssetsDesc{ .byteBudget = Settings<AssetsCacheSettings>().byteBudget });
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
@@ -545,9 +552,8 @@ namespace Arcane
 
     glm::vec2 Runtime::ResolvedGravity() const
     {
-        glm::vec2 g = ProjectManifest::PhysicsConfig{}.gravity;
-        if (m_impl->project)
-            g = m_impl->project->Manifest().physics.gravity;
+        const CVarVec2 p = Settings<Physics2DWorldSettings>().gravity;
+        glm::vec2 g{p.x, p.y};
         if (const SceneRoot* sr = m_impl->registry->GetResource<SceneRoot>())
             if (const PhysicsSettings* ps = std::as_const(*m_impl->registry).GetComponent<PhysicsSettings>(sr->entity))
                 g = ps->gravity;
@@ -781,7 +787,14 @@ namespace Arcane
         cvars.RevertLayer(SetBy::EditorUser);
         const LayerSources layers = CVarLayerSources();
         for (const CVarLayerDir& layer : layers.dirs)
+        {
             ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
+            // A shipped/read-only legacy manifest could not be rewritten.
+            // Its named values retain migration's merge-patch precedence over
+            // an older Config key, then EditorUser/User/--set may still win.
+            if (layer.by == SetBy::Project && !m_impl->project->Manifest().legacySettings.empty())
+                ApplyLegacyManifestSettings(cvars, m_impl->project->Manifest());
+        }
         cvars.Publish();
         // Unknown keys and type mismatches in any rung's files go to the
         // Problems panel (settings spec s4.8, s12); the whole set is replaced.

@@ -81,6 +81,7 @@
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
 #include <Arcane/Scene/ViewTransform.hpp>         // Orthographic -- the world-space batch case (3b)
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 // Extensions/NRIHelper.h: HelperInterface::UploadData, used by the four-cube
 // bindless proof's own MakeSolidTexture (mirrors MeshNode::CreateWhiteTexel's
@@ -434,7 +435,7 @@ namespace
         // without one). Pixel = (80 + (x + 4) * 10, 48 - (y - 0.4) * 10).
         constexpr glm::vec2 kCentre(-4.0f, 0.4f);
         const Arcane::ViewTransform view =
-            Arcane::ViewTransform::Orthographic(kCentre, 4.8f, glm::uvec2(kW, kH));
+            Arcane::Ortho2DView(kCentre, 4.8f, glm::uvec2(kW, kH));
 
         auto batcher = Arcane::Batcher2D::Create();
         REQUIRE(batcher != nullptr);
@@ -526,7 +527,7 @@ namespace
     // (40, kH - 24).
     Arcane::ViewTransform PixelIdentityView()
     {
-        return Arcane::ViewTransform::Orthographic(glm::vec2(kW * 0.5f, kH * 0.5f), kH * 0.5f, { kW, kH });
+        return Arcane::Ortho2DView(glm::vec2(kW * 0.5f, kH * 0.5f), kH * 0.5f, { kW, kH });
     }
 
     Arcane::PickDrawable WorldQuadAtPixel(glm::vec2 pixelCentre, glm::vec2 halfPx)

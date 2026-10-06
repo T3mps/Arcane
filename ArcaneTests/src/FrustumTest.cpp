@@ -1,5 +1,6 @@
 #include <Arcane/Scene/Frustum.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -15,7 +16,7 @@ namespace
     }
     Arcane::ViewTransform OrthoView()
     {
-        return Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 5.0f, glm::uvec2{ 800, 600 });
+        return Arcane::Ortho2DView(glm::vec2(0.0f), 5.0f, glm::uvec2{ 800, 600 });
     }
 }
 

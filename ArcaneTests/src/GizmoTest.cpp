@@ -10,6 +10,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Scene/Components.hpp>     // Transform::ToMatrix -- pins ComposeTRS against it
 #include <Arcane/Scene/ViewTransform.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 using Catch::Matchers::WithinAbs;
 using namespace Arcane;
@@ -19,7 +20,7 @@ namespace
     constexpr float kPi = 3.14159265358979f;
     // The 2D view: orthographic, centred on the origin, 800x600 at 100 px/m
     // (halfH = 3 m). world (x, y) -> pixel (400 + 100x, 300 - 100y).
-    ViewTransform Ortho() { return ViewTransform::Orthographic({0.0f, 0.0f}, 3.0f, {800u, 600u}); }
+    ViewTransform Ortho() { return Ortho2DView({0.0f, 0.0f}, 3.0f, {800u, 600u}); }
     // A perspective view on the same origin from +Z, 60 deg fov.
     ViewTransform Persp() { return ViewTransform::Perspective({0.0f, 0.0f, 6.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 60.0f, {800u, 600u}, 0.1f, 100.0f); }
     // An oblique perspective: above and to the side, so no world axis is edge-on.

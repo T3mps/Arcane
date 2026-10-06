@@ -484,6 +484,31 @@ TEST_CASE("SpriteDocument page: a Pixels Per Meter drag is one step", "[editor][
     CHECK_FALSE(fx.stack.CanUndo());
 }
 
+// S6-5 fix round 1: the row's range is assets.sprite.defaultPixelsPerUnit's
+// declared one ([1, 10000]), so a sprite seeded above the old 4096 cap is
+// re-editable in place. Under the old literal Range(1, 4096) a leftward drag
+// from 5000 snaps to 4096 (ImGui clamps a moved value to max); now it moves
+// by the drag alone.
+TEST_CASE("SpriteDocument page: a Pixels Per Meter above 4096 drags without snapping to a cap", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    Arcane::SpriteAssetData d = Fixture();
+    d.ppu = 5000.0f;
+    SpritePageUi h(s, d);
+    h.Frame(); h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x - 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    CHECK(h.doc.Data().ppu < 5000.0f);   // the drag moved it
+    CHECK(h.doc.Data().ppu > 4096.0f);   // and no 4096 cap caught it
+    REQUIRE(fx.stack.CanUndo());
+    fx.stack.Undo();
+    CHECK(h.doc.Data().ppu == 5000.0f);
+}
+
 // The grouped VecRow bracket (closed by EndAfterRow) is its own path, apart
 // from the FloatRow one above: a Source Size drag is one step too (s5.4
 // "each drag is one step"). A 2-box group's probed centre is the 0|1 gap, so

@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
@@ -83,7 +84,10 @@ int main(int argc, char** argv)
     Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CommandLineCVarContext(),
                                             /*editor*/ false);
     {
-        Arcane::Diagnostics::Config diag;
+        // The tunables are diagnostics.* (settings arc S6-2), read after the
+        // early rungs above so a project, user or --set value reaches Install.
+        Arcane::Diagnostics::Config diag =
+            Arcane::Diagnostics::ConfigFromSettings(Arcane::Settings<Arcane::DiagnosticsSettings>());
         diag.appName     = "ArcaneRuntime";
         diag.productName = ProductNameFor(parsed.config->projectPath);
         diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window

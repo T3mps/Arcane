@@ -1,6 +1,7 @@
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // the DeltaTime fallback reads sim.fixedHz
 
 #include <imgui.h>
 
@@ -57,7 +58,8 @@ namespace Arcane
                 ImGuiIO& io = ImGui::GetIO();
                 io.DisplaySize = ImVec2(m_input.displaySize.x <= 0.0f ? 1.0f : m_input.displaySize.x,
                                         m_input.displaySize.y <= 0.0f ? 1.0f : m_input.displaySize.y);
-                io.DeltaTime = m_input.deltaTime > 0.0f ? m_input.deltaTime : 1.0f / 60.0f;
+                io.DeltaTime = m_input.deltaTime > 0.0f ? m_input.deltaTime
+                                                        : 1.0f / static_cast<float>(Settings<SimSettings>().fixedHz);   // one sim step
                 if (m_input.hasInput)
                 {
                     io.AddMousePosEvent(m_input.mousePos.x, m_input.mousePos.y);

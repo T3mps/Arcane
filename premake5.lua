@@ -241,6 +241,8 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.glm}",            -- F2c Task 7: MeshImporter's bake math (node-transform
                                          -- composition, inverse-transpose normals, winding-flip
                                          -- cross/dot). Header-only -- no link.
+        "%{IncludeDir.Astra}",          -- settings arc S6-6: TextureMetaSettings is a reflected settings struct
+        "%{IncludeDir.Mosaic}",         -- ...and Astra's platform layer
     }
 
     defines {
@@ -304,6 +306,8 @@ project "arccook"
         -- CookSession.hpp pulls in TextureMetaSettings.hpp (a public
         -- ArcaneAssetPipeline header), which needs <Json.hpp>.
         "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.Astra}",      -- settings arc S6-6: TextureMetaSettings.hpp (reflected settings struct)
+        "%{IncludeDir.Mosaic}",     -- ...and Astra's platform layer
     }
 
     -- bc7enc_rdo: ArcaneAssetPipeline's TextureImporter calls into it for the BC7 encode
@@ -1654,6 +1658,8 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/SettingsHost.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ProjectSettingsPage.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorRestart.cpp",
+        -- S6-5: assets.sprite.* (Editor audience), read by SpriteDocument::NewSpriteData above.
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetsSpriteSettings.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core

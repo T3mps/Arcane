@@ -361,14 +361,10 @@ TEST_CASE("Project::Open self-heals a manifest without a guid", "[project]")
     CHECK(doc["engine"]["abi"] == 4);
 }
 
-TEST_CASE("a manifest rewrite upgrades a v1 file to formatVersion 2 and negates its on-disk gravity stamp", "[project]")
+TEST_CASE("Project::Open migrates a v1 gravity stamp and leaves an identity-only manifest", "[project]")
 {
-    // F4 plan 1 final review, F2a: the guid self-heal is a RewriteManifest
-    // edit, and every rewrite upgrades the file it touches. A v1 file that
-    // carries the Hub's +Y-down stamp must come out v2 with the SAME meaning:
-    // gravity (0, -9.81) in memory before AND after, and the file itself now
-    // says [0, -9.81] under formatVersion 2 (a bare stamp change would have
-    // flipped the project's gravity on the next open).
+    // The migration preserves the v1 +Y-down meaning in Config/physics.json,
+    // removes the stray store, and upgrades the identity manifest to v2.
     const auto dir = TempDir("format_upgrade");
     const auto file = dir / "Legacy.arcproj";
     WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 },)"
@@ -376,17 +372,21 @@ TEST_CASE("a manifest rewrite upgrades a v1 file to formatVersion 2 and negates 
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    CHECK(proj->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
     {
         std::ifstream in(file, std::ios::binary);
         const auto doc = nlohmann::json::parse(in);
         CHECK(doc["formatVersion"] == 2);
-        CHECK(doc["physics"]["gravity"][1].get<double>() == Catch::Approx(-9.81));
+        CHECK_FALSE(doc.contains("physics"));
+    }
+    {
+        std::ifstream in(dir / "Config" / "physics.json", std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        CHECK(doc["gravity"][1].get<double>() == Catch::Approx(-9.81));
     }
     auto again = Arcane::Project::Open(dir);
     REQUIRE(again.has_value());
     CHECK(again->Manifest().formatVersion == 2);
-    CHECK(again->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
+    CHECK(again->Manifest().legacySettings.empty());
 }
 
 TEST_CASE("Project::Open keeps an existing guid and is stable across opens", "[project]")

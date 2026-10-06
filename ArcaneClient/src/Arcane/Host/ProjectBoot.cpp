@@ -1,8 +1,8 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Input/InputActionAsset.hpp>
+#include <Arcane/Project/AppSplashSettings.hpp>
 
-#include <Arcane/Base/Diagnostics.hpp>   // Arcane::Diagnostic (silent-peek outDiag below)
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 
@@ -340,53 +340,16 @@ namespace Arcane::HostBoot
                 if (!ctx.runtime || !ctx.projectPath || !*ctx.projectPath)
                     return true;   // no --project: nothing to open, not a failure
 
-                // Pre-open PEEK at splash.showProgress, so an opted-in project's
-                // "Scanning content... N / M" text can actually be LIVE during
-                // the scan it describes, not just the taskbar/fraction from
-                // render_bridge onward. Without this, showProgress could only be
-                // learned from ctx.runtime->CurrentProject() AFTER OpenProject
-                // returns -- but ProjectManifest is parsed (Project.cpp) BEFORE
-                // that same call's content scan runs, so by the time this code
-                // could see it, the scan (and every onProgress call below) has
-                // already finished. Arcane::Project::ResolveManifestFile is the
-                // SAME function Project::Open itself now calls internally (that
-                // file's own comment) -- reusing it here means there is exactly
-                // ONE implementation of "how does a project root resolve to a
-                // manifest file", not a second one reimplemented in this TU.
-                // Silent and best-effort by design: no --project, an ambiguous/
-                // missing .arcproj, or an unparseable manifest all just leave
-                // showProgress at the `false` set two lines up -- OpenProject
-                // right below is the real, authoritative, error-reporting open;
-                // this is only a look-ahead for one boolean, and its failure
-                // modes are already OpenProject's failure modes reported again.
                 if (ctx.splash)
-                    if (const auto peekFile = Arcane::Project::ResolveManifestFile(ctx.projectPath))
-                    {
-                        // Silent by design (this stage's own comment above): a
-                        // throwaway outDiag stops LoadFile from publishing under
-                        // "project" here -- Project::Open owns that key, and a
-                        // parse failure on THIS peek is already re-reported,
-                        // authoritatively, when OpenProject runs a few lines down.
-                        Arcane::Diagnostic peekDiag;
-                        if (const auto peek = Arcane::ProjectManifest::LoadFile(*peekFile, &peekDiag))
-                            ctx.splash->SetShowProgress(peek->splash.showProgress);
-                    }
+                    ctx.splash->SetShowProgress(Settings<AppSplashSettings>().showProgress);
 
                 if (ctx.runtime->OpenProject(ctx.projectPath,
                         [scanDetail](std::size_t done, std::size_t total)
                         { ReportScanProgress(*scanDetail, done, total); },
                         ctx.openOptions))
                 {
-                    // Re-set from the ADOPTED manifest (not just the peek above):
-                    // authoritative over the peek in the (practically impossible,
-                    // for a boot-time --project) case they could ever disagree --
-                    // e.g. a self-heal rewrite between the peek's read and this
-                    // one. Never the editor's default (EditorStages does not
-                    // touch showProgress at all, so its true default stands
-                    // regardless of what any opened project's manifest says).
                     if (ctx.splash)
-                        if (const Arcane::Project* proj = ctx.runtime->CurrentProject())
-                            ctx.splash->SetShowProgress(proj->Manifest().splash.showProgress);
+                        ctx.splash->SetShowProgress(Settings<AppSplashSettings>().showProgress);
                     return true;
                 }
                 ARC_ERROR("{}: '{}' could not be opened (engine ABI {} -- is the "

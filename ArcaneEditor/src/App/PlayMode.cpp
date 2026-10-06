@@ -5,6 +5,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot -- the one resource the seed cannot carry
+#include <Arcane/Sim/SimSettings.hpp>        // ApplySimStepCap
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
@@ -179,6 +180,10 @@ namespace Arcane::Editor
     {
         if (!m_server) return;
         m_server->EnsurePhysics();
+        // sim.maxStepsPerFrame is Live: the server world takes the cap the editor's
+        // primary loop took this frame (EditorAppFrame), so a hitch that clamps one
+        // world clamps the other identically and the two do not desync.
+        Arcane::ApplySimStepCap(m_server->Loop());
         m_server->Loop().Advance(realDt);
     }
 }

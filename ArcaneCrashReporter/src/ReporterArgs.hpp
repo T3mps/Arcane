@@ -3,7 +3,9 @@
 // PURE and std-only on purpose: this TU source-compiles into ArcaneTests
 // (premake5.lua, ArcaneTests' `files` list) so the [reporter] cases drive the
 // whole refusal table directly, the same split arcbuild's Request.cpp and the
-// editor's ConsoleBuffer.cpp already use. Nothing Win32, nothing engine-side.
+// editor's ConsoleBuffer.cpp already use. Nothing Win32, nothing engine-side
+// beyond the three std-only plain-data settings headers its defaults come
+// from (settings arc S6-4).
 //
 // Every argument here arrives from a host that is ALREADY DYING, written by
 // Diagnostics::SpawnReporter on the crash thread. A malformed line is refused
@@ -11,6 +13,10 @@
 // numbers on it decide which process gets terminated (§9) and how long the
 // unattended deadline runs.
 #pragma once
+
+#include <Arcane/Base/DiagnosticsSettingsData.hpp>
+#include <Arcane/Base/ReporterSettingsData.hpp>
+#include <Arcane/Config/UiSettingsData.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -73,8 +79,27 @@ namespace Arcane::Reporter
         // --deadline <s> (unattended; tests lower it). R60: 60 is spec §6's
         // DEFAULT, not the only legal value; the FLOOR is 1 and 0 is refused
         // at parse time -- see ReporterArgs.cpp for the reasoning.
-        std::uint32_t deadlineSeconds = 60;
+        std::uint32_t deadlineSeconds = DiagnosticsReporterSettings{}.deadlineSeconds;
         bool          respawned = false;     // --respawned                (monitor: the second instance, D16)
+
+        // Settings arc S6-4: the reporter has no registry, so the host passes
+        // diagnostics.reporter.*, diagnostics.logTailLines and
+        // ui.copyFlashSeconds on its command line
+        // (Diagnostics::ReporterSettingsArgs). Each defaults to the settings
+        // struct's own default when its flag is absent (a hand-typed line, a
+        // test), so there is no second literal here.
+        std::uint32_t maxFramesPerThread      = DiagnosticsReporterSettings{}.maxFramesPerThread;       // --max-frames-thread <n>
+        std::uint32_t maxFramesFaultingThread = DiagnosticsReporterSettings{}.maxFramesFaultingThread;  // --max-frames-fault <n>
+        std::uint32_t maxThreads              = DiagnosticsReporterSettings{}.maxThreads;               // --max-threads <n>
+        std::uint32_t dbgengWaitMs            = DiagnosticsReporterSettings{}.dbgengWaitMs;             // --dbgeng-wait-ms <ms>
+        std::uint32_t logTailLines            = Detail::DiagnosticsDefaults().logTailLines;             // --log-tail <lines>
+        std::uint32_t hangLogTailLines        = DiagnosticsReporterSettings{}.hangLogTailLines;         // --hang-log-tail <lines>
+        std::uint32_t flushTimeoutMs          = DiagnosticsReporterSettings{}.flushTimeoutMs;           // --flush-ms <ms>
+        std::uint32_t uiPollMs                = DiagnosticsReporterSettings{}.uiPollMs;                 // --ui-poll-ms <ms>
+        std::uint32_t windowWidth             = DiagnosticsReporterSettings{}.windowWidth;              // --window <W>x<H>
+        std::uint32_t windowHeight            = DiagnosticsReporterSettings{}.windowHeight;
+        std::uint32_t windowReadyMs           = DiagnosticsReporterSettings{}.windowReadyMs;            // --window-ready-ms <ms>
+        double        copyFlashSeconds        = UiSettings{}.copyFlashSeconds;                          // --copy-flash <s>
     };
 
     struct ParseResult

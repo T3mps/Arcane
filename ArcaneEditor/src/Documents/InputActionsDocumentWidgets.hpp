@@ -12,6 +12,7 @@
 #include "Documents/InputPendingAdd.hpp"
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // the preview ticks one sim.fixedHz step
 #include <imgui.h>
 
 #include <cstdint>
@@ -80,7 +81,7 @@ namespace Arcane::Editor
             if (!evaluator->LoadAsset(*model.LastValidPreview())) evaluator.reset();
             source = next;
         }
-        void Update(const InputSnapshot& raw) { if (evaluator) evaluator->Update(1.0 / 60.0, raw); }
+        void Update(const InputSnapshot& raw) { if (evaluator) evaluator->Update(1.0 / Settings<SimSettings>().fixedHz, raw); }   // one sim step
         [[nodiscard]] InputActionValue Value(const Guid& action) const { return evaluator ? evaluator->Value(action) : InputActionValue{}; }
         [[nodiscard]] float BindingValue(const Guid& binding) const { return evaluator ? evaluator->BindingValue(binding) : 0.0f; }
         [[nodiscard]] InputDevice ActiveDevice() const { return evaluator ? evaluator->ActiveDevice() : InputDevice::Kbm; }

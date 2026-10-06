@@ -60,7 +60,7 @@
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
-#include <Arcane/Sim/SimSettings.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -227,6 +227,7 @@ namespace Arcane::Editor
             if (!cookProjectRoot.empty())
             {
                 Arcane::AssetPipeline::CookSession cookGate;
+                cookGate.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6
                 const Arcane::AssetPipeline::CookResult cookResult =
                     cookGate.CookProject(cookProjectRoot);
                 if (cookResult.failed > 0)
@@ -1332,10 +1333,10 @@ namespace Arcane::Editor
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - ls.simPrev).count();
             ls.simPrev = now;
-            const double maxFrameDelta = Arcane::Settings<Arcane::SimSettings>().maxFrameDeltaSeconds;   // settings arc S2: shared with editor Play
-            if (simDt > maxFrameDelta) simDt = maxFrameDelta;
+            simDt = Arcane::ClampFrameDelta(simDt);   // sim.maxFrameDeltaSeconds: the one clamp ArcaneRuntime shares
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
+        Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
@@ -1842,12 +1843,12 @@ namespace Arcane::Editor
                 ctx ? ctx->view.AsAffine2D() : std::nullopt;
             if (plan.draw && phys && phys->world && overlayAffine)
             {
-                Arcane::PhysicsDebugDrawOptions opts;
+                Arcane::PhysicsDebugDrawOptions opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
                 opts.view   = *overlayAffine;
                 opts.alpha  = ctx->alpha;
                 opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
-                opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = false;   // outlines + contacts (spec)
-                opts.drawContacts   = plan.wholeWorld;
+                opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
+                opts.contacts   = plan.wholeWorld;
                 if (!plan.wholeWorld) opts.onlyBody = selectedBody;
                 Arcane::DrawPhysicsDebug(*phys->world, b, opts);
             }

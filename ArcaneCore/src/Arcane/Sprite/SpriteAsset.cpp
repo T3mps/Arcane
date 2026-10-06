@@ -105,7 +105,9 @@ namespace Arcane
         if (texWidth == 0 || texHeight == 0)
             return g;                                  // no texture info yet: 1x1 m, full UV
 
-        const float ppu = data.ppu > 0.0f ? data.ppu : 100.0f;
+        // A non-positive ppu falls back to the struct default, the same one
+        // LoadSpriteAsset gives an absent key (never the editor's seed).
+        const float ppu = data.ppu > 0.0f ? data.ppu : SpriteAssetData{}.ppu;
         const bool fullRect = data.sourceSize.x <= 0.0f || data.sourceSize.y <= 0.0f;
         const glm::vec2 tex(static_cast<float>(texWidth), static_cast<float>(texHeight));
         const glm::vec2 pos  = fullRect ? glm::vec2(0.0f) : data.sourcePos;

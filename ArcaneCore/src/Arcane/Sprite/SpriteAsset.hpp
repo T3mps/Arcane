@@ -32,7 +32,9 @@ namespace Arcane
         Guid        id{};
         std::string name;
         Guid        texture{};                  // source texture asset; nil renders untextured
-        float       ppu = 100.0f;               // pixels per meter
+        float       ppu = 100.0f;               // pixels per meter; the absent-key fallback. A NEW
+                                                // sprite is seeded from assets.sprite.defaultPixelsPerUnit
+                                                // (the editor's mint, SpriteDocument::NewSpriteData)
         glm::vec2   sourcePos{0.0f, 0.0f};      // sub-rect origin, pixels
         glm::vec2   sourceSize{0.0f, 0.0f};     // sub-rect dims, pixels; (0,0) = whole texture
         // Normalized; (0,0) = BOTTOM-left of the image, (1,1) = top-right

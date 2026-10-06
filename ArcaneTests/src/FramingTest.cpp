@@ -16,29 +16,35 @@
 using Arcane::ExtractLengthFramed;
 using Arcane::Message;
 
+namespace
+{
+    // net.maxReceiveBufferBytes: the bound every service passes (settings arc S6-11).
+    std::size_t MaxBody() { return static_cast<std::size_t>(Arcane::Settings<Arcane::NetSettings>().maxReceiveBufferBytes); }
+}
+
 TEST_CASE("framing: empty buffer needs more data", "[wire]")
 {
-    auto r = ExtractLengthFramed("");
+    auto r = ExtractLengthFramed("", MaxBody());
     REQUIRE(r.needMoreData);
     REQUIRE_FALSE(r.error);
 }
 
 TEST_CASE("framing: short prefix without colon needs more data", "[wire]")
 {
-    auto r = ExtractLengthFramed("12");
+    auto r = ExtractLengthFramed("12", MaxBody());
     REQUIRE(r.needMoreData);
     REQUIRE_FALSE(r.error);
 }
 
 TEST_CASE("framing: long garbage without colon is an error", "[wire]")
 {
-    auto r = ExtractLengthFramed("12345678901"); // > 10 bytes, no colon
+    auto r = ExtractLengthFramed("12345678901", MaxBody()); // > 10 bytes, no colon
     REQUIRE(r.error);
 }
 
 TEST_CASE("framing: one complete frame parses, body excludes newline", "[wire]")
 {
-    auto r = ExtractLengthFramed("8:1|tok|{}\n");
+    auto r = ExtractLengthFramed("8:1|tok|{}\n", MaxBody());
     REQUIRE_FALSE(r.error);
     REQUIRE_FALSE(r.needMoreData);
     REQUIRE(r.body == "1|tok|{}");
@@ -48,38 +54,38 @@ TEST_CASE("framing: one complete frame parses, body excludes newline", "[wire]")
 TEST_CASE("framing: two glued frames extract sequentially and drain", "[wire]")
 {
     std::string buf = "8:1|tok|{}\n8:2|tok|{}\n";
-    auto r1 = ExtractLengthFramed(buf);
+    auto r1 = ExtractLengthFramed(buf, MaxBody());
     REQUIRE(r1.body == "1|tok|{}");
     buf.erase(0, r1.consumed);
 
-    auto r2 = ExtractLengthFramed(buf);
+    auto r2 = ExtractLengthFramed(buf, MaxBody());
     REQUIRE(r2.body == "2|tok|{}");
     buf.erase(0, r2.consumed);
 
-    auto r3 = ExtractLengthFramed(buf);
+    auto r3 = ExtractLengthFramed(buf, MaxBody());
     REQUIRE(r3.needMoreData); // drained
 }
 
 TEST_CASE("framing: non-numeric length prefix is an error", "[wire]")
 {
-    auto r = ExtractLengthFramed("notanum:bogus\n");
+    auto r = ExtractLengthFramed("notanum:bogus\n", MaxBody());
     REQUIRE(r.error);
 }
 
 TEST_CASE("framing: partially-numeric prefix is rejected (audit M-V4-5)", "[wire]")
 {
-    auto r = ExtractLengthFramed("12abc:somebodybytes\n");
+    auto r = ExtractLengthFramed("12abc:somebodybytes\n", MaxBody());
     REQUIRE(r.error);
 }
 
 TEST_CASE("framing: partial frame stays buffered, completes on append", "[wire]")
 {
     std::string buf = "8:1|tok|"; // 8 bytes promised, 5 of body present
-    auto r1 = ExtractLengthFramed(buf);
+    auto r1 = ExtractLengthFramed(buf, MaxBody());
     REQUIRE(r1.needMoreData);
 
     buf += "{}\n";
-    auto r2 = ExtractLengthFramed(buf);
+    auto r2 = ExtractLengthFramed(buf, MaxBody());
     REQUIRE(r2.body == "1|tok|{}");
 }
 
@@ -88,7 +94,7 @@ TEST_CASE("framing: frame missing its '\\n' delimiter is a desync error (E01-3d)
     // Length prefix promises 4 body bytes; the byte at the terminator offset is
     // 'X', not '\n'. Before E01-3d this silently accepted body "body" and
     // consumed on the wrong boundary; now it is flagged as a stream-desync error.
-    auto r = ExtractLengthFramed("4:bodyX");
+    auto r = ExtractLengthFramed("4:bodyX", MaxBody());
     REQUIRE(r.error);
     REQUIRE_FALSE(r.needMoreData);
 }
@@ -96,7 +102,7 @@ TEST_CASE("framing: frame missing its '\\n' delimiter is a desync error (E01-3d)
 TEST_CASE("framing: correct '\\n' delimiter still parses after E01-3d", "[wire]")
 {
     // Positive control: a well-terminated frame is unaffected by the delimiter check.
-    auto r = ExtractLengthFramed("4:body\n");
+    auto r = ExtractLengthFramed("4:body\n", MaxBody());
     REQUIRE_FALSE(r.error);
     REQUIRE_FALSE(r.needMoreData);
     REQUIRE(r.body == "body");
@@ -116,7 +122,7 @@ TEST_CASE("message: serialize -> extract -> parse round-trips", "[wire]")
     m.token   = std::string(64, 'a');
     m.payload = R"({"key":"va|ue with pipe"})"; // '|' in payload is legal
 
-    auto framed = ExtractLengthFramed(m.Serialize());
+    auto framed = ExtractLengthFramed(m.Serialize(), MaxBody());
     REQUIRE_FALSE(framed.error);
 
     Message back = Message::ParseBody(framed.body);

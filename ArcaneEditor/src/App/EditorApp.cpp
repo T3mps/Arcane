@@ -106,7 +106,7 @@ namespace Arcane::Editor
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
-        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+        : m_config(std::move(cfg)), m_splash(splash),
           m_splashPresenter(m_splash) {}
 
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
@@ -1443,7 +1443,8 @@ namespace Arcane::Editor
             m_cookQueueSettling = true;
 
             m_cookQueue.emplace(proj->Root(),
-                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); });
+                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); },
+                Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6: the project's import defaults
             m_cookQueue->SetOnCookComplete(
                 [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
 
@@ -1485,7 +1486,7 @@ namespace Arcane::Editor
             // in this branch at all are ones ResolveArtifact already found
             // Missing, and the highest-frequency one, NriTextureCache's own
             // PendingCook re-poll, already throttles ITS OWN calls into this
-            // facade via kPendingCookRepollInterval, so this exists() rides
+            // facade via assets.cook.pendingRepollInterval, so this exists() rides
             // an already-throttled ask, not a hot per-frame one). A deleted/
             // renamed source answers false here even while the queue is mid-
             // pass, which is exactly the fix: that guid refuses LOUDLY again,

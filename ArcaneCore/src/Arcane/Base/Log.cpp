@@ -6,6 +6,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/LogFileSettings.hpp>
 
 #include <Mosaic/Assert.hpp>
 #include <Mosaic/Log.hpp>
@@ -15,8 +16,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -340,19 +343,55 @@ namespace Arcane::Log
             s_fileSink.reset();
         }
 
-        // Rotate whatever already sits at `file`: delete .5, shift .4->.5 ..
-        // .1->.2, then file -> .1. keep = 5.
+        // Rotate whatever already sits at `file` (log.file.keepCount = N):
+        // delete .N and any stray past it (a run with a larger N left them),
+        // shift .N-1->.N .. .1->.2, then file -> .1. N = 0 deletes the file.
+        const LogFileSettings fileSettings = Settings<LogFileSettings>();   // a copy: no snapshot reference kept
         std::error_code ec;
         if (std::filesystem::exists(file, ec))
         {
-            constexpr int keep = 5;
+            const int keep = std::max(fileSettings.keepCount, 0);
             const std::filesystem::path dir = file.parent_path();
             const std::string stem = file.stem().string();
             const std::string ext = file.extension().string();
             const auto rotated = [&](int n) { return dir / (stem + "." + std::to_string(n) + ext); };
 
+            // Every <stem>.<n><ext> with n >= max(N, 1): .N is overwritten by
+            // the shift below, and anything past it is a stray. A directory
+            // scan rather than probing .N+1, .N+2 ..., because strays need not
+            // be contiguous. Collected first, removed after the scan. Names are
+            // compared in the native encoding: a foreign file in the folder
+            // whose name has no narrow spelling must not throw out of here.
+            const std::filesystem::path stemPath = file.stem();
+            const std::filesystem::path extPath = file.extension();
+            const auto rotationIndex = [&](const std::filesystem::path& entry) {   // -1: not <stem>.<n><ext>
+                const std::filesystem::path namePath = entry.filename();
+                const auto& name = namePath.native();
+                const auto& stemN = stemPath.native();
+                const auto& extN = extPath.native();
+                if (name.size() <= stemN.size() + 1 + extN.size() || name.compare(0, stemN.size(), stemN) != 0
+                    || name[stemN.size()] != '.' || name.compare(name.size() - extN.size(), extN.size(), extN) != 0)
+                    return -1;
+                int n = 0;
+                for (std::size_t i = stemN.size() + 1; i < name.size() - extN.size(); ++i)
+                {
+                    if (name[i] < '0' || name[i] > '9' || n > 1'000'000)
+                        return -1;
+                    n = n * 10 + static_cast<int>(name[i] - '0');
+                }
+                return n;
+            };
+            std::vector<std::filesystem::path> stale;
             ec.clear();
-            std::filesystem::remove(rotated(keep), ec);
+            for (std::filesystem::directory_iterator it(dir.empty() ? std::filesystem::path(".") : dir, ec), end;
+                 !ec && it != end; it.increment(ec))
+                if (rotationIndex(it->path()) >= std::max(keep, 1))
+                    stale.push_back(it->path());
+            for (const std::filesystem::path& path : stale)
+            {
+                ec.clear();
+                std::filesystem::remove(path, ec);
+            }
             for (int n = keep - 1; n >= 1; --n)
             {
                 ec.clear();
@@ -363,7 +402,10 @@ namespace Arcane::Log
                 }
             }
             ec.clear();
-            std::filesystem::rename(file, rotated(1), ec);
+            if (keep > 0)
+                std::filesystem::rename(file, rotated(1), ec);
+            else
+                std::filesystem::remove(file, ec);
         }
 
         try
@@ -384,7 +426,8 @@ namespace Arcane::Log
                 s_distSink->add_sink(s_backlogSink);
             }
 
-            s_engine->flush_on(spdlog::level::warn);
+            // log.file.flushLevel (Live; LogFileSettings.cpp re-applies it).
+            s_engine->flush_on(static_cast<spdlog::level::level_enum>(std::clamp(fileSettings.flushLevel, 0, 6)));
             EnsureFlushHelperStarted();
             return true;
         }

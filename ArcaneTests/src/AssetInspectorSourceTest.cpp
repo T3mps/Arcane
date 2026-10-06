@@ -306,11 +306,11 @@ TEST_CASE("DrawAssetPage: Copy Path reports an action, never acts; a .png draws 
     // The import settings drew (the ".png only" note returns before the knobs):
     // pressing sRGB flips the value merge-written into the .meta sidecar.
     const fs::path meta = root / "Content" / "brick.png.meta";
-    const bool srgbBefore = ReadTextureMetaSettingsDisplay(meta).srgb;
+    const bool srgbBefore = ReadTextureMetaSettingsDisplay(meta, {}).srgb;
     // PropertyGrid ids: PushID("sRGB") + "##value" under the Import rows table ("##texmeta").
     frame([] { return ImGui::GetIDWithSeed("##value", nullptr, ImGui::GetIDWithSeed("sRGB", nullptr, ImGui::GetID("##texmeta"))); });
     frame(nullptr);
-    CHECK(ReadTextureMetaSettingsDisplay(meta).srgb != srgbBefore);
+    CHECK(ReadTextureMetaSettingsDisplay(meta, {}).srgb != srgbBefore);
 }
 
 TEST_CASE("AssetPageThumbSize: compact and stacked forms clamp the height share between the floor and 140", "[editor][inspector]")
