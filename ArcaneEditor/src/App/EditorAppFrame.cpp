@@ -3369,7 +3369,7 @@ namespace Arcane::Editor
                 ImGui::PopTextWrapPos();
                 ImGui::Separator();
                 if (ImGui::Button("OK", ImVec2(120, 0)) ||
-                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+                    Arcane::Editor::EditorActions::Get().Pressed("ui.cancel") || Arcane::Editor::EditorActions::Get().Pressed("ui.confirm"))
                 {
                     m_modalErrors.Pop();
                     ImGui::CloseCurrentPopup();
@@ -3510,7 +3510,7 @@ namespace Arcane::Editor
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
-                    ImGui::IsKeyPressed(ImGuiKey_Escape))
+                    Arcane::Editor::EditorActions::Get().Pressed("ui.cancel"))
                 {
                     m_scene.ClearPending();
                     ImGui::CloseCurrentPopup();

@@ -1,6 +1,7 @@
 #include "Panels/AssetBrowserPanel.hpp"
 
 #include "Documents/DocumentHost.hpp"      // the open route a row's double-click hands to OpenAssetRow
+#include "Input/EditorActions.hpp"
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry/AssetPanelRow -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateKindForAssetKind -- the rail's per-kind "+" (AssetKind -> CreateAssetKind bridge)
 #include "Widgets/EditorFonts.hpp"
@@ -560,7 +561,7 @@ namespace Arcane::Editor
             ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
             if (st.renameFocusPending) { ImGui::SetKeyboardFocusHere(); st.renameFocusPending = false; }
             const bool enter = ImGui::InputText("##assetrename", st.renameBuf, sizeof(st.renameBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-            const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
+            const bool esc = EditorActions::Get().Pressed("ui.cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
             const bool commit = enter || (ImGui::IsItemDeactivatedAfterEdit() && !esc);
             const AssetOpRequest req{ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = st.renameBuf };
             const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string{};
@@ -1045,8 +1046,8 @@ namespace Arcane::Editor
 
                 if (!nav.empty())
                 {
-                    const bool up   = ImGui::IsKeyPressed(ImGuiKey_UpArrow);
-                    const bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow);
+                    const bool up   = EditorActions::Get().PressedRepeat("assets.selectPrev");
+                    const bool down = EditorActions::Get().PressedRepeat("assets.selectNext");
                     if (up || down)
                     {
                         int idx = -1;
@@ -1057,17 +1058,17 @@ namespace Arcane::Editor
                         model.Select(nav[static_cast<std::size_t>(next)]);
                     }
                 }
-                if (ImGui::IsKeyPressed(ImGuiKey_Enter) && model.selected.IsValid())
+                if (EditorActions::Get().PressedRepeat("assets.open") && model.selected.IsValid())
                 {
                     if (const AssetPanelEntry* e = model.Find(model.selected))
                         OpenAssetRow(*e, project, docs, actions);
                 }
                 // T5 s7.9: F2 renames ONE asset; Ctrl+D and Del act on the whole multi-selection.
-                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
+                if (EditorActions::Get().Pressed("assets.rename") && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
                     if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
-                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.SelectionCount() > 0)   // T5 s7.7
+                if (EditorActions::Get().Pressed("assets.duplicate") && model.SelectionCount() > 0)   // T5 s7.7
                     actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
-                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
+                if (EditorActions::Get().Pressed("assets.delete") && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
                     actions.requestDelete = model.selection;
             }
 
@@ -1193,6 +1194,7 @@ namespace Arcane::Editor
         // this one value.
         actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput
                             && !state.renameTarget.IsValid();   // T5 s7.6: an open rename box owns the keys
+        if (actions.ownsEditKeys) EditorActions::Get().MarkContextActive(ActionContext::AssetBrowser);
 
         // ---- body band -----------------------------------------------
         if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))

@@ -9,11 +9,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
+#include "Input/EditorActions.hpp"
 #include "Panels/AssetBrowserPanel.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/EditorPanels.hpp"
 
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ActivateItemByID, FindWindowByName, GImGui
@@ -119,6 +121,24 @@ TEST_CASE("Asset Browser F2 opens the inline rename; Enter commits a Rename; Esc
         REQUIRE(a.fileOp); CHECK((a.fileOp->kind == AssetOpKind::Rename && a.fileOp->newStem == "wall" && !h.state.renameTarget.IsValid()));
     }
     SECTION("Esc reverts") { CHECK_FALSE(h.Key(ImGuiKey_Escape).fileOp); CHECK_FALSE(h.state.renameTarget.IsValid()); }
+}
+TEST_CASE("Asset Browser: a rebound assets.rename opens rename on its new key, F2 no longer", "[editor][assetops][shortcuts]")
+{
+    Arcane::Editor::EditorActions& keys = Arcane::Editor::EditorActions::Get();
+    Arcane::CVarRegistry& reg = keys.Registry();
+    reg.Set(keys.HandleOf("assets.rename"), Arcane::CVarValue::String("F3"), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
+    BrowserHarness h("arcane_browser_rebound_rename_test"); (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid; h.model.Select(g);
+    (void)h.Key(ImGuiKey_F2);
+    CHECK_FALSE(h.state.renameTarget.IsValid());
+
+    (void)h.Key(ImGuiKey_F3);
+    CHECK(h.state.renameTarget == g);
+    reg.RevertLayer(Arcane::SetBy::EditorUser);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
 }
 TEST_CASE("Asset Browser Ctrl+D raises a Duplicate and keeps the keys from the entity clipboard", "[editor][assetops]")
 {

@@ -1,6 +1,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
+#include "Input/EditorActions.hpp"
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -56,6 +57,8 @@
 
 namespace Arcane::Editor
 {
+    using Arcane::Editor::EditorActions;
+    using Arcane::Editor::ActionContext;
     namespace
     {
         // The root guard's visible half (s3.1, 9.27.1): a root-only selection
@@ -1303,10 +1306,10 @@ namespace Arcane::Editor
         ms = ImGui::EndMultiSelect();
         s_selection.ApplyRequests(ms);
 
-        // Ctrl+C copies the selection while the log child has focus (clicking
-        // a row focuses it). Ctrl+A is BeginMultiSelect's own -- it arrives as
-        // a SelectAll request through ApplyRequests above.
-        if (s_selection.Size > 0 && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+        // Ctrl+C copies the selection while the log child has focus (settings
+        // S4: console.copy). Ctrl+A stays BeginMultiSelect's own.
+        if (ImGui::IsWindowFocused()) EditorActions::Get().MarkContextActive(ActionContext::Console);
+        if (s_selection.Size > 0 && ImGui::IsWindowFocused() && EditorActions::Get().Pressed("console.copy"))
             copyRows(true);
 
         // UE parity: the read-only text box's Copy/Select All, extended with
@@ -1914,11 +1917,12 @@ namespace Arcane::Editor
         // or Del/F2 would act on the selection behind the open menu. Keys stay
         // inert while any popup owns focus; the menu's own items act instead.
         const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy);
+        if (windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Outliner);
         // Shortcuts must not fire while any text field owns the keyboard
         // (e.g. the search box above) -- else Delete/F2 hijack typing.
         if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
+            if (EditorActions::Get().Pressed("outliner.rename") && sel.Count() == 1)
             {
                 // Rename edits an EXISTING Identity -- Edit::RenameEntity
                 // refuses when there is none and never mints one
@@ -1929,7 +1933,7 @@ namespace Arcane::Editor
                         std::as_const(registry).GetComponent<Arcane::Identity>(sel.Primary()))
                     BeginRename(state, sel.Primary(), info->name);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
+            if (EditorActions::Get().Pressed("outliner.delete") && sel.HasSelection())
                 DeleteSelection(registry, sel, undo, binding);
         }
 

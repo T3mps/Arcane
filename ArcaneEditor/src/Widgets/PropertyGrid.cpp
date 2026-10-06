@@ -1,4 +1,5 @@
 #include "Widgets/PropertyGrid.hpp"
+#include "Input/EditorActions.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"   // ICON_LC_ROTATE_CCW (the reset slot)
@@ -138,7 +139,7 @@ namespace Arcane::Editor
         // re-arm has no new edit): the rename box's IsItemDeactivated rule (D4).
         // A draft created this frame is CommitOrphans' flushed one (see below).
         if (reason && !inserted && ImGui::IsItemDeactivated()
-            && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+            && EditorActions::Get().Pressed("ui.confirm"))
         {
             draft.hold = true; draft.holdFrame = now; draft.focusPending = true;   // keep text + re-arm
             ImGui::PopID();
@@ -340,7 +341,7 @@ namespace Arcane::Editor
             draft.active = ImGui::IsItemActive();            // grouped rows: EndGroup forwarded the live id
             // Escape mid-DRAG (button held; text mode has no button down and
             // InputText reverts on its own): restore the seed, end the gesture.
-            if (draft.active && ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            if (draft.active && ImGui::IsMouseDown(ImGuiMouseButton_Left) && EditorActions::Get().Pressed("ui.cancel"))
             {
                 for (int i = 0; i < count; ++i) value[i] = static_cast<T>(draft.seed[i]);
                 ImGui::ClearActiveID();
