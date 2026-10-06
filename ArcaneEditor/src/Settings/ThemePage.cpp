@@ -1,6 +1,7 @@
 #include "Settings/ThemePage.hpp"
 
 #include "Settings/EditorThemeSettings.hpp"
+#include "Settings/SettingsHost.hpp"
 #include "Settings/ThemePresets.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -27,6 +28,11 @@ namespace Arcane::Editor
             Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
             const std::size_t n = ApplyThemeToRegistry(*file, reg);
             reg.Publish();
+            // Queue every token for the debounced archive write (S4-17 carried
+            // gap): without it a crash before exit loses the preset/import.
+            for (const auto& [field, colour] : file->colors)
+                if (const std::string name = ThemeCvarName(field); !reg.Find(name).IsStale())
+                    NoteSettingEdited(Arcane::SetBy::EditorUser, name);
             st.status = std::string(verb) + " " + PresetLabel(file->name) + " (" + std::to_string(n) + " colours)";
             if (!file->unknownKeys.empty())
                 st.status += "; ignored " + std::to_string(file->unknownKeys.size()) + " unknown key(s), first: " + file->unknownKeys.front();
@@ -126,6 +132,7 @@ namespace Arcane::Editor
         const bool ok = reg.Set(h, Arcane::CVarValue::Color(ToSettingColor(display)), Arcane::SetBy::EditorUser,
                                 "editor", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied;
         reg.Publish();
+        if (ok) NoteSettingEdited(Arcane::SetBy::EditorUser, ThemeCvarName(field));   // the debounced archive, not only exit
         return ok;
     }
 

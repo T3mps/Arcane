@@ -3,6 +3,7 @@
 // re-themes, so these tests read the registry and the draw list.
 #include <catch2/catch_test_macros.hpp>
 #include "Settings/EditorThemeSettings.hpp"
+#include "Settings/SettingsHost.hpp"
 #include "Settings/SettingsModel.hpp"
 #include "Settings/ThemePage.hpp"
 #include "Settings/ThemePresets.hpp"
@@ -12,7 +13,11 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 using namespace Arcane::Editor;
 
@@ -126,4 +131,45 @@ TEST_CASE("Theme page: draws balanced, and warns in the warning colour when a pa
     h.Frame([&] { DrawThemePage(&st); });
     CHECK(h.Drew(bad.warning));
     CHECK(h.stackDrift == 0);
+}
+
+TEST_CASE("Theme page: a swatch edit and a preset reach the debounced archive queue, not only the exit-time archive",
+          "[theme][settings-ui]")
+{
+    // S4-17 carried gap: theme edits were persisted only at exit, so a crash
+    // lost them. The archive folder is redirected so the flush never touches
+    // the real per-user Editor/Config.
+    const std::filesystem::path local = std::filesystem::temp_directory_path() / "s4-theme-archive";
+    std::filesystem::remove_all(local);
+    std::filesystem::create_directories(local);
+    std::wstring saved;
+    bool had = false;
+    if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
+    _wputenv_s(L"LOCALAPPDATA", local.wstring().c_str());
+    FlushSettingsArchives();   // whatever an earlier test left queued lands in the scratch folder
+    REQUIRE_FALSE(SettingsHostArchivePending());
+
+    REQUIRE(SetThemeToken("error", ImVec4(0.0f, 1.0f, 0.0f, 1.0f)));
+    CHECK(SettingsHostArchivePending());
+    FlushSettingsArchives();
+    CHECK_FALSE(SettingsHostArchivePending());
+    bool archived = false;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(local / "Arcane" / "Editor" / "Config", ec))
+        if (e.is_regular_file())
+        {
+            std::ifstream in(e.path());
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            archived = archived || text.find("error") != std::string::npos;
+        }
+    CHECK(archived);
+
+    ThemePageState st;
+    REQUIRE(ApplyThemePresetByName(st, "HighContrast"));
+    CHECK(SettingsHostArchivePending());
+
+    RevertEditorUser();
+    FlushSettingsArchives();   // the reverted keys leave the scratch archive
+    _wputenv_s(L"LOCALAPPDATA", had ? saved.c_str() : L"");
+    std::filesystem::remove_all(local);
 }
