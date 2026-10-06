@@ -309,3 +309,53 @@ TEST_CASE("DocumentHost::HasFactory matches the registered extension case-insens
     CHECK_FALSE(host.HasFactory("D:/p/a.png"));
     CHECK_FALSE(host.HasFactory("D:/p/noext"));
 }
+
+namespace
+{
+    struct FocusDoc final : EditorDocument
+    {
+        std::string title; Arcane::Guid guid = Arcane::Guid::Generate(); bool dirty = false; bool focused = false;
+        explicit FocusDoc(std::string t, bool d = false) : title(std::move(t)), dirty(d) {}
+        const std::string& Title() const override { return title; }
+        Arcane::Guid AssetGuid() const override { return guid; }
+        bool Dirty() const override { return dirty; }
+        bool Save() override { dirty = false; return true; }
+        void Draw(bool&) override {}
+        bool WindowFocused() const override { return focused; }
+        void NoteMoved(const std::filesystem::path&) override {}
+    };
+}
+
+TEST_CASE("DocumentHost::CloseTarget is the focused document, else the last active one, never a closed one", "[editor][shortcuts]")
+{
+    DocumentHost host;
+    auto* a = static_cast<FocusDoc*>(host.Add(std::make_unique<FocusDoc>("a")));
+    auto* b = static_cast<FocusDoc*>(host.Add(std::make_unique<FocusDoc>("b")));
+    CHECK(host.CloseTarget() == nullptr);
+
+    b->focused = true;
+    host.NoteFocus();
+    CHECK(host.CloseTarget() == b);
+    b->focused = false;
+    host.NoteFocus();
+    CHECK(host.CloseTarget() == b);
+
+    a->focused = true;
+    host.NoteFocus();
+    CHECK(host.CloseTarget() == a);
+    host.RequestClose(a);
+    a = nullptr;
+    CHECK(host.CloseTarget() == nullptr);
+}
+
+TEST_CASE("document.close on a dirty document parks the normal save prompt", "[editor][shortcuts]")
+{
+    DocumentHost host;
+    auto* d = static_cast<FocusDoc*>(host.Add(std::make_unique<FocusDoc>("d", true)));
+    d->focused = true;
+    host.NoteFocus();
+    host.RequestClose(host.CloseTarget());
+    CHECK(host.HasPendingConfirm());
+    CHECK(host.PendingConfirmDoc() == d);
+    CHECK(host.Count() == 1);
+}

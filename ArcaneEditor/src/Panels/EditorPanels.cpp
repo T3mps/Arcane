@@ -144,7 +144,8 @@ namespace Arcane::Editor
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents,
-                        const SceneRecents::List* sceneRecents)
+                        const SceneRecents::List* sceneRecents,
+                        bool closeableDocument)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -213,6 +214,10 @@ namespace Arcane::Editor
                     requests.saveSceneAs = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
+                if (ImGui::MenuItem("Close Document",
+                                    EditorActions::Get().MenuShortcut("document.close").c_str(),
+                                    false, closeableDocument))
+                    requests.closeDocument = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
                 if (ImGui::MenuItem("Open Folder...")) requests.openProjectFolder = true;

@@ -2178,7 +2178,8 @@ namespace Arcane::Editor
                                        m_assetModel.selected.IsValid(),
                                        m_physicsOverlay,
                                        &m_recents.projects,
-                                       &m_recents.scenes);
+                                       &m_recents.scenes,
+                                       m_documents.CloseTarget() != nullptr);
         if (menuReq.togglePhysicsOverlay) m_physicsOverlay = !m_physicsOverlay;
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
@@ -2715,6 +2716,12 @@ namespace Arcane::Editor
             fs.scSaveScene && (m_documents.FocusedDoc() != nullptr ||
                                InspectorSaveTarget(m_inspectorFocusedSource) != nullptr);
         menuReq.saveScene |= (fs.scSaveScene && !docOwnsSave);
+
+        // Both the shortcut and menu use the normal document close flow.
+        menuReq.closeDocument |= fs.scCloseDocument;
+        if (menuReq.closeDocument)
+            if (Arcane::Editor::EditorDocument* doc = m_documents.CloseTarget())
+                m_documents.RequestClose(doc);
 
         if (menuReq.newScene &&
             m_scene.Request(Arcane::Editor::SceneIntent::NewScene, {}, *m_undo))
