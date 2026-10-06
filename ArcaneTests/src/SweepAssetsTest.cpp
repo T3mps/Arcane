@@ -142,6 +142,40 @@ TEST_CASE("sweep: a newly minted sprite is seeded from assets.sprite.defaultPixe
     fs::remove_all(dir, ec);
 }
 
+// S6-5 fix round 1: the Sprite document's "Pixels Per Meter" row clamps to
+// the setting's DECLARED range (no second literal), so a project default above
+// the old 4096 row cap mints sprites the row can still hold and re-edit. The
+// drag half is in SpriteDocumentUndoTest.cpp.
+TEST_CASE("sweep: the Pixels Per Meter row range is assets.sprite.defaultPixelsPerUnit's range", "[sweep][assets][sprite]")
+{
+    const auto meta = CVarRegistry::Get().Metadata(CVarRegistry::Get().Find("assets.sprite.defaultPixelsPerUnit"));
+    REQUIRE(meta.has_value());
+    REQUIRE(meta->min.has_value());
+    REQUIRE(meta->max.has_value());
+    REQUIRE(meta->max->type == CVarType::Float32);
+
+    const auto row = Editor::SpritePixelsPerUnitRange();
+    REQUIRE(row.has_value());
+    CHECK(row->min == static_cast<double>(meta->min->AsFloat32()));
+    CHECK(row->max == static_cast<double>(meta->max->AsFloat32()));
+    CHECK(row->max == 10000.0);   // inventory row 420: [1, 10000]
+
+    // A registry that never registered it falls back to the declaration: the
+    // same range, still not a literal of the row's own.
+    const CVarRegistry bare;
+    const auto declared = Editor::SpritePixelsPerUnitRange(bare);
+    REQUIRE(declared.has_value());
+    CHECK(declared->min == row->min);
+    CHECK(declared->max == row->max);
+
+    // A default above the old 4096 cap seeds a sprite whose value the row holds.
+    const CodeOverride ppu("assets.sprite.defaultPixelsPerUnit", CVarValue::Float32(5000.0f));
+    const SpriteAssetData minted = Editor::SpriteDocument::NewSpriteData(Guid::Generate(), "big");
+    CHECK(minted.ppu == 5000.0f);
+    CHECK(static_cast<double>(minted.ppu) >= row->min);
+    CHECK(static_cast<double>(minted.ppu) <= row->max);
+}
+
 TEST_CASE("sweep: assets.material.maxParentDepth bounds the parent-chain walk live", "[sweep][assets]")
 {
     const fs::path dir = FreshDir("arc_sweep_matdepth");

@@ -1,7 +1,7 @@
 #include "Documents/SpriteDocument.hpp"
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
-#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData)
+#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData, the PPU row range)
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop, the Whole texture untick)
@@ -389,7 +389,9 @@ namespace Arcane::Editor
         // dirty. m_data still mutates live (the document's crop follows a
         // drag), so dirt is "m_data moved this frame", compared at the end.
         const Arcane::SpriteAssetData shown = m_data;
-        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, 0.5f, Astra::Range(1.0, 4096.0), "%g");
+        // The row's bounds ARE assets.sprite.defaultPixelsPerUnit's declared
+        // range: whatever that setting can seed, this row can hold (S6-5).
+        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, 0.5f, SpritePixelsPerUnitRange(), "%g");
         bracket("Edit Pixels Per Meter");
 
         // "Whole texture": a UI view over sourceSize == (0,0) (s5.4). Unticking

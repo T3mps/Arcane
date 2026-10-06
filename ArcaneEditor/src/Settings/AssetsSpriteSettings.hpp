@@ -10,6 +10,10 @@
 
 #include <Arcane/Config/Settings.hpp>
 
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Range
+
+#include <optional>
+
 namespace Arcane::Editor
 {
     struct AssetsSpriteSettings
@@ -23,4 +27,12 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(Range, 1.0, 10000.0)
             ARC_REFLECT_ATTR(Tooltip, "Pixels per meter a new sprite starts with. Existing sprites keep their own value.")
     ARC_END_REFLECT_TYPE()
+
+    // The declared [min, max] of assets.sprite.defaultPixelsPerUnit, read from
+    // the registry's metadata (the declaration above when the registry does
+    // not hold it). The Sprite document's "Pixels Per Meter" row clamps to
+    // it, so every value the setting can seed is one the row can hold and
+    // re-edit -- one range, never a second literal (S6-5 fix round 1).
+    // nullopt only if neither source carries a bound.
+    [[nodiscard]] std::optional<Astra::Range> SpritePixelsPerUnitRange(const CVarRegistry& registry = CVarRegistry::Get());
 }
