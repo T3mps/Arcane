@@ -101,7 +101,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     REQUIRE(meta.has_value());
     CHECK(meta->defaultValue == CVarValue::Bool(false));
     CHECK(meta->flags == CVarFlags::Dev);
-    CHECK(meta->module == "ArcaneClient");   // declared in Render/GpuInstrumentation.cpp, inside ArcaneClient.dll
+    CHECK(meta->module == "ArcaneCore");   // DiagnosticsSettings.cpp, inside ArcaneCore.dll
     CHECK(meta->scope == SettingScope::Project);
     CHECK_FALSE(GpuDrawMarkersEnabled());
     REQUIRE(reg.Set(markers, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
@@ -113,7 +113,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
 
     const auto cull = reg.Metadata(reg.Find("render.meshCull"));
     REQUIRE(cull.has_value());
-    CHECK(cull->defaultValue == CVarValue::Bool(kMeshCullEnabled));
+    CHECK(cull->defaultValue == CVarValue::Bool(true));
     CHECK(cull->flags == CVarFlags::Dev);
     CHECK(cull->audience == Audience::Game);
     CHECK(cull->scope == SettingScope::Project);

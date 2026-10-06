@@ -23,8 +23,7 @@ namespace Arcane
     class NriPipelineCache;
     struct GpuSceneNodeInputs;
 
-    inline constexpr bool kMeshCullEnabled = true; // declaration default of render.meshCull
-    // Published snapshot. Missing (Dev, compiled out) means the default: on.
+    // render.meshCull's published value (RenderDebugSettings). Missing (Dev, compiled out) means the default: on.
     [[nodiscard]] ARC_API bool MeshCullFrustumEnabled();
     inline constexpr std::uint32_t kMeshCullThreads = 64;
     [[nodiscard]] constexpr std::uint32_t MeshCullDispatchGroups(std::uint32_t rowCount) noexcept

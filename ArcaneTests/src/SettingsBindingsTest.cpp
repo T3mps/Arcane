@@ -5,6 +5,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
 #include <Arcane/Config/Bindings/AstraBinding.hpp>
 #include <Arcane/Config/Bindings/JobsBinding.hpp>
 #include <Arcane/Config/Bindings/LogBinding.hpp>
@@ -18,6 +19,9 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SimSettings.hpp>
+#include <Arcane/Render/RenderDebugSettings.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>
+#include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -357,5 +361,37 @@ TEST_CASE("log.level is LogSettings' field: same flags and scope as before, and 
         CHECK(Log::CoreMosaicLevel() == Mosaic::LogLevel::Error);
     }
     ApplyLogSettings(Settings<LogSettings>());                   // whatever the rungs hold now
+}
+
+TEST_CASE("render.meshCull and diagnostics.drawMarkers keep their names, types, defaults, flags and help as settings-struct fields", "[settings]")
+{
+    CHECK(RenderDebugSettings{}.meshCull == true);
+    CHECK(DiagnosticsSettings{}.drawMarkers == false);
+    CVarRegistry& reg = CVarRegistry::Get();
+#if defined(ARC_BUILD_DIST)
+    CHECK(reg.Find("render.meshCull").IsStale());                // Dev: compiled out, so the defaults stand
+    CHECK(MeshCullFrustumEnabled());
+    CHECK_FALSE(GpuDrawMarkersEnabled());
+#else
+    const auto cull = reg.Explain("render.meshCull");
+    REQUIRE(cull);
+    CHECK(cull->type == CVarType::Bool);
+    CHECK(cull->flags == CVarFlags::Dev);
+    CHECK(cull->scope == SettingScope::Project);
+    CHECK(cull->help == "Frustum-cull mesh instances on the GPU.");
+    const auto markers = reg.Explain("diagnostics.drawMarkers");
+    REQUIRE(markers);
+    CHECK(markers->type == CVarType::Bool);
+    CHECK(markers->flags == CVarFlags::Dev);
+    CHECK(markers->help == "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
+
+    const CVarHandle h = reg.Find("diagnostics.drawMarkers");
+    ClearCodeOnExit restore{ h };
+    CHECK_FALSE(GpuDrawMarkersEnabled());
+    REQUIRE(reg.Set(h, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(GpuDrawMarkersEnabled());
+    CHECK(Settings<DiagnosticsSettings>().drawMarkers);
+#endif
 }
 

@@ -4,8 +4,7 @@
 
 #undef ERROR
 
-#include <Arcane/Config/CVarDecl.hpp>
-#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Render/RenderDebugSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Nri/GpuScene.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
@@ -18,14 +17,11 @@
 
 namespace Arcane
 {
-    ARC_CVAR(cvar_meshCull, "render.meshCull", bool, kMeshCullEnabled,
-             .flags = CVarFlags::Dev, .audience = Audience::Game, .scope = SettingScope::Project,
-             .apply = ApplyMode::Live, .help = "Frustum-cull mesh instances on the GPU.");
-
     bool MeshCullFrustumEnabled()
     {
-        // Missing (Dev, compiled out of Dist) reads the declared default: on.
-        return cvar_meshCull.Get();
+        // render.meshCull (RenderDebugSettings, settings arc S2). In a Dist
+        // build the block holds the struct default: on.
+        return Settings<RenderDebugSettings>().meshCull;
     }
 
     namespace
