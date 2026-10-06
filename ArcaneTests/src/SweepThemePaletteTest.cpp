@@ -80,3 +80,91 @@ TEST_CASE("sweep: the input pills, asset kinds and camera frame resolve to today
     Test::RequireDefault("editor.theme.assetKind.model", CVarValue::Color(kinds.model));
     Test::RequireDefault("editor.theme.viewport.cameraFrame", CVarValue::Color(vp.cameraFrame));
 }
+
+// Fix round 1 (finding 2): editor.theme.channelR reached only the narrow boxes;
+// the wide ColorValue row, the popup's Linear row and ColorPicker4's own RGB
+// row are stock ColorEdit4 calls that drew ImGui's static marker table. A
+// non-default channelR must show on every one of them, and the table must be
+// restored once the picker is done. Device-less ImGui.
+#include "Widgets/ColorPickerPopup.hpp"
+#include "Widgets/EditorTheme.hpp"
+#include <imgui_internal.h>
+namespace
+{
+    struct MarkerHarness
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = nullptr;
+        MarkerHarness()
+        {
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1600, 1000);
+            io.IniFilename = nullptr;
+            unsigned char* px = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        }
+        ~MarkerHarness() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+        template <class F> bool Drew(ImU32 want, F&& body)
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(1500, 900));
+            ImGui::Begin("Host");
+            body();
+            ImGui::End();
+            ImGui::Render();
+            bool drew = false;
+            for (const ImDrawVert& v : ImGui::FindWindowByName("Host")->DrawList->VtxBuffer) drew = drew || v.col == want;
+            return drew;
+        }
+    };
+    constexpr ImU32 kStockRed = IM_COL32(240, 20, 20, 255);
+}
+
+TEST_CASE("sweep: a non-default channelR draws on the wide colour rows and the picker, not only the narrow boxes", "[sweep][theme-palette]")
+{
+    using namespace Arcane::Editor;
+    MarkerHarness h;
+    Theme::Palette p = Theme::kDarkPalette;
+    p.channelR = ImVec4(10.0f / 255.0f, 200.0f / 255.0f, 230.0f / 255.0f, 1.0f);
+    const ImU32 custom = U32(p.channelR);
+    const Theme::ScopedLivePalette live(p);
+    float linear[4] = { 0.5f, 0.25f, 0.125f, 1.0f };
+    float original[4] = { 0.5f, 0.25f, 0.125f, 1.0f };
+
+    SECTION("the wide ColorValue row (stock ColorEdit4, three decimals)")
+    {
+        bool drewStock = false;
+        const bool drewCustom = h.Drew(custom, [&] { ImGui::SetNextItemWidth(900.0f); (void)ColorValue("##c", linear, original); });
+        for (const ImDrawVert& v : ImGui::FindWindowByName("Host")->DrawList->VtxBuffer) drewStock = drewStock || v.col == kStockRed;
+        CHECK(drewCustom);
+        CHECK_FALSE(drewStock);
+    }
+    SECTION("the narrow ColorValue row (NarrowColorBoxes)")
+    {
+        CHECK(h.Drew(custom, [&] { ImGui::SetNextItemWidth(150.0f); (void)ColorValue("##c", linear, original); }));
+    }
+    SECTION("the popup body: ColorPicker4's RGB row and the Linear row")
+    {
+        bool drewStock = false;
+        const bool drewCustom = h.Drew(custom, [&] { (void)ColorPopupBody(linear, original, false); });
+        for (const ImDrawVert& v : ImGui::FindWindowByName("Host")->DrawList->VtxBuffer) drewStock = drewStock || v.col == kStockRed;
+        CHECK(drewCustom);
+        CHECK_FALSE(drewStock);
+    }
+    // The table is the stock one again outside the picker.
+    CHECK(ImGui::GetColorMarkerColors()[0] == kStockRed);
+}
+
+TEST_CASE("sweep: at the Dark default the picker draws ImGui's stock red marker", "[sweep][theme-palette]")
+{
+    using namespace Arcane::Editor;
+    MarkerHarness h;
+    const Theme::ScopedLivePalette live(Theme::kDarkPalette);
+    float linear[4] = { 0.5f, 0.25f, 0.125f, 1.0f };
+    float original[4] = { 0.5f, 0.25f, 0.125f, 1.0f };
+    CHECK(h.Drew(kStockRed, [&] { ImGui::SetNextItemWidth(900.0f); (void)ColorValue("##c", linear, original); }));
+}

@@ -4015,6 +4015,12 @@ namespace ImGui
     IMGUI_API void          ColorEditOptionsPopup(const float* col, ImGuiColorEditFlags flags);
     IMGUI_API void          ColorPickerOptionsPopup(const float* ref_col, ImGuiColorEditFlags flags);
     inline void             SetNextItemColorMarker(ImU32 col) { ImGuiContext& g = *GImGui; g.NextItemData.HasFlags |= ImGuiNextItemDataFlags_HasColorMarker; g.NextItemData.ColorMarker = col; }
+    // ARCANE LOCAL FIX (2026-10-06, settings S6-26 fix round 1): the R/G/B/A marker table ColorEdit4 and
+    // DragScalarN/SliderScalarN(ImGuiSliderFlags_ColorMarkers) draw from was a static const, so the editor's
+    // editor.theme.channelR/G/B/W reached only its own narrow boxes. Module-global (not ImGuiStyle: a style
+    // field would move ImGuiContext's layout under game modules built against ABI 53). nullptr = the stock table.
+    IMGUI_API void          SetColorMarkerColors(const ImU32* rgba4);
+    IMGUI_API const ImU32*  GetColorMarkerColors();
 
     // Plot
     IMGUI_API int           PlotEx(ImGuiPlotType plot_type, const char* label, float (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg);

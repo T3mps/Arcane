@@ -13,6 +13,32 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // ---- the channel markers (settings S6-26, fix round 1) -----------------
+        // editor.theme.channelR/G/B/W, pushed into ImGui's marker table (an
+        // ARCANE LOCAL FIX, imgui_internal.h SetColorMarkerColors) for the span
+        // of one widget, so EVERY marker path draws them: the narrow boxes
+        // below, the stock ColorEdit4 rows (wide ColorValue boxes, the Linear
+        // row) and ColorPicker4's own RGB input row. Restored on exit, so a
+        // widget outside the picker keeps whatever table it had. Dark = the
+        // stock GDefaultRgbaColorMarkers bytes.
+        class ScopedChannelMarkers
+        {
+        public:
+            ScopedChannelMarkers() noexcept
+            {
+                const ImU32* current = ImGui::GetColorMarkerColors();
+                for (int n = 0; n < 4; ++n) m_saved[n] = current[n];
+                const ImU32 theme[4] = { ImGui::ColorConvertFloat4ToU32(Theme::kChannelR), ImGui::ColorConvertFloat4ToU32(Theme::kChannelG),
+                                         ImGui::ColorConvertFloat4ToU32(Theme::kChannelB), ImGui::ColorConvertFloat4ToU32(Theme::kChannelW) };
+                ImGui::SetColorMarkerColors(theme);
+            }
+            ~ScopedChannelMarkers() { ImGui::SetColorMarkerColors(m_saved); }
+            ScopedChannelMarkers(const ScopedChannelMarkers&) = delete;
+            ScopedChannelMarkers& operator=(const ScopedChannelMarkers&) = delete;
+        private:
+            ImU32 m_saved[4]{};
+        };
+
         // ---- the narrow colour boxes (T3 gate, finding 3) ----------------------
         // ColorEdit4 prints its float boxes with a hard-coded "%0.3f"
         // (imgui_widgets.cpp:5883-5888), so a box narrower than "0.000" clips
@@ -44,9 +70,7 @@ namespace Arcane::Editor
         bool NarrowColorBoxes(const char* id, float linear[4], float width, bool hdr, const char* format)
         {
             static const char* kIds[4] = { "##X", "##Y", "##Z", "##W" };
-            // editor.theme.channelR/G/B/W (settings S6-26); Dark = ImGui's GDefaultRgbaColorMarkers.
-            const ImU32 kMarkers[4] = { ImGui::ColorConvertFloat4ToU32(Theme::kChannelR), ImGui::ColorConvertFloat4ToU32(Theme::kChannelG),
-                                        ImGui::ColorConvertFloat4ToU32(Theme::kChannelB), ImGui::ColorConvertFloat4ToU32(Theme::kChannelW) };
+            const ImU32* kMarkers = ImGui::GetColorMarkerColors();   // the caller's ScopedChannelMarkers
             if (ImGui::GetCurrentWindowRead()->SkipItems)   // ColorEdit4's own guard
                 return false;
             ImGuiContext& g = *ImGui::GetCurrentContext();
@@ -221,6 +245,7 @@ namespace Arcane::Editor
 
     bool ColorPopupBody(float linear[4], const float original[4], bool hdr)
     {
+        const ScopedChannelMarkers markers;   // the picker's RGB input row + the Linear row
         bool changed = false;
 
         // ---- Old / New, drawn by US -------------------------------------------
@@ -305,6 +330,7 @@ namespace Arcane::Editor
     ColorValueResult ColorValue(const char* id, float linear[4], float original[4], bool hdr)
     {
         ColorValueResult result;
+        const ScopedChannelMarkers markers;   // the narrow AND the wide box rows (and the popup, nested)
         const float total = ImGui::CalcItemWidth();   // read BEFORE the swatch consumes the pending width
         const float swatch = ImGui::GetFrameHeight();
         ImGui::PushID(id);
