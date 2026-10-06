@@ -190,6 +190,16 @@ TEST_CASE("constant guard: no allow-list entry is stale", "[sweep][guard]")
     CHECK(stale.empty());
 }
 
+TEST_CASE("constant guard: no allow-listed constants remain under ArcaneCore", "[sweep][guard][markers]")
+{
+    std::ifstream in(RepoRoot() / "scripts" / "constant-allowlist.txt");
+    std::string line, left;
+    while (std::getline(in, line))
+        if (line.rfind("ArcaneCore/", 0) == 0) left += "  " + line + "\n";
+    INFO("Mark these with ARC_CONSTANT(\"why\") and delete the lines:\n" << left);
+    CHECK(left.empty());
+}
+
 TEST_CASE("constant guard: seed dump", "[.][sweep-seed]")
 {
     const char* temp = std::getenv("TEMP");

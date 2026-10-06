@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -36,7 +37,9 @@ namespace Arcane
     void Xyz2Lab(const double xyz[3], double lab[3]) noexcept
     {
         // sigma = 6/29; the piecewise split keeps the curve finite-sloped at 0.
+        ARC_CONSTANT("test oracle: the CIELAB (6/29)^2 term of the ported Playwright compare (the golden gate)")
         constexpr double kSigmaPow2 = 6.0 * 6.0 / 29.0 / 29.0;
+        ARC_CONSTANT("test oracle: the CIELAB (6/29)^3 term of the ported Playwright compare (the golden gate)")
         constexpr double kSigmaPow3 = 6.0 * 6.0 * 6.0 / 29.0 / 29.0 / 29.0;
 
         const double x = xyz[0] / 0.950489;
@@ -85,7 +88,9 @@ namespace Arcane
 
         // "Graphic arts" weights. ASYMMETRIC: sC/sH use c1 (the EXPECTED
         // image's chroma) only -- upstream does the same, deliberately.
+        ARC_CONSTANT("test oracle: the graphic-arts colour-difference weights of the ported Playwright compare (the golden gate)")
         constexpr double k1 = 0.045, k2 = 0.015;
+        ARC_CONSTANT("test oracle: the colour-difference parametric factors of the ported Playwright compare (the golden gate)")
         constexpr double kL = 1.0, kC = 1.0, kH = 1.0;
         const double sL = 1.0;
         const double sC = 1.0 + k1 * c1;
@@ -261,8 +266,11 @@ namespace Arcane
         const double var2  = stats.VarianceC2(x1, y1, x2, y2);
         const double cov   = stats.Covariance(x1, y1, x2, y2);
 
+        ARC_CONSTANT("test oracle: the SSIM dynamic range of an 8-bit channel (2^8 - 1)")
         constexpr double kDynamicRange = 255.0;   // 2^8 - 1
+        ARC_CONSTANT("test oracle: the SSIM stabiliser C1 = (0.01 L)^2")
         constexpr double c1 = (0.01 * kDynamicRange) * (0.01 * kDynamicRange);
+        ARC_CONSTANT("test oracle: the SSIM stabiliser C2 = (0.03 L)^2")
         constexpr double c2 = (0.03 * kDynamicRange) * (0.03 * kDynamicRange);
 
         return (2.0 * mean1 * mean2 + c1) * (2.0 * cov + c2)
@@ -275,8 +283,11 @@ namespace Arcane
     {
         // compare.ts's own constants. VARIANCE_WINDOW_RADIUS is 1 -- a RADIUS,
         // giving a 3x3 window. Writing 3 here is the classic misport.
+        ARC_CONSTANT("test oracle: compare.ts's SSIM window radius (31x31)")
         constexpr std::int64_t kSsimWindowRadius     = 15;   // 31x31
+        ARC_CONSTANT("test oracle: compare.ts's variance window radius (3x3)")
         constexpr std::int64_t kVarianceWindowRadius = 1;    // 3x3
+        ARC_CONSTANT("test oracle: compare.ts's SSIM antialiasing threshold")
         constexpr double       kSsimAntialiasing     = 0.99;
 
         // Block sizing for the 10x10 spatial-concentration grid: CEIL, not

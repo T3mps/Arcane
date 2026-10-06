@@ -61,6 +61,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -248,6 +249,7 @@ namespace Arcane
         // normalized before it is stored, so no scale can survive it; the band's
         // only job is to catch values that read as an intent to scale (norm 2 is
         // a 4x basis) or that cannot be normalized at all.
+        ARC_CONSTANT("math identity / tolerance: the squared-norm band a file quaternion must fall in; file acceptance must not vary per machine")
         inline constexpr float kQuatNormTolerance2 = 0.05f;
 
         // Quaternions read back from [x, y, z, w].

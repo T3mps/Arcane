@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Diagnostics
 {
@@ -43,6 +44,7 @@ namespace Arcane::Diagnostics
     class ARC_CORE_API CrashArena
     {
     public:
+        ARC_CONSTANT("crash-path capacity: the static crash arena; the crash path cannot allocate")
         static constexpr std::size_t kCapacity = 256 * 1024;
 
         // The one static instance -- a function-local static over a static

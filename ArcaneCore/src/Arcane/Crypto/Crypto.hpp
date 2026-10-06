@@ -13,6 +13,7 @@
 #include "picosha2.hpp"
 #include <Arcane/Crypto/CryptoSettings.hpp>
 #include <Arcane/Util/Logger.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -43,7 +44,9 @@ namespace Arcane
         // new hash back to storage and the upgrade happens organically per
         // user, so raising the cvar needs no migration window.
         static int DefaultIterations() { return Settings<CryptoSettings>().pbkdf2Iterations; }
+        ARC_CONSTANT("security: the password salt length (128 bits)")
         static constexpr int SALT_LENGTH = 16;  // 128 bits
+        ARC_CONSTANT("security: the SHA-256 digest length (256 bits)")
         static constexpr int HASH_LENGTH = 32;  // 256 bits (SHA-256 output)
 
         // ============================================================================
@@ -168,6 +171,7 @@ namespace Arcane
         // Windows. Runtime validation on real Linux/ARM is deferred to
         // the Linux-port milestone.
         // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
+        ARC_CONSTANT("security: the RNG self-test entropy sample size")
         static constexpr size_t ENTROPY_SAMPLE_BYTES = 32;
 
         static std::vector<uint8_t> GenerateRandomBytes(size_t count)
@@ -374,6 +378,7 @@ namespace Arcane
 
         static std::vector<uint8_t> HMAC_SHA256(const std::string& key, const std::vector<uint8_t>& message)
         {
+            ARC_CONSTANT("security: the SHA-256 block size (FIPS 180-4)")
             constexpr size_t BLOCK_SIZE = 64;  // SHA-256 block size
 
             // Prepare key

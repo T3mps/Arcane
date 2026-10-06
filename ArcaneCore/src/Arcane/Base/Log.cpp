@@ -7,6 +7,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/LogFileSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Mosaic/Assert.hpp>
 #include <Mosaic/Log.hpp>
@@ -231,6 +232,7 @@ namespace Arcane::Log
             // the Mosaic sink, so it is unaffected by which stream this uses.
             s_engine = existing ? existing : spdlog::stderr_color_mt("Arcane");
             s_engine->set_level(level);
+            ARC_CONSTANT("the editor Console parses this prefix (Panels/ConsoleModel.cpp, CategoryForMessage)")
             s_engine->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
             // The one and only mutation of the logger's own sink vector, made
             // here under call_once -- before any other thread can reach the

@@ -86,6 +86,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -204,13 +205,17 @@ namespace Arcane
     // Author-edit detection tolerances. pos in meters, rot in radians. Small: they
     // only guard against SetAngle->GetAngle normalization round-trip noise, not any
     // meaningful author nudge (a real gizmo/inspector edit is orders larger).
+    ARC_CONSTANT("math identity / tolerance: authored-position round-trip noise")
     inline constexpr float kAuthorPosEps = 1e-5f;
+    ARC_CONSTANT("math identity / tolerance: authored-rotation round-trip noise")
     inline constexpr float kAuthorRotEps = 1e-5f;
 
     // Shortest-arc absolute angle difference (radians).
     inline float AngleDelta(float a, float b)
     {
+        ARC_CONSTANT("math identity / tolerance: pi")
         constexpr float kPi  = 3.14159265358979323846f;
+        ARC_CONSTANT("math identity / tolerance: tau = 2 pi")
         constexpr float kTau = 6.28318530717958647692f;
         float d = a - b;
         while (d >  kPi) d -= kTau;

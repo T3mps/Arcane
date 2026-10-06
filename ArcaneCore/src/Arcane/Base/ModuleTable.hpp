@@ -46,6 +46,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Diagnostics
 {
@@ -68,6 +69,7 @@ namespace Arcane::Diagnostics
     class ARC_CORE_API ModuleTable
     {
     public:
+        ARC_CONSTANT("crash-path capacity: the static module table the crash filter reads lock-free")
         static constexpr std::size_t kMax = 512;
 
         // Replaces the snapshot from a fresh module enumeration. Takes the

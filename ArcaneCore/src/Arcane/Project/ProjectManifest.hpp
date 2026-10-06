@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <Json.hpp>   // nlohmann::json (the vendored single header)
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -37,6 +38,7 @@ namespace Arcane
         //      a v1 manifest that carries a physics.gravity block NEGATES
         //      gravity.y (FromJson, with an ARC_INFO); a v1 manifest without
         //      the block gets the v2 default. Nothing else changed meaning.
+        ARC_CONSTANT("file format: the .arcproj version this engine writes")
         static constexpr int   kFormatVersion = 2;
 
         int                    formatVersion = 0;

@@ -12,6 +12,7 @@
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -23,6 +24,7 @@ namespace Arcane
     // store it as a member variable rather than looking it up on every call.
 
     using MsgId = uint16_t;
+    ARC_CONSTANT("wire protocol: message id 0 is the never-sent sentinel")
     inline constexpr MsgId kInvalidMsgId = 0;  // sentinel -- never sent on the wire
 
     // ============================================================================

@@ -60,6 +60,7 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -76,6 +77,7 @@ namespace Arcane
     // assertable if the order and the rebuild counter can be read.
     struct TransformOrder
     {
+        ARC_CONSTANT("ID space / sentinel: no parent")
         static constexpr std::uint32_t kNoParent = 0xFFFFFFFFu;
 
         // ---- structure: rebuilt only when StructureVersion()/root moves ----

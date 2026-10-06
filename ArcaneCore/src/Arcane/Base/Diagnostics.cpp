@@ -1,6 +1,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 
 #include <Arcane/Base/CrashArena.hpp>     // the ONLY allocator the crash thread may use (spec S5.5)
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope -- the GPU provider's own field carrier
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
 #include <Arcane/Base/ForeignModules.hpp> // ForeignModules::LastScan -- snapshotted OFF the crash path (R14)
@@ -97,6 +98,7 @@ namespace
     // is still publishing it; a minimized host renders no frames at all, and its
     // frozen counter must read as "no data", not as a stall. Two seconds is ~120
     // frames of grace at 60Hz.
+    ARC_CONSTANT("a change would be a bug: the GPU freshness gate must trip before the stall rule; the window is DERIVED, min(2 s, diagnostics.gpuStallSeconds / 2)")
     constexpr double kGpuBeatFreshnessCapSeconds = 2.0;
 
     // The gate has to trip BEFORE the stall threshold could, or a host that
@@ -227,12 +229,19 @@ namespace
 
     // ---- crash thread -----------------------------------------------------
 
+    ARC_CONSTANT("crash-path capacity: a snapshotted path in UTF-8 bytes; the crash path cannot allocate or read cvars")
     constexpr std::size_t kPathMax    = 1024;   // UTF-8 bytes, generous vs MAX_PATH
+    ARC_CONSTANT("crash-path capacity: the crash reason text; the crash path cannot allocate or read cvars")
     constexpr std::size_t kReasonMax  = 1024;
+    ARC_CONSTANT("crash-path capacity: the walked stack frames; the crash path cannot allocate or read cvars")
     constexpr std::size_t kMaxFrames  = 96;
+    ARC_CONSTANT("crash-path capacity: the walked thread's text reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kSectionRsv = 32 * 1024;   // the walked thread's text
+    ARC_CONSTANT("crash-path capacity: the .txt header reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kHeaderRsv  = 8 * 1024;    // the .txt header
+    ARC_CONSTANT("crash-path capacity: one envelope's JSON reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kEnvRsv     = 64 * 1024;   // one envelope's JSON
+    ARC_CONSTANT("crash-path capacity: the lean envelope's JSON reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kEnvLeanRsv = 8 * 1024;    // ...with the unbounded fields elided
     // Worst case 8 + 32 + (64 + 8) + (64 + 8) = 184 KiB of
     // CrashArena::kCapacity (256 KiB) -- both envelopes overrunning and
@@ -286,6 +295,7 @@ namespace
     // The injected third-party modules (R14): one rendered line for the .txt
     // and the base names for the envelope array. Guarded by its own mutex,
     // which the crash thread only ever TRY-locks.
+    ARC_CONSTANT("crash-path capacity: the injected-module list the crash thread renders without allocating")
     constexpr std::size_t kInjectedMax = 32;
     std::mutex  g_injectedMutex;
     bool        g_injectedScanned = false;
@@ -1516,6 +1526,7 @@ namespace
     // __except and every vectored handler and is NONCONTINUABLE, so THIS
     // FILTER IS THE ONLY PLACE IN THE PROCESS THAT CAN SEE IT, and it can
     // only decide how to die -- never whether to.
+    ARC_CONSTANT("hardware/OS/API limit: the D3D12 debug layer's fail-fast exception code, defined by the API")
     constexpr DWORD kD3D12DebugLayerFailFast = 0x0000087dul;
 
     // MSVC's C++ exception code ('msc' | 0xE0000000). A `throw` that nothing
@@ -1525,6 +1536,7 @@ namespace
     // filter never gets to call terminate(). So the classification has to
     // live on both paths (see ActiveExceptionReason below), or every uncaught
     // exception -- an OOM included -- would be filed as a plain `crash`.
+    ARC_CONSTANT("hardware/OS/API limit: MSVC's C++ exception code ('msc' | 0xE0000000), defined by the toolchain")
     constexpr DWORD kMsvcCppException = 0xE06D7363ul;
 
     // Both defined with the fail-fast family below; ActiveExceptionReason is

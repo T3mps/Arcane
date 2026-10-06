@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Log
 {
@@ -104,7 +105,9 @@ namespace Arcane::Log
     // The backlog: the last kBacklogLines formatted lines the engine logger
     // produced, ring-buffered. Backed by a fixed static array -- no
     // allocation, ever, on any of the paths below.
+    ARC_CONSTANT("crash-path capacity: the static lock-free log backlog ring the crash report reads (lines)")
     inline constexpr std::size_t kBacklogLines = 512;
+    ARC_CONSTANT("crash-path capacity: the static lock-free log backlog ring the crash report reads (bytes per line)")
     inline constexpr std::size_t kBacklogLineBytes = 512;
 
     // FreezeBacklog: a single atomic store. Safe to call from the FAULTING

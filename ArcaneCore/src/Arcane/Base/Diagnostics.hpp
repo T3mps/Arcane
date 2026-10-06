@@ -62,6 +62,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane { class CVarRegistry; }
 
@@ -202,9 +203,13 @@ namespace Arcane::Diagnostics
     // CI and the reporter all read them.
     namespace ExitCode
     {
+        ARC_CONSTANT("wire protocol: host exit code 'crashed'; the monitor, CI and the reporter read it")
         inline constexpr int kCrashed         = 10;   // a report was written, the host died
+        ARC_CONSTANT("wire protocol: host exit code 'hang terminated'; the monitor, CI and the reporter read it")
         inline constexpr int kHangTerminated  = 11;   // the reporter terminated a hung host
+        ARC_CONSTANT("wire protocol: host exit code 'exit sentinel'; the monitor, CI and the reporter read it")
         inline constexpr int kExitSentinel    = 12;   // the exit sentinel fired (task 8)
+        ARC_CONSTANT("wire protocol: host exit code 'crash in the crash path'; the monitor, CI and the reporter read it")
         inline constexpr int kCrashInCrashPath = 13;  // the crash thread itself faulted
     }
 

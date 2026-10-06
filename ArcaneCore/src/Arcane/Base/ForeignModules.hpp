@@ -49,6 +49,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::ForeignModules
 {
@@ -63,8 +64,11 @@ namespace Arcane::ForeignModules
     //        one ARC_INFO with its path. The row that makes the detection
     //        complete rather than a blocklist -- a new overlay, or a shell
     //        extension a file dialog pulled in, still shows up in the report.
+    ARC_CONSTANT("ID space / sentinel: foreign-module catalogue tier 1 (destabilising); catalogue data, not a tunable")
     inline constexpr int kTierDestabilising = 1;
+    ARC_CONSTANT("ID space / sentinel: foreign-module catalogue tier 2 (present-path hook); catalogue data, not a tunable")
     inline constexpr int kTierPresentHook   = 2;
+    ARC_CONSTANT("ID space / sentinel: foreign-module catalogue tier 3 (uncatalogued); catalogue data, not a tunable")
     inline constexpr int kTierUncatalogued  = 3;
 
     // One row of the known table. string_view because the table is static

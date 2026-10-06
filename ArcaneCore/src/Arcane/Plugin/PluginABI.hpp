@@ -9,6 +9,7 @@
 #include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (an EngineContext field, ABI 30)
 
 #include <cstdint>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -1078,6 +1079,7 @@ namespace Arcane
     //     Register); S3-GATE deferred its bump here. A v52 module was compiled
     //     against the old layouts and lacks the new imports; reject the pairing.
     //     ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
     inline constexpr uint32_t kGamePluginABIVersion = 53;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
