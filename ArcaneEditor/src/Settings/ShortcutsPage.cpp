@@ -251,13 +251,16 @@ namespace Arcane::Editor
             if (row.conflict) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kError);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(row.action.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", row.tooltip.c_str());
-            if (row.overriddenBy != Arcane::SetBy::Default)   // the marker the generic rows draw (SettingsRows)
+            if (row.overriddenBy != Arcane::SetBy::Default)   // the generic rows' marker, compact for the Action column
             {
+                // Icons, not the generic rows' full sentence: "Overridden by
+                // Command line" clipped the Action column at 1080p (S4-GATE capture).
                 ImGui::SameLine();
-                ImGui::TextColored(Theme::kAmber, "Overridden by %s", RungLabel(row.overriddenBy));
+                ImGui::TextColored(Theme::kAmber, ICON_LC_LAYERS);
+                ImGui::SetItemTooltip("Overridden by %s: this binding wins over the one saved for all projects", RungLabel(row.overriddenBy));
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Clear override")) (void)ClearShortcutOverride(actions, row.id, archive);
-                ImGui::SetItemTooltip("Remove the %s binding; the row shows what is left underneath", RungLabel(row.overriddenBy));
+                if (ImGui::SmallButton(ICON_LC_ERASER "##clearoverride")) (void)ClearShortcutOverride(actions, row.id, archive);
+                ImGui::SetItemTooltip("Clear override: remove the %s binding; the row shows what is left underneath", RungLabel(row.overriddenBy));
             }
             ImGui::TableNextColumn(); ImGui::TextUnformatted(row.context.c_str());
             ImGui::TableNextColumn();
