@@ -370,6 +370,10 @@ namespace Arcane
         void      ResetPhysics();
         // Scene-root PhysicsSettings when present, else the project's physics
         // block, else PhysicsConfig's default (0, -9.81; +Y up, F4).
+        // Layered on purpose, unlike the engine-wide settings structs: gravity
+        // is authored content, so the built-in default yields to the project
+        // (the manifest's physics block; the `physics.gravity` setting after
+        // S6-7) and the project to the per-scene PhysicsSettings component.
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:

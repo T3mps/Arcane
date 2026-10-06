@@ -3,15 +3,15 @@
 // Settings structs (settings arc S2; spec s4.3, s4.6): a reflected struct whose
 // fields are cvars, read as one typed block of the published snapshot.
 //
-//     struct PhysicsSettings { std::uint32_t substeps = 4; };
-//     ARC_REFLECT_TYPE(PhysicsSettings)
-//         ARC_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-//         ARC_REFLECT_FIELD(PhysicsSettings, substeps)
+//     struct ExampleSettings { std::uint32_t substeps = 4; };   // fictional: not an engine type
+//     ARC_REFLECT_TYPE(ExampleSettings)
+//         ARC_REFLECT_TYPE_ATTR(Settings, "example", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+//         ARC_REFLECT_FIELD(ExampleSettings, substeps)
 //             ARC_REFLECT_ATTR(Range, 1, 16) ARC_REFLECT_ATTR(Tooltip, "Solver substeps") ARC_REFLECT_ATTR(Deterministic)
 //     ARC_REFLECT_TYPE_END()
 //
-//     ARC_SETTINGS(PhysicsSettings);          // in ONE .cpp of the declaring module, after that header
-//     const PhysicsSettings& s = Arcane::Settings<PhysicsSettings>();
+//     ARC_SETTINGS(ExampleSettings);          // in ONE .cpp of the declaring module, after that header
+//     const ExampleSettings& s = Arcane::Settings<ExampleSettings>();
 //
 // - The member initializers ARE the defaults. A field's cvar is
 //   "<category>.<field>", and the field order is the window's row order.
