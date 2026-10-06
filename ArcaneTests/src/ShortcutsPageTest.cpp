@@ -2,11 +2,13 @@
 // cancel/clear, reserved refusal, red conflicts on every row, type flip, reset.
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/TestEnvironment.hpp"
+#include "Helpers/TestTypeContext.hpp"
 #include "Input/EditorActionTable.hpp"
 #include "Input/EditorActions.hpp"
 #include "Settings/SettingsApply.hpp"
 #include "Settings/SettingsModel.hpp"
 #include "Settings/ShortcutsPage.hpp"
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -215,4 +217,66 @@ TEST_CASE("Shortcuts page: every page write reports its cvar to the archive sink
     heard.clear();
     ResetAllShortcuts(r.actions, sink);
     CHECK(heard.size() == kEditorActionTable.size());
+}
+
+TEST_CASE("Shortcuts: the boot declares editor.keys.* before any config rung -- a saved shortcut and a --set editor.keys.* are live at boot", "[shortcuts][settings-ui][settings]")
+{
+    // S4-20 fix: the registry layers a rung onto cvars that already exist, never
+    // onto a later Register, and EditorActions::Get() declares its table lazily.
+    // A first Get() in the frame loop (after the rungs) dropped the Keyboard
+    // page's saved shortcuts on a cold boot and refused --set editor.keys.* as
+    // unknown. EditorApp::StageRuntimeCreate now calls Get() before the Runtime
+    // exists (EditorApp.cpp is not in this binary; this pins both orders).
+    Arcane::Test::TempDir dir("shortcuts-boot-order");
+    {
+        std::ofstream out(dir.path / "editor.json", std::ios::binary);
+        out << R"({ "keys": { "edit.copy": "F" } })";
+    }
+    const std::vector<std::string> sets{ "editor.keys.edit.cut=Ctrl+Shift+X" };
+
+    SECTION("rungs applied BEFORE the table is declared never reach it -- the old boot order")
+    {
+        Arcane::CVarRegistry reg;
+        (void)Arcane::ApplyCVarDirectory(reg, dir.path, Arcane::SetBy::EditorUser, "editor-user");
+        Arcane::ApplyCVarCommandLine(reg, sets, Arcane::CVarContext::Editor);   // warns: unknown
+        EditorActions actions(reg);
+        RegisterEditorActions(actions);
+        reg.Publish();
+        actions.RefreshBindings();
+        CHECK(FormatKeyChord(*actions.ChordOf("edit.copy")) == "Ctrl+C");
+        CHECK(FormatKeyChord(*actions.ChordOf("edit.cut")) == "Ctrl+X");
+    }
+
+    SECTION("the editor boot's order: Get(), then the Runtime, the EditorUser rung and the --set list")
+    {
+        EditorActions& keys = EditorActions::Get();   // StageRuntimeCreate, before m_runtime.emplace
+        Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+        struct Cleanup
+        {
+            EditorActions& keys;
+            ~Cleanup()
+            {
+                Arcane::CVarRegistry& r = Arcane::CVarRegistry::Get();
+                r.RevertLayer(Arcane::SetBy::EditorUser);
+                (void)r.ClearRung(r.Find("editor.keys.edit.cut"), Arcane::SetBy::CommandLine);
+                r.Publish();
+                keys.RefreshBindings();
+            }
+        } cleanup{ keys };
+
+        Arcane::Runtime rt(Arcane::Test::Process());   // applies the engine rung
+        rt.SetEditorUserConfigDir(dir.path);            // StageRuntimeCreate: the EditorUser rung
+        Arcane::ApplyCVarCommandLine(cvars, sets, Arcane::CVarContext::Editor);   // input_config: --set
+        cvars.Publish();
+        keys.RefreshBindings();
+
+        CHECK(FormatKeyChord(*keys.ChordOf("edit.copy")) == "F");
+        CHECK(cvars.Explain("editor.keys.edit.copy")->setBy == Arcane::SetBy::EditorUser);
+        CHECK(FormatKeyChord(*keys.ChordOf("edit.cut")) == "Ctrl+Shift+X");
+        CHECK(cvars.Explain("editor.keys.edit.cut")->setBy == Arcane::SetBy::CommandLine);
+
+        rt.SetEditorUserConfigDir({});   // archiving is off: nothing is written back
+        keys.RefreshBindings();
+        CHECK(FormatKeyChord(*keys.ChordOf("edit.copy")) == "Ctrl+C");
+    }
 }
