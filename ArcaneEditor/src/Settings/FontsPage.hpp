@@ -1,10 +1,11 @@
 #pragma once
 
 // Preferences > Appearance > Fonts and Scale (settings arc S4, spec s7.3).
-// The page draws the UI and monospace family pickers (the bundled families
-// plus the user's Fonts folder) and a sample; it owns its node's "font"
-// rows. editor.ui.fontSize / scale / followDpi sit on the same node and draw
-// as the window's standard rows below the page (provenance, reset, undo).
+// The page scans the family list (the bundled families plus the user's
+// Fonts folder; Refresh re-scans) and hands it to the node's "font" rows,
+// which draw as the window's standard rows below the page -- a family
+// combo with provenance, Clear override, reset and the window's undo --
+// beside editor.ui.fontSize / scale / followDpi; then a sample in both faces.
 
 #include "Widgets/EditorFonts.hpp"
 
@@ -27,6 +28,8 @@ namespace Arcane::Editor
         bool listDirty = true;                // re-scan on the next draw (Refresh button)
     };
 
-    bool SetUiSetting(std::string_view field, const Arcane::CVarValue& value);   // editor.ui.<field>, EditorUser + Publish
+    // editor.ui.<field> at the EditorUser rung + Publish (a direct write: no
+    // window undo; the page's rows go through the standard row machinery).
+    bool SetUiSetting(std::string_view field, const Arcane::CVarValue& value);
     void DrawFontsPage(void* user);                                              // user = FontsPageState*
 }

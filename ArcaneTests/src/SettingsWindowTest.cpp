@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
 #include <Settings/SettingsWindow.hpp>
+#include <Widgets/EditorFonts.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -280,7 +281,7 @@ TEST_CASE("Settings window: a custom page owns its node's keychord rows; the oth
     CHECK((h.st.last.rows == std::vector<std::string>{ "editor.keys.repeatDelay" }));
 }
 
-TEST_CASE("Settings window: a custom page owns its node's font-family rows; the size and scale rows still draw", "[settings-ui]")
+TEST_CASE("Settings window: the Fonts and Scale page feeds its node's font rows; a family pick is a standard row edit (undo, reset, provenance)", "[settings-ui]")
 {
     WindowHarness h;
     h.kind = SettingsWindowKind::Preferences;
@@ -291,13 +292,32 @@ TEST_CASE("Settings window: a custom page owns its node's font-family rows; the 
     h.st.selected = "Appearance/Fonts and Scale";
     h.Frame();
     h.Frame();
-    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Rows);   // no page: the generic text row draws
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Rows);   // no page: the font row is a text box
     CHECK(h.st.last.rows.size() == 2);
 
+    const std::vector<EditorFontFamily> families{ { "Inter", {}, true }, { "JetBrains Mono", {}, true }, { "Roboto", {}, false } };
     h.pages = { SettingsPageRef{ SettingScope::PreferencesMachine, "Appearance/Fonts and Scale", "Fonts and Scale" } };
-    h.drawPage = [](const std::string&) {};
+    h.drawPage = [&](const std::string&) { SetSettingsFontFamilies(&families); };
     h.Frame();
     h.Frame();
     CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Custom);
-    CHECK((h.st.last.rows == std::vector<std::string>{ "editor.ui.scale" }));
+    // The page does not own the font rows: both still draw as standard rows.
+    CHECK((h.st.last.rows == std::vector<std::string>{ "editor.ui.fontFamily", "editor.ui.scale" }));
+
+    h.Click("Font Family");                     // opens the family combo
+    h.Frame();
+    h.Frame();
+    h.Click("Font Family#font:Roboto  (user)");
+    CHECK(h.reg.RungValue("editor.ui.fontFamily", SetBy::EditorUser) == std::optional<CVarValue>(CVarValue::String("Roboto")));
+    CHECK(h.archive.Dirty());
+    REQUIRE(SettingsUndo(h.st).CanUndo());      // the window's own undo stack
+    SettingsUndo(h.st).Undo();
+    CHECK_FALSE(h.reg.RungValue("editor.ui.fontFamily", SetBy::EditorUser).has_value());
+
+    // --set editor.ui.fontFamily=Roboto: the row shows the CommandLine rung wins (provenance + Clear override).
+    REQUIRE(h.reg.Set(h.reg.Find("editor.ui.fontFamily"), CVarValue::String("Roboto"), SetBy::CommandLine) == SetResult::Applied);
+    h.reg.PublishImmediate();
+    h.Frame();
+    h.Frame();
+    CHECK((h.st.last.overridden == std::vector<std::string>{ "editor.ui.fontFamily" }));
 }

@@ -216,16 +216,16 @@ namespace Arcane::Editor
                 t_pageRow = nullptr;
                 t_pageGrid = nullptr;
             }
-            // A custom page owns its node's keychord and font rows (Preferences >
-            // Keyboard: the chord-listener table, S4-14; Appearance > Fonts and
-            // Scale: the family pickers, S4-17); the generic text field would
-            // only repeat each value below the page.
+            // A custom page owns its node's keychord rows (Preferences >
+            // Keyboard: the chord-listener table, S4-14); the generic text
+            // field would only repeat each binding below the page. Font rows
+            // stay standard rows: the Fonts and Scale page (S4-17) only hands
+            // them the family list (SetSettingsFontFamilies), so a family pick
+            // keeps provenance, Clear override, reset and the window's undo.
             const auto ownedByPage = [&](const std::string& name)
             {
                 const CVarDescInfo* desc = st.model.Desc(name);
-                if (!desc) return false;
-                const RowWidget w = RowWidgetFor(*desc);
-                return w == RowWidget::KeyChord || w == RowWidget::Font;
+                return desc && RowWidgetFor(*desc) == RowWidget::KeyChord;
             };
             if (custom && std::any_of(node->cvars.begin(), node->cvars.end(), ownedByPage))
             {
@@ -342,5 +342,10 @@ namespace Arcane::Editor
     {
         if (!t_pageRow) return false;
         return DrawSettingRow(*t_pageRow, name).drawn;
+    }
+
+    void SetSettingsFontFamilies(const std::vector<EditorFontFamily>* families)
+    {
+        if (t_pageRow) t_pageRow->fontFamilies = families;
     }
 }

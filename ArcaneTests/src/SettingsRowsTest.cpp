@@ -7,6 +7,7 @@
 #include <Settings/SettingsApply.hpp>
 #include <Settings/SettingsRows.hpp>
 #include <Panels/AssetPanelModel.hpp>
+#include <Widgets/EditorFonts.hpp>
 #include <Astra/Registry/Registry.hpp>
 #include <imgui.h>
 
@@ -33,6 +34,7 @@ namespace
         SettingsArchiveQueue archive;
         SettingsWindowKind window = SettingsWindowKind::Project;
         bool projectOpen = true;
+        const std::vector<EditorFontFamily>* fontFamilies = nullptr;
         std::vector<std::string> names;
         std::vector<SettingRowResult> results;
         std::string lastTooltip, lastContextMenu;
@@ -49,7 +51,8 @@ namespace
                 PropertyGrid pg(grid);
                 const SettingsEditSink sink = ArchiveSink(&archive, [] { return 0.0; });
                 SettingsRowContext ctx{ .registry = reg, .window = window, .grid = pg, .undo = undo, .gesture = gesture,
-                                        .memo = memo, .sink = sink, .textDrafts = drafts, .projectOpen = projectOpen };
+                                        .memo = memo, .sink = sink, .textDrafts = drafts, .projectOpen = projectOpen,
+                                        .fontFamilies = fontFamilies };
                 results.clear();
                 {
                     PropertyGrid::Rows rows(pg, "##rows");
@@ -269,4 +272,38 @@ TEST_CASE("With no project open, Project-rung rows are read-only", "[settings-ui
     CHECK(h.results[0].readOnly);
     CHECK_FALSE(h.results[0].overridden);
     CHECK(h.imgui.probe.count("Vsync#reset") == 0);
+}
+
+TEST_CASE("A font row with a family list is a combo: a pick is one undo step and the reset arrow follows", "[settings-ui]")
+{
+    RowHarness h;
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.ui.fontFamily", { .type = CVarType::String, .def = CVarValue::String("Inter"),
+                                                              .widget = "font" }).IsStale());
+    const std::vector<EditorFontFamily> families{ { "Inter", {}, true }, { "Roboto", {}, true }, { "Roboto", {}, false } };
+    h.fontFamilies = &families;
+    h.names = { "editor.ui.fontFamily" };
+    h.Frame();
+    h.Frame();
+    CHECK_FALSE(h.results.at(0).modified);
+    h.Click("Font Family");
+    CHECK_FALSE(ImGui::GetIO().WantTextInput);                             // a combo, not a text box
+    h.Frame();
+    h.Frame();
+    CHECK(h.imgui.probe.count("Font Family#font:Roboto") == 1);           // the bundled face
+    CHECK(h.imgui.probe.count("Font Family#font:Roboto  (user)") == 1);   // the user face of the same stem
+    h.Click("Font Family#font:Roboto  (user)");
+    CHECK(h.reg.RungValue("editor.ui.fontFamily", SetBy::Project) == std::optional<CVarValue>(CVarValue::String("Roboto")));
+    CHECK(h.archive.Dirty());
+    h.Frame();
+    CHECK(h.results.at(0).modified);                                       // the reset arrow is live
+    REQUIRE(h.undo.CanUndo());
+    h.undo.Undo();
+    CHECK_FALSE(h.reg.RungValue("editor.ui.fontFamily", SetBy::Project).has_value());
+    CHECK_FALSE(h.undo.CanUndo());
+
+    h.fontFamilies = nullptr;                   // no list (no Fonts and Scale page): the raw text box
+    h.Frame();
+    h.Frame();
+    h.Click("Font Family");
+    CHECK(ImGui::GetIO().WantTextInput);
 }

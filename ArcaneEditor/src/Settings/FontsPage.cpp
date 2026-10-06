@@ -1,11 +1,9 @@
 #include "Settings/FontsPage.hpp"
 
 #include "Project/ModuleBuild.hpp"
-#include "Settings/EditorUiSettings.hpp"
-#include "Settings/SettingsHost.hpp"
+#include "Settings/SettingsWindow.hpp"
 
 #include <Arcane/Config/CVarRegistry.hpp>
-#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Platform/Paths.hpp>
 
 #include <imgui.h>
@@ -24,26 +22,6 @@ namespace Arcane::Editor
         return ok;
     }
 
-    namespace
-    {
-        void FamilyCombo(const char* label, const char* field, const std::string& current, const std::vector<EditorFontFamily>& families)
-        {
-            if (!ImGui::BeginCombo(label, current.c_str())) return;
-            for (std::size_t i = 0; i < families.size(); ++i)
-            {
-                const EditorFontFamily& f = families[i];
-                const std::string item = f.bundled ? f.name : f.name + "  (user)";
-                ImGui::PushID(static_cast<int>(i));   // a .ttf and an .otf of one stem list twice
-                // The debounced archive writes the pick now; the exit-time
-                // archive alone would lose it to a crash.
-                if (ImGui::Selectable(item.c_str(), f.name == current) && SetUiSetting(field, Arcane::CVarValue::String(f.name)))
-                    NoteSettingEdited(Arcane::SetBy::EditorUser, "editor.ui." + std::string(field));
-                ImGui::PopID();
-            }
-            ImGui::EndCombo();
-        }
-    }
-
     void DrawFontsPage(void* user)
     {
         FontsPageState& st = *static_cast<FontsPageState*>(user);
@@ -55,11 +33,10 @@ namespace Arcane::Editor
             st.families = ListEditorFontFamilies(exe, fonts);
             st.listDirty = false;
         }
-        // A copy: a pick publishes mid-draw, and the next combo reads after it.
-        const EditorUiSettings ui = Arcane::Settings<EditorUiSettings>();
+        // The node's UI font / Monospace font rows (standard rows, drawn below
+        // the page) pick from this list: provenance, reset and undo are theirs.
+        SetSettingsFontFamilies(&st.families);
         ImGui::TextDisabled("Font changes rebuild the atlas at the next frame; scale applies at once.");
-        FamilyCombo("UI font", "fontFamily", ui.fontFamily, st.families);
-        FamilyCombo("Monospace font", "monoFontFamily", ui.monoFontFamily, st.families);
         ImGui::SameLine();
         if (ImGui::SmallButton("Refresh")) st.listDirty = true;
         ImGui::SetItemTooltip("Re-scan the Fonts folder for .ttf and .otf files.");
