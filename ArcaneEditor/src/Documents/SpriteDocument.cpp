@@ -2,7 +2,7 @@
 #include "Input/EditorActions.hpp"
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
-#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData, the PPU row range)
+#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData)
 #include "Settings/DocumentSettings.hpp"  // editor.sprite.*: the PPU range and drag speeds
 #include "Widgets/PropertyGrid.hpp"
 
@@ -386,18 +386,18 @@ namespace Arcane::Editor
         // dirty. m_data still mutates live (the document's crop follows a
         // drag), so dirt is "m_data moved this frame", compared at the end.
         const Arcane::SpriteAssetData shown = m_data;
-        // The row clamps to editor.sprite.ppuMin/ppuMax (S6-35), widened to
-        // assets.sprite.defaultPixelsPerUnit's declared range: whatever that
-        // setting can seed, this row can hold (S6-5). The preference can widen
-        // the row, never narrow it below the seed range.
+        // The row clamps to editor.sprite.ppuMin/ppuMax (S6-35; Live, so a
+        // changed bound takes effect at the next Publish), widened ONLY to
+        // include the sprite's current value: a sprite seeded or saved outside
+        // the preference (S6-5: assets.sprite.defaultPixelsPerUnit reaches
+        // 10000) is held as-is -- ImGui never snaps it to the cap -- and can be
+        // dragged back inside, while ppuMax still limits growth (S6-42 fix 1).
         const SpriteDocSettings& ss = Arcane::Settings<SpriteDocSettings>();
-        double ppuMin = static_cast<double>(ss.ppuMin);
-        double ppuMax = std::max(ppuMin, static_cast<double>(ss.ppuMax));   // an inverted pair collapses to the min
-        if (const std::optional<Astra::Range> seed = SpritePixelsPerUnitRange())
-        {
-            ppuMin = std::min(ppuMin, seed->min);
-            ppuMax = std::max(ppuMax, seed->max);
-        }
+        const double cur = static_cast<double>(m_data.ppu);
+        const double prefMin = static_cast<double>(ss.ppuMin);
+        const double prefMax = std::max(prefMin, static_cast<double>(ss.ppuMax));   // an inverted pair collapses to the min
+        const double ppuMin = std::min(prefMin, cur);
+        const double ppuMax = std::max(prefMax, cur);
         (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, ss.ppuDragSpeed, Astra::Range(ppuMin, ppuMax), "%g");
         bracket("Edit Pixels Per Meter");
 

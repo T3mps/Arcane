@@ -30,9 +30,11 @@ namespace Arcane::Editor
 
     // The declared [min, max] of assets.sprite.defaultPixelsPerUnit, read from
     // the registry's metadata (the declaration above when the registry does
-    // not hold it). The Sprite document's "Pixels Per Meter" row clamps to
-    // it, so every value the setting can seed is one the row can hold and
-    // re-edit -- one range, never a second literal (S6-5 fix round 1).
-    // nullopt only if neither source carries a bound.
+    // not hold it). S6-5 fix round 1 clamped the Sprite document's "Pixels
+    // Per Meter" row to it; since S6-42 fix round 1 that row clamps to
+    // editor.sprite.ppuMin/ppuMax widened only to the sprite's current value,
+    // so a seeded value above ppuMax is still held and re-editable without
+    // this range widening the preference. nullopt only if neither source
+    // carries a bound.
     [[nodiscard]] std::optional<Astra::Range> SpritePixelsPerUnitRange(const CVarRegistry& registry = CVarRegistry::Get());
 }

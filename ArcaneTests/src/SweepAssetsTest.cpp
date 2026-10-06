@@ -142,11 +142,13 @@ TEST_CASE("sweep: a newly minted sprite is seeded from assets.sprite.defaultPixe
     fs::remove_all(dir, ec);
 }
 
-// S6-5 fix round 1: the Sprite document's "Pixels Per Meter" row clamps to
-// the setting's DECLARED range (no second literal), so a project default above
-// the old 4096 row cap mints sprites the row can still hold and re-edit. The
-// drag half is in SpriteDocumentUndoTest.cpp.
-TEST_CASE("sweep: the Pixels Per Meter row range is assets.sprite.defaultPixelsPerUnit's range", "[sweep][assets][sprite]")
+// S6-5 fix round 1: SpritePixelsPerUnitRange reads the setting's DECLARED
+// range (no second literal), and a project default above 4096 mints a sprite
+// carrying it. The Sprite document's row no longer clamps to this range
+// (S6-42 fix round 1): it clamps to editor.sprite.ppuMin/ppuMax widened only
+// to the sprite's current value -- the drag halves (a 5000 sprite re-edits, a
+// non-default ppuMax caps) are in SpriteDocumentUndoTest.cpp.
+TEST_CASE("sweep: SpritePixelsPerUnitRange is assets.sprite.defaultPixelsPerUnit's declared range", "[sweep][assets][sprite]")
 {
     const auto meta = CVarRegistry::Get().Metadata(CVarRegistry::Get().Find("assets.sprite.defaultPixelsPerUnit"));
     REQUIRE(meta.has_value());
