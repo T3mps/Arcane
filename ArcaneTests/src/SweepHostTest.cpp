@@ -14,7 +14,7 @@ TEST_CASE("sweep: host window/boot defaults are the pre-sweep literals (goldens 
     CHECK(RenderWindowSettings{}.width == 1280u);
     CHECK(RenderWindowSettings{}.height == 720u);
     CHECK(RenderWindowSettings{}.resizable);
-    // WindowDesc keeps literal defaults (Window.hpp says why); they must stay RenderWindowSettings{}'s.
+    // WindowDesc defaults from the plain RenderWindowSettings struct (Platform/RenderWindowSettings.hpp).
     CHECK(WindowDesc{}.width == RenderWindowSettings{}.width);
     CHECK(WindowDesc{}.height == RenderWindowSettings{}.height);
     CHECK(WindowDesc{}.resizable == RenderWindowSettings{}.resizable);

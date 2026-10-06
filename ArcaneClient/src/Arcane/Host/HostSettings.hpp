@@ -16,21 +16,18 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Platform/RenderWindowSettings.hpp>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace Arcane
 {
-    struct RenderWindowSettings
-    {
-        std::uint32_t width     = 1280;
-        std::uint32_t height    = 720;
-        bool          resizable = true;
-    };
-
-    // The width/height range is HostConfig's kMinWindowSide..kMaxWindowSide
-    // (HostSettings.cpp static_asserts that the two agree).
+    // The plain RenderWindowSettings struct lives in
+    // Arcane/Platform/RenderWindowSettings.hpp, so WindowDesc can default from
+    // it without the settings headers. The width/height range is HostConfig's
+    // kMinWindowSide..kMaxWindowSide (HostSettings.cpp static_asserts that the
+    // two agree).
     ARC_REFLECT_TYPE(RenderWindowSettings)
         ARC_REFLECT_TYPE_ATTR(Settings, "render.window", SettingScope::Project, ApplyMode::Restart, Audience::Game)
         ARC_REFLECT_FIELD(RenderWindowSettings, width)

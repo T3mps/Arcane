@@ -4,6 +4,7 @@
 // input lives in Arcane/Input (snapshot-driven action system).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Platform/RenderWindowSettings.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -16,14 +17,12 @@ namespace Arcane
     struct WindowDesc
     {
         std::string title = "Arcane";
-        // The host window's extent comes from render.window.* (GpuContext);
-        // these equal RenderWindowSettings{} (SweepHostTest pins it). Not read
-        // from it here: Window.hpp stays free of the settings headers, which
-        // NRI's headers cannot follow (they pull Astra's windows.h, whose
-        // wingdi ERROR macro breaks NRI's Message enum).
-        uint32_t width    = 1280;
-        uint32_t height   = 720;
-        bool resizable    = true;
+        // render.window.*'s defaults. The host window's live extent comes from
+        // the published settings (GpuContext); RenderWindowSettings.hpp is the
+        // plain struct, free of the settings headers NRI cannot follow.
+        uint32_t width    = RenderWindowSettings{}.width;
+        uint32_t height   = RenderWindowSettings{}.height;
+        bool resizable    = RenderWindowSettings{}.resizable;
         bool hidden       = false;  // tests create hidden windows
         bool vulkan       = false;  // set true for Vulkan windows (SDL_WINDOW_VULKAN)
     };
