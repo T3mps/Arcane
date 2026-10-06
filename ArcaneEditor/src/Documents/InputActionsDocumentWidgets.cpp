@@ -3,10 +3,13 @@
 #include "Documents/InputActionsJson.hpp"
 #include "Input/EditorActions.hpp"
 #include "Input/MenuShortcut.hpp"
+#include "Settings/EditorDocumentUiSettings.hpp"
 
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 
@@ -476,7 +479,7 @@ namespace Arcane::Editor
         {
             const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(lo, hi, ImGui::ColorConvertFloat4ToU32(Theme::WithAlpha(Theme::kAmber, 0.12f + 0.2f * std::min(v, 1.0f))));
+            dl->AddRectFilled(lo, hi, ImGui::ColorConvertFloat4ToU32(Theme::WithAlpha(Theme::kAmber, LiveHighlightAlpha(Arcane::Settings<InputEditorSettings>(), v))));
             dl->AddRectFilled(lo, ImVec2(lo.x + 2.0f, hi.y), ImGui::ColorConvertFloat4ToU32(Theme::kAmber));
         }
 

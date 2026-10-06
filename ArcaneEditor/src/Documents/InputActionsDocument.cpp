@@ -1,11 +1,13 @@
 #include "Documents/InputActionsDocument.hpp"
 #include "Input/EditorActions.hpp"
+#include "Settings/EditorDocumentUiSettings.hpp"
 
 #include "Documents/InputActionsJson.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -143,7 +145,7 @@ namespace Arcane::Editor
     {
         if (!target.IsValid() || pending_) return;   // one capture at a time: the page's Rebind... waits for the pending add
         captureTarget_ = target;
-        capture_.Begin(target, std::nullopt, 10.0f, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
+        capture_.Begin(target, std::nullopt, Arcane::Settings<InputEditorSettings>().rebindTimeoutSeconds, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
     }
 
     void InputActionsDocument::BeginRebindFromPage(const Guid& target)
@@ -169,7 +171,7 @@ namespace Arcane::Editor
         // Any non-nil id (InputRebindOperation.cpp:48); never a row's, so no row
         // shows the rebind countdown. InputSwallowed() covers every step.
         captureTarget_ = Guid::Generate();
-        capture_.Begin(captureTarget_, std::nullopt, 10.0f, previewSnapshot_);
+        capture_.Begin(captureTarget_, std::nullopt, Arcane::Settings<InputEditorSettings>().rebindTimeoutSeconds, previewSnapshot_);
     }
 
     void InputActionsDocument::FinishPending()
