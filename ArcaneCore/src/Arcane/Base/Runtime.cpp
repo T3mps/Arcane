@@ -134,7 +134,9 @@ namespace Arcane
         // process-wide. Its OpenProject neither configures Paths nor layers
         // its rungs over the owner's, and its CloseProject or destruction
         // releases nothing of the owner's. The Impl address is the identity.
-        // Main thread only, like OpenProject.
+        // Touched only by OpenProject, CloseProject and ~Runtime, which a host
+        // already serializes (ProjectBoot's project_open stage runs on a boot
+        // worker, ordered after runtime_create and before any close).
         const void* g_projectOwner = nullptr;
 
         // Paths follows the OWNER's project. It is cleared only when the
