@@ -45,6 +45,7 @@ namespace Arcane
         WindowEvents PumpEvents();
 
         void SetTitle(const std::string& title);
+        [[nodiscard]] float DisplayScale() const;   // the monitor's content scale (1.0 without a window)
         void SetSize(uint32_t width, uint32_t height);
 
         // Un-hide a window created with WindowDesc::hidden. Hosts create hidden

@@ -801,6 +801,7 @@ namespace Arcane::Editor
         // Both run inside the canvas Begin/End (they use ed:: selection and
         // canvas-space coordinates).
         [[nodiscard]] std::string BuildGraphClipJson();   // "" = nothing copyable
+        void DeleteCanvasSelection();   // queue selected nodes and links for the canvas delete pass
         void PasteGraphClipText(const char* text);              // ignores foreign clips
         // One undo step per completed graph gesture: `before` was captured at
         // the gesture start; `after` is read from the graph at push time. The

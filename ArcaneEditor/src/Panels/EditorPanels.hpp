@@ -83,6 +83,7 @@ namespace Arcane::Editor
         bool openScene = false;      // File -> Open Scene...     (open-file dialog)
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
+        bool closeDocument = false;  // File -> Close Document / Ctrl+W
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
         bool openIde = false;        // Build -> Open Visual Studio (IdeLaunch; generates the .slnx first if missing)
         bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
@@ -158,7 +159,8 @@ namespace Arcane::Editor
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents = nullptr,
-                        const SceneRecents::List* sceneRecents = nullptr);
+                        const SceneRecents::List* sceneRecents = nullptr,
+                        bool closeableDocument = false);
 
     // The default layout's "Assets only" Inspector window (inspector filters
     // spec s6): InspectorWindowTitle's id for InspectorHost::kAssetsInstanceId.

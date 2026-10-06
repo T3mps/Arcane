@@ -6,6 +6,7 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::FontPx -- the cards' 13px secondary text follows editor.ui.fontSize
 
 #include <Arcane/Guid.hpp>
 
@@ -62,7 +63,7 @@ namespace Arcane::Editor
         // one section's last item and the next section's label -- the board's
         // ~13px). The pill line height this file needs, to vertically centre a
         // pill it positions BY HAND rather than by SameLine, is the widget
-        // layer's own exported kPillLineHeight (EditorWidgets.hpp) -- it used
+        // layer's own exported PillLineHeight() (EditorWidgets.hpp) -- it used
         // to be restated here as a second 16px constant nothing kept in step.
         constexpr float kStatusTileHeight      = 64.0f;
         constexpr float kStatusTileMinWidth    = 72.0f;
@@ -131,7 +132,7 @@ namespace Arcane::Editor
             // The card's inner padding, DERIVED rather than duplicated:
             // BeginCardFrame seats the cursor exactly one padding in from the
             // frame's top-left corner, so this difference IS
-            // EditorWidgets.cpp's kCardFramePadding without a second copy of
+            // EditorWidgets.cpp's CardFramePadding() without a second copy of
             // that constant living here to drift from it.
             const ImVec2 innerMin = ImGui::GetCursorScreenPos();
             const float  pad      = innerMin.x - cardMin.x;
@@ -150,7 +151,7 @@ namespace Arcane::Editor
             float line3 = 0.0f;
             if (!refused)
             {
-                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(13.0f));
                 line3 = ImGui::GetTextLineHeight();
                 ImGui::PopFont();
             }
@@ -263,7 +264,7 @@ namespace Arcane::Editor
 
             if (refused)
             {
-                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - kPillLineHeight) * 0.5f));
+                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - PillLineHeight()) * 0.5f));
                 AssetPill(kindText);
             }
             else
@@ -335,7 +336,7 @@ namespace Arcane::Editor
                 char caption[32];
                 std::snprintf(caption, sizeof(caption), "%d of %d cooked",
                              queuedCooked, queuedCookedAndQueued);
-                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(13.0f));
                 dl->AddText(ImVec2(innerMin.x, line2Y + kStatusProgressHeight + kStatusProgressCaptionGap),
                            ImGui::GetColorU32(Theme::kTextDim), caption);
                 ImGui::PopFont();
@@ -486,9 +487,9 @@ namespace Arcane::Editor
 
                     // Name, chip-style -- AssetPill, vertically centered the
                     // same way DrawAttentionCard positions its own trailing
-                    // pill (rowH - kPillLineHeight, halved).
+                    // pill (rowH - PillLineHeight(), halved).
                     ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kAssetRowThumbSize + style.ItemInnerSpacing.x,
-                                                     rowMin.y + (rowH - kPillLineHeight) * 0.5f));
+                                                     rowMin.y + (rowH - PillLineHeight()) * 0.5f));
                     AssetPill(e->fileName.c_str());
 
                     ImGui::SetCursorScreenPos(ImVec2(revealX, rowMin.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));

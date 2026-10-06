@@ -84,7 +84,7 @@ namespace Arcane::Editor
     // border" among that token's own citations. Both files re-spelled the token
     // as a literal; this spends it where it was authored to be spent. Hover
     // cyan has no theme token (it is canvas-only language), so it lives here.
-    inline constexpr ImVec4 kGraphNodeSelBorderColor = Theme::kAmber;
+    inline constexpr const ImVec4& kGraphNodeSelBorderColor = Theme::kAmber;
     inline constexpr ImVec4 kGraphNodeHovBorderColor = ImVec4(0.25f, 0.70f, 1.0f, 1.0f);
 
     namespace ed = ax::NodeEditor;
@@ -188,5 +188,7 @@ namespace Arcane::Editor
         s.HoveredNodeBorderWidth  = desc.hovBorderWidth;
         s.SelectedNodeBorderWidth = desc.selBorderWidth;
         s.NodePadding             = desc.nodePadding;
+        // EditorActions owns canvas shortcuts, including F, Delete and clipboard.
+        ed::EnableShortcuts(false);
     }
 }

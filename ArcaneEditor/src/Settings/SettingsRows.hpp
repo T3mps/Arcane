@@ -25,6 +25,7 @@
 namespace Arcane::Editor
 {
     struct AssetRefServices;
+    struct EditorFontFamily;
 
     enum class RowWidget : std::uint8_t { Checkbox, Int, IntText, Float, Slider, Double, Text, Asset, Path, Color, Vec, Enum, KeyChord, Font };
     [[nodiscard]] RowWidget RowWidgetFor(const CVarDescInfo& desc) noexcept;
@@ -58,6 +59,9 @@ namespace Arcane::Editor
         const AssetRefServices* assetRefs = nullptr;                 // null: asset rows draw as text
         std::function<void(const std::string& cvar, bool folder)> browsePath;   // null: no Browse button
         bool projectOpen = true;                  // false: Project and User-rung rows are read-only
+        // A "font" row's family combo picks from this list (filled by the node's
+        // custom page, Fonts and Scale, S4-17); null: the row is a raw text box.
+        const std::vector<EditorFontFamily>* fontFamilies = nullptr;
         // TEST SEAMS, written by the rows this frame (S3-9):
         std::string lastTooltip;
         std::string lastContextMenu;

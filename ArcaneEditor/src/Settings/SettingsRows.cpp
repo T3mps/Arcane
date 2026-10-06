@@ -3,6 +3,7 @@
 #include "Panels/AssetPanelModel.hpp"        // AssetKind, KindLabel, kAssetKindCount
 #include "Panels/AssetReferenceField.hpp"    // AssetRefRow
 #include "Settings/SettingsModel.hpp"        // SettingDisplayName
+#include "Widgets/EditorFonts.hpp"          // EditorFontFamily
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"         // InputTextString
 #include "Widgets/IconsLucide.h"
@@ -197,6 +198,31 @@ namespace Arcane::Editor
             ctx.grid.EndCustomRow(label.c_str());
             if (done && draft != current) return draft;
             return std::nullopt;
+        }
+
+        // A "font" row's family combo: a user family is labelled "(user)"; the
+        // current value previews even when it is not in the list (a missing
+        // user font). Returns the picked family when it differs.
+        std::optional<std::string> FontCombo(SettingsRowContext& ctx, const std::string& label, const std::string& current)
+        {
+            std::optional<std::string> picked;
+            ctx.grid.BeginCustomRow(label.c_str(), false);
+            if (ImGui::BeginCombo("##value", current.c_str()))
+            {
+                const std::vector<EditorFontFamily>& families = *ctx.fontFamilies;
+                for (std::size_t i = 0; i < families.size(); ++i)
+                {
+                    const EditorFontFamily& fam = families[i];
+                    const std::string item = fam.bundled ? fam.name : fam.name + "  (user)";
+                    ImGui::PushID(static_cast<int>(i));   // a .ttf and an .otf of one stem list twice
+                    if (ImGui::Selectable(item.c_str(), fam.name == current) && fam.name != current) picked = fam.name;
+                    ctx.grid.ProbeItem((label + "#font:" + item).c_str());   // TEST SEAM: the item's centre
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            ctx.grid.EndCustomRow(label.c_str());
+            return picked;
         }
 
         struct BadgeStyle { const char* icon; ImVec4 color; const char* tooltip; };
@@ -414,10 +440,16 @@ namespace Arcane::Editor
                 const std::optional<CVarValue> parsed = ParseIntegral(d.type, *text);
                 return parsed && Commit(ctx, d, *parsed);
             }
+            case RowWidget::Font:
+                if (ctx.fontFamilies)
+                {
+                    const std::optional<std::string> family = FontCombo(ctx, label, f.effective.AsString());
+                    return family && Commit(ctx, d, CVarValue::String(*family));
+                }
+                [[fallthrough]];        // no family list (no Fonts and Scale page): raw text
             case RowWidget::Text:
             case RowWidget::Path:
-            case RowWidget::KeyChord:   // S4 replaces with the chord listener
-            case RowWidget::Font:       // S4 replaces with the family combo
+            case RowWidget::KeyChord:   // raw text; a custom page (Keyboard) owns these rows on its node
             {
                 const std::optional<std::string> text = TextField(ctx, d, label, f.effective.AsString());
                 return text && Commit(ctx, d, CVarValue::String(*text));

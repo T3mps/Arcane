@@ -1,4 +1,5 @@
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Documents/MaterialSpherePreview.hpp"   // the mesh-surface preview sphere, shared with the thumbnails (T3-D6)
 #include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
@@ -341,7 +342,7 @@ namespace Arcane::Editor
         // other panel body is. Referencing the theme constant keeps them from
         // drifting apart; the value is unchanged (#1e1e1e), so the approved
         // canvas look is untouched.
-        constexpr ImVec4 kCanvasColor      = Theme::kPanel;                        // #1e1e1e
+        constexpr const ImVec4& kCanvasColor      = Theme::kPanel;                        // #1e1e1e
         // The grid palette moved to Widgets/GraphCanvasStyle.hpp
         // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09): the pair
         // was byte-identical to the Graph lens's, which had inherited it rather
@@ -2104,14 +2105,8 @@ namespace Arcane::Editor
         // region inside the document still count as "in this document".
         m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-        // Ctrl+S saves -- the toolbar button this replaced is gone. Shortcut()
-        // (not IsKeyChordPressed) so it ROUTES to whichever document owns focus
-        // (imgui.h:1106-1114, default ImGuiInputFlags_RouteFocused): with
-        // several material/sprite documents open, each one's Ctrl+S only fires
-        // for the one on top. Same binding SpriteDocument uses
-        // (SpriteDocument.cpp:181-187), deliberately -- one shape for "the
-        // focused document saves itself".
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+        if (m_windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Document);
+        if (m_windowFocused && EditorActions::Get().Pressed("document.save"))
             RequestSave();
 
         DrawToolbar();
@@ -3800,6 +3795,9 @@ namespace Arcane::Editor
         }
         }   // ~CanvasCreateScope -> ed::EndCreate()
 
+        if (ed::IsActive() && !ImGui::GetIO().WantTextInput && EditorActions::Get().Pressed("graph.delete"))
+            DeleteCanvasSelection();
+
         // ---- deletions: links = unwire a slot; nodes = remove the pass
         std::vector<std::pair<std::uint32_t, std::uint32_t>> unwire;
         std::vector<std::uint32_t> removePasses;   // chain indices
@@ -3866,9 +3864,9 @@ namespace Arcane::Editor
             structural = true;
         }
 
-        // F = frame, exactly like the graph canvas.
-        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_F, false))
+        // Frame the pass canvas with the current graph chord.
+        if (ImGui::IsWindowHovered() || ed::IsActive()) EditorActions::Get().MarkContextActive(ActionContext::Graph);
+        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput && EditorActions::Get().Pressed("graph.frameSelected"))
         {
             if (ed::GetSelectedObjectCount() > 0)
                 ed::NavigateToSelection(true);
@@ -4374,7 +4372,7 @@ namespace Arcane::Editor
         }
         // Mid-DRAG only: the text-entry mode (Ctrl+click / double-click) has no
         // button down, and its InputText reverts on Esc by itself.
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !EditorActions::Get().Pressed("ui.cancel"))
             return false;
         std::memcpy(values, m_canvasDragSeed.v, sizeof(float) * static_cast<std::size_t>(lanes));
         if (existed)
@@ -5011,10 +5009,9 @@ namespace Arcane::Editor
         else
             m_focusNode = 0;
 
-        // F = frame (the UE/SG muscle memory): zoom to the selection, or to
-        // everything when nothing is selected.
-        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_F, false))
+        // Frame the graph selection, or everything when nothing is selected.
+        if (ImGui::IsWindowHovered() || ed::IsActive()) EditorActions::Get().MarkContextActive(ActionContext::Graph);
+        if (ImGui::IsWindowHovered() && !ImGui::GetIO().WantTextInput && EditorActions::Get().Pressed("graph.frameSelected"))
         {
             if (ed::GetSelectedObjectCount() > 0)
                 ed::NavigateToSelection(true);
@@ -6580,45 +6577,50 @@ namespace Arcane::Editor
             PushGraphUndo("Delete", std::move(before));
         }
 
-        // Copy/paste/cut/duplicate: ed's shortcut actions (canvas focus only).
-        // WantTextInput keeps in-canvas text edits (param names, masks) from
-        // being hijacked. Cut deletes through ed::DeleteNode so the delete
-        // pass above owns the model erase + its undo step (next frame).
-        if (ed::BeginShortcut())
+        // Canvas focus only. The node editor's built-in shortcuts are disabled.
+        if (ed::IsActive())
         {
+            EditorActions& keys = EditorActions::Get();
+            keys.MarkContextActive(ActionContext::Graph);
             if (!ImGui::GetIO().WantTextInput)
             {
-                if (ed::AcceptCopy())
+                if (keys.Pressed("graph.copy"))
                 {
                     const std::string clip = BuildGraphClipJson();
-                    if (!clip.empty())
-                        ImGui::SetClipboardText(clip.c_str());
+                    if (!clip.empty()) ImGui::SetClipboardText(clip.c_str());
                 }
-                else if (ed::AcceptCut())
+                else if (keys.Pressed("graph.cut"))
                 {
                     const std::string clip = BuildGraphClipJson();
                     if (!clip.empty())
                     {
                         ImGui::SetClipboardText(clip.c_str());
-                        std::vector<ed::NodeId> sel(
-                            static_cast<std::size_t>(std::max(0, ed::GetSelectedObjectCount())));
-                        const int count = sel.empty() ? 0
-                            : ed::GetSelectedNodes(sel.data(), static_cast<int>(sel.size()));
-                        for (int i = 0; i < count; ++i)
-                            ed::DeleteNode(sel[static_cast<std::size_t>(i)]);
+                        DeleteCanvasSelection();
                     }
                 }
-                else if (ed::AcceptPaste())
+                else if (keys.Pressed("graph.paste"))
                     PasteGraphClipText(ImGui::GetClipboardText());
-                else if (ed::AcceptDuplicate())
+                else if (keys.Pressed("graph.duplicate"))
                 {
                     const std::string clip = BuildGraphClipJson();
-                    if (!clip.empty())
-                        PasteGraphClipText(clip.c_str());
+                    if (!clip.empty()) PasteGraphClipText(clip.c_str());
                 }
+                else if (keys.Pressed("graph.delete"))
+                    DeleteCanvasSelection();
             }
-            ed::EndShortcut();
         }
+    }
+
+    void ShaderEditorDocument::DeleteCanvasSelection()
+    {
+        const int count = std::max(0, ed::GetSelectedObjectCount());
+        if (count == 0) return;
+        std::vector<ed::NodeId> nodes(static_cast<std::size_t>(count));
+        nodes.resize(static_cast<std::size_t>(ed::GetSelectedNodes(nodes.data(), count)));
+        for (const ed::NodeId n : nodes) ed::DeleteNode(n);
+        std::vector<ed::LinkId> links(static_cast<std::size_t>(count));
+        links.resize(static_cast<std::size_t>(ed::GetSelectedLinks(links.data(), count)));
+        for (const ed::LinkId l : links) ed::DeleteLink(l);
     }
 
     std::string ShaderEditorDocument::BuildGraphClipJson()

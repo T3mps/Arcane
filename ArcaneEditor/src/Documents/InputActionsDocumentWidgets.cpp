@@ -1,6 +1,8 @@
 #include "Documents/InputActionsDocumentWidgets.hpp"
 
 #include "Documents/InputActionsJson.hpp"
+#include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -102,7 +104,7 @@ namespace Arcane::Editor
             RefusedFieldTooltip(reason);   // on hover, active or held (the Inspector Name row's rule)
             if (ImGui::IsItemDeactivated())
             {
-                const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                const bool cancelled = EditorActions::Get().Pressed("ui.cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape);
                 if (cancelled || !reason)
                 {
                     const std::string trimmed = TrimName(state.renameBuf);
@@ -129,6 +131,7 @@ namespace Arcane::Editor
             // focus, or Del would delete the SELECTED row, not the right-clicked
             // one. Keys stay inert while any popup owns focus.
             if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) || ImGui::GetIO().WantTextInput) return false;
+            EditorActions::Get().MarkContextActive(ActionContext::InputDocument);
             return !state.renameTarget.IsValid();   // safe: DrawActions/DrawMaps sweep a target whose row is not drawn this frame
         }
 
@@ -308,14 +311,14 @@ namespace Arcane::Editor
             if (model.SelectedMap() == id && state.scrollMapToSelection) { ImGui::SetScrollHereY(); state.scrollMapToSelection = false; }
             if (ImGui::BeginPopupContextItem("##mapmenu"))
             {
-                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, id);
+                if (ImGui::MenuItem("Rename", MenuKey("input.rename").c_str())) OpenRenameOn(model, state, id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollMapToSelection = true; };
                 if (ImGui::MenuItem("Set as default", nullptr, Str(draft, "defaultMap") == id.ToString()))
                     edit = [&model, id] { (void)model.SetDefaultMap(id); };
                 ImGui::Separator();
                 MoveRowMenu(model, id, edit);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, id] { (void)model.RemoveMap(id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, id] { (void)model.RemoveMap(id); };
                 ImGui::EndPopup();
             }
             ImGui::SetCursorScreenPos(row.trailingPos);
@@ -520,7 +523,7 @@ namespace Arcane::Editor
         {
             if (row.kind == InputRowKind::Action)
             {
-                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
+                if (ImGui::MenuItem("Rename", MenuKey("input.rename").c_str())) OpenRenameOn(model, state, row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollRowToSelection = true; };
                 const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
                 if (ImGui::MenuItem("Add binding") && services.beginAdd) services.beginAdd(MakeAddBinding(map, row.id, groups));
@@ -531,7 +534,7 @@ namespace Arcane::Editor
                     ImGui::EndMenu();
                 }
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, id = row.id] { (void)model.RemoveAction(map, id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, map, id = row.id] { (void)model.RemoveAction(map, id); };
             }
             else if (row.kind == InputRowKind::CompositeHeader)
             {
@@ -549,14 +552,14 @@ namespace Arcane::Editor
                 }
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str())) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
             }
             else   // Binding / Part
             {
-                if (ImGui::MenuItem("Rebind...", "Enter") && services.beginRebind) services.beginRebind(row.id);
+                if (ImGui::MenuItem("Rebind...", MenuKey("input.rebind").c_str()) && services.beginRebind) services.beginRebind(row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del"))
+                if (ImGui::MenuItem("Delete", MenuKey("input.delete").c_str()))
                 {
                     if (row.kind == InputRowKind::Part) edit = [&model, composite = row.bindingId, id = row.id] { (void)model.RemovePart(composite, id); };
                     else edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
@@ -689,8 +692,8 @@ namespace Arcane::Editor
             if (const auto next = StepSelection(rows, current, dir))
                 for (const auto& r : rows) if (r.id == *next && r.kind != InputRowKind::AddBinding) { SelectRow(model, r); state.scrollRowToSelection = true; break; }
         };
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);   // navigation repeats (UE SListView)
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
+        if (EditorActions::Get().PressedRepeat("input.selectNext")) step(+1);
+        if (EditorActions::Get().PressedRepeat("input.selectPrev")) step(-1);
         if (!row) return;
         const std::string actionKey = row->actionId.ToString();
         const bool searching = state.search[0] != '\0';   // a search forces every action open: Left/Right never edit collapsedActions then
@@ -704,37 +707,34 @@ namespace Arcane::Editor
         // the parent row (no collapse); Right expands a collapsed action,
         // otherwise descends to the first child. Commands (Left/Right/Enter/F2/
         // Delete) never auto-repeat: repeat = false, as the Outliner passes.
-        // Alt-modified presses are left alone (window/menu chords).
-        if (!ImGui::GetIO().KeyAlt)
+        // The action chord includes exact modifiers, so Alt+Left remains free.
+        if (EditorActions::Get().Pressed("input.collapseOrParent"))
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false))
+            if (row->kind == InputRowKind::Action)
             {
-                if (row->kind == InputRowKind::Action)
-                {
-                    if (!collapsed && !searching) state.collapsedActions.insert(actionKey);   // already collapsed: no-op
-                }
-                else if (row->kind == InputRowKind::Part)
-                {
-                    if (const auto* parent = rowById(InputRowKind::CompositeHeader, row->bindingId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
-                }
-                else if (const auto* parent = rowById(InputRowKind::Action, row->actionId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
+                if (!collapsed && !searching) state.collapsedActions.insert(actionKey);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false))
+            else if (row->kind == InputRowKind::Part)
             {
-                if (row->kind == InputRowKind::Action && collapsed) state.collapsedActions.erase(actionKey);
-                else if (row->kind == InputRowKind::Action || row->kind == InputRowKind::CompositeHeader)
-                {
-                    const std::size_t at = static_cast<std::size_t>(row - rows.data());
-                    if (at + 1 < rows.size() && rows[at + 1].depth > row->depth && rows[at + 1].kind != InputRowKind::AddBinding)
-                    { SelectRow(model, rows[at + 1]); state.scrollRowToSelection = true; }
-                }
+                if (const auto* parent = rowById(InputRowKind::CompositeHeader, row->bindingId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
+            }
+            else if (const auto* parent = rowById(InputRowKind::Action, row->actionId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
+        }
+        if (EditorActions::Get().Pressed("input.expandOrChild"))
+        {
+            if (row->kind == InputRowKind::Action && collapsed) state.collapsedActions.erase(actionKey);
+            else if (row->kind == InputRowKind::Action || row->kind == InputRowKind::CompositeHeader)
+            {
+                const std::size_t at = static_cast<std::size_t>(row - rows.data());
+                if (at + 1 < rows.size() && rows[at + 1].depth > row->depth && rows[at + 1].kind != InputRowKind::AddBinding)
+                { SelectRow(model, rows[at + 1]); state.scrollRowToSelection = true; }
             }
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) && (row->kind == InputRowKind::Binding || row->kind == InputRowKind::Part) && services.beginRebind)
+        if (EditorActions::Get().Pressed("input.rebind") && (row->kind == InputRowKind::Binding || row->kind == InputRowKind::Part) && services.beginRebind)
             services.beginRebind(row->id);
-        if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && row->kind == InputRowKind::Action)
+        if (EditorActions::Get().Pressed("input.rename") && row->kind == InputRowKind::Action)
             OpenRenameOn(model, state, row->id);   // the same entry as the context menu's Rename
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        if (EditorActions::Get().Pressed("input.delete"))
         {
             const Guid map = model.SelectedMap();
             switch (row->kind)
@@ -765,10 +765,10 @@ namespace Arcane::Editor
                                                         : std::clamp<std::ptrdiff_t>((index - ids.begin()) + dir, 0, static_cast<std::ptrdiff_t>(ids.size()) - 1);
             model.SelectMap(ids[static_cast<std::size_t>(i)]); state.scrollMapToSelection = true;
         };
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
+        if (EditorActions::Get().PressedRepeat("input.selectNext")) step(+1);
+        if (EditorActions::Get().PressedRepeat("input.selectPrev")) step(-1);
         if (index == ids.end()) return;
-        if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) OpenRenameOn(model, state, current);
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) edit = [&model, id = current] { (void)model.RemoveMap(id); };
+        if (EditorActions::Get().Pressed("input.rename")) OpenRenameOn(model, state, current);
+        if (EditorActions::Get().Pressed("input.delete")) edit = [&model, id = current] { (void)model.RemoveMap(id); };
     }
 }

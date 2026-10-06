@@ -4,10 +4,11 @@
 // Editor Preferences or Project Settings from a SettingsWindowEnv --
 // the category tree (left), search + filter + Show advanced (top), the
 // Restart bar and the next-world note, and the selected category's page
-// (right): its custom page if one is registered, then its rows, its child
-// categories as sub-headers. Window-local undo (Ctrl+Z / Ctrl+Y while the
-// window is focused); a game module's vanished category shows "Module
-// unloaded" and repopulates on reload; closing flushes the archive.
+// (right): its custom page if one is registered (which owns the node's
+// keychord rows), then its rows, its child categories as sub-headers.
+// Window-local undo (Ctrl+Z / Ctrl+Y while the window is focused); a game
+// module's vanished category shows "Module unloaded" and repopulates on
+// reload; closing flushes the archive.
 // The process-wide pair and the contract entry points: SettingsHost.
 
 #include "Scene/EditGesture.hpp"
@@ -86,4 +87,8 @@ namespace Arcane::Editor
     // and undo as the generated rows) -- call it inside a PropertyGrid::Rows.
     [[nodiscard]] PropertyGrid& CurrentSettingsGrid();
     bool SettingsRow(std::string_view name);
+    // The node's "font" rows (drawn after the page, this frame) pick from
+    // `families` instead of a text box; it must outlive the frame. Outside a
+    // page's draw function it does nothing.
+    void SetSettingsFontFamilies(const std::vector<EditorFontFamily>* families);
 }

@@ -12,6 +12,8 @@
 // FieldInfo-taking convenience overloads live one level up. That is what lets
 // non-Inspector callers (documents, tool panels) reach the same widgets.
 
+#include "Widgets/UiMetrics.hpp"
+
 #include <Arcane/Util/FunctionRef.hpp>
 
 #include <Astra/Reflection/Attribute.hpp>   // Astra::Range ONLY -- see above
@@ -237,13 +239,14 @@ namespace Arcane::Editor
     // HAND (AssetStatusPanel.cpp's cards vertically centre one inside a row
     // rect instead of chaining SameLine) needs the number, and re-declaring it
     // there made two constants nothing kept in step.
-    inline constexpr float kPillLineHeight = 16.0f;
+    // The pill line (spec §11.2's 16 px at the 16 px UI font): tracks the text (settings S4).
+    [[nodiscard]] inline float PillLineHeight() noexcept { return Ui::TextPx(16.0f); }
 
     // 12px bordered label (spec §11.2). variant: 0 = neutral (#333333 border,
     // TextDisabled-ish #9a9a9a text), 1 = amber (border #7a5a20, text
     // Theme::kAmber), 2 = blue-grey scheme tint (border #3a4a5c, text
     // #9fb3c8), 3 = violet-grey scheme tint (border #4a3a5c, text #b8a3c8)
-    // (input editor spec s2.3). kPillLineHeight line height; chain several
+    // (input editor spec s2.3). PillLineHeight() line height; chain several
     // with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
@@ -306,7 +309,7 @@ namespace Arcane::Editor
     };
     AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
                                 const char* name, bool selected, float indent,
-                                float rowHeight = 24.0f);
+                                float rowHeight = Ui::TextPx(24.0f));
 
     // ---- status lens vocabulary (Plan 2) -----------------------------------
     // Model-free ImGui draw helpers the Status lens dashboard draws out of

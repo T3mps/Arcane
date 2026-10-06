@@ -1,4 +1,5 @@
 #include "Documents/MeshDocument.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Panels/AssetPanelModel.hpp"         // AssetKind (the material row's kind filter)
 #include "Panels/AssetReferenceField.hpp"     // AssetRefRow / AssetRefArgs / AssetRefEdit
@@ -524,7 +525,8 @@ namespace Arcane::Editor
         }
         m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+        if (m_windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Document);
+        if (m_windowFocused && EditorActions::Get().Pressed("document.save"))
             Save();
         if (ImGui::Button("Save"))
             Save();

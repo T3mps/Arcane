@@ -68,98 +68,123 @@ namespace Arcane::Editor
             return (hi + 0.05f) / (lo + 0.05f);
         }
 
-        // -- CHROME -------------------------------------------------------
-        // Title bars sit at the bottom of the ramp (near-black in the
-        // reference); the menu bar / tab strip / popups one step above.
-        inline constexpr ImVec4 kChromeDeep   = ImVec4(0.047f, 0.047f, 0.047f, 1.00f); // #0c0c0c
-        inline constexpr ImVec4 kChrome       = ImVec4(0.098f, 0.098f, 0.098f, 1.00f); // #191919
+        // ---- THE PALETTE (settings arc S4, spec s7.1) -------------------
+        // Every colour token the editor draws with. kDarkPalette is today's
+        // theme and the default of EditorThemeSettings; Live() is the palette
+        // in force, swapped by the editor when a theme cvar publishes
+        // (Settings/AppearanceApplier). The named tokens below are constant
+        // REFERENCES into the live palette, so every existing Theme::kX read
+        // follows a re-theme with no call-site change. Hosts without a
+        // registry (ArcaneCrashReporter) never swap it and draw Dark.
+        struct Palette
+        {
+            ImVec4 chromeDeep, chrome;
+            ImVec4 panel, panelRaised;
+            ImVec4 well, wellHovered, wellActive;
+            ImVec4 button, buttonHovered, buttonActive;
+            ImVec4 selection;
+            ImVec4 accent, accentHovered, accentActive;
+            ImVec4 text, textDim, border, separator, separatorHot, separatorHeld;
+            ImVec4 grab, grabActive, check;
+            ImVec4 amber, amberLight, error, warning;
+            ImVec4 axisX, axisY, axisZ;
+            ImVec4 modalDim, rowStripe;
+        };
 
-        // -- PANEL --------------------------------------------------------
-        // kPanel is the editor's base surface. kPanelRaised is the one step
-        // up used for transient row/tab hover. (Table header bands moved to
-        // kChrome -- sharing the hover tone made headers read as rows.)
-        inline constexpr ImVec4 kPanel        = ImVec4(0.118f, 0.118f, 0.118f, 1.00f); // #1e1e1e
-        inline constexpr ImVec4 kPanelRaised  = ImVec4(0.165f, 0.165f, 0.165f, 1.00f); // #2a2a2a
+        // The three tonal layers, the two hues and the data marks described at
+        // the top of this file. Every value is today's, verbatim.
+        inline constexpr Palette kDarkPalette = {
+            ImVec4(0.047f, 0.047f, 0.047f, 1.00f),   // chromeDeep    #0c0c0c  title bars, scrollbar track
+            ImVec4(0.098f, 0.098f, 0.098f, 1.00f),   // chrome        #191919  menu bar, popups, table headers
+            ImVec4(0.118f, 0.118f, 0.118f, 1.00f),   // panel         #1e1e1e  base surface
+            ImVec4(0.165f, 0.165f, 0.165f, 1.00f),   // panelRaised   #2a2a2a  row/tab hover
+            ImVec4(0.071f, 0.071f, 0.071f, 1.00f),   // well          #121212  input wells (darker than panel: inset)
+            ImVec4(0.094f, 0.094f, 0.094f, 1.00f),   // wellHovered   #181818
+            ImVec4(0.110f, 0.110f, 0.110f, 1.00f),   // wellActive    #1c1c1c
+            ImVec4(0.184f, 0.184f, 0.184f, 1.00f),   // button        #2f2f2f
+            ImVec4(0.239f, 0.239f, 0.239f, 1.00f),   // buttonHovered #3d3d3d
+            ImVec4(0.294f, 0.294f, 0.294f, 1.00f),   // buttonActive  #4b4b4b
+            ImVec4(0.180f, 0.251f, 0.325f, 1.00f),   // selection     #2e4053
+            ImVec4(0.357f, 0.498f, 0.651f, 1.00f),   // accent        #5b7fa6  (bars pinned by EditorThemeContrastTest)
+            ImVec4(0.388f, 0.525f, 0.678f, 1.00f),   // accentHovered #6386ad
+            ImVec4(0.322f, 0.463f, 0.612f, 1.00f),   // accentActive  #52769c
+            ImVec4(0.878f, 0.878f, 0.878f, 1.00f),   // text          #e0e0e0
+            ImVec4(0.557f, 0.557f, 0.557f, 1.00f),   // textDim       #8e8e8e (5.09:1 on panel)
+            ImVec4(0.051f, 0.051f, 0.051f, 1.00f),   // border        #0d0d0d
+            ImVec4(0.200f, 0.200f, 0.200f, 1.00f),   // separator     #333333
+            ImVec4(0.290f, 0.290f, 0.290f, 1.00f),   // separatorHot  #4a4a4a
+            ImVec4(0.431f, 0.431f, 0.431f, 1.00f),   // separatorHeld #6e6e6e
+            ImVec4(0.604f, 0.604f, 0.604f, 1.00f),   // grab          #9a9a9a
+            ImVec4(0.784f, 0.784f, 0.784f, 1.00f),   // grabActive    #c8c8c8
+            ImVec4(0.831f, 0.831f, 0.831f, 1.00f),   // check         #d4d4d4
+            ImVec4(1.000f, 0.650f, 0.100f, 1.00f),   // amber         drop target, histogram, the selection outline
+            ImVec4(1.000f, 0.780f, 0.350f, 1.00f),   // amberLight
+            ImVec4(0.900f, 0.350f, 0.350f, 1.00f),   // error         #e65959
+            ImVec4(0.950f, 0.770f, 0.300f, 1.00f),   // warning       #f2c44d
+            ImVec4(196.0f / 255.0f,  64.0f / 255.0f,  54.0f / 255.0f, 1.0f),   // axisX  (the inspector's old kAxisBarColors[0])
+            ImVec4( 96.0f / 255.0f, 166.0f / 255.0f,  58.0f / 255.0f, 1.0f),   // axisY
+            ImVec4( 58.0f / 255.0f, 122.0f / 255.0f, 196.0f / 255.0f, 1.0f),   // axisZ
+            ImVec4(0.02f, 0.02f, 0.02f, 0.55f),      // modalDim      dims toward black, not stock's 0.80 gray
+            ImVec4(1.00f, 1.00f, 1.00f, 0.03f),      // rowStripe     a white wash, halved from stock's 0.06
+        };
 
-        // -- FIELD WELLS --------------------------------------------------
-        // Below chrome, well below panel. Hover/active step up just enough to
-        // acknowledge the cursor without ever reaching the panel tone -- a
-        // field that brightened past its panel would stop reading as inset.
-        inline constexpr ImVec4 kWell         = ImVec4(0.071f, 0.071f, 0.071f, 1.00f); // #121212
-        inline constexpr ImVec4 kWellHovered  = ImVec4(0.094f, 0.094f, 0.094f, 1.00f); // #181818
-        inline constexpr ImVec4 kWellActive   = ImVec4(0.110f, 0.110f, 0.110f, 1.00f); // #1c1c1c
+        namespace Detail { inline constinit Palette g_live = kDarkPalette; }
 
-        // -- RAISED (buttons, scrollbar grabs) ----------------------------
-        // Flat panel-family gray, lighter on hover. Never a tint.
-        inline constexpr ImVec4 kButton        = ImVec4(0.184f, 0.184f, 0.184f, 1.00f); // #2f2f2f
-        inline constexpr ImVec4 kButtonHovered = ImVec4(0.239f, 0.239f, 0.239f, 1.00f); // #3d3d3d
-        inline constexpr ImVec4 kButtonActive  = ImVec4(0.294f, 0.294f, 0.294f, 1.00f); // #4b4b4b
+        [[nodiscard]] inline const Palette& Live() noexcept { return Detail::g_live; }
+        inline void SetLivePalette(const Palette& p) noexcept { Detail::g_live = p; }
 
-        // -- SELECTION ----------------------------------------------------
-        // The selection hue: UE's selected-row blue-gray, desaturated
-        // far enough that it reads as "a gray with a cast" beside the ramp.
-        inline constexpr ImVec4 kSelection    = ImVec4(0.180f, 0.251f, 0.325f, 1.00f); // #2e4053
+        // Tests and previews: swap the live palette for a scope, restore after.
+        struct [[nodiscard]] ScopedLivePalette
+        {
+            explicit ScopedLivePalette(const Palette& p) noexcept : m_saved(Detail::g_live) { Detail::g_live = p; }
+            ~ScopedLivePalette() { Detail::g_live = m_saved; }
+            ScopedLivePalette(const ScopedLivePalette&) = delete;
+            ScopedLivePalette& operator=(const ScopedLivePalette&) = delete;
+        private:
+            Palette m_saved;
+        };
 
-        // -- ACCENT -------------------------------------------------------
-        // "On / active / playing" (node page phase s6.1): the toggle-on
-        // fills (kToggleOn* below, IconToggle), the selected tab's overline,
-        // and Play presence (the viewport's 2 px frame). kSelection keeps
-        // Header, TextSelectedBg and DockingPreview and gives up the overline.
-        // Nothing else adopts kAccent in this phase. Bars pinned by
-        // EditorThemeContrastTest.cpp: 3.21:1 against kButton, 4.21:1 on
-        // kChrome, kText on it 3.16:1.
-        inline constexpr ImVec4 kAccent        = ImVec4(0.357f, 0.498f, 0.651f, 1.00f); // #5b7fa6
-        inline constexpr ImVec4 kAccentHovered = ImVec4(0.388f, 0.525f, 0.678f, 1.00f); // #6386ad
-        inline constexpr ImVec4 kAccentActive  = ImVec4(0.322f, 0.463f, 0.612f, 1.00f); // #52769c
+        // The named tokens (meaning per kDarkPalette's comments). References,
+        // so `constexpr ImVec4 x = Theme::kPanel;` no longer compiles: write
+        // `const ImVec4&` (follows the theme) at such a site.
+        inline constexpr const ImVec4& kChromeDeep    = Detail::g_live.chromeDeep;
+        inline constexpr const ImVec4& kChrome        = Detail::g_live.chrome;
+        inline constexpr const ImVec4& kPanel         = Detail::g_live.panel;
+        inline constexpr const ImVec4& kPanelRaised   = Detail::g_live.panelRaised;
+        inline constexpr const ImVec4& kWell          = Detail::g_live.well;
+        inline constexpr const ImVec4& kWellHovered   = Detail::g_live.wellHovered;
+        inline constexpr const ImVec4& kWellActive    = Detail::g_live.wellActive;
+        inline constexpr const ImVec4& kButton        = Detail::g_live.button;
+        inline constexpr const ImVec4& kButtonHovered = Detail::g_live.buttonHovered;
+        inline constexpr const ImVec4& kButtonActive  = Detail::g_live.buttonActive;
+        inline constexpr const ImVec4& kSelection     = Detail::g_live.selection;
+        inline constexpr const ImVec4& kAccent        = Detail::g_live.accent;
+        inline constexpr const ImVec4& kAccentHovered = Detail::g_live.accentHovered;
+        inline constexpr const ImVec4& kAccentActive  = Detail::g_live.accentActive;
+        // The lit state of an IconToggle (s4.9): DERIVED aliases of the accent trio.
+        inline constexpr const ImVec4& kToggleOn        = Detail::g_live.accent;
+        inline constexpr const ImVec4& kToggleOnHovered = Detail::g_live.accentHovered;
+        inline constexpr const ImVec4& kToggleOnActive  = Detail::g_live.accentActive;
+        inline constexpr const ImVec4& kText          = Detail::g_live.text;
+        inline constexpr const ImVec4& kTextDim       = Detail::g_live.textDim;
+        inline constexpr const ImVec4& kBorder        = Detail::g_live.border;
+        inline constexpr const ImVec4& kSeparator     = Detail::g_live.separator;
+        inline constexpr const ImVec4& kSeparatorHot  = Detail::g_live.separatorHot;
+        inline constexpr const ImVec4& kSeparatorHeld = Detail::g_live.separatorHeld;
+        inline constexpr const ImVec4& kGrab          = Detail::g_live.grab;
+        inline constexpr const ImVec4& kGrabActive    = Detail::g_live.grabActive;
+        inline constexpr const ImVec4& kCheck         = Detail::g_live.check;
+        inline constexpr const ImVec4& kAmber         = Detail::g_live.amber;
+        inline constexpr const ImVec4& kAmberLight    = Detail::g_live.amberLight;
+        inline constexpr const ImVec4& kError         = Detail::g_live.error;
+        inline constexpr const ImVec4& kWarning       = Detail::g_live.warning;
+        inline constexpr const ImVec4& kAxisX         = Detail::g_live.axisX;
+        inline constexpr const ImVec4& kAxisY         = Detail::g_live.axisY;
+        inline constexpr const ImVec4& kAxisZ         = Detail::g_live.axisZ;
+        inline constexpr const ImVec4& kModalDim      = Detail::g_live.modalDim;
+        inline constexpr const ImVec4& kRowStripe     = Detail::g_live.rowStripe;
 
-        // The lit state of an IconToggle (Widgets/EditorWidgets.hpp, s4.9):
-        // Button / ButtonHovered / ButtonActive while `on`. Hover LIGHTENS and
-        // holding darkens, so "on" never vanishes under the cursor (s6.2).
-        inline constexpr ImVec4 kToggleOn        = kAccent;
-        inline constexpr ImVec4 kToggleOnHovered = kAccentHovered;
-        inline constexpr ImVec4 kToggleOnActive  = kAccentActive;
-
-        // -- TEXT AND LINES -----------------------------------------------
-        // Text is off-white, not white: pure white on a near-black well
-        // glares. kBorder is DARKER than every surface it outlines, which is
-        // what draws the 1px inset edge around a field well.
-        inline constexpr ImVec4 kText          = ImVec4(0.878f, 0.878f, 0.878f, 1.00f); // #e0e0e0
-        inline constexpr ImVec4 kTextDim       = ImVec4(0.557f, 0.557f, 0.557f, 1.00f); // #8e8e8e (s6.6: 5.09:1 on kPanel)
-        inline constexpr ImVec4 kBorder        = ImVec4(0.051f, 0.051f, 0.051f, 1.00f); // #0d0d0d
-        inline constexpr ImVec4 kSeparator     = ImVec4(0.200f, 0.200f, 0.200f, 1.00f); // #333333
-        inline constexpr ImVec4 kSeparatorHot  = ImVec4(0.290f, 0.290f, 0.290f, 1.00f); // #4a4a4a
-        inline constexpr ImVec4 kSeparatorHeld = ImVec4(0.431f, 0.431f, 0.431f, 1.00f); // #6e6e6e
-
-        // -- GRABS AND MARKS ----------------------------------------------
-        // Checkmarks, radio dots and slider grabs are LIGHT neutral gray in
-        // the reference -- they are the widget's only foreground, so they read
-        // off the text end of the ramp rather than the surface end.
-        inline constexpr ImVec4 kGrab       = ImVec4(0.604f, 0.604f, 0.604f, 1.00f); // #9a9a9a
-        inline constexpr ImVec4 kGrabActive = ImVec4(0.784f, 0.784f, 0.784f, 1.00f); // #c8c8c8
-        inline constexpr ImVec4 kCheck      = ImVec4(0.831f, 0.831f, 0.831f, 1.00f); // #d4d4d4
-
-        // -- DELIBERATELY NOT GRAY ----------------------------------------
-        // The drop-target frame speaks the editor's existing amber "this is
-        // the thing you are acting on" language (the viewport outline's
-        // kSelectColor, Render/Nri/nodes/PickOutlineNodes.cpp:101, and the
-        // shader graph's selected-node border), not the stock pure yellow.
-        // Histogram bars are a data mark, exempt like the axis bars.
-        inline constexpr ImVec4 kAmber      = ImVec4(1.000f, 0.650f, 0.100f, 1.00f);
-        inline constexpr ImVec4 kAmberLight = ImVec4(1.000f, 0.780f, 0.350f, 1.00f);
-        // "Something is wrong here": a refused value in a text field (the
-        // RefusedFieldStyle outline + text, EditorWidgets.hpp). The same triple
-        // the editor already spells as a literal for DiagSeverity::Error (the
-        // Problems panel, the Console, the Inspector's dangling-reference
-        // text), named here so a new error mark reuses it rather than another
-        // copy of the literal.
-        inline constexpr ImVec4 kError      = ImVec4(0.900f, 0.350f, 0.350f, 1.00f); // #e65959
-        // "Look at this": DiagSeverity::Warning (Problems, Console, the crash
-        // viewer's injected rows, the tab/chip tint). The literal the panels
-        // already drew, named (node-page phase s8.2).
-        inline constexpr ImVec4 kWarning    = ImVec4(0.950f, 0.770f, 0.300f, 1.00f); // #f2c44d
-
-        // Fully transparent -- spelled once so the entries that mean "draw
-        // nothing here" say so rather than repeating a zero vector.
+        // Fully transparent: "draw nothing here". A CONSTANT, not a token (any change is a bug).
         inline constexpr ImVec4 kNone = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
     }
 
@@ -168,7 +193,7 @@ namespace Arcane::Editor
     // future upstream entry has a sane value the day it appears, then every
     // entry that exists today is overwritten below. Call once at boot, before
     // the first frame, on the context that will use it.
-    inline void ApplyEditorTheme(ImGuiStyle& style)
+    inline void ApplyEditorThemeColors(ImGuiStyle& style)
     {
         ImGui::StyleColorsDark(&style);
 
@@ -268,7 +293,7 @@ namespace Arcane::Editor
         c[ImGuiCol_TableRowBg]             = Theme::kNone;
         // Row striping is a WHITE wash over whatever is behind it; at stock's
         // 0.06 it reads as a stripe on this darker panel, so it is halved.
-        c[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.03f);
+        c[ImGuiCol_TableRowBgAlt]          = Theme::kRowStripe;
 
         c[ImGuiCol_TextLink]               = Theme::kCheck;                 // link affordance is the underline
         c[ImGuiCol_TextSelectedBg]         = Theme::WithAlpha(Theme::kSelection, 0.80f);
@@ -282,8 +307,17 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingHighlight]  = Theme::WithAlpha(Theme::kText, 0.70f);
         // Stock dims with a light gray wash (0.80 gray) -- on a dark editor
         // that LIGHTENS the screen behind a modal. Dim toward black instead.
-        c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
-        c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
+        c[ImGuiCol_NavWindowingDimBg]      = Theme::kModalDim;
+        c[ImGuiCol_ModalWindowDimBg]       = Theme::kModalDim;
+    }
+
+    // The full look: the colours above, then the six metrics. Boot and the
+    // crash reporter call this; a live re-theme calls ApplyEditorThemeColors
+    // alone so the UI scale's metrics (S4-15) are never reset. WindowPadding
+    // (4,4) is the user-requested inset (controller 2026-10-05) and stays.
+    inline void ApplyEditorTheme(ImGuiStyle& style)
+    {
+        ApplyEditorThemeColors(style);
 
         // The first of SIX metrics this theme changes (FrameBorderSize,
         // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha,

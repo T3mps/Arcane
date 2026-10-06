@@ -25,9 +25,13 @@
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Settings/SettingsHost.hpp"
 #include "Settings/EditorRestart.hpp"
+#include "Settings/LayoutSettings.hpp"   // editor.layout.default / openPanelsAtStart (S4-18)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Input/EditorActions.hpp"
+#include <Arcane/Input/KeyLayout.hpp>
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
+#include "Panels/LayoutLibrary.hpp"     // the session layout dir + its seed (S4-18)
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/MeshDocument.hpp"
@@ -292,11 +296,12 @@ namespace Arcane::Editor
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // every panel back to a fresh EditorApp's visibility.
+    // every panel back to a fresh EditorApp's visibility -- the configured
+    // editor.layout.openPanelsAtStart ("*" = all, today's default).
     void EditorApp::PanelVisibilitySettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_panelVis = decltype(self->m_panelVis){};
+        self->m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
     }
 
     void EditorApp::RegisterPanelVisibilitySettings()
@@ -358,6 +363,16 @@ namespace Arcane::Editor
         // ran before the install above and pinned this exe to its own private ids.
         // See EditorApp.hpp's declaration comment for the incident.
         m_editSchedule.emplace();
+        // The editor.keys.* shortcut cvars are declared HERE, before the first
+        // config rung applies (settings S4-20 fix): the Runtime's ctor applies the
+        // engine rung, SetEditorUserConfigDir below the EditorUser rung (the
+        // Keyboard page's saved shortcuts), project_open the project rungs and
+        // input_config the --set list. The registry applies a rung only to cvars
+        // that already exist, and EditorActions::Get() registers its table
+        // lazily, so a first Get() in the frame loop left every saved shortcut
+        // and every --set editor.keys.* behind ("unknown"). Every other editor
+        // cvar is a static (ARC_CVAR) and exists before main.
+        (void)Arcane::Editor::EditorActions::Get();
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
@@ -445,6 +460,7 @@ namespace Arcane::Editor
         // Create -> ImGuiLayer::Create), before the first frame and before the
         // game ImGui context is created in StageRenderBridge. Zero engine change.
         Arcane::Editor::InstallEditorFonts();
+        Arcane::Editor::SetActiveKeyLayout(&Arcane::SystemKeyLayout());
         return true;
     }
 
@@ -523,11 +539,15 @@ namespace Arcane::Editor
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
+        m_appearance.Init(ImGui::GetStyle());   // the boot look IS the defaults: the first per-frame update applies nothing
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later
         // would never see the saved entry.
         RegisterPlayModeSettings();
+        // A fresh layout shows editor.layout.openPanelsAtStart; a saved ini's
+        // [ArcaneEditor][Panels] entry then overrides it ("*" = today's all-visible).
+        m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
         // Inspector filters s6: the Asset Browser's selection is a PERMANENT
@@ -535,6 +555,27 @@ namespace Arcane::Editor
         // switch's ReleaseAll (its history entries and pins still drop).
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
         RegisterViewportSettings();
+        // Settings arc S4: Preferences > Appearance > Theme.
+        m_themePage.requestImport = [this]
+        {
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeImport, m_dialogs.themeImport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        m_themePage.requestExport = [this]
+        {
+            m_gpu->Win().ShowSaveFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeExport, m_dialogs.themeExport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Appearance/Theme", "Theme",
+                                             &Arcane::Editor::DrawThemePage, &m_themePage);
+        // Settings arc S4: Preferences > Keyboard (the editor.keys.* cvars live on this node).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Keyboard", "Keyboard Shortcuts",
+                                             &Arcane::Editor::DrawShortcutsPage, &m_shortcutsPage);
+        // Settings arc S4: Preferences > Appearance > Fonts and Scale (the editor.ui.* cvars live on this node).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, std::string(Arcane::Editor::kFontsPageCategory),
+                                             "Fonts and Scale", &Arcane::Editor::DrawFontsPage, &m_fontsPage);
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Layout", "Layouts",
+                                             &Arcane::Editor::DrawLayoutPage, &m_layoutPage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
@@ -1695,13 +1736,13 @@ namespace Arcane::Editor
         if (m_editorImguiContext)
             ImGui::SetCurrentContext(m_editorImguiContext);
 
-        // <EditorUserDir>\layouts\<project-guid>.ini ("default" for a project-
-        // less session) -- %LOCALAPPDATA%\Arcane\Editor\layouts, the same folder
-        // as before on Windows (case-insensitive), resolved through Arcane::Paths
-        // (settings spec s11.0). With LOCALAPPDATA unset or the folder unwritable,
-        // ImGui's exe-dir imgui.ini default stands -- degraded, never broken.
-        const std::filesystem::path dir = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
-                                                              Arcane::Paths::Current(), "layouts");
+        // <EditorUserDir>\Layouts\Session\<project-guid>.ini ("default" for a
+        // project-less session), resolved through Arcane::Paths (settings spec
+        // s11.0). Settings S4 (spec s7.4): session layouts live in
+        // Layouts/Session; named layouts own Layouts/. Degraded, never broken:
+        // with LOCALAPPDATA unset or the folder unwritable, ImGui's exe-dir
+        // imgui.ini default stands.
+        const std::filesystem::path dir = Arcane::Editor::SessionLayoutDir();
         if (dir.empty())
             return;
         std::error_code ec;
@@ -1731,12 +1772,26 @@ namespace Arcane::Editor
         if (!m_layoutIniPath.empty() && io.IniFilename && *io.IniFilename)
             ImGui::SaveIniSettingsToDisk(io.IniFilename);
 
-        // One-time migration: seed a project's first appdata layout from the
-        // legacy exe-dir imgui.ini so a hand-tuned layout survives the move.
-        // The legacy file is left in place (bin/ is untracked scratch).
+        // One-time migration: seed a project's first session layout -- from its
+        // pre-S4 file (<EditorUserDir>\layouts\<key>.ini), else the named
+        // layout editor.layout.default, else the legacy exe-dir imgui.ini, so a
+        // hand-tuned layout survives the move. Every source is COPIED and left
+        // in place (bin/ is untracked scratch; the pre-S4 file stays for a
+        // rollback).
         if (!std::filesystem::exists(target, ec))
-            if (std::filesystem::exists("imgui.ini", ec))
-                std::filesystem::copy_file("imgui.ini", target, ec);
+        {
+            const std::filesystem::path preS4 = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
+                                                                    Arcane::Paths::Current(), "layouts")
+                                                / (key + ".ini");
+            const Arcane::Editor::LayoutSeed seed = Arcane::Editor::SeedSessionLayout(
+                target, preS4, Arcane::Editor::LayoutLibrary(Arcane::Editor::NamedLayoutDir()),
+                Arcane::Editor::cvar_layoutDefault.Get(), "imgui.ini");
+            ARC_INFO("layout: session layout {} seeded from {}", target.string(),
+                     seed == Arcane::Editor::LayoutSeed::PreS4File      ? "the pre-S4 file"
+                   : seed == Arcane::Editor::LayoutSeed::NamedDefault   ? "the default named layout"
+                   : seed == Arcane::Editor::LayoutSeed::LegacyExeIni   ? "the exe-dir imgui.ini"
+                                                                         : "nothing (factory layout)");
+        }
 
         const bool switching = !m_layoutIniPath.empty();   // boot: ImGui's first NewFrame autoloads; a switch must reload by hand
         // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the

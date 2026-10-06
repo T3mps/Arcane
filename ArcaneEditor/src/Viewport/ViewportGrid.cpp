@@ -121,7 +121,7 @@ namespace Arcane::Editor
         return plan;
     }
 
-    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan)
+    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan, const Grid2DAxisColors& axes)
     {
         if (!view.IsOrthographic()) return;   // the 3D grid is Task 10's GridNode
         if (view.viewport.x == 0u || view.viewport.y == 0u) return;
@@ -209,9 +209,9 @@ namespace Arcane::Editor
         // (inclusive, same edge rule as the level lines).
         const float axisEps = 1e-6f * std::max(maxX - minX, maxY - minY);
         if (minY - axisEps <= 0.0f && 0.0f <= maxY + axisEps)
-            line({ minX, 0.0f }, { maxX, 0.0f }, kGridAxisXColor);
+            line({ minX, 0.0f }, { maxX, 0.0f }, axes.x);
         if (minX - axisEps <= 0.0f && 0.0f <= maxX + axisEps)
-            line({ 0.0f, minY }, { 0.0f, maxY }, kGridAxisYColor);
+            line({ 0.0f, minY }, { 0.0f, maxY }, axes.y);
 
         b.SetLayer(0, 0);   // left where Begin() put it, for the submitter after us
     }

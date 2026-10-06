@@ -4,10 +4,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
 #include <Settings/SettingsWindow.hpp>
+#include <Widgets/EditorFonts.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,6 +35,7 @@ namespace
         SettingsWindowKind kind = SettingsWindowKind::Project;
         SettingsModuleRoles roles;
         std::vector<SettingsPageRef> pages;
+        std::function<void(const std::string&)> drawPage;
 
         WindowHarness() { st.grid.probe = &imgui.probe; }
 
@@ -44,6 +47,7 @@ namespace
             env.title = "Settings Under Test";
             env.roles = roles;
             env.pages = pages;
+            env.drawPage = drawPage;
             env.now = [this] { return clock; };
             env.archive = &archive;
             env.writeRung = [this](SetBy rung, const std::vector<std::string>& names) { writes.emplace_back(rung, names); return true; };
@@ -245,4 +249,75 @@ TEST_CASE("Settings window: Rebuild picks up a same-size page swap and a roles c
     h.Frame();
     CHECK(h.TreeHas("Game/TestGame/Speed"));
     CHECK_FALSE(h.TreeHas("Engine/Speed"));
+}
+
+TEST_CASE("Settings window: a custom page owns its node's keychord rows; the other rows still draw", "[settings-ui]")
+{
+    WindowHarness h;
+    h.kind = SettingsWindowKind::Preferences;
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.keys.edit.undo", { .type = CVarType::String, .def = CVarValue::String("Ctrl+Z"),
+        .scope = SettingScope::PreferencesMachine, .widget = "keychord", .categoryPath = "Keyboard" }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.keys.repeatDelay", { .type = CVarType::Int32, .def = CVarValue::Int32(300),
+        .scope = SettingScope::PreferencesMachine, .categoryPath = "Keyboard" }).IsStale());
+    h.st.selected = "Keyboard";
+    h.Frame();
+    h.Frame();
+    const auto drew = [&](std::string_view name)
+    {
+        return std::find(h.st.last.rows.begin(), h.st.last.rows.end(), name) != h.st.last.rows.end();
+    };
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Rows);   // no page: the generic chord row draws
+    CHECK(h.st.last.rows.size() == 2);
+    CHECK(drew("editor.keys.edit.undo"));
+    CHECK(drew("editor.keys.repeatDelay"));
+
+    int pageDraws = 0;
+    h.pages = { SettingsPageRef{ SettingScope::PreferencesMachine, "Keyboard", "Keyboard Shortcuts" } };
+    h.drawPage = [&](const std::string& path) { if (path == "Keyboard") ++pageDraws; };
+    h.Frame();
+    h.Frame();
+    CHECK(pageDraws >= 1);
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Custom);
+    CHECK((h.st.last.rows == std::vector<std::string>{ "editor.keys.repeatDelay" }));
+}
+
+TEST_CASE("Settings window: the Fonts and Scale page feeds its node's font rows; a family pick is a standard row edit (undo, reset, provenance)", "[settings-ui]")
+{
+    WindowHarness h;
+    h.kind = SettingsWindowKind::Preferences;
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.ui.fontFamily", { .type = CVarType::String, .def = CVarValue::String("Inter"),
+        .scope = SettingScope::PreferencesMachine, .widget = "font", .categoryPath = "Appearance/Fonts and Scale" }).IsStale());
+    REQUIRE_FALSE(AddSetting(h.reg, "editor.ui.scale", { .type = CVarType::Float32, .def = CVarValue::Float32(1.0f),
+        .scope = SettingScope::PreferencesMachine, .categoryPath = "Appearance/Fonts and Scale" }).IsStale());
+    h.st.selected = "Appearance/Fonts and Scale";
+    h.Frame();
+    h.Frame();
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Rows);   // no page: the font row is a text box
+    CHECK(h.st.last.rows.size() == 2);
+
+    const std::vector<EditorFontFamily> families{ { "Inter", {}, true }, { "JetBrains Mono", {}, true }, { "Roboto", {}, false } };
+    h.pages = { SettingsPageRef{ SettingScope::PreferencesMachine, "Appearance/Fonts and Scale", "Fonts and Scale" } };
+    h.drawPage = [&](const std::string&) { SetSettingsFontFamilies(&families); };
+    h.Frame();
+    h.Frame();
+    CHECK(h.st.last.page == SettingsWindowState::FrameFacts::Page::Custom);
+    // The page does not own the font rows: both still draw as standard rows.
+    CHECK((h.st.last.rows == std::vector<std::string>{ "editor.ui.fontFamily", "editor.ui.scale" }));
+
+    h.Click("Font Family");                     // opens the family combo
+    h.Frame();
+    h.Frame();
+    h.Click("Font Family#font:Roboto  (user)");
+    CHECK(h.reg.RungValue("editor.ui.fontFamily", SetBy::EditorUser) == std::optional<CVarValue>(CVarValue::String("Roboto")));
+    CHECK(h.archive.Dirty());
+    REQUIRE(SettingsUndo(h.st).CanUndo());      // the window's own undo stack
+    SettingsUndo(h.st).Undo();
+    CHECK_FALSE(h.reg.RungValue("editor.ui.fontFamily", SetBy::EditorUser).has_value());
+
+    // --set editor.ui.fontFamily=Roboto: the row shows the CommandLine rung wins (provenance + Clear override).
+    REQUIRE(h.reg.Set(h.reg.Find("editor.ui.fontFamily"), CVarValue::String("Roboto"), SetBy::CommandLine) == SetResult::Applied);
+    h.reg.PublishImmediate();
+    h.Frame();
+    h.Frame();
+    CHECK((h.st.last.overridden == std::vector<std::string>{ "editor.ui.fontFamily" }));
 }

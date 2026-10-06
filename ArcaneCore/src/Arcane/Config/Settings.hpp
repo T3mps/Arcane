@@ -96,6 +96,7 @@ namespace Arcane
                 if (const auto* k = field.GetAttribute<Attr::Keywords>())    out.keywords = k->words;
                 if (const auto* w = field.GetAttribute<Attr::Widget>())      out.widget = w->hint;
                 if (const auto* c = field.GetAttribute<Attr::Category>())    out.group = c->category;
+                out.categoryPath = type->categoryPath;
                 out.audience = field.HasAttribute<Attr::PlayerSafe>() ? Audience::PlayerSafe : type->audience;
                 out.scope = type->scope;
                 if (const auto* s = field.GetAttribute<Attr::Scope>()) out.scope = s->scope;

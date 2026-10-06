@@ -79,6 +79,10 @@ namespace Arcane::Editor
         // keybind phase runs before DrawAll), which focus tolerates -- a click
         // that focuses a document lands a frame before any keypress can.
         EditorDocument* FocusedDoc() const;
+        // Ctrl+W targets the focused document, or the last one that held focus.
+        [[nodiscard]] EditorDocument* CloseTarget() const;
+        // Called after drawing documents; tests also use it with fake focus.
+        void NoteFocus();
 
         // ---- close flow (pure, testable) ----------------------------------
         // Ask to close `doc`: clean documents close immediately; dirty ones
@@ -137,6 +141,7 @@ namespace Arcane::Editor
         // nothing would otherwise bring its tab forward. Cleared when consumed,
         // and in Close so it can never name a destroyed document.
         EditorDocument* m_focusRequest = nullptr;
+        EditorDocument* m_lastActive = nullptr;
         // Documents that already received their initial dock placement (see
         // DrawAll). Erased on close so a reopen docks fresh again.
         std::unordered_set<const EditorDocument*> m_dockPlaced;

@@ -203,6 +203,7 @@ namespace Arcane
         std::vector<std::string>  enumNames;
         std::vector<std::string>  aliases;                       // full former names
         std::string_view          group;                         // Category attribute (I9)
+        std::string_view          categoryPath;                  // empty = derived from the dotted name
         SettingsWriteFn           write = nullptr;
     };
 

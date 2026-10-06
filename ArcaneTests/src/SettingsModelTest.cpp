@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
 #include <Settings/SettingsModel.hpp>
+#include <Settings/LayoutSettings.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
 
 #include <algorithm>
@@ -67,6 +68,19 @@ TEST_CASE("SettingsModel: the Preferences window takes both Preferences scopes, 
     CHECK((m.Find("Appearance/Theme")->cvars == std::vector<std::string>{ "editor.theme.accent" }));
     CHECK(m.Find("Engine/Render") == nullptr);
     CHECK(m.Tree().children.front().label == "Appearance");
+}
+
+TEST_CASE("SettingsModel: Layout page owns both layout settings at the Preferences root", "[settings-ui][editor]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    SettingsModel m;
+    m.SetPages({ SettingsPageRef{ SettingScope::PreferencesMachine, "Layout", "Layouts" } });
+    m.Rebuild(reg, SettingScope::PreferencesMachine);
+
+    const SettingsTreeNode* layout = m.Find("Layout");
+    REQUIRE(layout != nullptr);
+    CHECK((layout->cvars == std::vector<std::string>{ "editor.layout.default", "editor.layout.openPanelsAtStart" }));
+    CHECK(m.Find("Editor/Layout") == nullptr);
 }
 
 TEST_CASE("DisplayWord and SettingDisplayName derive readable labels", "[settings-ui]")

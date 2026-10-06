@@ -44,7 +44,12 @@
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Settings/AppearanceApplier.hpp"
 #include "Settings/ProjectSettingsPage.hpp"
+#include "Settings/FontsPage.hpp"
+#include "Settings/LayoutPage.hpp"
+#include "Settings/ShortcutsPage.hpp"
+#include "Settings/ThemePage.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
 #include "Panels/LocatorRoute.hpp"           // RouteFacts (MakeRouteFacts, s8.2)
@@ -273,7 +278,7 @@ namespace Arcane::Editor
             // drift apart. Same shape for the Edit-menu clipboard shortcuts
             // (Ctrl+X/C/V/D) below.
             bool scNewScene = false, scOpenScene = false, scSaveScene = false;
-            bool scCut = false, scCopy = false, scPaste = false, scDuplicate = false;
+            bool scCut = false, scCopy = false, scPaste = false, scDuplicate = false, scCloseDocument = false;
             // This frame's Viewport panel result, read by the click-pick phase.
             Arcane::Editor::ViewportPanelResult vp{};
         };
@@ -285,10 +290,13 @@ namespace Arcane::Editor
         void ConsumeSceneDialogResults(LoopState& ls);
         void ConsumeProjectDialogResult();
         void ConsumeMaterialDialogResults();
+        void ConsumeSettingsDialogResults();
+        void ApplyAppearanceSettings();   // S4: theme/UI cvars -> the editor style, outside the ImGui frame
+        void ApplyPendingLayoutRequest();
         void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
         [[nodiscard]] bool IsDesignatedInputAsset(const Arcane::Guid& asset);   // the open project's manifest inputActions names `asset`
         void FrameInput(LoopState& ls, FrameState& fs);
-        void HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs);
+        void HandleUndoRedoAndSceneShortcuts(FrameState& fs);
         void HandleGizmoModeKeys(const Arcane::InputSnapshot& snap);
         void UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport,
                                 float lx, float ly, float dt);
@@ -927,13 +935,6 @@ namespace Arcane::Editor
         // Both, as the uvec2 EditorCamera::Resolve / Frame / Pan2D / ZoomAt2D
         // take (F4 plan 1 T6).
         [[nodiscard]] glm::uvec2 ViewportSize() const noexcept { return { ViewportWidth(), ViewportHeight() }; }
-        // The one "may editor shortcuts fire" predicate (three near-duplicates
-        // collapsed): Edit mode, ImGui not capturing the keyboard, and -- for keys
-        // that switch a viewport TOOL rather than act on the selection -- viewport
-        // focus.
-        [[nodiscard]] bool ShortcutsLive(const Arcane::InputSnapshot& snap,
-                                         bool requireViewportFocus) const;
-
         // Play-mode dropdown (Task 6, runtime-host-fold arc): which action the
         // transport's Play button performs (see DrawSimTimeToolbar). Viewport =
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
@@ -1003,9 +1004,9 @@ namespace Arcane::Editor
         }
 
         // ---- Editor layout ini (imgui.ini), per project ---------------------
-        // <Paths::EditorUserDir>\layouts\<project-guid>.ini, i.e.
-        // %LOCALAPPDATA%\Arcane\Editor\layouts (settings spec s11.0); "default"
-        // project-less. io.IniFilename BORROWS this string (ImGui never
+        // <Paths::EditorUserDir>\Layouts\Session\<project-guid>.ini, i.e.
+        // %LOCALAPPDATA%\Arcane\Editor\Layouts\Session (settings spec s11.0,
+        // s7.4: named layouts own Layouts\); "default" project-less. io.IniFilename BORROWS this string (ImGui never
         // copies it), so it lives here, never in a local. Retargeted at boot
         // (StageFinalize, before the first NewFrame auto-loads it) and on
         // project switch. A windowed switch loads the INCOMING project's
@@ -1135,23 +1136,19 @@ namespace Arcane::Editor
         // Runtime*, dereferenced fresh each call), so it must not outlive it.
         std::optional<Arcane::CommandStack> m_undo;
         Arcane::UndoLimits m_undoLimitsApplied;   // last limits pushed (per-frame change check)
+        // Settings arc S4: editor.theme.* / editor.ui.* -> the editor's ImGui
+        // style, compared per frame against what was last applied.
+        Arcane::Editor::AppearanceApplier m_appearance;
+        Arcane::Editor::ThemePageState m_themePage;
+        Arcane::Editor::ShortcutsPageState m_shortcutsPage;   // Preferences > Keyboard
+        Arcane::Editor::FontsPageState m_fontsPage;           // Preferences > Appearance > Fonts and Scale
+        Arcane::Editor::LayoutPageState m_layoutPage;         // Preferences > Layout
 
-        // Editor keybind + mouse edge tracking (architecture pass sec 6). All
-        // Updated within FrameInput's phases (6a-6d) at the site each chord's
-        // `down` value is computed; consumers read .pressed/.released. Replaces
-        // the 17 hand-rolled m_prev* bools (undo/redo, W/E/R/Q gizmo mode,
-        // Ctrl+N/O/S scene shortcuts, Ctrl+X/C/V/D clipboard shortcuts, F/Home
-        // framing, LMB/RMB) that used to be scattered across this class and the
-        // three functions in EditorAppFrame.cpp that consumed them.
+        // Mouse edge tracking (architecture pass sec 6). Keyboard chords now
+        // read EditorActions (settings S4); only the camera/gizmo buttons remain.
         struct InputEdges
         {
-            Edge undo, redo;            // Ctrl+Z / Ctrl+(Shift+)Z|Y
-            Edge w, e, r, q;            // gizmo tools
-            Edge n, o, s;               // Ctrl+N/O/S scene shortcuts
-            Edge x, c, v, d;            // Ctrl+X/C/V/D clipboard shortcuts
-            Edge f, home;                // camera framing
-            Edge g, j;                   // Alt+G / Alt+J view mode (F4 plan 1 T7)
-            Edge lmb, rmb, mmb;          // gizmo press/release; camera gestures
+            Edge lmb, rmb, mmb;   // gizmo press/release; camera gestures (keys: EditorActions, settings S4)
         };
         InputEdges m_edges;
 
@@ -1316,7 +1313,7 @@ namespace Arcane::Editor
         ViewportTargets m_viewportTargets;
         Arcane::Editor::ViewportRect                   m_viewportRect{};
         bool                                     m_viewportActive = false;
-        bool                                     m_rebindCaptureLive = false;   // an Input Actions rebind capture owns the keyboard this frame; computed at the top of FrameInput, read by ShortcutsLive (every caller is inside FrameInput)
+        bool                                     m_rebindCaptureLive = false;   // an Input Actions rebind capture owns the keyboard this frame; computed at the top of FrameInput, fed to EditorActions::BeginFrame
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
         // FrameInput (whose locals are out of scope at the render site) and read
