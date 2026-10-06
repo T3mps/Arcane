@@ -1,25 +1,51 @@
 #include <Arcane/Config/ConsoleModel.hpp>
 
 #include <algorithm>
+#include <cstdint>
+#include <string_view>
 
 namespace Arcane
 {
+    namespace
+    {
+        // console.historySize and console.maxLines are built-ins on EVERY
+        // registry (CVarRegistry's constructor), and the model serves whichever
+        // registry its caller hands it, so this is a per-command lookup rather
+        // than Settings<T>() (which reads the global registry only). The
+        // defaults live in that one registration: no shadow copy here.
+        std::int32_t BuiltinInt32(const CVarRegistry& registry, std::string_view name)
+        {
+            const auto v = registry.Get(registry.Find(name));
+            return v && v->type == CVarType::Int32 ? v->AsInt32() : 0;
+        }
+    }
+
+    void ConsoleModel::AppendLine(std::string text, bool ok)
+    {
+        Push(CVarRegistry::Get(), ConsoleLine{ std::move(text), ok });
+    }
+
+    void ConsoleModel::Push(const CVarRegistry& registry, ConsoleLine line)
+    {
+        m_lines.push_back(std::move(line));
+        if (const std::int32_t max = BuiltinInt32(registry, "console.maxLines"); max > 0 && m_lines.size() > std::size_t(max))
+            m_lines.erase(m_lines.begin(), m_lines.end() - max);
+    }
+
     void ConsoleModel::Submit(CVarRegistry& registry, CVarContext ctx)
     {
         if (m_input.empty()) return;
-        std::size_t cap = 64;
-        if (const auto v = registry.Get(registry.Find("console.historySize")); v && v->type == CVarType::Int32 && v->AsInt32() > 0)
-            cap = static_cast<std::size_t>(v->AsInt32());
         if (m_history.empty() || m_history.back() != m_input) m_history.push_back(m_input);
-        while (m_history.size() > cap) m_history.pop_front();
+        if (const std::int32_t cap = BuiltinInt32(registry, "console.historySize"); cap > 0)
+            while (m_history.size() > std::size_t(cap)) m_history.pop_front();
         m_historyPos = -1;
         m_draft.clear();
-        m_lines.push_back(ConsoleLine{ "> " + m_input, true });
+        Push(registry, ConsoleLine{ "> " + m_input, true });
         // NO Publish here: the console is a writer like any other, and the
         // frame driver's barrier is what makes an accepted set visible to
         // every reader of the next frame at once (spec 6.4).
         const ExecResult result = registry.Execute(m_input, ctx);
-        m_lines.push_back(ConsoleLine{ result.text, result.ok });
+        Push(registry, ConsoleLine{ result.text, result.ok });
         m_input.clear();
     }
 
@@ -54,7 +80,7 @@ namespace Arcane
             }
             std::string list;
             for (const std::string& m : matches) list += (list.empty() ? "" : "  ") + m;
-            m_lines.push_back(ConsoleLine{ list, true });
+            Push(registry, ConsoleLine{ list, true });
         }
         if (next == m_input) return false;
         m_input = next;

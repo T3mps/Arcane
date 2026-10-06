@@ -264,12 +264,11 @@ namespace Arcane::Editor
         bool showInfo    = true;
         bool showWarning = true;
         bool showError   = true;
-        bool collapse    = false;
-        bool autoScroll  = true;
-        bool wrap        = true;
+        // Collapse / Scroll / Wrap and the line cap are editor.console.* cvars
+        // (settings sweep S6-41): the panel reads them each frame and a toggle
+        // click writes the User rung, so they persist.
         char search[128] = {};
         std::string categoryFilter;   // "" = All categories (optional s8.2 combo)
-        int  lineCap     = 512;
         // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
         // swapped label holds until. A plain deadline the draw compares each
         // frame -- no timer, no animation state; 0 (any past time) = idle.

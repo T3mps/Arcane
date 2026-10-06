@@ -28,6 +28,10 @@ namespace Arcane
     public:
         void Submit(CVarRegistry& registry, CVarContext ctx);
         void SetInput(std::string text) { m_input = std::move(text); }
+        // Append one output line. Past console.maxLines (> 0) the oldest lines
+        // drop; 0 keeps every line. Reads the global registry's value (Submit
+        // and CompleteInput read the registry they are handed).
+        void AppendLine(std::string text, bool ok = true);
         [[nodiscard]] const std::string& Input() const { return m_input; }
         [[nodiscard]] const std::vector<ConsoleLine>& Lines() const { return m_lines; }
         // Prefix matches over List(ctx) + ListCommands(), sorted, de-duplicated:
@@ -43,6 +47,8 @@ namespace Arcane
         [[nodiscard]] const std::deque<std::string>& History() const { return m_history; }
 
     private:
+        void Push(const CVarRegistry& registry, ConsoleLine line);
+
         std::string m_input;
         std::vector<ConsoleLine> m_lines;
         std::deque<std::string> m_history;

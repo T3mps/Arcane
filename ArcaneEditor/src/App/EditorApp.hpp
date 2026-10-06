@@ -33,6 +33,8 @@
 #include "Panels/AssetReferenceField.hpp"   // m_assetRefServices
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel -- Status carries no state of its own
 #include "Panels/ConsoleBuffer.hpp"
+#include "Settings/EditorConsoleSettings.hpp"   // editor.console.ringLines (the ring's boot capacity)
+#include <Arcane/Config/Settings.hpp>
 #include "Panels/CreateAssetDialog.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
@@ -854,7 +856,10 @@ namespace Arcane::Editor
         // for the create/shutdown timing rationale.
         struct ConsoleDiagnostics
         {
-            ConsoleBuffer                                    console{512};
+            // Sized at construction, after HostBoot::ApplyEarlyConfigRungs (main.cpp):
+            // a Restart setting; the frame then follows editor.console.displayLineCap.
+            ConsoleBuffer                                    console{ static_cast<std::size_t>(
+                Arcane::Settings<Arcane::Editor::EditorConsoleSettings>().ringLines) };
             std::shared_ptr<spdlog::sinks::callback_sink_mt> sink;      // erased in Uninstall
             Arcane::Editor::ConsoleUiState                   ui;
             Arcane::Editor::DiagnosticStore                  store;

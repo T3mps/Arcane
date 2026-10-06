@@ -24,6 +24,7 @@
 #include "Panels/InspectorView.hpp"
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
+#include "Settings/EditorConsoleSettings.hpp"    // editor.console.* (the Console toolbar toggles, reply lines, category width; S6-41)
 #include "Settings/EditorViewportSettings.hpp"   // the view-settings popup's cvars (settings S6-29)
 #include "Settings/InspectorSettings.hpp"        // editor.inspector row rhythm, editor.outliner.slowClickMaxSeconds (S6-37)
 #include "App/PlayMode.hpp"
@@ -1065,6 +1066,13 @@ namespace Arcane::Editor
         // worker thread can push (and therefore evict) mid-frame. Snapshot
         // BEFORE Begin: the tab title carries the unseen count (s8.2).
         const std::vector<ConsoleEntry> entries = console.Snapshot();
+        // editor.console.* (settings sweep S6-41): the toolbar toggles are cvars;
+        // a click writes the User rung (visible from the next publish), and this
+        // frame draws with the clicked value.
+        const EditorConsoleSettings consoleSettings = Settings<EditorConsoleSettings>();   // a copy: held across the draw
+        bool collapse   = consoleSettings.collapse;
+        bool autoScroll = consoleSettings.autoScroll;
+        bool wrap       = consoleSettings.wrap;
         const std::size_t unseen = suppressBadges ? 0 : UnseenAlerts(entries, ui.lastSeenSeq);
         const bool tint = unseen > 0;
         if (tint)
@@ -1122,11 +1130,11 @@ namespace Arcane::Editor
                                               : "Copy###consolecopy",
                                     ImVec2(copyW, 0.0f));
         ImGui::SameLine();
-        ImGui::Checkbox("Collapse", &ui.collapse);
+        if (ImGui::Checkbox("Collapse", &collapse)) SetConsoleToggle(kConsoleCollapseCVar, collapse);
         ImGui::SameLine();
-        ImGui::Checkbox("Scroll", &ui.autoScroll);
+        if (ImGui::Checkbox("Scroll", &autoScroll)) SetConsoleToggle(kConsoleAutoScrollCVar, autoScroll);
         ImGui::SameLine();
-        ImGui::Checkbox("Wrap", &ui.wrap);
+        if (ImGui::Checkbox("Wrap", &wrap)) SetConsoleToggle(kConsoleWrapCVar, wrap);
 
         ImGui::SameLine(); (void)SeverityToggleFor("console_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);
         ImGui::SameLine(); (void)SeverityToggleFor("console_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning);
@@ -1162,9 +1170,10 @@ namespace Arcane::Editor
         // where another tab covers the Console hits this. So: no body in a
         // skipped child, period.
         // The cvar console's own history sits between the log rows and the
-        // input line: reserve the input line plus up to six reply lines.
-        // (Hygiene pass 2026-09-28: the replies were never drawn here.)
-        const std::size_t cvarLines = ui.cvars.Lines().size() < 6 ? ui.cvars.Lines().size() : std::size_t{ 6 };
+        // input line: reserve the input line plus up to editor.console.replyLines
+        // reply lines. (Hygiene pass 2026-09-28: the replies were never drawn here.)
+        const std::size_t replyCap = static_cast<std::size_t>(consoleSettings.replyLines > 0 ? consoleSettings.replyLines : 0);
+        const std::size_t cvarLines = ui.cvars.Lines().size() < replyCap ? ui.cvars.Lines().size() : replyCap;
         const float reserved = ImGui::GetFrameHeightWithSpacing() * (1.0f + static_cast<float>(cvarLines));
         if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -reserved)))
         {
@@ -1193,7 +1202,7 @@ namespace Arcane::Editor
         // outlives every use below.
         struct Row { const ConsoleEntry* e; std::size_t count; };
         std::vector<Row> rows;
-        if (ui.collapse)
+        if (collapse)
         {
             for (const CollapsedRow& r : CollapseConsole(entries))
                 if (r.first && visible(*r.first)) rows.push_back({ r.first, r.count });
@@ -1259,7 +1268,7 @@ namespace Arcane::Editor
 
             const std::string clock = ClockText(e.timestampMs);
             char cat[64];
-            std::snprintf(cat, sizeof(cat), "%-8s", e.category.c_str());
+            std::snprintf(cat, sizeof(cat), "%-*s", static_cast<int>(consoleSettings.categoryWidth), e.category.c_str());
             std::string msg = e.message;
             if (row.count > 1)
             {
@@ -1276,7 +1285,7 @@ namespace Arcane::Editor
             const float spacingX = ImGui::GetStyle().ItemSpacing.x;
             const float prefixW  = ImGui::CalcTextSize(clock.c_str()).x + spacingX +
                                    ImGui::CalcTextSize(cat).x + spacingX;
-            if (ui.wrap)
+            if (wrap)
             {
                 const float wrapW = ImGui::GetContentRegionAvail().x - prefixW;
                 if (wrapW > 1.0f)
@@ -1299,9 +1308,9 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", cat);
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, col);
-            if (ui.wrap) ImGui::PushTextWrapPos(0.0f);
+            if (wrap) ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(msg.c_str());
-            if (ui.wrap) ImGui::PopTextWrapPos();
+            if (wrap) ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
             ImGui::SetCursorPos(afterPos);
             ImGui::PopID();
@@ -1349,7 +1358,7 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
-        if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        if (autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
         if (cvarLines > 0)

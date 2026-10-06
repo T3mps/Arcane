@@ -23,6 +23,7 @@
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
 #include "Settings/EditorPlaySettings.hpp"     // editor.play.launchMode (settings S6-32)
 #include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..32)
@@ -2538,8 +2539,9 @@ namespace Arcane::Editor
                 if (const auto req = Arcane::Editor::DrawNewFolderModal(m_newFolder, *proj)) (void)RunAssetOp(*req);
         }
 
-        if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
-            m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
+        if (const auto lineCap = static_cast<std::size_t>(Arcane::Settings<Arcane::Editor::EditorConsoleSettings>().displayLineCap);
+            lineCap != m_consoleDiag.console.Capacity())
+            m_consoleDiag.console.SetCapacity(lineCap);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
             Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
                 Arcane::Editor::UnderVerifyHarness(m_config),

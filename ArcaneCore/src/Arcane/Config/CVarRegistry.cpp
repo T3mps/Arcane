@@ -496,6 +496,15 @@ namespace Arcane
             .help = "Command-line history depth.",
             .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
         (void)history;
+        // Settings sweep S6-41: the console's output line cap, beside the
+        // history depth for the same reason (every registry; ConsoleModel reads
+        // the registry it is handed). 0 = unbounded, the pre-sweep behaviour.
+        const CVarHandle maxLines = Register(CVarDesc{
+            .name = "console.maxLines", .type = CVarType::Int32, .defaultValue = CVarValue::Int32(0),
+            .min = CVarValue::Int32(0), .max = CVarValue::Int32(1000000), .flags = CVarFlags::Archive,
+            .help = "Console output lines kept; the oldest drop past it. 0 keeps every line.",
+            .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
+        (void)maxLines;
         // Settings spec s3.2: the cheats gate and the two engine knobs, on EVERY
         // registry (test registries included), like console.historySize. They
         // are Server audience: a LocalHost or ServerAdmin console sets them, and

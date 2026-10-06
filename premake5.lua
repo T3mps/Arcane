@@ -1254,6 +1254,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
