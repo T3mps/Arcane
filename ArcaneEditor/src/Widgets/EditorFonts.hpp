@@ -29,8 +29,12 @@ namespace Arcane::Editor
     };
     // The bundled Inter, Roboto, JetBrains Mono (in that order), then every .ttf/.otf
     // in `userFontsDir` by file stem, sorted. `userFontsDir` may be empty or absent.
+    // A user stem equal to a bundled family's name is named "user:<stem>" (S4-GATE),
+    // so the value a pick stores resolves to the user's file, never the bundled one.
     [[nodiscard]] std::vector<EditorFontFamily> ListEditorFontFamilies(const std::filesystem::path& exeDir,
                                                                        const std::filesystem::path& userFontsDir);
+    // What the family combo shows: the name, or "<stem>  (user)" for a user font.
+    [[nodiscard]] std::string EditorFontFamilyLabel(const EditorFontFamily& family);
     // The file of the family named `name`, else of `fallback`, else the first family's.
     [[nodiscard]] std::filesystem::path ResolveEditorFontFamily(const std::vector<EditorFontFamily>& families,
                                                                 std::string_view name, std::string_view fallback);

@@ -1473,11 +1473,11 @@ namespace Arcane::Editor
             // handler only WRITES when ImGui next saves, and a camera or
             // settings change on its own dirties nothing.
             const bool view2d = IconToggle(ICON_LC_SQUARE "##view_2d", tools.viewMode == ViewMode::TwoD);
-            tooltip("2D view (Alt+J)");
+            tooltip(WithChord("2D view", "editor.view.ortho2D").c_str());
             if (view2d) { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             const bool viewPersp = IconToggle(ICON_LC_BOX "##view_persp", tools.viewMode == ViewMode::Perspective);
-            tooltip("Perspective view (Alt+G)");
+            tooltip(WithChord("Perspective view", "editor.view.perspective").c_str());
             if (viewPersp) { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             if (iconBtn(ICON_LC_SETTINGS_2, "##view_settings", "View settings"))
@@ -1526,19 +1526,19 @@ namespace Arcane::Editor
 
             // --- Transform tools ---------------------------------------------
             const bool toolSel = IconToggle(ICON_LC_MOUSE_POINTER_2 "##tool_sel", !gizmoEnabled);
-            tooltip("Select (Q)");
+            tooltip(WithChord("Select", "editor.viewport.toolSelect").c_str());
             if (toolSel) gizmoEnabled = false;
             ImGui::SameLine();
             const bool toolT = IconToggle(ICON_LC_MOVE_3D "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate);
-            tooltip("Move (W)");
+            tooltip(WithChord("Move", "editor.viewport.toolTranslate").c_str());
             if (toolT) { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
             const bool toolR = IconToggle(ICON_LC_ROTATE_3D "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate);
-            tooltip("Rotate (E)");
+            tooltip(WithChord("Rotate", "editor.viewport.toolRotate").c_str());
             if (toolR) { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
             const bool toolS = IconToggle(ICON_LC_SCALE_3D "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale);
-            tooltip("Scale (R)");
+            tooltip(WithChord("Scale", "editor.viewport.toolScale").c_str());
             if (toolS) { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
             ImGui::SameLine();
             {

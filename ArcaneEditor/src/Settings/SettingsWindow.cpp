@@ -1,5 +1,7 @@
 #include "Settings/SettingsWindow.hpp"
 
+#include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
@@ -15,6 +17,8 @@ namespace Arcane::Editor
     namespace
     {
         using Page = SettingsWindowState::FrameFacts::Page;
+
+        const EditorActions& Keys(const SettingsWindowEnv& env) { return env.actions ? *env.actions : EditorActions::Get(); }
 
         // Valid only while SettingsWindowEnv::drawPage runs.
         thread_local SettingsRowContext* t_pageRow = nullptr;
@@ -121,12 +125,14 @@ namespace Arcane::Editor
             ImGui::BeginDisabled(!undo.CanUndo() || undo.InTransaction());
             if (ImGui::Button(ICON_LC_UNDO "##settings-undo")) undo.Undo();
             ImGui::EndDisabled();
-            ImGui::SetItemTooltip("Undo %s (Ctrl+Z)", undo.UndoLabel());
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))   // the bound chord, not a literal (S4-GATE)
+                ImGui::SetTooltip("%s", WithChord(std::string("Undo ") + undo.UndoLabel(), Keys(env), "edit.undo").c_str());
             ImGui::SameLine();
             ImGui::BeginDisabled(!undo.CanRedo() || undo.InTransaction());
             if (ImGui::Button(ICON_LC_REDO "##settings-redo")) undo.Redo();
             ImGui::EndDisabled();
-            ImGui::SetItemTooltip("Redo %s (Ctrl+Y)", undo.RedoLabel());
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))   // the bound chord, not a literal (S4-GATE)
+                ImGui::SetTooltip("%s", WithChord(std::string("Redo ") + undo.RedoLabel(), Keys(env), "edit.redo").c_str());
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 22.0f);
             ImGui::InputTextWithHint("##settings-search", ICON_LC_SEARCH " Search settings", st.search, sizeof(st.search));
@@ -257,9 +263,11 @@ namespace Arcane::Editor
             // Window-local undo (spec s6.3): ours while focused and no text box owns the keys.
             if (st.focused && !ImGui::GetIO().WantTextInput && !undo.InTransaction())
             {
-                if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) undo.Undo();
-                else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) ||
-                         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) undo.Redo();
+                // The editor's own undo/redo actions (S4-GATE): rebinding edit.undo,
+                // edit.redo or edit.redoAlt rebinds them here too.
+                const EditorActions& keys = Keys(env);
+                if (keys.PressedInWindow("edit.undo")) undo.Undo();
+                else if (keys.PressedInWindow("edit.redo") || keys.PressedInWindow("edit.redoAlt")) undo.Redo();
             }
 
             DrawToolbar(st, env, undo);

@@ -19,4 +19,19 @@ namespace Arcane::Editor
     private:
         std::string m_text;
     };
+
+    // A tooltip or label that names an action's chord reads it from the action
+    // (S4-GATE), never a literal that goes stale on a rebind: "Undo (Ctrl+Z)",
+    // or just "Undo" while the action is unbound.
+    [[nodiscard]] inline std::string WithChord(std::string_view label, const EditorActions& actions, std::string_view actionId)
+    {
+        std::string out(label);
+        const std::string chord = actions.MenuShortcut(actionId);
+        if (!chord.empty()) out += " (" + chord + ")";
+        return out;
+    }
+    [[nodiscard]] inline std::string WithChord(std::string_view label, std::string_view actionId)
+    {
+        return WithChord(label, EditorActions::Get(), actionId);
+    }
 }

@@ -680,3 +680,46 @@ TEST_CASE("E11: editor.settings.openAtBoot=both opens Editor Preferences and Pro
     CHECK(ini.find("[Window][Editor Preferences]") != std::string::npos);   // drawn: the menu's window exists
     CHECK(ini.find("[Window][Project Settings]") != std::string::npos);
 }
+
+TEST_CASE("E12: a saved shortcut and a --set editor.keys.* reach a declared cvar at boot -- the editor declares its shortcut cvars before the early config rungs", "[witness][gpu]")
+{
+    // S4-GATE: HostBoot::ApplyEarlyConfigRungs layers the EditorUser rung (the
+    // Keyboard page's saved shortcuts) and the --set list before EditorApp
+    // exists. The registry layers a rung only onto cvars that already exist,
+    // so main() declares the editor.keys.* table first. Declared later, the
+    // --set below was refused as "unknown" (the RED run of this gate).
+    WitnessScratch scratch(StagedEditorDir(), "e12-shortcut-boot");
+    const std::filesystem::path lad = scratch.Dir() / "localappdata";
+    std::filesystem::create_directories(lad / "Arcane" / "Editor" / "Config");
+    {
+        std::ofstream out(lad / "Arcane" / "Editor" / "Config" / "editor.json", std::ios::binary);
+        out << R"({ "keys": { "edit.copy": "F" } })";
+    }
+    struct ScopedLocalAppData   // RunWitness's child inherits it: Paths' EditorUserDir = <LOCALAPPDATA>/Arcane/Editor
+    {
+        std::wstring saved;
+        bool had = false;
+        explicit ScopedLocalAppData(const std::filesystem::path& value)
+        {
+            if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
+            _wputenv_s(L"LOCALAPPDATA", value.wstring().c_str());
+        }
+        ~ScopedLocalAppData() { _wputenv_s(L"LOCALAPPDATA", had ? saved.c_str() : L""); }
+    } scopedLad(lad);
+
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "5",
+                 "--report", inv.reportPath.generic_string(), "--set", "editor.keys.edit.cut=Ctrl+Shift+X" };
+    inv.hardCapMs = 120000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    const std::string out = ReadAllBytes(run.stdoutPath) + ReadAllBytes(run.stderrPath);
+    CHECK(out.find("unknown 'editor.keys.") == std::string::npos);    // the --set landed on a declared cvar
+    CHECK(out.find("unknown-key 'keys.") == std::string::npos);       // so did the saved editor.json key
+}

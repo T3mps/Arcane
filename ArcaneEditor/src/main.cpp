@@ -15,6 +15,7 @@
 #include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "App/EditorApp.hpp"
+#include "Input/EditorActions.hpp"   // the shortcut cvars, declared before the early config rungs
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 
 #include <cstdio>
@@ -376,6 +377,13 @@ int main(int argc, char** argv)
     // order IS still load-bearing (R16): Install attaches the log file sink
     // and the crash path freezes the log backlog, neither of which exists
     // before Log::Init runs.
+    // The editor.keys.* shortcut cvars are declared FIRST (S4-GATE): the
+    // registry layers a rung only onto cvars that already exist, and
+    // EditorActions registers its table lazily on the first Get(). Declared
+    // after the early rungs, every --set editor.keys.* was refused as unknown
+    // and a saved shortcut waited on the later re-application. Every other
+    // editor cvar is a static (ARC_CVAR) and exists before main.
+    (void)Arcane::Editor::EditorActions::Get();
     // I2: engine/project/EditorUser/user/--set rungs before Install and Runtime.
     Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CVarContext::Editor,
                                             /*editor*/ true);

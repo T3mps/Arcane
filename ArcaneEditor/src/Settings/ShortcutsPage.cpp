@@ -1,9 +1,11 @@
 #include "Settings/ShortcutsPage.hpp"
 
+#include "Settings/SettingsEdit.hpp"   // RungLabel
 #include "Settings/SettingsHost.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
+#include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Input/KeyLayout.hpp>
 
@@ -15,6 +17,12 @@
 
 namespace Arcane::Editor
 {
+    ARC_CVAR(cvar_settingsKeysConflictsOnly, "editor.settings.keysConflictsOnly", bool, false,
+             .flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::Hidden,
+             .audience = ::Arcane::Audience::Editor,
+             .scope = ::Arcane::SettingScope::PreferencesMachine,
+             .help = "Automation: the Keyboard page opens with Conflicts only ticked (headless desk captures).");
+
     namespace
     {
         std::string Lower(std::string_view s)
@@ -26,17 +34,43 @@ namespace Arcane::Editor
 
         std::string CVarNameOf(std::string_view id) { return "editor.keys." + std::string(id); }
 
-        bool WriteChord(EditorActions& actions, std::string_view id, std::string_view text, const ShortcutWriteSink& sink)
+        // The rung that holds `id`'s effective binding.
+        Arcane::SetBy WinningRung(const EditorActions& actions, std::string_view id)
+        {
+            const std::optional<Arcane::CVarExplain> e = actions.Registry().Explain(CVarNameOf(id));
+            return e ? e->setBy : Arcane::SetBy::Default;
+        }
+
+        // RefusedWeaker still RECORDS the EditorUser value beneath the
+        // stronger rung, so it is archived like an applied write.
+        Arcane::SetResult WriteChord(EditorActions& actions, std::string_view id, std::string_view text, const ShortcutWriteSink& sink)
         {
             Arcane::CVarRegistry& reg = actions.Registry();
             const Arcane::CVarHandle h = actions.HandleOf(id);
-            if (h.IsStale()) return false;
-            const bool ok = reg.Set(h, Arcane::CVarValue::String(std::string(text)), Arcane::SetBy::EditorUser,
-                                    "editor", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied;
+            if (h.IsStale()) return Arcane::SetResult::Stale;
+            const Arcane::SetResult r = reg.Set(h, Arcane::CVarValue::String(std::string(text)), Arcane::SetBy::EditorUser,
+                                                "editor", Arcane::CVarContext::Editor);
             reg.Publish();
             actions.RefreshBindings();
-            if (ok && sink) sink(CVarNameOf(id));
-            return ok;
+            if ((r == Arcane::SetResult::Applied || r == Arcane::SetResult::RefusedWeaker) && sink)
+                sink(Arcane::SetBy::EditorUser, CVarNameOf(id));
+            return r;
+        }
+
+        // Why a write did not take effect (`what`: "Ctrl+K" or "The clear"); empty when it did.
+        std::string WriteRefusal(const EditorActions& actions, std::string_view id, Arcane::SetResult r, const std::string& what)
+        {
+            switch (r)
+            {
+            case Arcane::SetResult::RefusedWeaker:
+                return what + " is saved for all projects, but the " + RungLabel(WinningRung(actions, id))
+                     + " binding still wins: use Clear override on the row.";
+            case Arcane::SetResult::Stale:        return what + " was not saved: the action's setting is no longer registered.";
+            case Arcane::SetResult::TypeMismatch: return what + " was not saved: the action's setting is not a text setting.";
+            case Arcane::SetResult::Denied:       return what + " was not saved: the settings registry denied the write.";
+            case Arcane::SetResult::Applied:      break;
+            }
+            return {};
         }
 
         void StopListening(EditorActions& actions, ShortcutsPageState& state)
@@ -46,7 +80,7 @@ namespace Arcane::Editor
         }
     }
 
-    std::vector<ShortcutRow> BuildShortcutRows(const EditorActions& actions, std::string_view query)
+    std::vector<ShortcutRow> BuildShortcutRows(const EditorActions& actions, std::string_view query, bool conflictsOnly)
     {
         const std::string q = Lower(query);
         std::vector<ShortcutRow> rows;
@@ -64,7 +98,10 @@ namespace Arcane::Editor
             row.type = chord.Bound() ? chord.type : def.type;
             row.isDefault = chord == def;
             row.conflict = !actions.ConflictsOf(id).empty();
+            if (conflictsOnly && !row.conflict) continue;
             row.tooltip = row.conflict ? actions.ConflictTooltip(id) : "editor.keys." + row.id;
+            if (const Arcane::SetBy winner = WinningRung(actions, id); winner > Arcane::SetBy::EditorUser)
+                row.overriddenBy = winner;
             if (!q.empty())
             {
                 const std::string hay = Lower(row.action + " " + row.id + " " + row.context + " " + row.chord + " " + FormatKeyChord(chord));
@@ -86,7 +123,11 @@ namespace Arcane::Editor
         const bool bare = !lab.ctrl && !lab.shift && !lab.alt && !lab.super;
         if (bare && lab.type == KeyType::Labelled && lab.key == Arcane::Keys::kEscape) return ListenOutcome::Cancelled;
         if (bare && lab.type == KeyType::Labelled && lab.key == Arcane::Keys::kBackspace)
-            return WriteChord(actions, id, "", sink) ? ListenOutcome::Cleared : ListenOutcome::Cancelled;
+        {
+            const Arcane::SetResult r = WriteChord(actions, id, "", sink);
+            state.refusal = WriteRefusal(actions, id, r, "The clear");
+            return r == Arcane::SetResult::Applied ? ListenOutcome::Cleared : ListenOutcome::Refused;
+        }
         const KeyChord current = actions.ChordOf(id).value_or(KeyChord{});
         const KeyType wanted = current.Bound() ? current.type : actions.DefaultChordOf(id).value_or(KeyChord{}).type;
         const KeyChord chosen = wanted == KeyType::Physical ? cap->physical : lab;
@@ -95,8 +136,9 @@ namespace Arcane::Editor
             state.refusal = DisplayKeyChord(chosen) + " is reserved: " + *why;
             return ListenOutcome::Refused;
         }
-        state.refusal.clear();
-        return SetActionChord(actions, id, chosen, sink) ? ListenOutcome::Bound : ListenOutcome::Cancelled;
+        const Arcane::SetResult r = WriteChord(actions, id, FormatKeyChord(chosen), sink);
+        state.refusal = WriteRefusal(actions, id, r, DisplayKeyChord(chosen));
+        return r == Arcane::SetResult::Applied ? ListenOutcome::Bound : ListenOutcome::Refused;
     }
 
     void EndListenIfPageHidden(EditorActions& actions, ShortcutsPageState& state, int frame)
@@ -106,7 +148,7 @@ namespace Arcane::Editor
 
     bool SetActionChord(EditorActions& actions, std::string_view id, const KeyChord& chord, const ShortcutWriteSink& sink)
     {
-        return WriteChord(actions, id, FormatKeyChord(chord), sink);
+        return WriteChord(actions, id, FormatKeyChord(chord), sink) == Arcane::SetResult::Applied;
     }
 
     bool FlipKeyType(EditorActions& actions, std::string_view id, const ShortcutWriteSink& sink)
@@ -118,37 +160,69 @@ namespace Arcane::Editor
         return SetActionChord(actions, id, flipped, sink);
     }
 
+    bool ClearShortcutOverride(EditorActions& actions, std::string_view id, const ShortcutWriteSink& sink)
+    {
+        const Arcane::SetBy winner = WinningRung(actions, id);
+        const Arcane::CVarHandle h = actions.HandleOf(id);
+        if (winner <= Arcane::SetBy::EditorUser || h.IsStale()) return false;
+        Arcane::CVarRegistry& reg = actions.Registry();
+        (void)reg.ClearRung(h, winner);
+        reg.Publish();
+        actions.RefreshBindings();
+        if (sink) sink(winner, CVarNameOf(id));
+        return true;
+    }
+
     void ResetAllShortcuts(EditorActions& actions, const ShortcutWriteSink& sink)
     {
-        // Drop the EditorUser record rather than writing the default text, so
-        // the user file stops pinning a binding the engine may later change.
-        // The sink is what makes that stick: the exit-time WriteCVarArchive
-        // never erases a key, so only the archive queue's
-        // WriteCVarRungArchive takes the old binding out of editor.json.
+        // Drop the records rather than writing the default text, so the user
+        // files stop pinning a binding the engine may later change. The sink
+        // is what makes that stick: the exit-time WriteCVarArchive never
+        // erases a key, so only the archive queue's WriteCVarRungArchive takes
+        // the old binding out of editor.json (EditorUser) and out of the
+        // project's user file (User; S4-GATE: a User value silently shadowed
+        // the page).
         Arcane::CVarRegistry& reg = actions.Registry();
-        std::vector<std::string> cleared;
+        std::vector<std::pair<Arcane::SetBy, std::string>> cleared;
         for (std::string_view id : actions.Ids())
             if (const Arcane::CVarHandle h = actions.HandleOf(id); !h.IsStale())
             {
+                const std::string name = CVarNameOf(id);
+                if (reg.RungValue(name, Arcane::SetBy::User).has_value())
+                {
+                    (void)reg.ClearRung(h, Arcane::SetBy::User);
+                    cleared.emplace_back(Arcane::SetBy::User, name);
+                }
                 (void)reg.ClearRung(h, Arcane::SetBy::EditorUser);
-                cleared.push_back(CVarNameOf(id));
+                cleared.emplace_back(Arcane::SetBy::EditorUser, name);
             }
         reg.Publish();
         actions.RefreshBindings();
         if (sink)
-            for (const std::string& name : cleared) sink(name);
+            for (const auto& [rung, name] : cleared) sink(rung, name);
     }
 
     void DrawShortcutsPage(void* user)
     {
         ShortcutsPageState& st = *static_cast<ShortcutsPageState*>(user);
         EditorActions& actions = EditorActions::Get();
+        if (st.drawnFrame < 0) st.conflictsOnly = st.conflictsOnly || cvar_settingsKeysConflictsOnly.Get();   // the first draw
         st.drawnFrame = ImGui::GetFrameCount();
-        const ShortcutWriteSink archive = [](const std::string& cvar) { NoteSettingEdited(Arcane::SetBy::EditorUser, cvar); };
+        const ShortcutWriteSink archive = [](Arcane::SetBy rung, const std::string& cvar)
+        {
+            if (rung == Arcane::SetBy::EditorUser || rung == Arcane::SetBy::User) NoteSettingEdited(rung, cvar);   // the archived rungs
+        };
         (void)FeedListen(actions, st, archive);
 
-        ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Reset All").x - ImGui::GetStyle().FramePadding.x * 4.0f);
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float trailing = ImGui::CalcTextSize("Reset All").x + style.FramePadding.x * 2.0f
+                             + ImGui::GetFrameHeight() + ImGui::CalcTextSize("Conflicts only").x
+                             + style.ItemInnerSpacing.x + style.ItemSpacing.x * 2.0f;
+        ImGui::SetNextItemWidth(-trailing);
         ImGui::InputTextWithHint("##shortcutsearch", ICON_LC_SEARCH " Search actions, contexts or keys", st.search, sizeof st.search);
+        ImGui::SameLine();
+        ImGui::Checkbox("Conflicts only", &st.conflictsOnly);
+        ImGui::SetItemTooltip("Show only the actions whose shortcut another action in an overlapping context also uses.");
         ImGui::SameLine();
         if (ImGui::Button("Reset All"))
         {
@@ -156,6 +230,9 @@ namespace Arcane::Editor
             st.refusal.clear();
             ResetAllShortcuts(actions, archive);
         }
+        ImGui::SetItemTooltip("Every action back to its default: clears the shortcuts saved for all projects (%s) and "
+                              "this project's overrides (%s). Command-line and console values stay; clear those per row.",
+                              RungLabel(Arcane::SetBy::EditorUser), RungLabel(Arcane::SetBy::User));
         if (!st.refusal.empty()) ImGui::TextColored(Theme::kWarning, ICON_LC_TRIANGLE_ALERT " %s", st.refusal.c_str());
 
         const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
@@ -167,13 +244,21 @@ namespace Arcane::Editor
         ImGui::TableSetupColumn("Type");
         ImGui::TableSetupColumn("Default");
         ImGui::TableHeadersRow();
-        for (const ShortcutRow& row : BuildShortcutRows(actions, st.search))
+        for (const ShortcutRow& row : BuildShortcutRows(actions, st.search, st.conflictsOnly))
         {
             ImGui::PushID(row.id.c_str());
             ImGui::TableNextRow();
             if (row.conflict) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kError);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(row.action.c_str());
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", row.tooltip.c_str());
+            if (row.overriddenBy != Arcane::SetBy::Default)   // the marker the generic rows draw (SettingsRows)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(Theme::kAmber, "Overridden by %s", RungLabel(row.overriddenBy));
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear override")) (void)ClearShortcutOverride(actions, row.id, archive);
+                ImGui::SetItemTooltip("Remove the %s binding; the row shows what is left underneath", RungLabel(row.overriddenBy));
+            }
             ImGui::TableNextColumn(); ImGui::TextUnformatted(row.context.c_str());
             ImGui::TableNextColumn();
             const bool listening = st.listeningId == row.id;

@@ -3,6 +3,7 @@
 // Restart bar, "Module unloaded", and debounced writes flushed on close.
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
+#include <Input/EditorActions.hpp>
 #include <Settings/SettingsWindow.hpp>
 #include <Widgets/EditorFonts.hpp>
 #include <imgui.h>
@@ -24,6 +25,8 @@ namespace
     {
         Arcane::Test::SettingsImGuiHarness imgui;
         CVarRegistry reg;
+        CVarRegistry keysReg;              // the shortcut cvars, apart from the window's own tree
+        EditorActions keys{ keysReg };
         SettingsWindowState st;
         SettingsArchiveQueue archive;
         SettingsApplyTracker tracker;
@@ -37,7 +40,19 @@ namespace
         std::vector<SettingsPageRef> pages;
         std::function<void(const std::string&)> drawPage;
 
-        WindowHarness() { st.grid.probe = &imgui.probe; }
+        WindowHarness()
+        {
+            st.grid.probe = &imgui.probe;
+            RegisterEditorActions(keys);
+            keysReg.Publish();
+            keys.RefreshBindings();
+        }
+        void Rebind(std::string_view action, const char* chord)
+        {
+            REQUIRE(keysReg.Set(keys.HandleOf(action), CVarValue::String(chord), SetBy::EditorUser, "editor", CVarContext::Editor) == SetResult::Applied);
+            keysReg.Publish();
+            keys.RefreshBindings();
+        }
 
         SettingsWindowEnv Env()
         {
@@ -54,6 +69,7 @@ namespace
             env.tracker = &tracker;
             env.restartEditor = [this] { ++restarts; };
             env.projectOpen = true;
+            env.actions = &keys;
             return env;
         }
         void Frame()
@@ -160,6 +176,54 @@ TEST_CASE("Settings window: Ctrl+Z undoes the window's own last edit, and only w
     CHECK(h.st.focused);
     Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
     CHECK_FALSE(h.reg.RungValue("render.vsync", SetBy::Project).has_value());
+}
+
+TEST_CASE("Settings window: its undo/redo keys are the editor's edit.undo / edit.redo / edit.redoAlt bindings -- a rebind moves them", "[settings-ui][shortcuts]")
+{
+    // S4-GATE: the window-local undo read raw Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z, so
+    // rebinding Undo on the Keyboard page left this window on the old chords.
+    WindowHarness h;
+    REQUIRE_FALSE(AddSetting(h.reg, "render.vsync", { .type = CVarType::Bool, .def = CVarValue::Bool(true) }).IsStale());
+    h.st.selected = "Engine/Render";
+    h.Frame();
+    h.Frame();
+    const auto edited = [&] { return h.reg.RungValue("render.vsync", SetBy::Project).has_value(); };
+
+    SECTION("the defaults: Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo")
+    {
+        h.Click("Vsync");
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
+        CHECK_FALSE(edited());
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Y, [&] { h.Frame(); });
+        CHECK(edited());
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
+        CHECK_FALSE(edited());
+        ImGuiIO& io = ImGui::GetIO();   // Ctrl+Shift+Z: one AddKeyEvent per modifier (PressChord takes one)
+        io.AddKeyEvent(ImGuiMod_Ctrl, true); io.AddKeyEvent(ImGuiMod_Shift, true); io.AddKeyEvent(ImGuiKey_Z, true); h.Frame();
+        io.AddKeyEvent(ImGuiKey_Z, false); io.AddKeyEvent(ImGuiMod_Shift, false); io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+        CHECK(edited());
+    }
+    SECTION("rebound: Ctrl+U undoes and Ctrl+R redoes; the old chords do nothing here")
+    {
+        h.Rebind("edit.undo", "Ctrl+U");
+        h.Rebind("edit.redo", "Ctrl+R");
+        h.Click("Vsync");
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
+        CHECK(edited());
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_U, [&] { h.Frame(); });
+        CHECK_FALSE(edited());
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Y, [&] { h.Frame(); });
+        CHECK_FALSE(edited());
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_R, [&] { h.Frame(); });
+        CHECK(edited());
+    }
+    SECTION("unbound: no key undoes")
+    {
+        h.Rebind("edit.undo", "");
+        h.Click("Vsync");
+        Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
+        CHECK(edited());
+    }
 }
 
 TEST_CASE("Settings window: the Restart bar counts settings changed since boot and its button restarts", "[settings-ui]")

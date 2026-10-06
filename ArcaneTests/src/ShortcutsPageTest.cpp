@@ -108,6 +108,19 @@ TEST_CASE("Shortcuts page: a conflict turns EVERY involved row red, names the ot
     CHECK_FALSE(r.reg.RungValue("editor.keys.edit.copy", Arcane::SetBy::EditorUser).has_value());   // dropped, not pinned
 }
 
+TEST_CASE("Shortcuts page: Conflicts only keeps exactly the red rows, Graph context included", "[shortcuts][settings-ui]")
+{
+    // S4-GATE: the conflict capture's Graph row sat below the 1080p fold; the
+    // filter (and editor.settings.keysConflictsOnly for automation) shows it.
+    Rig r;
+    CHECK(BuildShortcutRows(r.actions, "", true).empty());
+    REQUIRE(SetActionChord(r.actions, "edit.copy", *ParseKeyChord("F")));
+    std::vector<std::string> ids;
+    for (const ShortcutRow& row : BuildShortcutRows(r.actions, "", true)) { CHECK(row.conflict); ids.push_back(row.id); }
+    CHECK((ids == std::vector<std::string>{ "edit.copy", "editor.view.frameSelected", "graph.frameSelected" }));
+    CHECK(BuildShortcutRows(r.actions, "graph", true).size() == 1);   // the search still narrows
+}
+
 TEST_CASE("Shortcuts page: the Type column flips Labelled <-> Physical", "[shortcuts][settings-ui]")
 {
     Rig r;
@@ -172,7 +185,7 @@ TEST_CASE("Shortcuts page: Reset All survives a restart -- the archive takes the
         REQUIRE(FormatKeyChord(*r.actions.ChordOf("edit.copy")) == "F");
         REQUIRE(r.Row(BuildShortcutRows(r.actions, ""), "edit.copy").conflict);
         SettingsArchiveQueue archive;
-        ResetAllShortcuts(r.actions, [&](const std::string& cvar) { archive.MarkDirty(Arcane::SetBy::EditorUser, cvar, 0.0); });
+        ResetAllShortcuts(r.actions, [&](Arcane::SetBy rung, const std::string& cvar) { archive.MarkDirty(rung, cvar, 0.0); });
         CHECK(archive.Dirty());
         CHECK(archive.Flush([&](Arcane::SetBy rung, const std::vector<std::string>& names)
         {
@@ -203,7 +216,11 @@ TEST_CASE("Shortcuts page: every page write reports its cvar to the archive sink
 {
     Rig r;
     std::vector<std::string> heard;
-    const ShortcutWriteSink sink = [&](const std::string& cvar) { heard.push_back(cvar); };
+    const ShortcutWriteSink sink = [&](Arcane::SetBy rung, const std::string& cvar)
+    {
+        CHECK(rung == Arcane::SetBy::EditorUser);   // no User records here: every write is the page's own rung
+        heard.push_back(cvar);
+    };
     REQUIRE(SetActionChord(r.actions, "edit.undo", *ParseKeyChord("Ctrl+K"), sink));
     REQUIRE(FlipKeyType(r.actions, "editor.camera.flyForward", sink));
     CHECK((heard == std::vector<std::string>{ "editor.keys.edit.undo", "editor.keys.editor.camera.flyForward" }));
@@ -219,14 +236,94 @@ TEST_CASE("Shortcuts page: every page write reports its cvar to the archive sink
     CHECK(heard.size() == kEditorActionTable.size());
 }
 
+TEST_CASE("Shortcuts page: a User-rung binding is marked 'Overridden by', is clearable from the row, and Reset All clears it too", "[shortcuts][settings-ui]")
+{
+    // S4-GATE: a per-project User value of editor.keys.<id> (a hand edit of the
+    // project's user file) silently shadowed the page's EditorUser writes: the
+    // page drew no marker and Reset All cleared EditorUser only.
+    Rig r;
+    std::vector<std::pair<Arcane::SetBy, std::string>> heard;
+    const ShortcutWriteSink sink = [&](Arcane::SetBy rung, const std::string& cvar) { heard.emplace_back(rung, cvar); };
+    const auto userOverride = [&](std::string_view id, const char* chord)
+    {
+        REQUIRE(r.reg.Set(r.actions.HandleOf(id), Arcane::CVarValue::String(chord), Arcane::SetBy::User, "user",
+                          Arcane::CVarContext::Editor) == Arcane::SetResult::Applied);
+        r.reg.Publish();
+        r.actions.RefreshBindings();
+    };
+    userOverride("edit.undo", "Ctrl+J");
+    {
+        const ShortcutRow row = r.Row(BuildShortcutRows(r.actions, ""), "edit.undo");
+        CHECK(row.overriddenBy == Arcane::SetBy::User);
+        CHECK(row.chord == "Ctrl+J");
+        CHECK(r.Row(BuildShortcutRows(r.actions, ""), "edit.redo").overriddenBy == Arcane::SetBy::Default);
+    }
+
+    SECTION("binding over it is saved but refused with the reason, never reported as Cancelled")
+    {
+        CHECK(r.Listen("edit.undo", { Keys::kScanLCtrl, Keys::ScanLetter('K') }) == ListenOutcome::Refused);
+        CHECK(r.page.refusal == "Ctrl+K is saved for all projects, but the User (this project) binding still wins: use Clear override on the row.");
+        CHECK(r.reg.RungValue("editor.keys.edit.undo", Arcane::SetBy::EditorUser) == std::optional<Arcane::CVarValue>(Arcane::CVarValue::String("Ctrl+K")));
+        CHECK(FormatKeyChord(*r.actions.ChordOf("edit.undo")) == "Ctrl+J");
+        CHECK(r.Listen("edit.undo", { Keys::kScanBackspace }) == ListenOutcome::Refused);
+        CHECK(r.page.refusal.starts_with("The clear is saved for all projects, but the User (this project) binding still wins"));
+    }
+    SECTION("Clear override removes the User value; the row shows what is underneath")
+    {
+        REQUIRE(SetActionChord(r.actions, "edit.undo", *ParseKeyChord("Ctrl+K")) == false);   // recorded beneath User
+        heard.clear();
+        CHECK(ClearShortcutOverride(r.actions, "edit.undo", sink));
+        CHECK((heard == std::vector<std::pair<Arcane::SetBy, std::string>>{ { Arcane::SetBy::User, "editor.keys.edit.undo" } }));
+        const ShortcutRow row = r.Row(BuildShortcutRows(r.actions, ""), "edit.undo");
+        CHECK(row.overriddenBy == Arcane::SetBy::Default);
+        CHECK(row.chord == "Ctrl+K");
+        CHECK_FALSE(ClearShortcutOverride(r.actions, "edit.undo", sink));   // nothing above EditorUser any more
+    }
+    SECTION("a --set binding is marked too, and Clear override removes it")
+    {
+        REQUIRE(r.reg.Set(r.actions.HandleOf("edit.redo"), Arcane::CVarValue::String("Ctrl+L"), Arcane::SetBy::CommandLine, "",
+                          Arcane::CVarContext::Editor) == Arcane::SetResult::Applied);
+        r.reg.Publish();
+        r.actions.RefreshBindings();
+        CHECK(r.Row(BuildShortcutRows(r.actions, ""), "edit.redo").overriddenBy == Arcane::SetBy::CommandLine);
+        CHECK(ClearShortcutOverride(r.actions, "edit.redo", sink));
+        CHECK(FormatKeyChord(*r.actions.ChordOf("edit.redo")) == "Ctrl+Y");
+    }
+    SECTION("Reset All clears the User rung as well as EditorUser, and tells the archive both")
+    {
+        heard.clear();
+        ResetAllShortcuts(r.actions, sink);
+        CHECK_FALSE(r.reg.RungValue("editor.keys.edit.undo", Arcane::SetBy::User).has_value());
+        CHECK(FormatKeyChord(*r.actions.ChordOf("edit.undo")) == "Ctrl+Z");
+        CHECK(std::count(heard.begin(), heard.end(), std::pair<Arcane::SetBy, std::string>{ Arcane::SetBy::User, "editor.keys.edit.undo" }) == 1);
+        CHECK(std::count_if(heard.begin(), heard.end(), [](const auto& h) { return h.first == Arcane::SetBy::EditorUser; })
+              == static_cast<std::ptrdiff_t>(kEditorActionTable.size()));
+        for (const ShortcutRow& row : BuildShortcutRows(r.actions, "")) { INFO(row.id); CHECK(row.overriddenBy == Arcane::SetBy::Default); }
+    }
+}
+
+TEST_CASE("Shortcuts page: a write the registry refuses is Refused with its reason, not Cancelled", "[shortcuts][settings-ui]")
+{
+    // S4-GATE: FeedListen reported every failed WriteChord (bind or Backspace
+    // clear) as ListenOutcome::Cancelled with no text.
+    Rig r;
+    r.reg.UnregisterModule(r.reg.Describe("editor.keys.edit.copy")->module);   // the action's cvar is gone: its handle is stale
+    r.actions.RefreshBindings();
+    CHECK(r.Listen("edit.copy", { Keys::kScanLCtrl, Keys::ScanLetter('K') }) == ListenOutcome::Refused);
+    CHECK(r.page.refusal == "Ctrl+K was not saved: the action's setting is no longer registered.");
+    CHECK(r.Listen("edit.copy", { Keys::kScanBackspace }) == ListenOutcome::Refused);
+    CHECK(r.page.refusal == "The clear was not saved: the action's setting is no longer registered.");
+}
+
 TEST_CASE("Shortcuts: the boot declares editor.keys.* before any config rung -- a saved shortcut and a --set editor.keys.* are live at boot", "[shortcuts][settings-ui][settings]")
 {
     // S4-20 fix: the registry layers a rung onto cvars that already exist, never
     // onto a later Register, and EditorActions::Get() declares its table lazily.
     // A first Get() in the frame loop (after the rungs) dropped the Keyboard
     // page's saved shortcuts on a cold boot and refused --set editor.keys.* as
-    // unknown. EditorApp::StageRuntimeCreate now calls Get() before the Runtime
-    // exists (EditorApp.cpp is not in this binary; this pins both orders).
+    // unknown. ArcaneEditor's main() now calls Get() before HostBoot's early
+    // rungs (S4-GATE; main.cpp is not in this binary; this pins both orders,
+    // and EditorWitnessTest E12 pins the real process).
     Arcane::Test::TempDir dir("shortcuts-boot-order");
     {
         std::ofstream out(dir.path / "editor.json", std::ios::binary);
@@ -249,7 +346,7 @@ TEST_CASE("Shortcuts: the boot declares editor.keys.* before any config rung -- 
 
     SECTION("the editor boot's order: Get(), then the Runtime, the EditorUser rung and the --set list")
     {
-        EditorActions& keys = EditorActions::Get();   // StageRuntimeCreate, before m_runtime.emplace
+        EditorActions& keys = EditorActions::Get();   // main(), before ApplyEarlyConfigRungs
         Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
         struct Cleanup
         {

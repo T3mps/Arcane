@@ -4,6 +4,7 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/CVarModule.hpp>   // Detail::CallerModule: the editor.keys.* cvars belong to this module
 #include <Arcane/Input/KeyLayout.hpp>
 
 #include <imgui.h>
@@ -444,6 +445,10 @@ namespace Arcane::Editor
         cd.apply = Arcane::ApplyMode::Live;
         cd.order = static_cast<std::int32_t>(s->index);
         cd.categoryPath = "Keyboard";   // Preferences > Keyboard: the shortcuts page's node (S4-14)
+        // The declaring module, as ARC_CVAR records it (S4-GATE): left empty,
+        // Register fills it from ArcaneCore's CurrentModule() and every
+        // editor.keys.* read as an ArcaneCore setting.
+        cd.module = Arcane::Detail::CallerModule();
         s->handle = m_registry.Register(cd);
         if (s->handle.IsStale()) s->handle = m_registry.Find(s->cvarName);   // a module reload kept it
 
@@ -565,6 +570,18 @@ namespace Arcane::Editor
 
     bool EditorActions::Pressed(std::string_view id) const       { const State* s = Find(id); return s && Fired(*s, false); }
     bool EditorActions::PressedRepeat(std::string_view id) const { const State* s = Find(id); return s && Fired(*s, true); }
+
+    bool EditorActions::PressedInWindow(std::string_view id) const
+    {
+        const State* s = Find(id);
+        if (!s || !s->chord.Bound() || m_listening || m_frame.captureLive) return false;
+        const bool typing = ImGui::GetCurrentContext() ? ImGui::GetIO().WantTextInput : m_frame.wantTextInput;
+        if (typing && !(s->chord.ctrl || s->chord.alt || s->chord.super)) return false;
+        const bool edge = s->chord.type == KeyType::Labelled
+                        ? ImGuiChordPressed(s->chord, false) || (FallbackApplies(s->chord) && s->pressed)
+                        : s->pressed;
+        return edge && !Shadowed(*s);
+    }
 
     bool EditorActions::Down(std::string_view id) const
     {

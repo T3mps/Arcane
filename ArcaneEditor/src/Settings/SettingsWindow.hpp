@@ -33,6 +33,7 @@
 namespace Arcane::Editor
 {
     struct AssetRefServices;
+    class EditorActions;
 
     struct SettingsWindowEnv
     {
@@ -51,6 +52,7 @@ namespace Arcane::Editor
         const AssetRefServices* assetRefs = nullptr;
         std::function<void(const std::string& cvar, bool folder)> browsePath;
         bool projectOpen = true;
+        EditorActions* actions = nullptr;                  // the window's undo/redo chords; null = EditorActions::Get()
     };
 
     struct SettingsWindowState

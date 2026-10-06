@@ -157,9 +157,20 @@ namespace Arcane::Editor
                     user.push_back({ e.path().stem().string(), e.path(), false });
             }
             std::sort(user.begin(), user.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+            for (EditorFontFamily& u : user)
+                if (std::any_of(out.begin(), out.end(), [&](const EditorFontFamily& b) { return b.name == u.name; }))
+                    u.name = "user:" + u.name;   // out holds only the bundled three here
             out.insert(out.end(), user.begin(), user.end());
         }
         return out;
+    }
+
+    std::string EditorFontFamilyLabel(const EditorFontFamily& family)
+    {
+        if (family.bundled) return family.name;
+        const std::string_view stem = std::string_view(family.name).starts_with("user:")
+                                    ? std::string_view(family.name).substr(5) : std::string_view(family.name);
+        return std::string(stem) + "  (user)";
     }
 
     std::filesystem::path ResolveEditorFontFamily(const std::vector<EditorFontFamily>& families,

@@ -90,6 +90,13 @@ namespace Arcane::Editor
         [[nodiscard]] bool Pressed(std::string_view id) const;
         [[nodiscard]] bool PressedRepeat(std::string_view id) const;
         [[nodiscard]] bool Down(std::string_view id) const;
+        // A focused window's OWN copy of a Global action (the Settings window's
+        // local undo stack, spec s6.3; S4-GATE): the action's bound chord, pressed
+        // this frame through the ImGui route. The Global gate is skipped on
+        // purpose -- the window owning keyboard focus IS the capture that gate
+        // waits out -- so the caller must check its own focus. Rebinding the
+        // action rebinds it here too.
+        [[nodiscard]] bool PressedInWindow(std::string_view id) const;
         [[nodiscard]] std::vector<std::string> ConflictsOf(std::string_view id) const;
         [[nodiscard]] std::string MenuShortcut(std::string_view id) const;
 

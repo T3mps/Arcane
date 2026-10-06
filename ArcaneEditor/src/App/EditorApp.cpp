@@ -363,16 +363,6 @@ namespace Arcane::Editor
         // ran before the install above and pinned this exe to its own private ids.
         // See EditorApp.hpp's declaration comment for the incident.
         m_editSchedule.emplace();
-        // The editor.keys.* shortcut cvars are declared HERE, before the first
-        // config rung applies (settings S4-20 fix): the Runtime's ctor applies the
-        // engine rung, SetEditorUserConfigDir below the EditorUser rung (the
-        // Keyboard page's saved shortcuts), project_open the project rungs and
-        // input_config the --set list. The registry applies a rung only to cvars
-        // that already exist, and EditorActions::Get() registers its table
-        // lazily, so a first Get() in the frame loop left every saved shortcut
-        // and every --set editor.keys.* behind ("unknown"). Every other editor
-        // cvar is a static (ARC_CVAR) and exists before main.
-        (void)Arcane::Editor::EditorActions::Get();
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).

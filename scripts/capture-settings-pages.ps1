@@ -1,6 +1,7 @@
 # capture-settings-pages.ps1 -- settings arc S4 gate: headless screenshots of the
 # Preferences rich pages (theme Dark/Light/HighContrast, shortcuts plain and with
-# a conflict, fonts at 1.25x, layouts with one saved layout). Automation only:
+# a conflict, fonts at 16 and 20 px and at 1.25x, layouts with one saved
+# layout). Automation only:
 # --headless renders offscreen; no window focus, no SendInput. A scratch
 # LOCALAPPDATA keeps the user's own preferences and layouts out of it.
 #
@@ -12,9 +13,12 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\capture-settings-pages.ps1 -OutDir <dir> [-Configuration Release]
 #
 # Writes theme-dark.png, theme-light.png, theme-highcontrast.png, shortcuts.png,
-# shortcuts-conflict.png, fonts-scale-125.png and layouts.png into -OutDir, each
-# with the host's stdout beside it (<name>.log). Exit 0 when all seven PNGs were
-# written by a host that exited 0 and refused none of its --set values, else 1.
+# shortcuts-conflict.png, fonts-default.png, fonts-size-20.png,
+# fonts-scale-125.png and layouts.png into -OutDir, each with the host's stdout
+# beside it (<name>.log). Exit 0 when all nine PNGs were written by a host that
+# exited 0 and refused none of its --set values, else 1. The conflict capture
+# ticks the Keyboard page's Conflicts only (editor.settings.keysConflictsOnly),
+# so every red row -- the Graph context's too -- sits above the 1080p fold.
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [Parameter(Mandatory)][string]$OutDir
@@ -62,7 +66,7 @@ function Capture([string]$name, [string]$category, [string[]]$extra) {
     # default: the PNG would exist but show the wrong state, so it fails here.
     $refused = @($log -split "`n" | Where-Object { $_ -match 'cvar: --set ' })
     $ok = ($p.ExitCode -eq 0) -and (Test-Path $png) -and ($refused.Count -eq 0)
-    $verdict = if (-not (Test-Path $png)) { 'MISSING' } elseif ($refused.Count -gt 0) { 'SET-REFUSED' } else { 'PNG' }
+    $verdict = if (-not (Test-Path $png)) { 'MISSING' } elseif ($refused.Count -gt 0) { 'SET-REFUSED' } elseif ($p.ExitCode -ne 0) { 'EXIT' } else { 'PNG' }
     # Write-Host, not Write-Output: Capture's pipeline output is its verdict alone.
     Write-Host ("{0,-22} exit={1} {2}" -f $name, $p.ExitCode, $verdict)
     foreach ($line in $refused) { Write-Host ("    " + $line.Trim()) }
@@ -74,7 +78,9 @@ $results = @(
     Capture 'theme-light'        'Appearance/Theme'           (Theme-Sets 'Light')
     Capture 'theme-highcontrast' 'Appearance/Theme'           (Theme-Sets 'HighContrast')
     Capture 'shortcuts'          'Keyboard'                   @()
-    Capture 'shortcuts-conflict' 'Keyboard'                   @('--set', 'editor.keys.edit.copy=F')
+    Capture 'shortcuts-conflict' 'Keyboard'                   @('--set', 'editor.keys.edit.copy=F', '--set', 'editor.settings.keysConflictsOnly=true')
+    Capture 'fonts-default'      'Appearance/Fonts and Scale' @()
+    Capture 'fonts-size-20'      'Appearance/Fonts and Scale' @('--set', 'editor.ui.fontSize=20')
     Capture 'fonts-scale-125'    'Appearance/Fonts and Scale' @('--set', 'editor.ui.scale=1.25')
     Capture 'layouts'            'Layout'                     @()
 )

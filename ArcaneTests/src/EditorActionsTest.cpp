@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Input/EditorActions.hpp"
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/CVarModule.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Input/KeyLayout.hpp>
 #include <imgui.h>
@@ -68,6 +69,12 @@ TEST_CASE("EditorActions: Register makes editor.keys.<id>, a String cvar holding
     r.actions.Register({ "t.undo", "Undo", ActionContext::Global, "Ctrl+Y" });
     CHECK(FormatKeyChord(*r.actions.ChordOf("t.undo")) == "Ctrl+Z");
     CHECK(r.actions.MenuShortcut("t.undo") == "Ctrl+Z");
+    // S4-GATE: the declaring module, as ARC_CVAR records it (this binary here,
+    // ArcaneEditor in the editor) -- never ArcaneCore's CurrentModule().
+    const std::optional<Arcane::CVarDescInfo> info = r.reg.Describe("editor.keys.t.undo");
+    REQUIRE(info.has_value());
+    CHECK(info->module == Arcane::Detail::CallerModule());
+    CHECK(info->module != "ArcaneCore");
 }
 
 TEST_CASE("EditorActions: a press is one edge, with exact modifiers", "[shortcuts]")

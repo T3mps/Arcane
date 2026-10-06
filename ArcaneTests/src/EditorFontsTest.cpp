@@ -5,8 +5,10 @@
 #include "Widgets/EditorFonts.hpp"
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>   // ImGuiContext::DebugLogFlags / DebugLogBuf: the loader error is captured, not printed
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 using namespace Arcane::Editor;
 
@@ -31,6 +33,26 @@ TEST_CASE("Editor fonts: bundled families first, then the user's .ttf/.otf; reso
     std::filesystem::remove_all(user);
 }
 
+TEST_CASE("Editor fonts: a user font named like a bundled family is stored as user:<stem>, so picking it never resolves to the bundled face", "[settings-ui][editor]")
+{
+    // S4-GATE (S4-17 deferral): a user Inter.ttf listed twice as "Inter", and
+    // picking the "(user)" entry wrote "Inter" -- which resolves to the bundled face.
+    const std::filesystem::path exe = "C:/fake/exe";
+    const std::filesystem::path user = std::filesystem::temp_directory_path() / "s4-fonts-shadow";
+    std::filesystem::create_directories(user);
+    { std::ofstream(user / "Inter.ttf") << "x"; std::ofstream(user / "Atkinson.otf") << "x"; }
+    const auto families = ListEditorFontFamilies(exe, user);
+    REQUIRE(families.size() == 5);
+    CHECK(families[3].name == "Atkinson");                 // no collision: the plain stem
+    CHECK(families[4].name == "user:Inter");
+    CHECK_FALSE(families[4].bundled);
+    CHECK(ResolveEditorFontFamily(families, "user:Inter", "Inter") == user / "Inter.ttf");
+    CHECK(ResolveEditorFontFamily(families, "Inter", "Inter") == families[0].file);   // the bundled face, as before
+    CHECK(EditorFontFamilyLabel(families[4]) == "Inter  (user)");
+    CHECK(EditorFontFamilyLabel(families[0]) == "Inter");
+    std::filesystem::remove_all(user);
+}
+
 TEST_CASE("EditorUiSettings registers editor.ui.* with today's defaults", "[settings-ui][editor]")
 {
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
@@ -47,12 +69,19 @@ namespace
 {
     // A fresh ImGui context made current for one test; the font handles it
     // installs are forgotten before it dies so GetEditorFonts() stays all-null
-    // for the headless tests (EditorWidgetsTest's MonoFont case).
+    // for the headless tests (EditorWidgetsTest's MonoFont case). ImGui's
+    // error log stays in the context's buffer instead of stdout (S4-GATE):
+    // the deliberate bad fonts' "[imgui-error] stbtt_InitFont" lines were
+    // noise in every suite run; the test asserts on them instead.
     struct ScopedFontContext
     {
         ImGuiContext* prev = ImGui::GetCurrentContext();
         ImGuiContext* ctx  = ImGui::CreateContext();
-        ScopedFontContext() { ImGui::SetCurrentContext(ctx); }
+        ScopedFontContext()
+        {
+            ImGui::SetCurrentContext(ctx);
+            ctx->DebugLogFlags &= ~ImGuiDebugLogFlags_OutputToTTY;
+        }
         ~ScopedFontContext()
         {
             ForgetEditorFonts();
@@ -61,7 +90,9 @@ namespace
         }
     };
 
-    void RequireBundledFallback(const EditorFontRequest& request)
+    // `loaderError`: the face gets past ImGui's probe and fails in stbtt, which
+    // ImGui reports as a user error -- captured in the context's debug log.
+    void RequireBundledFallback(const EditorFontRequest& request, bool loaderError = false)
     {
         const ScopedFontContext scope;
         ImGuiIO& io = ImGui::GetIO();
@@ -76,6 +107,9 @@ namespace
         CHECK(fonts.roboto != nullptr);
         CHECK(fonts.brand != nullptr);
         CHECK(io.Fonts->Fonts.Size == 4);              // the failed faces were rolled back out
+        const std::string log = scope.ctx->DebugLogBuf.c_str();
+        INFO(log);
+        CHECK((log.find("stbtt_InitFont") != std::string::npos) == loaderError);
     }
 }
 
@@ -104,7 +138,7 @@ TEST_CASE("Editor fonts: an unloadable user font falls back to the bundled face 
     }
     SECTION("a .ttf with a font header but no tables")
     {
-        RequireBundledFallback({ noTables, noTables, 16.0f });
+        RequireBundledFallback({ noTables, noTables, 16.0f }, /*loaderError*/ true);
     }
     SECTION("a missing file")
     {

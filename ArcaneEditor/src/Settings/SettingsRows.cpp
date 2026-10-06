@@ -200,7 +200,8 @@ namespace Arcane::Editor
             return std::nullopt;
         }
 
-        // A "font" row's family combo: a user family is labelled "(user)"; the
+        // A "font" row's family combo: a user family is labelled "(user)" (its
+        // stored name is "user:<stem>" when it shadows a bundled one); the
         // current value previews even when it is not in the list (a missing
         // user font). Returns the picked family when it differs.
         std::optional<std::string> FontCombo(SettingsRowContext& ctx, const std::string& label, const std::string& current)
@@ -213,7 +214,7 @@ namespace Arcane::Editor
                 for (std::size_t i = 0; i < families.size(); ++i)
                 {
                     const EditorFontFamily& fam = families[i];
-                    const std::string item = fam.bundled ? fam.name : fam.name + "  (user)";
+                    const std::string item = EditorFontFamilyLabel(fam);
                     ImGui::PushID(static_cast<int>(i));   // a .ttf and an .otf of one stem list twice
                     if (ImGui::Selectable(item.c_str(), fam.name == current) && fam.name != current) picked = fam.name;
                     ctx.grid.ProbeItem((label + "#font:" + item).c_str());   // TEST SEAM: the item's centre
