@@ -10,6 +10,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <Project/MeshImportWave.hpp>
+#include <Settings/EditorThumbnailSettings.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/geometric.hpp>
@@ -18,11 +19,14 @@
 
 using namespace Arcane::Editor;
 
+// editor.thumbnail.framingMargin's default (S6-39): the margin every case below frames with.
+static const float kMargin = EditorThumbnailSettings{}.framingMargin;
+
 TEST_CASE("mesh thumb framing: the camera looks at the box centre from outside it",
           "[editor]")
 {
     Arcane::MeshBounds b; b.min = { -1, -2, -3 }; b.max = { 3, 4, 5 };
-    const MeshThumbCamera c = FrameMeshBounds(b, 35.0f);
+    const MeshThumbCamera c = FrameMeshBounds(b, 35.0f, kMargin);
     CHECK(c.target.x == Catch::Approx(1.0f));   // the centre, per axis
     CHECK(c.target.y == Catch::Approx(1.0f));
     CHECK(c.target.z == Catch::Approx(1.0f));
@@ -39,10 +43,10 @@ TEST_CASE("mesh thumb framing: a bigger box pushes the camera further out", "[ed
     // building without a per-asset knob.
     Arcane::MeshBounds small; small.min = { -1, -1, -1 }; small.max = { 1, 1, 1 };
     Arcane::MeshBounds big;   big.min   = { -10, -10, -10 }; big.max = { 10, 10, 10 };
-    const float dSmall = glm::length(FrameMeshBounds(small, 35.0f).eye
-                                   - FrameMeshBounds(small, 35.0f).target);
-    const float dBig   = glm::length(FrameMeshBounds(big, 35.0f).eye
-                                   - FrameMeshBounds(big, 35.0f).target);
+    const float dSmall = glm::length(FrameMeshBounds(small, 35.0f, kMargin).eye
+                                   - FrameMeshBounds(small, 35.0f, kMargin).target);
+    const float dBig   = glm::length(FrameMeshBounds(big, 35.0f, kMargin).eye
+                                   - FrameMeshBounds(big, 35.0f, kMargin).target);
     CHECK(dBig > dSmall * 5.0f);
 }
 
@@ -52,7 +56,7 @@ TEST_CASE("mesh thumb framing: a degenerate box yields a finite camera", "[edito
     // comment: "a caller framing an empty mesh needs a degenerate box it can still
     // build a camera from"). This is that caller, and a NaN here would be undefined
     // behaviour on the GPU rather than a blank thumbnail.
-    const MeshThumbCamera c = FrameMeshBounds(Arcane::MeshBounds{}, 35.0f);
+    const MeshThumbCamera c = FrameMeshBounds(Arcane::MeshBounds{}, 35.0f, kMargin);
     CHECK(std::isfinite(c.eye.x)); CHECK(std::isfinite(c.eye.y)); CHECK(std::isfinite(c.eye.z));
     CHECK(c.nearZ > 0.0f);
     CHECK(c.farZ > c.nearZ);
@@ -68,9 +72,20 @@ TEST_CASE("mesh thumb framing: a narrower FOV pushes the camera further out", "[
     // Same box, 20 vs 60 degrees; the 20-degree distance must be greater -- the
     // check that the fov parameter is USED, not decorative.
     Arcane::MeshBounds b; b.min = { -1, -1, -1 }; b.max = { 1, 1, 1 };
-    const float dNarrow = glm::length(FrameMeshBounds(b, 20.0f).eye
-                                    - FrameMeshBounds(b, 20.0f).target);
-    const float dWide   = glm::length(FrameMeshBounds(b, 60.0f).eye
-                                    - FrameMeshBounds(b, 60.0f).target);
+    const float dNarrow = glm::length(FrameMeshBounds(b, 20.0f, kMargin).eye
+                                    - FrameMeshBounds(b, 20.0f, kMargin).target);
+    const float dWide   = glm::length(FrameMeshBounds(b, 60.0f, kMargin).eye
+                                    - FrameMeshBounds(b, 60.0f, kMargin).target);
     CHECK(dNarrow > dWide);
+}
+
+TEST_CASE("mesh thumb framing: a wider editor.thumbnail.framingMargin pulls the camera back by exactly that fraction",
+          "[editor][thumbnail]")
+{
+    Arcane::MeshBounds b; b.min = { -1, -1, -1 }; b.max = { 1, 1, 1 };
+    const MeshThumbCamera tight = FrameMeshBounds(b, 35.0f, 0.0f);
+    const MeshThumbCamera loose = FrameMeshBounds(b, 35.0f, 0.5f);
+    const float dTight = glm::length(tight.eye - tight.target);
+    const float dLoose = glm::length(loose.eye - loose.target);
+    CHECK(dLoose == Catch::Approx(dTight * 1.5f));
 }

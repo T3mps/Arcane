@@ -224,7 +224,9 @@ namespace Arcane::Editor
     // the whole box with a small margin, looking at its centre?
     //
     // MARGIN, not a tight fit: a box that exactly fills the frame reads as cropped at
-    // thumbnail size, and the browser draws these at 64px. 15% is the mocks' own feel.
+    // thumbnail size, and the browser draws these at 64px. `framingMargin` is that room
+    // as a fraction of the distance -- editor.thumbnail.framingMargin, whose default
+    // 0.15 (15%) is the mocks' own feel; the harvester passes its latched value.
     //
     // A DEGENERATE BOX (a zero-extent AABB -- ComputeMeshBounds' documented answer for
     // an empty mesh) yields a finite camera at a unit distance rather than a division
@@ -233,5 +235,5 @@ namespace Arcane::Editor
     // transform, which is undefined behaviour on the GPU rather than a blank image.
     struct MeshThumbCamera { glm::vec3 eye; glm::vec3 target; float nearZ; float farZ; };
     [[nodiscard]] MeshThumbCamera FrameMeshBounds(const Arcane::MeshBounds& bounds,
-                                                  float fovDegrees);
+                                                  float fovDegrees, float framingMargin);
 }

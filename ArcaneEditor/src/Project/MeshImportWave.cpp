@@ -346,7 +346,7 @@ namespace Arcane::Editor
 
     // F2c Plan 2 Task 9 (spec s8, R5): see this function's own header declaration for
     // the MARGIN and DEGENERATE-BOX reasoning -- both are load-bearing, not decoration.
-    MeshThumbCamera FrameMeshBounds(const Arcane::MeshBounds& bounds, float fovDegrees)
+    MeshThumbCamera FrameMeshBounds(const Arcane::MeshBounds& bounds, float fovDegrees, float framingMargin)
     {
         const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
         // A DEGENERATE (zero-extent) box is floored to a UNIT radius here -- the header
@@ -361,11 +361,11 @@ namespace Arcane::Editor
         constexpr float kMinRadius = 0.5f;
         const float radius = std::max(glm::length((bounds.max - bounds.min) * 0.5f), kMinRadius);
 
-        // 15% breathing room past a tight fit (this function's own header comment) --
-        // a box that exactly fills the frame reads as cropped at 64px.
-        constexpr float kMargin = 0.15f;
+        // Breathing room past a tight fit (this function's own header comment;
+        // editor.thumbnail.framingMargin, 15% by default) -- a box that exactly
+        // fills the frame reads as cropped at 64px.
         const float halfFovRad = glm::radians(fovDegrees) * 0.5f;
-        const float distance = radius / std::sin(halfFovRad) * (1.0f + kMargin);
+        const float distance = radius / std::sin(halfFovRad) * (1.0f + framingMargin);
 
         // The mocks' own three-quarter direction (MaterialPreviewHarvester's sphere
         // camera), so a mesh thumbnail and a material thumbnail read as one family.

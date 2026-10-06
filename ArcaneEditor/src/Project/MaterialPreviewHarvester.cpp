@@ -1,6 +1,7 @@
 #include "Project/MaterialPreviewHarvester.hpp"
 #include "Documents/MaterialSpherePreview.hpp"   // the sphere scene, shared with the document's live preview (T3-D6)
 #include "Settings/DocumentSettings.hpp"          // editor.preview.*: the checker, the one preview light (S6-35)
+#include "Settings/EditorThumbnailSettings.hpp"   // editor.thumbnail.*: size, clock, retries, mesh camera (S6-39)
 
 #include <Arcane/Assets/Assets.hpp>          // LoadDisplayPixels / WriteThumbnailPngRgba
 #include <Arcane/Assets/ImageIo.hpp>         // PixelData
@@ -40,21 +41,14 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // 64px, the size the Assets panel's tile draws at. Fixed rather than
-        // configurable: it is also the on-disk PNG's size and the loader's
-        // maxSize, and three numbers that must agree are better as one.
-        constexpr std::uint32_t kThumbSize = 64;
-
-        // The checkerboard cell, scaled from the shader editor's 32-at-512 to
-        // keep the same 4x4-ish read at a sixteenth of the area.
-        constexpr float kCheckerCell = 16.0f;
-
-        // A FIXED clock for every thumbnail. A time-driven material (a pulse,
-        // a scroll) would otherwise harvest a different picture every time,
-        // which makes the persisted PNG and the live render disagree for no
-        // reason anybody can act on. Non-zero so a material whose animation
-        // starts flat at t=0 still shows something.
-        constexpr float kThumbTime = 0.35f;
+        // editor.thumbnail.* (S6-39) replaced the four thumbnail literals that
+        // lived here. thumb.size is the rendered target, the on-disk PNG's
+        // size and the loader's maxSize at once -- three numbers that must
+        // agree, so one setting. thumb.time is a FIXED clock for every
+        // thumbnail: a time-driven material (a pulse, a scroll) would
+        // otherwise harvest a different picture every time, which makes the
+        // persisted PNG and the live render disagree for no reason anybody can
+        // act on. The checker cell derives from the size (ThumbnailCheckerCell).
 
         // ===== THE HARVESTER'S SLOT IN THE PROCESS-WIDE STAGE-KEY SCHEME ====
         // 0x40/0x80, disjoint from ShaderEditorDocument's 0x1/0x2, the sprite
@@ -273,7 +267,9 @@ namespace Arcane::Editor
             const std::filesystem::path dir = services.thumbnailDir();
             if (dir.empty())
                 return {};
-            return dir / (id.ToString() + ".png");
+            // Keyed by the picture-changing settings: "<guid>.png" at the
+            // defaults, another name otherwise (ThumbnailCacheSuffix).
+            return dir / (id.ToString() + ThumbnailCacheSuffix(thumb) + ".png");
         }
 
         void Push(const WorkKey& key)
@@ -308,6 +304,9 @@ namespace Arcane::Editor
         // this feeds is what keeps DropVehicle's re-queue from becoming an
         // unbounded rebuild-render-fail loop -- see DropVehicle.
         int vehicleDrops = 0;
+        // editor.thumbnail.*, LATCHED at construction: one session never mixes
+        // two thumbnail sizes, and a change applies on the next start.
+        EditorThumbnailSettings thumb;
         // Latched by GiveUp: this session renders no previews at all. Checked
         // at every entry point that would otherwise start work again, so a
         // write-off is genuinely terminal rather than something the next
@@ -326,6 +325,7 @@ namespace Arcane::Editor
         : m_impl(new Impl)
     {
         m_impl->services = std::move(services);
+        m_impl->thumb = Arcane::Settings<EditorThumbnailSettings>();
     }
 
     MaterialPreviewHarvester::~MaterialPreviewHarvester()
@@ -387,13 +387,12 @@ namespace Arcane::Editor
     // rebuild, fail, re-queue and rebuild again forever, spending a frame's
     // worth of validation errors per frame for the rest of the session --
     // which is what dropping the vehicle ALONE never prevented, since the next
-    // Pump rebuilds it immediately. After kMaxVehicleDrops the whole pipeline
+    // Pump rebuilds it immediately. After thumb.maxRetries the whole pipeline
     // is written off exactly the way a failed CreateOffscreen writes it off.
     void MaterialPreviewHarvester::Impl::DropVehicle()
     {
         ResetVehicle();
-        constexpr int kMaxVehicleDrops = 3;
-        if (++vehicleDrops >= kMaxVehicleDrops)
+        if (++vehicleDrops >= thumb.maxRetries)
             GiveUp("the material-preview vehicle failed " +
                    std::to_string(vehicleDrops) + " times");
     }
@@ -680,10 +679,10 @@ namespace Arcane::Editor
             if (usable)
             {
                 Impl::Entry e;
-                // maxSize 64 -- the loader's own cap, matching what the
-                // harvest wrote, so a hand-dropped oversized PNG still lands
+                // maxSize thumb.size -- the loader's own cap, matching what
+                // the harvest wrote, so a hand-dropped oversized PNG still lands
                 // as a 64px thumbnail rather than a surprise upload.
-                if (Arcane::LoadDisplayPixels(png, kThumbSize, e.pixels) && e.pixels.Valid())
+                if (Arcane::LoadDisplayPixels(png, im.thumb.size, e.pixels) && e.pixels.Valid())
                 {
                     e.thumbId = Arcane::Guid::Generate();
                     im.thumbToMaterial.emplace(e.thumbId, id);
@@ -1074,7 +1073,7 @@ namespace Arcane::Editor
         // (This comment used to name a `NodeSet{}` argument the call has never
         // passed; the effective node set is the same either way.)
         ctx = Arcane::NriGraphContext::CreateOffscreen(*services.hostConfig, chrome.Device(),
-                                                       kThumbSize, kThumbSize);
+                                                       thumb.size, thumb.size);
         if (!ctx)
         {
             // Degraded, not fatal, and it degrades to what a missing device
@@ -1146,10 +1145,10 @@ namespace Arcane::Editor
             return HarvestOutcome::Retry;
 
         Arcane::GlobalParams globals;
-        globals.time = kThumbTime;
+        globals.time = thumb.time;
         globals.deltaTime = 0.0f;
-        globals.viewportWidth  = static_cast<float>(kThumbSize);
-        globals.viewportHeight = static_cast<float>(kThumbSize);
+        globals.viewportWidth  = static_cast<float>(thumb.size);
+        globals.viewportHeight = static_cast<float>(thumb.size);
 
         // ===== THE PICTURE, PER SURFACE ==================================
         // The backdrop is the shader editor preview's checkerboard on every
@@ -1171,18 +1170,19 @@ namespace Arcane::Editor
         //                  lens -- so "trivially reachable" was true, and the
         //                  mocks show spheres.
         Arcane::Batcher2D& b = *batch;
-        b.Begin(kThumbSize, kThumbSize);
+        b.Begin(thumb.size, thumb.size);
         b.SetGlobals(globals);   // AFTER Begin -- matching every other call site
 
-        const float extent = static_cast<float>(kThumbSize);
+        const float extent = static_cast<float>(thumb.size);
         const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
+        const float cell = ThumbnailCheckerCell(thumb);
         const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
                               preview.checkerLight.a);
-        for (int y = 0; y * kCheckerCell < extent; ++y)
-            for (int x = 0; x * kCheckerCell < extent; ++x)
+        for (int y = 0; y * cell < extent; ++y)
+            for (int x = 0; x * cell < extent; ++x)
                 if ((x + y) & 1)
-                    b.Rect(glm::vec2(x * kCheckerCell, y * kCheckerCell),
-                           glm::vec2(kCheckerCell, kCheckerCell), light);
+                    b.Rect(glm::vec2(x * cell, y * cell),
+                           glm::vec2(cell, cell), light);
 
         if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Sprite &&
             r.spriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
@@ -1238,8 +1238,7 @@ namespace Arcane::Editor
             // the new section ranges.
             ctx->InvalidateMeshGeometry(meshHarvestId);
 
-            constexpr float kMeshThumbFovDegrees = 35.0f;
-            const MeshThumbCamera cam = FrameMeshBounds(r.meshBounds, kMeshThumbFovDegrees);
+            const MeshThumbCamera cam = FrameMeshBounds(r.meshBounds, thumb.meshFovDegrees, thumb.framingMargin);
 
             instances = r.meshInstances;   // per-section baseColor/materialSlot/range,
                                             // resolved by StartOneMesh; mesh/model are
@@ -1254,7 +1253,7 @@ namespace Arcane::Editor
             meshScene.instances = instances;
             meshScene.view = glm::lookAtRH(cam.eye, cam.target, glm::vec3(0.0f, 1.0f, 0.0f));
             meshScene.projection =
-                Arcane::PerspectiveProjection(kMeshThumbFovDegrees, 1.0f, cam.nearZ, cam.farZ);
+                Arcane::PerspectiveProjection(thumb.meshFovDegrees, 1.0f, cam.nearZ, cam.farZ);
             // The SAME light as the mesh-kind material's sphere -- the one preview
             // light, editor.preview.light.* (R1) -- so every mesh thumbnail,
             // material or asset, has one lighting feel.
