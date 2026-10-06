@@ -284,3 +284,35 @@ TEST_CASE("sweep: a published pin ring reaches the shader canvas; node padding w
         CHECK(padding(doc).z == 14.0f); CHECK(padding(doc).w == 9.0f);
     }
 }
+
+// S6-45: the shader canvas's in-node widgets are editor.graph.* (frozen names;
+// nodePreviewMinPx / dragSpeed / rangeDragSpeed moved from editor.shader.*).
+TEST_CASE("sweep: the shader canvas's in-node widget widths and drag speeds are editor.graph.*", "[sweep][graph]")
+{
+    const Editor::GraphCanvasSettings g{};
+    CHECK(Editor::GraphPinNeutralWidth(g, 1) == 64.0f);
+    CHECK(Editor::GraphPinNeutralWidth(g, 2) == 106.0f);
+    CHECK(Editor::GraphPinNeutralWidth(g, 3) == 190.0f);
+    CHECK(Editor::GraphPinNeutralWidth(g, 4) == 190.0f);
+    CHECK(Editor::GraphConstValueWidth(g, 1) == 90.0f);
+    CHECK(Editor::GraphConstValueWidth(g, 2) == 140.0f);
+    CHECK(Editor::GraphConstValueWidth(g, 4) == 220.0f);
+    Test::RequireDefault("editor.graph.constPinNeutralWidth1", CVarValue::Float32(64.0f));
+    Test::RequireDefault("editor.graph.constPinNeutralWidth2", CVarValue::Float32(106.0f));
+    Test::RequireDefault("editor.graph.constPinNeutralWidth4", CVarValue::Float32(190.0f));
+    Test::RequireDefault("editor.graph.constFloatWidth", CVarValue::Float32(90.0f));
+    Test::RequireDefault("editor.graph.constFloat2Width", CVarValue::Float32(140.0f));
+    Test::RequireDefault("editor.graph.constFloat4Width", CVarValue::Float32(220.0f));
+    Test::RequireDefault("editor.graph.constParamRangeWidth", CVarValue::Float32(120.0f));
+    Test::RequireDefault("editor.graph.paramNameFieldWidth", CVarValue::Float32(110.0f));
+    Test::RequireDefault("editor.graph.passNameFieldWidth", CVarValue::Float32(120.0f));
+    Test::RequireDefault("editor.graph.swizzleFieldWidth", CVarValue::Float32(70.0f));
+    Test::RequireDefault("editor.graph.nodePreviewMinPx", CVarValue::Float32(96.0f));
+    Test::RequireDefault("editor.graph.dragSpeed", CVarValue::Float32(0.01f));
+    Test::RequireDefault("editor.graph.rangeDragSpeed", CVarValue::Float32(0.05f));
+    CHECK(CVarRegistry::Get().Find("editor.shader.dragSpeed").IsStale());   // the old spelling is gone
+
+    // A published override reaches the width the canvas sets.
+    const Test::ScopedCodeRung wide("editor.graph.constPinNeutralWidth2", CVarValue::Float32(150.0f));
+    CHECK(Editor::GraphPinNeutralWidth(Arcane::Settings<Editor::GraphCanvasSettings>(), 2) == 150.0f);
+}

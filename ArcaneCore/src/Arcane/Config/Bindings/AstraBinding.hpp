@@ -5,7 +5,8 @@
 // construction, ResetRegistry and RestoreRegistry (Play's stop restore).
 // The literals are Astra's defaults today; SettingsBindingsTest pins
 // "defaults == Registry::Config{}", so a library change fails a test instead
-// of silently moving Arcane's default.
+// of silently moving Arcane's default. astra.snapshot (S6-45): the snapshot's
+// compression, bound where Runtime::SnapshotRegistry saves the registry.
 
 #include <Arcane/Config/Settings.hpp>
 
@@ -86,6 +87,44 @@ namespace Arcane
             ARC_REFLECT_ATTR(Range, 0.0, 4096.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Initial registry-resource slots.")
     ARC_END_REFLECT_TYPE()
+
+    // astra.snapshot.compression (inventory Part 1, Astra "SaveConfig"; S6-45):
+    // how the hot-reload / Play-stop registry snapshot (Runtime::SnapshotRegistry)
+    // compresses its blocks -- snapshot speed against size. Mirrors
+    // Astra::CompressionMode by ordinal (the vendored enum carries no Arcane
+    // reflection); ToAstraSaveConfig is the one mapping.
+    enum class AstraSnapshotCompression : std::uint8_t { None = 0, LZ4 = 1 };
+
+    ARC_REFLECT_ENUM(AstraSnapshotCompression)
+        ARC_REFLECT_ENUM_VALUE(AstraSnapshotCompression, None)
+        ARC_REFLECT_ENUM_VALUE(AstraSnapshotCompression, LZ4)
+    ARC_END_REFLECT_ENUM()
+
+    struct AstraSnapshotSettings
+    {
+        AstraSnapshotCompression compression = AstraSnapshotCompression::LZ4;   // = Astra's SaveConfig default
+    };
+
+    // Editor audience declared in ArcaneCore: the snapshot is taken here, by the
+    // editor's hot reload and Play stop (precedent: BuildToolSettings, "build").
+    ARC_REFLECT_TYPE(AstraSnapshotSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "astra.snapshot", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(AstraSnapshotSettings, compression)
+            ARC_REFLECT_ATTR(DisplayName, "Snapshot compression") ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "hot reload play stop lz4 registry save")
+            ARC_REFLECT_ATTR(Tooltip, "How the registry snapshot taken for a hot reload or a Play stop is compressed: "
+                                      "LZ4 makes it smaller, None makes it faster.")
+    ARC_END_REFLECT_TYPE()
+
+    // The registry snapshot's Save configuration (settings arc S6-45). Pure;
+    // the level and threshold stay Astra's SaveConfig defaults.
+    inline Astra::Registry::SaveConfig ToAstraSaveConfig(const AstraSnapshotSettings& s)
+    {
+        Astra::Registry::SaveConfig cfg;
+        cfg.compressionMode = s.compression == AstraSnapshotCompression::None ? Astra::CompressionMode::None
+                                                                              : Astra::CompressionMode::LZ4;
+        return cfg;
+    }
 
     // The ONE Registry::Config construction path (settings arc S2). Pure.
     inline Astra::Registry::Config ToAstraConfig(const AstraMemorySettings& s,

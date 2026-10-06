@@ -169,7 +169,8 @@ namespace Arcane::Editor
     {
         namespace R = Arcane::Reporter;
         bool open = true;
-        ImGui::SetNextWindowSize(ImVec2(760.0f, 760.0f), ImGuiCond_FirstUseEver);
+        const CVarVec2 firstSize = Arcane::Settings<CrashViewerSettings>().initialSize;   // editor.crash.initialSize
+        ImGui::SetNextWindowSize(ImVec2(firstSize.x, firstSize.y), ImGuiCond_FirstUseEver);
         const bool visible = ImGui::Begin(m_windowLabel.c_str(), &open, 0);
         ImGui::SetItemTooltip("%s", m_path.stem().string().c_str());   // the tab (or title bar) is LastItemData after Begin
         if (!visible)
@@ -389,7 +390,9 @@ namespace Arcane::Editor
         {
             MonoFont mono;
             ImGui::InputTextMultiline("##logtail", m_view.logTail.data(), m_view.logTail.size() + 1,
-                                      ImVec2(-1.0f, ImGui::GetTextLineHeight() * 16.0f), ImGuiInputTextFlags_ReadOnly);
+                                      ImVec2(-1.0f, ImGui::GetTextLineHeight() *
+                                                        static_cast<float>(Arcane::Settings<CrashViewerSettings>().textRows)),
+                                      ImGuiInputTextFlags_ReadOnly);
         }
 
         ImGui::End();

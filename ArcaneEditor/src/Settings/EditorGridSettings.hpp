@@ -25,6 +25,12 @@ namespace Arcane::Editor
         float majorAlpha = 0.55f;
         float lineThickness = 1.0f;
         std::uint32_t maxLinesPerAxis = 16384;
+        // The 2D grid's level crossfade window, in screen pixels of a level's
+        // line spacing: a level fades in from fadeInPx and is full at fadeFullPx
+        // (S6-45; the S5-2 review restored them from DERIVED: they are the grid
+        // LOD's band, not UI chrome, so editor.ui.scale does not scale them).
+        float fadeInPx   = 8.0f;
+        float fadeFullPx = 24.0f;
     };
 
     struct EditorGrid3DSettings

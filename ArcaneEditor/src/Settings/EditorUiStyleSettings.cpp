@@ -48,5 +48,21 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(Tooltip, "What the - / + buttons add with Ctrl held.")
     ARC_END_REFLECT_TYPE()
 
+    ARC_REFLECT_TYPE(EditorUiToolbarSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.ui.toolbar", SettingScope::PreferencesMachine, ApplyMode::Live,
+                              Audience::Editor, "Appearance/Style and Density")
+        ARC_REFLECT_FIELD(EditorUiToolbarSettings, logoScale)
+            ARC_REFLECT_ATTR(DisplayName, "Logo size") ARC_REFLECT_ATTR(Category, "Toolbar") ARC_REFLECT_ATTR(Range, 1.0, 2.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "brand mark toolbar")
+            ARC_REFLECT_ATTR(Tooltip, "Height of the toolbar's logo mark as a multiple of the toolbar buttons' height.")
+        ARC_REFLECT_FIELD(EditorUiToolbarSettings, brandScale)
+            ARC_REFLECT_ATTR(DisplayName, "Wordmark size") ARC_REFLECT_ATTR(Category, "Toolbar") ARC_REFLECT_ATTR(Range, 0.5, 1.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "brand name toolbar")
+            ARC_REFLECT_ATTR(Tooltip, "Size of the toolbar's \"Arcane\" wordmark as a fraction of the logo's height.")
+    ARC_END_REFLECT_TYPE()
+
     ARC_SETTINGS(EditorUiStyleSettings);
+    ARC_SETTINGS(EditorUiToolbarSettings);
 }

@@ -1,6 +1,6 @@
 #include <Arcane/Edit/Gizmo.hpp>
 
-#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT (the held colours)
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT
 
 #include <glm/gtc/matrix_access.hpp>     // glm::row
 #include <glm/gtc/matrix_transform.hpp>
@@ -73,20 +73,19 @@ namespace Arcane
         // still read after the overlay halo and against the lit cube / sky.
         // Linear UE values were (0.594, 0.0197, 0) / (0.1349, 0.3959, 0) /
         // (0.0251, 0.207, 0.85); the painted X/Y/Z triples live on
-        // GizmoAxisColors (pending axis unification re-bless).
-        // The hot / screen / centre colours are held with them (S5-2 option A).
-        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
-        constexpr glm::vec4 kColorHot    { 1.00f, 0.86f, 0.18f, 1.0f };
-        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
-        constexpr glm::vec4 kColorScreen { 0.90f, 0.91f, 0.93f, 1.0f };
-        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
-        constexpr glm::vec4 kColorScreenArc { 0.96f, 0.90f, 0.42f, 1.0f };
-        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
-        constexpr glm::vec4 kColorCentre { 0.97f, 0.97f, 0.98f, 1.0f };
+        // GizmoAxisColors (pending axis unification re-bless), beside the hot /
+        // screen / screen-arc / centre colours (editor.gizmo.color.*, S6-45).
 
         // The colours of the Draw call in flight (main thread; Draw is not
         // re-entrant). Null outside Draw: the defaults.
         thread_local const GizmoAxisColors* t_axisColors = nullptr;
+
+        // The colours of the Draw in flight, else the defaults.
+        const GizmoAxisColors& Colors() noexcept
+        {
+            static const GizmoAxisColors kDefaults{};
+            return t_axisColors ? *t_axisColors : kDefaults;
+        }
 
         struct AxisColorScope
         {
@@ -287,23 +286,22 @@ namespace Arcane
         // The translucent hot yellow of a hovered plane square and a rotate sweep.
         glm::vec4 HotFill(const GizmoTuning& k) noexcept
         {
-            glm::vec4 fill = kColorHot;
+            glm::vec4 fill = Colors().hot;
             fill.w = k.hotFillAlpha;
             return fill;
         }
 
         glm::vec4 AxisColor(GizmoAxis a) noexcept
         {
-            static const GizmoAxisColors kDefaults{};
-            const GizmoAxisColors& c = t_axisColors ? *t_axisColors : kDefaults;
+            const GizmoAxisColors& c = Colors();
             switch (a)
             {
             case GizmoAxis::X: case GizmoAxis::YZ: return c.x;
             case GizmoAxis::Y: case GizmoAxis::XZ: return c.y;
             case GizmoAxis::Z: case GizmoAxis::XY: return c.z;
-            case GizmoAxis::Center:                return kColorCentre;
-            case GizmoAxis::Screen:                return kColorScreen;
-            default:                               return kColorCentre;
+            case GizmoAxis::Center:                return c.centre;
+            case GizmoAxis::Screen:                return c.screen;
+            default:                               return c.centre;
             }
         };
 
@@ -311,7 +309,7 @@ namespace Arcane
         // other handle keeps its axis colour.
         glm::vec4 HandleColor(GizmoAxis a, GizmoAxis hovered, GizmoAxis active) noexcept
         {
-            return (a == hovered || a == active) ? kColorHot : AxisColor(a);
+            return (a == hovered || a == active) ? Colors().hot : AxisColor(a);
         }
 
         // A shaded ROD between two pixels: the body in the handle colour with a
@@ -580,7 +578,7 @@ namespace Arcane
             }
             if (handles.Has(GizmoAxis::Screen) && !dragging)
             {
-                const glm::vec4 c = (hovered == GizmoAxis::Screen || active == GizmoAxis::Screen) ? kColorHot : kColorScreenArc;
+                const glm::vec4 c = (hovered == GizmoAxis::Screen || active == GizmoAxis::Screen) ? Colors().hot : Colors().screenArc;
                 const float r = kScreenRingPx * sizeScale;
                 const float segs = static_cast<float>(tuning.ringSegments);
                 for (int i = 0; i < tuning.ringSegments; ++i)
@@ -623,8 +621,8 @@ namespace Arcane
                     sink.Triangle(q[0], q[1], q[2], fill);
                     sink.Triangle(q[0], q[2], q[3], fill);
                 }
-                sink.Line(q[0], q[1], kPlaneBarWidthPx, hot ? kColorHot : AxisColor(a));   // along a
-                sink.Line(q[0], q[3], kPlaneBarWidthPx, hot ? kColorHot : AxisColor(b));   // along b
+                sink.Line(q[0], q[1], kPlaneBarWidthPx, hot ? Colors().hot : AxisColor(a));   // along a
+                sink.Line(q[0], q[3], kPlaneBarWidthPx, hot ? Colors().hot : AxisColor(b));   // along b
             }
         }
 

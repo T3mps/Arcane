@@ -139,6 +139,19 @@ namespace Arcane::Editor
         float scale         = 0.1f;    // ratio
     };
 
+    // editor.gizmo.color.* (inventory "Gizmo.cpp:61-64", reconciled R1; S6-45):
+    // the hot / screen / screen-arc / centre colours the engine gizmo paints,
+    // carried to it on GizmoAxisColors by DeriveAxisRoles. The X/Y/Z axis
+    // colours are NOT here: S5-2 option A holds them pending the unification
+    // re-bless. Defaults = GizmoAxisColors{}'s legacy values.
+    struct EditorGizmoColorSettings
+    {
+        CVarColor hot{ 1.00f, 0.86f, 0.18f, 1.0f };
+        CVarColor screen{ 0.90f, 0.91f, 0.93f, 1.0f };
+        CVarColor screenArc{ 0.96f, 0.90f, 0.42f, 1.0f };
+        CVarColor centre{ 0.97f, 0.97f, 0.98f, 1.0f };
+    };
+
     // The engine gizmo's inputs from the settings: pure (ToGizmoTuning) and
     // from the published snapshot (MakeGizmoTuning / MakeGizmoSnap, read once
     // per call -- the frame's HitTest, drag and Draw each call once).

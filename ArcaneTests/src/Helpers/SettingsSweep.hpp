@@ -34,6 +34,32 @@ namespace Arcane::Test
         CHECK(got == expected);
     }
 
+    // Holds a SetBy::Code value on one cvar and publishes it; the destructor
+    // clears that rung and publishes again, so a failed REQUIRE mid-test
+    // cannot leak the override into a later random-order case.
+    class ScopedCodeRung
+    {
+    public:
+        ScopedCodeRung(std::string_view name, const CVarValue& value)
+            : m_handle(CVarRegistry::Get().Find(name))
+        {
+            INFO("cvar " << std::string(name));
+            REQUIRE_FALSE(m_handle.IsStale());
+            REQUIRE(CVarRegistry::Get().Set(m_handle, value, SetBy::Code) == SetResult::Applied);
+            CVarRegistry::Get().PublishImmediate();
+        }
+        ~ScopedCodeRung()
+        {
+            CVarRegistry::Get().ClearRung(m_handle, SetBy::Code);
+            CVarRegistry::Get().PublishImmediate();
+        }
+        ScopedCodeRung(const ScopedCodeRung&) = delete;
+        ScopedCodeRung& operator=(const ScopedCodeRung&) = delete;
+
+    private:
+        CVarHandle m_handle;
+    };
+
     inline bool SameBits(float a, float b)   { return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b); }
     inline bool SameBits(double a, double b) { return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b); }
 }

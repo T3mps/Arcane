@@ -55,7 +55,35 @@ namespace Arcane::Editor
         // content, so they need it; the Graph lens lays its rows out by hand
         // with none (S6-44; the S5-2 review restored it from DERIVED).
         CVarVec2 nodePadding{ 10.0f, 6.0f };
+
+        // The shader canvas's in-node widgets (S6-45; the S5-2 review restored
+        // them from DERIVED): they sit inside canvas nodes and scale with the
+        // graph zoom, so they are canvas units, NOT Ui::Px chrome.
+        float nodePreviewMinPx      = 96.0f;   // the Output node's preview thumbnail, smallest side
+        float dragSpeed             = 0.01f;   // a constant / param default's change per px dragged
+        float rangeDragSpeed        = 0.05f;   // a param range's change per px dragged
+        float constPinNeutralWidth1 = 64.0f;   // an unwired input's literal field, by lane count
+        float constPinNeutralWidth2 = 106.0f;
+        float constPinNeutralWidth4 = 190.0f;  // 3 or 4 lanes
+        float constFloatWidth       = 90.0f;   // a Const / param default field, by lane count
+        float constFloat2Width      = 140.0f;
+        float constFloat4Width      = 220.0f;  // Float4 / Color, 3 or 4 lanes
+        float constParamRangeWidth  = 120.0f;  // a param's min/max field
+        float paramNameFieldWidth   = 110.0f;
+        float passNameFieldWidth    = 120.0f;  // a pass node's name field (the pass chain)
+        float swizzleFieldWidth     = 70.0f;
     };
+
+    // The in-node field width for a value of `lanes` components (1, 2, else
+    // 3-4): the unwired-pin literal row and the Const / param default rows.
+    [[nodiscard]] inline float GraphPinNeutralWidth(const GraphCanvasSettings& s, int lanes) noexcept
+    {
+        return lanes == 1 ? s.constPinNeutralWidth1 : lanes == 2 ? s.constPinNeutralWidth2 : s.constPinNeutralWidth4;
+    }
+    [[nodiscard]] inline float GraphConstValueWidth(const GraphCanvasSettings& s, int lanes) noexcept
+    {
+        return lanes == 1 ? s.constFloatWidth : lanes == 2 ? s.constFloat2Width : s.constFloat4Width;
+    }
 
     // editor.graph.nodePadding is ApplyMode::Restart (spec s3.4: read once at
     // boot), so the shader canvas never reads the published snapshot: the

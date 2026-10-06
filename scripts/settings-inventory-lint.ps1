@@ -116,7 +116,7 @@ foreach ($r in $rows) {
 # (grid fade, minorTargetPx), zoom-scaled canvas-space geometry (editor.graph.* node/pin metrics, the shader
 # chain layout, the asset graph node geometry) and the asset row/ref thumbnails (S6-28 / S6-32 / S6-34 convert
 # them as cvars, read as Ui::Px(setting) except the render-target ones). A row is exempt when EVERY name it expands to is listed.
-$l9KeptSetting = @('editor.viewport.fallbackExtent','editor.graph.grid.minorTargetPx','editor.graph.nodeHeaderGap',
+$l9KeptSetting = @('editor.viewport.fallbackExtentW','editor.viewport.fallbackExtentH','editor.graph.grid.minorTargetPx','editor.graph.nodeHeaderGap',
                    'editor.ui.assetRowThumbPx','editor.ui.assetRefThumbPx',
                    'editor.viewport.grid.fadeInPx','editor.viewport.grid.fadeFullPx','editor.shader.previewCheckerCell',
                    'editor.graph.pinRing.width','editor.graph.pinRing.outerGap','editor.graph.pinRing.outerWidth',

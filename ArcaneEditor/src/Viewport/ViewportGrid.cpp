@@ -4,7 +4,6 @@
 #include "Viewport/ViewportGrid.hpp"
 
 #include "Settings/EditorGridSettings.hpp"
-#include "Widgets/UiMetrics.hpp"
 
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -38,8 +37,7 @@ namespace Arcane::Editor
             return k < 0 ? 1.0f / p : p;
         }
 
-        // The crossfade: 0 at fade-in, 1 at full, clamped (both already in
-        // screen px at the current UI scale).
+        // The crossfade: 0 at fade-in, 1 at full, clamped (both in screen px).
         [[nodiscard]] float Ramp(float screenSpacingPx, float fadeInPx, float fadeFullPx) noexcept
         {
             return std::clamp((screenSpacingPx - fadeInPx) / (fadeFullPx - fadeInPx), 0.0f, 1.0f);
@@ -84,8 +82,11 @@ namespace Arcane::Editor
             return plan;   // degenerate: nothing
 
         const EditorGridSettings& s = Arcane::Settings<EditorGridSettings>();
-        const float fadeInPx   = Ui::Px(kGridFadeInPxBase);
-        const float fadeFullPx = Ui::Px(kGridFadeFullPxBase);
+        // editor.viewport.grid.fade{In,Full}Px (S6-45): screen px, not UI
+        // chrome, so not Ui::Px. The window is at least 1 px wide, so the
+        // ramp never divides by zero whatever the two settings hold.
+        const float fadeInPx   = s.fadeInPx;
+        const float fadeFullPx = std::max(s.fadeFullPx, s.fadeInPx + 1.0f);
 
         // The finest decade whose screen spacing reaches fade-in, then the two
         // above it. Searching upward from the smallest decade keeps this a

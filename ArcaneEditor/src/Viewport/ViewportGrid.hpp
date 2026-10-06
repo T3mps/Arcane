@@ -59,13 +59,8 @@ namespace Arcane
 
 namespace Arcane::Editor
 {
-    // The crossfade window, in screen pixels of a level's spacing, at UI
-    // scale 1.0: DERIVED (s16.11) -- the plan reads Ui::Px of these, so the
-    // window follows editor.ui.scale.
-    ARC_CONSTANT("DERIVED base px: x editor.ui.scale through Ui::Px (s16.11)")
-    inline constexpr float kGridFadeInPxBase   = 8.0f;
-    ARC_CONSTANT("DERIVED base px: x editor.ui.scale through Ui::Px (s16.11)")
-    inline constexpr float kGridFadeFullPxBase = 24.0f;
+    // The crossfade window, in screen pixels of a level's spacing, is
+    // editor.viewport.grid.fade{In,Full}Px (EditorGridSettings; S6-45).
 
     // The tunables -- the minor/major peak strengths, the line colour and
     // thickness and the per-axis line budget -- are editor.viewport.grid.*

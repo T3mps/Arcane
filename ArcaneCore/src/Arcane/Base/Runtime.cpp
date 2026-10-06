@@ -443,7 +443,9 @@ namespace Arcane
         // snapshot would resurface much later as a generic "reload lost state"
         // with the root cause erased. FinishSnapshot propagates the exact
         // SerializationError; log it here so the hot-reload path names the cause.
-        auto save = Serialization::FinishSnapshot(m_impl->registry->Save());
+        // astra.snapshot.compression (S6-45): the snapshot's compression.
+        auto save = Serialization::FinishSnapshot(
+            m_impl->registry->Save(ToAstraSaveConfig(Settings<AstraSnapshotSettings>())));
         if (save.IsErr())
         {
             const Astra::SerializationError err =

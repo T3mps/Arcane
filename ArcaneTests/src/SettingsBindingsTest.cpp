@@ -408,3 +408,26 @@ TEST_CASE("render.meshCull and diagnostics.drawMarkers keep their names, types, 
 #endif
 }
 
+
+// S6-45: astra.snapshot.compression -- the registry snapshot's Save config.
+TEST_CASE("ToAstraSaveConfig: the default is Astra's SaveConfig; None turns compression off", "[settings]")
+{
+    const Astra::Registry::SaveConfig lib{};
+    const Astra::Registry::SaveConfig ours = ToAstraSaveConfig(AstraSnapshotSettings{});
+    CHECK(ours.compressionMode == lib.compressionMode);
+    CHECK(ours.compressionLevel == lib.compressionLevel);
+    CHECK(ours.compressionThreshold == lib.compressionThreshold);
+
+    AstraSnapshotSettings off;
+    off.compression = AstraSnapshotCompression::None;
+    CHECK(ToAstraSaveConfig(off).compressionMode == Astra::CompressionMode::None);
+
+    const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("astra.snapshot.compression");
+    REQUIRE(d.has_value());
+    CHECK(d->type == CVarType::Enum);
+    CHECK(d->enumNames == std::vector<std::string>{ "None", "LZ4" });
+    CHECK(d->defaultValue == CVarValue::Enum(1));   // LZ4, by ordinal (I7)
+    CHECK(d->audience == Audience::Editor);
+    CHECK(d->scope == SettingScope::PreferencesProject);
+    CHECK(HasFlag(d->flags, CVarFlags::Dev));
+}

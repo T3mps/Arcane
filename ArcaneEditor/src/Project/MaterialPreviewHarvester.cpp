@@ -1174,10 +1174,10 @@ namespace Arcane::Editor
         b.SetGlobals(globals);   // AFTER Begin -- matching every other call site
 
         const float extent = static_cast<float>(thumb.size);
-        const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
+        const ShaderEditorSettings& preview = Arcane::Settings<ShaderEditorSettings>();   // editor.shader.previewChecker*
         const float cell = ThumbnailCheckerCell(thumb);
-        const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
-                              preview.checkerLight.a);
+        const glm::vec4 light(preview.previewCheckerLight.r, preview.previewCheckerLight.g,
+                              preview.previewCheckerLight.b, preview.previewCheckerLight.a);
         for (int y = 0; y * cell < extent; ++y)
             for (int x = 0; x * cell < extent; ++x)
                 if ((x + y) & 1)
@@ -1187,7 +1187,7 @@ namespace Arcane::Editor
         if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Sprite &&
             r.spriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
         {
-            const float s = preview.checkerExtent * extent;
+            const float s = preview.previewCheckerSpriteScale * extent;
             b.QuadMaterial(r.spriteMaterial,
                            glm::vec2((extent - s) * 0.5f, (extent - s) * 0.5f),
                            glm::vec2(s, s),

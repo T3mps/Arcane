@@ -26,6 +26,7 @@
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
 #include "Settings/EditorConsoleSettings.hpp"    // editor.console.* (the Console toolbar toggles, reply lines, category width; S6-41)
+#include "Settings/EditorUiStyleSettings.hpp"    // editor.ui.toolbar.* (the brand cluster; S6-45)
 #include "Settings/EditorViewportSettings.hpp"   // the view-settings popup's cvars (settings S6-29)
 #include "Settings/InspectorSettings.hpp"        // editor.inspector row rhythm, editor.outliner.slowClickMaxSeconds (S6-37)
 #include "App/PlayMode.hpp"
@@ -779,7 +780,8 @@ namespace Arcane::Editor
         // button row -- so the top/bottom padding also absorbs its overhang above/below.
         const ImGuiStyle& st = ImGui::GetStyle();
         const float btnH     = ImGui::GetFrameHeight();
-        const float logoH    = (logoTex != 0) ? std::floor(btnH * 1.35f) : btnH;
+        const EditorUiToolbarSettings& toolbar = Arcane::Settings<EditorUiToolbarSettings>();   // editor.ui.toolbar.*
+        const float logoH    = (logoTex != 0) ? std::floor(btnH * toolbar.logoScale) : btnH;
         const float overhang = (logoH - btnH) * 0.5f;   // logo extends this far above/below the row
         ImGui::Dummy(ImVec2(0.0f, Ui::Px(3.0f) + overhang));
 
@@ -805,7 +807,7 @@ namespace Arcane::Editor
         {
             // "Arcane" wordmark in the display face, a touch shorter than the logo, centered
             // on the same row. PushFont(font, size) renders it at a display size (ImGui 1.92).
-            const float brandSize = std::floor(logoH * 0.80f);
+            const float brandSize = std::floor(logoH * toolbar.brandScale);
             ImGui::PushFont(brand, brandSize);
             const ImVec2 sz = ImGui::CalcTextSize("Arcane");
             ImGui::SetCursorPos(ImVec2(leftX, rowY + (btnH - sz.y) * 0.5f));

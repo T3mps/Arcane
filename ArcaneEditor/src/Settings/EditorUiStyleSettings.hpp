@@ -33,4 +33,13 @@ namespace Arcane::Editor
         int   intStep = 1;               // PropertyGrid IntRow step button
         int   intStepFast = 100;         // ... with Ctrl held
     };
+
+    // editor.ui.toolbar.* (inventory "EditorPanels.cpp:768" / ":794"; S6-45):
+    // the main toolbar's brand cluster, as ratios -- the logo's height over the
+    // transport buttons' frame height, and the wordmark's size over the logo's.
+    struct EditorUiToolbarSettings
+    {
+        float logoScale  = 1.35f;
+        float brandScale = 0.80f;
+    };
 }

@@ -29,6 +29,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -688,10 +689,14 @@ namespace Arcane::Editor
                 // million-triangle mesh. Live: the row writes its draft every
                 // frame, so the preview rebuilds as the value moves.
                 bool changed = false;
-                const auto intRow = [&](const char* label, std::uint32_t& field, double lo, double hi)
+                // editor.mesh.primitiveRanges.* (S6-45): the cvar ranges keep each
+                // minimum at or above the validator's floor; a maximum below its
+                // minimum collapses to the minimum.
+                const auto intRow = [&](const char* label, std::uint32_t& field, std::int32_t lo, std::int32_t hi)
                 {
                     int v = static_cast<int>(field);
-                    (void)grid.IntRow(label, v, Astra::Range(lo, hi, 1.0));
+                    (void)grid.IntRow(label, v, Astra::Range(static_cast<double>(lo),
+                                                             static_cast<double>(std::max(lo, hi)), 1.0));
                     if (static_cast<std::uint32_t>(v) != field)
                     {
                         field = static_cast<std::uint32_t>(v);
@@ -699,29 +704,31 @@ namespace Arcane::Editor
                     }
                     bracket(label);
                 };
-                const MeshDocSettings& caps = Arcane::Settings<MeshDocSettings>();
+                const EditorMeshPrimitiveRangesSettings& caps = Arcane::Settings<EditorMeshPrimitiveRangesSettings>();
                 switch (m_data.source)
                 {
                     case Arcane::MeshSource::Plane:
-                        intRow("Subdivisions", m_data.subdivisions, 1.0, static_cast<double>(caps.subdivMax));
+                        intRow("Subdivisions", m_data.subdivisions, caps.planeSubdivisionsMin, caps.planeSubdivisionsMax);
                         break;
                     case Arcane::MeshSource::UvSphere:
-                        intRow("Rings", m_data.rings, 3.0, static_cast<double>(caps.ringsMax));
-                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
+                        intRow("Rings", m_data.rings, caps.sphereRingsMin, caps.sphereRingsMax);
+                        intRow("Segments", m_data.segments, caps.segmentsMin, caps.segmentsMax);
                         break;
                     case Arcane::MeshSource::Cylinder:
                         // Deliberately NOT `rings` -- BuildCylinder never reads it.
-                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
+                        intRow("Segments", m_data.segments, caps.segmentsMin, caps.segmentsMax);
                         break;
                     case Arcane::MeshSource::Capsule:
                     {
                         // The cap-ring floor is 2, not 3 -- a two-step arc still
                         // closes a hemisphere; UvSphere's rings span pole to pole.
-                        intRow("Rings", m_data.rings, 2.0, static_cast<double>(caps.capsuleRingsMax));
-                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
+                        intRow("Rings", m_data.rings, caps.capsuleRingsMin, caps.capsuleRingsMax);
+                        intRow("Segments", m_data.segments, caps.segmentsMin, caps.segmentsMax);
                         float ratio = m_data.capsuleLengthRatio;
-                        (void)grid.FloatRow("Length Ratio", ratio, caps.capsuleRatioDragSpeed,
-                                            Astra::Range(1.0, static_cast<double>(caps.capsuleRatioMax)), "%.2f");
+                        const double ratioLo = static_cast<double>(caps.capsuleLengthRatioMin);
+                        (void)grid.FloatRow("Length Ratio", ratio, Arcane::Settings<MeshDocSettings>().capsuleRatioDragSpeed,
+                                            Astra::Range(ratioLo, std::max(ratioLo, static_cast<double>(caps.capsuleLengthRatioMax))),
+                                            "%.2f");
                         if (ratio != m_data.capsuleLengthRatio)
                         {
                             m_data.capsuleLengthRatio = ratio;

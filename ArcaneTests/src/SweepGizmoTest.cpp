@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsSweep.hpp"
 #include "Settings/EditorViewportSettings.hpp"
+#include "Settings/AxisColors.hpp"
 #include <Arcane/Edit/Gizmo.hpp>
 
 #include <Arcane/Config/Settings.hpp>
@@ -200,4 +201,37 @@ TEST_CASE("sweep: the gizmo reads its pick radius, ring tessellation, fill alpha
     const GizmoTransform r1 = ApplyDrag(GizmoMode::Scale, GizmoSpace::Local, GizmoAxis::X, pivot, OrthoView(), {500, 300}, {400, 300}, GizmoSnap{}, floor);
     CHECK(r0.scale.x == 0.01f);
     CHECK(r1.scale.x == 0.5f);
+}
+
+// S6-45: editor.gizmo.color.{hot,screen,screenArc,centre} -- the gizmo's
+// non-axis colours ride GizmoAxisColors; the axis X/Y/Z stay held (S5-2 A).
+TEST_CASE("sweep: the gizmo's hot, screen and centre colours are editor.gizmo.color.*", "[sweep][gizmo]")
+{
+    const GizmoAxisColors legacy{};
+    CHECK(legacy.hot == glm::vec4(1.00f, 0.86f, 0.18f, 1.0f));
+    CHECK(legacy.screen == glm::vec4(0.90f, 0.91f, 0.93f, 1.0f));
+    CHECK(legacy.screenArc == glm::vec4(0.96f, 0.90f, 0.42f, 1.0f));
+    CHECK(legacy.centre == glm::vec4(0.97f, 0.97f, 0.98f, 1.0f));
+    Test::RequireDefault("editor.gizmo.color.hot", CVarValue::Color({ 1.00f, 0.86f, 0.18f, 1.0f }));
+    Test::RequireDefault("editor.gizmo.color.screen", CVarValue::Color({ 0.90f, 0.91f, 0.93f, 1.0f }));
+    Test::RequireDefault("editor.gizmo.color.screenArc", CVarValue::Color({ 0.96f, 0.90f, 0.42f, 1.0f }));
+    Test::RequireDefault("editor.gizmo.color.centre", CVarValue::Color({ 0.97f, 0.97f, 0.98f, 1.0f }));
+
+    // The colours the Draw is given are the ones painted: a hot plane square
+    // fills in colors.hot at the tuning's alpha.
+    const GizmoTuning def = Editor::ToGizmoTuning(Editor::EditorGizmoSettings{});
+    GizmoAxisColors magenta{};
+    magenta.hot = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+    ColourSink painted;
+    Draw(painted, GizmoMode::Translate, GizmoSpace::World, GizmoTransform{}, ObliqueView(), GizmoHandleMask::All(), 1.0f,
+         GizmoAxis::XY, GizmoAxis::None, def, nullptr, magenta);
+    REQUIRE(!painted.triangleColours.empty());
+    CHECK(painted.triangleColours.front() == glm::vec4(1.0f, 0.0f, 1.0f, 0.3f));
+
+    // The editor fills them from the published settings.
+    CHECK(Editor::DeriveAxisRoles(Editor::Theme::Live()).gizmo.hot == legacy.hot);
+    const Test::ScopedCodeRung hot("editor.gizmo.color.hot", CVarValue::Color({ 0.25f, 0.5f, 0.75f, 1.0f }));
+    const Editor::AxisRoleColors roles = Editor::DeriveAxisRoles(Editor::Theme::Live());
+    CHECK(roles.gizmo.hot == glm::vec4(0.25f, 0.5f, 0.75f, 1.0f));
+    CHECK(roles.gizmo.x == legacy.x);   // S5-2 option A: the axis colours stay held
 }

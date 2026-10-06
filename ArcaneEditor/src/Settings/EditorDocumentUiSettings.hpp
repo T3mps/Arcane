@@ -10,6 +10,8 @@
 // EditorDocumentUiSettings.cpp. Every default is the pre-sweep literal it
 // replaced.
 
+#include <Arcane/Config/CVarTypes.hpp>
+
 #include <algorithm>
 #include <cstdint>
 
@@ -27,6 +29,11 @@ namespace Arcane::Editor
     struct CrashViewerSettings
     {
         std::int32_t maxRows = 24;   // text rows the stack-frame list grows to before it scrolls
+        // S6-45 (inventory "CrashReportDocument.cpp:168" / ":387", S5-2 review):
+        // the window's first-use size (a window dimension, not UI chrome; ImGui's
+        // ini owns it after the first open) and the text box's row count.
+        CVarVec2     initialSize{ 760.0f, 760.0f };
+        std::int32_t textRows = 16;
     };
 
     // The live-highlight wash's alpha for a binding row whose live signal is v

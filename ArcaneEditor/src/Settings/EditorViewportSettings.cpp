@@ -102,7 +102,7 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(DisplayName, "Reference distance") ARC_REFLECT_ATTR(Range, 0.01, 1.0e5)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Pivot distance (metres) at which the distance scale is 1.")
-        ARC_REFLECT_FIELD(EditorCameraSettings, speedFloor)
+        ARC_REFLECT_FIELD_NAMED(EditorCameraSettings, speedFloor, "floor")   // frozen name editor.camera.floor
             ARC_REFLECT_ATTR(DisplayName, "Speed scale floor") ARC_REFLECT_ATTR(Range, 0.001, 1.0)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Smallest distance scale, so a camera parked on its pivot can still move.")
@@ -192,10 +192,27 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(Tooltip, "Step a Ctrl-held scale snaps to.")
     ARC_END_REFLECT_TYPE()
 
+    ARC_REFLECT_TYPE(EditorGizmoColorSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.gizmo.color", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(EditorGizmoColorSettings, hot)
+            ARC_REFLECT_ATTR(DisplayName, "Hot handle") ARC_REFLECT_ATTR(Keywords, "gizmo hover drag active yellow")
+            ARC_REFLECT_ATTR(Tooltip, "Color of the gizmo handle under the cursor or being dragged.")
+        ARC_REFLECT_FIELD(EditorGizmoColorSettings, screen)
+            ARC_REFLECT_ATTR(DisplayName, "Screen handle") ARC_REFLECT_ATTR(Keywords, "gizmo camera plane")
+            ARC_REFLECT_ATTR(Tooltip, "Color of the gizmo's camera-plane (screen-space) handle.")
+        ARC_REFLECT_FIELD(EditorGizmoColorSettings, screenArc)
+            ARC_REFLECT_ATTR(DisplayName, "Screen ring") ARC_REFLECT_ATTR(Keywords, "gizmo rotate band")
+            ARC_REFLECT_ATTR(Tooltip, "Color of the rotate gizmo's outer screen-space ring.")
+        ARC_REFLECT_FIELD(EditorGizmoColorSettings, centre)
+            ARC_REFLECT_ATTR(DisplayName, "Centre") ARC_REFLECT_ATTR(Keywords, "gizmo center pivot disc")
+            ARC_REFLECT_ATTR(Tooltip, "Color of the gizmo's centre disc.")
+    ARC_END_REFLECT_TYPE()
+
     ARC_SETTINGS(EditorViewportSettings);
     ARC_SETTINGS(EditorCameraSettings);
     ARC_SETTINGS(EditorGizmoSettings);
     ARC_SETTINGS(EditorGizmoSnapSettings);
+    ARC_SETTINGS(EditorGizmoColorSettings);
 
     GizmoTuning ToGizmoTuning(const EditorGizmoSettings& s) noexcept
     {

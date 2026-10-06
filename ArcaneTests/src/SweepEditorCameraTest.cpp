@@ -63,7 +63,7 @@ TEST_CASE("sweep: every editor.camera.* default is the declared literal", "[swee
     Test::RequireDefault("editor.camera.baseFlySpeed", CVarValue::Float32(5.0f));
     Test::RequireDefault("editor.camera.distanceScaledSpeed", CVarValue::Bool(true));
     Test::RequireDefault("editor.camera.refDistance", CVarValue::Float32(10.0f));
-    Test::RequireDefault("editor.camera.speedFloor", CVarValue::Float32(0.1f));
+    Test::RequireDefault("editor.camera.floor", CVarValue::Float32(0.1f));
     Test::RequireDefault("editor.camera.speedCap", CVarValue::Float32(1000.0f));
     Test::RequireDefault("editor.camera.lookSensitivity", CVarValue::Float32(0.2f));
     Test::RequireDefault("editor.camera.orbitSensitivity", CVarValue::Float32(0.2f));

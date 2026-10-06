@@ -59,3 +59,20 @@ TEST_CASE("sweep: the live-highlight wash is the pre-sweep alpha at the defaults
     CHECK(Editor::LiveHighlightAlpha(custom, 0.0f) == 0.3f);
     CHECK(Editor::LiveHighlightAlpha(custom, 2.0f) == 0.8f);   // the signal saturates at 1
 }
+
+// S6-45: the crash viewer's first-use window size and log-tail rows
+// (inventory "CrashReportDocument.cpp:168" / ":387", S5-2 review).
+TEST_CASE("sweep: editor.crash.initialSize and editor.crash.textRows are the pre-sweep literals", "[sweep][documents]")
+{
+    const Editor::CrashViewerSettings c{};
+    CHECK(c.initialSize.x == 760.0f); CHECK(c.initialSize.y == 760.0f);
+    CHECK(c.textRows == 16);
+    Test::RequireDefault("editor.crash.initialSize", CVarValue::Vec2({ 760.0f, 760.0f }));
+    Test::RequireDefault("editor.crash.textRows", CVarValue::Int32(16));
+    const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("editor.crash.textRows");
+    REQUIRE(d.has_value());
+    CHECK(d->scope == SettingScope::PreferencesMachine);
+    CHECK(d->apply == ApplyMode::Live);
+    REQUIRE(d->min.has_value()); REQUIRE(d->max.has_value());
+    CHECK(*d->min == CVarValue::Int32(4)); CHECK(*d->max == CVarValue::Int32(200));
+}

@@ -26,6 +26,17 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(DisplayName, "Max lines per axis") ARC_REFLECT_ATTR(Range, 256.0, 65536.0)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Draw budget: a 2D grid level with more lines than this on either axis is skipped.")
+        ARC_REFLECT_FIELD(EditorGridSettings, fadeInPx)
+            ARC_REFLECT_ATTR(DisplayName, "Level fade-in spacing") ARC_REFLECT_ATTR(Range, 1.0, 256.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "grid lod crossfade decade")
+            ARC_REFLECT_ATTR(Tooltip, "Screen pixels between a 2D grid level's lines at which the level starts to fade in.")
+        ARC_REFLECT_FIELD(EditorGridSettings, fadeFullPx)
+            ARC_REFLECT_ATTR(DisplayName, "Level full spacing") ARC_REFLECT_ATTR(Range, 1.0, 1024.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Keywords, "grid lod crossfade decade")
+            ARC_REFLECT_ATTR(Tooltip, "Screen pixels between a 2D grid level's lines at which the level is fully drawn "
+                                      "(at least 1 px past the fade-in spacing).")
     ARC_END_REFLECT_TYPE()
 
     ARC_REFLECT_TYPE(EditorGrid3DSettings)

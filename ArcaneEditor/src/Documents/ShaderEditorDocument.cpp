@@ -76,9 +76,9 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // editor.shader.dragSpeed: a constant / parameter default's per-pixel
+        // editor.graph.dragSpeed: a constant / parameter default's per-pixel
         // drag step on a graph node (S6-35).
-        [[nodiscard]] float NodeDragSpeed() { return Arcane::Settings<ShaderEditorSettings>().dragSpeed; }
+        [[nodiscard]] float NodeDragSpeed() { return Arcane::Settings<GraphCanvasSettings>().dragSpeed; }
 
         // The mesh-surface preview box's caption (T3-D6): the line that used
         // to BE the whole preview, kept as the honest note under the sphere.
@@ -1699,10 +1699,10 @@ namespace Arcane::Editor
         // The checkerboard. On the fullscreen surface it is ALSO what
         // kSceneInput samples, which is what makes it the scene stand-in.
         const float extent = static_cast<float>(m_graphPreviewSize);
-        const EditorPreviewSettings& preview = Arcane::Settings<EditorPreviewSettings>();
-        const float cell = Arcane::Settings<ShaderEditorSettings>().previewCheckerCell;   // editor.shader.previewCheckerCell
-        const glm::vec4 light(preview.checkerLight.r, preview.checkerLight.g, preview.checkerLight.b,
-                              preview.checkerLight.a);
+        const ShaderEditorSettings& preview = Arcane::Settings<ShaderEditorSettings>();
+        const float cell = preview.previewCheckerCell;   // editor.shader.previewCheckerCell
+        const glm::vec4 light(preview.previewCheckerLight.r, preview.previewCheckerLight.g,
+                              preview.previewCheckerLight.b, preview.previewCheckerLight.a);
         for (int y = 0; y * cell < extent; ++y)
             for (int x = 0; x * cell < extent; ++x)
                 if ((x + y) & 1)
@@ -1710,7 +1710,7 @@ namespace Arcane::Editor
 
         if (haveSprite)
         {
-            const float s = preview.checkerExtent * extent;
+            const float s = preview.previewCheckerSpriteScale * extent;
             b.QuadMaterial(m_graphSpriteMaterial,
                            glm::vec2((extent - s) * 0.5f, (extent - s) * 0.5f),
                            glm::vec2(s, s),
@@ -3410,24 +3410,25 @@ namespace Arcane::Editor
                           m_data.chainOutX != 0.0f || m_data.chainOutY != 0.0f;
             for (const Arcane::MaterialPass& p : m_data.passes)
                 anyPos = anyPos || p.posX != 0.0f || p.posY != 0.0f;
+            const ShaderChainLayoutSettings& layout = Arcane::Settings<ShaderChainLayoutSettings>();   // editor.shader.chainLayout.*
             if (!anyPos)
             {
-                m_data.chainBaseX = 40.0f;
-                m_data.chainBaseY = 40.0f;
+                m_data.chainBaseX = layout.originX;
+                m_data.chainBaseY = layout.originY;
                 for (std::size_t k = 0; k < m_data.passes.size(); ++k)
                 {
-                    m_data.passes[k].posX = 40.0f + 190.0f * static_cast<float>(k + 1);
-                    m_data.passes[k].posY = 40.0f;
+                    m_data.passes[k].posX = layout.originX + layout.pitchX * static_cast<float>(k + 1);
+                    m_data.passes[k].posY = layout.originY;
                 }
-                m_data.chainOutX = 40.0f + 190.0f * static_cast<float>(total);
-                m_data.chainOutY = 40.0f;
+                m_data.chainOutX = layout.originX + layout.pitchX * static_cast<float>(total);
+                m_data.chainOutY = layout.originY;
             }
             // The Scene source sits left of the base by default (also heals
             // pre-scene files whose chainPos lacks it).
             if (m_data.chainSceneX == 0.0f && m_data.chainSceneY == 0.0f)
             {
-                m_data.chainSceneX = m_data.chainBaseX - 170.0f;
-                m_data.chainSceneY = m_data.chainBaseY + 90.0f;
+                m_data.chainSceneX = m_data.chainBaseX + layout.sceneOffsetX;
+                m_data.chainSceneY = m_data.chainBaseY + layout.sceneOffsetY;
             }
             ed::SetNodePosition(nodeOf(0), ImVec2(m_data.chainBaseX, m_data.chainBaseY));
             for (std::size_t k = 0; k < m_data.passes.size(); ++k)
@@ -3545,7 +3546,7 @@ namespace Arcane::Editor
                 Arcane::MaterialPass& pass = m_data.passes[c - 1];
                 StableTextEdit("##passname", m_textEdit,
                                TextKey(TextEditKind::PassName, c),
-                               pass.name, 120.0f,
+                               pass.name, Arcane::Settings<GraphCanvasSettings>().passNameFieldWidth,
                                [&](const char* text)
                                {
                                    PassListState before = CapturePassListState();
@@ -3594,7 +3595,10 @@ namespace Arcane::Editor
             // intermediate readback, so there is nothing to draw for them.
             ImTextureID thumbId = c == 0 ? PreviewImageOf().id : 0;
             if (thumbId)
-                ImGui::Image(thumbId, ImVec2(72.0f, 72.0f));
+            {
+                const float thumbPx = Arcane::Settings<ShaderEditorSettings>().passThumbPx;   // editor.shader.passThumbPx
+                ImGui::Image(thumbId, ImVec2(thumbPx, thumbPx));
+            }
 
             {
                 const float rowW = ImGui::CalcTextSize("out").x +
@@ -4809,7 +4813,7 @@ namespace Arcane::Editor
         // the port rows. `width` is last frame's measured content width -- a
         // node drawing for the first time has none and gets the floor, which is
         // also what keeps a narrow node from collapsing the thumbnail.
-        const float thumbMin = Arcane::Settings<ShaderEditorSettings>().nodePreviewMinPx;
+        const float thumbMin = Arcane::Settings<GraphCanvasSettings>().nodePreviewMinPx;
         const float kThumbDraw = width > thumbMin ? width : thumbMin;
         // The Output node shows the material's own preview -- the pass
         // canvas's base-node convention. It is the ONLY node with a preview:
@@ -5942,7 +5946,7 @@ namespace Arcane::Editor
                     if (nd.kind == Arcane::GraphPinNeutralKind::Expression)
                         fmt = nd.hlsl;
                 }
-                ImGui::SetNextItemWidth(lanes == 1 ? 64.0f : lanes == 2 ? 106.0f : 190.0f);
+                ImGui::SetNextItemWidth(GraphPinNeutralWidth(Arcane::Settings<GraphCanvasSettings>(), lanes));
                 float pre[4];
                 std::memcpy(pre, buf, sizeof(pre));
                 const bool litExisted = lit != nullptr;   // `lit` may dangle once SetPinLiteral runs
@@ -5998,7 +6002,7 @@ namespace Arcane::Editor
         {
             case Arcane::GraphNodeType::ConstFloat:
             {
-                ImGui::SetNextItemWidth(90.0f);
+                ImGui::SetNextItemWidth(Arcane::Settings<GraphCanvasSettings>().constFloatWidth);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat("##v", &n.value[0], NodeDragSpeed());
@@ -6010,7 +6014,7 @@ namespace Arcane::Editor
             }
             case Arcane::GraphNodeType::ConstFloat2:
             {
-                ImGui::SetNextItemWidth(140.0f);
+                ImGui::SetNextItemWidth(Arcane::Settings<GraphCanvasSettings>().constFloat2Width);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat2("##v", n.value, NodeDragSpeed());
@@ -6023,7 +6027,7 @@ namespace Arcane::Editor
             case Arcane::GraphNodeType::ConstFloat4:
             case Arcane::GraphNodeType::ConstColor:
             {
-                ImGui::SetNextItemWidth(220.0f);
+                ImGui::SetNextItemWidth(Arcane::Settings<GraphCanvasSettings>().constFloat4Width);
                 float pre[4];
                 std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat4("##v", n.value, NodeDragSpeed());
@@ -6081,7 +6085,7 @@ namespace Arcane::Editor
                 // after-edit.
                 StableTextEdit("##pname", m_textEdit,
                                TextKey(TextEditKind::NodeName, n.id),
-                               n.paramName, 110.0f,
+                               n.paramName, Arcane::Settings<GraphCanvasSettings>().paramNameFieldWidth,
                                [&](const char* text)
                                {
                                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
@@ -6128,7 +6132,7 @@ namespace Arcane::Editor
                     // Default value at the decl's width.
                     const int lanes =
                         static_cast<int>(Arcane::ComponentCount(n.paramType));
-                    ImGui::SetNextItemWidth(lanes == 1 ? 90.0f : lanes == 2 ? 140.0f : 220.0f);
+                    ImGui::SetNextItemWidth(GraphConstValueWidth(Arcane::Settings<GraphCanvasSettings>(), lanes));
                     bool changed = false;
                     float pre[4];
                     std::memcpy(pre, n.paramDefault.f, sizeof(pre));
@@ -6154,11 +6158,11 @@ namespace Arcane::Editor
                     if (n.hasRange)
                     {
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(120.0f);
+                        ImGui::SetNextItemWidth(Arcane::Settings<GraphCanvasSettings>().constParamRangeWidth);
                         float mm[2] = { n.rangeMin, n.rangeMax };
                         const float pre[4] = { mm[0], mm[1], 0.0f, 0.0f };
                         const bool rchanged = ImGui::DragFloat2(
-                            "##prange", mm, Arcane::Settings<ShaderEditorSettings>().rangeDragSpeed);
+                            "##prange", mm, Arcane::Settings<GraphCanvasSettings>().rangeDragSpeed);
                         const bool escaped = CanvasDragEscape(pre, true, mm, 2);
                         gestureBegin("Param Range");
                         if (rchanged || escaped)
@@ -6217,7 +6221,7 @@ namespace Arcane::Editor
                 // shared TextCommitState -- only one InputText is active at a
                 // time; the keys are namespaced per site kind).
                 StableTextEdit("##mask", m_textEdit, TextKey(TextEditKind::Swizzle, n.id),
-                               n.swizzleMask, 70.0f,
+                               n.swizzleMask, Arcane::Settings<GraphCanvasSettings>().swizzleFieldWidth,
                                [&](const char* text)
                                {
                                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();

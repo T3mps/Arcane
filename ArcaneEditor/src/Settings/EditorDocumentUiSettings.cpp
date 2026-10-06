@@ -15,13 +15,13 @@ namespace Arcane::Editor
                                       "Rebind... or + Binding before it gives up. Applies to the next capture.")
         ARC_REFLECT_FIELD(InputEditorSettings, liveHighlightBase)
             ARC_REFLECT_ATTR(DisplayName, "Live highlight base") ARC_REFLECT_ATTR(Category, "Live preview")
-            ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Range, 0.0, 1.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Keywords, "glow wash alpha opacity firing preview")
             ARC_REFLECT_ATTR(Tooltip, "Opacity of the amber wash on a binding row that is firing in the live "
                                       "preview, at its faintest signal.")
         ARC_REFLECT_FIELD(InputEditorSettings, liveHighlightGain)
             ARC_REFLECT_ATTR(DisplayName, "Live highlight gain") ARC_REFLECT_ATTR(Category, "Live preview")
-            ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Range, 0.0, 1.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Keywords, "glow wash alpha opacity firing preview strength")
             ARC_REFLECT_ATTR(Tooltip, "Opacity the amber wash gains as a binding row's live signal rises to full "
                                       "strength. Base plus gain is the wash at full signal.")
@@ -36,6 +36,17 @@ namespace Arcane::Editor
             ARC_REFLECT_ATTR(Range, 4.0, 200.0)
             ARC_REFLECT_ATTR(Keywords, "crash report frames call stack height lines scroll")
             ARC_REFLECT_ATTR(Tooltip, "Text rows the crash viewer's stack-frame list grows to before it scrolls.")
+        ARC_REFLECT_FIELD(CrashViewerSettings, initialSize)
+            ARC_REFLECT_ATTR(DisplayName, "Window size") ARC_REFLECT_ATTR(Range, 200.0, 8192.0)
+            ARC_REFLECT_ATTR(Keywords, "crash report viewer width height first open")
+            ARC_REFLECT_ATTR(Tooltip, "Width and height, in pixels, of a crash report window the first time it opens "
+                                      "(afterwards the editor remembers its size).")
+        ARC_REFLECT_FIELD(CrashViewerSettings, textRows)
+            ARC_REFLECT_ATTR(DisplayName, "Text rows")
+            ARC_REFLECT_ATTR(Range, 4.0, 200.0)
+            ARC_REFLECT_ATTR(Keywords, "crash report log symbolized height lines")
+            ARC_REFLECT_ATTR(Tooltip, "Text rows the crash viewer's log tail box "
+                                      "shows before it scrolls.")
     ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(CrashViewerSettings);

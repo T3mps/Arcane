@@ -159,16 +159,21 @@ namespace Arcane
                                  GizmoHandleMask handles, float sizeScale,
                                  glm::vec2 mouseScreen, const GizmoTuning& tuning);
 
-    // The three axis colours the gizmo paints (settings arc S4): the editor
-    // derives them from the editor.theme.axis* tokens (Settings/AxisColors);
-    // the defaults are the gizmo's own display-space cousins of UE's palette.
-    // S5-2 option A: these stay the painted values until a unification re-bless
-    // (pending axis unification re-bless).
+    // The colours the gizmo paints. The three axis colours (settings arc S4)
+    // are the gizmo's own display-space cousins of UE's palette; S5-2 option A:
+    // they stay the painted values until a unification re-bless (pending axis
+    // unification re-bless). The hot / screen / screen-arc / centre colours are
+    // the editor's editor.gizmo.color.* settings (inventory "Gizmo.cpp:61-64";
+    // S6-45), filled by Settings/AxisColors. Every default is the legacy value.
     struct GizmoAxisColors
     {
         glm::vec4 x{ 0.96f, 0.28f, 0.22f, 1.0f };
         glm::vec4 y{ 0.48f, 0.84f, 0.16f, 1.0f };
         glm::vec4 z{ 0.24f, 0.58f, 0.98f, 1.0f };
+        glm::vec4 hot{ 1.00f, 0.86f, 0.18f, 1.0f };         // the hovered / dragged handle (UE's yellow)
+        glm::vec4 screen{ 0.90f, 0.91f, 0.93f, 1.0f };      // the screen-space handle
+        glm::vec4 screenArc{ 0.96f, 0.90f, 0.42f, 1.0f };   // the rotate mode's screen ring
+        glm::vec4 centre{ 0.97f, 0.97f, 0.98f, 1.0f };      // the centre disc
     };
 
     // Screen-constant gizmo geometry for the current state, UNREAL'S WIDGET

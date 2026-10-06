@@ -1,9 +1,11 @@
 #include "Settings/AxisColors.hpp"
 
+#include "Settings/EditorViewportSettings.hpp"   // EditorGizmoColorSettings
 #include "Settings/GraphThemeSettings.hpp"
 
 #include "Viewport/ViewportGrid.hpp"
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
 
 #include <algorithm>
@@ -29,6 +31,13 @@ namespace Arcane::Editor
         r.gizmo.x = gizmo.x;
         r.gizmo.y = gizmo.y;
         r.gizmo.z = gizmo.z;
+        // editor.gizmo.color.* (S6-45): the hot / screen / screen-arc / centre colours.
+        const EditorGizmoColorSettings& gc = Arcane::Settings<EditorGizmoColorSettings>();
+        const auto vec = [](const CVarColor& c) { return glm::vec4(c.r, c.g, c.b, c.a); };
+        r.gizmo.hot       = vec(gc.hot);
+        r.gizmo.screen    = vec(gc.screen);
+        r.gizmo.screenArc = vec(gc.screenArc);
+        r.gizmo.centre    = vec(gc.centre);
         r.grid2D[0] = kGridAxisXColor;
         r.grid2D[1] = kGridAxisYColor;
         r.grid3D[0] = Arcane::GridSceneDesc::kAxisXColor;

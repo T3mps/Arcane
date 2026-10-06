@@ -194,3 +194,13 @@ TEST_CASE("sweep: the alternate face resolves from editor.ui.altFontFamily", "[s
     CHECK(req.altFace == Editor::ResolveEditorFontFamily(families, Editor::EditorUiSettings{}.altFontFamily, "Roboto"));
     CHECK(req.altFace.filename() == "Roboto-Regular.ttf");
 }
+
+// S6-45: the toolbar's brand cluster ratios (inventory "EditorPanels.cpp:768" / ":794").
+TEST_CASE("sweep: editor.ui.toolbar.logoScale and brandScale are the pre-sweep ratios", "[sweep][ui-style]")
+{
+    const Editor::EditorUiToolbarSettings t{};
+    CHECK(t.logoScale == 1.35f);
+    CHECK(t.brandScale == 0.80f);
+    Test::RequireDefault("editor.ui.toolbar.logoScale", CVarValue::Float32(1.35f));
+    Test::RequireDefault("editor.ui.toolbar.brandScale", CVarValue::Float32(0.80f));
+}
