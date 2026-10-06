@@ -1,6 +1,7 @@
 #include "Viewport/EditorCamera.hpp"
 
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -41,7 +42,7 @@ namespace Arcane::Editor
     ViewTransform EditorCamera::Resolve(glm::uvec2 viewport) const noexcept
     {
         if (mode == ViewMode::TwoD)
-            return ViewTransform::Orthographic(ortho.center, ortho.halfHeight, viewport);
+            return Ortho2DView(ortho.center, ortho.halfHeight, viewport);   // render.ortho2D.depthRange
         return ViewTransform::Perspective(Eye(), orbit.pivot, glm::vec3(0, 1, 0), orbit.fovYDeg, viewport, kNearZ, kFarZ);
     }
     glm::vec3 EditorCamera::Eye() const noexcept { return orbit.pivot + DirFrom(orbit.yawDeg, orbit.pitchDeg) * orbit.distance; }

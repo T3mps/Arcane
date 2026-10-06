@@ -26,6 +26,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>   // the mirrored-affine case (F4 plan 1 T3)
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 #include <glm/glm.hpp>
 
@@ -211,7 +212,7 @@ TEST_CASE("PhysicsDebug projects an oriented box's WORLD corners through a mirro
     const BodyHandle h = w.AddBody(bd);
     w.SetAngle(h, Real(angle));
 
-    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D();
+    const auto affine = Arcane::Ortho2DView({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D();
     REQUIRE(affine.has_value());
     REQUIRE(affine->scale.y < 0.0f);   // the mirror is what this case is about
 

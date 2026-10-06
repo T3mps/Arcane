@@ -3,6 +3,7 @@
 // handle comes from entityToBody, never PhysicsBodyRef.
 
 #include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/PhysicsQuerySettings.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 
 #include <cmath>
@@ -11,15 +12,18 @@ namespace Arcane
 {
     namespace
     {
-        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle)
+        // physics.ground.* (settings arc S6-9): the floor threshold and the probe
+        // reach. The caller reads the settings once per query.
+        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const PhysicsGroundSettings& ground)
         {
+            const Phys::Real minY = Phys::Real(ground.minNormalY);
             bool supported = false;
             world.ForEachContactConstraint([&](const Phys::ContactConstraint& contact)
             {
-                if (contact.bodyA == handle.index && contact.normal.y > Phys::Real(0.5))
+                if (contact.bodyA == handle.index && contact.normal.y > minY)
                     supported = true;
                 if (contact.bodyBIsBody && contact.bodyB == handle.index &&
-                    contact.normal.y < Phys::Real(-0.5))
+                    contact.normal.y < -minY)
                     supported = true;
             });
             if (supported)
@@ -29,7 +33,7 @@ namespace Arcane
             // A resting body sits up to the linear slop INSIDE its support, and
             // a cast that starts overlapped answers t=0 with a zero normal
             // (Box2D-v3 parity), so the cast starts one slop higher and travels
-            // one slop further: the reach below the feet stays 0.05 m.
+            // one slop further: the reach below the feet stays probeDistance.
             Phys::ShapeCastOpts opts;
             opts.movers = true;
             opts.exclude = handle;
@@ -41,9 +45,9 @@ namespace Arcane
                 const Phys::Vec2 origin = world.GetFixtureWorldPos(fixture);
                 const auto hit = world.ShapeCast(world.GetFixtureShape(fixture),
                                                  Phys::Vec2(origin.x, origin.y + Phys::kLinearSlop),
-                                                 Phys::Vec2(0, -(Phys::Real(0.05) + Phys::kLinearSlop)), opts,
+                                                 Phys::Vec2(0, -(Phys::Real(ground.probeDistance) + Phys::kLinearSlop)), opts,
                                                  world.GetFixtureWorldAngle(fixture));
-                if (hit && hit->normal.y > Phys::Real(0.5))
+                if (hit && hit->normal.y > minY)
                     return true;
             }
             return false;
@@ -66,7 +70,7 @@ namespace Arcane
         motion.velocityY = static_cast<float>(velocity.y);
         motion.bodyReady = true;
         if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*world, it->second);
+            motion.supported = HasFloorSupport(*world, it->second, Settings<PhysicsGroundSettings>());
         return motion;
     }
 

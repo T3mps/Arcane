@@ -4,6 +4,7 @@
 #include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -55,7 +56,7 @@ namespace
 
     Arcane::ViewTransform Ortho10()   // half-height 10 m, 4:3 -> half-width 13.33
     {
-        return Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
+        return Arcane::Ortho2DView(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
     }
 }
 
