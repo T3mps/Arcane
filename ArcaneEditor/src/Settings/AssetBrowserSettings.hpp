@@ -29,7 +29,7 @@ namespace Arcane::Editor
         std::int32_t newMaterialDefaultSurface = 2;
         double       watchPollSeconds     = 1.0;   // material/texture source mtime poll
         double       discoveryPollSeconds = 2.0;   // Content/ new-source discovery walk
-        bool         mountDiagnostics     = true;  // diag:// at project open (Dev, NextWorld)
+        bool         mountDiagnostics     = true;  // diag:// at project open (Dev, Pref-P, NextWorld)
     };
 
     // editor.assetStatus.*

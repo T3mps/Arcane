@@ -45,6 +45,7 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(AssetBrowserSettings, mountDiagnostics)
             ARC_REFLECT_ATTR(DisplayName, "Mount diag://") ARC_REFLECT_ATTR(Category, "Project")
             ARC_REFLECT_ATTR(Apply, ApplyMode::NextWorld) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Scope, SettingScope::PreferencesProject)
             ARC_REFLECT_ATTR(Keywords, "diagnostics crash reports arcdiag mount")
             ARC_REFLECT_ATTR(Tooltip, "Mount this machine's crash and hang reports as diag:// when a project opens, "
                                       "so the Asset Browser lists them. Takes effect at the next project open.")

@@ -50,6 +50,7 @@ TEST_CASE("sweep: asset browser settings carry the inventory's scope, apply and 
     CHECK(describe("editor.assets.newMaterialDefaultSurface").scope == SettingScope::PreferencesProject);
     CHECK(describe("editor.assets.activityLogCapacity").apply == ApplyMode::Restart);
     const CVarDescInfo mount = describe("editor.assets.mountDiagnostics");
+    CHECK(mount.scope == SettingScope::PreferencesProject);   // inventory: Part 1 "Preferences" reads as Pref-P
     CHECK(mount.apply == ApplyMode::NextWorld);
     CHECK(HasFlag(mount.flags, CVarFlags::Dev));
     Test::RequireDefault("editor.assets.mountDiagnostics", CVarValue::Bool(true));
