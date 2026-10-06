@@ -6,7 +6,10 @@
 //     `static/inline/extern const` of a non-char type, and
 //   - has an initializer ('=' or '{') holding a numeric literal outside string
 //     and character literals (a lambda initializer is not a constant).
-// It is MARKED when the nearest non-blank line above it starts with ARC_CONSTANT(.
+// Every numeric declarator of the statement is a constant of its own:
+// `constexpr double k1 = 0.045, k2 = 0.015;` gives two sites, both at the
+// statement's line. The statement is MARKED when the nearest non-blank line
+// above it starts with ARC_CONSTANT(; that one marker covers all its declarators.
 
 #include "Helpers/ReferenceProjectDir.hpp"
 
@@ -15,6 +18,7 @@
 #include <fstream>
 #include <regex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Test
@@ -61,11 +65,22 @@ namespace Arcane::Test
         return out;
     }
 
-    inline std::string NumericConstantName(const std::string& raw)
+    // The names of the statement's NUMERIC declarators, in declaration order.
+    //   - The first declarator's name comes from the head (the text before the
+    //     first '=' or '{').
+    //   - From that initializer up to the statement's first top-level ';', the
+    //     text is split at commas outside (), {} and []. A piece is a further
+    //     declarator only when it reads `name [..]* =` or `name [..]* {`. Any
+    //     other piece (the ` 3>{...}` of `std::array<int, 3>{...}`) continues
+    //     the previous declarator's initializer.
+    //   - A declarator counts when its OWN initializer holds a numeric literal
+    //     and is not a lambda (`constexpr auto f = [](...) {...}`).
+    inline std::vector<std::string> NumericConstantNames(const std::string& raw)
     {
         static const std::regex kConstexpr(R"(^\s*(?:(?:static|inline|extern)\s+)*constexpr\s)");
         static const std::regex kConst(R"(^\s*(?:extern\s+)?(?:__declspec\(\w+\)\s+)?(?:(?:static|inline|extern)\s+)+const\s+(?!char\b|wchar_t\b))");
         static const std::regex kName(R"((\w+)\s*(?:\[[^\]]*\]\s*)*$)");
+        static const std::regex kNextDeclarator(R"(^\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*[={])");
         static const std::regex kNumber(R"((?:^|[^\w.])\.?\d)");
         const std::string stmt = StripLiteralsAndComments(raw);
         if (!std::regex_search(stmt, kConstexpr) && !std::regex_search(stmt, kConst)) return {};
@@ -73,12 +88,48 @@ namespace Arcane::Test
         if (init == std::string::npos) return {};
         const std::string head = stmt.substr(0, init);
         if (head.find('(') != std::string::npos && head.find("__declspec(") == std::string::npos) return {};
-        if (stmt[init] == '=')   // `constexpr auto f = [](...) {...}` is a lambda, not a constant
-            if (const std::size_t v = stmt.find_first_not_of(" 	", init + 1); v != std::string::npos && stmt[v] == '[') return {};
         std::smatch m;
         if (!std::regex_search(head, m, kName)) return {};
-        if (!std::regex_search(stmt.substr(init), kNumber)) return {};
-        return m[1].str();
+
+        // The initializer region [init, first top-level ';'), split at top-level commas.
+        std::vector<std::string> pieces(1);
+        int depth = 0;
+        for (std::size_t i = init; i < stmt.size(); ++i)
+        {
+            const char c = stmt[i];
+            if (c == '(' || c == '{' || c == '[') ++depth;
+            else if ((c == ')' || c == '}' || c == ']') && depth > 0) --depth;
+            else if (depth == 0 && c == ';') break;
+            else if (depth == 0 && c == ',') { pieces.emplace_back(); continue; }
+            pieces.back().push_back(c);
+        }
+
+        // (name, its initializer starting at its '=' or '{')
+        std::vector<std::pair<std::string, std::string>> decls{ { m[1].str(), pieces.front() } };
+        for (std::size_t p = 1; p < pieces.size(); ++p)
+        {
+            std::smatch d;
+            if (std::regex_search(pieces[p], d, kNextDeclarator))
+                decls.emplace_back(d[1].str(), pieces[p].substr(static_cast<std::size_t>(d.position(0) + d.length(0) - 1)));
+            else
+                decls.back().second += ',' + pieces[p];
+        }
+
+        std::vector<std::string> names;
+        for (const auto& [name, initializer] : decls)
+        {
+            if (initializer.front() == '=')   // a lambda initializer is not a constant
+                if (const std::size_t v = initializer.find_first_not_of(" \t", 1); v != std::string::npos && initializer[v] == '[') continue;
+            if (std::regex_search(initializer, kNumber)) names.push_back(name);
+        }
+        return names;
+    }
+
+    // The statement's first NUMERIC declarator (empty when it declares none).
+    inline std::string NumericConstantName(const std::string& raw)
+    {
+        std::vector<std::string> names = NumericConstantNames(raw);
+        return names.empty() ? std::string{} : std::move(names.front());
     }
 
     inline std::vector<ConstantSite> ScanNumericConstants(const std::filesystem::path& repoRoot)
@@ -105,20 +156,19 @@ namespace Arcane::Test
                     std::string stmt = first;
                     for (std::size_t j = i + 1; stmt.find(';') == std::string::npos && j < lines.size() && j < i + 64; ++j)
                         stmt += ' ' + lines[j];
-                    const std::string name = NumericConstantName(stmt);
-                    if (name.empty()) continue;
-                    ConstantSite s;
-                    s.file = fs::relative(e.path(), repoRoot).generic_string();
-                    s.line = static_cast<int>(i + 1);
-                    s.symbol = name;
+                    const std::vector<std::string> names = NumericConstantNames(stmt);
+                    if (names.empty()) continue;
+                    bool marked = false;   // one ARC_CONSTANT above the statement covers every declarator in it
                     for (std::size_t k = i; k-- > 0;)
                     {
                         const std::size_t p = lines[k].find_first_not_of(" \t");
                         if (p == std::string::npos) continue;
-                        s.marked = lines[k].compare(p, 13, "ARC_CONSTANT(") == 0;
+                        marked = lines[k].compare(p, 13, "ARC_CONSTANT(") == 0;
                         break;
                     }
-                    out.push_back(std::move(s));
+                    const std::string file = fs::relative(e.path(), repoRoot).generic_string();
+                    for (const std::string& name : names)
+                        out.push_back(ConstantSite{ file, static_cast<int>(i + 1), name, marked });
                 }
             }
         }

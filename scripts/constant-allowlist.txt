@@ -239,7 +239,10 @@ ArcaneCore/src/Arcane/Assets/ArtifactReader.hpp|kClientTextureImporterVersionMir
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|c1|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|c2|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|k1|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|k2|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kC|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kDynamicRange|CONSTANT|ported Playwright algorithm; golden oracle
+ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kH|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kL|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSigmaPow2|CONSTANT|ported Playwright algorithm; golden oracle
 ArcaneCore/src/Arcane/Assets/ImageCompare.cpp|kSigmaPow3|CONSTANT|ported Playwright algorithm; golden oracle
@@ -395,6 +398,7 @@ ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPassSceneNodeId|CONSTANT|ID
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinChipSlot|PENDING|inventory:1190 DERIVED
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinDotRadius|PENDING|inventory:1189 SETTING
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinInBase|CONSTANT|ID spaces: node and pin id bases
+ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinOutBase|CONSTANT|ID spaces: node and pin id bases
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kPinTextureColor|PENDING|inventory:1055 SETTING
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kSurfaceFullscreen|UNLISTED|line 122
 ArcaneEditor/src/Documents/ShaderEditorDocument.cpp|kSurfaceMesh|UNLISTED|line 124
