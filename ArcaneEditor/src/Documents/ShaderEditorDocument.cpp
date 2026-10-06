@@ -343,32 +343,30 @@ namespace Arcane::Editor
         // drifting apart; the value is unchanged (#1e1e1e), so the approved
         // canvas look is untouched.
         constexpr const ImVec4& kCanvasColor      = Theme::kPanel;                        // #1e1e1e
-        // The grid palette moved to Widgets/GraphCanvasStyle.hpp
-        // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09): the pair
-        // was byte-identical to the Graph lens's, which had inherited it rather
-        // than chosen it, with nothing policing the drift.
-        constexpr ImVec4 kNodeBodyColor    = ImVec4(0.176f, 0.176f, 0.188f, 1.0f); // #2d2d30
-        constexpr ImVec4 kNodeTitleColor   = ImVec4(0.137f, 0.137f, 0.149f, 1.0f); // #232326
-        constexpr ImVec4 kNodeBorderColor  = ImVec4(0.243f, 0.243f, 0.267f, 1.0f);
-        constexpr ImVec4 kNodeTitleText    = ImVec4(0.808f, 0.808f, 0.831f, 1.0f);
-        constexpr ImVec4 kNodeBadgeText    = ImVec4(1.0f,   0.4f,   0.3f,   1.0f);
-        // Selection/hover accents moved to Widgets/GraphCanvasStyle.hpp
-        // (kGraphNodeSelBorderColor / kGraphNodeHovBorderColor, 2026-09-09).
-        // The amber IS Theme::kAmber to the last digit, and that token's own
-        // comment already cites this border as one of its reasons to exist.
-        constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
-        constexpr ImVec4 kGroupBorderColor = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
+        // The node, group, pin and grid colours are theme cvars,
+        // editor.theme.graph.* (settings S6-27, Settings/GraphThemeSettings.hpp;
+        // GraphThemeDefaults holds today's values and their history): the
+        // grid pair is shared with the Graph lens, and the selection/hover
+        // accents live in Widgets/GraphCanvasStyle.hpp (selection IS
+        // Theme::kAmber; hover is editor.theme.graph.hoverBorder). Read per
+        // frame, except what ApplyGraphCanvasStyle latches at ed::CreateEditor
+        // (node body/border, group fill/border, hover: Apply(Restart)).
+        ImVec4 NodeBodyColor()   { return GraphThemeColor(&GraphThemeSettings::nodeBody); }      // #2d2d30
+        ImVec4 NodeTitleColor()  { return GraphThemeColor(&GraphThemeSettings::nodeTitle); }     // #232326
+        ImVec4 NodeTitleText()   { return GraphThemeColor(&GraphThemeSettings::nodeTitleText); } // #cecfd4
+        ImVec4 NodeBadgeText()   { return GraphThemeColor(&GraphThemeSettings::nodeBadgeText); }
+        ImVec4 PinDynamicColor() { return GraphThemeColor(&GraphThemeSettings::pinDynamic); }
 
-        // Pin/wire colors by PIN WIDTH (kPinScalarColor / kPinVec2Color /
-        // kPinVec4Color / kPinDynamicColor, PinColorForWidth, and the paint
-        // rule for a resolved dynamic pin) live in
+        // Pin/wire colors by PIN WIDTH (PinColorForWidth over
+        // editor.theme.graph.pin*, and the paint rule for a resolved dynamic
+        // pin) live in
         // Documents/ShaderGraphPinTypes.hpp (T3-D1), which the canvas, the
         // node page and the canvas legend all read.
         //
         // Unity's texture-red-orange row has a counterpart, just not on the
         // graph canvas: a material graph samples textures through params, but
         // every pin on the PASS canvas is a full-frame RGBA render target. So
-        // kPinTextureColor below is that reserved row, spent where a texture
+        // PinTextureColor() below is that reserved row, spent where a texture
         // pin actually exists.
         // Every pass-canvas pin carries the same thing -- an RGBA render target
         // -- so the pass canvas uses ONE colour throughout rather than a type
@@ -376,7 +374,7 @@ namespace Arcane::Editor
         // purpose: a pass wire moves a whole image between stages, which is a
         // different kind of edge from a float4 moving between expressions, and
         // the two canvases sit one breadcrumb click apart.
-        constexpr ImVec4 kPinTextureColor = ImVec4(0.949f, 0.549f, 0.251f, 1.0f); // red-orange
+        ImVec4 PinTextureColor() { return GraphThemeColor(&GraphThemeSettings::pinTexture); }   // red-orange
 
         // Node geometry (canvas units at zoom 1). The four chrome metrics --
         // rounding and the three border widths -- moved to
@@ -463,9 +461,10 @@ namespace Arcane::Editor
             // what stays here is the LAYOUT -- the cursor advance and the centre
             // this function exists to hand back. The Graph lens shares the
             // paint and none of that.
+            const ImVec4 ring = PinDynamicColor();
             DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
-                            kNodeBodyColor, kPinDotRadius, connected,
-                            paint.adapts ? &kPinDynamicColor : nullptr);
+                            NodeBodyColor(), kPinDotRadius, connected,
+                            paint.adapts ? &ring : nullptr);
             return c;
         }
         // The pass canvas's dots: one colour, no type to resolve.
@@ -503,7 +502,7 @@ namespace Arcane::Editor
         // Returns the node's measured size (zero before its first layout), so a
         // caller that caches a width reads it off this same query instead of
         // asking the library twice.
-        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY, ImVec4 color = kNodeTitleColor)
+        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY, ImVec4 color = NodeTitleColor())
         {
             const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(nodeId));
             const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(nodeId));
@@ -529,10 +528,11 @@ namespace Arcane::Editor
         GraphCanvasStyleDesc ShaderCanvasStyleDesc()
         {
             GraphCanvasStyleDesc d;
-            d.nodeBody    = kNodeBodyColor;     // #2d2d30, the Unity SG reference tone
-            d.nodeBorder  = kNodeBorderColor;
-            d.groupBg     = kGroupBgColor;      // this canvas HAS group (comment) nodes
-            d.groupBorder = kGroupBorderColor;
+            // The snapshot at canvas creation (Apply(Restart): reopen the document).
+            d.nodeBody    = NodeBodyColor();    // #2d2d30, the Unity SG reference tone
+            d.nodeBorder  = GraphThemeColor(&GraphThemeSettings::nodeBorder);
+            d.groupBg     = GraphThemeColor(&GraphThemeSettings::groupBg);       // this canvas HAS group (comment) nodes
+            d.groupBorder = GraphThemeColor(&GraphThemeSettings::groupBorder);
             // Content-driven nodes: ImGui measures them, so they need padding.
             d.nodePadding = ImVec4(kNodePadX, kNodePadY, kNodePadX, kNodePadY);
             return d;
@@ -737,9 +737,10 @@ namespace Arcane::Editor
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::Dummy(ImVec2(kPinChipSlot, ImGui::GetTextLineHeight()));
             const ImVec2 c(p.x + kPinChipSlot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
+            const ImVec4 ring = PinDynamicColor();
             DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
                             ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), kPinDotRadius, wired,
-                            paint.adapts ? &kPinDynamicColor : nullptr);
+                            paint.adapts ? &ring : nullptr);
             if (!showWord)
             {
                 ImGui::SetItemTooltip("%s", type.c_str());
@@ -2597,7 +2598,7 @@ namespace Arcane::Editor
             start, ImVec2(start.x + text.x + padX * 2.0f, start.y + h),
             ImGui::GetColorU32(GraphCategoryHeaderColor(info.category)), h * 0.5f);
         ImGui::SetCursorScreenPos(ImVec2(start.x + padX, start.y));
-        ImGui::PushStyleColor(ImGuiCol_Text, kNodeTitleText);
+        ImGui::PushStyleColor(ImGuiCol_Text, NodeTitleText());
         ImGui::TextUnformatted(category);
         ImGui::PopStyleColor();
         ImGui::SameLine(0.0f, padX * 2.0f);
@@ -3492,9 +3493,9 @@ namespace Arcane::Editor
                 (m_activePass == static_cast<int>(c) ? "> " : "") + PassLabel(c) +
                 (isPreviewCut ? "  " ICON_LC_EYE : "");
             if (passError)
-                ImGui::TextColored(kNodeBadgeText, "(!) %s", title.c_str());
+                ImGui::TextColored(NodeBadgeText(), "(!) %s", title.c_str());
             else
-                ImGui::TextColored(kNodeTitleText, "%s", title.c_str());
+                ImGui::TextColored(NodeTitleText(), "%s", title.c_str());
             // Band bottom + the body gap under it, same treatment and same
             // reasoning as a graph node (DrawNodeTitleBand).
             const float headerMaxY = ImGui::GetItemRectMax().y;
@@ -3543,7 +3544,7 @@ namespace Arcane::Editor
                              ed::PinKind::Input);
                 // A wired slot is always connected by construction -- the slot
                 // list IS the wire list -- so the dot is always filled here.
-                const ImVec2 dot = DrawPinDot(kPinTextureColor, true);
+                const ImVec2 dot = DrawPinDot(PinTextureColor(), true);
                 SetPinPivot(InPin(nodeId, static_cast<std::uint32_t>(s)).Get(),
                             ImVec2(dot.x - kPinDotRadius, dot.y));
                 ImGui::SameLine();
@@ -3558,7 +3559,7 @@ namespace Arcane::Editor
                 // The spare accepts the NEXT wire and has none yet, so it draws
                 // hollow -- the same "nothing attached" reading the graph
                 // canvas gives an unwired input.
-                const ImVec2 dot = DrawPinDot(kPinTextureColor, false);
+                const ImVec2 dot = DrawPinDot(PinTextureColor(), false);
                 SetPinPivot(InPin(nodeId, sparePin).Get(),
                             ImVec2(dot.x - kPinDotRadius, dot.y));
                 ImGui::SameLine();
@@ -3588,7 +3589,7 @@ namespace Arcane::Editor
                 for (const Arcane::MaterialPass& p : m_data.passes)
                     for (std::uint32_t in : p.inputs)
                         fanout = fanout || in == static_cast<std::uint32_t>(c);
-                const ImVec2 dot = DrawPinDot(kPinTextureColor, fanout);
+                const ImVec2 dot = DrawPinDot(PinTextureColor(), fanout);
                 SetPinPivot(OutPin(nodeId, 0).Get(),
                             ImVec2(dot.x + kPinDotRadius, dot.y));
                 ed::EndPin();
@@ -3605,7 +3606,7 @@ namespace Arcane::Editor
         // post hook; the checkerboard stand-in in the preview). Output pin
         // only; wiring it writes the kSceneInput sentinel.
         ed::BeginNode(ed::NodeId(kPassSceneNodeId));
-        ImGui::TextColored(kNodeTitleText, "Scene");
+        ImGui::TextColored(NodeTitleText(), "Scene");
         const float sceneHeaderY = ImGui::GetItemRectMax().y;
         {
             const float fill = (kNodePadY + kNodeHeaderGap) -
@@ -3627,7 +3628,7 @@ namespace Arcane::Editor
             for (const Arcane::MaterialPass& p : m_data.passes)
                 for (std::uint32_t in : p.inputs)
                     used = used || in == Arcane::kSceneInput;
-            const ImVec2 dot = DrawPinDot(kPinTextureColor, used);
+            const ImVec2 dot = DrawPinDot(PinTextureColor(), used);
             SetPinPivot(OutPin(kPassSceneNodeId, 0).Get(),
                         ImVec2(dot.x + kPinDotRadius, dot.y));
         }
@@ -3638,7 +3639,7 @@ namespace Arcane::Editor
         // The Output node: shows the final image; its wire marks the LAST pass
         // (execution order's tail = what single-material consumers see).
         ed::BeginNode(ed::NodeId(kPassOutputNodeId));
-        ImGui::TextColored(kNodeTitleText, "Output");
+        ImGui::TextColored(NodeTitleText(), "Output");
         const float outHeaderY = ImGui::GetItemRectMax().y;
         {
             const float fill = (kNodePadY + kNodeHeaderGap) -
@@ -3649,7 +3650,7 @@ namespace Arcane::Editor
         ed::BeginPin(InPin(kPassOutputNodeId, 0), ed::PinKind::Input);
         {
             // Always fed: the final wire is the chain's tail by construction.
-            const ImVec2 dot = DrawPinDot(kPinTextureColor, true);
+            const ImVec2 dot = DrawPinDot(PinTextureColor(), true);
             SetPinPivot(InPin(kPassOutputNodeId, 0).Get(),
                         ImVec2(dot.x - kPinDotRadius, dot.y));
         }
@@ -4923,14 +4924,14 @@ namespace Arcane::Editor
                 src && l.fromPin < Arcane::GraphNodeOutputCount(*src);
             const ImVec4 srcTint =
                 srcPinValid ? GraphPinPaintOn(*src, l.fromPin, /*input*/ false).color
-                            : kPinDynamicColor;
+                            : PinDynamicColor();
 
             const Arcane::GraphNode* dst = g.FindNode(l.toNode);
             const bool dstPinValid =
                 dst && l.toPin < Arcane::GraphNodeInputCount(*dst);
             const ImVec4 dstTint =
                 dstPinValid ? GraphPinPaintOn(*dst, l.toPin, /*input*/ true).color
-                            : kPinDynamicColor;
+                            : PinDynamicColor();
 
             const ed::LinkId linkId(i + 1);
             const ed::PinId fromPin = OutPin(l.fromNode, l.fromPin);
@@ -5670,9 +5671,9 @@ namespace Arcane::Editor
         // low-detail node still has a body and pin icons to be read by. Ours
         // collapses to the band, so the band has to carry the identity.)
         if (NodeBadged(n.id))
-            ImGui::TextColored(kNodeBadgeText, "(!) %s", info.display);
+            ImGui::TextColored(NodeBadgeText(), "(!) %s", info.display);
         else
-            ImGui::TextColored(kNodeTitleText, "%s", info.display);
+            ImGui::TextColored(NodeTitleText(), "%s", info.display);
         const float headerMaxY = ImGui::GetItemRectMax().y;
 
         // Reserve the gap under the band (kNodeHeaderGap). Solved rather than
@@ -6352,8 +6353,8 @@ namespace Arcane::Editor
         ed::Link(id, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
                  kGraphWireThickness);
         const bool emphasize = ed::IsLinkSelected(id) || ed::GetHoveredLink() == id;
-        DrawGradientWire(fromPin.Get(), toPin.Get(), kPinTextureColor,
-                         kPinTextureColor, emphasize);
+        DrawGradientWire(fromPin.Get(), toPin.Get(), PinTextureColor(),
+                         PinTextureColor(), emphasize);
     }
 
     void ShaderEditorDocument::DrawCanvasBackdrop(GraphGridPhase& phase)
@@ -6406,7 +6407,8 @@ namespace Arcane::Editor
         // The backdrop itself. The phase state rides on the DOCUMENT (one per
         // canvas) so a canvas keeps its history across view switches.
         DrawGraphCanvasBackdrop(canvasMin, canvasSize,
-                                kCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
+                                kCanvasColor, GraphThemeColor(&GraphThemeSettings::gridMinor),
+                                GraphThemeColor(&GraphThemeSettings::gridMajor),
                                 phase);
     }
 

@@ -9,6 +9,7 @@
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Settings/EditorThemeSettings.hpp"   // editor.theme.assetKind.*
+#include "Settings/GraphThemeSettings.hpp"    // editor.theme.assetGraph.* + the graph grid pair
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
@@ -457,8 +458,8 @@ namespace Arcane::Editor
         // NOT covered by either ruling, so NOT changed: the grid colours (the
         // board's single dot grid is #242424; this lens keeps its minor/major
         // two-tier grid) and the pill/label colours. See the fix report. The
-        // grid pair has since moved to Widgets/GraphCanvasStyle.hpp
-        // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09) -- the
+        // grid pair has since moved to one home, now the theme cvars
+        // editor.theme.graph.gridMinor / gridMajor (settings S6-27) -- the
         // VALUES are unchanged; what changed is that the pair it was
         // byte-identical to on the shader canvas is now the same pair, so the
         // "inherited, not chosen" state has one home instead of two copies with
@@ -471,7 +472,7 @@ namespace Arcane::Editor
         // (rounding + the three border widths) are the editor-wide canvas
         // language, not this lens's taste -- they were the same literals on both
         // canvases and now live once in Widgets/GraphCanvasStyle.hpp
-        // (kGraphNodeSelBorderColor / kGraphNodeHovBorderColor,
+        // (kGraphNodeSelBorderColor / editor.theme.graph.hoverBorder,
         // kGraphNodeRounding, kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
         // kGraphNodeSelBorderWidth). So is the wire thickness
         // (kGraphWireThickness). Only the four SURFACE tones above stay here:
@@ -1169,15 +1170,15 @@ namespace Arcane::Editor
         // legend in the same chrome; the swatches below stay this lens's own.
         constexpr float kGraphLegendSwatchW    = 18.0f;
         constexpr float kGraphLegendSwatchH    = 2.0f;
-        constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
-        constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
+        // The two swatch colours are theme cvars (settings S6-27):
+        // editor.theme.assetGraph.legendEdge (#5c5c5c) / .legendUsedBy (#4a4a4a).
 
         std::pair<ImVec2, ImVec2> DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
         {
             struct Entry { const char* text; ImVec4 color; bool dashed; };
             const Entry entries[] = {
-                { "derives / samples", kGraphLegendEdgeColor,   false },
-                { "uses",              kGraphLegendUsedByColor, false },
+                { "derives / samples", AssetGraphThemeColor(&AssetGraphThemeSettings::legendEdge),   false },
+                { "uses",              AssetGraphThemeColor(&AssetGraphThemeSettings::legendUsedBy), false },
                 { "drag a material pin = derive", Theme::kAmber, true },
             };
 
@@ -1370,7 +1371,8 @@ namespace Arcane::Editor
         state.graphCanvasMax = ImVec2(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
 
         DrawGraphCanvasBackdrop(canvasMin, canvasSize,
-                                kGraphCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
+                                kGraphCanvasColor, GraphThemeColor(&GraphThemeSettings::gridMinor),
+                                GraphThemeColor(&GraphThemeSettings::gridMajor),
                                 state.graphGrid);
 
         if (state.graph.nodes.empty())

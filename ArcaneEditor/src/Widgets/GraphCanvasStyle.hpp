@@ -28,6 +28,7 @@
 // writes ed::GetStyle() -- which is exactly why it lives in that family and not
 // in EditorWidgets.
 
+#include "Settings/GraphThemeSettings.hpp"   // editor.theme.graph.*: the grid pair and the hover border
 #include "Widgets/EditorTheme.hpp"
 
 #include <imgui.h>
@@ -63,16 +64,13 @@ namespace Arcane::Editor
     inline constexpr float kGraphPinOuterRingWidth = 1.0f;
 
     // ---- Grid palette -----------------------------------------------------
-    // Display-referred RGBA (ImGui draws post-tonemap, imgui.hlsl:1-5). The
+    // The theme cvars editor.theme.graph.gridMinor / gridMajor (settings
+    // S6-27, Settings/GraphThemeSettings.hpp), read per frame by both canvases:
+    // GraphThemeColor(&GraphThemeSettings::gridMinor / ::gridMajor). The
     // alphas are each octave's peak strength, not image opacity -- the backdrop
     // itself is always written opaque (GraphGridPhase.hpp, GraphGridColors).
-    //
-    // These two were byte-identical in both files, but shared BY ACCIDENT: the
-    // Graph lens's own comment recorded them as "NOT covered by either ruling,
-    // so NOT changed", i.e. inherited rather than chosen, with nothing policing
-    // the drift. One definition is the whole fix.
-    inline constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
-    inline constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+    // The pair was byte-identical in both files BY ACCIDENT (the Graph lens
+    // inherited it); one definition is the whole fix.
 
     // ---- Selection / hover accents ---------------------------------------
     // The editor-wide outline language, so one accent means "selected"
@@ -83,9 +81,9 @@ namespace Arcane::Editor
     // EditorTheme.hpp:106-110 already names "the shader graph's selected-node
     // border" among that token's own citations. Both files re-spelled the token
     // as a literal; this spends it where it was authored to be spent. Hover
-    // cyan has no theme token (it is canvas-only language), so it lives here.
+    // cyan is the graph theme's own token, editor.theme.graph.hoverBorder
+    // (settings S6-27), latched with the rest of the style at ed::CreateEditor.
     inline constexpr const ImVec4& kGraphNodeSelBorderColor = Theme::kAmber;
-    inline constexpr ImVec4 kGraphNodeHovBorderColor = ImVec4(0.25f, 0.70f, 1.0f, 1.0f);
 
     namespace ed = ax::NodeEditor;
 
@@ -146,7 +144,7 @@ namespace Arcane::Editor
         // left, top, right, bottom, in canvas units.
         ImVec4 nodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        ImVec4 hovBorder = kGraphNodeHovBorderColor;
+        ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the snapshot at canvas creation
         ImVec4 selBorder = kGraphNodeSelBorderColor;
         float  rounding       = kGraphNodeRounding;
         float  borderWidth    = kGraphNodeBorderWidth;

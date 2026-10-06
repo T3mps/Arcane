@@ -1,6 +1,6 @@
 #include "Documents/ShaderGraphPinLegend.hpp"
 
-#include "Documents/ShaderGraphPinTypes.hpp"   // PinPaintFor / PinWidthName / kPinDynamicColor
+#include "Documents/ShaderGraphPinTypes.hpp"   // PinPaintFor / PinWidthName / PinColorForWidth
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/GraphCanvasStyle.hpp"        // kGraphPinOuterRingGap / kGraphPinOuterRingWidth
@@ -76,8 +76,9 @@ namespace Arcane::Editor
         void SwatchDot(ImDrawList* dl, float x, float midY, const GraphPinPaint& paint, bool filled)
         {
             const ImVec2 c(std::floor(x + kLegendDotSlot * 0.5f) + 0.5f, std::floor(midY) + 0.5f);
+            const ImVec4 ring = PinColorForWidth(0);   // the dynamic grey, as on the canvas
             DrawGraphPinDot(dl, c, paint.color, Theme::kChrome, kLegendDotRadius, filled,
-                            paint.adapts ? &kPinDynamicColor : nullptr);
+                            paint.adapts ? &ring : nullptr);
         }
     }
 

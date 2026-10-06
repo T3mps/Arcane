@@ -1,6 +1,7 @@
 #include "Settings/ThemePage.hpp"
 
 #include "Settings/EditorThemeSettings.hpp"
+#include "Settings/GraphThemeSettings.hpp"
 #include "Settings/SettingsHost.hpp"
 #include "Settings/ThemePresets.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -118,7 +119,7 @@ namespace Arcane::Editor
         void DrawContrast()
         {
             ImGui::SeparatorText("Contrast");
-            for (const ContrastRow& row : ContrastReport(Theme::Live()))
+            for (const ContrastRow& row : ContrastReport(Theme::Live(), CurrentGraphThemeColors()))
             {
                 ImGui::Text("%.*s  %.2f:1", static_cast<int>(row.label.size()), row.label.data(), row.ratio);
                 if (!row.ok)
@@ -144,7 +145,7 @@ namespace Arcane::Editor
     {
         if (path.extension() != ".arctheme") path += ".arctheme";
         std::string error;
-        if (!WriteThemeFile(path, path.stem().string(), Theme::Live(), &error))
+        if (!WriteThemeFile(path, path.stem().string(), Theme::Live(), CurrentGraphThemeColors(), &error))
         {
             st.status = "Export failed: " + error;
             return false;

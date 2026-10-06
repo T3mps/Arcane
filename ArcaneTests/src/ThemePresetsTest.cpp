@@ -24,7 +24,7 @@ TEST_CASE("Theme presets: Dark.arctheme is today's palette, to the 8-bit colour"
     const auto file = ReadThemeFile(Preset("Dark"));
     REQUIRE(file.has_value());
     CHECK(file->unknownKeys.empty());
-    CHECK(file->colors.size() == kThemeTokens.size());
+    CHECK(file->colors.size() == kThemeTokens.size() + GraphThemeTokens().size());   // + the graph colours (S6-27)
     const Theme::Palette p = ToPalette(ApplyThemeFileTo(*file, EditorThemeSettings{}));
     for (const ThemeToken& t : kThemeTokens)
     {
@@ -40,7 +40,7 @@ TEST_CASE("Theme presets: every shipped preset sets every token and meets every 
         INFO(name);
         const auto file = ReadThemeFile(Preset(name));
         REQUIRE(file.has_value());
-        CHECK(file->colors.size() == kThemeTokens.size());
+        CHECK(file->colors.size() == kThemeTokens.size() + GraphThemeTokens().size());   // + the graph colours (S6-27)
         CHECK(file->unknownKeys.empty());
         const Theme::Palette p = ToPalette(ApplyThemeFileTo(*file, EditorThemeSettings{}));
         for (const ContrastRow& row : ContrastReport(p))
@@ -102,7 +102,7 @@ TEST_CASE("Theme presets: applying Light writes the EditorUser rung for every to
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     const auto file = ReadThemeFile(Preset("Light"));
     REQUIRE(file.has_value());
-    CHECK(ApplyThemeToRegistry(*file, reg) == kThemeTokens.size());
+    CHECK(ApplyThemeToRegistry(*file, reg) == kThemeTokens.size() + GraphThemeTokens().size());
     reg.PublishImmediate();
     CHECK(U32(ToPalette(Arcane::Settings<EditorThemeSettings>()).panel) == IM_COL32(0xf0, 0xf0, 0xf0, 0xff));
     const auto explain = reg.Explain("editor.theme.panel");
