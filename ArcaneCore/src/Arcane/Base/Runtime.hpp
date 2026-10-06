@@ -383,4 +383,16 @@ namespace Arcane
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
+
+    // The EngineConfig cvar rung from the ONE engine-config folder (settings
+    // arc S2-H): <Paths engine dir>/data/EngineConfig, where the engine dir
+    // defaults to the exe dir (and Paths is configured so) unless a host
+    // already set one. Layered once per process per folder: a call whose
+    // folder is the one already applied does nothing and returns false; a new
+    // folder drops the previous folder's EngineConfig records first.
+    // HostBoot::ApplyEarlyConfigRungs and every Runtime ctor go through here,
+    // so the first Runtime after HostBoot does not re-read the folder. Does
+    // NOT publish: returns true when it layered, and the caller publishes.
+    // Main thread only.
+    ARC_CORE_API bool ApplyEngineConfigRung();
 }

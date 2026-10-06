@@ -1,6 +1,6 @@
 #include <Arcane/Host/EarlyConfig.hpp>
 
-#include <Arcane/Base/Engine.hpp>
+#include <Arcane/Base/Runtime.hpp>   // ApplyEngineConfigRung
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Host/HostConfig.hpp>
@@ -14,8 +14,9 @@ namespace Arcane::HostBoot
     void ApplyEarlyConfigRungs(const HostConfig& cfg, CVarContext ctx, bool editor)
     {
         CVarRegistry& cvars = CVarRegistry::Get();
-        const std::filesystem::path exeDir = std::filesystem::path(ExecutablePathUtf8()).parent_path();
-        ApplyCVarDirectory(cvars, exeDir / "data" / "EngineConfig", SetBy::EngineConfig, "engine-config");
+        // The ONE engine-config folder (S2-H): Paths' engine dir (a host's,
+        // else the exe dir), recorded so the first Runtime does not re-read it.
+        (void)ApplyEngineConfigRung();
         if (!cfg.projectPath.empty())
         {
             if (const auto manifest = Project::ResolveManifestFile(cfg.projectPath))

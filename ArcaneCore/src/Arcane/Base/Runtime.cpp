@@ -93,8 +93,9 @@ namespace Arcane
             return Paths::Get(Paths::Location::EngineConfig);
         }
 
-        // The folder the EngineConfig rung was last applied from. Main thread
-        // only, like every Runtime construction.
+        // The folder the EngineConfig rung was last applied from, by
+        // ApplyEngineConfigRung (HostBoot's early rungs or a Runtime ctor).
+        // Main thread only.
         std::filesystem::path g_engineRungDir;
 
         // The EngineConfig cvar rung, applied BEFORE Impl reads any setting
@@ -102,24 +103,16 @@ namespace Arcane
         // the first registry's Astra config (astra.memory.*, NextWorld) are read
         // while Impl constructs, so the engine-config values must already be
         // published. Returns the JobSystem ctor argument.
-        // Once per process (S2-H): the first Runtime applies the rung, and so
-        // does the first one after the folder changes -- dropping the old
-        // folder's records first. Every other Runtime (the editor's embedded
-        // server, a PIE world) neither re-reads the folder nor publishes. A
-        // module that (re)loads still gets the rung through ApplyLayersFor
-        // (CVarLayerSources names the same folder).
+        // Once per process (S2-H): ApplyEngineConfigRung layers the folder
+        // only when it is not the one already applied -- by HostBoot's early
+        // rungs or an earlier Runtime -- so the first Runtime after HostBoot,
+        // the editor's embedded server and a PIE world neither re-read the
+        // folder nor publish. A module that (re)loads still gets the rung
+        // through ApplyLayersFor (CVarLayerSources names the same folder).
         std::uint32_t ApplyEngineRungAndResolveWorkers()
         {
-            const std::filesystem::path dir = EngineConfigDir();
-            if (dir != g_engineRungDir)
-            {
-                CVarRegistry& cvars = CVarRegistry::Get();
-                if (!g_engineRungDir.empty())
-                    cvars.RevertLayer(SetBy::EngineConfig);
-                ApplyCVarDirectory(cvars, dir, SetBy::EngineConfig, "engine-config");
-                cvars.PublishImmediate();   // asserts the main thread (settings spec s4.6)
-                g_engineRungDir = dir;
-            }
+            if (ApplyEngineConfigRung())
+                CVarRegistry::Get().PublishImmediate();   // asserts the main thread (settings spec s4.6)
             return ResolveWorkerThreads(Settings<JobsSettings>());
         }
 
@@ -170,6 +163,19 @@ namespace Arcane
             }
             return "Unknown";
         }
+    }
+
+    bool ApplyEngineConfigRung()
+    {
+        const std::filesystem::path dir = EngineConfigDir();
+        if (dir == g_engineRungDir)
+            return false;
+        CVarRegistry& cvars = CVarRegistry::Get();
+        if (!g_engineRungDir.empty())
+            cvars.RevertLayer(SetBy::EngineConfig);   // the previous folder's records leave with it
+        ApplyCVarDirectory(cvars, dir, SetBy::EngineConfig, "engine-config");
+        g_engineRungDir = dir;
+        return true;
     }
 
     struct Runtime::Impl
