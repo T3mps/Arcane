@@ -53,6 +53,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
+#include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
@@ -553,6 +554,14 @@ namespace Arcane::Editor
         // editor.camera.default* (NextWorld): the boot camera's pose, before
         // the handler below lets a saved [EditorViewport] block restore one.
         Arcane::Editor::ApplyFreshPose(m_camera);
+        // editor.gizmo.default* (NextWorld): the tool, mode and space this
+        // session starts in. Session state from here on (W/E/R, the toolbar).
+        {
+            const Arcane::Editor::EditorGizmoSettings& gizmo = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>();
+            m_gizmoMode    = gizmo.defaultMode;
+            m_gizmoSpace   = gizmo.defaultSpace;
+            m_gizmoEnabled = gizmo.defaultTool;
+        }
         RegisterViewportSettings();
         // Settings arc S4: Preferences > Appearance > Theme.
         m_themePage.requestImport = [this]

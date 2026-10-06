@@ -1,6 +1,6 @@
 #pragma once
 
-// editor.viewport.* / editor.camera.* / editor.gizmo.* (settings arc S6-29;
+// editor.viewport.* / editor.camera.* / editor.gizmo.* (settings arc S6-29..31;
 // inventory Part 3 "Viewport/Camera/Gizmo"): the viewport PREFERENCES the
 // [EditorViewport][Camera] imgui.ini block used to carry. Per-project editor
 // preferences (Pref-P), Live. The camera POSE (mode, ortho, orbit) stays
@@ -13,6 +13,7 @@
 // cvars (SetBy::User) and the camera picks them up next frame.
 
 #include <Arcane/Config/CVarTypes.hpp>
+#include <Arcane/Edit/Gizmo.hpp>   // GizmoMode / GizmoSpace (reflected there), GizmoTuning, GizmoSnap
 #include <Arcane/Reflection.hpp>
 
 #include <cstddef>
@@ -89,10 +90,46 @@ namespace Arcane::Editor
         float speedWheelStep   = 1.1f;      // speedScalar x / per wheel tick while flying
     };
 
+    // S6-31: the rest of editor.gizmo.* -- the pick tolerances, shape and
+    // shade literals Gizmo.cpp held (passed to Arcane::Gizmo as a GizmoTuning,
+    // MakeGizmoTuning), and the tool / mode / space a session starts in
+    // (NextWorld: read once at editor boot).
     struct EditorGizmoSettings
     {
         float size = 1.0f;           // Range 0.1..10: a zero or negative scale is refused
+
+        float        pickRadiusPx    = 8.0f;    // axis segment / screen ring pick radius
+        float        ringPickSlackPx = 4.0f;    // the band half-width plus this is the ring pick radius
+        float        minPlaneAreaPx2 = 4.0f;    // an edge-on plane corner is not a target
+        float        planeEdgeOnCos  = 0.2f;    // a corner within ~78 deg of edge-on is hidden
+        float        minAxisLenPx    = 2.0f;    // an arrow pointing at the camera: a dot, no head
+        std::int32_t ringSegments    = 48;      // full ring
+        float        minScale        = 0.01f;   // a scale drag never reaches zero
+        float        brighten        = 1.4f;    // the lit side of a rod / cone / cube
+        float        darken          = 0.55f;   // the shadow side
+        float        hotFillAlpha    = 0.3f;    // the hot plane square and the rotate sweep
+
+        Arcane::GizmoMode  defaultMode  = Arcane::GizmoMode::Translate;
+        Arcane::GizmoSpace defaultSpace = Arcane::GizmoSpace::World;
+        bool               defaultTool  = false;   // false = the Select tool (click-to-pick, no gizmo)
     };
+
+    // editor.gizmo.snap.* (S6-31): the steps a Ctrl-held gizmo drag rounds
+    // to. Before the sweep they were GizmoSnap's member defaults and the
+    // editor only ever set `enabled`, so nobody could change them.
+    struct EditorGizmoSnapSettings
+    {
+        float translate     = 0.5f;    // metres
+        float rotateDegrees = 15.0f;
+        float scale         = 0.1f;    // ratio
+    };
+
+    // The engine gizmo's inputs from the settings: pure (ToGizmoTuning) and
+    // from the published snapshot (MakeGizmoTuning / MakeGizmoSnap, read once
+    // per call -- the frame's HitTest, drag and Draw each call once).
+    [[nodiscard]] Arcane::GizmoTuning ToGizmoTuning(const EditorGizmoSettings& s) noexcept;
+    [[nodiscard]] Arcane::GizmoTuning MakeGizmoTuning();
+    [[nodiscard]] Arcane::GizmoSnap   MakeGizmoSnap(bool enabled);
 
     // The preference lines of an old [EditorViewport][Camera] block, captured
     // by ViewportSettings::ReadIniLine (validated exactly as before) and not

@@ -1160,7 +1160,9 @@ namespace Arcane::Editor
         // so ApplyDrag recomputes from origin each frame (no accumulation drift).
         // Transform is parent-local, but every GizmoTransform stored here is WORLD
         // space (Unreal parity) -- EditorApp converts through Edit::WorldMatrix on
-        // read and Edit::ParentWorldMatrix's inverse on write-back.
+        // read and Edit::ParentWorldMatrix's inverse on write-back. Mode, space
+        // and tool start from editor.gizmo.defaultMode / defaultSpace /
+        // defaultTool (NextWorld), read once at boot (settings S6-31).
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
         bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)

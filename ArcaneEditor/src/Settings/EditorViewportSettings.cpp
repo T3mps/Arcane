@@ -112,11 +112,104 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(EditorGizmoSettings, size)
             ARC_REFLECT_ATTR(DisplayName, "Gizmo size") ARC_REFLECT_ATTR(Range, 0.1, 10.0)
             ARC_REFLECT_ATTR(Tooltip, "Screen-size multiplier of the transform gizmo.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, pickRadiusPx)
+            ARC_REFLECT_ATTR(DisplayName, "Pick radius") ARC_REFLECT_ATTR(Range, 1.0, 32.0)
+            ARC_REFLECT_ATTR(Tooltip, "How close (pixels) the cursor must be to an arrow, box or the screen ring to grab it.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, ringPickSlackPx)
+            ARC_REFLECT_ATTR(DisplayName, "Ring pick slack") ARC_REFLECT_ATTR(Range, 0.0, 32.0)
+            ARC_REFLECT_ATTR(Tooltip, "Pixels added either side of a rotate band when grabbing it.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, minPlaneAreaPx2)
+            ARC_REFLECT_ATTR(DisplayName, "Min plane handle area") ARC_REFLECT_ATTR(Range, 0.0, 100.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "A plane handle whose projected square is smaller than this (square pixels) cannot be grabbed.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, planeEdgeOnCos)
+            ARC_REFLECT_ATTR(DisplayName, "Plane edge-on cutoff") ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "A plane handle is hidden when the cosine between its normal and the view direction falls below this.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, minAxisLenPx)
+            ARC_REFLECT_ATTR(DisplayName, "Min arrow length") ARC_REFLECT_ATTR(Range, 0.0, 32.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "An arrow shorter than this on screen (pixels, pointing at the camera) draws without its cone head.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, ringSegments)
+            ARC_REFLECT_ATTR(DisplayName, "Ring segments") ARC_REFLECT_ATTR(Range, 8, 256)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Segments in a full rotate ring and the screen ring; the rotate sweep follows it.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, minScale)
+            ARC_REFLECT_ATTR(DisplayName, "Min scale") ARC_REFLECT_ATTR(Range, 1.0e-6, 1.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Smallest scale magnitude a scale drag can reach; the sign of a mirrored axis is kept.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, brighten)
+            ARC_REFLECT_ATTR(DisplayName, "Highlight factor") ARC_REFLECT_ATTR(Range, 0.0, 4.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Colour multiplier of the lit side of the gizmo's rods, cones and cubes.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, darken)
+            ARC_REFLECT_ATTR(DisplayName, "Shadow factor") ARC_REFLECT_ATTR(Range, 0.0, 4.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Colour multiplier of the shadow side of the gizmo's rods and cones.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, hotFillAlpha)
+            ARC_REFLECT_ATTR(DisplayName, "Hot fill opacity") ARC_REFLECT_ATTR(Range, 0.0, 1.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Opacity of a hovered plane handle's square and of the rotate sweep.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, defaultMode)
+            ARC_REFLECT_ATTR(DisplayName, "Default gizmo mode") ARC_REFLECT_ATTR(Apply, ApplyMode::NextWorld)
+            ARC_REFLECT_ATTR(Tooltip, "The transform mode (translate, rotate, scale) the editor starts in.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, defaultSpace)
+            ARC_REFLECT_ATTR(DisplayName, "Default gizmo space") ARC_REFLECT_ATTR(Apply, ApplyMode::NextWorld)
+            ARC_REFLECT_ATTR(Tooltip, "Whether the gizmo starts aligned to the world axes or to the selection's local axes.")
+        ARC_REFLECT_FIELD(EditorGizmoSettings, defaultTool)
+            ARC_REFLECT_ATTR(DisplayName, "Start with the transform tool") ARC_REFLECT_ATTR(Apply, ApplyMode::NextWorld)
+            ARC_REFLECT_ATTR(Tooltip, "Start with the transform gizmo active instead of the Select tool.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_REFLECT_TYPE(EditorGizmoSnapSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.gizmo.snap", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(EditorGizmoSnapSettings, translate)
+            ARC_REFLECT_ATTR(DisplayName, "Translate snap") ARC_REFLECT_ATTR(Range, 0.001, 100.0)
+            ARC_REFLECT_ATTR(Tooltip, "Step (metres) a Ctrl-held move snaps to.")
+        ARC_REFLECT_FIELD(EditorGizmoSnapSettings, rotateDegrees)
+            ARC_REFLECT_ATTR(DisplayName, "Rotate snap") ARC_REFLECT_ATTR(Range, 0.1, 90.0)
+            ARC_REFLECT_ATTR(Tooltip, "Step (degrees) a Ctrl-held rotation snaps to.")
+        ARC_REFLECT_FIELD(EditorGizmoSnapSettings, scale)
+            ARC_REFLECT_ATTR(DisplayName, "Scale snap") ARC_REFLECT_ATTR(Range, 0.001, 10.0)
+            ARC_REFLECT_ATTR(Tooltip, "Step a Ctrl-held scale snaps to.")
     ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(EditorViewportSettings);
     ARC_SETTINGS(EditorCameraSettings);
     ARC_SETTINGS(EditorGizmoSettings);
+    ARC_SETTINGS(EditorGizmoSnapSettings);
+
+    GizmoTuning ToGizmoTuning(const EditorGizmoSettings& s) noexcept
+    {
+        GizmoTuning t;
+        t.pickRadiusPx    = s.pickRadiusPx;
+        t.ringPickSlackPx = s.ringPickSlackPx;
+        t.minPlaneAreaPx2 = s.minPlaneAreaPx2;
+        t.planeEdgeOnCos  = s.planeEdgeOnCos;
+        t.minAxisLenPx    = s.minAxisLenPx;
+        t.ringSegments    = s.ringSegments;
+        t.minScale        = s.minScale;
+        t.brighten        = s.brighten;
+        t.darken          = s.darken;
+        t.hotFillAlpha    = s.hotFillAlpha;
+        return t;
+    }
+
+    GizmoTuning MakeGizmoTuning()
+    {
+        return ToGizmoTuning(Arcane::Settings<EditorGizmoSettings>());
+    }
+
+    GizmoSnap MakeGizmoSnap(bool enabled)
+    {
+        const EditorGizmoSnapSettings& s = Arcane::Settings<EditorGizmoSnapSettings>();
+        GizmoSnap snap;
+        snap.enabled     = enabled;
+        snap.translate   = s.translate;
+        snap.rotationDeg = s.rotateDegrees;
+        snap.scale       = s.scale;
+        return snap;
+    }
 
     std::size_t ImportLegacyViewportPrefs(CVarRegistry& reg, const LegacyViewportPrefs& p)
     {

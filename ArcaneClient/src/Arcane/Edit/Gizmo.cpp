@@ -1,5 +1,7 @@
 #include <Arcane/Edit/Gizmo.hpp>
 
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT (the held colours)
+
 #include <glm/gtc/matrix_access.hpp>     // glm::row
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -16,7 +18,6 @@ namespace Arcane
     namespace
     {
         constexpr float kEps      = 1e-6f;
-        constexpr float kMinScale = 0.01f;
         constexpr float kPi       = 3.14159265358979323846f;
         constexpr float kTau      = 2.0f * kPi;
 
@@ -24,7 +25,9 @@ namespace Arcane
         // (Editor/UnrealEd/Private/UnrealWidgetRender.cpp, UnrealWidget.h):
         // the widget's UniformScale makes one widget unit two pixels, so every
         // number below is the UE constant times two. World lengths follow
-        // from WorldUnitsPerPixel at the pivot (screen-constant size).
+        // from WorldUnitsPerPixel at the pivot (screen-constant size). The pick
+        // tolerances, edge-on cutoffs, full-ring tessellation, drag floor and
+        // shading factors are the editor's: GizmoTuning (settings arc S6-31).
         constexpr float kAxisLenPx          = 70.0f;   // AXIS_LENGTH 35: the translate cylinder
         constexpr float kAxisTipPx          = 94.0f;   // cone apex: root at AXIS_LENGTH + ConeHeadOffset 12
         constexpr float kHeadLenPx          = 26.0f;   // DrawCone scaled -13
@@ -37,16 +40,11 @@ namespace Arcane
         constexpr float kPlaneCornerPx      = 14.0f;   // CornerPos 7
         constexpr float kPlaneBarPx         = 24.0f;   // AxisSize 12 along each spanning axis
         constexpr float kPlaneBarWidthPx    = 4.0f;    // a touch over UE's 1.2 units so the L-corner survives the halo
-        constexpr float kPlaneEdgeOnCos     = 0.2f;    // a corner within ~78 deg of edge-on is hidden (unusable as a target)
         constexpr float kCentrePx           = 8.0f;    // DrawSphere radius 4
         constexpr float kRingInnerPx        = 96.0f;   // INNER_AXIS_CIRCLE_RADIUS 48
         constexpr float kRingOuterPx        = 112.0f;  // OUTER_AXIS_CIRCLE_RADIUS 56
         constexpr float kScreenRingPx       = 140.0f;  // OUTER_AXIS_CIRCLE_RADIUS * 1.25
         constexpr float kScreenRingWidthPx  = 3.0f;    // 1.25 units
-        constexpr float kHitThreshPx        = 8.0f;    // axis segment pick radius
-        constexpr float kRingHitSlackPx     = 4.0f;    // the band half-width plus this is the ring pick radius
-        constexpr float kMinQuadAreaPx2     = 4.0f;    // an edge-on plane corner is not a target
-        constexpr int   kRingSegments       = 48;      // full ring
         constexpr int   kArcSegments        = 24;      // a quarter band (smooth enough that the facets don't read as a saw)
 
         // Axis colours keep UE's RGB assignment (X red, Y green, Z blue, hot
@@ -55,9 +53,14 @@ namespace Arcane
         // Linear UE values were (0.594, 0.0197, 0) / (0.1349, 0.3959, 0) /
         // (0.0251, 0.207, 0.85); the painted X/Y/Z triples live on
         // GizmoAxisColors (pending axis unification re-bless).
+        // The hot / screen / centre colours are held with them (S5-2 option A).
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         constexpr glm::vec4 kColorHot    { 1.00f, 0.86f, 0.18f, 1.0f };
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         constexpr glm::vec4 kColorScreen { 0.90f, 0.91f, 0.93f, 1.0f };
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         constexpr glm::vec4 kColorScreenArc { 0.96f, 0.90f, 0.42f, 1.0f };
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         constexpr glm::vec4 kColorCentre { 0.97f, 0.97f, 0.98f, 1.0f };
 
         // The colours of the Draw call in flight (main thread; Draw is not
@@ -147,7 +150,7 @@ namespace Arcane
 
         // Point-in-convex-quad in pixels (corners in order). A degenerate
         // (edge-on) quad is never inside.
-        bool InsideQuad(glm::vec2 p, const std::array<glm::vec2, 4>& q) noexcept
+        bool InsideQuad(glm::vec2 p, const std::array<glm::vec2, 4>& q, float minAreaPx2) noexcept
         {
             float area = 0.0f;
             for (int i = 0; i < 4; ++i)
@@ -156,7 +159,7 @@ namespace Arcane
                 const glm::vec2 a = q[i], b = q[(i + 1) % 4];
                 area += a.x * b.y - b.x * a.y;
             }
-            if (std::abs(area) * 0.5f < kMinQuadAreaPx2) return false;
+            if (std::abs(area) * 0.5f < minAreaPx2) return false;
             const float sign = area > 0.0f ? 1.0f : -1.0f;
             for (int i = 0; i < 4; ++i)
             {
@@ -191,13 +194,13 @@ namespace Arcane
         // view). False when the plane is close to edge-on -- a sliver is not a
         // target. sq[0] is the corner nearest the pivot, sq[1] along a, sq[3]
         // along b.
-        bool PlaneCornerFacing(const ViewTransform& v, glm::vec3 pivot, float sizeScale, glm::vec3 a, glm::vec3 b,
+        bool PlaneCornerFacing(const ViewTransform& v, glm::vec3 pivot, float sizeScale, float edgeOnCos, glm::vec3 a, glm::vec3 b,
                                std::array<glm::vec3, 4>& sq) noexcept
         {
             const glm::vec3 toEye = ToEye(v, pivot);
             const glm::vec3 n = glm::cross(a, b);
             const float nLen = glm::length(n);
-            if (nLen < kEps || std::abs(glm::dot(n / nLen, toEye)) < kPlaneEdgeOnCos) return false;
+            if (nLen < kEps || std::abs(glm::dot(n / nLen, toEye)) < edgeOnCos) return false;
             if (glm::dot(a, toEye) < 0.0f) a = -a;
             if (glm::dot(b, toEye) < 0.0f) b = -b;
             const float lo = Metres(v, pivot, sizeScale, kPlaneCornerPx);
@@ -250,14 +253,22 @@ namespace Arcane
             return pivot + (span.u * std::cos(angle) + span.w * std::sin(angle)) * radius;
         }
 
-        glm::vec4 Brighten(glm::vec4 c) noexcept
+        glm::vec4 Brighten(glm::vec4 c, const GizmoTuning& k) noexcept
         {
-            return { std::min(c.x * 1.4f, 1.0f), std::min(c.y * 1.4f, 1.0f), std::min(c.z * 1.4f, 1.0f), c.w };
+            return { std::min(c.x * k.brighten, 1.0f), std::min(c.y * k.brighten, 1.0f), std::min(c.z * k.brighten, 1.0f), c.w };
         }
 
-        glm::vec4 Darken(glm::vec4 c) noexcept
+        glm::vec4 Darken(glm::vec4 c, const GizmoTuning& k) noexcept
         {
-            return { c.x * 0.55f, c.y * 0.55f, c.z * 0.55f, c.w };
+            return { c.x * k.darken, c.y * k.darken, c.z * k.darken, c.w };
+        }
+
+        // The translucent hot yellow of a hovered plane square and a rotate sweep.
+        glm::vec4 HotFill(const GizmoTuning& k) noexcept
+        {
+            glm::vec4 fill = kColorHot;
+            fill.w = k.hotFillAlpha;
+            return fill;
         }
 
         glm::vec4 AxisColor(GizmoAxis a) noexcept
@@ -285,24 +296,24 @@ namespace Arcane
         // A shaded ROD between two pixels: the body in the handle colour with a
         // highlight strip on one side and a shadow strip on the other -- the
         // flat-shaded cylinder UE's ArrowMaterial gives, without a mesh pass.
-        void Rod(GizmoDrawSink& b, glm::vec2 p0, glm::vec2 p1, float width, glm::vec4 c)
+        void Rod(GizmoDrawSink& b, glm::vec2 p0, glm::vec2 p1, float width, glm::vec4 c, const GizmoTuning& k)
         {
             const glm::vec2 d = p1 - p0;
             const float len = glm::length(d);
             const glm::vec2 perp = len > kEps ? glm::vec2(-d.y, d.x) / len : glm::vec2(0.0f, 1.0f);
             b.Line(p0, p1, width, c);
-            b.Line(p0 - perp * (width * 0.25f), p1 - perp * (width * 0.25f), width * 0.3f, Brighten(c));
-            b.Line(p0 + perp * (width * 0.35f), p1 + perp * (width * 0.35f), width * 0.25f, Darken(c));
+            b.Line(p0 - perp * (width * 0.25f), p1 - perp * (width * 0.25f), width * 0.3f, Brighten(c, k));
+            b.Line(p0 + perp * (width * 0.35f), p1 + perp * (width * 0.35f), width * 0.25f, Darken(c, k));
         }
 
         // A CONE head as two triangles split along the axis, one lit and one
         // in shadow.
-        void Cone(GizmoDrawSink& b, glm::vec2 tip, glm::vec2 dir, float len, float halfWidth, glm::vec4 c)
+        void Cone(GizmoDrawSink& b, glm::vec2 tip, glm::vec2 dir, float len, float halfWidth, glm::vec4 c, const GizmoTuning& k)
         {
             const glm::vec2 perp(-dir.y, dir.x);
             const glm::vec2 base = tip - dir * len;
-            b.Triangle(tip, base + perp * halfWidth, base, Brighten(c));
-            b.Triangle(tip, base, base - perp * halfWidth, Darken(c));
+            b.Triangle(tip, base + perp * halfWidth, base, Brighten(c, k));
+            b.Triangle(tip, base, base - perp * halfWidth, Darken(c, k));
         }
 
         // A thick ARC band between two radii in the ring's plane, projected
@@ -327,11 +338,11 @@ namespace Arcane
 
         // The swept SECTOR of a rotate drag (UE's inner "pie" with the grid
         // material): a translucent fan from the pivot to the inner radius over
-        // [start, start + delta].
+        // [start, start + delta], at the full ring's angular step.
         void Sector(GizmoDrawSink& b, const ViewTransform& v, const RingSpan& span, glm::vec3 pivot,
-                    float radius, float start, float delta, glm::vec4 c)
+                    float radius, float start, float delta, int ringSegments, glm::vec4 c)
         {
-            const int segments = std::max(2, static_cast<int>(std::ceil(std::abs(delta) / (kTau / kRingSegments))));
+            const int segments = std::max(2, static_cast<int>(std::ceil(std::abs(delta) / (kTau / static_cast<float>(ringSegments)))));
             const glm::vec2 centre = Px(v, pivot);
             if (!Finite(centre)) return;
             for (int i = 0; i < segments; ++i)
@@ -432,7 +443,7 @@ namespace Arcane
 
     // ---- HitTest ---------------------------------------------------------------
     GizmoAxis HitTest(GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
-                      GizmoHandleMask handles, float sizeScale, glm::vec2 mouse)
+                      GizmoHandleMask handles, float sizeScale, glm::vec2 mouse, const GizmoTuning& tuning)
     {
         if (!Visible(view, t.position)) return GizmoAxis::None;   // behind the eye: no phantom to grab
         const glm::vec2 pivotPx = Px(view, t.position);
@@ -451,16 +462,16 @@ namespace Arcane
             {
                 return std::abs(glm::dot(AxisDir(space, t.rotation, a), fwd)) > std::abs(glm::dot(AxisDir(space, t.rotation, b), fwd));
             });
-            const float band = (kRingOuterPx - kRingInnerPx) * 0.5f * sizeScale + kRingHitSlackPx;
+            const float band = (kRingOuterPx - kRingInnerPx) * 0.5f * sizeScale + tuning.ringPickSlackPx;
             for (GizmoAxis a : order)
             {
                 if (!handles.Has(a)) continue;
                 const RingSpan span = RingSpanFor(view, space, t, a, /*full=*/false);
-                const int segs = span.a1 > kPi ? kRingSegments : kArcSegments;
+                const int segs = span.a1 > kPi ? tuning.ringSegments : kArcSegments;
                 if (DistToArc(view, span, t.position, M((kRingInnerPx + kRingOuterPx) * 0.5f), segs, mouse) <= band) return a;
             }
             if (handles.Has(GizmoAxis::Screen) &&
-                std::abs(glm::length(mouse - pivotPx) - kScreenRingPx * sizeScale) <= kHitThreshPx)
+                std::abs(glm::length(mouse - pivotPx) - kScreenRingPx * sizeScale) <= tuning.pickRadiusPx)
                 return GizmoAxis::Screen;
             return GizmoAxis::None;
         }
@@ -476,12 +487,12 @@ namespace Arcane
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
                 std::array<glm::vec3, 4> sq{};
-                if (!PlaneCornerFacing(view, t.position, sizeScale, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), sq)) continue;
+                if (!PlaneCornerFacing(view, t.position, sizeScale, tuning.planeEdgeOnCos, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), sq)) continue;
                 // A corner behind the eye projects to a mirrored pixel: skip the
                 // whole square rather than test a quad with a folded-back corner.
                 if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
                 const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
-                if (InsideQuad(mouse, q)) return plane;
+                if (InsideQuad(mouse, q, tuning.minPlaneAreaPx2)) return plane;
             }
         }
 
@@ -495,7 +506,7 @@ namespace Arcane
             const glm::vec3 w0 = t.position + dir * M(from), w1 = t.position + dir * M(to);
             if (!Visible(view, w1) || !Visible(view, w0)) continue;   // behind the eye: no phantom axis to grab
             const glm::vec2 p0 = Px(view, w0), p1 = Px(view, w1);
-            if (Finite(p0) && Finite(p1) && DistToSegment(mouse, p0, p1) <= kHitThreshPx) return a;
+            if (Finite(p0) && Finite(p1) && DistToSegment(mouse, p0, p1) <= tuning.pickRadiusPx) return a;
         }
         return GizmoAxis::None;
     }
@@ -517,7 +528,7 @@ namespace Arcane
     // ---- Draw --------------------------------------------------------------------
     void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
               GizmoHandleMask handles, float sizeScale, GizmoAxis hovered, GizmoAxis active,
-              const GizmoRotateSweep* sweep, const GizmoAxisColors& colors)
+              const GizmoTuning& tuning, const GizmoRotateSweep* sweep, const GizmoAxisColors& colors)
     {
         const AxisColorScope axisColors(colors);
         // Into the host's FOREGROUND sink (GizmoDrawSink): over the finished
@@ -539,21 +550,21 @@ namespace Arcane
                 if (!handles.Has(a)) continue;
                 if (dragging && a != active) continue;
                 const RingSpan span = RingSpanFor(view, space, t, a, /*full=*/dragging && a == active);
-                const int segs = span.a1 > kPi ? kRingSegments : kArcSegments;
+                const int segs = span.a1 > kPi ? tuning.ringSegments : kArcSegments;
                 ArcBand(sink, view, span, t.position, M(kRingInnerPx), M(kRingOuterPx), segs, HandleColor(a, hovered, active));
                 if (dragging && a == active)
                 {
-                    glm::vec4 fill = kColorHot; fill.w = 0.3f;
-                    Sector(sink, view, span, t.position, M(kRingInnerPx), sweep->start, sweep->delta, fill);
+                    Sector(sink, view, span, t.position, M(kRingInnerPx), sweep->start, sweep->delta, tuning.ringSegments, HotFill(tuning));
                 }
             }
             if (handles.Has(GizmoAxis::Screen) && !dragging)
             {
                 const glm::vec4 c = (hovered == GizmoAxis::Screen || active == GizmoAxis::Screen) ? kColorHot : kColorScreenArc;
                 const float r = kScreenRingPx * sizeScale;
-                for (int i = 0; i < kRingSegments; ++i)
+                const float segs = static_cast<float>(tuning.ringSegments);
+                for (int i = 0; i < tuning.ringSegments; ++i)
                 {
-                    const float a0 = kTau * static_cast<float>(i) / kRingSegments, a1 = kTau * static_cast<float>(i + 1) / kRingSegments;
+                    const float a0 = kTau * static_cast<float>(i) / segs, a1 = kTau * static_cast<float>(i + 1) / segs;
                     sink.Line(pivotPx + glm::vec2(std::cos(a0), std::sin(a0)) * r, pivotPx + glm::vec2(std::cos(a1), std::sin(a1)) * r, kScreenRingWidthPx, c);
                 }
             }
@@ -563,8 +574,7 @@ namespace Arcane
                 const glm::vec3 n = ViewForward(view);
                 const auto [u, w] = PlaneBasis(n);
                 const RingSpan span{ u, w, 0.0f, kTau };
-                glm::vec4 fill = kColorHot; fill.w = 0.3f;
-                Sector(sink, view, span, t.position, M(kScreenRingPx), sweep->start, sweep->delta, fill);
+                Sector(sink, view, span, t.position, M(kScreenRingPx), sweep->start, sweep->delta, tuning.ringSegments, HotFill(tuning));
             }
             return;
         }
@@ -576,7 +586,7 @@ namespace Arcane
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
                 std::array<glm::vec3, 4> sq{};
-                if (!PlaneCornerFacing(view, t.position, sizeScale, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), sq)) continue;
+                if (!PlaneCornerFacing(view, t.position, sizeScale, tuning.planeEdgeOnCos, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), sq)) continue;
                 if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
                 const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
                 if (!Finite(q[0]) || !Finite(q[1]) || !Finite(q[2]) || !Finite(q[3])) continue;
@@ -588,7 +598,7 @@ namespace Arcane
                 const bool hot = (plane == hovered || plane == active);
                 if (hot)
                 {
-                    glm::vec4 fill = kColorHot; fill.w = 0.3f;
+                    const glm::vec4 fill = HotFill(tuning);
                     sink.Triangle(q[0], q[1], q[2], fill);
                     sink.Triangle(q[0], q[2], q[3], fill);
                 }
@@ -609,11 +619,11 @@ namespace Arcane
                 if (!Visible(view, wShaft) || !Visible(view, wTip)) continue;   // behind the eye: no phantom axis
                 const glm::vec2 shaft = Px(view, wShaft), tip = Px(view, wTip);
                 if (!Finite(shaft) || !Finite(tip)) continue;
-                Rod(sink, pivotPx, shaft, kShaftPx, c);
+                Rod(sink, pivotPx, shaft, kShaftPx, c, tuning);
                 const glm::vec2 d = tip - pivotPx;
                 const float len = glm::length(d);
-                if (len < 2.0f) continue;   // pointing at the camera: a dot, no head
-                Cone(sink, tip, d / len, kHeadLenPx, kHeadHalfPx, c);
+                if (len < tuning.minAxisLenPx) continue;   // pointing at the camera: a dot, no head
+                Cone(sink, tip, d / len, kHeadLenPx, kHeadHalfPx, c, tuning);
             }
             else
             {
@@ -623,10 +633,10 @@ namespace Arcane
                 if (!Visible(view, w0) || !Visible(view, w1) || !Visible(view, wc)) continue;
                 const glm::vec2 p0 = Px(view, w0), p1 = Px(view, w1), pc = Px(view, wc);
                 if (!Finite(p0) || !Finite(p1) || !Finite(pc)) continue;
-                Rod(sink, p0, p1, kShaftPx, c);
+                Rod(sink, p0, p1, kShaftPx, c, tuning);
                 const glm::vec2 half(kScaleCubeHalfPx * sizeScale, kScaleCubeHalfPx * sizeScale);
                 sink.Rect(pc - half, half * 2.0f, c);
-                sink.Rect(pc - half, half, Brighten(c));   // the lit top-left face
+                sink.Rect(pc - half, half, Brighten(c, tuning));   // the lit top-left face
             }
         }
 
@@ -634,13 +644,14 @@ namespace Arcane
         {
             const glm::vec4 c = HandleColor(GizmoAxis::Center, hovered, active);
             sink.Circle(pivotPx, kCentrePx * sizeScale, c);
-            sink.Circle(pivotPx, kCentrePx * sizeScale * 0.42f, Brighten(c));   // specular pip, reads on a white mesh
+            sink.Circle(pivotPx, kCentrePx * sizeScale * 0.42f, Brighten(c, tuning));   // specular pip, reads on a white mesh
         }
     }
 
     // ---- ApplyDrag ---------------------------------------------------------------
     GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis, const GizmoTransform& start,
-                             const ViewTransform& view, glm::vec2 mouseStart, glm::vec2 mouseCur, const GizmoSnap& snap)
+                             const ViewTransform& view, glm::vec2 mouseStart, glm::vec2 mouseCur, const GizmoSnap& snap,
+                             const GizmoTuning& tuning)
     {
         GizmoTransform r = start;
         const Ray ray0 = view.ScreenToRay(mouseStart);
@@ -751,7 +762,7 @@ namespace Arcane
                 // (a negative authored scale) stays mirrored through a scale drag,
                 // even when the snap lands on -0 (the snapped value has no sign to read).
                 const float sign = start.scale[i] < 0.0f ? -1.0f : 1.0f;
-                r.scale[i] = sign * std::max(std::abs(r.scale[i]), kMinScale);
+                r.scale[i] = sign * std::max(std::abs(r.scale[i]), tuning.minScale);
             }
             break;
         }

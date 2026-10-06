@@ -24,7 +24,7 @@
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
-#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29)
+#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..31)
 #include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
@@ -1207,13 +1207,14 @@ namespace Arcane::Editor
             const Arcane::ViewTransform& view = m_runtime->View();
             const Arcane::GizmoHandleMask handles = GizmoHandles();
             const float gizmoSize = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size;
+            const Arcane::GizmoTuning gizmoTuning = Arcane::Editor::MakeGizmoTuning();   // editor.gizmo.* (settings S6-31)
 
             if (!m_gizmoDrag.active)
             {
                 // Hover + drag-start only when the cursor is over the viewport.
                 if (inViewport)
                 {
-                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen);
+                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen, gizmoTuning);
                     if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
                     {
                         // A press on a handle owns the click regardless of
@@ -1275,11 +1276,10 @@ namespace Arcane::Editor
                 Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
                 const glm::vec2 dragMouse(dragLx, dragLy);
 
-                Arcane::GizmoSnap gsnap;
-                gsnap.enabled = ctrlHeld;
+                const Arcane::GizmoSnap gsnap = Arcane::Editor::MakeGizmoSnap(ctrlHeld);   // editor.gizmo.snap.*
                 const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                     m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
-                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
+                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap, gizmoTuning);
                 // The sector Draw paints for a rotate drag -- the same inputs.
                 m_gizmoDrag.sweep = m_gizmoMode == Arcane::GizmoMode::Rotate
                     ? Arcane::RotateSweep(m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
@@ -3677,6 +3677,7 @@ namespace Arcane::Editor
                 Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
                              Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
                              m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                             Arcane::Editor::MakeGizmoTuning(),
                              m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
