@@ -28,6 +28,7 @@
 // See ImGuiNri::AdoptContext.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Sim/SimSettingsData.hpp>   // Input::deltaTime defaults to one sim.fixedHz step
 
 #include <glm/glm.hpp>
 
@@ -55,7 +56,7 @@ namespace Arcane
             glm::vec2 mousePos{0.0f, 0.0f};      // target-local px
             bool      mouseDown[5] = {};         // LMB,RMB,MMB,X1,X2
             float     wheel        = 0.0f;
-            float     deltaTime    = 1.0f / 60.0f;
+            float     deltaTime    = 1.0f / static_cast<float>(SimSettings{}.fixedHz);   // one sim.fixedHz step at its default
             bool      hasInput     = false;      // false => cursor off-target, no buttons
         };
         virtual void SetInput(const Input&) = 0;

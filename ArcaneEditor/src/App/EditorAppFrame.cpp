@@ -48,7 +48,7 @@
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
-#include <Arcane/Sim/SimSettings.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -1381,10 +1381,10 @@ namespace Arcane::Editor
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - ls.simPrev).count();
             ls.simPrev = now;
-            const double maxFrameDelta = Arcane::Settings<Arcane::SimSettings>().maxFrameDeltaSeconds;   // settings arc S2: shared with editor Play
-            if (simDt > maxFrameDelta) simDt = maxFrameDelta;
+            simDt = Arcane::ClampFrameDelta(simDt);   // sim.maxFrameDeltaSeconds: the one clamp ArcaneRuntime shares
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
+        Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });

@@ -5,6 +5,7 @@
 #include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
 #include <algorithm>   // std::find -- SanitizeRelaunchLine's strip-set lookups
 #include <cstdio>
+#include <format>
 #include <string_view>
 namespace Arcane
 {
@@ -93,7 +94,8 @@ namespace Arcane
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
         cli.Flag  ("headless",           "render with no window shown and no swapchain; "
                                          "pairs with --frames/--probe/--report");
-        cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
+        // 17 significant digits round-trip the default step's double exactly.
+        cli.Option("fixed-dt", std::format("{:.17g}", 1.0 / SimSettings{}.fixedHz), "seconds per simulated frame "
                                          "(--headless only)").Type(CliType::Double);
         cli.Option("fixed-time", "", "pin the absolute scene clock to this many seconds, so "
                                      "Time is independent of the frame count (--headless only; "

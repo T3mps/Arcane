@@ -89,21 +89,27 @@ namespace Arcane::Server
         rep.netMode                  = Arcane::ToString(m_runtime->Mode());
         rep.isDedicatedServerProcess = m_process->IsDedicatedServerProcess();
 
+        if (!m_runtime->OpenProject(m_cfg.projectPath))
+            return Finish(rep, "project-open-failed", 1);
+
         // Review round 1: make --fixed-dt REAL. RunLoop's internal accumulator
         // ticks at RunLoop::Config::fixedHz (default 60), independent of the
         // realDt passed to Advance() below -- so without this call, --fixed-dt
         // would only repace the host loop and never the physics step size.
-        // SetFixedHz(1/cfg.fixedDtSeconds) makes the REQUESTED step the loop's
-        // ACTUAL one; the tick loop below still advances by cfg.fixedDtSeconds
-        // of wall time per host frame, i.e. one fixed step per frame, as before.
-        // rep.fixedDt is derived back FROM THE LOOP, not echoed from m_cfg, so a
-        // future refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported
-        // honestly rather than optimistically.
-        m_runtime->Loop().SetFixedHz(1.0 / m_cfg.fixedDtSeconds);
+        // SetFixedHz makes the REQUESTED step the loop's ACTUAL one; the tick
+        // loop below still advances by cfg.fixedDtSeconds of wall time per host
+        // frame, i.e. one fixed step per frame, as before. rep.fixedDt is
+        // derived back FROM THE LOOP, not echoed from m_cfg, so a future
+        // refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported honestly
+        // rather than optimistically.
+        // Settings arc S6-8: with no --fixed-dt the rate is server.tickHz
+        // (Restart), read here, AFTER OpenProject applied the project's
+        // Config rung, and the wall-clock pacing follows it.
+        const double tickHz = m_cfg.FixedHz();
+        m_runtime->Loop().SetFixedHz(tickHz);
+        if (!m_cfg.fixedDtSupplied)
+            m_cfg.fixedDtSeconds = 1.0 / tickHz;
         rep.fixedDt = 1.0 / m_runtime->Loop().FixedHz();
-
-        if (!m_runtime->OpenProject(m_cfg.projectPath))
-            return Finish(rep, "project-open-failed", 1);
 
         const Arcane::Project* proj = m_runtime->CurrentProject();
         rep.projectOpened = true;

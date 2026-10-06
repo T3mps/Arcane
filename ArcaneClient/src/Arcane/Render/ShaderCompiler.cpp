@@ -185,13 +185,17 @@ namespace Arcane
 #include <wrl/client.h>
 
 #include <Arcane/Base/ServiceThread.hpp>
+#include <Arcane/Config/Bindings/JobsBinding.hpp>   // jobs.shaderCompileThreads (settings arc S6-8)
 
+#include <algorithm>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
 #include <mutex>
-#include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
@@ -416,8 +420,13 @@ namespace Arcane
 
         // Worker state. The queue/mutex/cv stay HERE -- they are the debounce
         // and coalescing machinery, not generic plumbing. ServiceThread owns
-        // only the thread's lifetime and the stop flag.
-        std::optional<ServiceThread> worker;
+        // only each thread's lifetime. jobs.shaderCompileThreads (settings arc
+        // S6-8, Restart) workers share the ONE queue; 1, the default, compiles
+        // in submission order as before. `stopping` is the shared stop flag:
+        // any worker's ServiceThread wake sets it (they are only ever
+        // destroyed together, in Shutdown).
+        std::vector<std::unique_ptr<ServiceThread>> workers;
+        bool stopping = false;   // guarded by mx
         std::mutex mx;
         std::condition_variable cv;
         std::deque<Job> queue;
@@ -472,8 +481,8 @@ namespace Arcane
                 Job job;
                 {
                     std::unique_lock lk(mx);
-                    cv.wait(lk, [this] { return worker->StopRequested() || !queue.empty(); });
-                    if (worker->StopRequested())
+                    cv.wait(lk, [this] { return stopping || !queue.empty(); });
+                    if (stopping)
                         return;
                     job = std::move(queue.front());
                     queue.pop_front();
@@ -604,9 +613,17 @@ namespace Arcane
         }
         im.toolchainHash = th;
 
-        im.worker.emplace("shader.compile",
-                          [this] { m_impl->WorkerMain(); },
-                          [this] { std::lock_guard lk(m_impl->mx); m_impl->cv.notify_all(); });
+        im.workers.clear();   // a re-Initialize replaces the workers, as the old optional's emplace did
+        {
+            std::lock_guard lk(im.mx);
+            im.stopping = false;
+        }
+        const std::uint32_t threads = std::max<std::uint32_t>(1u, Settings<JobsSettings>().shaderCompileThreads);
+        for (std::uint32_t i = 0; i < threads; ++i)
+            im.workers.push_back(std::make_unique<ServiceThread>(
+                i == 0 ? std::string("shader.compile") : std::format("shader.compile.{}", i),
+                [this] { m_impl->WorkerMain(); },
+                [this] { { std::lock_guard lk(m_impl->mx); m_impl->stopping = true; } m_impl->cv.notify_all(); }));
         m_available = true;
         ARC_INFO("ShaderCompiler: in-process dxc ready (debounce {:.0f} ms)", debounceSeconds * 1000.0);
         return true;
@@ -615,9 +632,10 @@ namespace Arcane
     void ShaderCompiler::Shutdown()
     {
         Impl& im = *m_impl;
-        // ~ServiceThread requests stop, fires the wake callback (which takes mx
-        // and notifies cv), and joins. Resetting the optional runs it here.
-        im.worker.reset();
+        // ~ServiceThread requests stop, fires the wake callback (which takes mx,
+        // sets the shared stopping flag and notifies cv), and joins. Clearing
+        // the vector runs it for every worker here.
+        im.workers.clear();
         im.mainCompiler.Reset();
         // hCompiler/hDxil stay loaded on purpose: unloading a COM-style DLL that
         // may still own module-static state is a classic shutdown crash; the OS

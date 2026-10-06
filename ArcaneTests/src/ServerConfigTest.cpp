@@ -18,7 +18,7 @@ TEST_CASE("ServerConfig: --project is required; the defaults are the documented 
     REQUIRE(ok.config);
     CHECK(ok.config->projectPath == "ReferenceProject");
     CHECK(ok.config->frames == 0);
-    CHECK(ok.config->fixedDtSeconds == 1.0 / 60.0);
+    CHECK_FALSE(ok.config->fixedDtSupplied);   // no --fixed-dt: the tick is 1/server.tickHz (SweepSimTest)
     CHECK(ok.config->reportPath.empty());
 }
 TEST_CASE("ServerConfig: --frames, --fixed-dt, --report, --plugin parse; a non-positive --fixed-dt is refused", "[server]")

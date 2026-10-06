@@ -247,7 +247,12 @@ namespace Arcane
             schedulers = std::make_unique<SystemSchedulers>(sched);
             // sim.fixedHz (settings arc S2, NextWorld): this Runtime's step,
             // read once. InstallEngineSystems and PhysicsEditPass read loopCfg.
-            loopCfg.fixedHz = Settings<SimSettings>().fixedHz;
+            // Restore/ResetRegistry REBIND this loop, so a changed fixedHz
+            // waits for the next Runtime. sim.maxStepsPerFrame (S6-8) is Live:
+            // read here for the first frame, then each frame by the hosts
+            // (ApplySimStepCap).
+            loopCfg.fixedHz          = Settings<SimSettings>().fixedHz;
+            loopCfg.maxStepsPerFrame = Settings<SimSettings>().maxStepsPerFrame;
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
             // assets.cache.byteBudget (Restart): read once, here, after the

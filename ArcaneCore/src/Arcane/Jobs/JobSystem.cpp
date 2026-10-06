@@ -1,6 +1,7 @@
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Jobs/ArcaneWorkScheduler.hpp>   // presents the enki ITaskExecutor as a Mosaic::IWorkScheduler
+#include <Arcane/Config/Bindings/JobsBinding.hpp>   // jobs.externalThreads (settings arc S6-8)
 #include <Arcane/Base/Diagnostics.hpp>   // GuaranteeStackForThisThread -- every worker's first statement (crash window plan 1, R23)
 
 #include <TaskScheduler.h>
@@ -102,6 +103,9 @@ namespace Arcane
         enki::TaskSchedulerConfig config;
         if (threads != 0)
             config.numTaskThreadsToCreate = threads - 1;
+        // jobs.externalThreads (settings arc S6-8, Restart): read when the pool
+        // is built. 0, enkiTS' own default, is the pre-sweep value.
+        config.numExternalTaskThreads = Settings<JobsSettings>().externalThreads;
         config.profilerCallbacks.threadStart =
             [](uint32_t) { Arcane::Diagnostics::GuaranteeStackForThisThread(); };
         m_impl->ts.Initialize(config);
