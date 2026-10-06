@@ -11,6 +11,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Paths::TempDir -- where the versioned plugin images are staged (settings spec s11.0)
 #include <Arcane/Plugin/ClientHooks.hpp>
+#include <Arcane/Plugin/PluginSettings.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Sim/NetDriver.hpp>
 
@@ -922,11 +923,12 @@ namespace Arcane
         const std::uint32_t g = m_impl->gen + 1;
         PluginImage img;
         bool copied = false;
-        for (int attempt = 0; attempt < 5 && !copied; ++attempt)
+        const PluginHotReloadSettings hr = Settings<PluginHotReloadSettings>();   // a copy: the loop sleeps
+        for (int attempt = 0; attempt < hr.copyRetries && !copied; ++attempt)
         {
             copied = m_impl->CopyVersioned(g, img);
             if (!copied)
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::this_thread::sleep_for(std::chrono::milliseconds(hr.copyRetryMs));
         }
         if (!copied)
         {
@@ -1061,7 +1063,7 @@ namespace Arcane
             m_impl->pendingSince = now;
             return;
         }
-        if (now - m_impl->pendingSince >= std::chrono::milliseconds(250))
+        if (now - m_impl->pendingSince >= std::chrono::milliseconds(Settings<PluginHotReloadSettings>().settleMs))
         {
             m_impl->pending = false;
             Reload(true);
