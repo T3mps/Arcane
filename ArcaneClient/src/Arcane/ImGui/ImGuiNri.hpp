@@ -347,7 +347,7 @@ namespace Arcane
         [[nodiscard]] bool HasEntryFor(nri::Texture* texture) const noexcept;
         // Descriptor sets evicted but not yet recycled. NRI cannot free a
         // single set, so a disposed entry's set lands here for
-        // kSwapchainFramesInFlight recorded frames rather than being destroyed
+        // FramesInFlight() recorded frames rather than being destroyed
         // -- this is what proves a disposal took the RETIREMENT path.
         [[nodiscard]] std::size_t RetiredSetCount() const noexcept { return m_retired.size(); }
 
@@ -399,7 +399,7 @@ namespace Arcane
         // but only once the submission that last bound it has retired, which
         // is the same pacing argument every per-frame-slot resource on this
         // path rests on: frame N's record happens after frame
-        // N - kSwapchainFramesInFlight completed (the wait inside
+        // N - FramesInFlight() completed (the wait inside
         // NriSwapChain::AcquireNextTexture).
         struct RetiredSet
         {

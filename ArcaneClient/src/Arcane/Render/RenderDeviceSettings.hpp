@@ -8,7 +8,9 @@
 //
 // - render.*         RenderSettings: the player-facing graphics choices
 //                    (backend, vsync, adapter, tearing; PlayerSafe, so a
-//                    player override writes the per-machine User rung) and
+//                    player override writes the per-machine User rung), the
+//                    frames-in-flight depth (S6-17; FramePacing.hpp latches
+//                    it once per process) and
 //                    the GPU frustum-cull debug switch, folded in from the S2
 //                    one-off struct with its name, type, default, flags and
 //                    help unchanged. --backend and --no-vsync stay as flags:
@@ -48,6 +50,7 @@ namespace Arcane
         std::int32_t    adapter      = -1;   // -1 = auto (D3D12: high-performance index 0; Vulkan: first discrete, else [0])
         bool            allowTearing = false;
         bool            meshCull     = true;
+        std::uint32_t   framesInFlight = 2;   // FramePacing.hpp: latched once, clamped to kMaxFramesInFlight
     };
 
     ARC_REFLECT_TYPE(RenderSettings)
@@ -70,6 +73,10 @@ namespace Arcane
         ARC_REFLECT_FIELD(RenderSettings, meshCull)
             ARC_REFLECT_ATTR(Apply, ApplyMode::Live) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Frustum-cull mesh instances on the GPU.")
+        ARC_REFLECT_FIELD(RenderSettings, framesInFlight)
+            ARC_REFLECT_ATTR(Range, 2.0, 3.0)
+            ARC_REFLECT_ATTR(Tooltip, "How many frames the CPU may record ahead of the GPU. 3 smooths uneven frame times at the "
+                                      "cost of one more frame of input latency; 2 is the lower-latency default.")
     ARC_END_REFLECT_TYPE()
 
     // The per-configuration validation default: on in Debug, off in Release

@@ -589,7 +589,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // Armed at the SAME pixel every frame (FirstPickProbe's answer does not
     // change frame to frame -- a run has exactly one `pick@x,y` request that
     // matters), which is what lets the readback -- landing
-    // kSwapchainFramesInFlight frames after the pass that wrote it -- settle
+    // FramesInFlight() frames after the pass that wrote it -- settle
     // well before ShutdownGraphPath reads NriGraphContext::ProbeId() after
     // the loop ends. A run combining this with the (windowed-only) dev
     // --pick-probe flag above has this block win FrameDesc::pickPixel for

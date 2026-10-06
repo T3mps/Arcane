@@ -36,7 +36,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
-#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // FramesInFlight()
 
 #undef ERROR
 
@@ -477,7 +477,7 @@ namespace Arcane
 
         if (m_frames.empty())
         {
-            m_frames.resize(kSwapchainFramesInFlight);
+            m_frames.resize(FramesInFlight());
             for (GpuFrameSlot& slot : m_frames)
             {
                 // Short-circuit order matters: a failed CreateCommandAllocator
@@ -1145,7 +1145,7 @@ namespace Arcane
         if (desc.frameSlot >= m_frames.size())
         {
             GraphError("RenderGraph::Execute: frameSlot " + std::to_string(desc.frameSlot)
-                        + " is out of range (kSwapchainFramesInFlight = "
+                        + " is out of range (FramesInFlight() = "
                         + std::to_string(m_frames.size()) + ")");
             return false;
         }

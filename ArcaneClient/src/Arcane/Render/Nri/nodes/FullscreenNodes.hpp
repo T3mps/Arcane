@@ -71,7 +71,7 @@
 #include <Arcane/Material/GlobalParams.hpp>   // GlobalParams (16 bytes, held by value)
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>        // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>        // kMaxFramesInFlight, FramesInFlight()
 
 #include <cstdint>
 #include <memory>
@@ -163,7 +163,7 @@ namespace Arcane
     //     (a chain input slot with nothing wired into it -- likewise), plus
     //     their views;
     //   * one LINEAR/wrap sampler, matching FullscreenMaterialPass::Init's;
-    //   * one descriptor pool sized for kMaxPasses x kSwapchainFramesInFlight
+    //   * one descriptor pool sized for kMaxPasses x FramesInFlight()
     //     sets;
     //   * the per-frame-slot constant-buffer arena the b0/b1 views name.
     // The pipeline LAYOUT and the PSOs come from the vehicle's shared
@@ -339,12 +339,12 @@ namespace Arcane
             // outlives the GetGraphics call (its fill contract, rule 2).
             std::shared_ptr<const std::vector<std::uint8_t>> vs, ps;
             nri::Pipeline*      pipeline = nullptr;
-            nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
+            nri::DescriptorSet* set[kMaxFramesInFlight]{};
             // What this pass's set for that frame slot currently has bound in
             // its texture range -- the declared params first, then the chain
             // inputs. A rebind happens only when one of them changes.
-            nri::Texture* bound[kSwapchainFramesInFlight][kMaxTextures + kMaxInputs]{};
-            bool          written[kSwapchainFramesInFlight]{};
+            nri::Texture* bound[kMaxFramesInFlight][kMaxTextures + kMaxInputs]{};
+            bool          written[kMaxFramesInFlight]{};
         };
 
         // See Batch2DNode::kShaderPairBase and TonemapNode::kShaderPairId: one
@@ -374,8 +374,8 @@ namespace Arcane
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_globalsView[kSwapchainFramesInFlight]{};
-        nri::Descriptor* m_materialView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_globalsView[kMaxFramesInFlight]{};
+        nri::Descriptor* m_materialView[kMaxFramesInFlight]{};
 
         // The bound chain's shape. Rebuilt only when `m_stamp` changes.
         std::uint64_t m_stamp        = 0;
@@ -489,9 +489,9 @@ namespace Arcane
         // shared set, which was correct while nothing in it was per-frame --
         // Task 10's chain makes the source change mid-run, and rewriting a
         // shared set with frames in flight is a real hazard.
-        nri::DescriptorSet*  m_set[kSwapchainFramesInFlight]{};
+        nri::DescriptorSet*  m_set[kMaxFramesInFlight]{};
         // The texture frame slot i's set currently binds at t0.
-        nri::Texture*        m_bound[kSwapchainFramesInFlight]{};
+        nri::Texture*        m_bound[kMaxFramesInFlight]{};
 
         std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
 

@@ -78,7 +78,7 @@
 //     RgExecuteDesc::swapChain = nullptr -- no acquire, no present -- and the
 //     graph's own submission fence is the frame's only completion signal;
 //   * PACING is therefore ours: RenderFrameOffscreen waits THIS object's own
-//     timeline fence kSwapchainFramesInFlight deep, signalled by a trailing
+//     timeline fence FramesInFlight() deep, signalled by a trailing
 //     signal-only submit, exactly the shape NriSwapChain::Present uses to
 //     stamp its pacing fence. Without it nothing would bound frames in flight
 //     and the per-frame-slot command buffers, upload-ring arena and node
@@ -503,7 +503,7 @@ namespace Arcane
             std::optional<glm::ivec2> hoverPixel;   // the outline seed's cursor
 
             // Rides with THIS frame's readback copy and comes back beside the
-            // id kSwapchainFramesInFlight frames later (PickNode::
+            // id FramesInFlight() frames later (PickNode::
             // LastProbeTicket). The vehicle ascribes no meaning to any value:
             // it is the HOST's label for "which request does this answer",
             // which a host that probes a different pixel every frame cannot do
@@ -1066,7 +1066,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t CurrentPickTicket() const noexcept { return m_currentPickTicket; }
 
         // The entity id read back at the probe pixel, or nullopt when no
-        // readback has landed yet (the first kSwapchainFramesInFlight frames of
+        // readback has landed yet (the first FramesInFlight() frames of
         // a probe run) or the probe pixel was outside the surface. 0 is a
         // legitimate value and means BACKGROUND -- the caller decides that is a
         // miss, not this.
@@ -1128,7 +1128,7 @@ namespace Arcane
 
         // Frames this vehicle has actually PRESENTED. Skipped frames do not
         // count -- it advances in lockstep with the swapchain's own frame
-        // counter, which is what makes `frameIndex % kSwapchainFramesInFlight`
+        // counter, which is what makes `frameIndex % FramesInFlight()`
         // a safe command-buffer slot.
         //
         // OFFSCREEN MODE counts frames RENDERED (nothing is presented), and the
@@ -1147,7 +1147,7 @@ namespace Arcane
         // Stable for the whole of one RenderFrame call.
         [[nodiscard]] std::uint32_t FrameSlot() const noexcept
         {
-            return (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+            return (std::uint32_t)(m_frameIndex % FramesInFlight());
         }
 
         // Installed once by the frame driver, right after Create(). Without it
@@ -1333,7 +1333,7 @@ namespace Arcane
         void InvalidateMeshAlbedoSlot(const Guid& id) { m_meshAlbedoSlots.erase(id); }
 
     private:
-        NriGraphContext() = default;
+        NriGraphContext();   // latches FramesInFlight() before any per-frame resource exists
 
         bool Init(const HostConfig& config, Window& window);
         bool InitOffscreen(const HostConfig& config, NriDevice& shared,
@@ -1547,7 +1547,7 @@ namespace Arcane
         // like every other NRI object here.
         //
         // m_offscreenFence is signalled with m_frameIndex + 1 by a trailing
-        // signal-only QueueSubmit and waited on kSwapchainFramesInFlight deep
+        // signal-only QueueSubmit and waited on FramesInFlight() deep
         // at the top of the next frame -- the same 1-based values, the same
         // depth and the same polling wait NriSwapChain's pacing fence uses.
         // "This offscreen context is its process's ONLY graph context, so it

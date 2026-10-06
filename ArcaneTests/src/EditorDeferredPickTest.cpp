@@ -216,7 +216,7 @@ TEST_CASE("deferred pick: Reset drops an outstanding request without applying it
 
 TEST_CASE("deferred pick: a request that never lands is abandoned, once and loudly", "[editor]")
 {
-    // The readback IS guaranteed to drain after kSwapchainFramesInFlight
+    // The readback IS guaranteed to drain after FramesInFlight()
     // rendered frames, and the host keeps the chain declared for exactly that
     // long -- so this should never fire. It exists because the failure it
     // guards is a machine that never returns to Idle, which would silently keep
@@ -252,7 +252,7 @@ TEST_CASE("deferred pick: the retained table survives the live one being rebuilt
 {
     // The whole reason the table is COPIED at TakeRequest rather than borrowed:
     // the caller's vector is rebuilt by CollectPickables every frame, and the
-    // answer arrives kSwapchainFramesInFlight frames later.
+    // answer arrives FramesInFlight() frames later.
     DeferredPick pick;
     std::vector<Astra::Entity> live = Table({ 1, 2, 3 });
 

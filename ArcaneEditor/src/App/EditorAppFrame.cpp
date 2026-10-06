@@ -3708,7 +3708,7 @@ namespace Arcane::Editor
         //
         // ============ THE PICK IS DEFERRED, NOT SYNCHRONOUS ============
         // The readback is a graph COPY node whose value lands
-        // kSwapchainFramesInFlight frames later, so the click is ARMED here
+        // FramesInFlight() frames later, so the click is ARMED here
         // and the resulting Select/Toggle/Clear is APPLIED here on a LATER
         // frame. That latency is inherent to reading a GPU-rasterised id back
         // without stalling the device, and it is the only pick path there is.
@@ -3759,7 +3759,7 @@ namespace Arcane::Editor
                 }
             }
             // Bounded, and loud if it ever fires: the readback is
-            // guaranteed to drain after kSwapchainFramesInFlight RENDERED
+            // guaranteed to drain after FramesInFlight() RENDERED
             // frames, and ArmGraphViewportFrame keeps the chain declared
             // for exactly as long as this is Busy() -- so the only way to
             // exhaust the budget is a very long run of Skipped frames (a

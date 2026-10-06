@@ -23,7 +23,7 @@
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Render/ShaderPaths.hpp>            // ShaderPaths::ResolveFlavorDir
-#include <Arcane/Render/FramePacing.hpp>              // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>              // FramesInFlight(), LatchFramesInFlight()
 
 #include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
 
@@ -120,6 +120,14 @@ namespace Arcane
 
             core.Wait(*fence, value);
         }
+    }
+
+    // FIRST, before any per-frame resource: render.framesInFlight (Restart)
+    // becomes FramesInFlight() for the rest of the process, so the ring,
+    // the command-buffer slots, the node pools and the swapchain all agree.
+    NriGraphContext::NriGraphContext()
+    {
+        LatchFramesInFlight();
     }
 
     std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config, Window& window)
@@ -328,7 +336,7 @@ namespace Arcane
 
         ARC_INFO("[nri-graph] offscreen ready: {}x{} format={} ring={}KiB/slot, pacing {} frames deep",
                  m_offscreenWidth, m_offscreenHeight, (int)m_format,
-                 kUploadRingBytesPerFrame / 1024, kSwapchainFramesInFlight);
+                 kUploadRingBytesPerFrame / 1024, FramesInFlight());
         return true;
     }
 
@@ -388,7 +396,7 @@ namespace Arcane
         if (!m_ring.Init(*m_device, kUploadRingBytesPerFrame))
         {
             ARC_ERROR("[nri-graph] upload-ring init failed ({} bytes x {} slots)",
-                      kUploadRingBytesPerFrame, kSwapchainFramesInFlight);
+                      kUploadRingBytesPerFrame, FramesInFlight());
             return false;
         }
 
@@ -549,7 +557,7 @@ namespace Arcane
                      // it can be stated once here at boot.
                      std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
                               OutlineNode::kMaxJfaSteps),
-                     kSwapchainFramesInFlight);
+                     FramesInFlight());
         }
         else if (nodes.pickOutline)
         {
@@ -559,7 +567,7 @@ namespace Arcane
                      "armed it",
                      std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
                               OutlineNode::kMaxJfaSteps),
-                     kSwapchainFramesInFlight);
+                     FramesInFlight());
         }
 
         return true;
@@ -898,7 +906,7 @@ namespace Arcane
         // The number to size kUploadRingBytesPerFrame from once a real frame
         // has run -- the peak across every slot, not slot 0's.
         std::uint64_t ringPeak = 0;
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
             ringPeak = ringPeak < m_ring.HighWater(slot) ? m_ring.HighWater(slot) : ringPeak;
         // Two lines rather than one composed one, because the host-window
         // wording is what a desk log is read against (D3b) and must not move.
@@ -1763,7 +1771,7 @@ namespace Arcane
         // NriSwapChain's own frame counter -- which is what makes the pacing
         // wait inside AcquireNextTexture the proof that this slot is safe to
         // reset (RgExecuteDesc::frameSlot's caller contract).
-        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % FramesInFlight());
         m_ring.BeginFrame(slot);   // the caller owes this before Execute()
 
         const RgExecuteDesc desc{ *m_device, m_graves, m_swap.get(), m_ring, m_pipelines, slot };
@@ -1847,21 +1855,22 @@ namespace Arcane
         // On the present path NriSwapChain::AcquireNextTexture holds the wait
         // that makes this frame's slot safe to reuse -- and it is not
         // decoration: the frame is about to reset frame slot
-        // `m_frameIndex % kSwapchainFramesInFlight`'s command allocator
+        // `m_frameIndex % FramesInFlight()`'s command allocator
         // (RgExecuteDesc::frameSlot's caller contract), reset that slot's
         // upload-ring arena, and rewrite that slot's descriptor sets in the
         // tonemap, the post chain and the HUD. Every one of those is a write to
-        // memory the GPU may still be reading kSwapchainFramesInFlight frames
+        // memory the GPU may still be reading FramesInFlight() frames
         // back. Nothing acquires here, so the wait has to be ours.
         //
         // Same shape as the swapchain's, deliberately: ONE timeline fence,
         // 1-based signal values, wait for `m_frameIndex - depth + 1`, and no
         // call at all for the first `depth` frames (nothing has been submitted
         // to wait on, and value 0 is what an unsignalled fence already reads).
-        if (m_frameIndex >= kSwapchainFramesInFlight)
+        const std::uint32_t framesInFlight = FramesInFlight();
+        if (m_frameIndex >= framesInFlight)
         {
             PollingWaitForTimelineFence(m_device->Core(), m_offscreenFence,
-                                        m_frameIndex - kSwapchainFramesInFlight + 1);
+                                        m_frameIndex - framesInFlight + 1);
         }
 
         FrameDesc effective = frame;
@@ -1901,7 +1910,7 @@ namespace Arcane
             return FrameOutcome::Failed;
         }
 
-        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % FramesInFlight());
         m_ring.BeginFrame(slot);   // the caller owes this before Execute()
 
         // THE ONE LINE THAT DIFFERS FROM THE PRESENT PATH'S EXECUTE: no
@@ -2019,7 +2028,7 @@ namespace Arcane
     std::optional<std::uint32_t> NriGraphContext::ProbeId() const noexcept
     {
         // No node, an out-of-range coordinate, or no readback landed yet (the
-        // first kSwapchainFramesInFlight frames of a probe run) all report
+        // first FramesInFlight() frames of a probe run) all report
         // NOTHING rather than 0 -- 0 is a real answer (background) and the
         // caller must be able to tell the two apart.
         if (!m_pick || m_probeOutOfRange)

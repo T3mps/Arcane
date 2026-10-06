@@ -39,7 +39,7 @@
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
 #include <Arcane/Render/GpuSceneTypes.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 
@@ -244,16 +244,16 @@ namespace Arcane
         std::uint32_t    m_rowCapacity = 0;
         std::uint64_t    m_instanceGeneration = 1;
         std::uint64_t    m_syncedGeneration = 0;
-        nri::Buffer*     m_args[kSwapchainFramesInFlight] = {};
-        nri::Descriptor* m_argsStorageView[kSwapchainFramesInFlight] = {};
-        std::uint32_t    m_argCapacity[kSwapchainFramesInFlight] = {};
-        nri::Buffer*     m_visible[kSwapchainFramesInFlight] = {};
-        nri::Descriptor* m_visibleView[kSwapchainFramesInFlight] = {};
-        nri::Descriptor* m_visibleStorageView[kSwapchainFramesInFlight] = {};
-        std::uint32_t    m_visibleCapacity[kSwapchainFramesInFlight] = {};
-        nri::Buffer*     m_cullBatches[kSwapchainFramesInFlight] = {};
-        nri::Descriptor* m_cullBatchesView[kSwapchainFramesInFlight] = {};
-        std::uint32_t    m_cullBatchCapacity[kSwapchainFramesInFlight] = {};
+        nri::Buffer*     m_args[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_argsStorageView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_argCapacity[kMaxFramesInFlight] = {};
+        nri::Buffer*     m_visible[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_visibleView[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_visibleStorageView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_visibleCapacity[kMaxFramesInFlight] = {};
+        nri::Buffer*     m_cullBatches[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_cullBatchesView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_cullBatchCapacity[kMaxFramesInFlight] = {};
         bool             m_warnedScratchOverflow = false;
 
         // The grow-copy Reserve leaves for Apply: the retired buffer holding
@@ -309,7 +309,7 @@ namespace Arcane
                 Pending       pending;             // recorded, not published: the slot-reuse path's input
             };
             const nri::CoreInterface* core = nullptr;
-            Slot                      slots[kSwapchainFramesInFlight];
+            Slot                      slots[kMaxFramesInFlight];
             bool                      released = false;
             // THE RING-GLOBAL HIGH-WATER MARK (the ring block's "one order"):
             // the newest seq any publication has claimed, across every slot

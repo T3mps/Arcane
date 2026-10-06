@@ -137,7 +137,7 @@
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
 
 #include <glm/glm.hpp>
 
@@ -596,7 +596,7 @@ namespace Arcane
         // capacity that does not cover what the node allocates is not a
         // compile error and not a wrong pixel -- it is an
         // AllocateDescriptorSets failure part-way through Create at the
-        // desk. TWO dimensions now (Task 8/10): kSwapchainFramesInFlight
+        // desk. TWO dimensions now (Task 8/10): FramesInFlight()
         // frame sets (one CONSTANT_BUFFER descriptor each, plus -- F3 plan 1
         // T7 -- two STRUCTURED_BUFFER descriptors each: the instance rows
         // and the slot's visible indices) plus ONE bindless set
@@ -686,11 +686,11 @@ namespace Arcane
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
 
         // The per-frame-slot b1 arena: ONE HOST_UPLOAD buffer, persistently
-        // mapped, carved into kSwapchainFramesInFlight regions.
+        // mapped, carved into FramesInFlight() regions.
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_frameCbView[kMaxFramesInFlight]{};
 
         // THE PER-FRAME descriptor sets, one per frame slot. Each binds that
         // slot's b1 region (written ONCE at Create -- Task 8/10 moved the
@@ -699,7 +699,7 @@ namespace Arcane
         // GPU scene's t0 instance view + t1 the slot's visible-index view,
         // rewritten by Record when either moved. One dimension only (the
         // frame slot), because the slot is the only thing a set differs by.
-        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
+        nri::DescriptorSet* m_sets[kMaxFramesInFlight]{};
 
         // WHAT EACH SLOT'S SET CURRENTLY NAMES at t0/t1 (F3 plan 1 T7), so
         // Record rewrites the two ranges only when the GPU scene's buffers
@@ -709,8 +709,8 @@ namespace Arcane
         // creates the slot's buffer -- there is NO generation counter for
         // those, so the pointer itself is the identity). Zero / null until
         // the slot's first Record, which therefore always writes.
-        std::uint64_t          m_setInstanceGen[kSwapchainFramesInFlight] = {};
-        const nri::Descriptor* m_setVisibleView[kSwapchainFramesInFlight] = {};
+        std::uint64_t          m_setInstanceGen[kMaxFramesInFlight] = {};
+        const nri::Descriptor* m_setVisibleView[kMaxFramesInFlight] = {};
 
         // MEMBERS, not locals, and that is load-bearing:
         // nri::GraphicsPipelineDesc::vertexInput is a POINTER into caller

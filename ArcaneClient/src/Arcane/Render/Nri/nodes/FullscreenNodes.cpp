@@ -296,12 +296,12 @@ namespace Arcane
         // frame slot) so the set a frame binds is the one whose arena region
         // that same frame owns -- which is what keeps ResetDescriptorPool (and
         // its fence discipline) out of this file entirely.
-        constexpr std::uint32_t kSets = kMaxPasses * kSwapchainFramesInFlight;
+        const std::uint32_t sets = kMaxPasses * FramesInFlight();
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kSets;
-        poolDesc.constantBufferMaxNum = 2 * kSets;                       // b0 + b1
-        poolDesc.textureMaxNum        = (kMaxTextures + kMaxInputs) * kSets;
-        poolDesc.samplerMaxNum        = kSets;
+        poolDesc.descriptorSetMaxNum  = sets;
+        poolDesc.constantBufferMaxNum = 2 * sets;                        // b0 + b1
+        poolDesc.textureMaxNum        = (kMaxTextures + kMaxInputs) * sets;
+        poolDesc.samplerMaxNum        = sets;
         if (!ARC_NRI_CHECK(m_device->Core().CreateDescriptorPool(m_device->Device(), poolDesc, m_pool))
             || !m_pool)
         {
@@ -324,7 +324,7 @@ namespace Arcane
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
 
         const std::uint64_t arenaBytes =
-            (std::uint64_t)kCbRegionsPerFrame * kSwapchainFramesInFlight * m_arenaStride;
+            (std::uint64_t)kCbRegionsPerFrame * FramesInFlight() * m_arenaStride;
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -354,7 +354,7 @@ namespace Arcane
         // Both CB views per frame slot, created ONCE. Their contents change
         // every frame; their (buffer, offset) never does, which is what lets a
         // descriptor set naming them be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -684,6 +684,7 @@ namespace Arcane
             }
         }
 
+        const std::uint32_t framesInFlight = FramesInFlight();
         for (std::uint32_t p = 0; p < passCount; ++p)
         {
             Pass& pass = m_passes[p];
@@ -701,7 +702,7 @@ namespace Arcane
                                           HashBytes(pass.vs->data(), pass.vs->size()))
                               | kShaderPairMark;
 
-            for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+            for (std::uint32_t slot = 0; slot < framesInFlight; ++slot)
             {
                 if (!pass.set[slot]
                     && (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *pipelineLayout, 0,
@@ -709,7 +710,7 @@ namespace Arcane
                         || !pass.set[slot]))
                 {
                     return refuse("a descriptor set could not be allocated -- the pool holds "
-                                  + std::to_string(kMaxPasses * kSwapchainFramesInFlight)
+                                  + std::to_string(kMaxPasses * framesInFlight)
                                   + " sets, sized by kMaxPasses");
                 }
 
@@ -889,7 +890,7 @@ namespace Arcane
     {
         const nri::CoreInterface& core = context.core;
 
-        if (!m_ready || pass >= m_passes.size() || frameSlot >= kSwapchainFramesInFlight)
+        if (!m_ready || pass >= m_passes.size() || frameSlot >= FramesInFlight())
         {
             GraphError("PostChainNode: asked to record a pass of a chain that is not prepared");
             return;
@@ -1174,16 +1175,17 @@ namespace Arcane
         }
 
         // ONE SET PER FRAME SLOT -- see SOURCE VIEWS AND THE POOL, mechanism 2.
+        const std::uint32_t framesInFlight = FramesInFlight();
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum = kSwapchainFramesInFlight;
-        poolDesc.textureMaxNum       = kSwapchainFramesInFlight;
-        poolDesc.samplerMaxNum       = kSwapchainFramesInFlight;
+        poolDesc.descriptorSetMaxNum = framesInFlight;
+        poolDesc.textureMaxNum       = framesInFlight;
+        poolDesc.samplerMaxNum       = framesInFlight;
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] TonemapNode: descriptor pool creation failed");
             return false;
         }
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < framesInFlight; ++slot)
         {
             if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &m_set[slot], 1, 0))
                 || !m_set[slot])
@@ -1304,7 +1306,7 @@ namespace Arcane
     bool TonemapNode::EnsureSource(const nri::CoreInterface& core, nri::Texture* texture,
                                    std::uint32_t frameSlot)
     {
-        if (frameSlot >= kSwapchainFramesInFlight || !m_set[frameSlot])
+        if (frameSlot >= FramesInFlight() || !m_set[frameSlot])
         {
             GraphError("TonemapNode: no descriptor set for this frame slot");
             return false;

@@ -90,9 +90,10 @@ namespace Arcane
         m_layoutId = m_pipelines->RegisterLayout(layout);
         if (m_layoutId == NriPipelineCache::kInvalidLayout) return false;
         nri::DescriptorPoolDesc pool = {};
-        pool.descriptorSetMaxNum = kSwapchainFramesInFlight; pool.structuredBufferMaxNum = 2 * kSwapchainFramesInFlight; pool.storageStructuredBufferMaxNum = 2 * kSwapchainFramesInFlight;
+        const std::uint32_t framesInFlight = FramesInFlight();
+        pool.descriptorSetMaxNum = framesInFlight; pool.structuredBufferMaxNum = 2 * framesInFlight; pool.storageStructuredBufferMaxNum = 2 * framesInFlight;
         if (!ARC_NRI_CHECK(m_device->Core().CreateDescriptorPool(m_device->Device(), pool, m_pool)) || !m_pool) return false;
-        if (!ARC_NRI_CHECK(m_device->Core().AllocateDescriptorSets(*m_pool, *m_pipelines->Layout(m_layoutId), 0, m_sets, kSwapchainFramesInFlight, 0))) return false;
+        if (!ARC_NRI_CHECK(m_device->Core().AllocateDescriptorSets(*m_pool, *m_pipelines->Layout(m_layoutId), 0, m_sets, framesInFlight, 0))) return false;
         m_pipeline = m_pipelines->GetCompute({ 0xF3000004ull, m_layoutId }, [this](nri::ComputePipelineDesc& desc)
         {
             desc.shader.stage = nri::StageBits::COMPUTE_SHADER; desc.shader.bytecode = m_shader.data(); desc.shader.size = m_shader.size(); desc.shader.entryPointName = "cs_main";
@@ -114,7 +115,7 @@ namespace Arcane
 
     void MeshCullNode::Record(RenderGraphNodeContext& context, GpuScene& scene, const GpuSceneFrame* frame, std::uint32_t slot)
     {
-        if (!frame || frame->rowCount == 0 || !m_pipeline || slot >= kSwapchainFramesInFlight) return;
+        if (!frame || frame->rowCount == 0 || !m_pipeline || slot >= FramesInFlight()) return;
         if (!UpdateSet(slot, scene)) { ARC_ERROR("[nri-graph] MeshCullNode: missing GPU-scene descriptors"); return; }
         CullConstants constants;
         constants.rowCount = frame->rowCount;

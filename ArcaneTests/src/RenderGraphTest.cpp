@@ -41,7 +41,7 @@
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
-#include <Arcane/Render/FramePacing.hpp>         // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>         // FramesInFlight()
 
 // AFTER the NRI + engine headers, deliberately: this file's include-order note
 // above pins NRI first, and imgui.h is an ordinary header with no ERROR clash.
@@ -1986,7 +1986,7 @@ TEST_CASE("uploadring layout: Reset (BeginFrame's half) zeroes the cursor but le
 
 TEST_CASE("uploadring layout: two independent slots never see each other's allocations", "[nri]")
 {
-    // NriUploadRing owns kSwapchainFramesInFlight of these; nothing in
+    // NriUploadRing owns FramesInFlight() of these; nothing in
     // RingLayout itself is shared across instances -- this proves it.
     Arcane::RingLayout slotA, slotB;
     slotA.Init(16);
@@ -2315,7 +2315,7 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
     // THE loop shape Task 7's frame driver runs. Before fix round 1, Reset()
     // buried the pool, so this -- the only way a real driver can clear
     // declarations -- re-created every render target every frame and buried
-    // the old ones, reaped kSwapchainFramesInFlight frames later.
+    // the old ones, reaped FramesInFlight() frames later.
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
@@ -2335,7 +2335,7 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
 
         const Arcane::RgCompiled    compiled = CompileOk(graph);
         const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
-                                          frame % Arcane::kSwapchainFramesInFlight };
+                                          frame % Arcane::FramesInFlight() };
         REQUIRE(graph.Execute(desc, compiled));
 
         if (frame == 0)
@@ -3299,7 +3299,7 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
         shape.Declare(graph);
 
         const Arcane::RgExecuteDesc desc{ *device, viewportLane, nullptr, ring, pipelines,
-                                          Arcane::kSwapchainFramesInFlight };
+                                          Arcane::FramesInFlight() };
         CHECK_FALSE(graph.Execute(desc, CompileOk(graph)));
 
         // ENTERED: the lane and the device are latched. NEVER SUCCEEDED: the
@@ -3438,7 +3438,7 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
         CHECK(backend.HasEntryFor(output));
         CHECK(backend.LiveTextureCount() == 1);
         // The retired set is NOT recycled into it -- no frame has been recorded
-        // since the retirement, so the gate (kSwapchainFramesInFlight recorded
+        // since the retirement, so the gate (FramesInFlight() recorded
         // frames) has not opened and a fresh one was allocated instead.
         CHECK(backend.RetiredSetCount() == 1);
 
@@ -3789,7 +3789,7 @@ TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
     const Arcane::RgCompiled compiled = CompileOk(graph);
 
     const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
-                                      Arcane::kSwapchainFramesInFlight };
+                                      Arcane::FramesInFlight() };
     CHECK_FALSE(graph.Execute(desc, compiled));
     CHECK(graph.DebugSubmitCount() == 0);
     CHECK(shape.execCount[0] == 0);
@@ -5439,9 +5439,9 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
             {
@@ -5454,7 +5454,7 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
             }
         }
         // Every region of the buffer Batch2DNode allocates is claimed exactly once.
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight());
     }
 
     // Region 0 of each frame slot is the GLOBALS CB and material slot n is
@@ -5647,9 +5647,9 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
             {
@@ -5661,7 +5661,7 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
                 seen.push_back(offset);
             }
         }
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight());
     }
 
     // The globals CB and the material CB are DIFFERENT regions of the same
@@ -7255,9 +7255,9 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
     const std::uint64_t strides[] = { 256, 64 };
     for (const std::uint64_t stride : strides)
     {
-        const std::uint64_t arenaBytes = (std::uint64_t)Arcane::kSwapchainFramesInFlight * stride;
+        const std::uint64_t arenaBytes = (std::uint64_t)Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             const std::uint64_t offset = Node::CbRegionOffset(stride, slot);
             CHECK(offset % stride == 0);
@@ -7267,7 +7267,7 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
             seen.push_back(offset);
         }
         // Every region of the buffer MeshNode allocates is claimed exactly once.
-        CHECK(seen.size() == (std::size_t)Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Arcane::FramesInFlight());
     }
 
     // Slot 0 starts the buffer and slot n is n strides in -- the indexing
@@ -7275,8 +7275,8 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
     // the arena DOUBLE-BUFFERED rather than shared.
     CHECK(Node::CbRegionOffset(256, 0) == 0);
     CHECK(Node::CbRegionOffset(256, 1) == 256);
-    static_assert(Arcane::kSwapchainFramesInFlight >= 2,
-                  "an arena with one region is not double-buffered against anything");
+    // An arena with one region is not double-buffered against anything.
+    CHECK(Arcane::FramesInFlight() >= 2);
 }
 
 TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it allocates", "[nri]")
@@ -7288,7 +7288,7 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // the whole vehicle (MeshNode is built eagerly). No device can show the
     // numbers agree; this can.
     //
-    // The expectations are recomputed here from kSwapchainFramesInFlight,
+    // The expectations are recomputed here from FramesInFlight(),
     // MeshNode::kBindlessCapacity and mesh.hlsl's register map rather than
     // copied from the implementation, so a set that gains a dimension
     // without the pool gaining one fails here.
@@ -7297,15 +7297,15 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // Task 8/10: ONE set per frame slot (b1 is the only per-frame thing left
     // in a set -- t0/s0 moved out, see below) PLUS ONE bindless set, shared
     // across every frame, that is not part of that per-frame dimension.
-    constexpr std::uint32_t kFrameSets = Arcane::kSwapchainFramesInFlight;
-    CHECK(pool.descriptorSetMaxNum == kFrameSets + 1);
+    const std::uint32_t frameSets = Arcane::FramesInFlight();
+    CHECK(pool.descriptorSetMaxNum == frameSets + 1);
 
     // ...each per-frame set carries exactly b1; the bindless set carries up
     // to kBindlessCapacity t0 TEXTURE descriptors. s0 is a ROOT/immutable
     // sampler now (RootSamplerDesc, CreateBindings) -- "not allocated from a
     // descriptor pool" (NRIDescs.h's own words on RootSamplerDesc) -- so
     // samplerMaxNum claims nothing at all.
-    CHECK(pool.constantBufferMaxNum == kFrameSets);
+    CHECK(pool.constantBufferMaxNum == frameSets);
     CHECK(pool.textureMaxNum        == Arcane::MeshNode::kBindlessCapacity);
     CHECK(pool.samplerMaxNum        == 0);
 
@@ -7313,7 +7313,7 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // structured SRVs -- t0 (the instance rows) and t1 (this slot's visible
     // indices), space1 -- rewritten per slot when the scene's buffers change.
     // Two per frame set, no more.
-    CHECK(pool.structuredBufferMaxNum == 2 * kFrameSets);
+    CHECK(pool.structuredBufferMaxNum == 2 * frameSets);
 
     // Nothing else is claimed: this node binds no raw/storage buffers and no
     // acceleration structures, so a nonzero here would mean the pool was
@@ -7353,9 +7353,9 @@ TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal 
             if (slice > 1)
                 CHECK(stride % slice == 0);    // ...and every region offset is legal
 
-            const std::uint64_t bytes = stride * Arcane::kSwapchainFramesInFlight;
+            const std::uint64_t bytes = stride * Arcane::FramesInFlight();
             std::vector<std::uint64_t> seen;
-            for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+            for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
             {
                 const std::uint64_t offset = slot * stride;
                 if (slice > 1)
@@ -7370,7 +7370,7 @@ TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal 
 
     // ONE REGION PER FRAME IN FLIGHT is the whole latency contract: fewer, and
     // the CPU would read a region the GPU is still writing.
-    CHECK(Arcane::kSwapchainFramesInFlight >= 2);
+    CHECK(Arcane::FramesInFlight() >= 2);
 }
 
 TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, stride-aligned "
@@ -7409,9 +7409,9 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
             {
@@ -7423,7 +7423,7 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
                 seen.push_back(offset);
             }
         }
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight());
     }
 
     // Two DIFFERENT jump-flood steps never share a region -- the mistake that
@@ -7653,7 +7653,7 @@ TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its cap
     constexpr std::uint32_t kSpriteTex   = Arcane::Batch2DNode::kMaxSpriteTextures;
     constexpr std::uint32_t kMatSlots    = Arcane::Batch2DNode::kMaxMaterialSlots;
     constexpr std::uint32_t kMatTextures = Arcane::Batch2DNode::kMaxMaterialTextures;
-    constexpr std::uint32_t kFrames      = Arcane::kSwapchainFramesInFlight;
+    const std::uint32_t     frames       = Arcane::FramesInFlight();
 
     // Built-in sets: the nil-texture one plus one per distinct sprite texture.
     // No frame-slot dimension -- their contents (t0 + s0) carry nothing
@@ -7661,7 +7661,7 @@ TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its cap
     constexpr std::uint32_t builtInSets = 1 + kSpriteTex;
     // Material sets: per material slot, per FRAME SLOT, per texture variant --
     // and variant 0 is the nil-texture one, hence (1 + kSpriteTex).
-    constexpr std::uint32_t materialSets = kMatSlots * kFrames * (1 + kSpriteTex);
+    const std::uint32_t materialSets = kMatSlots * frames * (1 + kSpriteTex);
 
     CHECK(pool.descriptorSetMaxNum >= builtInSets + materialSets);
     // A built-in set binds t0 alone; a material set binds t0 plus its declared
@@ -7676,6 +7676,6 @@ TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its cap
     // The frame-slot dimension is genuinely IN the material count -- a pool
     // sized for one frame slot would double-book the sets a frame in flight is
     // still reading, which is the failure this multiplication exists to avoid.
-    static_assert(kFrames >= 2, "the arena and the material sets are double-buffered");
-    CHECK(pool.descriptorSetMaxNum >= kMatSlots * kFrames);
+    CHECK(frames >= 2);   // the arena and the material sets are double-buffered
+    CHECK(pool.descriptorSetMaxNum >= kMatSlots * frames);
 }

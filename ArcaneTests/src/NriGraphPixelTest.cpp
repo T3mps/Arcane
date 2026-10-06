@@ -61,7 +61,7 @@
 
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/FramePacing.hpp>          // kSwapchainFramesInFlight -- the probe latency
+#include <Arcane/Render/FramePacing.hpp>          // FramesInFlight() -- the probe latency
 #include <Arcane/Render/GpuSceneSync.hpp>         // GpuSceneSync / BuildGpuSceneFrame -- the registry-backed draw (F3 plan 1 T7)
 #include <Arcane/Render/VisibilitySystem.hpp>     // BuildVisibleSet / VisibleSet -- what the indirect path draws from
 #include <Arcane/Scene/BoundsSystem.hpp>          // WorldBounds for the GPU scene's rows
@@ -511,8 +511,8 @@ TEST_CASE("pixel: a QuadWorld quad and a screen Rect land in their own rectangle
 //    cases need no registry and leave it default-constructed deliberately.
 //
 //    THE LATENCY IS PART OF THE CONTRACT: the readback rides
-//    kSwapchainFramesInFlight frames behind, so ProbeId() is nullopt until that
-//    many frames have gone by. Rendering exactly kSwapchainFramesInFlight + 1
+//    FramesInFlight() frames behind, so ProbeId() is nullopt until that
+//    many frames have gone by. Rendering exactly FramesInFlight() + 1
 //    frames and requiring a value on the last is what pins the latency at its
 //    documented depth -- a regression that made it deeper would fail here
 //    rather than silently return a stale id to a host.
@@ -554,7 +554,7 @@ namespace
         frame.pickPixel   = pixel;
         frame.pickTicket  = ticket;
 
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight(); ++i)
         {
             RenderOne(*v.ctx, frame);
             // Nothing has come back yet, by construction. Asserted rather than
@@ -1176,7 +1176,7 @@ namespace
             v.ctx->SetMeshSupply(SupplyTwo(nearId, nearCube, farId, farCube));
             Arcane::NriGraphContext::FrameDesc frame;
             frame.pickOutline = true; frame.pickables = drawables; frame.pickPixel = pixel; frame.pickView = view;
-            for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight; ++i) RenderOne(*v.ctx, frame);
+            for (std::uint32_t i = 0; i < Arcane::FramesInFlight(); ++i) RenderOne(*v.ctx, frame);
             RenderOne(*v.ctx, frame);
             const auto id = v.ctx->ProbeId();
             REQUIRE(id.has_value());
@@ -2492,11 +2492,11 @@ namespace
         CHECK(renderer.PoolCount() >= 2);
         CHECK(Arcane::RenderErrorCount() == before);
 
-        // kSwapchainFramesInFlight + 1 frames, so a steady-state frame (the
+        // FramesInFlight() + 1 frames, so a steady-state frame (the
         // atlas already registered, every set reused) is recorded too; the
         // last one is captured.
-        constexpr std::uint32_t kFrames = Arcane::kSwapchainFramesInFlight + 1u;
-        for (std::uint32_t frameIndex = 0; frameIndex < kFrames; ++frameIndex)
+        const std::uint32_t frames = Arcane::FramesInFlight() + 1u;
+        for (std::uint32_t frameIndex = 0; frameIndex < frames; ++frameIndex)
         {
             ImGui::NewFrame();
             ImDrawList* const draw = ImGui::GetForegroundDrawList();
@@ -2514,7 +2514,7 @@ namespace
 
             Arcane::NriGraphContext::FrameDesc frame;
             frame.imgui   = ImGui::GetDrawData();
-            frame.capture = frameIndex + 1u == kFrames;
+            frame.capture = frameIndex + 1u == frames;
             RenderOne(*v.ctx, frame);
         }
 

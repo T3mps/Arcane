@@ -259,18 +259,17 @@ namespace Arcane
         //     slot), where variant 0 is the nil-texture one Task 9 had. Hence
         //     the (1 + kMaxSpriteTextures) factor.
         constexpr std::uint32_t kBuiltInSets  = 1 + kMaxSpriteTextures;
-        constexpr std::uint32_t kMaterialSets =
-            kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures);
+        const std::uint32_t materialSets  = kMaxMaterialSlots * FramesInFlight() * (1 + kMaxSpriteTextures);
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kBuiltInSets + kMaterialSets;
+        poolDesc.descriptorSetMaxNum  = kBuiltInSets + materialSets;
         // Per material set: the sprite's t0 plus its declared t1..N. Per
         // built-in set: t0 alone.
-        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * kMaterialSets;
-        poolDesc.samplerMaxNum        = kBuiltInSets + kMaterialSets;
+        poolDesc.textureMaxNum        = kBuiltInSets + (1 + kMaxMaterialTextures) * materialSets;
+        poolDesc.samplerMaxNum        = kBuiltInSets + materialSets;
         // Per material set: material CB b1 (when the template has numeric
         // params) and globals CB b2. A built-in set has neither.
-        poolDesc.constantBufferMaxNum = 2 * kMaterialSets;
+        poolDesc.constantBufferMaxNum = 2 * materialSets;
         return poolDesc;
     }
 
@@ -507,7 +506,7 @@ namespace Arcane
         m_materials.reserve(kMaxMaterialSlots);
 
         const std::uint64_t regionsPerFrame = kMaxMaterialSlots + 1;
-        const std::uint64_t arenaBytes = regionsPerFrame * kSwapchainFramesInFlight * m_arenaStride;
+        const std::uint64_t arenaBytes = regionsPerFrame * FramesInFlight() * m_arenaStride;
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -537,7 +536,7 @@ namespace Arcane
         // The globals CB view per frame slot, created ONCE. Its contents change
         // every frame; its (buffer, offset) never does, which is exactly what
         // lets a descriptor set naming it be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -936,7 +935,8 @@ namespace Arcane
 
         MaterialSlot::TextureVariant fresh;
         fresh.id = id;
-        for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
+        const std::uint32_t framesInFlight = FramesInFlight();
+        for (std::uint32_t frameSlot = 0; frameSlot < framesInFlight; ++frameSlot)
         {
             if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
                                                             &fresh.set[frameSlot], 1, 0))
@@ -945,7 +945,7 @@ namespace Arcane
                 ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for a "
                           "material's sprite-texture variant -- the pool holds {} material sets, "
                           "sized by kMaxMaterialSlots x kMaxSpriteTextures",
-                          kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures));
+                          kMaxMaterialSlots * framesInFlight * (1 + kMaxSpriteTextures));
                 return fallback();
             }
             WriteMaterialSet(slot, *fresh.set[frameSlot], frameSlot, spriteView);
@@ -1048,7 +1048,8 @@ namespace Arcane
         // slot and only rewritten on a rebuild, which idles first
         // (EnsureMaterial) -- so nothing here is ever written while a frame in
         // flight reads it.
-        for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
+        const std::uint32_t framesInFlight = FramesInFlight();
+        for (std::uint32_t frameSlot = 0; frameSlot < framesInFlight; ++frameSlot)
         {
             if (cbSize > 0 && !slot.cbView[frameSlot])
             {
@@ -1075,7 +1076,7 @@ namespace Arcane
         if (slot.variants.empty())
         {
             MaterialSlot::TextureVariant nil;
-            for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
+            for (std::uint32_t frameSlot = 0; frameSlot < framesInFlight; ++frameSlot)
             {
                 if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0,
                                                                 &nil.set[frameSlot], 1, 0))
@@ -1084,7 +1085,7 @@ namespace Arcane
                     ARC_ERROR("[nri-graph] Batch2DNode: descriptor-set allocation failed for material "
                               "'{}' -- the pool holds {} material sets, sized by kMaxMaterialSlots "
                               "x kMaxSpriteTextures", desc.templ->Name(),
-                              kMaxMaterialSlots * kSwapchainFramesInFlight * (1 + kMaxSpriteTextures));
+                              kMaxMaterialSlots * framesInFlight * (1 + kMaxSpriteTextures));
                     return false;
                 }
             }
@@ -1099,7 +1100,7 @@ namespace Arcane
         for (MaterialSlot::TextureVariant& variant : slot.variants)
         {
             nri::Descriptor* spriteView = variant.id.IsValid() ? TextureView(variant.id) : nullptr;
-            for (std::uint32_t frameSlot = 0; frameSlot < kSwapchainFramesInFlight; ++frameSlot)
+            for (std::uint32_t frameSlot = 0; frameSlot < framesInFlight; ++frameSlot)
                 if (variant.set[frameSlot])
                     WriteMaterialSet(slot, *variant.set[frameSlot], frameSlot, spriteView);
         }

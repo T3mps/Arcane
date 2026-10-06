@@ -109,7 +109,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // kMaxFramesInFlight, FramesInFlight()
 
 #include <cstdint>
 #include <memory>
@@ -366,7 +366,7 @@ namespace Arcane
             // mid-recording, and a FAILED miss would latch an error on a frame
             // that is otherwise fine. Owned by the cache; borrowed here.
             nri::Pipeline*      pipeline = nullptr;
-            nri::Descriptor*    cbView[kSwapchainFramesInFlight]{};
+            nri::Descriptor*    cbView[kMaxFramesInFlight]{};
             bool ready = false;
             // Transient Prepare flag -- Batcher2D::End's `packedThisBatch`,
             // verbatim in purpose.
@@ -387,7 +387,7 @@ namespace Arcane
             struct TextureVariant
             {
                 Guid                id{};
-                nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
+                nri::DescriptorSet* set[kMaxFramesInFlight]{};
             };
             std::vector<TextureVariant> variants;
 
@@ -496,7 +496,7 @@ namespace Arcane
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;   // AlignUp(kMaterialCbMaxBytes, constantBufferOffset)
-        nri::Descriptor* m_globalsView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_globalsView[kMaxFramesInFlight]{};
 
         // Slot per REGISTERED material id, assigned in first-use order (ids are
         // dense from 3 today, but nothing in Batcher2D promises that).

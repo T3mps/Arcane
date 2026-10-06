@@ -294,18 +294,18 @@ namespace Arcane
 
     nri::DescriptorPoolDesc MeshNode::PoolSizes(bool bindlessUpdateAfterSet) noexcept
     {
-        // TWO dimensions now (Task 8/10): kSwapchainFramesInFlight per-frame
+        // TWO dimensions now (Task 8/10): FramesInFlight() per-frame
         // sets, each carrying exactly ONE CONSTANT_BUFFER descriptor (b1);
         // and ONE bindless set carrying up to kBindlessCapacity TEXTURE
         // descriptors. The root sampler (CreateBindings) consumes NO pool
         // budget at all -- static/immutable samplers are not allocated from
         // a descriptor pool on either backend (NRIDescs.h:1077's own words).
-        constexpr std::uint32_t kFrameSets = kSwapchainFramesInFlight;
+        const std::uint32_t frameSets = FramesInFlight();
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum      = kFrameSets + 1;      // +1: the one bindless set
-        poolDesc.constantBufferMaxNum     = kFrameSets;          // b1, one per frame slot
-        poolDesc.structuredBufferMaxNum   = 2 * kFrameSets;      // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
+        poolDesc.descriptorSetMaxNum      = frameSets + 1;       // +1: the one bindless set
+        poolDesc.constantBufferMaxNum     = frameSets;           // b1, one per frame slot
+        poolDesc.structuredBufferMaxNum   = 2 * frameSets;       // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
         poolDesc.textureMaxNum            = kBindlessCapacity;   // the bindless array's own budget
         // The pool-level update-after-set permission is conditional. Only the
         // bindless texture set needs it, and Vulkan may expose descriptor
@@ -503,7 +503,7 @@ namespace Arcane
         // requires to be a multiple of 256 -- so the views name a whole region
         // and the shader simply reads less than it.
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
-        const std::uint64_t arenaBytes = m_arenaStride * kSwapchainFramesInFlight;
+        const std::uint64_t arenaBytes = m_arenaStride * FramesInFlight();
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -533,7 +533,7 @@ namespace Arcane
         // The b1 view per frame slot, created ONCE. Its contents change every
         // frame; its (buffer, offset) never does, which is exactly what lets a
         // descriptor set naming it be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -562,7 +562,7 @@ namespace Arcane
             return false;
         }
 
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             // setIndex 0: the ARRAY position of frameSetDesc in
             // CreateBindings' setDescs[2] -- an ARRAY INDEX, not a register
@@ -1050,7 +1050,7 @@ namespace Arcane
         // AddMaterial between passes; what does not change mid-pass is
         // WHICH set is bound). A null here means Create() failed part way
         // and already said so.
-        nri::DescriptorSet* set = frameSlot < kSwapchainFramesInFlight ? m_sets[frameSlot] : nullptr;
+        nri::DescriptorSet* set = frameSlot < FramesInFlight() ? m_sets[frameSlot] : nullptr;
         if (!set || !m_bindlessSet)
         {
             GraphError("MeshNode: no descriptor set for this frame slot -- nothing recorded");
