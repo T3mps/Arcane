@@ -32,14 +32,17 @@
 // A rename (settings spec s4.7): the old name keeps working in config files,
 // --set and the console, with a one-time warning; the next archive write
 // saves the new name. Namespace scope, in a .cpp.
+// ARC_CVAR_ALIAS and ARC_COMMAND name their statics with __COUNTER__, not
+// __LINE__, so two expansions on one line (from another macro) never collide
+// (S2-H).
 #define ARC_CVAR_ALIAS(oldLit, newLit)                                                         \
-    static const bool ARC_CVAR_CAT(arcCVarAlias_, __LINE__) =                                  \
+    static const bool ARC_CVAR_CAT(arcCVarAlias_, __COUNTER__) =                               \
         ::Arcane::Detail::RegisterDeclaredAlias(oldLit, newLit)
 
 // fn: CommandResult(*)(std::string_view args, void* user) (settings spec s4.5).
 // The command belongs to the declaring module (Detail::CallerModule, s4.3).
 #define ARC_COMMAND(nameLit, flagExpr, helpLit, fn)                                        \
-    static const bool ARC_CVAR_CAT(arcCmd_, __LINE__) =                                    \
+    static const bool ARC_CVAR_CAT(arcCmd_, __COUNTER__) =                                 \
         ::Arcane::CVarRegistry::Get().RegisterCommand(nameLit, flagExpr, helpLit,          \
                                                       std::string(::Arcane::Detail::CallerModule()), \
                                                       static_cast<::Arcane::CommandFn>(fn), nullptr)

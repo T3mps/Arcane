@@ -4,13 +4,16 @@
 // Dist-style registry that compiles a Dev field out.
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Settings.hpp>
 
 #include "Helpers/SettingsProbe.hpp"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The process registry, at static init -- this is the only TU that does it.
@@ -228,4 +231,67 @@ TEST_CASE("ARC_SETTINGS registers on the process registry at static init", "[set
     REQUIRE_FALSE(h.IsStale());
     CHECK(Settings<SettingsProbe::ProbeSettings>().count == reg.Get(h)->AsInt32());
     CHECK(Settings<SettingsProbe::ProbeSettings>().label == "probe");
+}
+
+// S2-H item 6: the registration macros name their statics with __COUNTER__,
+// so two expansions on ONE line -- here through a helper macro -- compile and
+// both register. With __LINE__ the second was a redefinition.
+namespace SameLine
+{
+    struct FirstSettings
+    {
+        bool on = true;
+    };
+
+    ARC_REFLECT_TYPE(FirstSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.sameLineFirst", ::Arcane::SettingScope::Project,
+                                 ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
+        ARC_REFLECT_FIELD(FirstSettings, on)
+            ARC_REFLECT_ATTR(Tooltip, "The first of two registrations on one line.")
+    ARC_END_REFLECT_TYPE()
+
+    struct SecondSettings
+    {
+        bool on = false;
+    };
+
+    ARC_REFLECT_TYPE(SecondSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.sameLineSecond", ::Arcane::SettingScope::Project,
+                                 ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
+        ARC_REFLECT_FIELD(SecondSettings, on)
+            ARC_REFLECT_ATTR(Tooltip, "The second of two registrations on one line.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_CVAR(cvar_sameLineTarget, "tests.sameLine.target", std::int32_t, 1, .help = "Two same-line aliases point here.");
+
+    ::Arcane::CommandResult First(std::string_view, void*) { return { true, "first" }; }
+    ::Arcane::CommandResult Second(std::string_view, void*) { return { true, "second" }; }
+}
+
+#define ARC_TEST_TWO_SETTINGS(a, b) ARC_SETTINGS(a); ARC_SETTINGS(b)
+#define ARC_TEST_TWO_ALIASES(oldA, oldB, target) ARC_CVAR_ALIAS(oldA, target); ARC_CVAR_ALIAS(oldB, target)
+#define ARC_TEST_TWO_COMMANDS(nameA, fnA, nameB, fnB)     ARC_COMMAND(nameA, ::Arcane::CVarFlags::None, "Same-line command probe.", fnA);     ARC_COMMAND(nameB, ::Arcane::CVarFlags::None, "Same-line command probe.", fnB)
+
+ARC_TEST_TWO_SETTINGS(SameLine::FirstSettings, SameLine::SecondSettings);
+ARC_TEST_TWO_ALIASES("tests.sameLine.oldA", "tests.sameLine.oldB", "tests.sameLine.target");
+ARC_TEST_TWO_COMMANDS("tests.sameLine.commandA", &SameLine::First, "tests.sameLine.commandB", &SameLine::Second);
+
+TEST_CASE("ARC_SETTINGS, ARC_CVAR_ALIAS and ARC_COMMAND expand twice on one line and register both", "[settings][cvar]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    CHECK_FALSE(reg.Find("tests.sameLineFirst.on").IsStale());
+    CHECK_FALSE(reg.Find("tests.sameLineSecond.on").IsStale());
+    CHECK(Settings<SameLine::FirstSettings>().on);
+    CHECK_FALSE(Settings<SameLine::SecondSettings>().on);
+
+    const auto aliases = reg.Aliases();
+    const auto aliased = [&](std::string_view oldName) {
+        return std::find(aliases.begin(), aliases.end(),
+                         std::pair<std::string, std::string>(std::string(oldName), "tests.sameLine.target")) != aliases.end();
+    };
+    CHECK(aliased("tests.sameLine.oldA"));
+    CHECK(aliased("tests.sameLine.oldB"));
+
+    CHECK(reg.Execute("tests.sameLine.commandA", CVarContext::Editor).text == "first");
+    CHECK(reg.Execute("tests.sameLine.commandB", CVarContext::Editor).text == "second");
 }

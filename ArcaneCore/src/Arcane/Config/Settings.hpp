@@ -182,6 +182,8 @@ namespace Arcane
 // At namespace scope in ONE .cpp of the declaring module, AFTER the header that
 // holds the struct's reflection block. That header's registrar is partially
 // ordered and this static is ordered, so the registrar initializes first.
+// The static is named with __COUNTER__, not __LINE__, so two expansions on one
+// line (from another macro) never collide (S2-H).
 #define ARC_SETTINGS(Type) \
-    static const bool ARC_SETTINGS_CAT(arcSettings_, __LINE__) = \
+    static const bool ARC_SETTINGS_CAT(arcSettings_, __COUNTER__) = \
         ::Arcane::RegisterSettings<Type>(::Arcane::CVarRegistry::Get(), ::Arcane::Detail::CallerModule())
