@@ -14,6 +14,8 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -1535,5 +1537,17 @@ namespace Arcane
             ARC_ERROR("cvar: the declaration of '{}' (module '{}') was refused: {}", desc.name, desc.module,
                       registry.LastError());
         return handle;
+    }
+
+    void Detail::WarnUnlistedSettingsEnumValue(std::string_view enumType, std::int64_t raw)
+    {
+        static std::mutex lock;
+        static std::set<std::pair<std::string, std::int64_t>> warned;
+        {
+            const std::lock_guard guard(lock);
+            if (!warned.emplace(std::string(enumType), raw).second) return;
+        }
+        ARC_WARN("settings: {} value {} is not in its reflected enum table -- the cvar reads it as index 0; "
+                 "reflect the enumerator (ARC_REFLECT_ENUM_VALUE) or change the value (warned once)", enumType, raw);
     }
 }

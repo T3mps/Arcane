@@ -14,6 +14,7 @@
 // and console spelling, and a non-contiguous enum still has a dense range.
 
 #include <Arcane/Config/CVarTypes.hpp>
+#include <Arcane/Core/Api.hpp>
 
 #include <Astra/Core/TypeID.hpp>
 #include <Astra/Reflection/Attribute.hpp>
@@ -21,8 +22,10 @@
 #include <Astra/Reflection/MetaRegistry.hpp>
 #include <Astra/Reflection/TypeMeta.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -94,6 +97,11 @@ namespace Arcane::Detail
         }
     };
 
+    // Logs, once per (enum type, raw value) for the process, that a settings
+    // field holds a value its enum's reflection does not list, so the cvar
+    // reads it as index 0 (S2-H). Defined in CVarRegistry.cpp.
+    ARC_CORE_API void WarnUnlistedSettingsEnumValue(std::string_view enumType, std::int64_t raw);
+
     template <class F>
     CVarValue ToCVar(const F& v)
     {
@@ -116,6 +124,7 @@ namespace Arcane::Detail
             for (std::size_t i = 0; i < table.values.size(); ++i)
                 if (table.values[i] == raw)
                     return CVarValue::Enum(static_cast<std::int32_t>(i));
+            WarnUnlistedSettingsEnumValue(::Astra::Detail::TypeNameInternal<F>(), raw);
             return CVarValue::Enum(0);
         }
     }
@@ -147,10 +156,28 @@ namespace Arcane::Detail
         }
     }
 
-    template <class U>
-    constexpr U ClampToUnsigned(double bound) noexcept
+    // A Range bound (a double) in an integer field's type, clamped to the
+    // type's limits: an out-of-range static_cast is undefined behaviour
+    // (S2-H). A negative bound on an unsigned field is 0, never a wrap. NaN
+    // is no bound at all.
+    template <class I>
+    std::optional<I> ClampToInteger(double bound) noexcept
     {
-        return bound <= 0.0 ? U{ 0 } : static_cast<U>(bound);
+        if (std::isnan(bound)) return std::nullopt;
+        // max() rounds UP to 2^N for the 64-bit types, so ">=" also catches
+        // every double too large to convert.
+        constexpr double lo = static_cast<double>((std::numeric_limits<I>::min)());
+        constexpr double hi = static_cast<double>((std::numeric_limits<I>::max)());
+        if (bound <= lo) return (std::numeric_limits<I>::min)();
+        if (bound >= hi) return (std::numeric_limits<I>::max)();
+        return static_cast<I>(bound);
+    }
+
+    template <class I, CVarValue (*Make)(I)>
+    std::optional<CVarValue> IntegerBound(double bound)
+    {
+        if (const std::optional<I> v = ClampToInteger<I>(bound)) return Make(*v);
+        return std::nullopt;
     }
 
     // An Astra Range(min, max) bound (doubles) in the field's cvar type. Colour
@@ -158,10 +185,10 @@ namespace Arcane::Detail
     template <class F>
     std::optional<CVarValue> RangeBound(double bound)
     {
-        if constexpr (std::is_same_v<F, std::int32_t>)       return CVarValue::Int32(static_cast<std::int32_t>(bound));
-        else if constexpr (std::is_same_v<F, std::uint32_t>) return CVarValue::UInt32(ClampToUnsigned<std::uint32_t>(bound));
-        else if constexpr (std::is_same_v<F, std::int64_t>)  return CVarValue::Int64(static_cast<std::int64_t>(bound));
-        else if constexpr (std::is_same_v<F, std::uint64_t>) return CVarValue::UInt64(ClampToUnsigned<std::uint64_t>(bound));
+        if constexpr (std::is_same_v<F, std::int32_t>)       return IntegerBound<std::int32_t, &CVarValue::Int32>(bound);
+        else if constexpr (std::is_same_v<F, std::uint32_t>) return IntegerBound<std::uint32_t, &CVarValue::UInt32>(bound);
+        else if constexpr (std::is_same_v<F, std::int64_t>)  return IntegerBound<std::int64_t, &CVarValue::Int64>(bound);
+        else if constexpr (std::is_same_v<F, std::uint64_t>) return IntegerBound<std::uint64_t, &CVarValue::UInt64>(bound);
         else if constexpr (std::is_same_v<F, float>)         return CVarValue::Float32(static_cast<float>(bound));
         else if constexpr (std::is_same_v<F, double>)        return CVarValue::Float64(bound);
         else if constexpr (std::is_same_v<F, CVarColor>)

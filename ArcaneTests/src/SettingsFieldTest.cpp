@@ -4,11 +4,20 @@
 // (an unmappable field stops the build) is scripts/settings-compile-fail.ps1.
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Reflection.hpp>
 
 #include "Helpers/SettingsProbe.hpp"
 
+#include <spdlog/sinks/callback_sink.h>
+
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -197,4 +206,143 @@ TEST_CASE("Range bounds convert to the field's cvar type; bool, string and enum 
     CHECK_FALSE(CodecOf(meta, "toggle")->bound(1.0).has_value());
     CHECK_FALSE(CodecOf(meta, "label")->bound(1.0).has_value());
     CHECK_FALSE(CodecOf(meta, "quality")->bound(1.0).has_value());
+}
+
+namespace
+{
+    // S2-H item 4: an enumerator the reflection block does not list. Its
+    // value (2) is outside the reflected table, so the codec falls back to
+    // index 0 -- and says so.
+    enum class PartlyReflected : std::uint8_t { Listed = 0, AlsoListed = 1, Unlisted = 2 };
+
+    ARC_REFLECT_ENUM(PartlyReflected)
+        ARC_REFLECT_ENUM_VALUE(PartlyReflected, Listed)
+        ARC_REFLECT_ENUM_VALUE(PartlyReflected, AlsoListed)
+    ARC_END_REFLECT_ENUM()
+
+    struct UnlistedDefaultSettings
+    {
+        PartlyReflected mode = PartlyReflected::Unlisted;
+    };
+
+    ARC_REFLECT_TYPE(UnlistedDefaultSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.unlistedDefault", ::Arcane::SettingScope::Project,
+                                 ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
+        ARC_REFLECT_FIELD(UnlistedDefaultSettings, mode)
+            ARC_REFLECT_ATTR(Tooltip, "An enum whose default is not reflected.")
+    ARC_END_REFLECT_TYPE()
+
+    // S2-H item 5: Range bounds past what the integer field can hold.
+    struct WideRangeSettings
+    {
+        std::int32_t  wide = 1;
+        std::int64_t  deep = -1;
+        std::int64_t  high = 1;
+        std::uint32_t over = 1;
+    };
+
+    ARC_REFLECT_TYPE(WideRangeSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.wideRange", ::Arcane::SettingScope::Project,
+                                 ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
+        ARC_REFLECT_FIELD(WideRangeSettings, wide)
+            ARC_REFLECT_ATTR(Tooltip, "An int32 whose upper bound overflows it.")
+            ARC_REFLECT_ATTR(Range, 0.0, 1e10)
+        ARC_REFLECT_FIELD(WideRangeSettings, deep)
+            ARC_REFLECT_ATTR(Tooltip, "An int64 whose lower bound overflows it.")
+            ARC_REFLECT_ATTR(Range, -1e30, 0.0)
+        ARC_REFLECT_FIELD(WideRangeSettings, high)
+            ARC_REFLECT_ATTR(Tooltip, "An int64 whose upper bound overflows it.")
+            ARC_REFLECT_ATTR(Range, 0.0, 1e30)
+        ARC_REFLECT_FIELD(WideRangeSettings, over)
+            ARC_REFLECT_ATTR(Tooltip, "A uint32 whose upper bound overflows it.")
+            ARC_REFLECT_ATTR(Range, 0.0, 1e12)
+    ARC_END_REFLECT_TYPE()
+
+    // Warnings only. Locked: a worker of an earlier test may still log.
+    struct WarningCapture
+    {
+        mutable std::mutex lock;
+        std::vector<std::string> messages;
+        std::shared_ptr<spdlog::sinks::callback_sink_mt> sink;
+        WarningCapture()
+        {
+            sink = std::make_shared<spdlog::sinks::callback_sink_mt>([this](const spdlog::details::log_msg& m) {
+                if (m.level != spdlog::level::warn) return;
+                const std::lock_guard guard(lock);
+                messages.emplace_back(m.payload.data(), m.payload.size());
+            });
+            Log::Engine()->sinks().push_back(sink);
+        }
+        ~WarningCapture()
+        {
+            auto& sinks = Log::Engine()->sinks();
+            sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+        }
+        WarningCapture(const WarningCapture&) = delete;
+        WarningCapture& operator=(const WarningCapture&) = delete;
+        std::size_t Count() const
+        {
+            const std::lock_guard guard(lock);
+            return messages.size();
+        }
+        std::size_t Mentioning(std::string_view a, std::string_view b) const
+        {
+            const std::lock_guard guard(lock);
+            return static_cast<std::size_t>(std::count_if(messages.begin(), messages.end(), [&](const std::string& m) {
+                return m.find(a) != std::string::npos && m.find(b) != std::string::npos;
+            }));
+        }
+    };
+
+    const SettingsFieldDesc& FieldNamed(const SettingsTypeDesc& d, std::string_view name)
+    {
+        for (const SettingsFieldDesc& f : d.fields)
+            if (f.name == name)
+                return f;
+        FAIL("no field " << name);
+        return d.fields.front();
+    }
+}
+
+TEST_CASE("An enum value outside the reflected table reads as index 0 and warns once per type and value", "[settings]")
+{
+    const Astra::TypeMeta meta = BuildMeta<UnlistedDefaultSettings>();
+    const auto* codec = CodecOf(meta, "mode");
+    REQUIRE(codec != nullptr);
+    REQUIRE(codec->enumNames() == std::vector<std::string>{ "Listed", "AlsoListed" });
+    const WarningCapture log;
+    const UnlistedDefaultSettings s;                                // mode = Unlisted (2): not in the table
+    CHECK(codec->read(&s).AsEnum() == 0);                           // the fallback is unchanged
+    CHECK(codec->read(&s).AsEnum() == 0);
+    CHECK(log.Mentioning("PartlyReflected", "2") == 1);             // named once, with the raw value
+    UnlistedDefaultSettings listed;
+    listed.mode = PartlyReflected::AlsoListed;
+    CHECK(codec->read(&listed).AsEnum() == 1);                      // a listed value never warns
+    CHECK(log.Count() == 1);
+}
+
+TEST_CASE("Integer Range bounds clamp to the field type's limits instead of overflowing", "[settings]")
+{
+    const SettingsTypeDesc d = DescribeSettings<WideRangeSettings>("settings-field-test");
+    REQUIRE(d.error.empty());
+    const SettingsFieldDesc& wide = FieldNamed(d, "tests.wideRange.wide");
+    REQUIRE(wide.max.has_value());
+    CHECK(wide.min->AsInt32() == 0);
+    CHECK(wide.max->AsInt32() == std::numeric_limits<std::int32_t>::max());
+    const SettingsFieldDesc& deep = FieldNamed(d, "tests.wideRange.deep");
+    REQUIRE(deep.min.has_value());
+    CHECK(deep.min->AsInt64() == std::numeric_limits<std::int64_t>::min());
+    CHECK(deep.max->AsInt64() == 0);
+    const SettingsFieldDesc& high = FieldNamed(d, "tests.wideRange.high");
+    REQUIRE(high.max.has_value());
+    CHECK(high.max->AsInt64() == std::numeric_limits<std::int64_t>::max());
+    const SettingsFieldDesc& over = FieldNamed(d, "tests.wideRange.over");
+    REQUIRE(over.max.has_value());
+    CHECK(over.max->AsUInt32() == std::numeric_limits<std::uint32_t>::max());
+
+    const Astra::TypeMeta meta = BuildMeta<WideRangeSettings>();
+    CHECK(CodecOf(meta, "wide")->bound(-1e10)->AsInt32() == std::numeric_limits<std::int32_t>::min());
+    CHECK_FALSE(CodecOf(meta, "wide")->bound(std::nan("")).has_value());   // NaN is no bound at all
+    CHECK_FALSE(CodecOf(meta, "high")->bound(std::nan("")).has_value());
+    CHECK_FALSE(CodecOf(meta, "over")->bound(std::nan("")).has_value());
 }
