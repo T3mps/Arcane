@@ -44,6 +44,21 @@
       "invocation": "~[gpu]",
       "value": 1831,
       "unit": "cases"
+    },
+    {
+      "name": "arcanetests.assertions",
+      "configuration": "Debug",
+      "invocation": "~[gpu] hosted-ci",
+      "value": 71760,
+      "unit": "assertions",
+      "note": "The hosted GitHub Actions windows-msvc lane (.github/workflows/ci.yml). It differs from the desk `~[gpu]` entries by design: GitHub sets CI, so CrashPathTest's SkipIfBuildMachine skips the 7 reporter-spawn cases (spec s6: no reporter spawn on a build machine) -- 2708 passed + 11 skipped vs the desk's 2715 + 4. Read off run 37393119328 (2026-10-05). Release and Dist hosted entries are added once read off a real run, never guessed."
+    },
+    {
+      "name": "arcanetests.cases",
+      "configuration": "Debug",
+      "invocation": "~[gpu] hosted-ci",
+      "value": 2708,
+      "unit": "cases"
     }
   ]
 }

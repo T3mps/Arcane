@@ -96,17 +96,18 @@ jobs:
       # data/ and the staged automation-exclusions.json are all resolved relative
       # to it, and the exclusion-expiry case hard-fails if that file is missing.
       #
-      # -Invocation MUST MATCH the test-spec above, verbatim. The baseline entry
-      # is keyed on it, so a mismatch reports "NO BASELINE -- not checked"
-      # instead of comparing against counts taken a different way. The six
-      # committed baselines are "~[gpu]", which is exactly what this lane runs,
-      # so this lane genuinely checks them.
+      # -Invocation is part of the baseline key, so a mismatch reports
+      # "NO BASELINE -- not checked" instead of comparing against counts taken a
+      # different way. This lane runs "~[gpu]" but checks the "~[gpu] hosted-ci"
+      # entries: GitHub sets CI, so CrashPathTest skips its 7 reporter-spawn
+      # cases by design (spec s6: no reporter spawn on a build machine) and the
+      # counts legitimately differ from the desk "~[gpu]" entries.
       - name: Test Debug
         working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
         run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
 
       - name: Check Debug baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug -Invocation "~[gpu]"
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug -Invocation "~[gpu] hosted-ci"
 
       # Same per-config sequence as Debug: solution, ReferenceGame via arcbuild, restage.
       - name: Build Release
@@ -123,7 +124,7 @@ jobs:
         run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
 
       - name: Check Release baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release -Invocation "~[gpu]"
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release -Invocation "~[gpu] hosted-ci"
 
       # Same per-config sequence as Debug: solution, ReferenceGame via arcbuild, restage.
       - name: Build Dist
@@ -140,4 +141,4 @@ jobs:
         run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
 
       - name: Check Dist baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist -Invocation "~[gpu]"
+        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist -Invocation "~[gpu] hosted-ci"
