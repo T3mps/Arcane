@@ -1252,6 +1252,7 @@ project "ArcaneTests"
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",

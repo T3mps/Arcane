@@ -938,17 +938,21 @@ namespace Arcane::Editor
         // Play-mode dropdown (Task 6, runtime-host-fold arc): which action the
         // transport's Play button performs (see DrawSimTimeToolbar). Viewport =
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
-        // m_play/its toggle are never touched by that path. Persisted across
-        // restarts via an ImGuiSettingsHandler ("[EditorPlayMode][State]"),
-        // registered in Init;
-        // a malformed or absent ini line leaves this at its Viewport default.
-        Arcane::Editor::PlayLaunchMode m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+        // m_play/its toggle are never touched by that path. The mode is the
+        // editor.play.launchMode cvar (settings S6-32, Pref-P): the toolbar
+        // reads the published value and its menu writes the cvar. An old
+        // "[EditorPlayMode][State]" ini section is still READ (the handler
+        // below) into m_legacyPlayMode, imported once at the top of the next
+        // frame (ImportLegacyPlayMode, User rung, only where the user has not
+        // chosen), and never written again.
+        std::optional<Arcane::Editor::PlayLaunchMode> m_legacyPlayMode;
 
-        // ImGuiSettingsHandler callbacks for m_playMode, in the standard
+        // ImGuiSettingsHandler callbacks for m_legacyPlayMode, in the standard
         // ImGuiSettingsHandler read/write shape -- static member functions rather than free
         // functions (like the scene/project dialog Thunks below) so they can
-        // reach the private m_playMode of the instance handed through
+        // reach the private m_legacyPlayMode of the instance handed through
         // handler->UserData; there is exactly one EditorApp per process.
+        // WriteAll writes nothing: the section leaves the ini on its next save.
         static void* PlayModeSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               const char* name);
         static void  PlayModeSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
@@ -1229,6 +1233,9 @@ namespace Arcane::Editor
         // destruction order is unchanged: it still destructs before m_runtime.
         std::optional<Arcane::Editor::EditModeSchedule> m_editSchedule;
         bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
+        // The editor.viewport.physicsOverlay value last applied to m_physicsOverlay
+        // (settings S6-32): the frame's sync moves the toggle only when the cvar changes.
+        bool m_physicsOverlayPref = false;
         // An old [EditorViewport][Camera] block's preference lines (fov,
         // speed, grid, gizmo size), captured by ViewportSettingsReadLine and
         // imported ONCE at the top of the next frame (settings S6-29:

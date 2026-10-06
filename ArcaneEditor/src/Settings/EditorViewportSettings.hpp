@@ -44,6 +44,19 @@ namespace Arcane::Editor
     {
         bool      showGrid  = true;
         GridPlane gridPlane = GridPlane::XZ;
+
+        // S6-32 (Dev). The View -> Physics Overlay toggle stays session state
+        // (spec s6.3): this is the state a session starts in, and a change to
+        // the cvar moves the toggle to it (EditorApp's per-frame sync).
+        bool physicsOverlay = false;
+        // Frames a viewport pick may stay in flight before DeferredPick gives
+        // up (Pref-M): far above the swapchain depth, so a briefly collapsed
+        // panel does not lose the click.
+        std::uint32_t pickMaxFramesInFlight = 64;
+        // The extent the viewport context is first built at when there is no
+        // panel measurement yet -- one frame's picture (Pref-M, Restart).
+        std::uint32_t fallbackExtentW = 1280;
+        std::uint32_t fallbackExtentH = 720;
     };
 
     // S6-30: the rest of editor.camera.* -- what EditorCamera's static

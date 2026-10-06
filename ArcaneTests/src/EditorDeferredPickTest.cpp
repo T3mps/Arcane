@@ -221,28 +221,29 @@ TEST_CASE("deferred pick: a request that never lands is abandoned, once and loud
     // long -- so this should never fire. It exists because the failure it
     // guards is a machine that never returns to Idle, which would silently keep
     // an outline chain declared for the rest of the session.
+    constexpr std::uint32_t kBudget = 64;   // editor.viewport.pickMaxFramesInFlight's default (settings S6-32)
     DeferredPick pick;
-    CHECK_FALSE(pick.TickAndMaybeAbandon());   // nothing outstanding: no tick, no give-up
+    CHECK_FALSE(pick.TickAndMaybeAbandon(kBudget));   // nothing outstanding: no tick, no give-up
 
     pick.Arm(glm::ivec2(1, 2), false, 1, false);
     // Armed but not yet in flight: the budget counts FRAMES IN FLIGHT, and a
     // click waiting for its declaration frame has not spent one.
-    CHECK_FALSE(pick.TickAndMaybeAbandon());
+    CHECK_FALSE(pick.TickAndMaybeAbandon(kBudget));
     CHECK(pick.State() == DeferredPick::Phase::Armed);
 
     const auto request = pick.TakeRequest(Table({ 9 }));
     REQUIRE(request.has_value());
 
-    for (std::uint32_t frame = 0; frame < DeferredPick::kMaxFramesInFlight; ++frame)
+    for (std::uint32_t frame = 0; frame < kBudget; ++frame)
     {
         INFO("frame " << frame);
-        REQUIRE_FALSE(pick.TickAndMaybeAbandon());
+        REQUIRE_FALSE(pick.TickAndMaybeAbandon(kBudget));
         REQUIRE(pick.Busy());
     }
     // EXACTLY ON the frame it gives up, so the caller can say so once.
-    CHECK(pick.TickAndMaybeAbandon());
+    CHECK(pick.TickAndMaybeAbandon(kBudget));
     CHECK_FALSE(pick.Busy());
-    CHECK_FALSE(pick.TickAndMaybeAbandon());
+    CHECK_FALSE(pick.TickAndMaybeAbandon(kBudget));
 
     // ...and the abandoned ticket can never resurface as a selection change.
     CHECK_FALSE(pick.Land(request->ticket, 1u, 1, false).has_value());

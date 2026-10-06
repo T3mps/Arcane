@@ -519,8 +519,8 @@ namespace Arcane::Editor
 
     // ---- The default layout's geometry: Panels/DefaultLayout.hpp (USER
     // DECISION 2026-09-30 -- the user's ReferenceProject layout is the default;
-    // the pixel targets, their clamps and the band's proportion are named
-    // there). ----
+    // the pixel targets, their clamps and the band's proportion are computed
+    // there from editor.layout.factory.*, LayoutFactorySettings). ----
 
     namespace
     {
@@ -552,7 +552,9 @@ namespace Arcane::Editor
         ImGui::DockBuilderRemoveNode(dockspaceId);
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspaceId, size);
-        const DefaultLayoutPixels px = ComputeDefaultLayoutPixels(size.x, size.y);
+        // editor.layout.factory.* (settings S6-32): read once, at build time.
+        const LayoutFactorySettings& factory = Arcane::Settings<LayoutFactorySettings>();
+        const DefaultLayoutPixels px = ComputeDefaultLayoutPixels(size.x, size.y, factory);
 
         // The central node follows the INHERITOR side of every split (the side
         // opposite the direction), so it ends up top-right of the left block.
@@ -570,11 +572,11 @@ namespace Arcane::Editor
         // entity page in the main Inspector. NOT a pixel target: neither
         // side of this split holds the central node, so ImGui re-divides it
         // by SizeRef ratio on every resize -- the user's 1920-scale
-        // proportion (kDefaultAssetsInspectorBandFraction) is right at every
+        // proportion (DefaultAssetsInspectorBandFraction) is right at every
         // size, a pixel target only at the build size.
         ImGuiID browserNodeId = 0;
         const ImGuiID assetsInspectorId = ImGui::DockBuilderSplitNode(bandId, ImGuiDir_Right,
-            kDefaultAssetsInspectorBandFraction, nullptr, &browserNodeId);
+            DefaultAssetsInspectorBandFraction(factory), nullptr, &browserNodeId);
 
         ImGui::DockBuilderDockWindow("Outliner", outlinerId);
         // The main Inspector owns the right column alone, full height: a
@@ -674,7 +676,7 @@ namespace Arcane::Editor
             // holds the central node (a pre-feature browser tab set sits in
             // its own bottom node), so ImGui divides this split by SizeRef
             // ratio on resize: it takes the default's SAME proportion
-            // (kDefaultAssetsInspectorBandFraction), not pixels. (Were the
+            // (DefaultAssetsInspectorBandFraction), not pixels. (Were the
             // browser docked INTO the central node, the central flag stays
             // with the browser's child and Inspector 2 keeps the pixels that
             // proportion gives it here -- still a sane width.)
@@ -691,7 +693,7 @@ namespace Arcane::Editor
                     node->Size = node->SizeRef;
                 ImGuiID left = browserDock;
                 const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right,
-                    kDefaultAssetsInspectorBandFraction, nullptr, &left);
+                    DefaultAssetsInspectorBandFraction(Arcane::Settings<LayoutFactorySettings>()), nullptr, &left);
                 ImGui::DockBuilderDockWindow(id.c_str(), right);
             }
             // An undocked (or non-leaf) browser splits nothing: the new

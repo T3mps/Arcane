@@ -24,7 +24,8 @@
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
-#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..31)
+#include "Settings/EditorPlaySettings.hpp"     // editor.play.launchMode (settings S6-32)
+#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..32)
 #include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
 #include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
@@ -407,6 +408,14 @@ namespace Arcane::Editor
                     { Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, std::string(name)); });
                 m_legacyViewport = {};
             }
+            // Likewise an old [EditorPlayMode][State] section's mode (settings
+            // S6-32): imported once, never written back to the ini.
+            if (m_legacyPlayMode)
+            {
+                if (Arcane::Editor::ImportLegacyPlayMode(Arcane::CVarRegistry::Get(), *m_legacyPlayMode))
+                    Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, "editor.play.launchMode");
+                m_legacyPlayMode.reset();
+            }
             // THE CVAR PUBLISH BARRIER, once per frame: every Set a console
             // line, a callback or a plugin made since the last one becomes
             // visible here, to all of this frame's readers at once. The
@@ -419,6 +428,16 @@ namespace Arcane::Editor
                 const auto& camPrefs = Arcane::Settings<Arcane::Editor::EditorCameraSettings>();
                 m_camera.orbit.fovYDeg = camPrefs.fovYDeg;
                 m_camera.speedScalar   = camPrefs.speedScalar;
+            }
+            // editor.viewport.physicsOverlay (settings S6-32): the View-menu
+            // toggle stays session state (spec s6.3); the cvar is where a
+            // session starts, and a change to it (the settings window, a
+            // project switch's Pref-P value) moves the toggle to it.
+            if (const bool overlayPref = Arcane::Settings<Arcane::Editor::EditorViewportSettings>().physicsOverlay;
+                overlayPref != m_physicsOverlayPref)
+            {
+                m_physicsOverlay     = overlayPref;
+                m_physicsOverlayPref = overlayPref;
             }
             Arcane::Editor::TickSettingsHost();   // the settings windows' debounced writes (editor.settings.saveDebounceMs)
             // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
@@ -2300,11 +2319,19 @@ namespace Arcane::Editor
                 stripStatus.problems = Arcane::Editor::StripChip{ chip->label,
                     nErr > 0 ? Arcane::Editor::Theme::kError : Arcane::Editor::Theme::kWarning, chip->tooltip };
         }
+        // editor.play.launchMode (settings S6-32; NextWorld: the next Play):
+        // the toolbar reads the published value, and its mode menu's choice
+        // writes the cvar (User rung, archived).
+        const Arcane::Editor::PlayLaunchMode publishedPlayMode =
+            Arcane::Settings<Arcane::Editor::EditorPlaySettings>().launchMode;
+        Arcane::Editor::PlayLaunchMode playMode = publishedPlayMode;
         const Arcane::Editor::ToolbarResult toolbar =
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
-                                               m_plugin ? &*m_plugin : nullptr, m_playMode,
+                                               m_plugin ? &*m_plugin : nullptr, playMode,
                                                ToolbarLogoTextureId(), stripStatus,
                                                [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+        if (playMode != publishedPlayMode)
+            Arcane::Editor::SetPlayLaunchMode(playMode);
         if (toolbar.launchStandalone)
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
@@ -3770,11 +3797,13 @@ namespace Arcane::Editor
             // exhaust the budget is a very long run of Skipped frames (a
             // collapsed Viewport panel). Giving up beats a state machine
             // that never returns to Idle.
-            if (m_deferredPick.TickAndMaybeAbandon())
+            const std::uint32_t pickBudget =
+                Arcane::Settings<Arcane::Editor::EditorViewportSettings>().pickMaxFramesInFlight;
+            if (m_deferredPick.TickAndMaybeAbandon(pickBudget))
             {
                 ARC_WARN("Viewport pick: no readback landed within {} frames -- the click was "
                          "dropped (was the Viewport panel collapsed?)",
-                         Arcane::Editor::DeferredPick::kMaxFramesInFlight);
+                         pickBudget);
             }
         }
 

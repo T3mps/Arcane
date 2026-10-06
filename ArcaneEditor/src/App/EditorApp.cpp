@@ -53,6 +53,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
+#include "Settings/EditorPlaySettings.hpp"       // ReadPlayModeIniLine: the old [EditorPlayMode] section (settings S6-32)
 #include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
@@ -99,10 +100,12 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
-        // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
-        // right after ImGui's context exists and before the first NewFrame
-        // reads the ini.
+        // The OLD persistence of the Play launch mode: an ImGuiSettingsHandler
+        // section "[EditorPlayMode][State]", one "Mode=%d" line. Now the
+        // editor.play.launchMode cvar (settings S6-32); the handler is still
+        // registered in Init (right after ImGui's context exists and before the
+        // first NewFrame reads the ini) so an old section is read and imported
+        // once -- it is never written again.
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
     }
@@ -122,37 +125,27 @@ namespace Arcane::Editor
     void EditorApp::PlayModeSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
                                              void* entry, const char* line)
     {
+        // Malformed or out-of-range: refused (ReadPlayModeIniLine), so nothing
+        // is imported. A valid line waits in m_legacyPlayMode for the next
+        // frame's ImportLegacyPlayMode.
         auto* self = static_cast<EditorApp*>(entry);
-        int mode = -1;
-        // Malformed or out-of-range: m_playMode keeps its Viewport default --
-        // never trust an ini line a hand edit (or a future enumerator's
-        // rollback) could have left in a bogus state. Viewport is also the
-        // safe fallback: it is today's behavior, unchanged.
-        if (std::sscanf(line, "Mode=%d", &mode) == 1 && mode >= 0 &&
-            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateServerProcess))
-        {
-            self->m_playMode = static_cast<Arcane::Editor::PlayLaunchMode>(mode);
-        }
+        (void)Arcane::Editor::ReadPlayModeIniLine(line, self->m_legacyPlayMode);
     }
 
-    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
-                                             ImGuiTextBuffer* buf)
+    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*)
     {
-        auto* self = static_cast<EditorApp*>(handler->UserData);
-        buf->reserve(buf->size() + 48);
-        buf->appendf("[%s][%s]\n", handler->TypeName, kPlayModeIniName);
-        buf->appendf("Mode=%d\n", static_cast<int>(self->m_playMode));
-        buf->append("\n");
+        // Writes nothing: the mode is a cvar now (settings S6-32), so the old
+        // section drops out of the ini on its next save. ImGui calls every
+        // handler's WriteAllFn unconditionally, so this stays registered.
     }
 
     // ImGui::ClearIniSettings -- a WINDOWED project switch (RetargetLayoutIni)
-    // before it reads the incoming file: back to the value a fresh EditorApp
-    // holds, so a file without this section never inherits the outgoing
-    // project's mode.
+    // before it reads the incoming file: an outgoing file's unimported mode
+    // must not be imported into the incoming project.
     void EditorApp::PlayModeSettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+        self->m_legacyPlayMode.reset();
     }
 
     void EditorApp::RegisterPlayModeSettings()
@@ -165,7 +158,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = kPlayModeIniType;
         handler.TypeHash   = ImHashStr(kPlayModeIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
         handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
@@ -279,7 +272,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = Arcane::Editor::ViewportSettings::kIniType;
         handler.TypeHash   = ImHashStr(Arcane::Editor::ViewportSettings::kIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::ViewportSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::ViewportSettingsReadLine;
         handler.WriteAllFn = &EditorApp::ViewportSettingsWriteAll;
@@ -2554,8 +2547,10 @@ namespace Arcane::Editor
         // picture and nothing else.
         if (width == 0 || height == 0)
         {
-            width  = 1280;
-            height = 720;
+            // editor.viewport.fallbackExtentW/H (settings S6-32; 1280x720).
+            const auto& prefs = Arcane::Settings<Arcane::Editor::EditorViewportSettings>();
+            width  = prefs.fallbackExtentW;
+            height = prefs.fallbackExtentH;
         }
 
 
