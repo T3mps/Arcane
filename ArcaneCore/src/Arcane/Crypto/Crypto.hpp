@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "picosha2.hpp"
+#include <Arcane/Crypto/CryptoSettings.hpp>
 #include <Arcane/Util/Logger.hpp>
 
 #ifdef _WIN32
@@ -34,22 +35,14 @@ namespace Arcane
     public:
         // Configuration
         //
-        // PBKDF2-HMAC-SHA256 iteration count. 200,000 puts us above the OWASP
-        // 2023 floor for PBKDF2-SHA256 (600k is the current rec; 200k is the
-        // lower bound still considered acceptable). Audit C5 (2026-06-02)
-        // raised this from 10,000 -- anything hashed at the old setting is
+        // PBKDF2-HMAC-SHA256 iteration count for new hashes: the published
+        // crypto.pbkdf2Iterations (CryptoSettings.hpp, settings arc S6-13;
+        // default 200000, raise-only). Anything hashed below it is
         // lazy-rehashed on its next successful VerifyPassword via the helpers
         // below (NeedsRehash, IterationsOfStoredHash) -- the caller writes the
         // new hash back to storage and the upgrade happens organically per
-        // user.
-        // DEFER (audit L-V5-1 security, 2026-06-03, multi-cycle carry-forward):
-        // OWASP 2023 PBKDF2-SHA256 recommendation is 600k. 200k is the
-        // documented lower bound -- pre-launch fine; bump before Release
-        // launch (or before 2027, whichever is sooner). The lazy-rehash
-        // pathway above means a bump rolls out organically per user on their
-        // next successful password verification; no migration window required.
-        // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
-        static constexpr int DEFAULT_ITERATIONS = 200000;
+        // user, so raising the cvar needs no migration window.
+        static int DefaultIterations() { return Settings<CryptoSettings>().pbkdf2Iterations; }
         static constexpr int SALT_LENGTH = 16;  // 128 bits
         static constexpr int HASH_LENGTH = 32;  // 256 bits (SHA-256 output)
 
@@ -59,7 +52,7 @@ namespace Arcane
 
         // Hash a password with a random salt
         // Returns format: "iterations:salt_hex:hash_hex"
-        static std::string HashPassword(const std::string& password, int iterations = DEFAULT_ITERATIONS)
+        static std::string HashPassword(const std::string& password, int iterations = DefaultIterations())
         {
             // Generate random salt
             std::vector<uint8_t> salt = GenerateRandomBytes(SALT_LENGTH);
@@ -95,7 +88,7 @@ namespace Arcane
         // Parse the iteration count embedded in a stored hash. Returns 0 on
         // any parse failure (treat as "needs rehash" since the row is
         // malformed). Used by the lazy-rehash path to decide whether the
-        // existing hash is below DEFAULT_ITERATIONS.
+        // existing hash is below DefaultIterations().
         static int IterationsOfStoredHash(const std::string& storedHash)
         {
             int iterations = 0;
@@ -106,11 +99,11 @@ namespace Arcane
         }
 
         // Returns true when the stored hash should be re-derived because its
-        // iteration count is below the current DEFAULT_ITERATIONS. Call this
+        // iteration count is below the current DefaultIterations(). Call this
         // after a successful VerifyPassword and, if true, rehash + persist.
         static bool NeedsRehash(const std::string& storedHash)
         {
-            return IterationsOfStoredHash(storedHash) < DEFAULT_ITERATIONS;
+            return IterationsOfStoredHash(storedHash) < DefaultIterations();
         }
 
         // Verify a password against a stored hash
@@ -131,11 +124,11 @@ namespace Arcane
                 // any future code path that hands VerifyPassword a hash
                 // it can't decode) doesn't short-circuit and reopen the
                 // username-enumeration timing oracle. The derivation is
-                // against a fixed dummy salt and DEFAULT_ITERATIONS so
+                // against a fixed dummy salt and DefaultIterations() so
                 // the wall time matches the legitimate parse-then-derive
                 // path. Result is intentionally discarded.
                 std::vector<uint8_t> dummySalt(SALT_LENGTH, 0xA5);
-                (void)PBKDF2_HMAC_SHA256(password, dummySalt, DEFAULT_ITERATIONS, HASH_LENGTH);
+                (void)PBKDF2_HMAC_SHA256(password, dummySalt, DefaultIterations(), HASH_LENGTH);
                 return false;
             }
 
