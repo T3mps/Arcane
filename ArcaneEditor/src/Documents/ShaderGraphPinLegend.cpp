@@ -6,8 +6,10 @@
 #include "Widgets/GraphCanvasStyle.hpp"        // kGraphPinOuterRingGap / kGraphPinOuterRingWidth
 #include "Widgets/GraphLegend.hpp"             // the shared legend box chrome
 #include "Widgets/GraphPinDot.hpp"             // DrawGraphPinDot -- the canvas's own pin painter
+#include "Settings/GraphCanvasSettings.hpp"    // editor.graph.showPinLegend
 
-#include <Arcane/Config/CVarDecl.hpp>          // ARC_CVAR (settings spec s4.3)
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -16,10 +18,7 @@ namespace Arcane::Editor
 {
     namespace
     {
-        ARC_CVAR(cvar_showPinLegend, "editor.graph.showPinLegend", bool, true,
-                 .flags = ::Arcane::CVarFlags::Archive, .audience = ::Arcane::Audience::Editor,
-                 .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Show the shader graph's pin colour legend (false folds it to a ? chip).");
+        constexpr const char* kShowPinLegendCVar = "editor.graph.showPinLegend";   // GraphCanvasSettings
 
         // The shader canvas's kPinDotRadius at zoom 1: the key shows the dot at
         // the size the canvas draws it unzoomed.
@@ -84,12 +83,16 @@ namespace Arcane::Editor
 
     bool GraphPinLegendShown()
     {
-        return cvar_showPinLegend.Get();
+        return Settings<GraphCanvasSettings>().showPinLegend;
     }
 
     void SetGraphPinLegendShown(bool shown)
     {
-        (void)CVarRegistry::Get().Set(cvar_showPinLegend.Handle(), CVarValue::Bool(shown), SetBy::User, "editor");
+        // A click, not a hot path: one name lookup. The write is unchanged by
+        // the fold into GraphCanvasSettings (S6-34): the User rung, archived at
+        // exit with the rest of the Archive cvars.
+        CVarRegistry& reg = CVarRegistry::Get();
+        (void)reg.Set(reg.Find(kShowPinLegendCVar), CVarValue::Bool(shown), SetBy::User, "editor");
     }
 
     ImVec2 GraphPinLegendBoxSize(bool expanded)

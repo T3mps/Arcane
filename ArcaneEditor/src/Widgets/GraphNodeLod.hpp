@@ -18,7 +18,12 @@
 // It used to live in ShaderEditorDocument.hpp (the enum) and .cpp (the
 // boundaries + the lookup), while the Graph lens copied THE NUMBER 0.250 out of
 // it into a bare float compare and said so in a comment. Now both read the
-// table.
+// table -- and the table is editor.graph.lod.* (settings S6-34,
+// GraphLodSettings), read from the published snapshot every frame.
+
+#include "Settings/GraphCanvasSettings.hpp"   // GraphLodSettings (plain struct)
+
+#include <Arcane/Config/Settings.hpp>
 
 namespace Arcane::Editor
 {
@@ -38,22 +43,19 @@ namespace Arcane::Editor
         FullyZoomedIn,      // zoomed in past 1:1
     };
 
-    // Each constant is the LAST kZoomLevels entry belonging to that tier, read
-    // straight off FFixedZoomLevelsContainer (SNodePanel.cpp:56-75):
-    //   0.100 .. 0.200          LowestDetail
-    //   0.225 .. 0.250          LowDetail
-    //   0.375 .. 0.675          MediumDetail
-    //   0.750 .. 1.375          DefaultDetail
+    // Each GraphLodSettings boundary is the LAST zoom stop belonging to that
+    // tier; the defaults are read straight off FFixedZoomLevelsContainer
+    // (SNodePanel.cpp:56-75):
+    //   0.100 .. 0.200          LowestDetail   (lowestMax  = 0.200)
+    //   0.225 .. 0.250          LowDetail      (lowMax     = 0.250)
+    //   0.375 .. 0.675          MediumDetail   (mediumMax  = 0.675)
+    //   0.750 .. 1.375          DefaultDetail  (defaultMax = 1.375)
     //   1.500 .. 2.000          FullyZoomedIn
     // UE indexes its table and looks the tier up by INDEX (SNodePanel.cpp:1921);
     // we compare the scale instead, because the canvas can also sit BETWEEN
     // stops -- ed::NavigateToContent / NavigateToSelection fit a rectangle and
     // land on an arbitrary scale (imgui_node_editor.cpp:3516-3548), which an
     // index lookup has no answer for. Comparing covers both.
-    inline constexpr float kLodLowestMax  = 0.200f;
-    inline constexpr float kLodLowMax     = 0.250f;
-    inline constexpr float kLodMediumMax  = 0.675f;
-    inline constexpr float kLodDefaultMax = 1.375f;
 
     // The canvas's tier at a given view scale (GraphWire.hpp's GraphViewScale,
     // i.e. a zoom-stop-space number, NOT ed::GetCurrentZoom's reciprocal).
@@ -64,23 +66,30 @@ namespace Arcane::Editor
     //
     // THE EPSILON'S REACH, stated exactly, because a consumer converting from a
     // bare float compare inherits it. A scale in the half-open band
-    // (kLodBoundary, kLodBoundary + kEps] answers the LOWER tier. No entry in
-    // kZoomLevels sits inside any such band, so no reachable zoom STOP changes
-    // tier because of it -- but a STOP is not the only scale a canvas can sit
+    // (boundary, boundary + kEps] answers the LOWER tier. No default zoom
+    // stop (editor.graph.zoomLevels) sits inside any such band at the default
+    // boundaries, so no reachable zoom STOP changes tier because of it -- but
+    // a STOP is not the only scale a canvas can sit
     // at: ed::NavigateToContent / NavigateToSelection fit a rectangle and land
     // on an arbitrary scale (imgui_node_editor.cpp:3516-3548), and such a fit
     // CAN land inside a band. There, this answers one tier lower than a bare
-    // `scale > kLodBoundary` would -- i.e. a consumer degrades a hair earlier,
+    // `scale > boundary` would -- i.e. a consumer degrades a hair earlier,
     // over a window 1e-4 wide. Recorded rather than engineered around: the
     // consequence is imperceptible and the epsilon is doing its real job at the
     // stops.
-    inline NodeLOD NodeLODForScale(float scale) noexcept
+    inline NodeLOD NodeLODForScale(float scale, const GraphLodSettings& lod) noexcept
     {
         constexpr float kEps = 1e-4f;
-        if (scale <= kLodLowestMax  + kEps) return NodeLOD::LowestDetail;
-        if (scale <= kLodLowMax     + kEps) return NodeLOD::LowDetail;
-        if (scale <= kLodMediumMax  + kEps) return NodeLOD::MediumDetail;
-        if (scale <= kLodDefaultMax + kEps) return NodeLOD::DefaultDetail;
+        if (scale <= lod.lowestMax  + kEps) return NodeLOD::LowestDetail;
+        if (scale <= lod.lowMax     + kEps) return NodeLOD::LowDetail;
+        if (scale <= lod.mediumMax  + kEps) return NodeLOD::MediumDetail;
+        if (scale <= lod.defaultMax + kEps) return NodeLOD::DefaultDetail;
         return NodeLOD::FullyZoomedIn;
+    }
+
+    // The same, against the published editor.graph.lod.* block (Live).
+    inline NodeLOD NodeLODForScale(float scale)
+    {
+        return NodeLODForScale(scale, Settings<GraphLodSettings>());
     }
 }

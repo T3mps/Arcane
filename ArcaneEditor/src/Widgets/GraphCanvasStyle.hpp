@@ -28,8 +28,11 @@
 // writes ed::GetStyle() -- which is exactly why it lives in that family and not
 // in EditorWidgets.
 
+#include "Settings/GraphCanvasSettings.hpp"  // editor.graph.*: the node, wire and pin metrics
 #include "Settings/GraphThemeSettings.hpp"   // editor.theme.graph.*: the grid pair and the hover border
 #include "Widgets/EditorTheme.hpp"
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_node_editor.h>
@@ -37,24 +40,26 @@
 namespace Arcane::Editor
 {
     // ---- Node chrome metrics (canvas units at zoom 1) --------------------
-    // Both canvases wrote these as the same seven literals. A canvas that ever
-    // wants to differ overrides through its own style application, not by
-    // re-spelling the number.
-    inline constexpr float kGraphNodeRounding       = 4.0f;
-    inline constexpr float kGraphNodeBorderWidth    = 1.0f;
-    inline constexpr float kGraphNodeHovBorderWidth = 1.5f;
-    inline constexpr float kGraphNodeSelBorderWidth = 2.0f;   // spec §10: "selection = 2px"
+    // Both canvases wrote these as the same seven literals; they are now the
+    // editor.graph.* settings (S6-34, GraphCanvasSettings), read from the
+    // published snapshot. A canvas that ever wants to differ overrides through
+    // its own style application, not by re-spelling the number.
+    [[nodiscard]] inline float GraphNodeRounding()       { return Settings<GraphCanvasSettings>().nodeRounding; }
+    [[nodiscard]] inline float GraphNodeBorderWidth()    { return Settings<GraphCanvasSettings>().nodeBorderWidth; }
+    [[nodiscard]] inline float GraphNodeHovBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderHoverWidth; }
+    [[nodiscard]] inline float GraphNodeSelBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderSelectedWidth; }
 
     // ---- Wire + pin metrics ----------------------------------------------
     // The thickness handed to ed::Link is the REAL one even when the link is
     // submitted fully transparent, or the wire would be hard to grab -- see
     // GraphWire.hpp's channel note for why the visible curve is hand-drawn.
-    inline constexpr float kGraphWireThickness = 2.0f;
-    // A pin dot's tessellation and ring weight. The RADIUS is deliberately NOT
-    // here: it is the one pin value the two canvases genuinely disagree about
-    // (4.0 on the shader canvas, 4.5 for spec §11.2's 9px on the Graph lens),
-    // so it stays a parameter at the call.
-    inline constexpr int   kGraphPinSegments  = 12;
+    [[nodiscard]] inline float GraphWireThickness() { return Settings<GraphCanvasSettings>().wireThickness; }
+    // A pin dot's tessellation (editor.graph.pinSegments) and ring weight.
+    // The RADIUS is deliberately NOT here: it is the one pin value the two
+    // canvases genuinely disagree about (editor.graph.pinDotRadius on the
+    // shader canvas, 4.5 for spec §11.2's 9px on the Graph lens), so it stays
+    // a parameter at the call.
+    [[nodiscard]] inline int GraphPinSegments() { return Settings<GraphCanvasSettings>().pinSegments; }
     inline constexpr float kGraphPinRingWidth = 1.6f;
     // The OPTIONAL outer ring DrawGraphPinDot adds around a dot (the shader
     // canvas's "adapts to its input" mark on a resolved dynamic pin): its
@@ -147,10 +152,11 @@ namespace Arcane::Editor
 
         ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the published snapshot; RefreshGraphCanvasStyle keeps an open canvas current
         ImVec4 selBorder = kGraphNodeSelBorderColor;
-        float  rounding       = kGraphNodeRounding;
-        float  borderWidth    = kGraphNodeBorderWidth;
-        float  hovBorderWidth = kGraphNodeHovBorderWidth;
-        float  selBorderWidth = kGraphNodeSelBorderWidth;
+        // editor.graph.* from the published snapshot, like hovBorder.
+        float  rounding       = GraphNodeRounding();
+        float  borderWidth    = GraphNodeBorderWidth();
+        float  hovBorderWidth = GraphNodeHovBorderWidth();
+        float  selBorderWidth = GraphNodeSelBorderWidth();
     };
 
     // One-time style for a node-editor context. Written to the PERSISTENT

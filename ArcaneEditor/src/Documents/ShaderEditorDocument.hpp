@@ -89,7 +89,7 @@ namespace Arcane::Editor
     struct AssetRefEdit;       // Panels/AssetReferenceField.hpp (ApplyParamRefEdit)
     struct AssetRefServices;   // Panels/AssetReferenceField.hpp (DocServices::assetRefs)
 
-    // NodeLOD, the kLod* boundaries and NodeLODForScale now live in
+    // NodeLOD, the tier boundaries (editor.graph.lod.*) and NodeLODForScale live in
     // Widgets/GraphNodeLod.hpp (included above) so both node canvases read one
     // table; only the per-tier DEGRADATION -- which branches in DrawGraphNode
     // drop what -- is still this document's own.

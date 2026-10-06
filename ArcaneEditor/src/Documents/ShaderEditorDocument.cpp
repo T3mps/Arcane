@@ -17,7 +17,9 @@
 #include "Widgets/GraphFit.hpp"         // GraphFitToContent -- capped fit-on-open (s4.5)
 #include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
-#include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
+#include "Widgets/GraphZoomLevels.hpp"   // ApplyZoomLevels (editor.graph.zoomLevels) -- shared with the Graph lens
+#include "Widgets/UiMetrics.hpp"         // Ui::Px: the header gap follows editor.ui.scale
+#include "Settings/GraphCanvasSettings.hpp"   // editor.graph.*: header gap, cull band, pin dot, selection modifier
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
 #include "Widgets/PropertyGrid.hpp"   // the material page's sections (s5.3)
@@ -38,6 +40,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR (settings spec s4.3)
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -379,9 +382,9 @@ namespace Arcane::Editor
 
         // Node geometry (canvas units at zoom 1). The four chrome metrics --
         // rounding and the three border widths -- moved to
-        // Widgets/GraphCanvasStyle.hpp (kGraphNodeRounding,
-        // kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
-        // kGraphNodeSelBorderWidth, 2026-09-09): they are the canvas's own
+        // Widgets/GraphCanvasStyle.hpp (GraphNodeRounding(),
+        // GraphNodeBorderWidth(), GraphNodeHovBorderWidth(),
+        // GraphNodeSelBorderWidth(), 2026-09-09): they are the canvas's own
         // language, not this canvas's taste, and were the same four literals in
         // the Graph lens. The padding pair below is NOT shared -- it is exactly
         // what the two canvases disagree about (the Graph lens lays its rows out
@@ -398,8 +401,10 @@ namespace Arcane::Editor
         //
         // Canvas units, like every other constant here: everything inside
         // ed::Begin/End is authored in canvas space, so this scales with zoom on
-        // its own and must not be pre-multiplied by anything.
-        constexpr float kNodeHeaderGap = 5.0f;
+        // its own and must not be pre-multiplied by the zoom. It is the setting
+        // editor.graph.nodeHeaderGap (S6-34) at the UI scale (Ui::Px, s16.11 --
+        // exact at scale 1).
+        float NodeHeaderGap() { return Ui::Px(Settings<GraphCanvasSettings>().nodeHeaderGap); }
 
         // Off-screen culling guard band, as a fraction of the visible canvas
         // extent added to EVERY side. UE's value verbatim:
@@ -407,12 +412,14 @@ namespace Arcane::Editor
         // drawSize * -0.25 .. drawSize * 1.25 (:1588-1589). Generous on
         // purpose -- the band is what stops a node at the edge oscillating
         // between full content and stand-in as the view drifts, and it means a
-        // node is already fully built by the time it scrolls in.
-        constexpr float kCullGuardBand = 0.25f;
+        // node is already fully built by the time it scrolls in. The setting
+        // editor.graph.cullGuardBand (S6-34).
+        float CullGuardBand() { return Settings<GraphCanvasSettings>().cullGuardBand; }
         // The pin dot's RADIUS is this canvas's own (the Graph lens draws 4.5f
-        // for spec §11.2's 9px); its segment count and ring width are shared
-        // (kGraphPinSegments / kGraphPinRingWidth, Widgets/GraphCanvasStyle.hpp).
-        constexpr float kPinDotRadius   = 4.0f;
+        // for spec §11.2's 9px): editor.graph.pinDotRadius (S6-34). Its segment
+        // count and ring width are shared (GraphPinSegments / kGraphPinRingWidth,
+        // Widgets/GraphCanvasStyle.hpp).
+        float PinDotRadius() { return Settings<GraphCanvasSettings>().pinDotRadius; }
 
         // ---- Gradient wires -------------------------------------------------
         // The two-layer technique -- transparent ed::Link for interaction, a
@@ -427,19 +434,20 @@ namespace Arcane::Editor
         // ZOOM STOPS + ApplyZoomLevels moved to Widgets/GraphZoomLevels.hpp
         // (2026-09-09) so the Assets panel's Graph lens can install the same
         // table instead of hand-copying it -- see that header for the full
-        // rationale (kZoomLevels, ApplyZoomLevels) and docs/specs/
+        // rationale (ApplyZoomLevels; the table itself is the setting
+        // editor.graph.zoomLevels since S6-34) and docs/specs/
         // 2026-09-06-asset-manager-redesign-design.md §19 for the bug this
-        // fixed. `kZoomLevels` and `ApplyZoomLevels` below still name the
-        // header's definitions via using-directive-free lookup (both are in
-        // namespace Arcane::Editor, which this anonymous namespace nests
-        // inside).
+        // fixed. `ApplyZoomLevels` below still names the header's definition
+        // via using-directive-free lookup (it is in namespace Arcane::Editor,
+        // which this anonymous namespace nests inside).
 
         // The view-scale helper moved to Widgets/GraphWire.hpp as
         // GraphViewScale (2026-09-09) -- the reciprocal flip and its "THE TRAP"
         // note were byte-identical in the Graph lens. RENDERING LOD BOUNDARIES (the
-        // kLod* constants and NodeLODForScale, the third column of UE's zoom
-        // table) moved to Widgets/GraphNodeLod.hpp alongside the NodeLOD enum,
-        // so the Graph lens reads the table instead of copying 0.250 out of it.
+        // tier boundaries -- editor.graph.lod.* since S6-34 -- and NodeLODForScale,
+        // the third column of UE's zoom table) moved to Widgets/GraphNodeLod.hpp
+        // alongside the NodeLOD enum, so the Graph lens reads the table instead
+        // of copying 0.250 out of it.
 
         // FillRgba (ImVec4 -> the plain float[4] GraphGridColors holds) had one
         // caller, the backdrop composition, and moved with it into
@@ -456,15 +464,15 @@ namespace Arcane::Editor
         {
             const float lineH = ImGui::GetTextLineHeight();
             const ImVec2 p = ImGui::GetCursorScreenPos();
-            ImGui::Dummy(ImVec2(kPinDotRadius * 2.0f, lineH));
-            const ImVec2 c(p.x + kPinDotRadius, p.y + lineH * 0.5f);
+            ImGui::Dummy(ImVec2(PinDotRadius() * 2.0f, lineH));
+            const ImVec2 c(p.x + PinDotRadius(), p.y + lineH * 0.5f);
             // The three draw calls are Widgets/GraphPinDot.hpp's (2026-09-09);
             // what stays here is the LAYOUT -- the cursor advance and the centre
             // this function exists to hand back. The Graph lens shares the
             // paint and none of that.
             const ImVec4 ring = PinDynamicColor();
             DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
-                            NodeBodyColor(), kPinDotRadius, connected,
+                            NodeBodyColor(), PinDotRadius(), connected,
                             paint.adapts ? &ring : nullptr);
             return c;
         }
@@ -511,11 +519,11 @@ namespace Arcane::Editor
                 return nodeSize;
             if (ImDrawList* bg = ed::GetNodeBackgroundDrawList(ed::NodeId(nodeId)))
                 bg->AddRectFilled(
-                    ImVec2(nodePos.x + kGraphNodeBorderWidth, nodePos.y + kGraphNodeBorderWidth),
-                    ImVec2(nodePos.x + nodeSize.x - kGraphNodeBorderWidth,
+                    ImVec2(nodePos.x + GraphNodeBorderWidth(), nodePos.y + GraphNodeBorderWidth()),
+                    ImVec2(nodePos.x + nodeSize.x - GraphNodeBorderWidth(),
                            headerMaxY + kNodePadY),
                     ImGui::GetColorU32(color),
-                    kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
+                    GraphNodeRounding(), ImDrawFlags_RoundCornersTop);
             return nodeSize;
         }
 
@@ -705,7 +713,7 @@ namespace Arcane::Editor
 
         // The chip's dot slot: it fits a dot WITH its outer ring, ringed or
         // not, so the type words of a section line up.
-        constexpr float kPinChipSlot = 2.0f * (kPinDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+        float PinChipSlot() { return 2.0f * (PinDotRadius() + kGraphPinOuterRingGap + kGraphPinOuterRingWidth); }
 
         // The value-cell width the chip needs to show its word (T3-D2), from
         // the CURRENT font: the dot slot, the widest word ANY pin shows (so
@@ -718,7 +726,7 @@ namespace Arcane::Editor
                 for (int resolved = 0; resolved <= 4; ++resolved)
                     widest = std::max(widest, ImGui::CalcTextSize(PinTypeText(declared, resolved).c_str()).x);
             const ImGuiStyle& style = ImGui::GetStyle();
-            return kPinChipSlot + style.ItemInnerSpacing.x + widest + style.ItemSpacing.x +
+            return PinChipSlot() + style.ItemInnerSpacing.x + widest + style.ItemSpacing.x +
                    ImGui::CalcTextSize("x").x * static_cast<float>(NodePageMinTextRun());
         }
 
@@ -737,11 +745,11 @@ namespace Arcane::Editor
         {
             const bool showWord = ImGui::GetContentRegionAvail().x >= NodePageTypeWordCellWidth();
             const ImVec2 p = ImGui::GetCursorScreenPos();
-            ImGui::Dummy(ImVec2(kPinChipSlot, ImGui::GetTextLineHeight()));
-            const ImVec2 c(p.x + kPinChipSlot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
+            ImGui::Dummy(ImVec2(PinChipSlot(), ImGui::GetTextLineHeight()));
+            const ImVec2 c(p.x + PinChipSlot() * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
             const ImVec4 ring = PinDynamicColor();
             DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
-                            ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), kPinDotRadius, wired,
+                            ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), PinDotRadius(), wired,
                             paint.adapts ? &ring : nullptr);
             if (!showWord)
             {
@@ -3354,7 +3362,8 @@ namespace Arcane::Editor
             // feel and belongs on every canvas in the editor. (The LOD tiers
             // built on top of it are not -- see DrawPassCanvas's note below.)
             ApplyZoomLevels(cfg);
-            cfg.ShiftAddsToSelection = true;   // UE's modifiers, as on the graph canvas
+            // UE's modifiers, as on the graph canvas (editor.graph.shiftAddsToSelection).
+            cfg.ShiftAddsToSelection = Settings<GraphCanvasSettings>().shiftAddsToSelection;
             m_passCanvasCtx = ed::CreateEditor(&cfg);
             // Same node/canvas styling as the material graph, including the
             // switch that kills the vendored grid so the shader backdrop below
@@ -3503,7 +3512,7 @@ namespace Arcane::Editor
             // reasoning as a graph node (DrawNodeTitleBand).
             const float headerMaxY = ImGui::GetItemRectMax().y;
             {
-                const float fill = (kNodePadY + kNodeHeaderGap) -
+                const float fill = (kNodePadY + NodeHeaderGap()) -
                                    2.0f * ImGui::GetStyle().ItemSpacing.y;
                 if (fill > 0.0f)
                     ImGui::Dummy(ImVec2(0.0f, fill));
@@ -3549,7 +3558,7 @@ namespace Arcane::Editor
                 // list IS the wire list -- so the dot is always filled here.
                 const ImVec2 dot = DrawPinDot(PinTextureColor(), true);
                 SetPinPivot(InPin(nodeId, static_cast<std::uint32_t>(s)).Get(),
-                            ImVec2(dot.x - kPinDotRadius, dot.y));
+                            ImVec2(dot.x - PinDotRadius(), dot.y));
                 ImGui::SameLine();
                 ImGui::Text("in%zu", s);
                 ed::EndPin();
@@ -3564,7 +3573,7 @@ namespace Arcane::Editor
                 // canvas gives an unwired input.
                 const ImVec2 dot = DrawPinDot(PinTextureColor(), false);
                 SetPinPivot(InPin(nodeId, sparePin).Get(),
-                            ImVec2(dot.x - kPinDotRadius, dot.y));
+                            ImVec2(dot.x - PinDotRadius(), dot.y));
                 ImGui::SameLine();
                 ImGui::TextDisabled("+");
                 ed::EndPin();
@@ -3580,7 +3589,7 @@ namespace Arcane::Editor
             {
                 const float rowW = ImGui::CalcTextSize("out").x +
                                    ImGui::GetStyle().ItemSpacing.x +
-                                   kPinDotRadius * 2.0f;
+                                   PinDotRadius() * 2.0f;
                 RightAlignRow(passContentW, rowW);
                 ed::BeginPin(OutPin(nodeId, 0), ed::PinKind::Output);
                 ImGui::TextUnformatted("out");
@@ -3594,7 +3603,7 @@ namespace Arcane::Editor
                         fanout = fanout || in == static_cast<std::uint32_t>(c);
                 const ImVec2 dot = DrawPinDot(PinTextureColor(), fanout);
                 SetPinPivot(OutPin(nodeId, 0).Get(),
-                            ImVec2(dot.x + kPinDotRadius, dot.y));
+                            ImVec2(dot.x + PinDotRadius(), dot.y));
                 ed::EndPin();
             }
 
@@ -3612,7 +3621,7 @@ namespace Arcane::Editor
         ImGui::TextColored(NodeTitleText(), "Scene");
         const float sceneHeaderY = ImGui::GetItemRectMax().y;
         {
-            const float fill = (kNodePadY + kNodeHeaderGap) -
+            const float fill = (kNodePadY + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
@@ -3633,7 +3642,7 @@ namespace Arcane::Editor
                     used = used || in == Arcane::kSceneInput;
             const ImVec2 dot = DrawPinDot(PinTextureColor(), used);
             SetPinPivot(OutPin(kPassSceneNodeId, 0).Get(),
-                        ImVec2(dot.x + kPinDotRadius, dot.y));
+                        ImVec2(dot.x + PinDotRadius(), dot.y));
         }
         ed::EndPin();
         ed::EndNode();
@@ -3645,7 +3654,7 @@ namespace Arcane::Editor
         ImGui::TextColored(NodeTitleText(), "Output");
         const float outHeaderY = ImGui::GetItemRectMax().y;
         {
-            const float fill = (kNodePadY + kNodeHeaderGap) -
+            const float fill = (kNodePadY + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
@@ -3655,7 +3664,7 @@ namespace Arcane::Editor
             // Always fed: the final wire is the chain's tail by construction.
             const ImVec2 dot = DrawPinDot(PinTextureColor(), true);
             SetPinPivot(InPin(kPassOutputNodeId, 0).Get(),
-                        ImVec2(dot.x - kPinDotRadius, dot.y));
+                        ImVec2(dot.x - PinDotRadius(), dot.y));
         }
         ImGui::SameLine();
         ImGui::TextUnformatted("final");
@@ -4820,11 +4829,12 @@ namespace Arcane::Editor
         {
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
-            ApplyZoomLevels(cfg);         // UE's 20 stops (see kZoomLevels)
+            ApplyZoomLevels(cfg);         // UE's 20 stops by default (editor.graph.zoomLevels)
             // UE's selection modifiers (SNodePanel.cpp:194-212, MarqueeOperation.h:
             // 50-68): Shift+click and Shift+drag ADD. Upstream's Shift+drag selects
             // only groups (Comments), which read on the desk as a broken marquee.
-            cfg.ShiftAddsToSelection = true;
+            // editor.graph.shiftAddsToSelection (S6-34; true by default).
+            cfg.ShiftAddsToSelection = Settings<GraphCanvasSettings>().shiftAddsToSelection;
             m_graphCtx = ed::CreateEditor(&cfg);
             // The style is per-context state, so a rebuilt context re-applies
             // it -- including the switch that kills the vendored grid.
@@ -4945,7 +4955,7 @@ namespace Arcane::Editor
             // nothing (see kGraphLinkChannel). The thickness is the real one:
             // it is still the hit radius.
             ed::Link(linkId, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                     kGraphWireThickness);
+                     GraphWireThickness());
 
             // GetHoveredLink reports 0 while any action is running (the
             // m_CurrentAction guard, imgui_node_editor.cpp:1280), so a wire
@@ -5680,7 +5690,7 @@ namespace Arcane::Editor
             ImGui::TextColored(NodeTitleText(), "%s", info.display);
         const float headerMaxY = ImGui::GetItemRectMax().y;
 
-        // Reserve the gap under the band (kNodeHeaderGap). Solved rather than
+        // Reserve the gap under the band (NodeHeaderGap()). Solved rather than
         // guessed, because ImGui's automatic spacing is already in play at both
         // ends of the dummy: the next real item lands at
         // headerMaxY + 2*ItemSpacing.y + fill, and it needs to land at the
@@ -5696,7 +5706,7 @@ namespace Arcane::Editor
         // height for no reading. The band-only tier wants no gap at all.
         if (showPinRows)
         {
-            const float fill = (kNodePadY + kNodeHeaderGap) -
+            const float fill = (kNodePadY + NodeHeaderGap()) -
                                2.0f * ImGui::GetStyle().ItemSpacing.y;
             if (fill > 0.0f)
                 ImGui::Dummy(ImVec2(0.0f, fill));
@@ -5850,7 +5860,7 @@ namespace Arcane::Editor
             // (the dot's dummy is the full text line height). Same point as
             // before, now stated instead of inferred.
             SetPinPivot(InPin(n.id, pin).Get(),
-                        ImVec2(inDot.x - kPinDotRadius, inDot.y));
+                        ImVec2(inDot.x - PinDotRadius(), inDot.y));
             if (showPinText)
             {
                 ImGui::SameLine();
@@ -6264,8 +6274,8 @@ namespace Arcane::Editor
             const float rowW = showPinText
                                    ? ImGui::CalcTextSize(outDesc.name).x +
                                          ImGui::GetStyle().ItemSpacing.x +
-                                         kPinDotRadius * 2.0f
-                                   : kPinDotRadius * 2.0f;
+                                         PinDotRadius() * 2.0f
+                                   : PinDotRadius() * 2.0f;
             RightAlignRow(contentW, rowW);
             ed::BeginPin(OutPin(n.id, pin), ed::PinKind::Output);
             if (showPinText)
@@ -6277,7 +6287,7 @@ namespace Arcane::Editor
             // Mirror of the input row: the dot is the row's LAST item, so the
             // (1, 0.5) alignment's pinRect.Max.x was the dot's right edge.
             SetPinPivot(OutPin(n.id, pin).Get(),
-                        ImVec2(outDot.x + kPinDotRadius, outDot.y));
+                        ImVec2(outDot.x + PinDotRadius(), outDot.y));
             ed::EndPin();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 m_pinTip = { n.id, pin, false, true };
@@ -6355,7 +6365,7 @@ namespace Arcane::Editor
         // the exact curve match, not for a colour transition it has no types
         // to make.
         ed::Link(id, fromPin, toPin, ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                 kGraphWireThickness);
+                 GraphWireThickness());
         const bool emphasize = ed::IsLinkSelected(id) || ed::GetHoveredLink() == id;
         DrawGradientWire(fromPin.Get(), toPin.Get(), PinTextureColor(),
                          PinTextureColor(), emphasize);
@@ -6393,8 +6403,8 @@ namespace Arcane::Editor
             const ImVec2 tl = ed::ScreenToCanvas(canvasMin);
             const ImVec2 br = ed::ScreenToCanvas(ImVec2(canvasMin.x + canvasSize.x,
                                                         canvasMin.y + canvasSize.y));
-            const float bandX = (br.x - tl.x) * kCullGuardBand;
-            const float bandY = (br.y - tl.y) * kCullGuardBand;
+            const float bandX = (br.x - tl.x) * CullGuardBand();
+            const float bandY = (br.y - tl.y) * CullGuardBand();
             m_cullMin = ImVec2(tl.x - bandX, tl.y - bandY);
             m_cullMax = ImVec2(br.x + bandX, br.y + bandY);
             m_cullRectValid = true;
@@ -6464,7 +6474,7 @@ namespace Arcane::Editor
         // segment budget and the midpoint-sampled walk are all
         // Widgets/GraphWire.hpp's now. The returned midpoint is for callers that
         // hang a label off it (the Graph lens does); this canvas has none.
-        DrawGraphWire(p0, p3, a, b, kGraphWireThickness, GraphViewScale());
+        DrawGraphWire(p0, p3, a, b, GraphWireThickness(), GraphViewScale());
     }
 
     void ShaderEditorDocument::HandleGraphEdits()

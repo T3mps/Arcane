@@ -370,7 +370,7 @@ namespace Arcane::Editor
         constexpr float kGraphPinRadius      = 4.5f;
         // The dot's segment count and ring width are the canvas's own language,
         // identical on both canvases, so they live once in
-        // Widgets/GraphCanvasStyle.hpp (kGraphPinSegments / kGraphPinRingWidth).
+        // Widgets/GraphCanvasStyle.hpp (GraphPinSegments() / kGraphPinRingWidth).
         // Only the RADIUS above is this lens's -- §11.2's 9px across.
 
         // ---- Layout pitch (tuning values; Task 5's render comparison against
@@ -473,9 +473,9 @@ namespace Arcane::Editor
         // language, not this lens's taste -- they were the same literals on both
         // canvases and now live once in Widgets/GraphCanvasStyle.hpp
         // (kGraphNodeSelBorderColor / editor.theme.graph.hoverBorder,
-        // kGraphNodeRounding, kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
-        // kGraphNodeSelBorderWidth). So is the wire thickness
-        // (kGraphWireThickness). Only the four SURFACE tones above stay here:
+        // GraphNodeRounding(), GraphNodeBorderWidth(), GraphNodeHovBorderWidth(),
+        // GraphNodeSelBorderWidth()). So is the wire thickness
+        // (GraphWireThickness()). Only the four SURFACE tones above stay here:
         // those are the board ruling's, and the ruling declines to drag the
         // shader canvas onto them.
 
@@ -825,7 +825,7 @@ namespace Arcane::Editor
             const int prevChannel = dl->_Splitter._Current;
             dl->ChannelsSetCurrent(kGraphLinkChannel);
             dl->AddCircleFilled(centre, kGraphDashEndDotRadius,
-                                ImGui::GetColorU32(color), kGraphPinSegments);
+                                ImGui::GetColorU32(color), GraphPinSegments());
             dl->ChannelsSetCurrent(prevChannel);
         }
 
@@ -918,14 +918,14 @@ namespace Arcane::Editor
             if (!bg)
                 return;
 
-            const float b = kGraphNodeBorderWidth;
+            const float b = GraphNodeBorderWidth();
             const ImVec2 innerMin(v.pos.x + b, v.pos.y + b);
             const ImVec2 innerMax(v.pos.x + v.width - b, v.pos.y + v.height - b);
 
             if (drawBand)
                 bg->AddRectFilled(innerMin, ImVec2(innerMax.x, v.pos.y + kGraphHeaderHeight),
                                   ImGui::GetColorU32(kGraphNodeTitleColor),
-                                  kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
+                                  GraphNodeRounding(), ImDrawFlags_RoundCornersTop);
 
             if (accent)
                 // Drawn AFTER the band so it runs the node's FULL height, the
@@ -933,17 +933,17 @@ namespace Arcane::Editor
                 // header is not a separate region the bar stops at.
                 bg->AddRectFilled(innerMin, ImVec2(innerMin.x + kGraphAccentBarWidth, innerMax.y),
                                   ImGui::GetColorU32(*accent),
-                                  kGraphNodeRounding, ImDrawFlags_RoundCornersLeft);
+                                  GraphNodeRounding(), ImDrawFlags_RoundCornersLeft);
 
             if (wash > 0.0f)
                 bg->AddRectFilled(innerMin, innerMax,
                                   ImGui::GetColorU32(Theme::WithAlpha(kGraphCanvasColor, wash)),
-                                  kGraphNodeRounding);
+                                  GraphNodeRounding());
 
             if (borderAccent)
                 bg->AddRect(innerMin, innerMax, ImGui::GetColorU32(*borderAccent),
-                            kGraphNodeRounding, ImDrawFlags_RoundCornersAll,
-                            kGraphNodeBorderWidth);
+                            GraphNodeRounding(), ImDrawFlags_RoundCornersAll,
+                            GraphNodeBorderWidth());
         }
 
         // Submit one node: the §10 anatomy (header row + 3px kind accent bar
@@ -1729,7 +1729,7 @@ namespace Arcane::Editor
         //
         // The lookup carries a 1e-4 epsilon the bare `> 0.250f` compare did
         // not, which moves the cut by 0.0001. At every reachable zoom STOP
-        // that is a no-op -- no entry in kZoomLevels lies in
+        // that is a no-op -- no default zoom stop (editor.graph.zoomLevels) lies in
         // (0.250, 0.2501]. But a stop is not the only scale this canvas can
         // sit at: ed::NavigateToSelection (section 8b) fits a rectangle and
         // lands on an arbitrary scale, and such a fit CAN land inside that
@@ -1764,7 +1764,7 @@ namespace Arcane::Editor
             const std::uint64_t startPin = GraphRightPinId(GraphNodeIdOf(to->second));
             const std::uint64_t endPin   = GraphLeftPinId(GraphNodeIdOf(from->second));
             ed::Link(ed::LinkId(ei + 1), ed::PinId(startPin), ed::PinId(endPin),
-                     ImVec4(0.0f, 0.0f, 0.0f, 0.0f), kGraphWireThickness);
+                     ImVec4(0.0f, 0.0f, 0.0f, 0.0f), GraphWireThickness());
 
             const ImVec2 p0(tv.pos.x + tv.width, tv.pos.y + tv.height * 0.5f);
             const ImVec2 p3(fv.pos.x,            fv.pos.y + fv.height * 0.5f);
@@ -1798,7 +1798,7 @@ namespace Arcane::Editor
             const ImVec2 mid = DrawGraphWire(p0, p3,
                                              endColor(nodes[to->second]),
                                              endColor(nodes[from->second]),
-                                             kGraphWireThickness, viewScale);
+                                             GraphWireThickness(), viewScale);
 
             if (drawLabels && e.label)
             {
@@ -1941,7 +1941,7 @@ namespace Arcane::Editor
         // destructor, so it cannot be skipped on any path out of this block
         // (Widgets/CanvasEditScope.hpp holds the rule and the crash).
         const CanvasCreateScope create(ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                                       kGraphWireThickness);
+                                       GraphWireThickness());
         if (create)
         {
             ed::PinId aId, bId;
@@ -2051,7 +2051,7 @@ namespace Arcane::Editor
                 // the pin; a left-pin drag ARRIVES at it. The board's path
                 // (`M230,330 C320,330 390,402 462,402`) is the former.
                 DrawGraphDashedWire(right ? pivot : tip, right ? tip : pivot,
-                                    Theme::kAmber, kGraphWireThickness, viewScale);
+                                    Theme::kAmber, GraphWireThickness(), viewScale);
                 DrawGraphWireEndDot(tip, Theme::kAmber);
             }
         }
