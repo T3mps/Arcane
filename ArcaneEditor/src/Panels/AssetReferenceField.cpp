@@ -91,7 +91,13 @@ namespace Arcane::Editor
                 {
                     ImGui::SetCursorScreenPos(row.trailingPos);
                     AssetPill(pill);
-                    ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + 24.0f + st.ItemSpacing.y));   // RowWithThumb's pitch: its 24 px Selectable + the ItemSize spacing a pill-less row gets
+                    // The row's TableRowHeight() Selectable + ItemSpacing.y (the
+                    // pre-sweep 24 + spacing, now at the setting). NOTE a
+                    // pill-less row pitches TableRowHeight() alone
+                    // (RowWithThumb parks the cursor at its bottom), so a
+                    // pill row sits ItemSpacing.y further down; kept as it
+                    // was (identical at the defaults), owed a ruling.
+                    ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + TableRowHeight() + st.ItemSpacing.y));
                 }
                 widest = std::max(widest, AssetRowThumbSize() + st.ItemInnerSpacing.x * 2.0f
                                           + ImGui::CalcTextSize(e->fileName.c_str()).x + (pill ? PillWidth(pill) : 0.0f));

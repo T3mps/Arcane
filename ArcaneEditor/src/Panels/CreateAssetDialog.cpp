@@ -29,10 +29,11 @@ namespace Arcane::Editor
         // content -- the field count varies by kind and by whether the parent
         // picker is expanded.
         constexpr float kDialogWidth = 380.0f;
-        // Picker rows reuse the table row pitch (s11.2: "table rows | 24px"),
-        // the same value RowWithThumb defaults to -- the picker IS an asset
-        // list, so it gets the asset-list row, not a bespoke one.
-        constexpr float kPickerRowHeight = 24.0f;
+        // Picker rows reuse the table row pitch (s11.2: "table rows | 24px",
+        // now editor.ui.tableRowHeight at the UI scale, settings S6-28), the
+        // same value RowWithThumb defaults to -- the picker IS an asset list,
+        // so it gets the asset-list row, not a bespoke one.
+        float PickerRowHeight() { return TableRowHeight(); }
         // Six rows before the picker scrolls: enough to browse a small
         // project's materials without the modal growing past a comfortable
         // height on a big one.
@@ -289,9 +290,9 @@ namespace Arcane::Editor
             const int rows = std::min(static_cast<int>(candidates.size()), kPickerVisibleRows);
             // + the bordered child's OWN vertical padding, both sides:
             // ImGuiChildFlags_Borders enables WindowPadding (imgui.h's own note
-            // on that flag), so a height of exactly rows*24 clips the last row
+            // on that flag), so a height of exactly rows*PickerRowHeight() clips the last row
             // by that padding instead of showing it.
-            const float height = std::max(kPickerRowHeight, kPickerRowHeight * static_cast<float>(rows))
+            const float height = PickerRowHeight() * static_cast<float>(std::max(rows, 1))
                                + ImGui::GetStyle().WindowPadding.y * 2.0f;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kWell);
             if (ImGui::BeginChild("##createparentlist", ImVec2(-FLT_MIN, height), ImGuiChildFlags_Borders))
@@ -305,7 +306,7 @@ namespace Arcane::Editor
                     ImGui::PushID(e->guid.ToString().c_str());
                     const AssetRowResult res =
                         RowWithThumb("##pick", 0, ICON_LC_PALETTE, e->name.c_str(),
-                                     st.parent == e->guid, 0.0f, kPickerRowHeight);
+                                     st.parent == e->guid, 0.0f, PickerRowHeight());
                     if (res.clicked)
                     {
                         st.parent = e->guid;
@@ -397,7 +398,7 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", counts);
 
             const int rows = std::min(static_cast<int>(candidates.size()), kPickerVisibleRows);
-            const float height = std::max(kPickerRowHeight, kPickerRowHeight * static_cast<float>(rows))
+            const float height = PickerRowHeight() * static_cast<float>(std::max(rows, 1))
                                + ImGui::GetStyle().WindowPadding.y * 2.0f;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kWell);
             if (ImGui::BeginChild("##createtexturelist", ImVec2(-FLT_MIN, height), ImGuiChildFlags_Borders))
@@ -411,7 +412,7 @@ namespace Arcane::Editor
                     ImGui::PushID(e->guid.ToString().c_str());
                     const AssetRowResult res =
                         RowWithThumb("##pick", 0, ICON_LC_IMAGE, e->name.c_str(),
-                                     st.texture == e->guid, 0.0f, kPickerRowHeight);
+                                     st.texture == e->guid, 0.0f, PickerRowHeight());
                     if (res.clicked)
                     {
                         st.texture = e->guid;

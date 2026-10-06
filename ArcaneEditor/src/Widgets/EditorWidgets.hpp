@@ -271,11 +271,13 @@ namespace Arcane::Editor
     // (pills, right-aligned extras) should START. `indent` shifts where the
     // thumb and name start; the row's own Selectable still spans the full
     // width, so the row stays clickable everywhere regardless of indent.
-    // `rowHeight` defaults to the 24px table row (spec §11.2); rail rows --
-    // drawn with this SAME helper per §11.1 -- pass 26. (The brief's doc
-    // fixed this at 24px, which cannot serve both rows; controller ruling,
-    // 2026-09-06, makes it a parameter instead, defaulted to 24 so table
-    // call sites stay unchanged.)
+    // `rowHeight` defaults to the table row, TableRowHeight() (spec §11.2;
+    // 24px at the defaults); rail rows -- drawn with this SAME helper per
+    // §11.1 -- pass their own (Ui::TextPx(26)). (The brief's doc fixed this
+    // at 24px, which cannot serve both rows; controller ruling, 2026-09-06,
+    // makes it a parameter instead.) A caller that positions content
+    // against the row's pitch reads TableRowHeight(), never a literal: the
+    // pitch is the user's editor.ui.tableRowHeight at the UI scale.
     //
     // TASK 10 FIX ROUND 1 (review Critical 1): the thumb and name are pure
     // ImDrawList overdraw now, NOT ImGui::Image/TextUnformatted items --

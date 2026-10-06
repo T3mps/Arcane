@@ -17,6 +17,7 @@
 #include <imgui_internal.h>   // ImTrunc: what ScaleAllSizes rounds to
 #include <cstring>
 #include <filesystem>
+#include <string_view>
 #include <vector>
 using namespace Arcane;
 
@@ -39,6 +40,45 @@ namespace
         REQUIRE(reg.Set(reg.Find(name), v, SetBy::EditorUser, "editor", CVarContext::Editor) == SetResult::Applied);
         reg.PublishImmediate();
     }
+
+    // ImGuiStyle field by field. NOT a memcmp over the struct: it has padding
+    // (3 bytes after DockingNodeHasCloseButton, 1 after the AntiAliased*
+    // bools) that its member-wise constructor never writes, so two equal
+    // styles can differ there (Debug's /RTC 0xCC stack fill hid it). Every
+    // member of the vendored ImGui's ImGuiStyle is listed; Colors is an ImVec4 array
+    // (no padding) and compares bytewise. Returns the first differing field
+    // name, or "" when the styles are equal.
+    std::string_view StyleDiff(const ImGuiStyle& a, const ImGuiStyle& b)
+    {
+#define ARC_STYLE_F(f) if (!Test::SameBits(a.f, b.f)) return #f;
+#define ARC_STYLE_V(f) if (!Test::SameBits(a.f.x, b.f.x) || !Test::SameBits(a.f.y, b.f.y)) return #f;
+#define ARC_STYLE_E(f) if (a.f != b.f) return #f;
+        ARC_STYLE_F(FontSizeBase) ARC_STYLE_F(FontScaleMain) ARC_STYLE_F(FontScaleDpi) ARC_STYLE_F(Alpha)
+        ARC_STYLE_F(DisabledAlpha) ARC_STYLE_F(WindowRounding) ARC_STYLE_F(WindowBorderSize) ARC_STYLE_F(WindowBorderHoverPadding)
+        ARC_STYLE_F(ChildRounding) ARC_STYLE_F(ChildBorderSize) ARC_STYLE_F(PopupRounding) ARC_STYLE_F(PopupBorderSize)
+        ARC_STYLE_F(FrameRounding) ARC_STYLE_F(FrameBorderSize) ARC_STYLE_F(IndentSpacing) ARC_STYLE_F(ColumnsMinSpacing)
+        ARC_STYLE_F(ScrollbarSize) ARC_STYLE_F(ScrollbarRounding) ARC_STYLE_F(ScrollbarPadding) ARC_STYLE_F(GrabMinSize)
+        ARC_STYLE_F(GrabRounding) ARC_STYLE_F(LogSliderDeadzone) ARC_STYLE_F(ImageRounding) ARC_STYLE_F(ImageBorderSize)
+        ARC_STYLE_F(TabRounding) ARC_STYLE_F(TabBorderSize) ARC_STYLE_F(TabMinWidthBase) ARC_STYLE_F(TabMinWidthShrink)
+        ARC_STYLE_F(TabCloseButtonMinWidthSelected) ARC_STYLE_F(TabCloseButtonMinWidthUnselected) ARC_STYLE_F(TabBarBorderSize) ARC_STYLE_F(TabBarOverlineSize)
+        ARC_STYLE_F(TableAngledHeadersAngle) ARC_STYLE_F(TreeLinesSize) ARC_STYLE_F(TreeLinesRounding) ARC_STYLE_F(DragDropTargetRounding)
+        ARC_STYLE_F(DragDropTargetBorderSize) ARC_STYLE_F(DragDropTargetPadding) ARC_STYLE_F(ColorMarkerSize) ARC_STYLE_F(SeparatorSize)
+        ARC_STYLE_F(SeparatorTextBorderSize) ARC_STYLE_F(DockingSeparatorSize) ARC_STYLE_F(MouseCursorScale) ARC_STYLE_F(CurveTessellationTol)
+        ARC_STYLE_F(CircleTessellationMaxError) ARC_STYLE_F(HoverStationaryDelay) ARC_STYLE_F(HoverDelayShort) ARC_STYLE_F(HoverDelayNormal)
+        ARC_STYLE_F(_MainScale) ARC_STYLE_F(_NextFrameFontSizeBase)
+        ARC_STYLE_V(WindowPadding) ARC_STYLE_V(WindowMinSize) ARC_STYLE_V(WindowTitleAlign) ARC_STYLE_V(FramePadding)
+        ARC_STYLE_V(ItemSpacing) ARC_STYLE_V(ItemInnerSpacing) ARC_STYLE_V(CellPadding) ARC_STYLE_V(TouchExtraPadding)
+        ARC_STYLE_V(TableAngledHeadersTextAlign) ARC_STYLE_V(ButtonTextAlign) ARC_STYLE_V(SelectableTextAlign) ARC_STYLE_V(SeparatorTextAlign)
+        ARC_STYLE_V(SeparatorTextPadding) ARC_STYLE_V(DisplayWindowPadding) ARC_STYLE_V(DisplaySafeAreaPadding)
+        ARC_STYLE_E(WindowMenuButtonPosition) ARC_STYLE_E(TreeLinesFlags) ARC_STYLE_E(ColorButtonPosition) ARC_STYLE_E(DockingNodeHasCloseButton)
+        ARC_STYLE_E(AntiAliasedLines) ARC_STYLE_E(AntiAliasedLinesUseTex) ARC_STYLE_E(AntiAliasedFill) ARC_STYLE_E(HoverFlagsForTooltipMouse)
+        ARC_STYLE_E(HoverFlagsForTooltipNav)
+#undef ARC_STYLE_F
+#undef ARC_STYLE_V
+#undef ARC_STYLE_E
+        if (std::memcmp(a.Colors, b.Colors, sizeof a.Colors) != 0) return "Colors";
+        return {};
+    }
 }
 
 TEST_CASE("sweep: style metrics are EditorUiStyleSettings fields with the pre-sweep values", "[sweep][ui-style]")
@@ -57,7 +97,7 @@ TEST_CASE("sweep: style metrics are EditorUiStyleSettings fields with the pre-sw
     // The one-argument form (tests; the crash reporter spells EditorUiStyleSettings{}) is the defaults.
     ImGuiStyle d;
     Editor::ApplyEditorTheme(d);
-    CHECK(std::memcmp(&d, &s, sizeof d) == 0);
+    CHECK(StyleDiff(d, s) == "");
     Test::RequireDefault("editor.ui.tabRounding", CVarValue::Float32(2.0f));
     Test::RequireDefault("editor.ui.frameBorderSize", CVarValue::Float32(1.0f));
     Test::RequireDefault("editor.ui.dockNodeCloseButton", CVarValue::Bool(false));
@@ -89,7 +129,7 @@ TEST_CASE("sweep: a Live style change re-applies the metrics once, at the curren
     const ImGuiStyle boot = style;
     Editor::AppearanceApplier applier; applier.Init(style);
     CHECK_FALSE(applier.UpdateStyle(Editor::EditorUiStyleSettings{}, style));   // the boot style IS the defaults
-    CHECK(std::memcmp(&style, &boot, sizeof style) == 0);
+    CHECK(StyleDiff(style, boot) == "");
 
     Editor::EditorUiStyleSettings u; u.tabRounding = 6.0f; u.disabledAlpha = 0.7f; u.dockNodeCloseButton = true;
     CHECK(applier.UpdateStyle(u, style));
@@ -106,7 +146,7 @@ TEST_CASE("sweep: a Live style change re-applies the metrics once, at the curren
     CHECK(style.TabRounding == ImTrunc(2.0f * 1.5f));
     ui.scale = 1.0f;
     CHECK(applier.UpdateUi(ui, 1.0f, style));
-    CHECK(std::memcmp(&style, &boot, sizeof style) == 0);   // back to the defaults at 1.0: the boot style, bit for bit
+    CHECK(StyleDiff(style, boot) == "");   // back to the defaults at 1.0: the boot style, bit for bit
 }
 
 TEST_CASE("sweep: UiPx is the identity at scale 1 and scales linearly", "[sweep][ui-style]")
