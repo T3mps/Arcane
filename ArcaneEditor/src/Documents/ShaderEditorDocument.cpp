@@ -22,6 +22,7 @@
 #include "Widgets/UiMetrics.hpp"         // Ui::Px: the header gap follows editor.ui.scale
 #include "Settings/GraphCanvasSettings.hpp"   // editor.graph.*: header gap, cull band, pin dot, selection modifier
 #include "Settings/DocumentSettings.hpp"      // editor.shader.* / editor.preview.*: caps, drag speeds, the checker
+#include "Settings/InspectorSettings.hpp"     // editor.inspector.materialPreviewFraction / nodePageMinTextRun
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
 #include "Widgets/PropertyGrid.hpp"   // the material page's sections (s5.3)
@@ -41,7 +42,6 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR (settings spec s4.3)
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
@@ -79,12 +79,6 @@ namespace Arcane::Editor
         // drag step on a graph node (S6-35).
         [[nodiscard]] float NodeDragSpeed() { return Arcane::Settings<ShaderEditorSettings>().dragSpeed; }
 
-        // s5.3 (9.28 #25): the preview square's height cap, as a share of the page.
-        ARC_CVAR(cvar_materialPreviewFraction, "editor.inspector.materialPreviewFraction", float, 0.45f,
-                 .min = 0.2f, .max = 0.8f, .flags = ::Arcane::CVarFlags::Archive,
-                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Largest share of the Inspector's height the material page's preview square may take");
-
         // The mesh-surface preview box's caption (T3-D6): the line that used
         // to BE the whole preview, kept as the honest note under the sphere.
         constexpr const char* kMeshPreviewCaption =
@@ -97,9 +91,11 @@ namespace Arcane::Editor
                  + ImGui::GetStyle().ItemSpacing.y;
         }
 
+        // s5.3 (9.28 #25): the preview square's height cap, as a share of the
+        // page (editor.inspector.materialPreviewFraction, S6-37).
         float MaterialPreviewFraction()
         {
-            return cvar_materialPreviewFraction.Get();
+            return Arcane::Settings<InspectorSettings>().materialPreviewFraction;
         }
 
         const AssetRefServices& NoAssetRefServices()
@@ -704,17 +700,10 @@ namespace Arcane::Editor
         // pin can show (PinTypeText over every declared/resolved pair), not the
         // row's own: every row of a page makes the same call, so a page never
         // mixes worded and dot-only rows and its dots stay in one column.
-        ARC_CVAR(cvar_nodePageMinTextRun, "editor.inspector.nodePageMinTextRun", std::int32_t, 16,
-                 .min = 0, .max = 256, .flags = ::Arcane::CVarFlags::Archive,
-                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Characters of a node page pin row's wiring or default text that must stay readable "
-                         "after the widest pin type word (e.g. 'dynamic (unresolved)'); a value cell narrower "
-                         "than dot + that word + this run shows only the pin's dot on every row of the page "
-                         "and moves the type word into the row's hover tooltip");
-
+        // editor.inspector.nodePageMinTextRun (S6-37).
         int NodePageMinTextRun()
         {
-            return cvar_nodePageMinTextRun.Get();
+            return Arcane::Settings<InspectorSettings>().nodePageMinTextRun;
         }
 
         // The chip's dot slot: it fits a dot WITH its outer ring, ringed or

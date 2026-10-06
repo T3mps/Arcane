@@ -1,11 +1,17 @@
 #include "Panels/InspectorHost.hpp"
+#include "Settings/InspectorSettings.hpp"   // editor.inspector.historyDepth / maxInstances (settings S6-37)
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
 
 namespace Arcane::Editor
 {
     InspectorHost::InspectorHost(InspectorSource& fallback)
-        : m_fallback(&fallback), m_sources{ &fallback }, m_current(&fallback)
+        : m_fallback(&fallback)
+        , m_maxInstances(Arcane::Settings<InspectorSettings>().maxInstances)
+        , m_sources{ &fallback }
+        , m_current(&fallback)
     {
         m_instances.push_back(Instance{});   // id 0
     }
@@ -82,8 +88,9 @@ namespace Arcane::Editor
             m_history.resize(m_cursor + 1);                        // drop forward entries
         }
         m_history.push_back(HistoryEntry{ &source, std::move(key), InspectorCrumbText(source, source.Page()) });
-        if (m_history.size() > kHistoryDepth)
-            m_history.erase(m_history.begin(), m_history.begin() + static_cast<std::ptrdiff_t>(m_history.size() - kHistoryDepth));
+        const auto depth = static_cast<std::size_t>(Arcane::Settings<InspectorSettings>().historyDepth);
+        if (m_history.size() > depth)
+            m_history.erase(m_history.begin(), m_history.begin() + static_cast<std::ptrdiff_t>(m_history.size() - depth));
         m_cursor = m_history.size() - 1;
     }
 
@@ -135,7 +142,7 @@ namespace Arcane::Editor
 
     int InspectorHost::AddInstance()
     {
-        for (int id = 1; id < kMaxInstances; ++id)
+        for (int id = 1; id < m_maxInstances; ++id)
             if (!Find(id))
             {
                 Instance inst;
@@ -160,7 +167,7 @@ namespace Arcane::Editor
         kept.push_back(*Find(0));
         for (const int id : extras)
         {
-            if (id < 1 || id >= kMaxInstances) continue;
+            if (id < 1 || id >= m_maxInstances) continue;
             if (std::any_of(kept.begin(), kept.end(), [id](const Instance& i) { return i.id == id; })) continue;
             if (const Instance* old = Find(id)) kept.push_back(*old);
             else { Instance inst; inst.id = id; kept.push_back(inst); }

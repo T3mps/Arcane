@@ -25,6 +25,7 @@
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
 #include "Settings/EditorViewportSettings.hpp"   // the view-settings popup's cvars (settings S6-29)
+#include "Settings/InspectorSettings.hpp"        // editor.inspector row rhythm, editor.outliner.slowClickMaxSeconds (S6-37)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
@@ -2275,7 +2276,7 @@ namespace Arcane::Editor
                                 && sel.Count() == 1 && sel.Primary() == row.entity
                                 && state.lastClicked == row.entity
                                 && (now - state.lastClickTime) > ImGui::GetIO().MouseDoubleClickTime
-                                && (now - state.lastClickTime) < 1.2;
+                                && (now - state.lastClickTime) < Arcane::Settings<OutlinerSettings>().slowClickMaxSeconds;
                             if (slowSecond)
                                 BeginRename(state, row.entity, info->name);
                             else
@@ -2530,27 +2531,6 @@ namespace Arcane::Editor
         ImGui::End();
     }
 
-    namespace
-    {
-        // ---------------------------------------------------------------------
-        // Row rhythm (UE's Details rows read visibly tighter than ImGui's own
-        // theme defaults).
-        // ---------------------------------------------------------------------
-
-        // Starting values for the vertical-rhythm tuning knobs used below --
-        // NOT an applied tightening yet. Both equal ImGui's own stock style
-        // defaults (FramePadding = (4,3) at imgui.cpp:1531, ItemSpacing =
-        // (8,4) at imgui.cpp:1534) and nothing else in this editor modifies
-        // style, so the push at the loop site moves ZERO pixels as authored
-        // today. Per the spec's tune-at-desk flow, these constants are where
-        // a human pass narrows the rhythm once the layout is on screen. Only
-        // .y is a tuning target; the push site keeps the live style's .x so
-        // horizontal spacing elsewhere in the panel (search box, buttons) is
-        // untouched by a change scoped to vertical rhythm.
-        constexpr float kInspectorFramePaddingY = 3.0f;
-        constexpr float kInspectorItemSpacingY  = 4.0f;
-    }
-
     void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            const Arcane::Project* project, InspectorState& state,
@@ -2683,10 +2663,18 @@ namespace Arcane::Editor
         // 7233-7239), which advances window->DC.Indent.x by g.Style.IndentSpacing
         // (imgui.cpp:12246) -- a third style var, distinct from the two pushed
         // here.
+        // Row rhythm (UE's Details rows read visibly tighter than ImGui's own
+        // theme defaults): editor.inspector.framePaddingY / itemSpacingY
+        // (settings S6-37), base px at the editor.ui.scale. The defaults (3, 4)
+        // are the pre-sweep constants, which equal ImGui's stock FramePadding.y
+        // / ItemSpacing.y. Only .y is a tuning target: the live style's .x is
+        // kept so horizontal spacing elsewhere in the panel (search box,
+        // buttons) is untouched.
+        const InspectorSettings& rhythm = Arcane::Settings<InspectorSettings>();
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-            ImVec2(ImGui::GetStyle().FramePadding.x, kInspectorFramePaddingY));
+            ImVec2(ImGui::GetStyle().FramePadding.x, Ui::Px(rhythm.framePaddingY)));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-            ImVec2(ImGui::GetStyle().ItemSpacing.x, kInspectorItemSpacingY));
+            ImVec2(ImGui::GetStyle().ItemSpacing.x, Ui::Px(rhythm.itemSpacingY)));
         for (const Astra::Registry::ComponentInfo& ci : components)
         {
             // An unreflected component has no name to show and no fields to

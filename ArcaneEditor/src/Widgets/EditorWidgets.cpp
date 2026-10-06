@@ -2,6 +2,7 @@
 
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorThemeSettings.hpp"   // the input-pill domain palette
+#include "Settings/InspectorSettings.hpp"     // editor.inspector.labelColumnFraction / labelSeedMinEm (S6-37)
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
 #include "Widgets/UiMetrics.hpp"     // Ui::Px / FontPx -- the hard pixel sizes follow editor.ui.*
@@ -90,20 +91,21 @@ namespace Arcane::Editor
         // form, so there is no way to open a grid without a guaranteed close.
         // ---------------------------------------------------------------------
 
-        // How much of the panel the label column takes when nothing has been
-        // dragged yet. Only ever consulted once per session -- after that
-        // PropertyGridState::labelColWidth is the authority.
-        constexpr float kLabelColumnFraction = 0.4f;
-        // The narrowest region a seed may be taken from, in font heights
-        // (T3-D6 fix round 1). A dock node's child can report a DEGENERATE
-        // width on its first frame -- measured: Inspector 2's ##page at
-        // avail 4.0 on frame 1 of a 1920x1080 boot with an asset selected --
-        // and the once-per-session seed taken there pinned the label column
-        // at its minimum for the whole session, every label elided to "..".
-        // Below this floor the grid stays unseeded (the column auto-sizes)
-        // and the seed is retried on the next frame. Not a tunable: a guard
-        // against a measurement that is not one.
-        constexpr float kLabelSeedMinAvailEm = 8.0f;
+        // The label column's seed (settings S6-37, InspectorSettings):
+        // - editor.inspector.labelColumnFraction: how much of the panel the
+        //   label column takes when nothing has been dragged yet. Only ever
+        //   consulted once per session -- after that
+        //   PropertyGridState::labelColWidth is the authority.
+        // - editor.inspector.labelSeedMinEm (Dev): the narrowest region a seed
+        //   may be taken from, in font heights (T3-D6 fix round 1). A dock
+        //   node's child can report a DEGENERATE width on its first frame --
+        //   measured: Inspector 2's ##page at avail 4.0 on frame 1 of a
+        //   1920x1080 boot with an asset selected -- and the once-per-session
+        //   seed taken there pinned the label column at its minimum for the
+        //   whole session, every label elided to "..". Below this floor the
+        //   grid stays unseeded (the column auto-sizes) and the seed is
+        //   retried on the next frame. A guard against a measurement that is
+        //   not one, so it is a Dev setting, not a preference.
 
         // Open one field region's grid. Returns false exactly when
         // ImGui::BeginTable did (culled/clipped host window), in which case the
@@ -185,9 +187,10 @@ namespace Arcane::Editor
             // table it is pushed onto, which is noise nothing here needs.
             if (labelColWidth <= 0.0f)
             {
+                const InspectorSettings& inspector = Arcane::Settings<InspectorSettings>();
                 const float avail = ImGui::GetContentRegionAvail().x;
-                if (avail > 0.0f && avail >= ImGui::GetFontSize() * kLabelSeedMinAvailEm)
-                    labelColWidth = ImTrunc(avail * kLabelColumnFraction);
+                if (avail > 0.0f && avail >= ImGui::GetFontSize() * inspector.labelSeedMinEm)
+                    labelColWidth = ImTrunc(avail * inspector.labelColumnFraction);
             }
             // NoSavedSettings is passed explicitly even though a table inside a
             // child window inherits it anyway (:299-301): OUR float is the only

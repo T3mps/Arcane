@@ -8,8 +8,10 @@
 #include <Panels/InspectorHost.hpp>
 #include <Panels/InspectorKinds.hpp>     // kInspectorKinds / kInspectorAllIcon (the filter face)
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
+#include <Settings/InspectorSettings.hpp>  // editor.inspector.historyDepth (the ring's cap)
 #include <Input/EditorActions.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Widgets/IconsLucide.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
@@ -204,9 +206,10 @@ TEST_CASE("InspectorHost: history is capped at 32 and never grows past it", "[ed
 {
     World w;
     for (int i = 0; i < 40; ++i) w.Select(w.doc, "k" + std::to_string(i));
-    CHECK(w.host.History().size() == InspectorHost::kHistoryDepth);
+    const auto depth = static_cast<std::size_t>(Arcane::Settings<InspectorSettings>().historyDepth);   // 32
+    CHECK(w.host.History().size() == depth);
     CHECK(w.host.History().front().key == "k8");
-    CHECK(w.host.HistoryCursor() == InspectorHost::kHistoryDepth - 1);
+    CHECK(w.host.HistoryCursor() == depth - 1);
 }
 
 TEST_CASE("InspectorHost: ReleaseAll drops every non-fallback source, the history and the pins", "[editor][inspector]")
@@ -312,10 +315,10 @@ TEST_CASE("InspectorHost: instance ids are a reusable pool of 8 slots, never min
     w.host.RemoveInstance(1);
     CHECK(w.host.AddInstance() == 1);                // the freed slot, not 3
     for (int i = 0; i < 8; ++i) (void)w.host.AddInstance();
-    CHECK(w.host.Instances().size() == static_cast<std::size_t>(InspectorHost::kMaxInstances));
+    CHECK(w.host.Instances().size() == static_cast<std::size_t>(w.host.MaxInstances()));
     CHECK(w.host.AddInstance() == -1);
     w.host.RemoveInstance(0);                        // still refused
-    CHECK(w.host.Instances().size() == static_cast<std::size_t>(InspectorHost::kMaxInstances));
+    CHECK(w.host.Instances().size() == static_cast<std::size_t>(w.host.MaxInstances()));
     const int ids[] = { 0, 3, 3, 42, -1 };
     w.host.SetInstanceIds(ids);
     REQUIRE(w.host.Instances().size() == 2);
