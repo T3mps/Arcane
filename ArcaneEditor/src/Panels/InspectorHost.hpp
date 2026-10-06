@@ -4,11 +4,12 @@
 // Inspector INSTANCE shows. Pure state -- no ImGui -- so the rules are unit-
 // tested (EditorInspectorHostTest): the last-selecting source wins; focus is
 // never an event (there is no focus API here at all); pin holds a keyed page;
-// a closed source releases; history depth 32, prune-on-invalidate (PruneStale,
-// once per frame, through the sources' PURE Resolves), skip at navigation,
-// never persisted; every source but the fallback and a permanent one releases
-// on project switch; the fallback is INVALIDATED (history + pins) on every
-// scene swap; each instance routes through its own filter (spec 2026-09-29 s3).
+// a closed source releases; history depth editor.inspector.historyDepth (32),
+// prune-on-invalidate (PruneStale, once per frame, through the sources' PURE
+// Resolves), skip at navigation, never persisted; every source but the
+// fallback and a permanent one releases on project switch; the fallback is
+// INVALIDATED (history + pins) on every scene swap; each instance routes
+// through its own filter (spec 2026-09-29 s3).
 
 #include "Panels/InspectorKinds.hpp"
 #include "Panels/InspectorSource.hpp"
@@ -47,11 +48,13 @@ namespace Arcane::Editor
     class InspectorHost
     {
     public:
-        static constexpr std::size_t kHistoryDepth = 32;
-        // ids 0..7: a FIXED pool of stable window keys (UE keeps Details 1..4),
-        // so a closed slot's imgui.ini dock entry is the one its next opener
-        // inherits. Never minted, always the lowest free slot.
-        static constexpr int kMaxInstances = 8;
+        // The history ring holds editor.inspector.historyDepth entries (32),
+        // read at every push (settings S6-37). Ids 0..MaxInstances()-1
+        // (editor.inspector.maxInstances, 8): a FIXED pool of stable window
+        // keys (UE keeps Details 1..4), so a closed slot's imgui.ini dock entry
+        // is the one its next opener inherits. Never minted, always the lowest
+        // free slot. The pool size is latched at construction (Restart), so
+        // persisted Ids= at or above it are dropped on restore.
         // The default layout's "Assets only" instance ("Inspector 2", spec s6).
         static constexpr int kAssetsInstanceId = 1;
 
@@ -74,6 +77,8 @@ namespace Arcane::Editor
 
         // `fallback` (the scene) is registered for the host's whole life.
         explicit InspectorHost(InspectorSource& fallback);
+
+        [[nodiscard]] int MaxInstances() const noexcept { return m_maxInstances; }
 
         // `permanent`: lives as long as the host, like the fallback (the Asset
         // Browser's source) -- ReleaseAll invalidates it instead of dropping it.
@@ -101,7 +106,7 @@ namespace Arcane::Editor
         [[nodiscard]] const std::vector<Instance>& Instances() const noexcept { return m_instances; }
         [[nodiscard]] Instance* Find(int id);
         [[nodiscard]] const Instance* Find(int id) const;
-        // Lowest free id in [1, kMaxInstances); -1 when the pool is full. A
+        // Lowest free id in [1, MaxInstances()); -1 when the pool is full. A
         // slot closed earlier this session comes back with the filter it had
         // (its [Window] entry still docks it where that filter made sense --
         // final review m2); a never-used slot is All.
@@ -155,7 +160,7 @@ namespace Arcane::Editor
         [[nodiscard]] std::vector<std::size_t> ForwardIndices(int id) const;
         // Drop every entry whose source no longer resolves its key; the cursor
         // keeps pointing at the same surviving entry (index arithmetic, never a
-        // key search). Once per frame from the draw: <= kHistoryDepth pure lookups.
+        // key search). Once per frame from the draw: <= historyDepth pure lookups.
         void PruneStale();
         // An asset rename keeps every guid key, so only the cached text goes
         // stale: recompute each history label and pinnedName whose source is
@@ -200,6 +205,7 @@ namespace Arcane::Editor
         void Stamp(InspectorSource& source) { m_stamps[&source] = ++m_stampClock; }
 
         InspectorSource* m_fallback;
+        int m_maxInstances;                  // editor.inspector.maxInstances at construction (Restart)
         std::vector<InspectorSource*> m_sources;
         InspectorSource* m_current;
         std::vector<HistoryEntry> m_history;

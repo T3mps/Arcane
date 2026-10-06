@@ -3,6 +3,7 @@
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"   // ICON_LC_ROTATE_CCW (the reset slot)
+#include "Widgets/UiScale.hpp"     // UiStyle: editor.ui.propertyDragSpeed / intStep{,Fast} (settings S6-28)
 #include <imgui_internal.h>   // ClearActiveID (numeric-row Escape cancel)
 
 #include <cfloat>
@@ -11,6 +12,8 @@
 
 namespace Arcane::Editor
 {
+    float PropertyDragSpeed() { return UiStyle().propertyDragSpeed; }
+
     void PropertyGrid::ProbeItem(const char* label)
     {
         if (!m_state.probe) return;
@@ -372,10 +375,12 @@ namespace Arcane::Editor
                 (void)RangedDragInt("##value", v, range, format);
             else
             {
-                // InputInt spelled out (imgui_widgets.cpp: InputScalar S32,
-                // step 1, fast 100) so it can take `format`; same id, same
-                // step buttons.
-                const int step = 1, stepFast = 100;
+                // InputInt spelled out (imgui_widgets.cpp: InputScalar S32)
+                // so it can take `format`; same id, same step buttons. The
+                // steps are editor.ui.intStep / intStepFast (settings S6-28;
+                // 1 / 100, ImGui's InputInt defaults).
+                const EditorUiStyleSettings& ui = UiStyle();
+                const int step = ui.intStep, stepFast = ui.intStepFast;
                 ImGui::InputScalar("##value", ImGuiDataType_S32, v, &step, &stepFast, format);
             }
         });

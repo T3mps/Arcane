@@ -405,13 +405,10 @@ namespace Arcane::Editor
     // panels; Status has no toolbar to gap from (spec s9.1).
     inline constexpr float kAssetPanelToolbarBodyGapPx = 7.0f;
 
-    // Task 10 (spec s6/s11.2) row pitch, promoted here in Task 4 alongside
-    // BootSceneGuid/ScenesByName/DrawAssetPeekTooltip above: the Status
-    // panel's Unreferenced card (Plan 2 Task 8) draws its rows at this exact
-    // pitch, matching every Browser table row -- an `inline constexpr`
-    // rather than a second copy of the literal, the same avoid-drift
-    // reasoning every other constant on this header already follows.
-    inline constexpr float kTableRowHeight = 24.0f;
+    // The Task 10 (spec s6/s11.2) row pitch that lived here is now
+    // TableRowHeight() (Widgets/EditorWidgets.hpp): editor.ui.tableRowHeight
+    // at the UI scale (settings S6-28), one definition for the Browser's
+    // tables, the Status panel's Unreferenced card and RowWithThumb.
 
     // Task 8 dedupe: the "no project" body message, spelled identically at
     // all three panels' `if (!project)` guard (DrawAssetBrowserPanel/

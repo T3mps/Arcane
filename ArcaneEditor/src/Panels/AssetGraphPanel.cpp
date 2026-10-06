@@ -8,6 +8,9 @@
 #include "Widgets/CanvasPopupScope.hpp"    // ed::Suspend/Resume around the Graph canvas's node menu
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Settings/AssetGraphSettings.hpp"    // editor.assetGraph.* -- caps, pitch, dims (S6-36)
+#include "Settings/EditorThemeSettings.hpp"   // editor.theme.assetKind.*
+#include "Settings/GraphThemeSettings.hpp"    // editor.theme.assetGraph.* + the graph grid pair
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
@@ -20,6 +23,7 @@
 #include "Widgets/IconsLucide.h"
 #include "Widgets/UiMetrics.hpp"           // Ui::FontPx -- the canvas font sizes follow editor.ui.fontSize
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>
@@ -65,7 +69,7 @@
 // and the em dash when the canvas was never opened at all.
 //
 // BootSceneGuid, ScenesByName, DrawAssetPeekTooltip, PillWidth, OpenAssetRow,
-// DrawAssetMenuItems, SubkindPillText and kTableRowHeight are NOT here: all
+// DrawAssetMenuItems, SubkindPillText and TableRowHeight() are NOT here: all
 // are genuinely cross-panel (the Browser and/or Status panels call them too),
 // so their declarations live on AssetPanelCommon.hpp and -- as of Task 7,
 // which retired AssetsPanel.cpp where they used to sit -- their bodies live
@@ -108,7 +112,8 @@ namespace Arcane::Editor
         // (`width: 230px`) rather than guessed -- longer names ellipsize
         // inside the combo rather than widening it.
         constexpr float kGraphFocusComboWidth = 280.0f;
-        constexpr int   kGraphFocusHitCap     = 12;   // files in the popup; keywords always fit
+        // The popup's file-row cap is editor.assetGraph.focusHitCap (S6-36);
+        // keywords always fit.
 
         enum class FocusPick : std::uint8_t { Everything, Kind, Guid };
         struct FocusRow
@@ -147,6 +152,7 @@ namespace Arcane::Editor
                             std::vector<FocusRow>& rows)
         {
             rows.clear();
+            const int hitCap = Arcane::Settings<AssetGraphSettings>().focusHitCap;
             auto addEverything = [&]()
             {
                 rows.push_back({ FocusPick::Everything, AssetKind::Other, {}, "@everything" });
@@ -214,13 +220,13 @@ namespace Arcane::Editor
             int n = 0;
             for (const AssetPanelEntry* e : prefixHits)
             {
-                if (n++ >= kGraphFocusHitCap)
+                if (n++ >= hitCap)
                     break;
                 addGuid(*e);
             }
             for (const AssetPanelEntry* e : otherHits)
             {
-                if (n++ >= kGraphFocusHitCap)
+                if (n++ >= hitCap)
                     break;
                 addGuid(*e);
             }
@@ -367,10 +373,11 @@ namespace Arcane::Editor
         constexpr float kGraphPinRadius      = 4.5f;
         // The dot's segment count and ring width are the canvas's own language,
         // identical on both canvases, so they live once in
-        // Widgets/GraphCanvasStyle.hpp (kGraphPinSegments / kGraphPinRingWidth).
+        // Widgets/GraphCanvasStyle.hpp (GraphPinSegments() / kGraphPinRingWidth).
         // Only the RADIUS above is this lens's -- §11.2's 9px across.
 
-        // ---- Layout pitch (tuning values; Task 5's render comparison against
+        // ---- Layout pitch: editor.assetGraph.layoutColumnPitch / .layoutRowPitch
+        // (S6-36; tuning values -- Task 5's render comparison against
         // OptionD-Graph-FINAL.png arbitrates the final numbers).
         //
         // COLUMN PITCH is measured off the board rather than guessed: its
@@ -387,8 +394,6 @@ namespace Arcane::Editor
         // Tighter than the board's ~70, deliberately -- the board shows three
         // nodes in a column and a real project's "everything" mode shows
         // dozens.
-        constexpr float kGraphColumnPitch = 300.0f;
-        constexpr float kGraphRowPitch    = 90.0f;
 
         // ---- Node internals, read off the board (OptionD.dc.html) ---------
         // `.nhead { height: 24px; padding: 0 8px 0 11px; gap: 6px }` -- the
@@ -455,8 +460,8 @@ namespace Arcane::Editor
         // NOT covered by either ruling, so NOT changed: the grid colours (the
         // board's single dot grid is #242424; this lens keeps its minor/major
         // two-tier grid) and the pill/label colours. See the fix report. The
-        // grid pair has since moved to Widgets/GraphCanvasStyle.hpp
-        // (kGraphGridMinorColor / kGraphGridMajorColor, 2026-09-09) -- the
+        // grid pair has since moved to one home, now the theme cvars
+        // editor.theme.graph.gridMinor / gridMajor (settings S6-27) -- the
         // VALUES are unchanged; what changed is that the pair it was
         // byte-identical to on the shader canvas is now the same pair, so the
         // "inherited, not chosen" state has one home instead of two copies with
@@ -469,26 +474,27 @@ namespace Arcane::Editor
         // (rounding + the three border widths) are the editor-wide canvas
         // language, not this lens's taste -- they were the same literals on both
         // canvases and now live once in Widgets/GraphCanvasStyle.hpp
-        // (kGraphNodeSelBorderColor / kGraphNodeHovBorderColor,
-        // kGraphNodeRounding, kGraphNodeBorderWidth, kGraphNodeHovBorderWidth,
-        // kGraphNodeSelBorderWidth). So is the wire thickness
-        // (kGraphWireThickness). Only the four SURFACE tones above stay here:
+        // (kGraphNodeSelBorderColor / editor.theme.graph.hoverBorder,
+        // GraphNodeRounding(), GraphNodeBorderWidth(), GraphNodeHovBorderWidth(),
+        // GraphNodeSelBorderWidth()). So is the wire thickness
+        // (GraphWireThickness()). Only the four SURFACE tones above stay here:
         // those are the board ruling's, and the ruling declines to drag the
         // shader canvas onto them.
 
         // The subtle anchor -> "+N more" connector: thinner than a data edge
         // on purpose (it is NOT one -- see DrawAssetGraphBody's own comment).
         constexpr float kGraphOverflowWireThickness = 1.5f;
-        // How far a wire's colour is pulled toward the canvas when the edge
-        // is NOT emphasized. The board's edges read as a mid-gray against the
+        // editor.assetGraph.wireDim (S6-36, default 0.62): how far a wire's
+        // colour is pulled toward the canvas when the edge is NOT emphasized.
+        // The board's edges read as a mid-gray against the
         // backdrop; dimming the source kind's accent this far lands in the
-        // same tonal band while still saying which kind the edge leaves.
-        constexpr float kGraphWireDim         = 0.62f;
-        constexpr float kGraphOverflowWireDim = 0.78f;
-        // The ghost/overflow body wash: the canvas tone laid back over the
+        // same tonal band while still saying which kind the edge leaves. The
+        // anchor -> "+N more" connector's pull is editor.assetGraph.overflowDim
+        // (0.78).
+        // editor.assetGraph.ghostWash (0.55) -- the ghost/overflow body wash:
+        // the canvas tone laid back over the
         // node body at partial alpha, which pulls a tombstone or a "+N more"
         // chip toward the backdrop without inventing a second body colour.
-        constexpr float kGraphGhostWash = 0.55f;
 
         // ---- Task 6: the dashed in-flight wire ----------------------------
         // `stroke-dasharray: 6 5` on the board's amber drag path
@@ -502,14 +508,14 @@ namespace Arcane::Editor
         // read as "attached to the pointer" rather than as a wire that just
         // stops.
         constexpr float kGraphDashEndDotRadius = 4.0f;
-        // LOD floor. The dash walk splits the curve at every on/off boundary,
+        // LOD floor: editor.assetGraph.dashMaxCells (S6-36, default 256). The
+        // dash walk splits the curve at every on/off boundary,
         // so the CELL COUNT -- not the segment count -- is what bounds its
         // work. Zoomed far in, 11 screen pixels is a vanishing distance in
         // canvas units and the pattern is unresolvable anyway; the cap
         // stretches the cell (ratio preserved) rather than letting the walk
         // grind. Screen length is bounded by the viewport in practice, so this
         // is a guard against a pathological view scale, not the common path.
-        constexpr int kGraphDashMaxCells = 256;
 
         // Mid-edge labels (ruling 9) stop being legible long before the nodes
         // do, so they are the first thing the canvas drops on zoom-out. The
@@ -544,7 +550,7 @@ namespace Arcane::Editor
         // overflowed from (AssetGraphViewModel.hpp's own field comment).
         ImVec4 KindAccentColor(AssetKind kind) noexcept
         {
-            const std::uint32_t rgb = KindAccentRgb(kind);
+            const std::uint32_t rgb = KindAccentRgb(kind, Arcane::Settings<EditorThemeAssetKindSettings>());
             if (rgb == 0)
                 return Theme::kGrab;   // #9a9a9a -- no row, so no invented hue
             const float s = 1.0f / 255.0f;
@@ -756,10 +762,11 @@ namespace Arcane::Editor
             const auto len = [](float ax, float ay) { return std::sqrt(ax * ax + ay * ay); };
 
             // Cell lengths in CANVAS units, so the dash reads 6-on/5-off on
-            // screen at any zoom -- then the LOD floor (kGraphDashMaxCells).
+            // screen at any zoom -- then the LOD floor (editor.assetGraph.dashMaxCells).
             float on  = kGraphDashOnPx  / scale;
             float off = kGraphDashOffPx / scale;
-            if (const float floorLen = polyLen / static_cast<float>(kGraphDashMaxCells);
+            const int maxCells = Arcane::Settings<AssetGraphSettings>().dashMaxCells;
+            if (const float floorLen = polyLen / static_cast<float>(maxCells);
                 on + off < floorLen && on + off > 0.0f)
             {
                 const float k = floorLen / (on + off);
@@ -822,7 +829,7 @@ namespace Arcane::Editor
             const int prevChannel = dl->_Splitter._Current;
             dl->ChannelsSetCurrent(kGraphLinkChannel);
             dl->AddCircleFilled(centre, kGraphDashEndDotRadius,
-                                ImGui::GetColorU32(color), kGraphPinSegments);
+                                ImGui::GetColorU32(color), GraphPinSegments());
             dl->ChannelsSetCurrent(prevChannel);
         }
 
@@ -887,7 +894,7 @@ namespace Arcane::Editor
         // it, so it sets the row.
         float GraphBodyRowHeight()
         {
-            return kAssetRowThumbSize;
+            return AssetRowThumbSize();
         }
 
         float GraphNodeHeight()
@@ -915,14 +922,14 @@ namespace Arcane::Editor
             if (!bg)
                 return;
 
-            const float b = kGraphNodeBorderWidth;
+            const float b = GraphNodeBorderWidth();
             const ImVec2 innerMin(v.pos.x + b, v.pos.y + b);
             const ImVec2 innerMax(v.pos.x + v.width - b, v.pos.y + v.height - b);
 
             if (drawBand)
                 bg->AddRectFilled(innerMin, ImVec2(innerMax.x, v.pos.y + kGraphHeaderHeight),
                                   ImGui::GetColorU32(kGraphNodeTitleColor),
-                                  kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
+                                  GraphNodeRounding(), ImDrawFlags_RoundCornersTop);
 
             if (accent)
                 // Drawn AFTER the band so it runs the node's FULL height, the
@@ -930,17 +937,17 @@ namespace Arcane::Editor
                 // header is not a separate region the bar stops at.
                 bg->AddRectFilled(innerMin, ImVec2(innerMin.x + kGraphAccentBarWidth, innerMax.y),
                                   ImGui::GetColorU32(*accent),
-                                  kGraphNodeRounding, ImDrawFlags_RoundCornersLeft);
+                                  GraphNodeRounding(), ImDrawFlags_RoundCornersLeft);
 
             if (wash > 0.0f)
                 bg->AddRectFilled(innerMin, innerMax,
                                   ImGui::GetColorU32(Theme::WithAlpha(kGraphCanvasColor, wash)),
-                                  kGraphNodeRounding);
+                                  GraphNodeRounding());
 
             if (borderAccent)
                 bg->AddRect(innerMin, innerMax, ImGui::GetColorU32(*borderAccent),
-                            kGraphNodeRounding, ImDrawFlags_RoundCornersAll,
-                            kGraphNodeBorderWidth);
+                            GraphNodeRounding(), ImDrawFlags_RoundCornersAll,
+                            GraphNodeBorderWidth());
         }
 
         // Submit one node: the §10 anatomy (header row + 3px kind accent bar
@@ -1062,17 +1069,17 @@ namespace Arcane::Editor
                 if (body.thumb != 0)
                 {
                     dl->AddImage(static_cast<ImTextureID>(body.thumb), ImVec2(x, rowTop),
-                                 ImVec2(x + kAssetRowThumbSize, rowTop + kAssetRowThumbSize));
+                                 ImVec2(x + AssetRowThumbSize(), rowTop + AssetRowThumbSize()));
                 }
                 else if (body.icon)
                 {
                     const ImVec2 iconSize = ImGui::CalcTextSize(body.icon);
-                    dl->AddText(ImVec2(x + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                    dl->AddText(ImVec2(x + (AssetRowThumbSize() - iconSize.x) * 0.5f,
                                        rowTop + (rowH - iconSize.y) * 0.5f),
                                 dimCol, body.icon);
                 }
                 if (body.thumb != 0 || body.icon)
-                    x += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+                    x += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
 
                 const float budgetEnd = origin.x + v.width - kGraphNodePadRight;
                 if (!body.pills.empty())
@@ -1165,17 +1172,19 @@ namespace Arcane::Editor
         // gaps, font size and the kChrome/kBorder/kTextDim tones -- moved to
         // Widgets/GraphLegend.hpp (T3-D1) when the shader graph grew a pin
         // legend in the same chrome; the swatches below stay this lens's own.
-        constexpr float kGraphLegendSwatchW    = 18.0f;
-        constexpr float kGraphLegendSwatchH    = 2.0f;
-        constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
-        constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
+        // The swatch scales with the legend box around it (Ui::Px, like
+        // GraphLegend.hpp's padding and gaps; settings S6-28): 18 x 2 px at scale 1.
+        float GraphLegendSwatchW() { return Ui::Px(18.0f); }
+        float GraphLegendSwatchH() { return Ui::Px(2.0f); }
+        // The two swatch colours are theme cvars (settings S6-27):
+        // editor.theme.assetGraph.legendEdge (#5c5c5c) / .legendUsedBy (#4a4a4a).
 
         std::pair<ImVec2, ImVec2> DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
         {
             struct Entry { const char* text; ImVec4 color; bool dashed; };
             const Entry entries[] = {
-                { "derives / samples", kGraphLegendEdgeColor,   false },
-                { "uses",              kGraphLegendUsedByColor, false },
+                { "derives / samples", AssetGraphThemeColor(&AssetGraphThemeSettings::legendEdge),   false },
+                { "uses",              AssetGraphThemeColor(&AssetGraphThemeSettings::legendUsedBy), false },
                 { "drag a material pin = derive", Theme::kAmber, true },
             };
 
@@ -1187,7 +1196,7 @@ namespace Arcane::Editor
             {
                 if (i > 0)
                     contentW += GraphLegendEntryGap();
-                contentW += kGraphLegendSwatchW + GraphLegendSwatchGap() +
+                contentW += GraphLegendSwatchW() + GraphLegendSwatchGap() +
                             ImGui::CalcTextSize(entries[i].text).x;
             }
 
@@ -1211,7 +1220,7 @@ namespace Arcane::Editor
                     x += GraphLegendEntryGap();
                 const ImU32 swatch = ImGui::GetColorU32(entries[i].color);
                 x = std::floor(x);
-                const float y0 = std::floor(midY - kGraphLegendSwatchH * 0.5f);
+                const float y0 = std::floor(midY - GraphLegendSwatchH() * 0.5f);
                 if (entries[i].dashed)
                 {
                     // The same 6-on/5-off cell the in-flight wire uses, walked
@@ -1219,13 +1228,13 @@ namespace Arcane::Editor
                     // that wire, so it cannot pick its own pattern.
                     float cx = x;
                     bool ink = true;
-                    while (cx < x + kGraphLegendSwatchW)
+                    while (cx < x + GraphLegendSwatchW())
                     {
                         const float step = (std::min)(ink ? kGraphDashOnPx : kGraphDashOffPx,
-                                                      x + kGraphLegendSwatchW - cx);
+                                                      x + GraphLegendSwatchW() - cx);
                         if (ink)
                             dl->AddRectFilled(ImVec2(cx, y0),
-                                              ImVec2(cx + step, y0 + kGraphLegendSwatchH), swatch);
+                                              ImVec2(cx + step, y0 + GraphLegendSwatchH()), swatch);
                         cx += step;
                         ink = !ink;
                     }
@@ -1233,10 +1242,10 @@ namespace Arcane::Editor
                 else
                 {
                     dl->AddRectFilled(ImVec2(x, y0),
-                                      ImVec2(x + kGraphLegendSwatchW, y0 + kGraphLegendSwatchH),
+                                      ImVec2(x + GraphLegendSwatchW(), y0 + GraphLegendSwatchH()),
                                       swatch);
                 }
-                x += kGraphLegendSwatchW + GraphLegendSwatchGap();
+                x += GraphLegendSwatchW() + GraphLegendSwatchGap();
                 dl->AddText(ImVec2(x, midY - lineH * 0.5f), textCol, entries[i].text);
                 x += ImGui::CalcTextSize(entries[i].text).x;
             }
@@ -1282,6 +1291,11 @@ namespace Arcane::Editor
         // unseeded value that frame -- a one-frame "focus: everything" vs.
         // "focus: <boot scene>" split between the toolbar and the bottom bar.
 
+        // editor.assetGraph.* read once per Draw (S6-36): a copy, so a publish
+        // mid-frame cannot split one frame's layout across two snapshots.
+        const AssetGraphSettings graphSettings = Arcane::Settings<AssetGraphSettings>();
+        const GraphBuildInput query = MakeAssetGraphQuery();
+
         // ---- 1. Rebuild the projection, and ONLY when it moved --------
         // The trigger is AssetPanelModel::entriesStamp (bumped exactly
         // when the entries map or the reference index changed content)
@@ -1292,7 +1306,9 @@ namespace Arcane::Editor
         if (!state.graphBuilt ||
             state.graphBuiltStamp != model.entriesStamp ||
             state.graphBuiltFocus != state.graphFocus ||
-            state.graphBuiltKindFilter != state.graphKindFilter)
+            state.graphBuiltKindFilter != state.graphKindFilter ||
+            state.graphBuiltDepth != query.depthLimit ||
+            state.graphBuiltBreadth != query.breadthCap)
         {
             // s6.9: a NEW scope (first build, focus, kind filter) frames itself;
             // an entriesStamp-only rebuild keeps the user's view.
@@ -1301,7 +1317,7 @@ namespace Arcane::Editor
             {
                 state.graphFitPending.Arm();
             }
-            GraphBuildInput in;
+            GraphBuildInput in = query;
             in.entries    = &model.Entries();
             in.index      = &model.RefIndex();
             in.focus      = state.graphFocus;
@@ -1311,6 +1327,17 @@ namespace Arcane::Editor
             state.graphBuiltStamp      = model.entriesStamp;
             state.graphBuiltFocus      = state.graphFocus;
             state.graphBuiltKindFilter = state.graphKindFilter;
+            state.graphBuiltDepth      = query.depthLimit;
+            state.graphBuiltBreadth    = query.breadthCap;
+            state.graphLayoutDirty = true;
+        }
+        // A pitch edit re-lays the current projection out (no rebuild, no
+        // re-fit) -- the same snap-back a rebuild applies to dragged nodes.
+        if (state.graphLaidOutColumnPitch != graphSettings.layoutColumnPitch ||
+            state.graphLaidOutRowPitch != graphSettings.layoutRowPitch)
+        {
+            state.graphLaidOutColumnPitch = graphSettings.layoutColumnPitch;
+            state.graphLaidOutRowPitch    = graphSettings.layoutRowPitch;
             state.graphLayoutDirty = true;
         }
 
@@ -1345,6 +1372,7 @@ namespace Arcane::Editor
             state.graphFitPending.Arm();   // s6.9: a fresh context frames itself
         }
         ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
+        RefreshGraphCanvasStyle(AssetGraphCanvasStyleDesc());   // a Live theme change reaches the open canvas
 
         // ---- 3. The backdrop, before ed::Begin ------------------------
         // The canvas rect is measured HERE because this is the one place
@@ -1368,7 +1396,8 @@ namespace Arcane::Editor
         state.graphCanvasMax = ImVec2(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
 
         DrawGraphCanvasBackdrop(canvasMin, canvasSize,
-                                kGraphCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
+                                kGraphCanvasColor, GraphThemeColor(&GraphThemeSettings::gridMinor),
+                                GraphThemeColor(&GraphThemeSettings::gridMajor),
                                 state.graphGrid);
 
         if (state.graph.nodes.empty())
@@ -1628,7 +1657,7 @@ namespace Arcane::Editor
             }
             float wantBody = kGraphNodePadLeft + kGraphNodePadRight;
             if (body.thumb != 0 || body.icon)
-                wantBody += kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+                wantBody += AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
             if (!body.pills.empty())
             {
                 bool first = true;
@@ -1649,8 +1678,8 @@ namespace Arcane::Editor
             v.width  = std::clamp((std::max)(wantHeader, wantBody),
                                   kGraphNodeMinWidth, kGraphNodeMaxWidth);
             v.height = nodeHeight;
-            v.pos    = ImVec2(static_cast<float>(n.layer) * kGraphColumnPitch,
-                              static_cast<float>(n.row)   * kGraphRowPitch);
+            v.pos    = ImVec2(static_cast<float>(n.layer) * graphSettings.layoutColumnPitch,
+                              static_cast<float>(n.row)   * graphSettings.layoutRowPitch);
             if (n.isOverflow)
             {
                 v.hasLeftPin = v.hasRightPin = false;
@@ -1700,7 +1729,7 @@ namespace Arcane::Editor
             DrawGraphNodeChrome(nodeId, v,
                                 /*drawBand=*/!n.isOverflow,
                                 /*accent=*/n.isOverflow ? nullptr : &accent,
-                                /*wash=*/ghost ? kGraphGhostWash : 0.0f,
+                                /*wash=*/ghost ? graphSettings.ghostWash : 0.0f,
                                 borderAccent);
         }
         state.graphLayoutDirty = false;
@@ -1722,7 +1751,7 @@ namespace Arcane::Editor
         //
         // The lookup carries a 1e-4 epsilon the bare `> 0.250f` compare did
         // not, which moves the cut by 0.0001. At every reachable zoom STOP
-        // that is a no-op -- no entry in kZoomLevels lies in
+        // that is a no-op -- no default zoom stop (editor.graph.zoomLevels) lies in
         // (0.250, 0.2501]. But a stop is not the only scale this canvas can
         // sit at: ed::NavigateToSelection (section 8b) fits a rectangle and
         // lands on an arbitrary scale, and such a fit CAN land inside that
@@ -1757,7 +1786,7 @@ namespace Arcane::Editor
             const std::uint64_t startPin = GraphRightPinId(GraphNodeIdOf(to->second));
             const std::uint64_t endPin   = GraphLeftPinId(GraphNodeIdOf(from->second));
             ed::Link(ed::LinkId(ei + 1), ed::PinId(startPin), ed::PinId(endPin),
-                     ImVec4(0.0f, 0.0f, 0.0f, 0.0f), kGraphWireThickness);
+                     ImVec4(0.0f, 0.0f, 0.0f, 0.0f), GraphWireThickness());
 
             const ImVec2 p0(tv.pos.x + tv.width, tv.pos.y + tv.height * 0.5f);
             const ImVec2 p3(fv.pos.x,            fv.pos.y + fv.height * 0.5f);
@@ -1782,16 +1811,16 @@ namespace Arcane::Editor
                                     (e.from == selectedGuid || e.to == selectedGuid)) ||
                                    (hoveredGuid.IsValid() &&
                                     (e.from == hoveredGuid || e.to == hoveredGuid));
-            const auto endColor = [emphasize](const GraphNode& n)
+            const auto endColor = [emphasize, &graphSettings](const GraphNode& n)
             {
                 const ImVec4 base = GraphNodeAccentColor(n);
                 return emphasize ? GraphBrightenColor(base)
-                                 : GraphDimColor(base, kGraphWireDim);
+                                 : GraphDimColor(base, graphSettings.wireDim);
             };
             const ImVec2 mid = DrawGraphWire(p0, p3,
                                              endColor(nodes[to->second]),
                                              endColor(nodes[from->second]),
-                                             kGraphWireThickness, viewScale);
+                                             GraphWireThickness(), viewScale);
 
             if (drawLabels && e.label)
             {
@@ -1841,7 +1870,7 @@ namespace Arcane::Editor
             // Equal colours also mean it takes DrawGraphWire's flat
             // AddBezierCubic path -- unchanged paint, not merely a
             // gradient that happens to be constant.
-            const ImVec4 col = GraphDimColor(Theme::kGrab, kGraphOverflowWireDim);
+            const ImVec4 col = GraphDimColor(Theme::kGrab, graphSettings.overflowDim);
             if (n.overflowInbound)
                 // Truncated on the anchor's INBOUND side: the companion
                 // stacks one column to the RIGHT.
@@ -1934,7 +1963,7 @@ namespace Arcane::Editor
         // destructor, so it cannot be skipped on any path out of this block
         // (Widgets/CanvasEditScope.hpp holds the rule and the crash).
         const CanvasCreateScope create(ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
-                                       kGraphWireThickness);
+                                       GraphWireThickness());
         if (create)
         {
             ed::PinId aId, bId;
@@ -2044,7 +2073,7 @@ namespace Arcane::Editor
                 // the pin; a left-pin drag ARRIVES at it. The board's path
                 // (`M230,330 C320,330 390,402 462,402`) is the former.
                 DrawGraphDashedWire(right ? pivot : tip, right ? tip : pivot,
-                                    Theme::kAmber, kGraphWireThickness, viewScale);
+                                    Theme::kAmber, GraphWireThickness(), viewScale);
                 DrawGraphWireEndDot(tip, Theme::kAmber);
             }
         }

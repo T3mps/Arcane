@@ -397,7 +397,7 @@ namespace Arcane::Editor
                                                 bool* primaryOpen)
     {
         InspectorWindowsResult result;
-        host.PruneStale();   // once per frame, <= kHistoryDepth pure lookups: the arrows below are truthful (spec s6 rule 3)
+        host.PruneStale();   // once per frame, <= historyDepth pure lookups: the arrows below are truthful (spec s6 rule 3)
         // Snapshot the instances: the header actions applied after each End() mutate host state.
         const std::vector<InspectorHost::Instance> instances = host.Instances();
         for (const InspectorHost::Instance& inst : instances)

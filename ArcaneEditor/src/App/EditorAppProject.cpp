@@ -25,6 +25,7 @@
 #include "App/EditorApp.hpp"
 #include "Settings/SettingsHost.hpp"
 #include "Documents/SpriteDocument.hpp"   // SpriteDocument::NewSpriteData (MintOrReuseSpriteForTexture)
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.* polls + EditorOpenOptions (settings S6-38)
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // Assets -> Create -> C++ Class (MintCppClass)
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
@@ -38,6 +39,7 @@
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>   // F2c Task 15: MintImportMaterials' survey parameter
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Build/Toolchain.hpp>   // DiscoverSolution (OpenInIde's "which .slnx" question; arcbuild arc)
+#include <Arcane/Config/Settings.hpp>   // Settings<AssetBrowserSettings>: the asset-watch / discovery polls (settings S6-38)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Intermediate/ and Saved/UndoCache resolve through it (settings spec s11.0)
@@ -431,7 +433,7 @@ namespace Arcane::Editor
     {
         if (m_editorClock < m_materialWatchNext)
             return;
-        m_materialWatchNext = m_editorClock + 1.0;
+        m_materialWatchNext = m_editorClock + Arcane::Settings<Arcane::Editor::AssetBrowserSettings>().watchPollSeconds;
         const Arcane::Project* project =
             m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
@@ -482,7 +484,7 @@ namespace Arcane::Editor
         // set, both kinds' extensions in one array.
         if (m_editorClock >= m_contentDiscoveryNext)
         {
-            m_contentDiscoveryNext = m_editorClock + 2.0;
+            m_contentDiscoveryNext = m_editorClock + Arcane::Settings<Arcane::Editor::AssetBrowserSettings>().discoveryPollSeconds;
 
             using Arcane::Editor::kDiscoveryExtensions;   // ContentDiscovery.hpp: .png, .gltf, .glb
 
@@ -2418,7 +2420,7 @@ namespace Arcane::Editor
         // either, or the opt-out would hold only until the first switch.
         // Forwarded explicitly by the project_open body below, which is
         // REPLACED here rather than inherited from CoreStages.
-        ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        ctx.openOptions = Arcane::Editor::EditorOpenOptions(Arcane::HostBoot::OpenOptionsFor(m_config));
 
         std::vector<Arcane::BootStage> all = Arcane::HostBoot::EditorStages(ctx);
         if (!PatchHostStages(all))

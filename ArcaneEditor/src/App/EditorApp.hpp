@@ -33,6 +33,8 @@
 #include "Panels/AssetReferenceField.hpp"   // m_assetRefServices
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel -- Status carries no state of its own
 #include "Panels/ConsoleBuffer.hpp"
+#include "Settings/EditorConsoleSettings.hpp"   // editor.console.ringLines (the ring's boot capacity)
+#include <Arcane/Config/Settings.hpp>
 #include "Panels/CreateAssetDialog.hpp"
 #include "Panels/DiagnosticStore.hpp"
 #include "App/DialogSlot.hpp"
@@ -857,7 +859,10 @@ namespace Arcane::Editor
         // for the create/shutdown timing rationale.
         struct ConsoleDiagnostics
         {
-            ConsoleBuffer                                    console{512};
+            // Sized at construction, after HostBoot::ApplyEarlyConfigRungs (main.cpp):
+            // a Restart setting; the frame then follows editor.console.displayLineCap.
+            ConsoleBuffer                                    console{ static_cast<std::size_t>(
+                Arcane::Settings<Arcane::Editor::EditorConsoleSettings>().ringLines) };
             std::shared_ptr<spdlog::sinks::callback_sink_mt> sink;      // erased in Uninstall
             Arcane::Editor::ConsoleUiState                   ui;
             Arcane::Editor::DiagnosticStore                  store;
@@ -941,17 +946,21 @@ namespace Arcane::Editor
         // Play-mode dropdown (Task 6, runtime-host-fold arc): which action the
         // transport's Play button performs (see DrawSimTimeToolbar). Viewport =
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
-        // m_play/its toggle are never touched by that path. Persisted across
-        // restarts via an ImGuiSettingsHandler ("[EditorPlayMode][State]"),
-        // registered in Init;
-        // a malformed or absent ini line leaves this at its Viewport default.
-        Arcane::Editor::PlayLaunchMode m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+        // m_play/its toggle are never touched by that path. The mode is the
+        // editor.play.launchMode cvar (settings S6-32, Pref-P): the toolbar
+        // reads the published value and its menu writes the cvar. An old
+        // "[EditorPlayMode][State]" ini section is still READ (the handler
+        // below) into m_legacyPlayMode, imported once at the top of the next
+        // frame (ImportLegacyPlayMode, User rung, only where the user has not
+        // chosen), and never written again.
+        std::optional<Arcane::Editor::PlayLaunchMode> m_legacyPlayMode;
 
-        // ImGuiSettingsHandler callbacks for m_playMode, in the standard
+        // ImGuiSettingsHandler callbacks for m_legacyPlayMode, in the standard
         // ImGuiSettingsHandler read/write shape -- static member functions rather than free
         // functions (like the scene/project dialog Thunks below) so they can
-        // reach the private m_playMode of the instance handed through
+        // reach the private m_legacyPlayMode of the instance handed through
         // handler->UserData; there is exactly one EditorApp per process.
+        // WriteAll writes nothing: the section leaves the ini on its next save.
         static void* PlayModeSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               const char* name);
         static void  PlayModeSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
@@ -964,7 +973,7 @@ namespace Arcane::Editor
         static void  PlayModeSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterPlayModeSettings();   // called from Init
 
-        // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
+        // ImGuiSettingsHandler callbacks for m_camera + m_legacyViewport
         // ("[EditorViewport][Camera]", F4 plan 1 T7), mirroring the PlayMode
         // handler above line for line; the line format and its refusal table
         // are ViewportSettings::WriteIni / ReadIniLine (pure, unit-tested),
@@ -982,6 +991,17 @@ namespace Arcane::Editor
                                               ImGuiTextBuffer* buf);
         static void  ViewportSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterViewportSettings();
+
+        // The gizmo session's start (settings S6-31): ApplyGizmoSessionDefaults
+        // writes editor.gizmo.defaultMode / defaultSpace / defaultTool
+        // (NextWorld) to m_gizmoMode / m_gizmoSpace / m_gizmoEnabled;
+        // ApplyGizmoToolSeed then lays the --tool flag on top (the flag beats
+        // the defaults). Boot: the defaults in StageEditorShell, the seed in
+        // StageFinalize after the boot scene. A windowed project switch: both,
+        // in ViewportSettingsClearAll beside ApplyFreshPose, so the incoming
+        // project's Pref-P defaults apply without an editor restart.
+        void ApplyGizmoSessionDefaults();
+        void ApplyGizmoToolSeed();
 
         // ImGuiSettingsHandler callbacks for m_panelVis ("[EditorPanels]
         // [Visibility]", one name-keyed line per hideable panel), mirroring
@@ -1163,7 +1183,10 @@ namespace Arcane::Editor
         // so ApplyDrag recomputes from origin each frame (no accumulation drift).
         // Transform is parent-local, but every GizmoTransform stored here is WORLD
         // space (Unreal parity) -- EditorApp converts through Edit::WorldMatrix on
-        // read and Edit::ParentWorldMatrix's inverse on write-back.
+        // read and Edit::ParentWorldMatrix's inverse on write-back. Mode, space
+        // and tool start from editor.gizmo.defaultMode / defaultSpace /
+        // defaultTool (NextWorld), applied at boot and on every windowed
+        // project switch (ApplyGizmoSessionDefaults, settings S6-31).
         Arcane::GizmoMode  m_gizmoMode    = Arcane::GizmoMode::Translate;
         Arcane::GizmoSpace m_gizmoSpace   = Arcane::GizmoSpace::World;
         bool               m_gizmoEnabled = false;  // false = Select tool (click-to-pick, no gizmo)
@@ -1218,11 +1241,16 @@ namespace Arcane::Editor
         // destruction order is unchanged: it still destructs before m_runtime.
         std::optional<Arcane::Editor::EditModeSchedule> m_editSchedule;
         bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
-        // The persisted viewport preferences (grid, gizmo size) that ride the
-        // same [EditorViewport][Camera] ini block as m_camera -- see
-        // ViewportSettings.hpp and RegisterViewportSettings below. Task 8's
-        // settings popup edits these; the grids (Tasks 9/10) read them.
-        Arcane::Editor::ViewportSettings m_viewSettings;
+        // The editor.viewport.physicsOverlay value last applied to m_physicsOverlay
+        // (settings S6-32): the frame's sync moves the toggle only when the cvar changes.
+        bool m_physicsOverlayPref = false;
+        // An old [EditorViewport][Camera] block's preference lines (fov,
+        // speed, grid, gizmo size), captured by ViewportSettingsReadLine and
+        // imported ONCE at the top of the next frame (settings S6-29:
+        // ImportLegacyViewportPrefs, User rung, only where the user has not
+        // chosen). The preferences themselves are editor.viewport.* /
+        // editor.camera.* / editor.gizmo.* cvars, read via Settings<T>().
+        Arcane::Editor::LegacyViewportPrefs m_legacyViewport;
         // Set by ViewportSettingsReadLine when the persisted block restores a
         // transform (an Ortho= or Orbit= line parsed). F4 plan 1 final
         // review, F3: a restored camera cancels the boot-time SceneOpen

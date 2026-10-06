@@ -52,6 +52,10 @@
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
+#include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
+#include "Settings/AssetBrowserSettings.hpp"     // EditorOpenOptions: editor.assets.mountDiagnostics (settings S6-38)
+#include "Settings/EditorPlaySettings.hpp"       // ReadPlayModeIniLine: the old [EditorPlayMode] section (settings S6-32)
+#include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
@@ -97,10 +101,12 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
-        // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
-        // right after ImGui's context exists and before the first NewFrame
-        // reads the ini.
+        // The OLD persistence of the Play launch mode: an ImGuiSettingsHandler
+        // section "[EditorPlayMode][State]", one "Mode=%d" line. Now the
+        // editor.play.launchMode cvar (settings S6-32); the handler is still
+        // registered in Init (right after ImGui's context exists and before the
+        // first NewFrame reads the ini) so an old section is read and imported
+        // once -- it is never written again.
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
     }
@@ -120,37 +126,27 @@ namespace Arcane::Editor
     void EditorApp::PlayModeSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
                                              void* entry, const char* line)
     {
+        // Malformed or out-of-range: refused (ReadPlayModeIniLine), so nothing
+        // is imported. A valid line waits in m_legacyPlayMode for the next
+        // frame's ImportLegacyPlayMode.
         auto* self = static_cast<EditorApp*>(entry);
-        int mode = -1;
-        // Malformed or out-of-range: m_playMode keeps its Viewport default --
-        // never trust an ini line a hand edit (or a future enumerator's
-        // rollback) could have left in a bogus state. Viewport is also the
-        // safe fallback: it is today's behavior, unchanged.
-        if (std::sscanf(line, "Mode=%d", &mode) == 1 && mode >= 0 &&
-            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateServerProcess))
-        {
-            self->m_playMode = static_cast<Arcane::Editor::PlayLaunchMode>(mode);
-        }
+        (void)Arcane::Editor::ReadPlayModeIniLine(line, self->m_legacyPlayMode);
     }
 
-    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
-                                             ImGuiTextBuffer* buf)
+    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*)
     {
-        auto* self = static_cast<EditorApp*>(handler->UserData);
-        buf->reserve(buf->size() + 48);
-        buf->appendf("[%s][%s]\n", handler->TypeName, kPlayModeIniName);
-        buf->appendf("Mode=%d\n", static_cast<int>(self->m_playMode));
-        buf->append("\n");
+        // Writes nothing: the mode is a cvar now (settings S6-32), so the old
+        // section drops out of the ini on its next save. ImGui calls every
+        // handler's WriteAllFn unconditionally, so this stays registered.
     }
 
     // ImGui::ClearIniSettings -- a WINDOWED project switch (RetargetLayoutIni)
-    // before it reads the incoming file: back to the value a fresh EditorApp
-    // holds, so a file without this section never inherits the outgoing
-    // project's mode.
+    // before it reads the incoming file: an outgoing file's unimported mode
+    // must not be imported into the incoming project.
     void EditorApp::PlayModeSettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+        self->m_legacyPlayMode.reset();
     }
 
     void EditorApp::RegisterPlayModeSettings()
@@ -163,7 +159,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = kPlayModeIniType;
         handler.TypeHash   = ImHashStr(kPlayModeIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
         handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
@@ -196,7 +192,7 @@ namespace Arcane::Editor
         // windowed project switch). The committed verify-layout.ini
         // carries no [EditorViewport] block, so gate/witness runs still frame.
         const bool accepted =
-            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_legacyViewport);
         if (accepted && (std::strncmp(line, "Ortho=", 6) == 0 || std::strncmp(line, "Orbit=", 6) == 0))
         {
             self->m_cameraRestoredFromIni = true;
@@ -223,11 +219,12 @@ namespace Arcane::Editor
         auto* self = static_cast<EditorApp*>(handler->UserData);
         // WriteIni appends the "[Type][Name]" header itself from the same
         // constants handler.TypeName was registered from.
-        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera, self->m_viewSettings);
+        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera);
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // the camera and the viewport preferences go back to a fresh EditorApp's,
+    // the camera and any not-yet-imported legacy preferences go back to a
+    // fresh EditorApp's (the preferences themselves are cvars, untouched),
     // and the camera counts as NOT restored. The SceneOpen framing request is
     // deliberately left alone: the reload's ReadLine cancels it when the
     // incoming file carries a camera, exactly as at boot. The --view-mode seed
@@ -238,9 +235,33 @@ namespace Arcane::Editor
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
         self->m_camera                = decltype(self->m_camera){};
-        self->m_viewSettings          = decltype(self->m_viewSettings){};
+        Arcane::Editor::ApplyFreshPose(self->m_camera);   // editor.camera.default* (NextWorld)
+        self->m_legacyViewport        = {};
         self->m_cameraRestoredFromIni = false;
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
+        // editor.gizmo.default* (NextWorld, Pref-P): the incoming project's
+        // starting tool / mode / space, then --tool on top as at boot.
+        // RetargetLayoutIni runs after OnProjectOpened, so the snapshot
+        // already carries the incoming project's User rung.
+        self->ApplyGizmoSessionDefaults();
+        self->ApplyGizmoToolSeed();
+    }
+
+    void EditorApp::ApplyGizmoSessionDefaults()
+    {
+        Arcane::Editor::GizmoSessionState state;
+        Arcane::Editor::ApplyGizmoSessionDefaults(state);
+        m_gizmoMode    = state.mode;
+        m_gizmoSpace   = state.space;
+        m_gizmoEnabled = state.enabled;
+    }
+
+    void EditorApp::ApplyGizmoToolSeed()
+    {
+        Arcane::Editor::GizmoSessionState state{ m_gizmoMode, m_gizmoSpace, m_gizmoEnabled };
+        Arcane::Editor::ApplyGizmoToolSeed(m_config.tool, state);
+        m_gizmoMode    = state.mode;
+        m_gizmoEnabled = state.enabled;
     }
 
     void EditorApp::RegisterViewportSettings()
@@ -252,7 +273,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = Arcane::Editor::ViewportSettings::kIniType;
         handler.TypeHash   = ImHashStr(Arcane::Editor::ViewportSettings::kIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::ViewportSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::ViewportSettingsReadLine;
         handler.WriteAllFn = &EditorApp::ViewportSettingsWriteAll;
@@ -528,8 +549,11 @@ namespace Arcane::Editor
         // Before this call the editor ran on ImGui's stock dark style, whose whole
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
-        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
-        m_appearance.Init(ImGui::GetStyle());   // the boot look IS the defaults: the first per-frame update applies nothing
+        // The style metrics are the published editor.ui block (settings S6-28):
+        // the early config rungs have run, so a saved value lands at boot.
+        const Arcane::Editor::EditorUiStyleSettings& uiStyle = Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>();
+        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle(), uiStyle);
+        m_appearance.Init(ImGui::GetStyle(), uiStyle);   // the boot look IS the defaults: the first per-frame update applies nothing
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later
@@ -544,6 +568,13 @@ namespace Arcane::Editor
         // source -- registered once, never closed, and kept across a project
         // switch's ReleaseAll (its history entries and pins still drop).
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
+        // editor.camera.default* (NextWorld): the boot camera's pose, before
+        // the handler below lets a saved [EditorViewport] block restore one.
+        Arcane::Editor::ApplyFreshPose(m_camera);
+        // editor.gizmo.default* (NextWorld): the tool, mode and space this
+        // session starts in. Session state from here on (W/E/R, the toolbar)
+        // until a windowed project switch re-applies them (ViewportSettingsClearAll).
+        ApplyGizmoSessionDefaults();
         RegisterViewportSettings();
         // Settings arc S4: Preferences > Appearance > Theme.
         m_themePage.requestImport = [this]
@@ -1338,18 +1369,7 @@ namespace Arcane::Editor
             else
                 m_assetModel.Select(*guid);           // the asset edge routes it next frame, like a click
         }
-        if (!m_config.tool.empty())
-        {
-            if (m_config.tool == "select")
-                m_gizmoEnabled = false;
-            else
-            {
-                m_gizmoEnabled = true;
-                m_gizmoMode = m_config.tool == "rotate" ? Arcane::GizmoMode::Rotate
-                            : m_config.tool == "scale"  ? Arcane::GizmoMode::Scale
-                                                        : Arcane::GizmoMode::Translate;
-            }
-        }
+        ApplyGizmoToolSeed();   // the flag beats editor.gizmo.default* (StageEditorShell)
         // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
         // hang report from THIS boot must land under THIS project's own
         // Saved/Diagnostics, not the exe-relative default a project-less
@@ -2160,7 +2180,7 @@ namespace Arcane::Editor
         // machine's own crash history -- the 24-pixel scrollbar-thumb diff
         // that demoted editor-ui to advisory. Same shared rule the runtime
         // host uses (HostBoot::OpenOptionsFor), never a second copy.
-        m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        m_bootCtx.openOptions = Arcane::Editor::EditorOpenOptions(Arcane::HostBoot::OpenOptionsFor(m_config));
         m_bootCtx.hostConfig = &m_config;
         m_bootCtx.cvarContext = Arcane::CVarContext::Editor;
 
@@ -2530,8 +2550,10 @@ namespace Arcane::Editor
         // picture and nothing else.
         if (width == 0 || height == 0)
         {
-            width  = 1280;
-            height = 720;
+            // editor.viewport.fallbackExtentW/H (settings S6-32; 1280x720).
+            const auto& prefs = Arcane::Settings<Arcane::Editor::EditorViewportSettings>();
+            width  = prefs.fallbackExtentW;
+            height = prefs.fallbackExtentH;
         }
 
 

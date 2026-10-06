@@ -16,6 +16,10 @@
 // Astra::Range only, and pulling imgui_node_editor.h into it would couple every
 // editor widget to the node editor (CanvasPopupScope.hpp:16-19).
 
+#include "Settings/GraphCanvasSettings.hpp"   // editor.graph.wireHighlight / wireSegments*
+
+#include <Arcane/Config/Settings.hpp>
+
 #include <imgui.h>
 #include <imgui_node_editor.h>
 
@@ -42,7 +46,7 @@ namespace Arcane::Editor
     // :2240-2247) reads only the geometry and m_Thickness. So hover, selection,
     // rect-select and the delete flow are untouched, and the thickness passed
     // to ed::Link still has to be the REAL one or the wire would be hard to
-    // grab (kGraphWireThickness, GraphCanvasStyle.hpp).
+    // grab (GraphWireThickness(), GraphCanvasStyle.hpp).
     //
     // Hover/selection feedback also survives on its own: those passes use
     // StyleColor_HovLinkBorder / StyleColor_SelLinkBorder, not the link's
@@ -98,17 +102,17 @@ namespace Arcane::Editor
                       a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
     }
 
-    // A quarter of the way to white, alpha untouched. Hover/selection already
-    // reads through the library's halo (see kGraphLinkChannel); this lifts the
-    // wire itself the same way a highlighted dot lifts, so the emphasis lands
-    // on the whole run.
-    inline ImVec4 GraphBrightenColor(const ImVec4& c) noexcept
+    // editor.graph.wireHighlight of the way to white (a quarter by default),
+    // alpha untouched. Hover/selection already reads through the library's
+    // halo (see kGraphLinkChannel); this lifts the wire itself the same way a
+    // highlighted dot lifts, so the emphasis lands on the whole run.
+    inline ImVec4 GraphBrightenColor(const ImVec4& c)
     {
-        return GraphLerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), 0.25f);
+        return GraphLerpColor(c, ImVec4(1.0f, 1.0f, 1.0f, c.w), Settings<GraphCanvasSettings>().wireHighlight);
     }
 
     // The canvas's view scale, in the same units as a zoom stop
-    // (GraphZoomLevels.hpp, kZoomLevels). THE TRAP: ed::GetCurrentZoom returns
+    // (GraphZoomLevels.hpp, editor.graph.zoomLevels). THE TRAP: ed::GetCurrentZoom returns
     // InvScale -- canvas units per screen pixel
     // (imgui_node_editor_api.cpp:665-668) -- which is the RECIPROCAL of the
     // scale everything else means by "zoom". One helper, so the flip is written
@@ -189,11 +193,16 @@ namespace Arcane::Editor
     // lens's dashed in-flight wire (whose own comment recorded the expression
     // as "DrawGradientWire's own approximation, kept so both wires spend
     // vertices the same way" -- now they do so by construction).
-    inline int GraphWireSegments(float polyLen, float viewScale) noexcept
+    //
+    // The budget is editor.graph.wireSegments{Min,Max,PxPer}: one segment per
+    // PxPer screen px, clamped to [Min, Max] (12..64, 6 px by default).
+    inline int GraphWireSegments(float polyLen, float viewScale)
     {
+        const GraphCanvasSettings& g = Settings<GraphCanvasSettings>();
         const float screenLen = polyLen * GraphWireScreenScale(viewScale);
         return static_cast<int>(
-            (std::min)(64.0f, (std::max)(12.0f, screenLen / 6.0f)));
+            (std::min)(static_cast<float>(g.wireSegmentsMax),
+                       (std::max)(static_cast<float>(g.wireSegmentsMin), screenLen / g.wireSegmentsPxPer)));
     }
 
     // ---- The stroke -------------------------------------------------------

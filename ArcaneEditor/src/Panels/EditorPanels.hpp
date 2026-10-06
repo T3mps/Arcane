@@ -8,7 +8,7 @@
 #include "Project/RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "Project/SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
 #include "Viewport/ViewportInput.hpp"
-#include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
+#include "Viewport/EditorCamera.hpp"   // ViewportToolState (ViewMode)
 #include "Widgets/PropertyGrid.hpp"   // PropertyGridState (InspectorState::grid)
 #include <Arcane/Config/ConsoleModel.hpp>   // ConsoleUiState::cvars (the command line's model)
 #include <Arcane/Edit/CommandStack.hpp>
@@ -264,12 +264,11 @@ namespace Arcane::Editor
         bool showInfo    = true;
         bool showWarning = true;
         bool showError   = true;
-        bool collapse    = false;
-        bool autoScroll  = true;
-        bool wrap        = true;
+        // Collapse / Scroll / Wrap and the line cap are editor.console.* cvars
+        // (settings sweep S6-41): the panel reads them each frame and a toggle
+        // click writes the User rung, so they persist.
         char search[128] = {};
         std::string categoryFilter;   // "" = All categories (optional s8.2 combo)
-        int  lineCap     = 512;
         // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
         // swapped label holds until. A plain deadline the draw compares each
         // frame -- no timer, no animation state; 0 (any past time) = idle.
@@ -330,19 +329,17 @@ namespace Arcane::Editor
     // References into EditorApp's state, so a click on the overlay edits the
     // host's member directly and the host reads the new value next frame:
     // the view-mode segments assign `viewMode` exactly as the Alt+G / Alt+J
-    // keys do (EditorCamera::Resolve reads it), and the settings popup's
-    // fovYDeg / speedScalar / settings edits are live the same way. All of it
-    // persists through the [EditorViewport][Camera] ini block (Task 7's
-    // handler, ViewportSettings.hpp).
+    // keys do (EditorCamera::Resolve reads it); the view mode persists
+    // through the [EditorViewport][Camera] ini block (ViewportSettings.hpp).
+    // The settings popup edits no member: it writes the editor.viewport.* /
+    // editor.camera.* / editor.gizmo.* cvars (settings S6-29) at the User
+    // rung, and the host reads them from the next published snapshot.
     struct ViewportToolState
     {
         bool&                              gizmoEnabled;
         Arcane::GizmoMode&                 mode;
         Arcane::GizmoSpace&                space;
         Arcane::Editor::ViewMode&          viewMode;
-        Arcane::Editor::ViewportSettings&  settings;
-        float&                             fovYDeg;
-        float&                             speedScalar;
     };
 
     // What the viewport window shows around the image (node page phase s6.3/s6.4):

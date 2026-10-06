@@ -9,7 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // E9: the fixture's node id
 #include <Arcane/Material/MaterialGraph.hpp>
-#include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7)
+#include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7): editor.layout.factory.* defaults
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -465,7 +465,7 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* insp = FindRow(rows, WindowDockId(ini, "Inspector"));
     REQUIRE(insp != nullptr);
     CHECK(insp->parent == root.id);
-    CHECK(std::abs(insp->w - Arcane::Editor::kDefaultInspectorWidthPx) <= kTol);
+    CHECK(std::abs(insp->w - Arcane::Editor::LayoutFactorySettings{}.inspectorWidth) <= kTol);
     // Left of it: the block split top/bottom.
     const DockRow* leftBlock = nullptr;
     for (const DockRow& r : rows) if (r.parent == root.id && r.id != insp->id) leftBlock = &r;
@@ -476,7 +476,7 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* viewport = FindRow(rows, WindowDockId(ini, "Viewport"));
     REQUIRE(outliner != nullptr);
     REQUIRE(viewport != nullptr);
-    CHECK(std::abs(outliner->w - Arcane::Editor::kDefaultOutlinerWidthPx) <= kTol);
+    CHECK(std::abs(outliner->w - Arcane::Editor::LayoutFactorySettings{}.outlinerWidth) <= kTol);
     CHECK(viewport->central);
     CHECK(outliner->parent == viewport->parent);
     const DockRow* top = FindRow(rows, outliner->parent);
@@ -497,14 +497,14 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* band = FindRow(rows, browser->parent);
     REQUIRE(band != nullptr);
     CHECK(band->parent == leftBlock->id);                       // under the Outliner, left of the Inspector
-    CHECK(std::abs(band->h - Arcane::Editor::kDefaultBottomBandPx) <= kTol);
+    CHECK(std::abs(band->h - Arcane::Editor::LayoutFactorySettings{}.bottomBand) <= kTol);
     // The band's browser | Inspector 2 split has no central node, so ImGui
     // re-divides it by the children's SizeRef RATIO on resize: the SizeRefs
     // must carry the user's 1920-scale proportion (1144 : 392), not a pixel
     // target taken at this 1280x720 build (integration residual 2a).
     const float bandShare = assetsInsp->w / (browser->w + assetsInsp->w);
     INFO("band SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
-    CHECK(std::abs(bandShare - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
+    CHECK(std::abs(bandShare - Arcane::Editor::DefaultAssetsInspectorBandFraction(Arcane::Editor::LayoutFactorySettings{})) <= 0.005f);
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);          // the seed IS this default
 }
@@ -604,7 +604,7 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     // default's band: the default's proportion, not a pixel target.
     const float share = assetsInsp->w / (browser->w + assetsInsp->w);
     INFO("SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
-    CHECK(std::abs(share - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
+    CHECK(std::abs(share - Arcane::Editor::DefaultAssetsInspectorBandFraction(Arcane::Editor::LayoutFactorySettings{})) <= 0.005f);
 }
 
 // E8: THE LATE-BOUND PREVIEW SEAM (node page + editor upgrades s3.2). A mesh

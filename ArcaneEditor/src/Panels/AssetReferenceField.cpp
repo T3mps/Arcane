@@ -4,9 +4,11 @@
 #include "Panels/CreateAssetDialog.hpp"   // MaterialSurfacePillText (the Create dialog's own pill text)
 #include "Widgets/EditorTheme.hpp"        // Theme::kError (a dangling reference)
 #include "Widgets/EditorWidgets.hpp"      // EllipsisToWidth, RowWithThumb, AssetPill, BeginPopupBelow
+#include "Widgets/UiScale.hpp"            // UiStyle: editor.ui.assetRefThumbPx (settings S6-28)
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
+#include <cmath>
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>
@@ -19,7 +21,9 @@ namespace Arcane::Editor
 {
     namespace
     {
-        constexpr float kAssetRefThumbSize = 20.0f;   // spec s4.2's thumb (a size, not a tunable)
+        // spec s4.2's thumb: editor.ui.assetRefThumbPx (settings S6-28) at the
+        // UI scale and font size, whole pixels; 20 px at the defaults.
+        float AssetRefThumbSize() { return std::floor(Ui::TextPx(UiStyle().assetRefThumbPx)); }
 
         // One cache: one picker is open at a time. Refilled only when the
         // model's entries, the filters or the search change; a new popup
@@ -87,9 +91,15 @@ namespace Arcane::Editor
                 {
                     ImGui::SetCursorScreenPos(row.trailingPos);
                     AssetPill(pill);
-                    ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + 24.0f + st.ItemSpacing.y));   // RowWithThumb's pitch: its 24 px Selectable + the ItemSize spacing a pill-less row gets
+                    // The row's TableRowHeight() Selectable + ItemSpacing.y (the
+                    // pre-sweep 24 + spacing, now at the setting). NOTE a
+                    // pill-less row pitches TableRowHeight() alone
+                    // (RowWithThumb parks the cursor at its bottom), so a
+                    // pill row sits ItemSpacing.y further down; kept as it
+                    // was (identical at the defaults), owed a ruling.
+                    ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + TableRowHeight() + st.ItemSpacing.y));
                 }
-                widest = std::max(widest, kAssetRowThumbSize + st.ItemInnerSpacing.x * 2.0f
+                widest = std::max(widest, AssetRowThumbSize() + st.ItemInnerSpacing.x * 2.0f
                                           + ImGui::CalcTextSize(e->fileName.c_str()).x + (pill ? PillWidth(pill) : 0.0f));
             }
             ImGui::Dummy(ImVec2(widest, 0.0f));   // the rows are overdraw: give the auto-fit their natural width
@@ -209,7 +219,7 @@ namespace Arcane::Editor
                              + (showClear ? iconW(ICON_LC_X) : 0.0f);
 
         // Thumb: overdraw on a Dummy that reserves its seat (no interactive item).
-        ImGui::Dummy(ImVec2(kAssetRefThumbSize, frameH));
+        ImGui::Dummy(ImVec2(AssetRefThumbSize(), frameH));
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImVec2 lo = ImGui::GetItemRectMin();
@@ -217,14 +227,14 @@ namespace Arcane::Editor
             const std::uint64_t thumb = real && services.resolveThumb ? services.resolveThumb(args.guid) : 0;
             if (thumb != 0)
             {
-                const float y = lo.y + (frameH - kAssetRefThumbSize) * 0.5f;
-                dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(lo.x, y), ImVec2(lo.x + kAssetRefThumbSize, y + kAssetRefThumbSize));
+                const float y = lo.y + (frameH - AssetRefThumbSize()) * 0.5f;
+                dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(lo.x, y), ImVec2(lo.x + AssetRefThumbSize(), y + AssetRefThumbSize()));
             }
             else
             {
                 const char* glyph = KindIcon(d.kind);
                 const ImVec2 gs = ImGui::CalcTextSize(glyph);
-                dl->AddText(ImVec2(lo.x + (kAssetRefThumbSize - gs.x) * 0.5f, lo.y + (frameH - gs.y) * 0.5f),
+                dl->AddText(ImVec2(lo.x + (AssetRefThumbSize() - gs.x) * 0.5f, lo.y + (frameH - gs.y) * 0.5f),
                             ImGui::GetColorU32(ImGuiCol_Text), glyph);
             }
         }

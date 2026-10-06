@@ -1,7 +1,8 @@
 #include "Settings/AxisColors.hpp"
 
+#include "Settings/GraphThemeSettings.hpp"
+
 #include "Viewport/ViewportGrid.hpp"
-#include "Widgets/GraphCanvasStyle.hpp"
 
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
 
@@ -37,8 +38,8 @@ namespace Arcane::Editor
         r.inspectorBar[1] = ImGui::ColorConvertFloat4ToU32(p.axisY);
         r.inspectorBar[2] = ImGui::ColorConvertFloat4ToU32(p.axisZ);
         r.outlineSelect = glm::vec4(p.amber.x, p.amber.y, p.amber.z, 1.0f);
-        r.outlineHover  = glm::vec4(kGraphNodeHovBorderColor.x, kGraphNodeHovBorderColor.y,
-                                    kGraphNodeHovBorderColor.z, kGraphNodeHovBorderColor.w);
+        const ImVec4 hover = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // editor.theme.graph.hoverBorder
+        r.outlineHover  = glm::vec4(hover.x, hover.y, hover.z, hover.w);
         return r;
     }
 }

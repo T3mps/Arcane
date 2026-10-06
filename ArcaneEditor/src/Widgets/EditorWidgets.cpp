@@ -1,9 +1,14 @@
 #include "Widgets/EditorWidgets.hpp"
 
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorThemeSettings.hpp"   // the input-pill domain palette
+#include "Settings/InspectorSettings.hpp"     // editor.inspector.labelColumnFraction / labelSeedMinEm (S6-37)
 #include "Widgets/EditorFonts.hpp"   // AssetPill's 12px PushFont
 #include "Widgets/EditorTheme.hpp"   // Theme:: tokens -- asset panel vocabulary is chrome
 #include "Widgets/UiMetrics.hpp"     // Ui::Px / FontPx -- the hard pixel sizes follow editor.ui.*
+#include "Widgets/UiScale.hpp"       // UiStyle: editor.ui.tableRowHeight / assetRowThumbPx (settings S6-28)
+
+#include <Arcane/Config/Settings.hpp>   // Settings<EditorThemeInputPillSettings>()
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiTable + ImGuiTableColumn + TableSetColumnWidth
@@ -24,6 +29,11 @@
 
 namespace Arcane::Editor
 {
+    // Whole pixels, so a row edge stays pixel-integral at any scale (the
+    // Browser's hairlines rely on it); exact at the defaults.
+    float AssetRowThumbSize() { return std::floor(Ui::TextPx(UiStyle().assetRowThumbPx)); }
+    float TableRowHeight()    { return std::floor(Ui::TextPx(UiStyle().tableRowHeight)); }
+
     namespace
     {
         int StringResizeCallback(ImGuiInputTextCallbackData* data)
@@ -81,20 +91,21 @@ namespace Arcane::Editor
         // form, so there is no way to open a grid without a guaranteed close.
         // ---------------------------------------------------------------------
 
-        // How much of the panel the label column takes when nothing has been
-        // dragged yet. Only ever consulted once per session -- after that
-        // PropertyGridState::labelColWidth is the authority.
-        constexpr float kLabelColumnFraction = 0.4f;
-        // The narrowest region a seed may be taken from, in font heights
-        // (T3-D6 fix round 1). A dock node's child can report a DEGENERATE
-        // width on its first frame -- measured: Inspector 2's ##page at
-        // avail 4.0 on frame 1 of a 1920x1080 boot with an asset selected --
-        // and the once-per-session seed taken there pinned the label column
-        // at its minimum for the whole session, every label elided to "..".
-        // Below this floor the grid stays unseeded (the column auto-sizes)
-        // and the seed is retried on the next frame. Not a tunable: a guard
-        // against a measurement that is not one.
-        constexpr float kLabelSeedMinAvailEm = 8.0f;
+        // The label column's seed (settings S6-37, InspectorSettings):
+        // - editor.inspector.labelColumnFraction: how much of the panel the
+        //   label column takes when nothing has been dragged yet. Only ever
+        //   consulted once per session -- after that
+        //   PropertyGridState::labelColWidth is the authority.
+        // - editor.inspector.labelSeedMinEm (Dev): the narrowest region a seed
+        //   may be taken from, in font heights (T3-D6 fix round 1). A dock
+        //   node's child can report a DEGENERATE width on its first frame --
+        //   measured: Inspector 2's ##page at avail 4.0 on frame 1 of a
+        //   1920x1080 boot with an asset selected -- and the once-per-session
+        //   seed taken there pinned the label column at its minimum for the
+        //   whole session, every label elided to "..". Below this floor the
+        //   grid stays unseeded (the column auto-sizes) and the seed is
+        //   retried on the next frame. A guard against a measurement that is
+        //   not one, so it is a Dev setting, not a preference.
 
         // Open one field region's grid. Returns false exactly when
         // ImGui::BeginTable did (culled/clipped host window), in which case the
@@ -176,9 +187,10 @@ namespace Arcane::Editor
             // table it is pushed onto, which is noise nothing here needs.
             if (labelColWidth <= 0.0f)
             {
+                const InspectorSettings& inspector = Arcane::Settings<InspectorSettings>();
                 const float avail = ImGui::GetContentRegionAvail().x;
-                if (avail > 0.0f && avail >= ImGui::GetFontSize() * kLabelSeedMinAvailEm)
-                    labelColWidth = ImTrunc(avail * kLabelColumnFraction);
+                if (avail > 0.0f && avail >= ImGui::GetFontSize() * inspector.labelSeedMinEm)
+                    labelColWidth = ImTrunc(avail * inspector.labelColumnFraction);
             }
             // NoSavedSettings is passed explicitly even though a table inside a
             // child window inherits it anyway (:299-301): OUR float is the only
@@ -257,9 +269,8 @@ namespace Arcane::Editor
         // lightness so the row still visibly responds to input. They sit ABOVE
         // the theme's panel tone (#1e1e1e, EditorTheme.hpp kPanel), so the band
         // still reads as raised against the body it heads.
-        constexpr ImU32 kHeaderBandColor        = IM_COL32(48, 48, 52, 255);
-        constexpr ImU32 kHeaderBandHoveredColor = IM_COL32(58, 58, 64, 255);
-        constexpr ImU32 kHeaderBandActiveColor  = IM_COL32(66, 66, 73, 255);
+        // The triple is the editor.theme.headerBand* tokens (settings S6-26;
+        // Dark = #303034 / #3a3a40 / #424249).
 
         // Push/pop as a matched pair so every call site pushes and pops the
         // same 3 colors, rather than trusting three inline pushes (and three
@@ -273,9 +284,9 @@ namespace Arcane::Editor
         // HeaderBand is the only public form, so the pair cannot be split.
         void PushHeaderBandColors()
         {
-            ImGui::PushStyleColor(ImGuiCol_Header, kHeaderBandColor);
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kHeaderBandHoveredColor);
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, kHeaderBandActiveColor);
+            ImGui::PushStyleColor(ImGuiCol_Header, Theme::kHeaderBand);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Theme::kHeaderBandHovered);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, Theme::kHeaderBandActive);
         }
 
         void PopHeaderBandColors()
@@ -295,25 +306,21 @@ namespace Arcane::Editor
         // it has an out-of-file consumer (see its doc comment there). The
         // neutral border IS a theme token already -- kSeparator is
         // EditorTheme.hpp's own #333333, used today for table borders -- but
-        // the amber variant's #7a5a20 has no token of its own, so it is
-        // hardcoded here for the same reason kHeaderBandColor
-        // above are: a spec-pinned hex with no chrome-ramp equivalent, not an
-        // oversight.
-        //
-        // SECOND CONSUMER (Plan 2, Task 6): BeginCardFrame's variant 1 --
-        // "the muted-amber acting-on frame" -- reuses this SAME constant for
-        // its border, same TU, no new token. AssetPill and CardFrame are
-        // therefore the two places in the codebase that draw the #7a5a20
-        // acting-on frame; if a third ever needs it, promote it to
-        // EditorTheme.hpp instead of a third hardcode.
-        constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
+        // the amber variant's #7a5a20 is the editor.theme.actingOnFrame token
+        // (settings S6-26). Its two consumers are AssetPill's variant 1 and
+        // BeginCardFrame's variant 1 -- "the muted-amber acting-on frame".
+        // Drawn as a raw ImU32 (no style-alpha modulation), as before.
+        ImU32 ActingOnFrameU32() { return ImGui::ColorConvertFloat4ToU32(Theme::kActingOnFrame); }
+
         // The input editor's per-scheme binding pills (input editor spec s2.3):
         // variant 2 = blue-grey (the KeyboardMouse scheme), 3 = violet-grey
-        // (every other scheme). Spec-pinned hexes with no chrome-ramp token.
-        constexpr ImU32 kPillSchemeBlueBorder   = IM_COL32(0x3a, 0x4a, 0x5c, 255);
-        constexpr ImU32 kPillSchemeBlueText     = IM_COL32(0x9f, 0xb3, 0xc8, 255);
-        constexpr ImU32 kPillSchemeVioletBorder = IM_COL32(0x4a, 0x3a, 0x5c, 255);
-        constexpr ImU32 kPillSchemeVioletText   = IM_COL32(0xb8, 0xa3, 0xc8, 255);
+        // (every other scheme): editor.theme.inputPill.* (settings S6-26).
+        ImU32 InputPillU32(Arcane::CVarColor EditorThemeInputPillSettings::* field, const ImVec4& legacy)
+        {
+            static const EditorThemeInputPillSettings kDefaults{};
+            return ImGui::ColorConvertFloat4ToU32(
+                ResolveDomainColor(Arcane::Settings<EditorThemeInputPillSettings>().*field, kDefaults.*field, legacy));
+        }
 
         // ---------------------------------------------------------------------
         // Status lens vocabulary (Plan 2, asset-manager-redesign-design.md
@@ -720,7 +727,7 @@ namespace Arcane::Editor
     // spec §11.2 pins) and Theme::kGrab for its text (the spec's #9a9a9a --
     // "TextDisabled-ish" in name only; kTextDim is a different gray, #737373,
     // so kGrab is the token that actually matches). variant 1 is the amber
-    // attention pill: kPillAmberBorder (no token exists for #7a5a20) and
+    // attention pill: the editor.theme.actingOnFrame token (#7a5a20) and
     // Theme::kAmber, whose own value already IS the spec's #ffa61a.
     void AssetPill(const char* text, int variant)
     {
@@ -738,9 +745,15 @@ namespace Arcane::Editor
         ImU32 textColor   = ImGui::GetColorU32(Theme::kGrab);
         switch (variant)
         {
-        case 1: borderColor = kPillAmberBorder;        textColor = ImGui::GetColorU32(Theme::kAmber); break;
-        case 2: borderColor = kPillSchemeBlueBorder;   textColor = kPillSchemeBlueText;               break;
-        case 3: borderColor = kPillSchemeVioletBorder; textColor = kPillSchemeVioletText;             break;
+        case 1: borderColor = ActingOnFrameU32(); textColor = ImGui::GetColorU32(Theme::kAmber); break;
+        case 2:
+            borderColor = InputPillU32(&EditorThemeInputPillSettings::blueBorder, kInputPillBlueBorder);
+            textColor   = InputPillU32(&EditorThemeInputPillSettings::blueText, kInputPillBlueText);
+            break;
+        case 3:
+            borderColor = InputPillU32(&EditorThemeInputPillSettings::violetBorder, kInputPillVioletBorder);
+            textColor   = InputPillU32(&EditorThemeInputPillSettings::violetText, kInputPillVioletText);
+            break;
         default: break;
         }
 
@@ -828,11 +841,11 @@ namespace Arcane::Editor
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        const float thumbY = rowMin.y + (rowHeight - kAssetRowThumbSize) * 0.5f;
+        const float thumbY = rowMin.y + (rowHeight - AssetRowThumbSize()) * 0.5f;
         if (thumb != 0)
         {
             dl->AddImage(thumb, ImVec2(rowMin.x + indent, thumbY),
-                        ImVec2(rowMin.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                        ImVec2(rowMin.x + indent + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
         }
         else
         {
@@ -840,7 +853,7 @@ namespace Arcane::Editor
             // cell, under whichever font is active (every editor face
             // carries the merged icon range, EditorFonts.cpp).
             const ImVec2 iconSize = ImGui::CalcTextSize(iconUtf8);
-            dl->AddText(ImVec2(rowMin.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+            dl->AddText(ImVec2(rowMin.x + indent + (AssetRowThumbSize() - iconSize.x) * 0.5f,
                               rowMin.y + (rowHeight - iconSize.y) * 0.5f),
                        ImGui::GetColorU32(ImGuiCol_Text), iconUtf8);
         }
@@ -849,7 +862,7 @@ namespace Arcane::Editor
         // there is no per-glyph icon-rect to diverge from any more (nothing
         // above is a real item), so both the thumb and icon-fallback paths
         // already agree on where the cell ends.
-        const float nameX = rowMin.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemInnerSpacing.x;
+        const float nameX = rowMin.x + indent + AssetRowThumbSize() + ImGui::GetStyle().ItemInnerSpacing.x;
         const ImVec2 nameSize = ImGui::CalcTextSize(name);
         dl->AddText(ImVec2(nameX, rowMin.y + (rowHeight - nameSize.y) * 0.5f),
                    ImGui::GetColorU32(ImGuiCol_Text), name);
@@ -1082,7 +1095,7 @@ namespace Arcane::Editor
         // Merge() below flattens 0-then-1, so this fill+border sits behind
         // the caller's content despite being drawn chronologically after it.
         st.splitter.SetCurrentChannel(st.drawList, 0);
-        const ImU32 borderColor = (st.variant == 1) ? kPillAmberBorder
+        const ImU32 borderColor = (st.variant == 1) ? ActingOnFrameU32()
                                                     : ImGui::GetColorU32(Theme::kSeparator);
         st.drawList->AddRectFilled(frameMin, frameMax, ImGui::GetColorU32(Theme::kChrome));
         st.drawList->AddRect(frameMin, frameMax, borderColor);

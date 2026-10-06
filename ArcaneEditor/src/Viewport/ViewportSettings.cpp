@@ -1,5 +1,9 @@
 #include "Viewport/ViewportSettings.hpp"
 
+#include "Settings/EditorViewportSettings.hpp"
+
+#include <Arcane/Config/Settings.hpp>
+
 #include <imgui.h>
 
 #include <cmath>
@@ -20,22 +24,19 @@ namespace Arcane::Editor
         }
     }
 
-    void ViewportSettings::WriteIni(ImGuiTextBuffer& buf, const EditorCamera& cam, const ViewportSettings& s)
+    void ViewportSettings::WriteIni(ImGuiTextBuffer& buf, const EditorCamera& cam)
     {
-        buf.reserve(buf.size() + 256);
+        buf.reserve(buf.size() + 192);
         buf.appendf("[%s][%s]\n", kIniType, kIniName);
         buf.appendf("Mode=%d\n", static_cast<int>(cam.mode));
         buf.appendf("Ortho=%f %f %f\n", cam.ortho.center.x, cam.ortho.center.y, cam.ortho.halfHeight);
-        buf.appendf("Orbit=%f %f %f %f %f %f %f\n",
+        buf.appendf("Orbit=%f %f %f %f %f %f\n",
                     cam.orbit.pivot.x, cam.orbit.pivot.y, cam.orbit.pivot.z,
-                    cam.orbit.yawDeg, cam.orbit.pitchDeg, cam.orbit.distance, cam.orbit.fovYDeg);
-        buf.appendf("Speed=%f\n", cam.speedScalar);
-        buf.appendf("Grid=%d %d\n", s.showGrid ? 1 : 0, static_cast<int>(s.gridPlane));
-        buf.appendf("GizmoSize=%f\n", s.gizmoSize);
+                    cam.orbit.yawDeg, cam.orbit.pitchDeg, cam.orbit.distance);
         buf.append("\n");
     }
 
-    bool ViewportSettings::ReadIniLine(const char* line, EditorCamera& cam, ViewportSettings& s)
+    bool ViewportSettings::ReadIniLine(const char* line, EditorCamera& cam, LegacyViewportPrefs& legacy)
     {
         if (line == nullptr || *line == 0)
             return false;
@@ -59,34 +60,49 @@ namespace Arcane::Editor
             float cx = 0, cy = 0, hh = 0;
             if (std::sscanf(line, "Ortho=%f %f %f%c", &cx, &cy, &hh, &trailing) != 3) return false;
             if (!Finite(cx) || !Finite(cy)) return false;
-            if (!InRange(hh, EditorCamera::kMinHalfHeight, EditorCamera::kMaxHalfHeight)) return false;
+            const EditorCameraSettings& camPrefs = Settings<EditorCameraSettings>();   // the camera's own clamps
+            if (!InRange(hh, camPrefs.orthoMinHalfHeight, camPrefs.orthoMaxHalfHeight)) return false;
             cam.ortho.center     = { cx, cy };
             cam.ortho.halfHeight = hh;
             return true;
         }
         if (std::strncmp(line, "Orbit=", 6) == 0)
         {
+            // Six values (the pose), or the legacy seven whose last is the
+            // fov -- a preference since S6-29, captured for the import.
             float px = 0, py = 0, pz = 0, yaw = 0, pitch = 0, dist = 0, fov = 0;
+            // Each form is matched with its own trailing "%c": a six-value
+            // scan of "... 6x" stops at 'x' with 6 conversions, so only the
+            // six-value FORMAT's %c can tell it from a clean line.
+            int n = 0;
             if (std::sscanf(line, "Orbit=%f %f %f %f %f %f %f%c",
-                            &px, &py, &pz, &yaw, &pitch, &dist, &fov, &trailing) != 7) return false;
+                            &px, &py, &pz, &yaw, &pitch, &dist, &fov, &trailing) == 7)
+                n = 7;
+            else if (std::sscanf(line, "Orbit=%f %f %f %f %f %f%c",
+                                 &px, &py, &pz, &yaw, &pitch, &dist, &trailing) == 6)
+                n = 6;
+            else
+                return false;
             if (!Finite(px) || !Finite(py) || !Finite(pz) || !Finite(yaw)) return false;
             // Strictly inside the lock: +-90 exactly makes Right()/Up() NaN.
             if (!InRange(pitch, -kMaxPitchDeg, kMaxPitchDeg)) return false;
-            if (!InRange(dist, EditorCamera::kMinDistance, EditorCamera::kMaxDistance)) return false;
-            if (!InRange(fov, kMinFovYDeg, kMaxFovYDeg)) return false;
+            const EditorCameraSettings& camPrefs = Settings<EditorCameraSettings>();   // the camera's own clamps
+            if (!InRange(dist, camPrefs.minOrbitDistance, camPrefs.maxOrbitDistance)) return false;
+            if (n == 7 && !InRange(fov, kMinFovYDeg, kMaxFovYDeg)) return false;
             cam.orbit.pivot    = { px, py, pz };
             cam.orbit.yawDeg   = yaw;
             cam.orbit.pitchDeg = pitch;
             cam.orbit.distance = dist;
-            cam.orbit.fovYDeg  = fov;
+            if (n == 7) legacy.fovYDeg = fov;
             return true;
         }
         if (std::strncmp(line, "Speed=", 6) == 0)
         {
             float speed = 0;
             if (std::sscanf(line, "Speed=%f%c", &speed, &trailing) != 1) return false;
-            if (!InRange(speed, kMinSpeedScalar, kMaxSpeedScalar)) return false;
-            cam.speedScalar = speed;
+            const auto [lo, hi] = RegisteredFloatRange("editor.camera.speedScalar");
+            if (!InRange(speed, lo, hi)) return false;
+            legacy.speedScalar = speed;
             return true;
         }
         if (std::strncmp(line, "Grid=", 5) == 0)
@@ -95,16 +111,17 @@ namespace Arcane::Editor
             if (std::sscanf(line, "Grid=%d %d%c", &show, &plane, &trailing) != 2) return false;
             if (show < 0 || show > 1) return false;
             if (plane < static_cast<int>(GridPlane::XZ) || plane > static_cast<int>(GridPlane::XY)) return false;
-            s.showGrid  = show == 1;
-            s.gridPlane = static_cast<GridPlane>(plane);
+            legacy.showGrid  = show == 1;
+            legacy.gridPlane = static_cast<GridPlane>(plane);
             return true;
         }
         if (std::strncmp(line, "GizmoSize=", 10) == 0)
         {
             float size = 0;
             if (std::sscanf(line, "GizmoSize=%f%c", &size, &trailing) != 1) return false;
-            if (!InRange(size, kMinGizmoSize, kMaxGizmoSize)) return false;
-            s.gizmoSize = size;
+            const auto [lo, hi] = RegisteredFloatRange("editor.gizmo.size");
+            if (!InRange(size, lo, hi)) return false;
+            legacy.gizmoSize = size;
             return true;
         }
         return false;   // an unknown key: ignored, never trusted

@@ -43,7 +43,7 @@ namespace Arcane::Editor
             if (!m.files.empty())
                 (void)RowWithThumb(("##doomed" + m.guid.ToString()).c_str(),
                                    static_cast<ImTextureID>(sv.resolveAssetThumb ? sv.resolveAssetThumb(m.guid) : 0),
-                                   KindIcon(m.kind), m.files.front().from.filename().string().c_str(), false, 0.0f, kTableRowHeight);
+                                   KindIcon(m.kind), m.files.front().from.filename().string().c_str(), false, 0.0f, TableRowHeight());
         for (const AssetRefusal& r : st.plan.refusals) ImGui::TextColored(Theme::kError, "%s", r.reason.c_str());   // refusals replace the confirm
         if (st.plan.refusals.empty())
         {

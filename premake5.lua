@@ -1252,12 +1252,25 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
-        -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
+        -- editor.undo.* (T1-B10; S6-33): EditorUndoSettings + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/InspectorSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/EditorUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiStyleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorViewportSettings.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
         "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",

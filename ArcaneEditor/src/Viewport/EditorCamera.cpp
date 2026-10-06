@@ -1,5 +1,9 @@
 #include "Viewport/EditorCamera.hpp"
 
+#include "Settings/EditorViewportSettings.hpp"   // EditorCameraSettings, CameraSpeedScalarRange
+
+#include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>
 
@@ -31,19 +35,36 @@ namespace Arcane::Editor
         }
         // UE's shape (bUseDistanceScaledCameraSpeed: min(distance / 1000 uu, 1000),
         // NO floor, and OFF by default). Ours is ON by default -- it is what makes
-        // "F, then fly" feel right at every zoom -- with a 0.1 floor so a camera
+        // "F, then fly" feel right at every zoom -- with a floor so a camera
         // parked on its pivot can still move. The floor is ours, not UE's.
-        float DistanceScale(float distance) noexcept
+        float DistanceScale(const EditorCameraSettings& s, float distance) noexcept
         {
-            return std::clamp(distance / 10.0f, 0.1f, 1000.0f);
+            return s.distanceScaledSpeed ? std::clamp(distance / s.refDistance, s.speedFloor, s.speedCap) : 1.0f;
         }
+        // Each clamp's high end never drops below its low end (std::clamp
+        // requires lo <= hi): two independently ranged cvars can cross.
+        float ClampHalfHeight(const EditorCameraSettings& s, float h) noexcept
+        {
+            return std::clamp(h, s.orthoMinHalfHeight, std::max(s.orthoMinHalfHeight, s.orthoMaxHalfHeight));
+        }
+        float ClampDistance(const EditorCameraSettings& s, float d) noexcept
+        {
+            return std::clamp(d, s.minOrbitDistance, std::max(s.minOrbitDistance, s.maxOrbitDistance));
+        }
+        // The pitch lock: +-90 exactly makes Right()/Up() NaN.
+        ARC_CONSTANT("NaN guard: the pitch lock (same as ViewportSettings' kMaxPitchDeg)")
+        constexpr float kPitchLockDeg = 90.0f - 1e-3f;
+        // A point (or a zero-extent box) still frames at a sane distance.
+        ARC_CONSTANT("zero-extent guard: a zero framing radius is a bug, not a preference")
+        constexpr float kMinFrameRadius = 0.05f;
     }
 
     ViewTransform EditorCamera::Resolve(glm::uvec2 viewport) const noexcept
     {
         if (mode == ViewMode::TwoD)
             return Ortho2DView(ortho.center, ortho.halfHeight, viewport);   // render.ortho2D.depthRange
-        return ViewTransform::Perspective(Eye(), orbit.pivot, glm::vec3(0, 1, 0), orbit.fovYDeg, viewport, kNearZ, kFarZ);
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
+        return ViewTransform::Perspective(Eye(), orbit.pivot, glm::vec3(0, 1, 0), orbit.fovYDeg, viewport, s.nearClip, s.farClip);
     }
     glm::vec3 EditorCamera::Eye() const noexcept { return orbit.pivot + DirFrom(orbit.yawDeg, orbit.pitchDeg) * orbit.distance; }
     glm::vec3 EditorCamera::Forward() const noexcept { return -DirFrom(orbit.yawDeg, orbit.pitchDeg); }
@@ -59,7 +80,8 @@ namespace Arcane::Editor
     void EditorCamera::ZoomAt2D(glm::vec2 screenPos, float ticks, glm::uvec2 vp) noexcept
     {
         if (!(vp.x > 0u) || !(vp.y > 0u)) return;
-        const float next = std::clamp(ortho.halfHeight / std::pow(kWheelStep, ticks), kMinHalfHeight, kMaxHalfHeight);
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
+        const float next = ClampHalfHeight(s, ortho.halfHeight / std::pow(s.wheelZoomStep, ticks));
         if (!(next > 0.0f) || next == ortho.halfHeight) return;
         const glm::vec2 anchored = glm::vec2(Resolve(vp).ScreenToRay(screenPos).origin);   // world under the cursor (ortho: z ignored)
         ortho.halfHeight = next;
@@ -69,23 +91,27 @@ namespace Arcane::Editor
     }
     void EditorCamera::Look(glm::vec2 d) noexcept
     {
+        const float sens = Settings<EditorCameraSettings>().lookSensitivity;
         const glm::vec3 eye = Eye();
-        orbit.yawDeg   -= d.x * 0.2f;
-        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * 0.2f, -90.0f + 1e-3f, 90.0f - 1e-3f);
+        orbit.yawDeg   -= d.x * sens;
+        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * sens, -kPitchLockDeg, kPitchLockDeg);
         orbit.pivot = eye - DirFrom(orbit.yawDeg, orbit.pitchDeg) * orbit.distance;   // the eye stays put
     }
-    // 0.2 deg per pixel for BOTH Look and Orbit: UE's one MouseSensitivty
-    // setting (default .2) feeds free-look and orbit alike
-    // (EditorViewportClient.cpp ConvertMovementToDragRot / ...OrbitDragRot).
+    // 0.2 deg per pixel by default for BOTH Look and Orbit: UE's one
+    // MouseSensitivty setting (default .2) feeds free-look and orbit alike
+    // (EditorViewportClient.cpp ConvertMovementToDragRot / ...OrbitDragRot);
+    // ours are two cvars with that default.
     void EditorCamera::Orbit(glm::vec2 d) noexcept
     {
-        orbit.yawDeg   -= d.x * 0.2f;
-        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * 0.2f, -90.0f + 1e-3f, 90.0f - 1e-3f);
+        const float sens = Settings<EditorCameraSettings>().orbitSensitivity;
+        orbit.yawDeg   -= d.x * sens;
+        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * sens, -kPitchLockDeg, kPitchLockDeg);
     }
     void EditorCamera::Fly(glm::vec3 local, float dt, bool boost) noexcept
     {
         if (!(dt > 0.0f)) return;
-        const float speed = kBaseFlySpeed * speedScalar * DistanceScale(orbit.distance) * (boost ? 2.0f : 1.0f);
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
+        const float speed = s.baseFlySpeed * speedScalar * DistanceScale(s, orbit.distance) * (boost ? s.boostMultiplier : 1.0f);
         const glm::vec3 delta = (Right() * local.x + glm::vec3(0, 1, 0) * local.y + Forward() * local.z) * (speed * dt);
         orbit.pivot += delta;   // eye = pivot + dir*distance, so the eye moves by the same delta
     }
@@ -106,36 +132,51 @@ namespace Arcane::Editor
     // it is what keeps a later orbit sane after a dolly. Deliberate divergence.
     void EditorCamera::Dolly(float ticks) noexcept
     {
-        orbit.distance = std::clamp(orbit.distance / std::pow(kWheelStep, ticks), kMinDistance, kMaxDistance);
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
+        orbit.distance = ClampDistance(s, orbit.distance / std::pow(s.wheelZoomStep, ticks));
     }
     // UE's wheel-while-flying step is additive +-10 % (down = x0.9); a symmetric
-    // x1.1 / /1.1 keeps up-then-down a no-op. Limits are ours.
-    void EditorCamera::AdjustSpeed(float ticks) noexcept
+    // x step / / step (editor.camera.speedWheelStep, 1.1) keeps up-then-down a
+    // no-op. The limits are
+    // editor.camera.speedScalar's range (settings S6-29), read on the wheel
+    // event only.
+    void EditorCamera::AdjustSpeed(float ticks)
     {
-        speedScalar = std::clamp(speedScalar * std::pow(1.1f, ticks), 0.01f, 100.0f);
+        const auto [lo, hi] = CameraSpeedScalarRange();
+        speedScalar = std::clamp(speedScalar * std::pow(Settings<EditorCameraSettings>().speedWheelStep, ticks), lo, hi);
     }
     void EditorCamera::Frame(const FramingBounds& b, glm::uvec2 vp) noexcept
     {
         if (!b.Valid() || !(vp.x > 0u) || !(vp.y > 0u)) return;
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
         const glm::vec3 lo = glm::min(b.min, b.max), hi = glm::max(b.min, b.max);
         const glm::vec3 centre = (lo + hi) * 0.5f, extent = hi - lo;
         if (mode == ViewMode::TwoD)
         {
             ortho.center = glm::vec2(centre);
             float halfH = 0.0f;
-            if (extent.y > 0.0f) halfH = extent.y * 0.5f / kFrameFill;
-            if (extent.x > 0.0f) { const float aspect = float(vp.x) / float(vp.y); halfH = std::max(halfH, extent.x * 0.5f / kFrameFill / aspect); }
-            if (halfH > 0.0f) ortho.halfHeight = std::clamp(halfH, kMinHalfHeight, kMaxHalfHeight);
+            if (extent.y > 0.0f) halfH = extent.y * 0.5f / s.frameFill;
+            if (extent.x > 0.0f) { const float aspect = float(vp.x) / float(vp.y); halfH = std::max(halfH, extent.x * 0.5f / s.frameFill / aspect); }
+            if (halfH > 0.0f) ortho.halfHeight = ClampHalfHeight(s, halfH);
             return;
         }
         orbit.pivot = centre;
-        const float radius = std::max(glm::length(extent) * 0.5f, 0.05f);
+        const float radius = std::max(glm::length(extent) * 0.5f, kMinFrameRadius);
         const float aspect = float(vp.x) / float(vp.y);
         const float tanHalf = std::tan(glm::radians(orbit.fovYDeg) * 0.5f) * std::min(aspect, 1.0f);
-        orbit.distance = std::clamp(radius / tanHalf / kFrameFill, kMinDistance, kMaxDistance);
+        orbit.distance = ClampDistance(s, radius / tanHalf / s.frameFill);
     }
     void EditorCamera::CentreOrigin() noexcept { ortho.center = glm::vec2(0.0f); }
     glm::vec3 EditorCamera::FocusPoint() const noexcept { return mode == ViewMode::TwoD ? glm::vec3(ortho.center, 0.0f) : orbit.pivot; }
+
+    void ApplyFreshPose(EditorCamera& cam)
+    {
+        const EditorCameraSettings& s = Settings<EditorCameraSettings>();
+        cam.ortho.halfHeight = s.default2DHalfHeight;
+        cam.orbit.yawDeg     = s.default3DYaw;
+        cam.orbit.pitchDeg   = s.default3DPitch;
+        cam.orbit.distance   = s.default3DDistance;
+    }
 
     // ---- framing bounds ---------------------------------------------------
 

@@ -3,10 +3,13 @@
 #include "Documents/InputActionsJson.hpp"
 #include "Input/EditorActions.hpp"
 #include "Input/MenuShortcut.hpp"
+#include "Settings/EditorDocumentUiSettings.hpp"
 
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 
@@ -147,9 +150,10 @@ namespace Arcane::Editor
             auto line = [&](float extra, const ImVec4& color, const std::string& text)
             {
                 const ImVec2 at = ImGui::GetCursorScreenPos();
-                ImGui::GetWindowDrawList()->AddText(ImVec2(at.x + indent + extra, at.y + (24.0f - ImGui::GetFontSize()) * 0.5f),
+                const float rowH = TableRowHeight();   // the RowWithThumb pitch (editor.ui.tableRowHeight)
+                ImGui::GetWindowDrawList()->AddText(ImVec2(at.x + indent + extra, at.y + (rowH - ImGui::GetFontSize()) * 0.5f),
                                                     ImGui::ColorConvertFloat4ToU32(color), text.c_str());
-                ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 24.0f));   // the RowWithThumb pitch
+                ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, rowH));
             };
             if (p.kind == PendingAdd::Kind::Binding) { line(0.0f, Theme::kAmber, countdown); return; }
             const bool headed = p.kind != PendingAdd::Kind::Part;
@@ -420,7 +424,7 @@ namespace Arcane::Editor
         // the row's Selectable (below, once the row's drag/menu/tooltip have
         // read it as the last item) -- RowWithThumb's documented foreground-item
         // pattern. Submitted before the row, the selected row's highlight
-        // painted over it and it sat top-aligned in the 24 px row.
+        // painted over it and it sat top-aligned in the row.
         const bool searching = state.search[0] != '\0';
         const char* chevron = nullptr;
         if (row.kind == InputRowKind::Action)
@@ -475,7 +479,7 @@ namespace Arcane::Editor
         {
             const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(lo, hi, ImGui::ColorConvertFloat4ToU32(Theme::WithAlpha(Theme::kAmber, 0.12f + 0.2f * std::min(v, 1.0f))));
+            dl->AddRectFilled(lo, hi, ImGui::ColorConvertFloat4ToU32(Theme::WithAlpha(Theme::kAmber, LiveHighlightAlpha(Arcane::Settings<InputEditorSettings>(), v))));
             dl->AddRectFilled(lo, ImVec2(lo.x + 2.0f, hi.y), ImGui::ColorConvertFloat4ToU32(Theme::kAmber));
         }
 
@@ -570,12 +574,12 @@ namespace Arcane::Editor
         if (!row.path.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) ImGui::SetTooltip("%s", row.path.c_str());
 
         // The expander chevron, over the row (a SmallButton is FontSize tall:
-        // centred in the 24 px row). A non-empty search forces every action
+        // centred in the TableRowHeight() row RowWithThumb drew). A non-empty search forces every action
         // open (rows are built that way) and the click is a no-op then, so the
         // user's own collapse state survives the search.
         if (chevron)
         {
-            ImGui::SetCursorScreenPos(ImVec2(rowTop.x, rowTop.y + (24.0f - ImGui::GetFontSize()) * 0.5f));
+            ImGui::SetCursorScreenPos(ImVec2(rowTop.x, rowTop.y + (TableRowHeight() - ImGui::GetFontSize()) * 0.5f));
             ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
             if (ImGui::SmallButton(chevron) && !searching && !swallowed)
             {

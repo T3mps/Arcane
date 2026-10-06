@@ -28,7 +28,11 @@
 // writes ed::GetStyle() -- which is exactly why it lives in that family and not
 // in EditorWidgets.
 
+#include "Settings/GraphCanvasSettings.hpp"  // editor.graph.*: the node, wire and pin metrics
+#include "Settings/GraphThemeSettings.hpp"   // editor.theme.graph.*: the grid pair and the hover border
 #include "Widgets/EditorTheme.hpp"
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_node_editor.h>
@@ -36,24 +40,26 @@
 namespace Arcane::Editor
 {
     // ---- Node chrome metrics (canvas units at zoom 1) --------------------
-    // Both canvases wrote these as the same seven literals. A canvas that ever
-    // wants to differ overrides through its own style application, not by
-    // re-spelling the number.
-    inline constexpr float kGraphNodeRounding       = 4.0f;
-    inline constexpr float kGraphNodeBorderWidth    = 1.0f;
-    inline constexpr float kGraphNodeHovBorderWidth = 1.5f;
-    inline constexpr float kGraphNodeSelBorderWidth = 2.0f;   // spec §10: "selection = 2px"
+    // Both canvases wrote these as the same seven literals; they are now the
+    // editor.graph.* settings (S6-34, GraphCanvasSettings), read from the
+    // published snapshot. A canvas that ever wants to differ overrides through
+    // its own style application, not by re-spelling the number.
+    [[nodiscard]] inline float GraphNodeRounding()       { return Settings<GraphCanvasSettings>().nodeRounding; }
+    [[nodiscard]] inline float GraphNodeBorderWidth()    { return Settings<GraphCanvasSettings>().nodeBorderWidth; }
+    [[nodiscard]] inline float GraphNodeHovBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderHoverWidth; }
+    [[nodiscard]] inline float GraphNodeSelBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderSelectedWidth; }
 
     // ---- Wire + pin metrics ----------------------------------------------
     // The thickness handed to ed::Link is the REAL one even when the link is
     // submitted fully transparent, or the wire would be hard to grab -- see
     // GraphWire.hpp's channel note for why the visible curve is hand-drawn.
-    inline constexpr float kGraphWireThickness = 2.0f;
-    // A pin dot's tessellation and ring weight. The RADIUS is deliberately NOT
-    // here: it is the one pin value the two canvases genuinely disagree about
-    // (4.0 on the shader canvas, 4.5 for spec §11.2's 9px on the Graph lens),
-    // so it stays a parameter at the call.
-    inline constexpr int   kGraphPinSegments  = 12;
+    [[nodiscard]] inline float GraphWireThickness() { return Settings<GraphCanvasSettings>().wireThickness; }
+    // A pin dot's tessellation (editor.graph.pinSegments) and ring weight.
+    // The RADIUS is deliberately NOT here: it is the one pin value the two
+    // canvases genuinely disagree about (editor.graph.pinDotRadius on the
+    // shader canvas, 4.5 for spec §11.2's 9px on the Graph lens), so it stays
+    // a parameter at the call.
+    [[nodiscard]] inline int GraphPinSegments() { return Settings<GraphCanvasSettings>().pinSegments; }
     inline constexpr float kGraphPinRingWidth = 1.6f;
     // The OPTIONAL outer ring DrawGraphPinDot adds around a dot (the shader
     // canvas's "adapts to its input" mark on a resolved dynamic pin): its
@@ -63,16 +69,13 @@ namespace Arcane::Editor
     inline constexpr float kGraphPinOuterRingWidth = 1.0f;
 
     // ---- Grid palette -----------------------------------------------------
-    // Display-referred RGBA (ImGui draws post-tonemap, imgui.hlsl:1-5). The
+    // The theme cvars editor.theme.graph.gridMinor / gridMajor (settings
+    // S6-27, Settings/GraphThemeSettings.hpp), read per frame by both canvases:
+    // GraphThemeColor(&GraphThemeSettings::gridMinor / ::gridMajor). The
     // alphas are each octave's peak strength, not image opacity -- the backdrop
     // itself is always written opaque (GraphGridPhase.hpp, GraphGridColors).
-    //
-    // These two were byte-identical in both files, but shared BY ACCIDENT: the
-    // Graph lens's own comment recorded them as "NOT covered by either ruling,
-    // so NOT changed", i.e. inherited rather than chosen, with nothing policing
-    // the drift. One definition is the whole fix.
-    inline constexpr ImVec4 kGraphGridMinorColor = ImVec4(0.180f, 0.180f, 0.196f, 0.55f);
-    inline constexpr ImVec4 kGraphGridMajorColor = ImVec4(0.235f, 0.235f, 0.255f, 0.90f);
+    // The pair was byte-identical in both files BY ACCIDENT (the Graph lens
+    // inherited it); one definition is the whole fix.
 
     // ---- Selection / hover accents ---------------------------------------
     // The editor-wide outline language, so one accent means "selected"
@@ -83,9 +86,10 @@ namespace Arcane::Editor
     // EditorTheme.hpp:106-110 already names "the shader graph's selected-node
     // border" among that token's own citations. Both files re-spelled the token
     // as a literal; this spends it where it was authored to be spent. Hover
-    // cyan has no theme token (it is canvas-only language), so it lives here.
+    // cyan is the graph theme's own token, editor.theme.graph.hoverBorder
+    // (settings S6-27), written with the rest of the style at ed::CreateEditor
+    // and re-written by RefreshGraphCanvasStyle when the theme changes.
     inline constexpr const ImVec4& kGraphNodeSelBorderColor = Theme::kAmber;
-    inline constexpr ImVec4 kGraphNodeHovBorderColor = ImVec4(0.25f, 0.70f, 1.0f, 1.0f);
 
     namespace ed = ax::NodeEditor;
 
@@ -146,12 +150,13 @@ namespace Arcane::Editor
         // left, top, right, bottom, in canvas units.
         ImVec4 nodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 
-        ImVec4 hovBorder = kGraphNodeHovBorderColor;
+        ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the published snapshot; RefreshGraphCanvasStyle keeps an open canvas current
         ImVec4 selBorder = kGraphNodeSelBorderColor;
-        float  rounding       = kGraphNodeRounding;
-        float  borderWidth    = kGraphNodeBorderWidth;
-        float  hovBorderWidth = kGraphNodeHovBorderWidth;
-        float  selBorderWidth = kGraphNodeSelBorderWidth;
+        // editor.graph.* from the published snapshot, like hovBorder.
+        float  rounding       = GraphNodeRounding();
+        float  borderWidth    = GraphNodeBorderWidth();
+        float  hovBorderWidth = GraphNodeHovBorderWidth();
+        float  selBorderWidth = GraphNodeSelBorderWidth();
     };
 
     // One-time style for a node-editor context. Written to the PERSISTENT
@@ -190,5 +195,39 @@ namespace Arcane::Editor
         s.NodePadding             = desc.nodePadding;
         // EditorActions owns canvas shortcuts, including F, Delete and clipboard.
         ed::EnableShortcuts(false);
+    }
+
+    // True when the CURRENT context's style already carries every value
+    // ApplyGraphCanvasStyle would write for `desc`.
+    [[nodiscard]] inline bool GraphCanvasStyleMatches(const GraphCanvasStyleDesc& desc)
+    {
+        const ed::Style& s = ed::GetStyle();
+        const auto same = [](const ImVec4& a, const ImVec4& b)
+        { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+        return same(s.Colors[ed::StyleColor_NodeBg], desc.nodeBody)
+            && same(s.Colors[ed::StyleColor_NodeBorder], desc.nodeBorder)
+            && same(s.Colors[ed::StyleColor_HovNodeBorder], desc.hovBorder)
+            && same(s.Colors[ed::StyleColor_SelNodeBorder], desc.selBorder)
+            && same(s.Colors[ed::StyleColor_GroupBg], desc.groupBg)
+            && same(s.Colors[ed::StyleColor_GroupBorder], desc.groupBorder)
+            && same(s.NodePadding, desc.nodePadding)
+            && s.NodeRounding == desc.rounding
+            && s.NodeBorderWidth == desc.borderWidth
+            && s.HoveredNodeBorderWidth == desc.hovBorderWidth
+            && s.SelectedNodeBorderWidth == desc.selBorderWidth;
+    }
+
+    // Per frame, with the canvas's context CURRENT and before ed::Begin: a
+    // theme change (editor.theme.graph.* publishes Live -- a preset switch,
+    // an import, a swatch edit) reaches an ALREADY-OPEN canvas without a
+    // reopen (settings S6-27 carried gap). The style is latched per node at
+    // BeginNode, so a write here lands on this frame's nodes. Unchanged
+    // values cost one compare and write nothing. True when it re-applied.
+    inline bool RefreshGraphCanvasStyle(const GraphCanvasStyleDesc& desc)
+    {
+        if (GraphCanvasStyleMatches(desc))
+            return false;
+        ApplyGraphCanvasStyle(desc);
+        return true;
     }
 }

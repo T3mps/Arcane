@@ -1,6 +1,8 @@
 #include "Project/SceneRecents.hpp"
+#include "Settings/EditorConsoleSettings.hpp"   // editor.recents.maxScenes (settings S6-41)
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Paths::Join(ProjectSaved, ...) (FileFor; settings spec s11.0)
 
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
@@ -84,6 +86,11 @@ std::string Serialize(const List& list)
     return doc.dump(2);   // 2-space, matching RecentProjects.cpp's convention
 }
 
+std::size_t MaxEntries()
+{
+    return static_cast<std::size_t>(std::max(1, Settings<RecentsSettings>().maxScenes));
+}
+
 void Push(List& list, const std::filesystem::path& scenePath)
 {
     const std::string key = scenePath.lexically_normal().generic_string();
@@ -91,8 +98,8 @@ void Push(List& list, const std::filesystem::path& scenePath)
         return;
     std::erase(list.paths, key);
     list.paths.insert(list.paths.begin(), key);
-    if (list.paths.size() > kMaxEntries)
-        list.paths.resize(kMaxEntries);
+    if (const std::size_t cap = MaxEntries(); list.paths.size() > cap)
+        list.paths.resize(cap);
 }
 
 void Replace(List& list, const std::filesystem::path& from, const std::filesystem::path& to)

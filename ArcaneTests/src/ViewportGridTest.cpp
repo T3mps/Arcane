@@ -22,10 +22,21 @@
 #include <Arcane/Scene/ViewTransform.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>
 
+#include <Settings/EditorGridSettings.hpp>
 #include <Viewport/ViewportGrid.hpp>
 
 using Catch::Approx;
 using namespace Arcane::Editor;
+
+namespace
+{
+    // The oracle: editor.viewport.grid.*'s declared defaults (settings S6-21),
+    // which PlanGrid2D / DrawGrid2D read through the registry.
+    const EditorGridSettings kGridDefaults{};
+    const float     kGridMinorAlpha = kGridDefaults.minorAlpha;
+    const float     kGridMajorAlpha = kGridDefaults.majorAlpha;
+    const glm::vec3 kGridLineRgb{ kGridDefaults.lineColor.r, kGridDefaults.lineColor.g, kGridDefaults.lineColor.b };
+}
 
 namespace
 {

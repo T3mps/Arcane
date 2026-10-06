@@ -7,7 +7,7 @@
 // clickable breadcrumb, the pin) and then the page body of the source the
 // host routes to it, through that instance's own PropertyGrid state (so two
 // instances showing the same page keep separate text drafts).
-// Instance ids are pool slots (InspectorHost::kMaxInstances), so a closed
+// Instance ids are pool slots (InspectorHost::MaxInstances()), so a closed
 // instance's `[Window]` entry is the one its next opener inherits.
 
 #include "Panels/InspectorHost.hpp"
@@ -77,7 +77,7 @@ namespace Arcane::Editor
 
     struct InspectorWindowsState
     {
-        std::unordered_map<int, PropertyGridState> grids;   // per instance id (ids are pool slots, InspectorHost::kMaxInstances)
+        std::unordered_map<int, PropertyGridState> grids;   // per instance id (ids are pool slots, InspectorHost::MaxInstances())
     };
 
     struct InspectorWindowsResult

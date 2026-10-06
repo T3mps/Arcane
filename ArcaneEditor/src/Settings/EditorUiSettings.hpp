@@ -13,6 +13,7 @@ namespace Arcane::Editor
     {
         std::string fontFamily = "Inter";
         std::string monoFontFamily = "JetBrains Mono";
+        std::string altFontFamily = "Roboto";   // the pushable alternate face (settings S6-28)
         float fontSize = 16.0f;
         float scale = 1.0f;
         bool followDpi = false;

@@ -58,7 +58,8 @@ TEST_CASE("every migrated Archive declaration keeps type, default, range and fla
         { "editor.graph.showPinLegend", CVarValue::Bool(true), std::nullopt, std::nullopt, ed, prefM, "ArcaneTests" },
         { "editor.inspector.materialPreviewFraction", CVarValue::Float32(0.45f), CVarValue::Float32(0.2f), CVarValue::Float32(0.8f), ed, prefM, "ArcaneTests" },
         { "editor.inspector.nodePageMinTextRun", CVarValue::Int32(16), CVarValue::Int32(0), CVarValue::Int32(256), ed, prefM, "ArcaneTests" },
-        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(140), ed, prefM, "ArcaneTests" },
+        // S6-37: the ceiling follows editor.inspector.assetThumbMaxPx's 512 (the reader clamps min <= max).
+        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(512), ed, prefM, "ArcaneTests" },
         { "editor.inspector.assetThumbHeightFraction", CVarValue::Float32(0.30f), CVarValue::Float32(0.1f), CVarValue::Float32(0.6f), ed, prefM, "ArcaneTests" },
         { "editor.undo.maxSteps", CVarValue::Int32(100), CVarValue::Int32(1), CVarValue::Int32(10000), ed, prefP, "ArcaneTests" },
         { "editor.undo.byteBudgetMB", CVarValue::Int32(512), CVarValue::Int32(16), CVarValue::Int32(65536), ed, prefP, "ArcaneTests" },

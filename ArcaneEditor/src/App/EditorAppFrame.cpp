@@ -23,7 +23,13 @@
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
+#include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
+#include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
+#include "Settings/EditorPlaySettings.hpp"     // editor.play.launchMode (settings S6-32)
+#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..32)
+#include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
 #include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
+#include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
 #include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
 #include "Settings/LayoutPage.hpp"
 #include "Panels/LayoutLibrary.hpp"       // ParseOpenPanels
@@ -394,11 +400,50 @@ namespace Arcane::Editor
 #endif
 
             FrameState fs;
+            // An old [EditorViewport][Camera] block's preference lines, read by
+            // the ini handler since the last frame (boot, RetargetLayoutIni, a
+            // windowed project switch's reload): imported ONCE into the User
+            // rung where the user has not chosen (settings S6-29), BEFORE the
+            // barrier below so this frame already reads them, and queued for
+            // the debounced archive write.
+            if (m_legacyViewport.Any())
+            {
+                Arcane::Editor::ImportLegacyViewportPrefs(Arcane::CVarRegistry::Get(), m_legacyViewport);
+                Arcane::Editor::ForEachLegacyViewportPref(m_legacyViewport, [](std::string_view name)
+                    { Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, std::string(name)); });
+                m_legacyViewport = {};
+            }
+            // Likewise an old [EditorPlayMode][State] section's mode (settings
+            // S6-32): imported once, never written back to the ini.
+            if (m_legacyPlayMode)
+            {
+                if (Arcane::Editor::ImportLegacyPlayMode(Arcane::CVarRegistry::Get(), *m_legacyPlayMode))
+                    Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, "editor.play.launchMode");
+                m_legacyPlayMode.reset();
+            }
             // THE CVAR PUBLISH BARRIER, once per frame: every Set a console
             // line, a callback or a plugin made since the last one becomes
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            // editor.camera.* -> the camera's runtime copies, before any input
+            // reads them (the wheel and the view-settings popup write the cvar;
+            // the camera picks it up here, next frame).
+            {
+                const auto& camPrefs = Arcane::Settings<Arcane::Editor::EditorCameraSettings>();
+                m_camera.orbit.fovYDeg = camPrefs.fovYDeg;
+                m_camera.speedScalar   = camPrefs.speedScalar;
+            }
+            // editor.viewport.physicsOverlay (settings S6-32): the View-menu
+            // toggle stays session state (spec s6.3); the cvar is where a
+            // session starts, and a change to it (the settings window, a
+            // project switch's Pref-P value) moves the toggle to it.
+            if (const bool overlayPref = Arcane::Settings<Arcane::Editor::EditorViewportSettings>().physicsOverlay;
+                overlayPref != m_physicsOverlayPref)
+            {
+                m_physicsOverlay     = overlayPref;
+                m_physicsOverlayPref = overlayPref;
+            }
             Arcane::Editor::TickSettingsHost();   // the settings windows' debounced writes (editor.settings.saveDebounceMs)
             // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
             if (m_undo)
@@ -707,11 +752,13 @@ namespace Arcane::Editor
             Arcane::Editor::EditorFontRequest req;
             req.uiFace   = Arcane::Editor::ResolveEditorFontFamily(families, fonts->fontFamily, "Inter");
             req.monoFace = Arcane::Editor::ResolveEditorFontFamily(families, fonts->monoFontFamily, "JetBrains Mono");
+            req.altFace  = Arcane::Editor::ResolveEditorFontFamily(families, fonts->altFontFamily, "Roboto");
             req.sizePx   = fonts->fontSize;
             Arcane::Editor::ReinstallEditorFonts(req);
             style.FontSizeBase = fonts->fontSize;
         }
         m_appearance.UpdateTheme(Arcane::Settings<Arcane::Editor::EditorThemeSettings>(), style);
+        m_appearance.UpdateStyle(Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>(), style);   // before UpdateUi: recomposes at the applied scale
         m_appearance.UpdateUi(Arcane::Settings<Arcane::Editor::EditorUiSettings>(),
                               m_gpu ? m_gpu->Win().DisplayScale() : 1.0f, style);
         ImGui::SetCurrentContext(prev);
@@ -1085,7 +1132,11 @@ namespace Arcane::Editor
                 // CameraSpeedScalar via the wheel during RMB flight), never
                 // the zoom/dolly.
                 if (snap.wheelY != 0.0f)
-                    m_camera.AdjustSpeed(snap.wheelY);
+                {
+                    m_camera.AdjustSpeed(snap.wheelY);   // live this frame; the cvar carries it on
+                    Arcane::Editor::SetViewportPref("editor.camera.speedScalar",
+                                                    Arcane::CVarValue::Float32(m_camera.speedScalar));
+                }
             }
             // The wheel otherwise: 2D zoom anchored on the viewport-local
             // cursor (the pixel space the resolved view maps to), or the
@@ -1190,14 +1241,15 @@ namespace Arcane::Editor
             const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
             const Arcane::ViewTransform& view = m_runtime->View();
             const Arcane::GizmoHandleMask handles = GizmoHandles();
-            const float gizmoSize = m_viewSettings.gizmoSize;
+            const float gizmoSize = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size;
+            const Arcane::GizmoTuning gizmoTuning = Arcane::Editor::MakeGizmoTuning();   // editor.gizmo.* (settings S6-31)
 
             if (!m_gizmoDrag.active)
             {
                 // Hover + drag-start only when the cursor is over the viewport.
                 if (inViewport)
                 {
-                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen);
+                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen, gizmoTuning);
                     if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
                     {
                         // A press on a handle owns the click regardless of
@@ -1259,11 +1311,10 @@ namespace Arcane::Editor
                 Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
                 const glm::vec2 dragMouse(dragLx, dragLy);
 
-                Arcane::GizmoSnap gsnap;
-                gsnap.enabled = ctrlHeld;
+                const Arcane::GizmoSnap gsnap = Arcane::Editor::MakeGizmoSnap(ctrlHeld);   // editor.gizmo.snap.*
                 const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                     m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
-                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
+                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap, gizmoTuning);
                 // The sector Draw paints for a rotate drag -- the same inputs.
                 m_gizmoDrag.sweep = m_gizmoMode == Arcane::GizmoMode::Rotate
                     ? Arcane::RotateSweep(m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
@@ -1822,7 +1873,8 @@ namespace Arcane::Editor
         // grid is Task 10's depth-tested GridNode, not these lines. In Play
         // the view is the scene camera's and the grid is an editor affordance,
         // so it stays off.
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD && m_viewSettings.showGrid)
+        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
             const Arcane::ViewTransform& view = m_runtime->View();
             Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
@@ -1913,7 +1965,11 @@ namespace Arcane::Editor
                     // dark scene content without competing with the selection
                     // outline or the gizmo axes. (Dashed would read better still,
                     // but the batcher has no dash primitive.)
-                    const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                    // editor.theme.viewport.cameraFrame (settings S6-26).
+                    static const EditorThemeViewportSettings kVpDefaults{};
+                    const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
+                                                            kVpDefaults.cameraFrame, kCameraFrameColor);
+                    const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
                     for (int i = 0; i < 4; ++i)
                         b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
                 }
@@ -2043,10 +2099,14 @@ namespace Arcane::Editor
         // Nothing here reaches the pick chain below: the grid is canvas
         // content only (GridNode.hpp).
         if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
-            && m_viewSettings.showGrid)
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
+            // The tunables are editor.viewport.grid.* / grid3D.* (settings
+            // S6-21), rebuilt every frame so a Live edit lands next frame.
+            m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
+                                                        Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
             m_gridScene.view = m_runtime->View();
-            m_gridScene.SetPlane(m_viewSettings.gridPlane == Arcane::Editor::GridPlane::XY
+            m_gridScene.SetPlane(Arcane::Settings<Arcane::Editor::EditorViewportSettings>().gridPlane == Arcane::Editor::GridPlane::XY
                                      ? Arcane::GridSceneDesc::Plane::XY
                                      : Arcane::GridSceneDesc::Plane::XZ);
             vp.grid = &m_gridScene;
@@ -2275,11 +2335,19 @@ namespace Arcane::Editor
                 stripStatus.problems = Arcane::Editor::StripChip{ chip->label,
                     nErr > 0 ? Arcane::Editor::Theme::kError : Arcane::Editor::Theme::kWarning, chip->tooltip };
         }
+        // editor.play.launchMode (settings S6-32; NextWorld: the next Play):
+        // the toolbar reads the published value, and its mode menu's choice
+        // writes the cvar (User rung, archived).
+        const Arcane::Editor::PlayLaunchMode publishedPlayMode =
+            Arcane::Settings<Arcane::Editor::EditorPlaySettings>().launchMode;
+        Arcane::Editor::PlayLaunchMode playMode = publishedPlayMode;
         const Arcane::Editor::ToolbarResult toolbar =
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
-                                               m_plugin ? &*m_plugin : nullptr, m_playMode,
+                                               m_plugin ? &*m_plugin : nullptr, playMode,
                                                ToolbarLogoTextureId(), stripStatus,
                                                [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+        if (playMode != publishedPlayMode)
+            Arcane::Editor::SetPlayLaunchMode(playMode);
         if (toolbar.launchStandalone)
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
@@ -2486,8 +2554,9 @@ namespace Arcane::Editor
                 if (const auto req = Arcane::Editor::DrawNewFolderModal(m_newFolder, *proj)) (void)RunAssetOp(*req);
         }
 
-        if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
-            m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
+        if (const auto lineCap = static_cast<std::size_t>(Arcane::Settings<Arcane::Editor::EditorConsoleSettings>().displayLineCap);
+            lineCap != m_consoleDiag.console.Capacity())
+            m_consoleDiag.console.SetCapacity(lineCap);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
             Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
                 Arcane::Editor::UnderVerifyHarness(m_config),
@@ -2925,17 +2994,17 @@ namespace Arcane::Editor
                 std::chrono::system_clock::now().time_since_epoch()).count());
             const Arcane::Editor::StartPageModel page = Arcane::Editor::BuildStartPage(m_recents.projects, now);
             const float avail = ImGui::GetContentRegionAvail().x;
-            const float width = std::min(640.0f, avail);
+            const float width = std::min(Ui::Px(640.0f), avail);   // start page column (settings S6-28: px follow editor.ui.scale)
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - width) * 0.5f));
             ImGui::BeginChild("##startcol", ImVec2(width, 0.0f));
             // ---- section 1: heading + actions ---------------------------------
-            ImGui::Dummy(ImVec2(0.0f, 24.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(24.0f)));
             ImGui::TextUnformatted("No project open");
             ImGui::Spacing();
             if (ImGui::Button(ICON_LC_FOLDER_OPEN " Open Project...")) req.openProject = true;
             ImGui::SameLine();
             if (ImGui::Button(ICON_LC_FOLDER " Open Folder...")) req.openProjectFolder = true;
-            ImGui::Dummy(ImVec2(0.0f, 16.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(16.0f)));
             // ---- (crash-window plan 3's "Recover" section slots in HERE) ------
             // ---- section 2: recent projects -------------------------------------
             ImGui::TextDisabled("Recent projects");
@@ -3622,13 +3691,12 @@ namespace Arcane::Editor
                                           : 0;
         // The overlay's state, by reference (F4 plan 1 T8): the 2D | Persp
         // segments assign m_camera.mode exactly as Alt+J / Alt+G do (Resolve
-        // reads it next frame); the settings popup edits m_viewSettings, the
-        // orbit fov and the speed scalar in place, and the camera reads them
-        // per frame.
+        // reads it next frame); the settings popup writes the editor.viewport.*
+        // / editor.camera.* / editor.gizmo.* cvars (settings S6-29), which the
+        // camera and the grids read from the next published snapshot.
         Arcane::Editor::ViewportToolState tools{
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
-            m_camera.mode, m_viewSettings,
-            m_camera.orbit.fovYDeg, m_camera.speedScalar,
+            m_camera.mode,
         };
         // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
         // SDPG_Foreground for its widget): drawn by the panel right after the
@@ -3651,8 +3719,9 @@ namespace Arcane::Editor
                     Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
                 Arcane::Editor::ImGuiGizmoSink sink(list, origin);
                 Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             m_viewSettings.gizmoSize, m_gizmoHovered,
+                             Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
                              m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                             Arcane::Editor::MakeGizmoTuning(),
                              m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
@@ -3745,11 +3814,13 @@ namespace Arcane::Editor
             // exhaust the budget is a very long run of Skipped frames (a
             // collapsed Viewport panel). Giving up beats a state machine
             // that never returns to Idle.
-            if (m_deferredPick.TickAndMaybeAbandon())
+            const std::uint32_t pickBudget =
+                Arcane::Settings<Arcane::Editor::EditorViewportSettings>().pickMaxFramesInFlight;
+            if (m_deferredPick.TickAndMaybeAbandon(pickBudget))
             {
                 ARC_WARN("Viewport pick: no readback landed within {} frames -- the click was "
                          "dropped (was the Viewport panel collapsed?)",
-                         Arcane::Editor::DeferredPick::kMaxFramesInFlight);
+                         pickBudget);
             }
         }
 

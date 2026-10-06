@@ -18,7 +18,7 @@
 // GraphCanvasStyle.hpp / GraphWire.hpp, on the same one-named-concern rule and
 // the same refusal to grow EditorWidgets.hpp into the canvas family.
 
-#include "Widgets/GraphCanvasStyle.hpp"   // kGraphPinSegments / kGraphPinRingWidth
+#include "Widgets/GraphCanvasStyle.hpp"   // GraphPinSegments() / kGraphPinRingWidth
 
 #include <imgui.h>
 
@@ -47,17 +47,17 @@ namespace Arcane::Editor
     {
         if (outerRing)
             dl->AddCircle(centre, radius + kGraphPinOuterRingGap, ImGui::GetColorU32(*outerRing),
-                          kGraphPinSegments, kGraphPinOuterRingWidth);
+                          GraphPinSegments(), kGraphPinOuterRingWidth);
         const ImU32 col = ImGui::GetColorU32(color);
         if (connected)
         {
-            dl->AddCircleFilled(centre, radius, col, kGraphPinSegments);
+            dl->AddCircleFilled(centre, radius, col, GraphPinSegments());
         }
         else
         {
             dl->AddCircleFilled(centre, radius,
-                                ImGui::GetColorU32(bodyColor), kGraphPinSegments);
-            dl->AddCircle(centre, radius, col, kGraphPinSegments, kGraphPinRingWidth);
+                                ImGui::GetColorU32(bodyColor), GraphPinSegments());
+            dl->AddCircle(centre, radius, col, GraphPinSegments(), kGraphPinRingWidth);
         }
     }
 }

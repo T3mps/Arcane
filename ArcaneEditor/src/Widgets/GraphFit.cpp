@@ -11,32 +11,15 @@
 #pragma warning(pop)
 
 #include "Widgets/GraphFit.hpp"
-#include "Widgets/GraphZoomLevels.hpp"    // kZoomLevels[0]: the fit floor
+#include "Widgets/GraphZoomLevels.hpp"    // CurrentZoomLevels: the first stop is the fit floor
+#include "Settings/GraphCanvasSettings.hpp"
 
-#include <Arcane/Config/CVarDecl.hpp>     // ARC_CVAR (settings spec s4.3)
+#include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
 
 namespace Arcane::Editor
 {
-    ARC_CVAR(cvar_graphFitMaxZoom, "editor.graph.fitMaxZoom", float, 1.0f,
-             .min = 0.1f, .max = 2.0f, .flags = ::Arcane::CVarFlags::Archive,
-             .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-             .help = "Largest zoom a graph's frame-to-fit may pick (1.0 = never magnify).");
-
-    // FIT-MINZOOM (user, 2026-10-03). Default 0.5: the smallest zoom stop at
-    // which a node's title and pin labels still read as text at 1080p. The
-    // canvas draws the 16 px editor font scaled by the zoom (no re-raster), so
-    // 0.5 is an 8 px em; the tiers' text gate (pin labels need > kLodLowMax,
-    // GraphNodeLod.hpp) only opens at 0.375 (a 6 px em, unreadable), and the
-    // 1080p logo_showcase captures (FIT-MINZOOM report) put 0.5 as the first
-    // stop whose titles and labels are legible. Range = the zoom table's.
-    ARC_CVAR(cvar_graphFitMinZoom, "editor.graph.fitMinZoom", float, 0.5f,
-             .min = 0.1f, .max = 2.0f, .flags = ::Arcane::CVarFlags::Archive,
-             .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-             .help = "Smallest zoom a graph's frame-to-fit may pick; a graph too big for it frames its "
-                     "centre (0.1 = the zoom table's floor, no extra limit).");
-
     namespace
     {
         // Mirrors the vendored c_NavigationZoomMargin (imgui_node_editor.cpp:144,
@@ -44,8 +27,16 @@ namespace Arcane::Editor
         constexpr float kNavigationZoomMargin = 0.1f;
     }
 
-    float GraphFitMaxZoom() { return cvar_graphFitMaxZoom.Get(); }
-    float GraphFitMinZoom() { return cvar_graphFitMinZoom.Get(); }
+    // editor.graph.fitMaxZoom / fitMinZoom (GraphCanvasSettings, S6-34).
+    // fitMinZoom's default 0.5 (FIT-MINZOOM, user 2026-10-03) is the smallest
+    // zoom stop at which a node's title and pin labels still read as text at
+    // 1080p: the canvas draws the 16 px editor font scaled by the zoom (no
+    // re-raster), so 0.5 is an 8 px em; the tiers' text gate (pin labels need
+    // > editor.graph.lod.lowMax, GraphNodeLod.hpp) only opens at 0.375 (a 6 px
+    // em, unreadable), and the 1080p logo_showcase captures put 0.5 as the
+    // first stop whose titles and labels are legible.
+    float GraphFitMaxZoom() { return Settings<GraphCanvasSettings>().fitMaxZoom; }
+    float GraphFitMinZoom() { return Settings<GraphCanvasSettings>().fitMinZoom; }
 
     GraphFitZoomRange GraphFitZoomRangeFromCVars()
     {
@@ -66,7 +57,7 @@ namespace Arcane::Editor
     {
         if (viewPx.x <= 0.0f || viewPx.y <= 0.0f)
             return content;
-        const float floorZoom = std::max(kZoomLevels[0], zoom.minZoom);
+        const float floorZoom = std::max(CurrentZoomLevels().front(), zoom.minZoom);
         const float cap = std::max(zoom.maxZoom, floorZoom);   // a min above the max wins
         const ImVec2 centre((content.min.x + content.max.x) * 0.5f, (content.min.y + content.max.y) * 0.5f);
         float cw = std::max(0.0f, content.max.x - content.min.x);
@@ -120,7 +111,7 @@ namespace Arcane::Editor
         // zoomIn = WithMargin: c_NavigationZoomMargin (imgui_node_editor.cpp:144, :3556-3560) only
         // LOWERS the zoom, so the cap holds; ComputeGraphFitRect pre-shrinks a floored
         // frame by exactly that margin, so the floor holds too (GraphFitLandedZoom).
-        // Not snapped to kZoomLevels: SetViewRect takes CalcCenterView's scale as-is
+        // Not snapped to the zoom stops: SetViewRect takes CalcCenterView's scale as-is
         // (:3635-3640); the next wheel step snaps through MatchZoom.
         editor->NavigateTo(ImRect(fitted.min, fitted.max), /*zoomIn*/ true, std::max(0.0f, durationSeconds));
         return true;

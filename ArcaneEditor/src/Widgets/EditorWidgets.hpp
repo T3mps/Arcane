@@ -235,7 +235,7 @@ namespace Arcane::Editor
 
     // Pill line height (spec §11.2's pinned 16px). Exposed -- rather than kept
     // file-local to EditorWidgets.cpp, as it was until Plan 3 -- for the same
-    // reason kAssetRowThumbSize below is: a caller that positions a pill BY
+    // reason AssetRowThumbSize() below is: a caller that positions a pill BY
     // HAND (AssetStatusPanel.cpp's cards vertically centre one inside a row
     // rect instead of chaining SameLine) needs the number, and re-declaring it
     // there made two constants nothing kept in step.
@@ -256,7 +256,14 @@ namespace Arcane::Editor
     // e.g. a status badge overlaid on a corner of it -- can do so without
     // re-guessing the value; the Asset Browser's refused-marker badge (Task
     // 10 fix round 1) is the first such consumer.
-    inline constexpr float kAssetRowThumbSize = 18.0f;
+    // editor.ui.assetRowThumbPx (settings S6-28) at the UI scale and font size
+    // (Ui::TextPx): 18 px at the defaults.
+    [[nodiscard]] float AssetRowThumbSize();
+    // The asset tables' row pitch: editor.ui.tableRowHeight at the UI scale
+    // and font size (Ui::TextPx; settings S6-28). 24 px at the defaults. The
+    // Browser's tables, the Status panel's Unreferenced card and RowWithThumb's
+    // default all draw at it.
+    [[nodiscard]] float TableRowHeight();
 
     // One selectable asset row (spec §11.1/§11.2): an 18px thumb (`thumb`
     // == 0 falls back to the `iconUtf8` Lucide glyph), then `name`, then
@@ -264,11 +271,13 @@ namespace Arcane::Editor
     // (pills, right-aligned extras) should START. `indent` shifts where the
     // thumb and name start; the row's own Selectable still spans the full
     // width, so the row stays clickable everywhere regardless of indent.
-    // `rowHeight` defaults to the 24px table row (spec §11.2); rail rows --
-    // drawn with this SAME helper per §11.1 -- pass 26. (The brief's doc
-    // fixed this at 24px, which cannot serve both rows; controller ruling,
-    // 2026-09-06, makes it a parameter instead, defaulted to 24 so table
-    // call sites stay unchanged.)
+    // `rowHeight` defaults to the table row, TableRowHeight() (spec §11.2;
+    // 24px at the defaults); rail rows -- drawn with this SAME helper per
+    // §11.1 -- pass their own (Ui::TextPx(26)). (The brief's doc fixed this
+    // at 24px, which cannot serve both rows; controller ruling, 2026-09-06,
+    // makes it a parameter instead.) A caller that positions content
+    // against the row's pitch reads TableRowHeight(), never a literal: the
+    // pitch is the user's editor.ui.tableRowHeight at the UI scale.
     //
     // TASK 10 FIX ROUND 1 (review Critical 1): the thumb and name are pure
     // ImDrawList overdraw now, NOT ImGui::Image/TextUnformatted items --
@@ -309,7 +318,7 @@ namespace Arcane::Editor
     };
     AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
                                 const char* name, bool selected, float indent,
-                                float rowHeight = Ui::TextPx(24.0f));
+                                float rowHeight = TableRowHeight());
 
     // ---- status lens vocabulary (Plan 2) -----------------------------------
     // Model-free ImGui draw helpers the Status lens dashboard draws out of

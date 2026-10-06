@@ -24,6 +24,54 @@ namespace Arcane::Editor
                 if (t.field == field) return &t;
             return nullptr;
         }
+
+        // The file key's field ("panel", "graph.nodeBody"), or empty when the
+        // key names no token.
+        std::string_view TokenField(std::string_view cvarName)
+        {
+            if (const ThemeToken* t = FindToken(cvarName)) return t->field;
+            constexpr std::string_view kPrefix = "editor.theme.";
+            if (!cvarName.starts_with(kPrefix)) return {};
+            if (const GraphThemeTokenInfo* g = FindGraphThemeToken(cvarName.substr(kPrefix.size()))) return g->field;
+            return {};
+        }
+
+        bool WriteThemeJson(const std::filesystem::path& path, std::string_view name, const Theme::Palette& palette,
+                            const GraphThemeColors* graph, std::string* error)
+        {
+            nlohmann::ordered_json doc;
+            doc["format"]  = "arctheme";
+            doc["version"] = 1;
+            doc["name"]    = std::string(name);
+            nlohmann::ordered_json colors = nlohmann::ordered_json::object();
+            for (const ThemeToken& t : kThemeTokens)
+                colors[ThemeCvarName(t.field)] = FormatHexColor(palette.*(t.palette));
+            if (graph)
+                for (const GraphThemeTokenInfo& t : GraphThemeTokens())
+                    colors[ThemeCvarName(t.field)] = FormatHexColor(ResolveGraphThemeColor(*graph, t));
+            doc["colors"] = std::move(colors);
+
+            const std::filesystem::path tmp = path.string() + ".tmp";
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                out << doc.dump(2) << '\n';
+                if (!out)
+                {
+                    if (error) *error = "cannot write " + tmp.generic_string();
+                    return false;
+                }
+            }
+            std::error_code ec;
+            std::filesystem::rename(tmp, path, ec);   // atomic replace on one volume
+            if (ec)
+            {
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
+                if (error) *error = "cannot replace " + path.generic_string() + ": " + ec.message();
+                return false;
+            }
+            return true;
+        }
     }
 
     std::optional<ImVec4> ParseHexColor(std::string_view text)
@@ -73,11 +121,11 @@ namespace Arcane::Editor
         out.name = (name != doc.end() && name->is_string()) ? name->get<std::string>() : path.stem().string();
         for (auto it = colors->begin(); it != colors->end(); ++it)
         {
-            const ThemeToken* token = FindToken(it.key());
-            if (!token) { out.unknownKeys.push_back(it.key()); continue; }
+            const std::string_view field = TokenField(it.key());
+            if (field.empty()) { out.unknownKeys.push_back(it.key()); continue; }
             const std::optional<ImVec4> c = it->is_string() ? ParseHexColor(it->get<std::string>()) : std::nullopt;
             if (!c) return std::unexpected(it.key() + ": expected \"#rrggbb\" or \"#rrggbbaa\"");
-            out.colors.emplace_back(std::string(token->field), *c);
+            out.colors.emplace_back(std::string(field), *c);
         }
         return out;
     }
@@ -85,35 +133,13 @@ namespace Arcane::Editor
     bool WriteThemeFile(const std::filesystem::path& path, std::string_view name, const Theme::Palette& palette,
                         std::string* error)
     {
-        nlohmann::ordered_json doc;
-        doc["format"]  = "arctheme";
-        doc["version"] = 1;
-        doc["name"]    = std::string(name);
-        nlohmann::ordered_json colors = nlohmann::ordered_json::object();
-        for (const ThemeToken& t : kThemeTokens)
-            colors[ThemeCvarName(t.field)] = FormatHexColor(palette.*(t.palette));
-        doc["colors"] = std::move(colors);
+        return WriteThemeJson(path, name, palette, nullptr, error);
+    }
 
-        const std::filesystem::path tmp = path.string() + ".tmp";
-        {
-            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-            out << doc.dump(2) << '\n';
-            if (!out)
-            {
-                if (error) *error = "cannot write " + tmp.generic_string();
-                return false;
-            }
-        }
-        std::error_code ec;
-        std::filesystem::rename(tmp, path, ec);   // atomic replace on one volume
-        if (ec)
-        {
-            std::error_code ignored;
-            std::filesystem::remove(tmp, ignored);
-            if (error) *error = "cannot replace " + path.generic_string() + ": " + ec.message();
-            return false;
-        }
-        return true;
+    bool WriteThemeFile(const std::filesystem::path& path, std::string_view name, const Theme::Palette& palette,
+                        const GraphThemeColors& graph, std::string* error)
+    {
+        return WriteThemeJson(path, name, palette, &graph, error);
     }
 
     EditorThemeSettings ApplyThemeFileTo(const ThemeFile& file, EditorThemeSettings base)
@@ -121,6 +147,14 @@ namespace Arcane::Editor
         for (const auto& [field, colour] : file.colors)
             for (const ThemeToken& t : kThemeTokens)
                 if (t.field == field) { base.*(t.setting) = ToSettingColor(colour); break; }
+        return base;
+    }
+
+    GraphThemeColors ApplyThemeFileTo(const ThemeFile& file, GraphThemeColors base)
+    {
+        for (const auto& [field, colour] : file.colors)
+            if (const GraphThemeTokenInfo* t = FindGraphThemeToken(field))
+                GraphThemeSlot(base, *t) = ToSettingColor(colour);
         return base;
     }
 
@@ -149,6 +183,38 @@ namespace Arcane::Editor
             const float ratio = Theme::ContrastRatio(p.*(pair.fg), p.*(pair.bg));
             rows.push_back({ pair.label, ratio, pair.minRatio, ratio >= pair.minRatio });
         }
+        return rows;
+    }
+
+    std::vector<ContrastRow> ContrastReport(const Theme::Palette& palette, const GraphThemeColors& graph)
+    {
+        std::vector<ContrastRow> rows = ContrastReport(palette);
+        const auto colour = [&graph](std::string_view field) { return ResolveGraphThemeColor(graph, *FindGraphThemeToken(field)); };
+        const auto add = [&rows](std::string_view label, const ImVec4& fg, const ImVec4& bg, float minRatio)
+        {
+            const float ratio = Theme::ContrastRatio(fg, bg);
+            rows.push_back({ label, ratio, minRatio, ratio >= minRatio });
+        };
+        const ImVec4 text  = colour("graph.nodeTitleText");
+        const ImVec4 body  = colour("graph.nodeBody");
+        const ImVec4 title = colour("graph.nodeTitle");
+        add("Node text on node body",          text, body,  4.5f);
+        add("Node text on node title",         text, title, 4.5f);
+        add("Node error title on node title",  colour("graph.nodeBadgeText"), title, 4.5f);
+        // The category bands carry the same title text (s5.1.4).
+        add("Node text on Input band",         text, colour("graph.category.input"),         4.5f);
+        add("Node text on Math band",          text, colour("graph.category.math"),          4.5f);
+        add("Node text on Vector band",        text, colour("graph.category.vector"),        4.5f);
+        add("Node text on Procedural band",    text, colour("graph.category.procedural"),    4.5f);
+        add("Node text on Output band",        text, colour("graph.category.output"),        4.5f);
+        add("Node text on Utility band",       text, colour("graph.category.utility"),       4.5f);
+        add("Node text on Uncategorized band", text, colour("graph.category.uncategorized"), 4.5f);
+        // Pins are marks: 3:1 on the body they sit on.
+        add("float pin on node body",          colour("graph.pinScalar"),  body, 3.0f);
+        add("float2 pin on node body",         colour("graph.pinVec2"),    body, 3.0f);
+        add("float4 pin on node body",         colour("graph.pinVec4"),    body, 3.0f);
+        add("Dynamic pin on node body",        colour("graph.pinDynamic"), body, 3.0f);
+        add("Render target pin on node body",  colour("graph.pinTexture"), body, 3.0f);
         return rows;
     }
 }

@@ -44,8 +44,9 @@ namespace Arcane::Editor
         std::filesystem::path uiFace;
         std::filesystem::path monoFace;
         float sizePx = 16.0f;
+        std::filesystem::path altFace;   // the pushable alternate (EditorFontSet::roboto); empty = the bundled Roboto
     };
-    [[nodiscard]] EditorFontRequest DefaultEditorFontRequest(const std::filesystem::path& exeDir);   // today's faces at 16 px
+    [[nodiscard]] EditorFontRequest DefaultEditorFontRequest(const std::filesystem::path& exeDir);   // today's faces at 16 px (alt = Roboto)
 
     // Install on the CURRENT context: the UI face (Fonts[0]), Roboto, the mono
     // face, each with merged lucide icons, then the brand face. Before the first

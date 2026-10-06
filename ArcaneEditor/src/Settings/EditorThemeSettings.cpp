@@ -1,5 +1,7 @@
 #include "Settings/EditorThemeSettings.hpp"
 
+#include "Panels/AssetPanelModel.hpp"
+
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Reflection.hpp>
 
@@ -43,9 +45,51 @@ namespace Arcane::Editor
         ARC_REFLECT_FIELD(EditorThemeSettings, axisZ)         ARC_REFLECT_ATTR(DisplayName, "Z axis")              ARC_REFLECT_ATTR(Category, "Axes")                 ARC_REFLECT_ATTR(Tooltip, "The Z axis colour: the inspector bars, the 3D grid and the gizmo all derive from it.")
         ARC_REFLECT_FIELD(EditorThemeSettings, modalDim)      ARC_REFLECT_ATTR(DisplayName, "Modal dim")           ARC_REFLECT_ATTR(Category, "Overlays")             ARC_REFLECT_ATTR(Tooltip, "The wash behind a modal dialog.")
         ARC_REFLECT_FIELD(EditorThemeSettings, rowStripe)     ARC_REFLECT_ATTR(DisplayName, "Row stripe")          ARC_REFLECT_ATTR(Category, "Overlays")             ARC_REFLECT_ATTR(Tooltip, "The alternate table row stripe, a wash over the row.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, actingOnFrame) ARC_REFLECT_ATTR(DisplayName, "Acting-on frame") ARC_REFLECT_ATTR(Category, "Overlays") ARC_REFLECT_ATTR(Tooltip, "The muted-amber border of an attention pill and of the asset status card you are acting on.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, headerBand) ARC_REFLECT_ATTR(DisplayName, "Header band") ARC_REFLECT_ATTR(Category, "Header bands") ARC_REFLECT_ATTR(Tooltip, "The inspector's component header band.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, headerBandHovered) ARC_REFLECT_ATTR(DisplayName, "Header band (hovered)") ARC_REFLECT_ATTR(Category, "Header bands") ARC_REFLECT_ATTR(Tooltip, "A component header under the cursor.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, headerBandActive) ARC_REFLECT_ATTR(DisplayName, "Header band (pressed)") ARC_REFLECT_ATTR(Category, "Header bands") ARC_REFLECT_ATTR(Tooltip, "A component header being pressed.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, channelR) ARC_REFLECT_ATTR(DisplayName, "Red channel") ARC_REFLECT_ATTR(Category, "Channel markers") ARC_REFLECT_ATTR(Tooltip, "The colour picker's marker beside the red (X) channel field.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, channelG) ARC_REFLECT_ATTR(DisplayName, "Green channel") ARC_REFLECT_ATTR(Category, "Channel markers") ARC_REFLECT_ATTR(Tooltip, "The colour picker's marker beside the green (Y) channel field.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, channelB) ARC_REFLECT_ATTR(DisplayName, "Blue channel") ARC_REFLECT_ATTR(Category, "Channel markers") ARC_REFLECT_ATTR(Tooltip, "The colour picker's marker beside the blue (Z) channel field.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, channelW) ARC_REFLECT_ATTR(DisplayName, "Alpha channel") ARC_REFLECT_ATTR(Category, "Channel markers") ARC_REFLECT_ATTR(Tooltip, "The colour picker's marker beside the alpha (W) channel field.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, unfocusedOverlineAlpha) ARC_REFLECT_ATTR(DisplayName, "Unfocused tab overline opacity") ARC_REFLECT_ATTR(Category, "Overlays") ARC_REFLECT_ATTR(Range, 0.0, 1.0) ARC_REFLECT_ATTR(Tooltip, "The opacity of the accent overline on the selected tab of a dock that does not have focus.")
     ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(EditorThemeSettings);
+
+    ARC_REFLECT_TYPE(EditorThemeInputPillSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme.inputPill", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
+                             "Appearance/Domain colours")
+        ARC_REFLECT_FIELD(EditorThemeInputPillSettings, blueBorder)   ARC_REFLECT_ATTR(DisplayName, "Keyboard/mouse pill border") ARC_REFLECT_ATTR(Category, "Input pills") ARC_REFLECT_ATTR(Tooltip, "The border of a KeyboardMouse-scheme binding pill in the input editor.")
+        ARC_REFLECT_FIELD(EditorThemeInputPillSettings, blueText)     ARC_REFLECT_ATTR(DisplayName, "Keyboard/mouse pill text")   ARC_REFLECT_ATTR(Category, "Input pills") ARC_REFLECT_ATTR(Tooltip, "The text of a KeyboardMouse-scheme binding pill in the input editor.")
+        ARC_REFLECT_FIELD(EditorThemeInputPillSettings, violetBorder) ARC_REFLECT_ATTR(DisplayName, "Other scheme pill border")   ARC_REFLECT_ATTR(Category, "Input pills") ARC_REFLECT_ATTR(Tooltip, "The border of a binding pill of every other control scheme in the input editor.")
+        ARC_REFLECT_FIELD(EditorThemeInputPillSettings, violetText)   ARC_REFLECT_ATTR(DisplayName, "Other scheme pill text")     ARC_REFLECT_ATTR(Category, "Input pills") ARC_REFLECT_ATTR(Tooltip, "The text of a binding pill of every other control scheme in the input editor.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_SETTINGS(EditorThemeInputPillSettings);
+
+    ARC_REFLECT_TYPE(EditorThemeAssetKindSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme.assetKind", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
+                             "Appearance/Domain colours")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, texture)      ARC_REFLECT_ATTR(DisplayName, "Texture")       ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a texture node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, material)     ARC_REFLECT_ATTR(DisplayName, "Material")      ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a material node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, mesh)         ARC_REFLECT_ATTR(DisplayName, "Mesh")          ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a mesh node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, sprite)       ARC_REFLECT_ATTR(DisplayName, "Sprite")        ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a sprite node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, scene)        ARC_REFLECT_ATTR(DisplayName, "Scene")         ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a scene node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, inputActions) ARC_REFLECT_ATTR(DisplayName, "Input actions") ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of an input-actions node in the asset graph.")
+        ARC_REFLECT_FIELD(EditorThemeAssetKindSettings, model)        ARC_REFLECT_ATTR(DisplayName, "Model")         ARC_REFLECT_ATTR(Category, "Asset kinds") ARC_REFLECT_ATTR(Tooltip, "The accent of a model node in the asset graph.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_SETTINGS(EditorThemeAssetKindSettings);
+
+    ARC_REFLECT_TYPE(EditorThemeViewportSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme.viewport", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor,
+                             "Appearance/Domain colours")
+        ARC_REFLECT_FIELD(EditorThemeViewportSettings, cameraFrame) ARC_REFLECT_ATTR(DisplayName, "Camera frame") ARC_REFLECT_ATTR(Category, "Viewport") ARC_REFLECT_ATTR(Tooltip, "The thin line the 2D viewport draws around the scene camera's view bounds.")
+    ARC_END_REFLECT_TYPE()
+
+    ARC_SETTINGS(EditorThemeViewportSettings);
 
     // SrgbToLinear / LinearToSrgb live in Widgets/EditorWidgets.cpp (LNK2005
     // if this TU defines them too; ArcaneTests source-compiles both).
@@ -78,10 +122,63 @@ namespace Arcane::Editor
 
     bool SameThemeSettings(const EditorThemeSettings& a, const EditorThemeSettings& b) noexcept
     {
-        static_assert(sizeof(EditorThemeSettings) == kThemeTokens.size() * sizeof(Arcane::CVarColor),
-                      "EditorThemeSettings is exactly its colours: memcmp compares every field and no padding");
+        static_assert(sizeof(EditorThemeSettings) == kThemeTokens.size() * sizeof(Arcane::CVarColor) + sizeof(float),
+                      "EditorThemeSettings is exactly its colours + unfocusedOverlineAlpha: memcmp compares every field and no padding");
         return std::memcmp(&a, &b, sizeof(EditorThemeSettings)) == 0;
     }
 
     std::string ThemeCvarName(std::string_view field) { return "editor.theme." + std::string(field); }
+
+    namespace
+    {
+        ImVec4 DisplayOfRgb(std::uint32_t rgb) noexcept
+        {
+            return ImVec4(static_cast<float>((rgb >> 16) & 0xffu) / 255.0f, static_cast<float>((rgb >> 8) & 0xffu) / 255.0f,
+                          static_cast<float>(rgb & 0xffu) / 255.0f, 1.0f);
+        }
+
+        // kind -> its field, or null for a kind with no row.
+        Arcane::CVarColor EditorThemeAssetKindSettings::* AssetKindField(AssetKind kind) noexcept
+        {
+            switch (kind)
+            {
+                case AssetKind::Texture:      return &EditorThemeAssetKindSettings::texture;
+                case AssetKind::Material:     return &EditorThemeAssetKindSettings::material;
+                case AssetKind::Mesh:         return &EditorThemeAssetKindSettings::mesh;
+                case AssetKind::Sprite:       return &EditorThemeAssetKindSettings::sprite;
+                case AssetKind::Scene:        return &EditorThemeAssetKindSettings::scene;
+                case AssetKind::InputActions: return &EditorThemeAssetKindSettings::inputActions;
+                case AssetKind::Model:        return &EditorThemeAssetKindSettings::model;
+                default:                      return nullptr;
+            }
+        }
+    }
+
+    // The defaults are KindAccentRgb(kind)'s table, so that table stays the
+    // one spelling of the asset-manager spec's hexes.
+    EditorThemeAssetKindSettings::EditorThemeAssetKindSettings()
+        : texture(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Texture))))
+        , material(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Material))))
+        , mesh(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Mesh))))
+        , sprite(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Sprite))))
+        , scene(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Scene))))
+        , inputActions(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::InputActions))))
+        , model(ToSettingColor(DisplayOfRgb(KindAccentRgb(AssetKind::Model))))
+    {
+    }
+
+    ImVec4 ResolveDomainColor(const Arcane::CVarColor& value, const Arcane::CVarColor& defaultValue, const ImVec4& legacy) noexcept
+    {
+        return std::memcmp(&value, &defaultValue, sizeof(Arcane::CVarColor)) == 0 ? legacy : ToDisplayColor(value);
+    }
+
+    std::uint32_t KindAccentRgb(AssetKind kind, const EditorThemeAssetKindSettings& s) noexcept
+    {
+        const auto field = AssetKindField(kind);
+        if (field == nullptr)
+            return 0;
+        static const EditorThemeAssetKindSettings kDefaults{};
+        const ImU32 u = ImGui::ColorConvertFloat4ToU32(ResolveDomainColor(s.*field, kDefaults.*field, DisplayOfRgb(KindAccentRgb(kind))));
+        return (((u >> IM_COL32_R_SHIFT) & 0xffu) << 16) | (((u >> IM_COL32_G_SHIFT) & 0xffu) << 8) | ((u >> IM_COL32_B_SHIFT) & 0xffu);
+    }
 }

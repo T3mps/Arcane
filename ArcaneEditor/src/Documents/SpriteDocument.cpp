@@ -3,9 +3,11 @@
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
 #include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData, the PPU row range)
+#include "Settings/DocumentSettings.hpp"  // editor.sprite.*: the PPU range and drag speeds
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop, the Whole texture untick)
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/Command.hpp>
 
 #include <Astra/Reflection/Attribute.hpp>   // Astra::Range (the ranged rows)
@@ -384,9 +386,19 @@ namespace Arcane::Editor
         // dirty. m_data still mutates live (the document's crop follows a
         // drag), so dirt is "m_data moved this frame", compared at the end.
         const Arcane::SpriteAssetData shown = m_data;
-        // The row's bounds ARE assets.sprite.defaultPixelsPerUnit's declared
-        // range: whatever that setting can seed, this row can hold (S6-5).
-        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, 0.5f, SpritePixelsPerUnitRange(), "%g");
+        // The row clamps to editor.sprite.ppuMin/ppuMax (S6-35), widened to
+        // assets.sprite.defaultPixelsPerUnit's declared range: whatever that
+        // setting can seed, this row can hold (S6-5). The preference can widen
+        // the row, never narrow it below the seed range.
+        const SpriteDocSettings& ss = Arcane::Settings<SpriteDocSettings>();
+        double ppuMin = static_cast<double>(ss.ppuMin);
+        double ppuMax = std::max(ppuMin, static_cast<double>(ss.ppuMax));   // an inverted pair collapses to the min
+        if (const std::optional<Astra::Range> seed = SpritePixelsPerUnitRange())
+        {
+            ppuMin = std::min(ppuMin, seed->min);
+            ppuMax = std::max(ppuMax, seed->max);
+        }
+        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, ss.ppuDragSpeed, Astra::Range(ppuMin, ppuMax), "%g");
         bracket("Edit Pixels Per Meter");
 
         // "Whole texture": a UI view over sourceSize == (0,0) (s5.4). Unticking
@@ -420,7 +432,7 @@ namespace Arcane::Editor
         bracket("Edit Source Pos");
         (void)grid.VecRow("Source Size", &m_data.sourceSize.x, 2, 1.0f, Astra::Range(0.0, FLT_MAX), "%.0f");
         bracket("Edit Source Size");
-        (void)grid.VecRow("Pivot", &m_data.pivot.x, 2, 0.005f, Astra::Range(0.0, 1.0), "%.3f");
+        (void)grid.VecRow("Pivot", &m_data.pivot.x, 2, ss.pivotDragSpeed, Astra::Range(0.0, 1.0), "%.3f");
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             ImGui::SetTooltip("Normalized: (0, 0) = bottom-left, (1, 1) = top-right (+Y up).\n"
                               "Sprites authored before F4 used y = 0 = top; an off-centre pivot\n"

@@ -336,7 +336,7 @@ namespace Arcane::Editor
         // graph-preview vehicle.
         ++m_previewVehicleAttempts;
         m_preview = Arcane::NriGraphContext::CreateOffscreen(
-            *m_services.hostConfig, chrome->Device(), kPreviewSize, kPreviewSize);
+            *m_services.hostConfig, chrome->Device(), m_previewSize, m_previewSize);
         if (!m_preview)
         {
             // Degraded, not fatal: no preview image, already logged inside
@@ -393,9 +393,9 @@ namespace Arcane::Editor
             if (!(radius > 1e-4f))
                 radius = 0.5f;   // degenerate-bounds guard; unreached by any of the five generators today
 
-            constexpr float kFovYDegrees = 45.0f;
-            constexpr float kMargin = 1.5f;
-            const float distance = radius / std::sin(glm::radians(kFovYDegrees * 0.5f)) * kMargin;
+            const MeshDocSettings& ms = Arcane::Settings<MeshDocSettings>();
+            const float fovYDegrees = ms.previewFov;
+            const float distance = radius / std::sin(glm::radians(fovYDegrees * 0.5f)) * ms.previewMargin;
             // A fixed three-quarter viewing direction -- there is no camera
             // authoring here (F4's job), so one angle that reads every one of
             // the five sources reasonably is enough; +Y up matches the
@@ -419,17 +419,19 @@ namespace Arcane::Editor
             // that ECS-facing header, which this device-less, registry-free
             // preview has no other reason to depend on.
             scene.view = glm::lookAtRH(eye, center, glm::vec3(0.0f, 1.0f, 0.0f));
-            scene.projection = glm::perspectiveRH_ZO(glm::radians(kFovYDegrees), 1.0f,
+            scene.projection = glm::perspectiveRH_ZO(glm::radians(fovYDegrees), 1.0f,
                                                       0.05f, distance * 4.0f + 1.0f);
-            scene.lightDirection = glm::normalize(glm::vec3(0.4f, 1.0f, 0.3f));
-            scene.lightColor = glm::vec3(1.0f);
-            // Brighter than MeshSceneDesc's own default ambient (0.05): a
-            // lone preview mesh has no fill light of any kind, and the
-            // default reads as near-black on its unlit side. A one-off UX
-            // choice for this window only -- it has no bearing on how a
-            // scene's own mesh instances light (those keep MeshSceneDesc's
-            // real default).
-            scene.ambient = glm::vec3(0.12f);
+            // The ONE preview light (editor.preview.light.*, R1), shared with
+            // the material sphere and the thumbnails; normalized here as this
+            // preview always has. Its ambient is brighter than MeshSceneDesc's
+            // own default (0.05): a lone preview mesh has no fill light of any
+            // kind, and the default reads as near-black on its unlit side. It
+            // has no bearing on how a scene's own mesh instances light (those
+            // keep MeshSceneDesc's real default).
+            const EditorPreviewLightSettings& l = Arcane::Settings<EditorPreviewLightSettings>();
+            scene.lightDirection = glm::normalize(glm::vec3(l.direction.x, l.direction.y, l.direction.z));
+            scene.lightColor = glm::vec3(l.color.r, l.color.g, l.color.b);
+            scene.ambient = glm::vec3(l.ambient);
         }
 
         Arcane::NriGraphContext::FrameDesc frame;
@@ -565,7 +567,7 @@ namespace Arcane::Editor
             // below instead (s3.2's image bit does not consult the compile).
             // The one placement rule every preview box shares (T3-D6): fitted and centred.
             const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const PreviewFit fit = FitPreviewImage(avail.x, avail.y, static_cast<float>(kPreviewSize));
+            const PreviewFit fit = FitPreviewImage(avail.x, avail.y, static_cast<float>(m_previewSize));
             const ImVec2 at = ImGui::GetCursorPos();
             ImGui::SetCursorPos(ImVec2(at.x + fit.x, at.y + fit.y));
             ImGui::Image(static_cast<ImTextureID>(PreviewTextureId()), ImVec2(fit.side, fit.side));
@@ -695,27 +697,29 @@ namespace Arcane::Editor
                     }
                     bracket(label);
                 };
+                const MeshDocSettings& caps = Arcane::Settings<MeshDocSettings>();
                 switch (m_data.source)
                 {
                     case Arcane::MeshSource::Plane:
-                        intRow("Subdivisions", m_data.subdivisions, 1.0, 64.0);
+                        intRow("Subdivisions", m_data.subdivisions, 1.0, static_cast<double>(caps.subdivMax));
                         break;
                     case Arcane::MeshSource::UvSphere:
-                        intRow("Rings", m_data.rings, 3.0, 128.0);
-                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        intRow("Rings", m_data.rings, 3.0, static_cast<double>(caps.ringsMax));
+                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
                         break;
                     case Arcane::MeshSource::Cylinder:
                         // Deliberately NOT `rings` -- BuildCylinder never reads it.
-                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
                         break;
                     case Arcane::MeshSource::Capsule:
                     {
                         // The cap-ring floor is 2, not 3 -- a two-step arc still
                         // closes a hemisphere; UvSphere's rings span pole to pole.
-                        intRow("Rings", m_data.rings, 2.0, 64.0);
-                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        intRow("Rings", m_data.rings, 2.0, static_cast<double>(caps.capsuleRingsMax));
+                        intRow("Segments", m_data.segments, 3.0, static_cast<double>(caps.segmentsMax));
                         float ratio = m_data.capsuleLengthRatio;
-                        (void)grid.FloatRow("Length Ratio", ratio, 0.02f, Astra::Range(1.0, 20.0), "%.2f");
+                        (void)grid.FloatRow("Length Ratio", ratio, caps.capsuleRatioDragSpeed,
+                                            Astra::Range(1.0, static_cast<double>(caps.capsuleRatioMax)), "%.2f");
                         if (ratio != m_data.capsuleLengthRatio)
                         {
                             m_data.capsuleLengthRatio = ratio;

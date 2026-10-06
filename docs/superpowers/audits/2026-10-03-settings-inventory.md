@@ -1131,7 +1131,7 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Viewport/EditorCamera.hpp:122 | kFrameFill | 0.9 | SETTING | editor.camera.frameFill | EditorCameraSettings | Editor | Pref-P | Live | 0.5..1 | N | F/Home padding |
 | Viewport/EditorCamera.hpp:126-127 | kMin/MaxDistance | 0.05 / 1e5 m | SETTING | editor.camera.{min,max}OrbitDistance | EditorCameraSettings | Editor Dev | Pref-P | Live | >0 | N | — |
 | Viewport/EditorCamera.hpp:128 | kNearZ | 0.05 m | SETTING | editor.camera.nearClip | EditorCameraSettings | Editor | Pref-P | Live | 0.001..10 | N | UE exposes near clip |
-| Viewport/EditorCamera.hpp:129 | kFarZ | 5000 m | SETTING | editor.camera.farClip | EditorCameraSettings | Editor | Pref-P | Live | 10..1e6 | N | large worlds |
+| Viewport/EditorCamera.hpp:129 | kFarZ | 5000 m | SETTING | editor.camera.farClip | EditorCameraSettings | Editor | Pref-P | Live | 20..1e6 | N | large worlds; min 20, not 10 (S6-30): above nearClip's max of 10, so near < far and the frustum never degenerates |
 | Viewport/EditorCamera.hpp:133 | kBaseFlySpeed | 5 m/s | SETTING | editor.camera.baseFlySpeed | EditorCameraSettings | Editor | Pref-P | Live | 0.1..100 | N | — |
 | Viewport/EditorCamera.cpp:37 | DistanceScale ref / floor / cap | /10 m, 0.1, 1000 | SETTING | editor.camera.{distanceScaledSpeed,refDistance,floor,speedCap} | EditorCameraSettings | Editor Dev | Pref-P | Live | bool / >0 | N | UE has this as a toggle |
 | Viewport/EditorCamera.cpp:72, :81 | look / orbit sensitivity | 0.2 deg/px | SETTING | editor.camera.{look,orbit}Sensitivity | EditorCameraSettings | Editor | Pref-P | Live | 0.01..2 | N | no invert-Y exists today either |

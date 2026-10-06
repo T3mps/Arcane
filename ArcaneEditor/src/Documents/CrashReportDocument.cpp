@@ -4,6 +4,7 @@
 #include "Widgets/EditorWidgets.hpp"   // LinkText (s4.7)
 #include "Widgets/EditorFonts.hpp"     // MonoFont (s4.8)
 #include "Widgets/IconsLucide.h"
+#include "Settings/EditorDocumentUiSettings.hpp"
 #include "Project/OsShell.hpp"   // ShellOpen / ShowInExplorer -- the one shell route (s4.6)
 
 #include "FileText.hpp"   // ArcaneCrashReporter/src: Slurp
@@ -12,6 +13,7 @@
 #include <Arcane/Base/DiagnosticsSettings.hpp>   // diagnostics.logTailLines -- one tail length with the reporter
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/UiSettings.hpp>             // ui.copyFlashSeconds -- one flash with the reporter
+#include <Arcane/Config/Settings.hpp>
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // Diag::ReadGpuDump / ParseGpuDump
 
@@ -282,7 +284,8 @@ namespace Arcane::Editor
 
             const R::ThreadView& t = v.threads[m_threadIndex];
             const float lineH = ImGui::GetTextLineHeightWithSpacing();
-            ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, lineH * 24.0f));
+            const float maxFramesH = lineH * static_cast<float>(Arcane::Settings<CrashViewerSettings>().maxRows);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, maxFramesH));
             if (ImGui::BeginChild("##frames", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY))
             {
                 MonoFont mono;
