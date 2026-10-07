@@ -8,6 +8,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -22,6 +23,9 @@ namespace Arcane::Editor
 {
     namespace
     {
+        ARC_CONSTANT("UI fallback: the frame delta the rebind capture uses when ImGui reports DeltaTime 0; not a tunable and not the sim step")
+        constexpr float kFallbackFrameDelta = 1.0f / 60.0f;
+
         nlohmann::json ReadDraft(const std::filesystem::path& path)
         {
             std::ifstream stream(path, std::ios::binary);
@@ -231,7 +235,7 @@ namespace Arcane::Editor
         if (!bodyDrawn || !focused_ || clickedAway) capture_.Cancel();
         else if (EditorActions::Get().Pressed("ui.cancel")) capture_.Cancel();
         else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive(), onChrome),
-                              ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);
+                              ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : kFallbackFrameDelta);
         const auto& result = capture_.Result();
         if (result.state == InputRebindState::Completed)
         {

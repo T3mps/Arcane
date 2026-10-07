@@ -4,10 +4,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
 #include <Settings/SettingsModel.hpp>
+#include <Settings/SettingsEdit.hpp>
 #include <Settings/LayoutSettings.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -235,4 +237,33 @@ TEST_CASE("SettingsModel::Rebuild applies a same-size page swap and a roles chan
     CHECK(m.BuiltRevision() == rev);
     CHECK(m.Find("Game/TestGame/Speed") != nullptr);
     CHECK(m.Find("Engine/Speed") == nullptr);
+}
+
+// S6-GATE (controller verification, user try-out 2026-10-07): the live
+// astra.snapshot.compression row reaches the Preferences window, filed under
+// Engine/Astra/Snapshot (its dotted name; "astra" is no known root). It is a
+// Dev row, so the default view hides it until Show advanced is on (spec s6.2).
+TEST_CASE("SettingsModel: astra.snapshot.compression is a Preferences row under Engine/Astra/Snapshot, behind Show advanced", "[settings-ui][editor]")
+{
+    const CVarRegistry& reg = CVarRegistry::Get();
+    const std::optional<CVarDescInfo> d = reg.Describe("astra.snapshot.compression");
+    REQUIRE(d.has_value());
+    CHECK(d->scope == SettingScope::PreferencesProject);
+    CHECK(HasFlag(d->flags, CVarFlags::Dev));
+
+    SettingsModel prefs;
+    prefs.Rebuild(reg, SettingScope::PreferencesMachine);
+    const SettingsTreeNode* node = prefs.Find("Engine/Astra/Snapshot");
+    REQUIRE(node != nullptr);
+    CHECK((node->cvars == std::vector<std::string>{ "astra.snapshot.compression" }));
+    REQUIRE(prefs.Desc("astra.snapshot.compression") != nullptr);
+    CHECK(SettingDisplayName(*prefs.Desc("astra.snapshot.compression")) == "Snapshot compression");
+    using F = SettingsModel::Filter;
+    CHECK(Has(prefs.Visible(reg, "snapshot", F::All, /*showAdvanced=*/true), "astra.snapshot.compression"));
+    if (!ComputeRowFacts(reg, *d, SettingsWindowKind::Preferences).overridden)   // the Dev gate hides a row nobody overrides
+        CHECK_FALSE(Has(prefs.Visible(reg, "snapshot", F::All, /*showAdvanced=*/false), "astra.snapshot.compression"));
+
+    SettingsModel project;
+    project.Rebuild(reg, SettingScope::Project);
+    CHECK(project.Desc("astra.snapshot.compression") == nullptr);
 }
