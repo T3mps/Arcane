@@ -683,7 +683,13 @@ project "death-fixture"
         defines { "ARCANE_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
-        symbols "off"
+        -- ON, unlike the engine's Dist: the fixture is a test program, and
+        -- "reporter: symbolizes the death fixture's minidump" asserts that
+        -- dbgeng resolves death-fixture.pdb (`!main`, DeathFixtureMain.cpp).
+        -- With symbols off the Dist suite had no PDB to find and that case
+        -- failed on the hosted Windows lane (Release passes it with the same
+        -- optimizer settings and symbols on).
+        symbols "on"
     filter {}
 
     -- Crash window plan 2 (spec §12 item 2): the fixture's `--reporter` mode
