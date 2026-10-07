@@ -17,10 +17,39 @@
 #include <cstdint>
 #include <string_view>
 
+#if ARCANE_PLATFORM_MACOS
+#include <signal.h>   // _STRUCT_MCONTEXT; <ucontext.h> itself needs _XOPEN_SOURCE on Darwin
+#else
 #include <ucontext.h>
+#endif
 
 namespace Arcane::Diagnostics::Internal::Posix
 {
+    // ---- the stored register context -----------------------------------------
+    // Linux: a ucontext_t (its fpregs pointer re-pointed into the copy, see
+    // CopyContext). macOS: the Darwin MACHINE context itself -- a Darwin
+    // ucontext_t only POINTS at its mcontext (in the signal frame), so a
+    // stored copy keeps the pointee, the same reason Linux re-points fpregs.
+    // Thread ids are the kernel's: a Linux tid, or on macOS the thread's Mach
+    // port name in this task (what task_threads lists and thread_get_state
+    // takes -- the SuspendThread/GetThreadContext handle).
+#if ARCANE_PLATFORM_MACOS
+    using NativeContext = _STRUCT_MCONTEXT;
+#else
+    using NativeContext = ucontext_t;
+#endif
+
+    // The calling thread's id in the form above.
+    [[nodiscard]] std::uint32_t KernelThreadId() noexcept;
+
+    // Names the CALLING thread (Linux: pthread_setname_np(self, n), 15 chars
+    // max; macOS: pthread_setname_np(n), which only names the caller).
+    void NameThisThread(const char* name) noexcept;
+
+    // pipe2(fds, flags) where it exists; pipe + fcntl on macOS (no pipe2).
+    // flags: O_CLOEXEC and/or O_NONBLOCK.
+    [[nodiscard]] bool MakePipe(int fds[2], int flags) noexcept;
+
     // ---- heap-free file IO (open/write/close; the CreateFileW twins) --------
     [[nodiscard]] int OpenForWrite(const char* path, bool append) noexcept;   // -1 on failure
     bool WriteAll(int fd, const void* data, std::size_t size) noexcept;
@@ -41,14 +70,25 @@ namespace Arcane::Diagnostics::Internal::Posix
     // getcontext's) uc_mcontext.fpregs points OUTSIDE the struct, so a plain
     // copy would dangle the moment that frame is gone. This copies the FP
     // state into the copy's own __fpregs_mem and re-points it there.
-    void CopyContext(ucontext_t& dst, const ucontext_t& src) noexcept;
+    void CopyContext(NativeContext& dst, const NativeContext& src) noexcept;
 
-    [[nodiscard]] std::uint64_t ContextPc(const ucontext_t& uc) noexcept;
-    [[nodiscard]] std::uint64_t ContextSp(const ucontext_t& uc) noexcept;
+    // From a SA_SIGINFO handler's third argument (a ucontext_t*).
+    void CopySignalContext(NativeContext& dst, const void* signalUcontext) noexcept;
+
+    // The CALLER's context, as getcontext() reports it on Linux. Darwin has
+    // no getcontext on arm64, so pc/fp/sp/lr of the calling frame are taken
+    // directly -- enough for the frame-chain walk, which is all a stored
+    // context is used for besides the minidump's register block.
+    [[nodiscard]] bool CaptureOwnContext(NativeContext& out) noexcept;
+
+    [[nodiscard]] std::uint64_t ContextPc(const NativeContext& uc) noexcept;
+    [[nodiscard]] std::uint64_t ContextSp(const NativeContext& uc) noexcept;
 
     // ---- other threads ------------------------------------------------------
     // The thread ids of this process, read from /proc/self/task with raw
-    // getdents64 (opendir allocates). Returns the count written (<= cap).
+    // getdents64 (opendir allocates); on macOS from task_threads (a Mach
+    // call that allocates with vm_allocate, never malloc). Returns the count
+    // written (<= cap).
     std::size_t ListThreads(std::uint32_t* out, std::size_t cap) noexcept;
 
     // The POSIX reading of SuspendThread + GetThreadContext. A real-time
@@ -58,11 +98,15 @@ namespace Arcane::Diagnostics::Internal::Posix
     // requester calls `whileParked` and releases it. The stack of a parked
     // thread does not move, which is what lets the minidump copy it.
     //
+    // macOS needs no signal: thread_suspend + thread_get_state IS
+    // SuspendThread + GetThreadContext, so the target is suspended (not
+    // parked in a handler) for `whileParked`, then resumed.
+    //
     // One thread is held at a time, never the caller. A thread that has the
     // signal blocked (some libraries block everything in their own workers)
     // is simply not captured: false after `timeoutMs`. Requests are
     // serialized by the caller (the crash thread is the only one).
-    using ParkedFn = void (*)(std::uint32_t tid, const ucontext_t& context, void* user);
+    using ParkedFn = void (*)(std::uint32_t tid, const NativeContext& context, void* user);
     bool SnapshotThread(std::uint32_t tid, std::uint32_t timeoutMs, ParkedFn whileParked, void* user) noexcept;
 
     // Installed at Install REGARDLESS of installCrashHandler: like the crash
@@ -82,7 +126,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     struct DumpThread
     {
         std::uint32_t     tid     = 0;
-        const ucontext_t* context = nullptr;
+        const NativeContext* context = nullptr;
     };
 
     struct DumpRequest
@@ -102,7 +146,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         // walked thread's context -- the Windows path's STILL_ACTIVE record,
         // and for the same reason: every dump opens on a stored event.
         std::uint32_t     exceptionTid     = 0;
-        const ucontext_t* exceptionContext = nullptr;
+        const NativeContext* exceptionContext = nullptr;
         std::uint32_t     exceptionCode    = 0;   // signal number, or kDumpRequested
         std::uint32_t     exceptionFlags   = 0;   // si_code
         std::uint64_t     exceptionAddress = 0;   // si_addr (or the pc)

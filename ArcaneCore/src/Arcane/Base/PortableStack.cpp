@@ -19,6 +19,10 @@
 #include <sys/uio.h>      // process_vm_readv: a read that FAILS instead of faulting
 #include <ucontext.h>
 #include <unistd.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>   // mach_vm_read_overwrite: a read that FAILS instead of faulting
+#include <signal.h>         // _STRUCT_MCONTEXT (the machine context a Darwin ucontext points at)
 #endif
 #endif
 
@@ -67,9 +71,15 @@ namespace Arcane::Diagnostics
         return CaptureStackFromContext(&ctx, out);
     }
 #else
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     // Linux (Diagnostics POSIX port, 2026-10-05): a FRAME-POINTER walk over a
     // ucontext_t -- the ELF reading of "walk a COPY of a foreign context".
+    // macOS (2026-10-07): the same walk over the Darwin machine context
+    // (_STRUCT_MCONTEXT -- a Darwin ucontext_t only POINTS at one, so the
+    // crash path stores the mcontext itself; PosixCrashSupport.hpp's
+    // NativeContext). The arm64 Darwin ABI mandates the frame record
+    // (x29/x30), so every Mac frame -- system libraries included -- keeps
+    // the chain.
     //
     // Why not .eh_frame: _Unwind_Backtrace only walks the CALLING thread from
     // where it stands, and the crash thread walks OTHER threads (the faulting
@@ -95,6 +105,15 @@ namespace Arcane::Diagnostics
         // trick: write() from an unmapped address is EFAULT too.
         bool SafeRead(std::uint64_t address, void* out, std::size_t size) noexcept
         {
+#if defined(__APPLE__)
+            // The Mach VM read of our OWN task: an unmapped or unreadable
+            // range is KERN_INVALID_ADDRESS / KERN_PROTECTION_FAILURE, never
+            // a signal. A plain Mach trap -- safe on the crash thread.
+            mach_vm_size_t got = 0;
+            return ::mach_vm_read_overwrite(::mach_task_self(), address, size,
+                                            reinterpret_cast<mach_vm_address_t>(out), &got) == KERN_SUCCESS
+                && got == size;
+#else
             iovec local{ out, size };
             iovec remote{ reinterpret_cast<void*>(address), size };
             const ssize_t n = ::syscall(SYS_process_vm_readv, ::getpid(), &local, 1ul, &remote, 1ul, 0ul);
@@ -111,6 +130,18 @@ namespace Arcane::Diagnostics
             ::close(fds[0]);
             ::close(fds[1]);
             return ok;
+#endif
+        }
+
+        // Apple arm64: return addresses taken from system code may carry
+        // pointer-authentication bits above the 47-bit user address space.
+        std::uint64_t StripPointer(std::uint64_t address) noexcept
+        {
+#if defined(__APPLE__) && defined(__aarch64__)
+            return address & 0x00007FFFFFFFFFFFull;
+#else
+            return address;
+#endif
         }
 
         // The walk proper, over three registers. A chain link is accepted only
@@ -136,6 +167,7 @@ namespace Arcane::Diagnostics
                 std::uint64_t link[2] = { 0, 0 };   // [saved fp, return address]
                 if (!SafeRead(fp, link, sizeof(link)) || link[1] == 0)
                     break;
+                link[1] = StripPointer(link[1]);
                 out[n].address = link[1];
                 out[n].module  = ModuleTable::Find(link[1]);
                 ++n;
@@ -152,6 +184,19 @@ namespace Arcane::Diagnostics
     {
         if (!nativeContext || out.empty())
             return 0;
+#if defined(__APPLE__)
+        const auto* mc = static_cast<const _STRUCT_MCONTEXT*>(nativeContext);
+#if defined(__aarch64__)
+        return WalkFrameChain(StripPointer(static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_pc(mc->__ss))),
+                              static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_sp(mc->__ss)),
+                              static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_fp(mc->__ss)), out);
+#elif defined(__x86_64__)
+        return WalkFrameChain(mc->__ss.__rip, mc->__ss.__rsp, mc->__ss.__rbp, out);
+#else
+        (void)mc;
+        return 0;
+#endif
+#else
         const auto* uc = static_cast<const ucontext_t*>(nativeContext);
 #if defined(__x86_64__)
         const auto& g = uc->uc_mcontext.gregs;
@@ -164,10 +209,10 @@ namespace Arcane::Diagnostics
         (void)uc;
         return 0;
 #endif
+#endif
     }
 #else
-    // Other POSIX targets: no foreign-context walk yet (macOS's mcontext is a
-    // different shape; it lands with that port).
+    // Other POSIX targets: no foreign-context walk yet.
     std::size_t CaptureStackFromContext(const void*, std::span<StackFrame>) noexcept { return 0; }
 #endif
 

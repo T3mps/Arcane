@@ -11,13 +11,66 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
-#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#if ARCANE_PLATFORM_MACOS
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#else
+#include <sys/syscall.h>
+#endif
 
 namespace Arcane::Diagnostics::Internal::Posix
 {
+    // ---- identity + pipes ---------------------------------------------------
+
+    std::uint32_t KernelThreadId() noexcept
+    {
+#if ARCANE_PLATFORM_MACOS
+        // The Mach port name: what task_threads lists and thread_suspend /
+        // thread_get_state take. pthread_mach_thread_np takes no new port
+        // reference (mach_thread_self would leak one per call).
+        return static_cast<std::uint32_t>(::pthread_mach_thread_np(::pthread_self()));
+#else
+        return static_cast<std::uint32_t>(::syscall(SYS_gettid));
+#endif
+    }
+
+    void NameThisThread(const char* name) noexcept
+    {
+#if ARCANE_PLATFORM_MACOS
+        ::pthread_setname_np(name);
+#else
+        ::pthread_setname_np(::pthread_self(), name);
+#endif
+    }
+
+    bool MakePipe(int fds[2], int flags) noexcept
+    {
+#if ARCANE_PLATFORM_MACOS
+        if (::pipe(fds) != 0) return false;
+        for (int i = 0; i < 2; ++i)
+        {
+            if ((flags & O_CLOEXEC) && ::fcntl(fds[i], F_SETFD, FD_CLOEXEC) != 0) goto fail;
+            if (flags & O_NONBLOCK)
+            {
+                const int fl = ::fcntl(fds[i], F_GETFL);
+                if (fl < 0 || ::fcntl(fds[i], F_SETFL, fl | O_NONBLOCK) != 0) goto fail;
+            }
+        }
+        return true;
+    fail:
+        ::close(fds[0]);
+        ::close(fds[1]);
+        fds[0] = fds[1] = -1;
+        return false;
+#else
+        return ::pipe2(fds, flags) == 0;
+#endif
+    }
+
     // ---- IO -----------------------------------------------------------------
 
     int OpenForWrite(const char* path, bool append) noexcept
@@ -76,6 +129,25 @@ namespace Arcane::Diagnostics::Internal::Posix
     std::size_t SafeRead(std::uint64_t address, void* out, std::size_t size) noexcept
     {
         if (size == 0) return 0;
+#if ARCANE_PLATFORM_MACOS
+        // A Mach VM read of our own task fails (KERN_INVALID_ADDRESS /
+        // KERN_PROTECTION_FAILURE) instead of faulting. Page by page, so a
+        // range that runs into unmapped memory still yields its prefix.
+        std::size_t done = 0;
+        while (done < size)
+        {
+            const std::uint64_t at   = address + done;
+            const std::size_t   room = static_cast<std::size_t>(4096 - (at & 4095));
+            const std::size_t   want = (size - done) < room ? (size - done) : room;
+            mach_vm_size_t got = 0;
+            if (::mach_vm_read_overwrite(::mach_task_self(), at, want,
+                                         reinterpret_cast<mach_vm_address_t>(static_cast<char*>(out) + done), &got) != KERN_SUCCESS
+                || got != want)
+                break;
+            done += want;
+        }
+        return done;
+#else
 #if defined(__linux__)
         iovec local{ out, size };
         iovec remote{ reinterpret_cast<void*>(address), size };
@@ -89,7 +161,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         // Page by page, so a range that runs into unmapped memory still yields
         // its readable prefix. A pipe holds at least 4 KiB.
         int fds[2];
-        if (::pipe2(fds, O_CLOEXEC) != 0) return 0;
+        if (!MakePipe(fds, O_CLOEXEC)) return 0;
         std::size_t done = 0;
         while (done < size)
         {
@@ -103,13 +175,14 @@ namespace Arcane::Diagnostics::Internal::Posix
         ::close(fds[0]);
         ::close(fds[1]);
         return done;
+#endif
     }
 
     // ---- contexts -----------------------------------------------------------
 
-    void CopyContext(ucontext_t& dst, const ucontext_t& src) noexcept
+    void CopyContext(NativeContext& dst, const NativeContext& src) noexcept
     {
-        std::memcpy(&dst, &src, sizeof(ucontext_t));
+        std::memcpy(&dst, &src, sizeof(NativeContext));
 #if defined(__linux__) && defined(__x86_64__)
         // The first 512 bytes of the kernel's XSAVE area (or getcontext's
         // fnstenv block) ARE the FXSAVE layout _libc_fpstate describes.
@@ -119,9 +192,54 @@ namespace Arcane::Diagnostics::Internal::Posix
 #endif
     }
 
-    std::uint64_t ContextPc(const ucontext_t& uc) noexcept
+    void CopySignalContext(NativeContext& dst, const void* signalUcontext) noexcept
     {
-#if defined(__linux__) && defined(__x86_64__)
+        if (!signalUcontext) return;
+#if ARCANE_PLATFORM_MACOS
+        const auto* uc = static_cast<const ucontext_t*>(signalUcontext);
+        if (uc->uc_mcontext)
+            std::memcpy(&dst, uc->uc_mcontext, sizeof(NativeContext));
+        else
+            std::memset(&dst, 0, sizeof(NativeContext));
+#else
+        CopyContext(dst, *static_cast<const ucontext_t*>(signalUcontext));
+#endif
+    }
+
+    // noinline: "the caller's frame" must be a real frame, not this one
+    // folded into it.
+    __attribute__((noinline)) bool CaptureOwnContext(NativeContext& out) noexcept
+    {
+#if ARCANE_PLATFORM_MACOS
+        std::memset(&out, 0, sizeof(NativeContext));
+        // This function's frame record: [0] = the caller's fp, [1] = our
+        // return address (a pc inside the caller). The caller's sp is just
+        // above our frame record.
+        const auto* frame = static_cast<const std::uint64_t*>(__builtin_frame_address(0));
+        const std::uint64_t pc = reinterpret_cast<std::uint64_t>(__builtin_return_address(0));
+#if defined(__aarch64__)
+        __darwin_arm_thread_state64_set_fp(out.__ss, reinterpret_cast<void*>(frame[0]));
+        __darwin_arm_thread_state64_set_lr_fptr(out.__ss, reinterpret_cast<void*>(pc));
+        __darwin_arm_thread_state64_set_pc_fptr(out.__ss, reinterpret_cast<void*>(pc));
+        __darwin_arm_thread_state64_set_sp(out.__ss, reinterpret_cast<std::uint64_t>(frame + 2));
+#elif defined(__x86_64__)
+        out.__ss.__rbp = frame[0];
+        out.__ss.__rip = pc;
+        out.__ss.__rsp = reinterpret_cast<std::uint64_t>(frame + 2);
+#endif
+        return true;
+#else
+        return ::getcontext(&out) == 0;
+#endif
+    }
+
+    std::uint64_t ContextPc(const NativeContext& uc) noexcept
+    {
+#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+        return reinterpret_cast<std::uint64_t>(__darwin_arm_thread_state64_get_pc_fptr(uc.__ss)) & 0x00007FFFFFFFFFFFull;
+#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+        return uc.__ss.__rip;
+#elif defined(__linux__) && defined(__x86_64__)
         return static_cast<std::uint64_t>(uc.uc_mcontext.gregs[REG_RIP]);
 #elif defined(__linux__) && defined(__aarch64__)
         return uc.uc_mcontext.pc;
@@ -130,9 +248,13 @@ namespace Arcane::Diagnostics::Internal::Posix
 #endif
     }
 
-    std::uint64_t ContextSp(const ucontext_t& uc) noexcept
+    std::uint64_t ContextSp(const NativeContext& uc) noexcept
     {
-#if defined(__linux__) && defined(__x86_64__)
+#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+        return static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_sp(uc.__ss));
+#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+        return uc.__ss.__rsp;
+#elif defined(__linux__) && defined(__x86_64__)
         return static_cast<std::uint64_t>(uc.uc_mcontext.gregs[REG_RSP]);
 #elif defined(__linux__) && defined(__aarch64__)
         return uc.uc_mcontext.sp;
@@ -145,7 +267,24 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     std::size_t ListThreads(std::uint32_t* out, std::size_t cap) noexcept
     {
-#if defined(__linux__)
+#if ARCANE_PLATFORM_MACOS
+        thread_act_array_t threads = nullptr;
+        mach_msg_type_number_t count = 0;
+        if (::task_threads(::mach_task_self(), &threads, &count) != KERN_SUCCESS || !threads)
+            return 0;
+        std::size_t n = 0;
+        for (mach_msg_type_number_t i = 0; i < count; ++i)
+        {
+            if (n < cap) out[n++] = static_cast<std::uint32_t>(threads[i]);
+            // task_threads added a send-right reference per thread; drop it.
+            // The NAME stays valid: libpthread holds its own reference for
+            // every live thread.
+            ::mach_port_deallocate(::mach_task_self(), threads[i]);
+        }
+        ::vm_deallocate(::mach_task_self(), reinterpret_cast<vm_address_t>(threads),
+                        static_cast<vm_size_t>(count * sizeof(thread_act_t)));
+        return n;
+#elif defined(__linux__)
         int fd;
         do { fd = ::open("/proc/self/task", O_RDONLY | O_DIRECTORY | O_CLOEXEC); } while (fd < 0 && errno == EINTR);
         if (fd < 0) return 0;
@@ -196,7 +335,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         std::atomic<std::uint64_t> g_snapCaptured{0};
         std::atomic<std::uint64_t> g_snapReleased{0};
         std::uint64_t              g_snapGeneration = 0;
-        ucontext_t                 g_snapContext{};
+        NativeContext              g_snapContext{};
 
         int              g_snapSignal = 0;
         bool             g_snapInstalled = false;
@@ -207,11 +346,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
         std::uint32_t RawTid() noexcept
         {
-#if defined(__linux__)
-            return static_cast<std::uint32_t>(::syscall(SYS_gettid));
-#else
-            return 0;
-#endif
+            return KernelThreadId();
         }
 
         void SleepMs(long ms) noexcept
@@ -227,7 +362,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             if (request != 0 && static_cast<std::uint32_t>(request) == RawTid() && ucv)
             {
                 const std::uint64_t generation = request >> 32;
-                CopyContext(g_snapContext, *static_cast<const ucontext_t*>(ucv));
+                CopySignalContext(g_snapContext, ucv);
                 g_snapCaptured.store(generation, std::memory_order_release);
 
                 // Parked: this thread's stack must not move until the
@@ -251,6 +386,11 @@ namespace Arcane::Diagnostics::Internal::Posix
     bool InstallSnapshotSignal() noexcept
     {
         if (g_snapInstalled) return true;
+#if ARCANE_PLATFORM_MACOS
+        // No signal on macOS: SnapshotThread suspends the target with Mach.
+        g_snapInstalled = true;
+        return true;
+#endif
         g_snapSignal = SIGRTMIN + 4;
         struct sigaction sa{};
         sa.sa_sigaction = &OnSnapshotSignal;
@@ -267,13 +407,47 @@ namespace Arcane::Diagnostics::Internal::Posix
     void RemoveSnapshotSignal() noexcept
     {
         if (!g_snapInstalled) return;
+#if ARCANE_PLATFORM_MACOS
+        g_snapInstalled = false;
+        return;
+#endif
         ::sigaction(g_snapSignal, &g_snapPrevious, nullptr);
         g_snapInstalled = false;
     }
 
     bool SnapshotThread(std::uint32_t tid, std::uint32_t timeoutMs, ParkedFn whileParked, void* user) noexcept
     {
-#if defined(__linux__)
+#if ARCANE_PLATFORM_MACOS
+        (void)timeoutMs;   // a Mach suspend is synchronous
+        if (!g_snapInstalled || tid == 0 || tid == RawTid()) return false;
+        const thread_act_t thread = static_cast<thread_act_t>(tid);
+        if (::thread_suspend(thread) != KERN_SUCCESS) return false;
+
+        std::memset(&g_snapContext, 0, sizeof(g_snapContext));
+#if defined(__aarch64__)
+        mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
+        bool captured = ::thread_get_state(thread, ARM_THREAD_STATE64,
+                                           reinterpret_cast<thread_state_t>(&g_snapContext.__ss), &n) == KERN_SUCCESS;
+        n = ARM_NEON_STATE64_COUNT;
+        (void)::thread_get_state(thread, ARM_NEON_STATE64, reinterpret_cast<thread_state_t>(&g_snapContext.__ns), &n);
+        n = ARM_EXCEPTION_STATE64_COUNT;
+        (void)::thread_get_state(thread, ARM_EXCEPTION_STATE64, reinterpret_cast<thread_state_t>(&g_snapContext.__es), &n);
+#elif defined(__x86_64__)
+        mach_msg_type_number_t n = x86_THREAD_STATE64_COUNT;
+        bool captured = ::thread_get_state(thread, x86_THREAD_STATE64,
+                                           reinterpret_cast<thread_state_t>(&g_snapContext.__ss), &n) == KERN_SUCCESS;
+        n = x86_FLOAT_STATE64_COUNT;
+        (void)::thread_get_state(thread, x86_FLOAT_STATE64, reinterpret_cast<thread_state_t>(&g_snapContext.__fs), &n);
+        n = x86_EXCEPTION_STATE64_COUNT;
+        (void)::thread_get_state(thread, x86_EXCEPTION_STATE64, reinterpret_cast<thread_state_t>(&g_snapContext.__es), &n);
+#else
+        bool captured = false;
+#endif
+        if (captured && whileParked)
+            whileParked(tid, g_snapContext, user);
+        ::thread_resume(thread);
+        return captured;
+#elif defined(__linux__)
         if (!g_snapInstalled || tid == 0 || tid == RawTid()) return false;
 
         const std::uint64_t generation = ++g_snapGeneration;

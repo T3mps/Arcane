@@ -34,10 +34,20 @@
 // them; written field by field at explicit offsets so no compiler padding
 // can leak in. x86-64 contexts only (the workspace's one architecture); on
 // another architecture threads carry no context.
+//
+// macOS (2026-10-07): the same container with Breakpad's Mac conventions --
+// MD_OS_MAC_OS_X, ARM64 (MS ARM64_NT_CONTEXT layout, Breakpad's
+// MD_CONTEXT_ARM64) or AMD64 thread contexts from the Mach thread state, the
+// module list read lock-free from dyld's own dyld_all_image_infos (what
+// Breakpad's Mac writer reads) with each image's LC_UUID as an RSDS CodeView
+// record (Breakpad's Mac debug-id), stacks bounded by mach_vm_region, and
+// the exception as a Mach exception type (EXC_BAD_ACCESS, ...) rather than a
+// signal. No /proc streams exist to copy.
 
 #include <Arcane/Base/Posix/PosixCrashSupport.hpp>
 
 #include <cerrno>
+#include <cstddef>
 #include <cstring>
 #include <ctime>
 
@@ -46,6 +56,14 @@
 #include <unistd.h>
 #if defined(__x86_64__)
 #include <cpuid.h>
+#endif
+#if ARCANE_PLATFORM_MACOS
+#include <Arcane/Platform/Process.hpp>   // MachImageExtent
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach-o/dyld_images.h>          // dyld_all_image_infos: the image list, lock-free
+#include <mach-o/loader.h>               // LC_UUID
+#include <sys/sysctl.h>
 #endif
 
 namespace Arcane::Diagnostics::Internal::Posix
@@ -68,9 +86,17 @@ namespace Arcane::Diagnostics::Internal::Posix
         constexpr std::uint32_t kLinuxMaps        = 0x47670009u;
 
         constexpr std::uint32_t kOsLinux        = 0x8201u;        // MD_OS_LINUX
+        constexpr std::uint32_t kOsMac          = 0x8101u;        // MD_OS_MAC_OS_X
         constexpr std::uint32_t kCvSignatureElf = 0x4270454cu;    // "BpEL"
+        constexpr std::uint32_t kCvSignaturePdb70 = 0x53445352u;  // "RSDS" (Breakpad Mac: LC_UUID as the GUID, age 0)
 
-        constexpr std::size_t kContextSize    = 1232;   // MDRawContextAMD64 / CONTEXT (x64)
+        constexpr std::size_t kContextSize    = 1232;   // MDRawContextAMD64 / CONTEXT (x64); the buffer size
+        constexpr std::size_t kContextArm64Size = 912;  // MDRawContextARM64 / ARM64_NT_CONTEXT
+#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+        constexpr std::size_t kContextBytes   = kContextArm64Size;
+#else
+        constexpr std::size_t kContextBytes   = kContextSize;
+#endif
         constexpr std::size_t kThreadSize     = 48;
         constexpr std::size_t kModuleSize     = 108;
         constexpr std::size_t kMemDescSize    = 16;
@@ -237,6 +263,22 @@ namespace Arcane::Diagnostics::Internal::Posix
         void FindMapping(std::uint64_t address, std::uint64_t& start, std::uint64_t& end) noexcept
         {
             start = end = 0;
+#if ARCANE_PLATFORM_MACOS
+            // mach_vm_region: the first region at or above `address`.
+            mach_vm_address_t       regionStart = address;
+            mach_vm_size_t          regionSize  = 0;
+            vm_region_basic_info_data_64_t info{};
+            mach_msg_type_number_t  count = VM_REGION_BASIC_INFO_COUNT_64;
+            mach_port_t             object = MACH_PORT_NULL;
+            if (::mach_vm_region(::mach_task_self(), &regionStart, &regionSize, VM_REGION_BASIC_INFO_64,
+                                 reinterpret_cast<vm_region_info_t>(&info), &count, &object) == KERN_SUCCESS
+                && address >= regionStart && address < regionStart + regionSize)
+            {
+                start = regionStart;
+                end   = regionStart + regionSize;
+            }
+            return;
+#endif
             std::size_t at = 0;
             MapLine m;
             while (NextMapLine(at, m))
@@ -246,10 +288,38 @@ namespace Arcane::Diagnostics::Internal::Posix
         }
 
         // ---- contexts ------------------------------------------------------
-        void BuildContext(const ucontext_t& uc, unsigned char (&b)[kContextSize]) noexcept
+        void BuildContext(const NativeContext& uc, unsigned char (&b)[kContextSize]) noexcept
         {
             std::memset(b, 0, sizeof(b));
-#if defined(__linux__) && defined(__x86_64__)
+#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+            // ARM64_NT_CONTEXT: flags, cpsr, x0..x28, fp, lr, sp, pc, v0..v31,
+            // fpcr, fpsr (debug registers left zero).
+            Put32(b, 0, 0x00400007u);   // ARM64 | CONTROL | INTEGER | FLOATING_POINT
+            Put32(b, 4, uc.__ss.__cpsr);
+            for (int i = 0; i < 29; ++i)
+                Put64(b, 8 + static_cast<std::size_t>(i) * 8, uc.__ss.__x[i]);
+            Put64(b, 240, static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_fp(uc.__ss)));
+            Put64(b, 248, reinterpret_cast<std::uint64_t>(__darwin_arm_thread_state64_get_lr_fptr(uc.__ss)) & 0x00007FFFFFFFFFFFull);
+            Put64(b, 256, static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_sp(uc.__ss)));
+            Put64(b, 264, ContextPc(uc));
+            std::memcpy(b + 272, &uc.__ns.__v, 512);
+            Put32(b, 784, uc.__ns.__fpcr);
+            Put32(b, 788, uc.__ns.__fpsr);
+#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+            Put32(b, 48, 0x0010000Fu);   // AMD64 | CONTROL | INTEGER | SEGMENTS | FLOATING_POINT
+            const auto& t = uc.__ss;
+            Put16(b, 56, static_cast<std::uint16_t>(t.__cs));
+            Put16(b, 62, static_cast<std::uint16_t>(t.__fs));
+            Put16(b, 64, static_cast<std::uint16_t>(t.__gs));
+            Put32(b, 68, static_cast<std::uint32_t>(t.__rflags));
+            const std::uint64_t regs[16] = { t.__rax, t.__rcx, t.__rdx, t.__rbx, t.__rsp, t.__rbp, t.__rsi, t.__rdi,
+                                             t.__r8, t.__r9, t.__r10, t.__r11, t.__r12, t.__r13, t.__r14, t.__r15 };
+            for (int i = 0; i < 16; ++i)
+                Put64(b, 120 + static_cast<std::size_t>(i) * 8, regs[i]);
+            Put64(b, 248, t.__rip);
+            Put32(b, 52, uc.__fs.__fpu_mxcsr);
+            std::memcpy(b + 256, &uc.__fs.__fpu_fcw, 512);   // the FXSAVE image starts at __fpu_fcw
+#elif defined(__linux__) && defined(__x86_64__)
             const auto& g = uc.uc_mcontext.gregs;
             const bool  haveFp = uc.uc_mcontext.fpregs != nullptr;
             Put32(b, 48, 0x0010000Fu);   // AMD64 | CONTROL | INTEGER | SEGMENTS | FLOATING_POINT
@@ -272,14 +342,14 @@ namespace Arcane::Diagnostics::Internal::Posix
 #endif
         }
 
-        Location AppendContext(const ucontext_t* uc) noexcept
+        Location AppendContext(const NativeContext* uc) noexcept
         {
-#if defined(__linux__) && defined(__x86_64__)
+#if (defined(__linux__) && defined(__x86_64__)) || (ARCANE_PLATFORM_MACOS && (defined(__x86_64__) || defined(__aarch64__)))
             if (!uc) return {};
             static unsigned char s_ctx[kContextSize];
             BuildContext(*uc, s_ctx);
             AlignTo(16);
-            return { static_cast<std::uint32_t>(kContextSize), Append(s_ctx, kContextSize) };
+            return { static_cast<std::uint32_t>(kContextBytes), Append(s_ctx, kContextBytes) };
 #else
             (void)uc;
             return {};
@@ -306,7 +376,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             return loc;
         }
 
-        void AddThread(std::uint32_t tid, const ucontext_t& uc) noexcept
+        void AddThread(std::uint32_t tid, const NativeContext& uc) noexcept
         {
             if (g_threadCount >= kMaxThreads) return;
             ThreadRec& t = g_threads[g_threadCount];
@@ -330,7 +400,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             ++g_threadCount;
         }
 
-        void OnParkedThread(std::uint32_t tid, const ucontext_t& uc, void*) noexcept
+        void OnParkedThread(std::uint32_t tid, const NativeContext& uc, void*) noexcept
         {
             AddThread(tid, uc);   // the thread is parked: its stack holds still for the copy
         }
@@ -348,6 +418,39 @@ namespace Arcane::Diagnostics::Internal::Posix
         void CollectModules() noexcept
         {
             g_moduleCount = 0;
+#if ARCANE_PLATFORM_MACOS
+            // dyld's own record of every loaded image, read through checked
+            // reads and without dyld's lock (dyld clears infoArray while it
+            // edits it: a null array is "no modules", never a stale one).
+            task_dyld_info_data_t dyldInfo{};
+            mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+            if (::task_info(::mach_task_self(), TASK_DYLD_INFO, reinterpret_cast<task_info_t>(&dyldInfo), &count) != KERN_SUCCESS)
+                return;
+            dyld_all_image_infos all{};
+            if (SafeRead(dyldInfo.all_image_info_addr, &all, sizeof(all)) < offsetof(dyld_all_image_infos, notification)
+                || !all.infoArray)
+                return;
+            static char s_paths[kMaxModules][512];
+            for (std::uint32_t i = 0; i < all.infoArrayCount && g_moduleCount < kMaxModules; ++i)
+            {
+                dyld_image_info image{};
+                if (SafeRead(reinterpret_cast<std::uint64_t>(all.infoArray + i), &image, sizeof(image)) != sizeof(image)
+                    || !image.imageLoadAddress)
+                    continue;
+                char* path = s_paths[g_moduleCount];
+                const std::size_t got = image.imageFilePath
+                    ? SafeRead(reinterpret_cast<std::uint64_t>(image.imageFilePath), path, sizeof(s_paths[0]) - 1) : 0;
+                path[got] = '\0';
+                std::size_t len = 0;
+                while (len < got && path[len] != '\0') ++len;
+                path[len] = '\0';
+                const Arcane::Platform::ImageExtent extent = Arcane::Platform::MachImageExtentAt(image.imageLoadAddress);
+                if (extent.size == 0)
+                    continue;
+                g_modules[g_moduleCount++] = { extent.base, extent.base + extent.size, path, len };
+            }
+            return;
+#endif
             std::size_t at = 0;
             MapLine m;
             while (NextMapLine(at, m))
@@ -444,6 +547,28 @@ namespace Arcane::Diagnostics::Internal::Posix
                 s_path[len] = '\0';
                 Put32(row, 20, AppendString(s_path));
 
+#if ARCANE_PLATFORM_MACOS
+                // RSDS: signature, the LC_UUID as the GUID, age 0, then the
+                // file name -- Breakpad's Mac debug identifier.
+                unsigned char uuid[16];
+                if (Arcane::Platform::MachImageUuid(reinterpret_cast<const void*>(m.base), uuid))
+                {
+                    unsigned char cv[4 + 16 + 4 + 256] = {};
+                    std::memcpy(cv, &kCvSignaturePdb70, 4);
+                    std::memcpy(cv + 4, uuid, 16);
+                    const char* leaf = s_path;
+                    for (const char* c = s_path; *c; ++c) if (*c == '/') leaf = c + 1;
+                    std::size_t leafLen = std::strlen(leaf);
+                    if (leafLen > 255) leafLen = 255;
+                    std::memcpy(cv + 24, leaf, leafLen);
+                    AlignTo(4);
+                    const std::uint32_t cvSize = static_cast<std::uint32_t>(24 + leafLen + 1);
+                    const std::uint32_t rva = Append(cv, cvSize);
+                    Put32(row, 76, cvSize);
+                    Put32(row, 80, rva);
+                }
+                continue;
+#endif
                 unsigned char cv[4 + 64];
                 const std::size_t idLen = ReadBuildId(m.base, cv + 4, 64);
                 if (idLen != 0)
@@ -509,7 +634,11 @@ namespace Arcane::Diagnostics::Internal::Posix
             Put32(b, 8, g_sys.major);
             Put32(b, 12, g_sys.minor);
             Put32(b, 16, g_sys.build);
+#if ARCANE_PLATFORM_MACOS
+            Put32(b, 20, kOsMac);
+#else
             Put32(b, 20, kOsLinux);
+#endif
             Put32(b, 24, csdRva);
             Put32(b, 32, g_sys.vendor[0]);
             Put32(b, 36, g_sys.vendor[1]);
@@ -566,6 +695,24 @@ namespace Arcane::Diagnostics::Internal::Posix
         const long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
         g_sys.cpus = static_cast<std::uint8_t>(cpus > 255 ? 255 : (cpus < 1 ? 1 : cpus));
 
+#if ARCANE_PLATFORM_MACOS
+        // Breakpad's Mac SystemInfo: the PRODUCT version (15.6.1) in
+        // major/minor/build, the OS build string ("24G90") as the CSD.
+        {
+            char product[64] = {};
+            std::size_t len = sizeof(product) - 1;
+            if (::sysctlbyname("kern.osproductversion", product, &len, nullptr, 0) == 0)
+            {
+                const char* p = product;
+                g_sys.major = ParseUInt(p); if (*p == '.') ++p;
+                g_sys.minor = ParseUInt(p); if (*p == '.') ++p;
+                g_sys.build = ParseUInt(p);
+            }
+            len = sizeof(g_sys.csd) - 1;
+            if (::sysctlbyname("kern.osversion", g_sys.csd, &len, nullptr, 0) != 0)
+                g_sys.csd[0] = '\0';
+        }
+#else
         utsname u{};
         if (::uname(&u) == 0)
         {
@@ -583,6 +730,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             AppendText(g_sys.csd, sizeof(g_sys.csd), used, " ");
             AppendText(g_sys.csd, sizeof(g_sys.csd), used, u.machine);
         }
+#endif
     }
 
     bool WriteMinidump(const DumpRequest& r) noexcept
@@ -597,7 +745,11 @@ namespace Arcane::Diagnostics::Internal::Posix
         unsigned char header[32] = {};
         Append(header, sizeof(header));
 
+#if ARCANE_PLATFORM_MACOS
+        g_mapsLen = 0;   // no /proc: FindMapping asks mach_vm_region instead
+#else
         g_mapsLen = ReadFileInto("/proc/self/maps", g_maps, sizeof(g_maps));
+#endif
 
         // Threads: the ones the report already holds first (their stacks are
         // parked in the crash path's own waits), then every other thread,
@@ -647,8 +799,33 @@ namespace Arcane::Diagnostics::Internal::Posix
             const Location ctx = AppendContext(r.exceptionContext);
             unsigned char ex[kExceptionSize] = {};
             Put32(ex, 0, r.exceptionTid);
+#if ARCANE_PLATFORM_MACOS
+            // A Mac minidump names a MACH exception (Breakpad's
+            // MD_EXCEPTION_MAC_*): the signal the BSD layer delivered is
+            // mapped back to the exception type it came from; the signal
+            // itself rides in ExceptionInformation[0] for a reader that
+            // wants it. A requested dump is MD_EXCEPTION_MAC_SIMULATED.
+            std::uint32_t machCode = 0x43507378u;   // MD_EXCEPTION_MAC_SIMULATED ("CPsx")
+            switch (r.exceptionCode)
+            {
+                case SIGSEGV: case SIGBUS: machCode = 1; break;   // EXC_BAD_ACCESS
+                case SIGILL:               machCode = 2; break;   // EXC_BAD_INSTRUCTION
+                case SIGFPE:               machCode = 3; break;   // EXC_ARITHMETIC
+                case SIGTRAP:              machCode = 6; break;   // EXC_BREAKPOINT
+                case SIGABRT:              machCode = 5; break;   // EXC_SOFTWARE (an abort is EXC_CRASH's SIGABRT; Breakpad files it here)
+                default: break;
+            }
+            Put32(ex, 8, machCode);
+            Put32(ex, 12, r.exceptionFlags);
+            if (r.exceptionCode != kDumpRequested)
+            {
+                Put32(ex, 32, 1);                    // NumberParameters
+                Put64(ex, 40, r.exceptionCode);      // ExceptionInformation[0]: the signal
+            }
+#else
             Put32(ex, 8, r.exceptionCode);
             Put32(ex, 12, r.exceptionFlags);
+#endif
             Put64(ex, 24, r.exceptionAddress);
             Put32(ex, 160, ctx.size);
             Put32(ex, 164, ctx.rva);
@@ -658,12 +835,14 @@ namespace Arcane::Diagnostics::Internal::Posix
 
         AddStream(kSystemInfoStream, WriteSystemInfo());
 
+#if !ARCANE_PLATFORM_MACOS
         // The maps text was edited in place by the parser; re-read it whole.
         AddFileStream(kLinuxMaps,       "/proc/self/maps");
         AddFileStream(kLinuxProcStatus, "/proc/self/status");
         AddFileStream(kLinuxCmdLine,    "/proc/self/cmdline");
         AddFileStream(kLinuxAuxv,       "/proc/self/auxv");
         AddFileStream(kLinuxLsbRelease, "/etc/lsb-release");
+#endif
 
         // Directory, then the header that points at it.
         AlignTo(4);

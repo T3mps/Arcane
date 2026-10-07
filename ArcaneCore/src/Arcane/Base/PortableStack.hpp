@@ -41,13 +41,15 @@ namespace Arcane::Diagnostics
     // Spec S5.2 step 2. Walks `nativeContext` -- a `const CONTEXT*` on
     // Windows, via RtlLookupFunctionEntry + RtlVirtualUnwind over a COPY of
     // it (unwinding mutates the context in place); a `const ucontext_t*` on
-    // Linux, via its frame-pointer chain -- resolving each frame against
+    // Linux and a `const _STRUCT_MCONTEXT*` (the Darwin machine context) on
+    // macOS, via the frame-pointer chain -- resolving each frame against
     // ModuleTable::Find. A walk that itself faults (a corrupted frame, a
     // stack that ran off the end) stops there and returns the frames already
     // written, never propagates the fault (Windows: its own SEH guard;
-    // Linux: every read is a checked process_vm_readv). Returns 0 for a null
-    // `nativeContext` or an empty `out`, and on every platform but those two.
-    ARCANE_CORE_API std::size_t CaptureStackFromContext(const void* nativeContext /*CONTEXT* | ucontext_t**/, std::span<StackFrame> out) noexcept;
+    // Linux: every read is a checked process_vm_readv; macOS: a checked
+    // mach_vm_read_overwrite). Returns 0 for a null `nativeContext` or an
+    // empty `out`, and on every other platform.
+    ARCANE_CORE_API std::size_t CaptureStackFromContext(const void* nativeContext /*CONTEXT* | ucontext_t* | macOS _STRUCT_MCONTEXT**/, std::span<StackFrame> out) noexcept;
 
     // RtlCaptureContext for the calling thread, then CaptureStackFromContext
     // over it -- the resulting first frame is this function's own caller.

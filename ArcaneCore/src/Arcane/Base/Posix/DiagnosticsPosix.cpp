@@ -69,10 +69,12 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
-#include <ucontext.h>
 #include <unistd.h>
+#if ARCANE_PLATFORM_MACOS
+#include <Arcane/Platform/Process.hpp>   // QueryProcess: the host's start stamp
+#include <sys/sysctl.h>                  // KERN_PROC: P_TRACED, the debugger check
+#endif
 
 extern char** environ;
 
@@ -95,7 +97,7 @@ namespace
         int           signo   = 0;
         int           code    = 0;
         std::uint64_t address = 0;
-        ucontext_t    context{};
+        NativeContext context{};
     };
 
     // The one request in flight. Written by the submitter under
@@ -108,7 +110,7 @@ namespace
         int           sigCode;
         std::uint64_t faultAddress;
         bool          haveContext;     // the fault's ucontext, or the submitter's getcontext
-        ucontext_t    context;
+        NativeContext context;
         std::uint32_t contextTid;      // whose context that is
         std::uint32_t walkTid;
         bool          lightweight;
@@ -140,14 +142,14 @@ namespace
     char g_commandLineSnap[4096]{};
     char g_phaseSnap[256]{};
     char g_reporterExe[kPathMax]{};
-    char g_hostStartSnap[32]{};        // /proc/self/stat starttime: --host-created (pid-recycling guard)
+    char g_hostStartSnap[32]{};        // /proc/self/stat starttime (macOS: proc_pidinfo's): --host-created (pid-recycling guard)
     long g_utcOffsetSeconds = 0;       // local time, without localtime_r on the crash path
 
     Guid g_guidSeed{};
 
     // Crash-thread scratch that must not live on its stack.
     StackFrame    g_frames[kMaxFrames]{};
-    ucontext_t    g_walkedContext{};
+    NativeContext g_walkedContext{};
     bool          g_walkedContextValid = false;
     std::size_t   g_walkedFrameCount   = 0;
 
@@ -161,7 +163,7 @@ namespace
 
     std::uint32_t Tid() noexcept
     {
-        return static_cast<std::uint32_t>(::syscall(SYS_gettid));
+        return KernelThreadId();
     }
 
     std::uint64_t MonotonicMs() noexcept
@@ -307,7 +309,7 @@ namespace
 
     // ---- the walked thread ----------------------------------------------------
 
-    void OnWalkedThreadParked(std::uint32_t, const ucontext_t& uc, void*) noexcept
+    void OnWalkedThreadParked(std::uint32_t, const NativeContext& uc, void*) noexcept
     {
         // Walk WHILE it is parked: its frame chain holds still.
         CopyContext(g_walkedContext, uc);
@@ -685,7 +687,7 @@ namespace
     void* CrashThreadProc(void*)
     {
         BlockAsyncSignalsOnThisThread();
-        ::pthread_setname_np(::pthread_self(), "Arcane-CrashRep");
+        NameThisThread("Arcane-CrashRep");
         g_crashThreadId.store(Tid(), std::memory_order_release);
 
         static Pending s_local;   // ~2 KiB: never on this thread's stack
@@ -718,8 +720,8 @@ namespace
 
     bool StartCrashThread() noexcept
     {
-        if (::pipe2(g_wakePipe, O_CLOEXEC) != 0) return false;
-        if (::pipe2(g_donePipe, O_CLOEXEC | O_NONBLOCK) != 0)
+        if (!MakePipe(g_wakePipe, O_CLOEXEC)) return false;
+        if (!MakePipe(g_donePipe, O_CLOEXEC | O_NONBLOCK))
         {
             ::close(g_wakePipe[0]); ::close(g_wakePipe[1]);
             g_wakePipe[0] = g_wakePipe[1] = -1;
@@ -776,7 +778,7 @@ namespace
         fault.signo   = signo;
         fault.code    = info ? info->si_code : 0;
         fault.address = info ? reinterpret_cast<std::uint64_t>(info->si_addr) : 0;
-        if (ucv) CopyContext(fault.context, *static_cast<const ucontext_t*>(ucv));
+        if (ucv) CopySignalContext(fault.context, ucv);
 
         char reason[96];
         Text t{ reason, sizeof(reason) };
@@ -922,7 +924,7 @@ namespace
     void* ConsoleThreadProc(void*)
     {
         BlockAsyncSignalsOnThisThread();
-        ::pthread_setname_np(::pthread_self(), "Arcane-Console");
+        NameThisThread("Arcane-Console");
         for (;;)
         {
             char byte = 0;
@@ -956,7 +958,7 @@ namespace
     void InstallConsoleHandlers() noexcept
     {
         if (g_consoleInstalled) return;
-        if (::pipe2(g_consolePipe, O_CLOEXEC) != 0) return;
+        if (!MakePipe(g_consolePipe, O_CLOEXEC)) return;
         if (::pthread_create(&g_consoleThread, nullptr, &ConsoleThreadProc, nullptr) != 0)
         {
             ::close(g_consolePipe[0]); ::close(g_consolePipe[1]);
@@ -1051,9 +1053,16 @@ namespace
     // time does on Windows (D7).
     void SnapshotHostStart() noexcept
     {
-        char stat[1024];
         g_hostStartSnap[0] = '0';
         g_hostStartSnap[1] = '\0';
+#if ARCANE_PLATFORM_MACOS
+        // proc_pidinfo's start time (microseconds since the epoch) -- the
+        // same per-OS stamp Arcane::Platform::QueryProcess reports.
+        std::snprintf(g_hostStartSnap, sizeof(g_hostStartSnap), "%llu",
+                      static_cast<unsigned long long>(Platform::QueryProcess(static_cast<std::uint32_t>(::getpid())).start));
+        return;
+#endif
+        char stat[1024];
         if (ReadFileInto("/proc/self/stat", stat, sizeof(stat)) == 0) return;
         const char* p = std::strrchr(stat, ')');   // the comm field may hold spaces
         if (!p) return;
@@ -1169,12 +1178,20 @@ void StopWatchdog() noexcept
 void OnWatchdogThreadStart() noexcept
 {
     BlockAsyncSignalsOnThisThread();
-    ::pthread_setname_np(::pthread_self(), "Arcane-Watchdog");
+    NameThisThread("Arcane-Watchdog");
 }
 
 bool DebuggerAttached() noexcept
 {
     // IsDebuggerPresent's POSIX reading: a ptrace tracer (gdb, lldb, rr).
+#if ARCANE_PLATFORM_MACOS
+    // Apple's documented check (QA1361): P_TRACED in the kinfo_proc.
+    kinfo_proc info{};
+    std::size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, ::getpid() };
+    if (::sysctl(mib, 4, &info, &size, nullptr, 0) != 0) return false;
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+#endif
     char status[4096];
     if (ReadFileInto("/proc/self/status", status, sizeof(status)) == 0) return false;
     const char* p = std::strstr(status, "TracerPid:");
@@ -1363,7 +1380,7 @@ void SubmitReport(const ReportRequest& request) noexcept
         // Captured HERE, in the frame that is about to park in the wait
         // below, so its frame chain stays intact for the crash thread's walk
         // (the Windows half suspends this thread for the same picture).
-        p.haveContext = ::getcontext(&p.context) == 0;
+        p.haveContext = CaptureOwnContext(p.context);
     }
 
     const std::uint64_t seq = g_submitSeq.load(std::memory_order_relaxed) + 1;
