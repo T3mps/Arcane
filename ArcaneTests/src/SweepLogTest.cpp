@@ -113,6 +113,7 @@ TEST_CASE("sweep: the log rows carry the frozen inventory's audience, scope and 
     for (const Row& row : rows)
     {
         INFO("cvar " << row.name);
+        if (!Test::InThisBuild(row.name)) { CHECK(row.dev); continue; }   // Dist: a Dev row is compiled out
         const auto e = CVarRegistry::Get().Explain(row.name);
         REQUIRE(e.has_value());
         CHECK(e->audience == row.audience);
@@ -126,6 +127,7 @@ TEST_CASE("sweep: the log rows carry the frozen inventory's audience, scope and 
 TEST_CASE("sweep: log rotation keeps log.file.keepCount files", "[sweep][log]")
 {
     namespace fs = std::filesystem;
+    Test::SkipIfCompiledOut("log.file.keepCount");
     ClearCodeRungs restore{ { "log.file.keepCount" } };
     const fs::path dir = FreshDir("arcane-sweep-log-rotate");
     const fs::path file = dir / "t.log";
@@ -161,6 +163,7 @@ TEST_CASE("sweep: log rotation keeps log.file.keepCount files", "[sweep][log]")
 
 TEST_CASE("sweep: log.file.flushLevel sets the engine logger's flush level, live", "[sweep][log]")
 {
+    Test::SkipIfCompiledOut("log.file.flushLevel");
     ClearCodeRungs restore{ { "log.file.flushLevel" } };
     const std::filesystem::path dir = FreshDir("arcane-sweep-log-flush");
     Log::Init();
@@ -182,6 +185,7 @@ TEST_CASE("sweep: log.file.flushLevel sets the engine logger's flush level, live
 
 TEST_CASE("sweep: log.dir reaches Diagnostics::Config through ConfigFromSettings", "[sweep][log]")
 {
+    Test::SkipIfCompiledOut("log.dir");
     ClearCodeRungs restore{ { "log.dir" } };
     CHECK(Diagnostics::ConfigFromSettings(DiagnosticsSettings{}).logDir.empty());
     SetCode("log.dir", CVarValue::String("D:/logs-here"));
@@ -202,7 +206,9 @@ TEST_CASE("sweep: the server Logger reads log.server.* at Init and follows the L
     SetCode("log.server.consoleLevel", CVarValue::Int32(4));
     SetCode("log.server.fileLevel", CVarValue::Int32(1));
     SetCode("log.server.flushLevel", CVarValue::Int32(0));
-    SetCode("log.server.filePattern", CVarValue::String("SWEEP|%l|%v"));
+    // log.server.filePattern is Dev: compiled out of Dist, where the default pattern writes the line.
+    const bool patternRow = Test::InThisBuild("log.server.filePattern");
+    if (patternRow) SetCode("log.server.filePattern", CVarValue::String("SWEEP|%l|%v"));
     CVarRegistry::Get().PublishImmediate();
 
     Logger::Init(Level::Info, Level::Trace, "");     // explicit arguments still win
@@ -219,7 +225,7 @@ TEST_CASE("sweep: the server Logger reads log.server.* at Init and follows the L
     CHECK(probe->flush_level() == spdlog::level::trace);
     probe->info("hello sweep");
     probe->flush();
-    CHECK(ReadAll(file).find("SWEEP|info|hello sweep") != std::string::npos);
+    CHECK(ReadAll(file).find(patternRow ? "SWEEP|info|hello sweep" : "[SweepProbe] [info] hello sweep") != std::string::npos);
 
     // Live: a publish re-applies the levels to the running logger.
     SetCode("log.server.consoleLevel", CVarValue::Int32(1));

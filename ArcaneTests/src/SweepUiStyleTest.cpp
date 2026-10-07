@@ -177,12 +177,14 @@ TEST_CASE("sweep: the density sizes are the setting at the UI scale and font siz
         CHECK(Editor::TableRowHeight() == 36.0f);
         CHECK(Editor::AssetRowThumbSize() == 27.0f);
     }
+    // editor.ui.assetRowThumbPx is a Dev row: compiled out of Dist, where the default stands.
+    const bool thumbRow = Test::InThisBuild("editor.ui.assetRowThumbPx");
     SetUi("editor.ui.tableRowHeight", CVarValue::Float32(30.0f));
-    SetUi("editor.ui.assetRowThumbPx", CVarValue::Float32(22.0f));
+    if (thumbRow) SetUi("editor.ui.assetRowThumbPx", CVarValue::Float32(22.0f));
     SetUi("editor.ui.propertyDragSpeed", CVarValue::Float32(0.5f));
     const Editor::Ui::ScopedMetrics at1(Editor::Ui::Metrics{});
     CHECK(Editor::TableRowHeight() == 30.0f);
-    CHECK(Editor::AssetRowThumbSize() == 22.0f);
+    CHECK(Editor::AssetRowThumbSize() == (thumbRow ? 22.0f : 18.0f));
     CHECK(Editor::PropertyDragSpeed() == 0.5f);
 }
 

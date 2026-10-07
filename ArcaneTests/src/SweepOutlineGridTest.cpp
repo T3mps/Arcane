@@ -39,6 +39,9 @@ TEST_CASE("sweep: the 2D grid crossfade window is editor.viewport.grid.fadeInPx 
     CHECK(std::abs(atDefault.levels[0].spacingMetres - 0.1f) < 1e-6f);
     CHECK(atDefault.levels[0].alpha > 0.0f);
     CHECK(atDefault.levels[0].alpha < Editor::PlanGrid2D(5.0f).levels[0].alpha);   // below the saturated minor
+    // The overrides below need the two Dev rows, compiled out of Dist (each proven absent: `&`, not `&&`).
+    if (!(Test::InThisBuild("editor.viewport.grid.fadeInPx") & Test::InThisBuild("editor.viewport.grid.fadeFullPx")))
+        return;
     {
         // Fade-in raised to 12 px: the 0.1 m level drops out, the 1 m level leads.
         const Test::ScopedCodeRung fadeIn("editor.viewport.grid.fadeInPx", CVarValue::Float32(12.0f));

@@ -5,6 +5,7 @@
 // so nothing is written).
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
+#include "Helpers/SettingsSweep.hpp"
 #include "App/DialogSlot.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Documents/EditorDocument.hpp"
@@ -80,6 +81,8 @@ TEST_CASE("SettingsWindowFocused follows the settings windows' focus, so the sce
 
 TEST_CASE("editor.settings.openAtBoot / openCategory open a window at boot and select a category", "[settings-ui]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openAtBoot");
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openCategory");
     CVarRegistry& reg = CVarRegistry::Get();
     REQUIRE(reg.Set(reg.Find("editor.settings.openAtBoot"), CVarValue::String("project"), SetBy::Console) == SetResult::Applied);
     REQUIRE(reg.Set(reg.Find("editor.settings.openCategory"), CVarValue::String("Engine"), SetBy::Console) == SetResult::Applied);
@@ -98,6 +101,7 @@ TEST_CASE("editor.settings.openAtBoot / openCategory open a window at boot and s
 
 TEST_CASE("ApplySettingsPathPick: a Browse dialog's result lands on the cvar as an undoable edit; empty or unknown picks are ignored", "[settings-ui]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openCategory");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
     const std::string before = reg.Get(h)->AsString();
@@ -152,6 +156,7 @@ namespace
 TEST_CASE("BrowseSettingsPath: OS picker PathPickedThunk lands on DialogInbox::settingsPath and the frame consume path edits the cvar",
           "[settings-ui]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openCategory");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
     const std::string before = reg.Get(h)->AsString();
@@ -190,6 +195,7 @@ TEST_CASE("BrowseSettingsPath: OS picker PathPickedThunk lands on DialogInbox::s
 TEST_CASE("SwitchProject: SettingsHostOnProjectSwitch flushes only on Accepted, including later StageTableMismatch refusals",
           "[settings-ui]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openCategory");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
     const std::string before = reg.Get(h)->AsString();
@@ -245,6 +251,7 @@ TEST_CASE("SwitchProject: SettingsHostOnProjectSwitch flushes only on Accepted, 
 TEST_CASE("HandleUndoRedoAndSceneShortcuts: a focused settings window owns Ctrl+Z/Y via DispatchSceneUndoKeys",
           "[settings-ui]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.settings.openCategory");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.settings.openCategory");
     const std::string before = reg.Get(h)->AsString();

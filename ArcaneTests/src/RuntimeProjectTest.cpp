@@ -12,6 +12,7 @@
 #include <Json.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -315,8 +316,9 @@ TEST_CASE("Runtime user cvar archive: a project switch writes the OLD project's 
         Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::UserSettable, "test cvar", "t3d2-runtime-test" });
     REQUIRE_FALSE(legend.IsStale());
     REQUIRE_FALSE(plain.IsStale());
-    const fs::path fileA = dir / "A" / "Saved" / "Config" / "t3d2test.json";
-    const fs::path fileB = dir / "B" / "Saved" / "Config" / "t3d2test.json";
+    // The User rung's folders: <project>/Saved/Config in dev, the per-user dir in Dist.
+    const fs::path fileA = Arcane::Test::FreshUserConfigDir(dir / "A") / "t3d2test.json";
+    const fs::path fileB = Arcane::Test::FreshUserConfigDir(dir / "B") / "t3d2test.json";
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.SetUserCVarArchiving(true);
@@ -468,6 +470,7 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     const fs::path dir = MakeTempDir("editor_user");
     REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
     const fs::path machine = dir / "machine" / "Config";
+    const fs::path userA = Arcane::Test::FreshUserConfigDir(dir / "A");   // the User rung: Saved/Config in dev
     WriteFile(machine / "s2eu.json", R"({ "theme": 5 })");
     WriteFile(dir / "A" / "Config" / "s2eu.json", R"({ "theme": 3, "undo": 30 })");
     const auto readJson = [](const fs::path& p) {
@@ -525,7 +528,7 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     cvars.Publish();
     CHECK(cvars.Get(theme)->AsInt32() == 9);
     REQUIRE(rt.SaveUserCVars());
-    CHECK(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").at("theme") == 9);   // the override is the project's...
+    CHECK(readJson(userA / "s2eu.json").at("theme") == 9);                             // the override is the project's...
     CHECK(readJson(machine / "s2eu.json").at("theme") == 6);                           // ...not the machine's
 
     REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::AllProjects) == Arcane::SetResult::Applied);
@@ -533,7 +536,7 @@ TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a 
     cvars.Publish();
     REQUIRE(rt.SaveUserCVars());
     CHECK(readJson(machine / "s2eu.json").at("theme") == 7);
-    CHECK_FALSE(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").contains("theme"));
+    CHECK_FALSE(readJson(userA / "s2eu.json").contains("theme"));
 
     rt.CloseProject();
     CHECK(cvars.Get(theme)->AsInt32() == 7);                    // machine-wide: survives the project
@@ -598,9 +601,9 @@ TEST_CASE("Runtime: a second Runtime's project neither layers over nor releases 
     REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
     REQUIRE(Arcane::Project::Create(dir / "Q", "Queue").has_value());
     WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
-    WriteFile(dir / "P" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 7 })");
+    WriteFile(Arcane::Test::FreshUserConfigDir(dir / "P") / "s2hown.json", R"({ "pref": 7 })");
     WriteFile(dir / "Q" / "Config" / "s2hown.json", R"({ "knob": 9 })");
-    WriteFile(dir / "Q" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 8 })");
+    WriteFile(Arcane::Test::FreshUserConfigDir(dir / "Q") / "s2hown.json", R"({ "pref": 8 })");
     const OwnershipProbe probe;
     REQUIRE_FALSE(probe.knob.IsStale());
     REQUIRE_FALSE(probe.pref.IsStale());
@@ -649,6 +652,7 @@ TEST_CASE("Runtime: a Runtime destroyed with its project open releases the proje
     const fs::path dir = MakeTempDir("s2h_dtor");
     REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
     WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
+    const fs::path userP = Arcane::Test::FreshUserConfigDir(dir / "P");
     const OwnershipProbe probe;
     REQUIRE_FALSE(probe.knob.IsStale());
     Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
@@ -667,7 +671,7 @@ TEST_CASE("Runtime: a Runtime destroyed with its project open releases the proje
     CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.pref") == 0);
     CHECK(Arcane::Paths::Get(Arcane::Paths::Location::ProjectDir).empty());
     {
-        std::ifstream in(dir / "P" / "Saved" / "Config" / "s2hown.json", std::ios::binary);
+        std::ifstream in(userP / "s2hown.json", std::ios::binary);
         const auto doc = nlohmann::json::parse(in, nullptr, false);
         REQUIRE(doc.is_object());
         CHECK(doc.value("pref", 0) == 3);                            // archived on the way out

@@ -65,7 +65,8 @@ TEST_CASE("sweep: the remaining inspector fields register with their pre-sweep d
     (void)describe("editor.inspector.assetThumbHeightFraction");
     (void)describe("editor.inspector.historyDepth");
     (void)describe("editor.outliner.slowClickMaxSeconds");
-    CHECK(describe("editor.inspector.maxInstances").apply == ApplyMode::Restart);
+    if (Test::InThisBuild("editor.inspector.maxInstances"))   // Dev: compiled out of Dist
+        CHECK(describe("editor.inspector.maxInstances").apply == ApplyMode::Restart);
     CHECK(describe("editor.inspector.dragSpeed").apply == ApplyMode::Live);
     const CVarDescInfo thumbMin = describe("editor.inspector.assetThumbMinPx");
     REQUIRE(thumbMin.min.has_value());
@@ -112,6 +113,8 @@ TEST_CASE("sweep: a published editor.inspector.historyDepth caps the history rin
         bool Resolves(std::string_view) const override { return true; }
     };
 
+    // The case pins the Restart latch of the Dev row editor.inspector.maxInstances beside the Live depth.
+    Test::SkipIfCompiledOut("editor.inspector.maxInstances");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle depth = reg.Find("editor.inspector.historyDepth");
     const CVarHandle maxInst = reg.Find("editor.inspector.maxInstances");

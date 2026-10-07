@@ -10,6 +10,8 @@
 #include "Widgets/EditorTheme.hpp"
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Settings.hpp>
+#include <Arcane/Platform/Paths.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -139,6 +141,8 @@ TEST_CASE("Theme page: a swatch edit and a preset reach the debounced archive qu
     // S4-17 carried gap: theme edits were persisted only at exit, so a crash
     // lost them. The archive folder is redirected so the flush never touches
     // the real per-user Editor/Config.
+    if (Arcane::kDistBuild)
+        SKIP("Dist has no EditorUserDir (spec s11.0); the no-folder case below covers it");
     const std::filesystem::path local = std::filesystem::temp_directory_path() / "s4-theme-archive";
     std::filesystem::remove_all(local);
     std::filesystem::create_directories(local);
@@ -172,4 +176,49 @@ TEST_CASE("Theme page: a swatch edit and a preset reach the debounced archive qu
     FlushSettingsArchives();   // the reverted keys leave the scratch archive
     _wputenv_s(L"LOCALAPPDATA", had ? saved.c_str() : L"");
     std::filesystem::remove_all(local);
+}
+
+// S7-DIST: Dist has no EditorUserDir (spec s11.0), so the EditorUser rung has
+// no folder. A flush keeps the edit for the session; it never writes a
+// relative "Config" into the working directory. Simulated in any build by a
+// preset Paths dist.
+TEST_CASE("Theme page: with no per-user editor folder, a flush writes nothing relative to the working directory",
+          "[theme][settings-ui]")
+{
+    const Arcane::Paths::Config saved = Arcane::Paths::Current();
+    const std::filesystem::path cwd = std::filesystem::current_path();
+    struct Restore
+    {
+        Arcane::Paths::Config config;
+        std::filesystem::path cwd;
+        ~Restore()
+        {
+            std::error_code ec;
+            std::filesystem::current_path(cwd, ec);
+            Arcane::Paths::Configure(config);
+        }
+    } restore{ saved, cwd };
+    Arcane::Paths::Config preset = saved;
+    preset.dist = true;
+    Arcane::Paths::Configure(preset);
+    REQUIRE(Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir).empty());
+
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path() / "s7dist-theme-cwd";
+    std::filesystem::remove_all(scratch);
+    std::filesystem::create_directories(scratch);
+    std::filesystem::current_path(scratch);
+    FlushSettingsArchives();   // whatever an earlier test left queued
+    REQUIRE_FALSE(SettingsHostArchivePending());
+
+    REQUIRE(SetThemeToken("error", ImVec4(0.0f, 1.0f, 0.0f, 1.0f)));
+    CHECK(SettingsHostArchivePending());
+    FlushSettingsArchives();
+    CHECK_FALSE(SettingsHostArchivePending());   // kept for this session, not retried forever
+    CHECK_FALSE(std::filesystem::exists(scratch / "Config"));
+
+    RevertEditorUser();
+    FlushSettingsArchives();
+    CHECK_FALSE(std::filesystem::exists(scratch / "Config"));
+    std::filesystem::current_path(cwd);
+    std::filesystem::remove_all(scratch);
 }

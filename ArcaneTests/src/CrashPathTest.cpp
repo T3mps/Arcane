@@ -12,6 +12,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include "Helpers/HostWitness.hpp"
 
@@ -356,8 +357,18 @@ TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs,
         INFO("symbolized:\n" << text);
         CHECK(text.find("engine      : dbgeng") != std::string::npos);
         CHECK(text.find("(faulting)") != std::string::npos);
-        CHECK(text.find("!main") != std::string::npos);            // death-fixture.pdb resolved
-        CHECK(text.find("DeathFixtureMain.cpp") != std::string::npos);
+        if (Arcane::kDistBuild)
+        {
+            // Dist links with symbols "off" (premake5.lua): no death-fixture.pdb
+            // exists, so even the fixture's own folder yields the image form.
+            CHECK(text.find("!main") == std::string::npos);
+            CHECK(text.find("death-fixture.exe+0x") != std::string::npos);
+        }
+        else
+        {
+            CHECK(text.find("!main") != std::string::npos);            // death-fixture.pdb resolved
+            CHECK(text.find("DeathFixtureMain.cpp") != std::string::npos);
+        }
     }
     std::filesystem::remove(sibling);
     {

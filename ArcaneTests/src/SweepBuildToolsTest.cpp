@@ -14,6 +14,7 @@ TEST_CASE("sweep: an explicit build.premakePath wins over discovery; empty disco
 {
     const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(BuildToolSettings{}.premakePath.empty());
+    Test::SkipIfCompiledOut("build.premakePath");
     Test::RequireDefault("build.premakePath", CVarValue::String(""));
     const auto fake = std::filesystem::temp_directory_path() / "fake-premake5.exe";
     std::ofstream(fake) << "x";
@@ -37,16 +38,25 @@ TEST_CASE("sweep: build.msbuildPath/makePath/ninjaPath/ideExecutable win over di
     Test::RequireDefault("build.ninjaPath", CVarValue::String(""));
     Test::RequireDefault("build.ideExecutable", CVarValue::String(""));
 
+    // build.msbuildPath is not Dev, so Dist keeps it; the other three are
+    // compiled out there (each proven absent: `&`, not `&&`).
+    const bool devRows = Test::InThisBuild("build.makePath") & Test::InThisBuild("build.ninjaPath")
+                       & Test::InThisBuild("build.ideExecutable");
+
     const auto fake = std::filesystem::temp_directory_path() / "fake-build-tool.exe";
     std::ofstream(fake) << "x";
     CVarRegistry& reg = CVarRegistry::Get();
     for (const char* name : { "build.msbuildPath", "build.makePath", "build.ninjaPath", "build.ideExecutable" })
-        reg.Set(reg.Find(name), CVarValue::String(fake.string()), SetBy::Code);
+        if (devRows || std::string_view(name) == "build.msbuildPath")
+            reg.Set(reg.Find(name), CVarValue::String(fake.string()), SetBy::Code);
     reg.PublishImmediate();
     CHECK(std::filesystem::equivalent(Toolchain::ResolveMsBuild(), fake));
-    CHECK(std::filesystem::equivalent(Toolchain::ResolveMake(), fake));
-    CHECK(std::filesystem::equivalent(Toolchain::ResolveNinja(), fake));
-    CHECK(std::filesystem::equivalent(Toolchain::ResolveDevenv(), fake));
+    if (devRows)
+    {
+        CHECK(std::filesystem::equivalent(Toolchain::ResolveMake(), fake));
+        CHECK(std::filesystem::equivalent(Toolchain::ResolveNinja(), fake));
+        CHECK(std::filesystem::equivalent(Toolchain::ResolveDevenv(), fake));
+    }
     reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
     std::filesystem::remove(fake);
 }
@@ -57,6 +67,7 @@ TEST_CASE("sweep: a changed build.ideExecutable is what the next IDE launch reso
     // S6-15 carried gap: the editor cached its devenv answer for the whole
     // session, so a changed setting reached "Open Visual Studio" only on the
     // next launch. Both values are real files, so no vswhere is spawned.
+    Test::SkipIfCompiledOut("build.ideExecutable");
     const auto first  = std::filesystem::temp_directory_path() / "fake-devenv-a.exe";
     const auto second = std::filesystem::temp_directory_path() / "fake-devenv-b.exe";
     std::ofstream(first) << "x";
@@ -107,7 +118,9 @@ TEST_CASE("sweep: arcbuild carries repeatable --set to the CommandLine rung", "[
     CHECK(req.cvarSets == std::vector<std::string>{ "build.ninjaPath=C:/tools/ninja.exe", "build.makePath=C:/tools/make.exe" });
 
     // What arcbuild's Application does with them: the Editor context reaches
-    // the Editor-audience build.* cvars.
+    // the Editor-audience build.* cvars (Dev, so not in a Dist build).
+    Test::SkipIfCompiledOut("build.ninjaPath");
+    Test::SkipIfCompiledOut("build.makePath");
     CVarRegistry& reg = CVarRegistry::Get();
     ApplyCVarCommandLine(reg, req.cvarSets, CVarContext::Editor);
     reg.PublishImmediate();

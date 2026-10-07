@@ -74,8 +74,11 @@ namespace Arcane::Editor
             switch (rung)
             {
             case SetBy::Project:    return project ? Paths::Get(Location::ProjectConfig) : std::filesystem::path{};
-            case SetBy::User:       return project ? Paths::Get(Location::GameUserDir) / "Config" : std::filesystem::path{};
-            case SetBy::EditorUser: return Paths::Get(Location::EditorUserDir) / "Config";
+            // Join, never `Get(...) / "Config"`: an empty base (Dist has no
+            // EditorUserDir; no LOCALAPPDATA) stays empty, not a relative
+            // "Config" in the working directory (S7-DIST).
+            case SetBy::User:       return project ? Paths::Join(Location::GameUserDir, Paths::Current(), "Config") : std::filesystem::path{};
+            case SetBy::EditorUser: return Paths::Join(Location::EditorUserDir, Paths::Current(), "Config");
             default:                return {};
             }
         }
@@ -87,7 +90,7 @@ namespace Arcane::Editor
             const std::filesystem::path dir = RungDir(rung);
             if (dir.empty())
             {
-                ARC_WARN("settings: no folder for the {} rung (no project open) -- {} edit(s) kept for this session only",
+                ARC_WARN("settings: no folder for the {} rung (no project open, or none in this build) -- {} edit(s) kept for this session only",
                          RungLabel(rung), names.size());
                 return true;
             }

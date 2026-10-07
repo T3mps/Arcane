@@ -29,6 +29,7 @@ namespace
     void CheckMeta(const char* name, Audience audience, SettingScope scope, ApplyMode apply, bool dev)
     {
         INFO("cvar " << name);
+        if (!Test::InThisBuild(name)) { CHECK(dev); return; }   // Dist: a Dev row is compiled out
         const auto e = CVarRegistry::Get().Explain(name);
         REQUIRE(e.has_value());
         CHECK(e->audience == audience);
@@ -158,6 +159,7 @@ TEST_CASE("sweep: SpritePixelsPerUnitRange is assets.sprite.defaultPixelsPerUnit
 
 TEST_CASE("sweep: assets.material.maxParentDepth bounds the parent-chain walk live", "[sweep][assets]")
 {
+    Test::SkipIfCompiledOut("assets.material.maxParentDepth");
     const fs::path dir = FreshDir("arc_sweep_matdepth");
     const auto base = WriteFile(dir, "base.arcmat",
         R"({"id":"7e5a0006-0001-4001-8001-000000000001","kind":"sprite","name":"B","params":{},"snippet":"","type":"material"})");

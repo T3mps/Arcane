@@ -16,6 +16,7 @@
 #include <Panels/DiagnosticStore.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -243,7 +244,7 @@ TEST_CASE("Project::Open mounts diag:// and registers an existing .arcdiag by it
     auto created = Arcane::Project::Create(dir, "DiagMountPresent");
     REQUIRE(created.has_value());
 
-    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);   // Dist: the per-user <game>/Diagnostics
     std::filesystem::create_directories(diagDir);
 
     Arcane::Diag::Envelope env;
@@ -266,6 +267,7 @@ TEST_CASE("Project::Open mounts diag:// and registers an existing .arcdiag by it
     CHECK(std::filesystem::exists(*resolved));
 
     std::error_code ec;
+    std::filesystem::remove_all(diagDir, ec);   // Dist: it sits outside the project
     std::filesystem::remove_all(dir, ec);
 }
 
@@ -279,7 +281,7 @@ TEST_CASE("Project::Open with no Saved/Diagnostics mounts nothing and does not f
     auto proj = Arcane::Project::Create(dir, "DiagMountAbsent");
     REQUIRE(proj.has_value());   // Create()'s own Open() must still succeed
 
-    CHECK_FALSE(std::filesystem::is_directory(dir / "Saved" / "Diagnostics"));
+    CHECK_FALSE(std::filesystem::is_directory(Arcane::Test::DiagnosticsDirFor(dir)));
     CHECK_FALSE(proj->Mounts().HasMount("diag"));
 
     std::error_code ec;

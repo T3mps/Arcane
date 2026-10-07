@@ -8,11 +8,14 @@
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- the mountDiagnostics case needs a REAL .arcdiag
 
 #include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include <Json.hpp>
 
 #include <filesystem>
 #include <fstream>
+
+#include "Helpers/UserDataDirs.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,6 +29,18 @@
 
 namespace
 {
+    // The editor lock lives in <project>/Saved, which a Dist build does not
+    // have (spec s11.0); Dist ships no editor. There the lock has no file, so
+    // a project never reads as held, and the case stops.
+    void SkipEditorLockInDist(const std::filesystem::path& projectRoot)
+    {
+        if (!Arcane::kDistBuild) return;
+        CHECK(Arcane::EditorLock::FileFor(projectRoot).empty());
+        CHECK_FALSE(Arcane::EditorLock::ReadLive(projectRoot).has_value());
+        CHECK_FALSE(Arcane::EditorLock::RivalPid(projectRoot).has_value());
+        SKIP("Dist has no <project>/Saved, so no editor lock");
+    }
+
     // A unique temp dir for a test, cleaned before use. (Date/random are unavailable
     // in some sandboxes; a fixed per-test name + remove_all is deterministic.)
     std::filesystem::path TempDir(const char* leaf)
@@ -446,6 +461,7 @@ TEST_CASE("EditorLock JSON round-trips and rejects malformed shapes", "[project]
 TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "[project]")
 {
     const auto dir = TempDir("editor_lock");
+    SkipEditorLockInDist(dir);
 
     // No lock file -> not running.
     CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
@@ -475,6 +491,7 @@ TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "
 TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "[project]")
 {
     const auto dir = TempDir("editor_lock_rival");
+    SkipEditorLockInDist(dir);
 
     // No lock -> no rival.
     CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
@@ -509,6 +526,7 @@ TEST_CASE("EditorLock: a lock held by an exited process is stale, even while a h
     // This spawns exactly that shape: a child that exits immediately, whose
     // handle this test keeps open across the assertions.
     const auto dir = TempDir("editor_lock_zombie");
+    SkipEditorLockInDist(dir);
 
     wchar_t cmdline[] = L"cmd.exe /c exit 0";   // CreateProcessW may write to this buffer
     STARTUPINFOW si{};
@@ -568,8 +586,9 @@ TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
 
     // A REAL report on disk, exactly as Diagnostics::WriteReportImpl leaves one.
     // An empty Saved/Diagnostics would mount but register nothing, and so could
-    // not distinguish the two halves of the branch at all.
-    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    // not distinguish the two halves of the branch at all. Dist keeps it in the
+    // per-user <game>/Diagnostics instead (spec s11.0).
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
     std::filesystem::create_directories(diagDir);
     Arcane::Diag::Envelope env;
     env.guid = Arcane::Guid::Generate();
@@ -595,4 +614,46 @@ TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
     // The opt-out is SCOPED to diag:// -- game:// must be unaffected, or the
     // fix has broken asset resolution rather than narrowed it.
     CHECK(without->Mounts().HasMount("game"));
+    std::error_code ec;
+    std::filesystem::remove_all(diagDir, ec);   // Dist: it sits outside the project
+}
+
+// S7-DIST: Open resolves diag:// with the OPENED project's identity. In Dist,
+// DiagnosticsDir is <per-user>/<Company>/<Game>/Diagnostics, and a Runtime
+// opens the project before it configures Paths for it, so Paths::Current()
+// still names the previous project (or none). Simulated in any build: a
+// preset Paths dist naming another game, and a scratch per-user base.
+TEST_CASE("Project::Open mounts diag:// from the opened project's own per-user folder when Paths resolves the Dist way", "[project][paths]")
+{
+    const Arcane::Paths::Config saved = Arcane::Paths::Current();
+    struct RestorePaths
+    {
+        Arcane::Paths::Config config;
+        ~RestorePaths() { Arcane::Paths::Configure(config); }
+    } restore{ saved };
+    const auto base = TempDir("open_diag_dist_base");
+    const Arcane::Test::ScopedUserDataBase userData(base);
+    Arcane::Paths::Config previous = saved;
+    previous.dist = true;
+    previous.projectDir.reset();
+    previous.companyName = "Elsewhere";
+    previous.gameName = "PreviousGame";
+    Arcane::Paths::Configure(previous);
+
+    const auto dir = TempDir("open_diag_dist");
+    WriteFile(dir / "DistDiag.arcproj",
+              R"({ "formatVersion": 2, "name": "DistDiag", "company": "Starworks QA", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
+    REQUIRE(diagDir.lexically_normal() == (base / "Starworks QA" / "DistDiag" / "Diagnostics").lexically_normal());
+    std::filesystem::create_directories(diagDir);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    auto opened = Arcane::Project::Open(dir);
+    REQUIRE(opened.has_value());
+    CHECK(opened->Mounts().HasMount("diag"));
+    CHECK(opened->Registry().Resolve(env.guid).has_value());
 }

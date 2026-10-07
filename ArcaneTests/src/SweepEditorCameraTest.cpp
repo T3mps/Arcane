@@ -73,10 +73,11 @@ TEST_CASE("sweep: every editor.camera.* default is the declared literal", "[swee
 
     // The Dev rows (inventory "Editor Dev") and the fresh-camera pose (NextWorld).
     const auto flagsOf = [](std::string_view n) { return CVarRegistry::Get().Describe(n)->flags; };
-    CHECK(HasFlag(flagsOf("editor.camera.orthoMinHalfHeight"), CVarFlags::Dev));
-    CHECK(HasFlag(flagsOf("editor.camera.default3DYaw"), CVarFlags::Dev));
+    for (const std::string_view n : { "editor.camera.orthoMinHalfHeight", "editor.camera.default3DYaw" })
+        if (Test::InThisBuild(n)) CHECK(HasFlag(flagsOf(n), CVarFlags::Dev));   // Dist: compiled out
     CHECK_FALSE(HasFlag(flagsOf("editor.camera.wheelZoomStep"), CVarFlags::Dev));
-    CHECK(CVarRegistry::Get().Describe("editor.camera.default3DPitch")->apply == ApplyMode::NextWorld);
+    if (Test::InThisBuild("editor.camera.default3DPitch"))
+        CHECK(CVarRegistry::Get().Describe("editor.camera.default3DPitch")->apply == ApplyMode::NextWorld);
     CHECK(CVarRegistry::Get().Describe("editor.camera.nearClip")->apply == ApplyMode::Live);
 }
 
@@ -89,6 +90,9 @@ TEST_CASE("sweep: the fresh-camera pose follows editor.camera.default*", "[sweep
     CHECK(cam.ortho.halfHeight == 5.0f); CHECK(cam.orbit.yawDeg == -30.0f);
     CHECK(cam.orbit.pitchDeg == 30.0f);  CHECK(cam.orbit.distance == 10.0f);
 
+    for (const std::string_view n : { "editor.camera.default2DHalfHeight", "editor.camera.default3DYaw",
+                                      "editor.camera.default3DPitch", "editor.camera.default3DDistance" })
+        Test::SkipIfCompiledOut(n);
     reg.Set(reg.Find("editor.camera.default2DHalfHeight"), CVarValue::Float32(8.0f), SetBy::Code);
     reg.Set(reg.Find("editor.camera.default3DYaw"), CVarValue::Float32(45.0f), SetBy::Code);
     reg.Set(reg.Find("editor.camera.default3DPitch"), CVarValue::Float32(15.0f), SetBy::Code);
@@ -115,13 +119,20 @@ TEST_CASE("sweep: clip planes, sensitivities, boost and the distance scale follo
     { return ViewTransform::Perspective(cam.Eye(), cam.orbit.pivot, glm::vec3(0, 1, 0), cam.orbit.fovYDeg, vp, nearZ, farZ).projection; };
     CHECK(cam.Resolve(vp).projection == projWith(0.05f, 5000.0f));
 
+    // The distance scale and the wheel step are Dev rows: compiled out of
+    // Dist (each proven absent: `&`, not `&&`), so only the rest are set there.
+    const bool devRows = Test::InThisBuild("editor.camera.distanceScaledSpeed")
+                       & Test::InThisBuild("editor.camera.speedWheelStep");
     set("editor.camera.nearClip", CVarValue::Float32(0.5f));
     set("editor.camera.farClip", CVarValue::Float32(200.0f));
     set("editor.camera.lookSensitivity", CVarValue::Float32(1.0f));
     set("editor.camera.orbitSensitivity", CVarValue::Float32(0.5f));
     set("editor.camera.boostMultiplier", CVarValue::Float32(4.0f));
-    set("editor.camera.distanceScaledSpeed", CVarValue::Bool(false));
-    set("editor.camera.speedWheelStep", CVarValue::Float32(2.0f));
+    if (devRows)
+    {
+        set("editor.camera.distanceScaledSpeed", CVarValue::Bool(false));
+        set("editor.camera.speedWheelStep", CVarValue::Float32(2.0f));
+    }
     reg.PublishImmediate();
 
     CHECK(cam.Resolve(vp).projection == projWith(0.5f, 200.0f));
@@ -130,6 +141,7 @@ TEST_CASE("sweep: clip planes, sensitivities, boost and the distance scale follo
     CHECK(cam.orbit.yawDeg == -5.0f);
     cam.orbit.yawDeg = 0.0f; cam.Look({ 10.0f, 0.0f });
     CHECK(cam.orbit.yawDeg == -10.0f);
+    if (!devRows) return;
 
     // Distance scaling off: 5 m/s x 4 boost regardless of a 100 m pivot.
     cam.orbit.distance = 100.0f; cam.speedScalar = 1.0f;

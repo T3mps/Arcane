@@ -18,6 +18,7 @@
 
 #include "Helpers/CVarTestDesc.hpp"
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 #include "../plugins/HotReloadShared.hpp"
 
 #include <spdlog/sinks/callback_sink.h>
@@ -91,6 +92,8 @@ namespace
         std::error_code ec;
         fs::remove_all(dir, ec);
         REQUIRE(Arcane::Project::Create(dir / "P", "LifetimeProbe").has_value());
+        // Every "LifetimeProbe" shares one User folder in Dist: start each case from an empty one.
+        (void)Arcane::Test::FreshUserConfigDir(dir / "P");
         return dir;
     }
 }
@@ -176,7 +179,7 @@ TEST_CASE("an unload flushes the module's unsaved User values to the archive fir
     reg.Publish();
 
     host.Unload();
-    const fs::path file = dir / "P" / "Saved" / "Config" / "hotreload.json";
+    const fs::path file = Arcane::Test::UserConfigDir(dir / "P") / "hotreload.json";
     REQUIRE(fs::exists(file));
     std::ifstream in(file, std::ios::binary);
     CHECK(nlohmann::json::parse(in).at("step") == 7);

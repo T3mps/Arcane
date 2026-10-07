@@ -68,6 +68,7 @@ TEST_CASE("sweep: host rows carry the inventory metadata", "[sweep][host]")
                          Row{ "console.maxLineChars", ApplyMode::Restart } })
     {
         INFO(r.name);
+        if (!Test::InThisBuild(r.name)) continue;   // Dev: compiled out of Dist
         const auto e = reg.Explain(r.name);
         REQUIRE(e);
         CHECK(e->audience == Audience::Game);
@@ -94,6 +95,7 @@ TEST_CASE("sweep: ShouldReportScanProgress is the one throttle for both hosts", 
 
 TEST_CASE("sweep: boot.scanProgressStride reaches the throttle live", "[sweep][host]")
 {
+    Arcane::Test::SkipIfCompiledOut("boot.scanProgressStride");
     const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("boot.scanProgressStride"), CVarValue::UInt32(10u), SetBy::Code);

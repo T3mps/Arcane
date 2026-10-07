@@ -35,6 +35,7 @@ TEST_CASE("sweep: physics debug defaults are the pre-sweep literals", "[sweep][p
 
 TEST_CASE("sweep: MakePhysicsDebugDrawOptions carries the published values", "[sweep][physics-debug]")
 {
+    Test::SkipIfCompiledOut("debug.physics.draw.aabbs");
     const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("debug.physics.draw.aabbs"), CVarValue::Bool(true), SetBy::Code);
@@ -77,6 +78,7 @@ TEST_CASE("sweep: debug.physics.* descriptors are Game Dev, per-project preferen
                               "debug.physics.style.axisHalfLenPx" })
     {
         INFO(name);
+        if (!Test::InThisBuild(name)) continue;   // Dev: compiled out of Dist
         const auto d = reg.Explain(name);
         REQUIRE(d);
         CHECK(d->audience == Audience::Game);
@@ -154,6 +156,7 @@ TEST_CASE("sweep: the narrowphase overlay draws with the published debug.physics
     REQUIRE(before.radii.size() == 3);
     CHECK(Test::SameBits(before.radii.back(), 4.0f));   // the default anchorDiscRadius
 
+    Test::SkipIfCompiledOut("debug.physics.style.anchorDiscRadius");
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("debug.physics.style.anchorDiscRadius"), CVarValue::Float32(9.0f), SetBy::Code);
     reg.PublishImmediate();

@@ -27,6 +27,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 namespace
 {
@@ -392,7 +393,7 @@ TEST_CASE("project_open forwards BootContext::openOptions to Runtime::OpenProjec
         << static_cast<int>(Arcane::kGamePluginABIVersion) << "}}";
 
     // Pre-existing crash history, exactly what the defect enumerated.
-    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);   // Dist: the per-user <game>/Diagnostics
     std::error_code ec;
     std::filesystem::create_directories(diagDir, ec);
     Arcane::Diag::Envelope env;
@@ -441,4 +442,5 @@ TEST_CASE("project_open forwards BootContext::openOptions to Runtime::OpenProjec
         CHECK_FALSE(off.first);
         CHECK_FALSE(off.second);
     }
+    std::filesystem::remove_all(diagDir, ec);   // Dist: it sits outside the project
 }

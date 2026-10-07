@@ -4,6 +4,7 @@
 #include <catch2/catch_session.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
@@ -14,6 +15,10 @@
 ARC_AGILITY_SDK_EXPORTS();
 
 int main(int argc, char* argv[]) {
+    // A Dist build resolves game user data under the OS per-user dir (settings
+    // S7). Point it at a private folder under TEMP before anything resolves a
+    // path -- the pin below included -- so no case writes the real profile.
+    const Arcane::Test::PrivateUserDataRoot userData;
     // Install the shared context in the TEST module BEFORE any test computes a
     // component TypeID, so engine/plugin/test agree (TypeID caches per-module).
     Astra::SetTypeContext(&Arcane::Test::SharedTypeContext());

@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/ConstantScan.hpp"
+#include "Helpers/SettingsSweep.hpp"
 #include <Arcane/Config/CVarRegistry.hpp>
 #include "Input/EditorActionTable.hpp"   // kEditorActionTable: the editor.keys.* members
 #include <fstream>
@@ -13,14 +14,16 @@ TEST_CASE("sweep coverage: every frozen SETTING name is a registered cvar", "[sw
     std::ifstream in(RepoRoot() / "scripts" / "settings-frozen-names.txt");
     REQUIRE(in.good());
     std::string name, missing;
-    std::size_t n = 0;
+    std::size_t n = 0, compiledOut = 0;
     while (std::getline(in, name))
     {
         if (name.empty() || name[0] == '#') continue;
         ++n;
-        if (CVarRegistry::Get().Find(name).IsStale()) missing += "  " + name + "\n";
+        if (!CVarRegistry::Get().Find(name).IsStale()) continue;
+        if (CompiledOutOfThisBuild(name)) ++compiledOut;   // Dist: a Dev name, refused at registration
+        else missing += "  " + name + "\n";
     }
-    INFO(n << " frozen names; not registered in the test process:\n" << missing);
+    INFO(n << " frozen names (" << compiledOut << " Dev, compiled out of this build); not registered in the test process:\n" << missing);
     CHECK(missing.empty());
 }
 TEST_CASE("sweep coverage: the allow-list holds no PENDING or UNLISTED entry", "[sweep][coverage]")

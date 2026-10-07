@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
+#include "Helpers/SettingsSweep.hpp"
 #include "Documents/SpriteDocument.hpp"
 #include "Scene/UndoGate.hpp"
 #include "Settings/DocumentSettings.hpp"   // editor.sprite.* (the PPU row bounds)
@@ -559,6 +560,7 @@ TEST_CASE("SpriteDocument page: editor.sprite.ppuMax caps a Pixels Per Meter dra
 
     SECTION("a non-default ppuMax (200) caps a rightward drag from 100")
     {
+        if (!Arcane::Test::InThisBuild("editor.sprite.ppuMax")) return;   // Dev: compiled out of Dist
         const SpriteCodeOverride cap("editor.sprite.ppuMax", Arcane::CVarValue::Float32(200.0f));
         REQUIRE(Arcane::Settings<Arcane::Editor::SpriteDocSettings>().ppuMax == 200.0f);
         UndoFixture fx;

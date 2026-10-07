@@ -73,6 +73,7 @@ TEST_CASE("sweep: net.rateLimit.maxAttempts is Live -- ConfigFromSettings follow
 
 TEST_CASE("sweep: ProtocolLoader::Load() reads net.protocolPath; absent caps fall back to net.*", "[sweep][net]")
 {
+    Test::SkipIfCompiledOut("net.protocolPath");
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "arcane_sweep_net_protocol.json";
     {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);

@@ -111,9 +111,8 @@ TEST_CASE("sweep: every editor.graph.* default is the declared literal", "[sweep
     };
     CHECK(HasFlag(flagsOf("editor.graph.wireThickness"), CVarFlags::Archive));
     CHECK_FALSE(HasFlag(flagsOf("editor.graph.wireThickness"), CVarFlags::Dev));
-    CHECK(HasFlag(flagsOf("editor.graph.pinSegments"), CVarFlags::Dev));
-    CHECK(HasFlag(flagsOf("editor.graph.lod.mediumMax"), CVarFlags::Dev));
-    CHECK(HasFlag(flagsOf("editor.graph.grid.majorEvery"), CVarFlags::Dev));
+    for (const char* dev : { "editor.graph.pinSegments", "editor.graph.lod.mediumMax", "editor.graph.grid.majorEvery" })
+        if (Test::InThisBuild(dev)) CHECK(HasFlag(flagsOf(dev), CVarFlags::Dev));   // Dist: compiled out
     CHECK(flagsOf("editor.graph.fitMinZoom") == CVarFlags::Archive);
 }
 
@@ -182,6 +181,10 @@ TEST_CASE("sweep: editor.graph.pinRing.* and editor.graph.nodePadding defaults a
     CHECK(Editor::GraphPinRingWidth() == 1.6f);
     CHECK(Editor::GraphPinOuterRingGap() == 2.2f);
     CHECK(Editor::GraphPinOuterRingWidth() == 1.0f);
+    // The rows below are Dev: compiled out of Dist (each proven absent: `&`, not `&&`).
+    if (!(Test::InThisBuild("editor.graph.pinRing.width") & Test::InThisBuild("editor.graph.pinRing.outerGap")
+          & Test::InThisBuild("editor.graph.nodePadding")))
+        return;
 
     CVarRegistry& reg = CVarRegistry::Get();
     const auto describe = [&](std::string_view name)
@@ -208,6 +211,8 @@ TEST_CASE("sweep: a published pin ring reaches the shader canvas; node padding w
 {
     const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     namespace ed = ax::NodeEditor;
+    Test::SkipIfCompiledOut("editor.graph.pinRing.width");
+    Test::SkipIfCompiledOut("editor.graph.nodePadding");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle ring = reg.Find("editor.graph.pinRing.width");
     const CVarHandle pad  = reg.Find("editor.graph.nodePadding");
@@ -314,6 +319,7 @@ TEST_CASE("sweep: the shader canvas's in-node widget widths and drag speeds are 
     CHECK(CVarRegistry::Get().Find("editor.shader.dragSpeed").IsStale());   // the old spelling is gone
 
     // A published override reaches the width the canvas sets.
+    Test::SkipIfCompiledOut("editor.graph.constPinNeutralWidth2");
     const Test::ScopedCodeRung wide("editor.graph.constPinNeutralWidth2", CVarValue::Float32(150.0f));
     CHECK(Editor::GraphPinNeutralWidth(Arcane::Settings<Editor::GraphCanvasSettings>(), 2) == 150.0f);
 }

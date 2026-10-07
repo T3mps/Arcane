@@ -3,6 +3,7 @@
 // branches, custom page nodes, readable labels. No ImGui.
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsFixtures.hpp"
+#include "Helpers/SettingsSweep.hpp"
 #include <Settings/SettingsModel.hpp>
 #include <Settings/SettingsEdit.hpp>
 #include <Settings/LayoutSettings.hpp>
@@ -245,6 +246,7 @@ TEST_CASE("SettingsModel::Rebuild applies a same-size page swap and a roles chan
 // Dev row, so the default view hides it until Show advanced is on (spec s6.2).
 TEST_CASE("SettingsModel: astra.snapshot.compression is a Preferences row under Engine/Astra/Snapshot, behind Show advanced", "[settings-ui][editor]")
 {
+    Arcane::Test::SkipIfCompiledOut("astra.snapshot.compression");
     const CVarRegistry& reg = CVarRegistry::Get();
     const std::optional<CVarDescInfo> d = reg.Describe("astra.snapshot.compression");
     REQUIRE(d.has_value());

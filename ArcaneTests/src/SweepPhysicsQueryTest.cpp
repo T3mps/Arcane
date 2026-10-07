@@ -47,18 +47,24 @@ TEST_CASE("sweep: physics.ground / render.ortho2D descriptors match the inventor
         CHECK(HasFlag(e->flags, CVarFlags::Deterministic));
     }
 
-    const auto solver = reg.Explain("physics.parallelSolver");
-    REQUIRE(solver);
-    CHECK(solver->apply == ApplyMode::NextWorld);
-    CHECK(HasFlag(solver->flags, CVarFlags::Dev));
-    CHECK_FALSE(HasFlag(solver->flags, CVarFlags::Deterministic));
+    if (Test::InThisBuild("physics.parallelSolver"))   // Dev: compiled out of Dist
+    {
+        const auto solver = reg.Explain("physics.parallelSolver");
+        REQUIRE(solver);
+        CHECK(solver->apply == ApplyMode::NextWorld);
+        CHECK(HasFlag(solver->flags, CVarFlags::Dev));
+        CHECK_FALSE(HasFlag(solver->flags, CVarFlags::Deterministic));
+    }
 
-    const auto depth = reg.Explain("render.ortho2D.depthRange");
-    REQUIRE(depth);
-    CHECK(depth->audience == Audience::Game);
-    CHECK(depth->scope == SettingScope::Project);
-    CHECK(depth->apply == ApplyMode::Live);
-    CHECK(HasFlag(depth->flags, CVarFlags::Dev));
+    if (Test::InThisBuild("render.ortho2D.depthRange"))   // Dev: compiled out of Dist
+    {
+        const auto depth = reg.Explain("render.ortho2D.depthRange");
+        REQUIRE(depth);
+        CHECK(depth->audience == Audience::Game);
+        CHECK(depth->scope == SettingScope::Project);
+        CHECK(depth->apply == ApplyMode::Live);
+        CHECK(HasFlag(depth->flags, CVarFlags::Dev));
+    }
 }
 
 TEST_CASE("sweep: the 2D view's depth is render.ortho2D.depthRange, read live", "[sweep][physics-query][camera]")
@@ -73,6 +79,7 @@ TEST_CASE("sweep: the 2D view's depth is render.ortho2D.depthRange, read live", 
     CHECK(before.projection == legacy.projection);
     CHECK(before.view == legacy.view);
 
+    Test::SkipIfCompiledOut("render.ortho2D.depthRange");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("render.ortho2D.depthRange");
     struct Restore

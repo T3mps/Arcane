@@ -72,6 +72,8 @@ TEST_CASE("sweep: a graph format latch that beat the config rungs is reported", 
     CHECK(GraphCanvasFormat() == nri::Format::RGBA16_SFLOAT);
     CHECK(GraphDepthFormat() == nri::Format::D32_SFLOAT);
     CHECK(CheckGraphFormatLatch());   // latched == published: silent
+    Test::SkipIfCompiledOut("render.canvasFormat");
+    Test::SkipIfCompiledOut("render.depthFormat");
     CVarRegistry& reg = CVarRegistry::Get();
 
     // An early read froze Rgba16f; R11g11b10f was published after.

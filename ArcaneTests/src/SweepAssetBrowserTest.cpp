@@ -43,16 +43,20 @@ TEST_CASE("sweep: asset browser settings carry the inventory's scope, apply and 
                                       "editor.assets.watchPollSeconds", "editor.assets.discoveryPollSeconds",
                                       "editor.assetStatus.rightColumnMaxFraction" })
     {
+        if (!Test::InThisBuild(n)) continue;   // the Dev rows: compiled out of Dist
         const CVarDescInfo d = describe(n);
         CHECK(d.scope == SettingScope::PreferencesMachine);
         CHECK(d.apply == ApplyMode::Live);
     }
     CHECK(describe("editor.assets.newMaterialDefaultSurface").scope == SettingScope::PreferencesProject);
     CHECK(describe("editor.assets.activityLogCapacity").apply == ApplyMode::Restart);
-    const CVarDescInfo mount = describe("editor.assets.mountDiagnostics");
-    CHECK(mount.scope == SettingScope::PreferencesProject);   // inventory: Part 1 "Preferences" reads as Pref-P
-    CHECK(mount.apply == ApplyMode::NextWorld);
-    CHECK(HasFlag(mount.flags, CVarFlags::Dev));
+    if (Test::InThisBuild("editor.assets.mountDiagnostics"))
+    {
+        const CVarDescInfo mount = describe("editor.assets.mountDiagnostics");
+        CHECK(mount.scope == SettingScope::PreferencesProject);   // inventory: Part 1 "Preferences" reads as Pref-P
+        CHECK(mount.apply == ApplyMode::NextWorld);
+        CHECK(HasFlag(mount.flags, CVarFlags::Dev));
+    }
     Test::RequireDefault("editor.assets.mountDiagnostics", CVarValue::Bool(true));
     Test::RequireDefault("editor.assets.activityLogCapacity", CVarValue::Int32(100));
     Test::RequireDefault("editor.assets.newMaterialDefaultSurface", CVarValue::Int32(2));
@@ -87,6 +91,7 @@ TEST_CASE("sweep: editor.assets.mountDiagnostics only ever declines the host's d
     CHECK(Editor::EditorOpenOptions(hostOn).mountDiagnostics);    // default: unchanged
     CHECK_FALSE(Editor::EditorOpenOptions(hostOff).mountDiagnostics);
 
+    Test::SkipIfCompiledOut("editor.assets.mountDiagnostics");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("editor.assets.mountDiagnostics");
     REQUIRE_FALSE(h.IsStale());

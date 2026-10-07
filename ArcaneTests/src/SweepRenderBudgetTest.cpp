@@ -134,7 +134,9 @@ TEST_CASE("sweep: the ImGui pool chain and the mesh cache latch their budgets at
         REQUIRE(reg.Set(reg.Find(name), value, SetBy::Code) == SetResult::Applied);
         reg.PublishImmediate();
     };
-    set("render.imgui.firstPoolSets", CVarValue::UInt32(16u));
+    // render.imgui.firstPoolSets is a Dev row: compiled out of Dist, where only the mesh cache's half runs.
+    const bool poolRow = Test::InThisBuild("render.imgui.firstPoolSets");
+    if (poolRow) set("render.imgui.firstPoolSets", CVarValue::UInt32(16u));
     set("render.mesh.residencyBudgetBytes", CVarValue::UInt64(128ull << 20));
 
     auto device = NriDevice::CreateNoneForTests();
@@ -155,14 +157,17 @@ TEST_CASE("sweep: the ImGui pool chain and the mesh cache latch their budgets at
         REQUIRE(cache != nullptr);
 
         // The published values, not the defaults.
-        CHECK(backend.LinkCapacity(0) == 16u);
-        CHECK(backend.LinkCapacity(1) == 32u);
+        if (poolRow)
+        {
+            CHECK(backend.LinkCapacity(0) == 16u);
+            CHECK(backend.LinkCapacity(1) == 32u);
+        }
         CHECK(cache->Budget() == (128ull << 20));
 
         // A later publish never resizes what already exists.
-        set("render.imgui.firstPoolSets", CVarValue::UInt32(256u));
+        if (poolRow) set("render.imgui.firstPoolSets", CVarValue::UInt32(256u));
         set("render.mesh.residencyBudgetBytes", CVarValue::UInt64(1ull << 30));
-        CHECK(backend.LinkCapacity(0) == 16u);
+        if (poolRow) CHECK(backend.LinkCapacity(0) == 16u);
         CHECK(cache->Budget() == (128ull << 20));
 
         backend.Release(lane, 1);

@@ -149,6 +149,7 @@ TEST_CASE("sweep: jobs.externalThreads / jobs.shaderCompileThreads defaults are 
     for (const char* name : { "jobs.externalThreads", "jobs.shaderCompileThreads" })
     {
         INFO(name);
+        if (!Test::InThisBuild(name)) continue;   // Dev: compiled out of Dist
         const auto e = CVarRegistry::Get().Explain(name);
         REQUIRE(e);
         CHECK(e->apply == ApplyMode::Restart);

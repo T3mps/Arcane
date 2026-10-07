@@ -65,6 +65,11 @@ TEST_CASE("sweep: the factory layout cvars and the viewport misc keep their lite
     CHECK(play->scope == SettingScope::PreferencesProject);
     CHECK(play->apply == ApplyMode::NextWorld);
     CHECK(play->audience == Audience::Editor);
+    // The three Dev rows: compiled out of Dist (each proven absent: `&`, not `&&`).
+    if (!(Test::InThisBuild("editor.layout.factory.inspectorWidth")
+          & Test::InThisBuild("editor.viewport.pickMaxFramesInFlight")
+          & Test::InThisBuild("editor.viewport.fallbackExtentW")))
+        return;
     const auto inspector = reg.Describe("editor.layout.factory.inspectorWidth");
     REQUIRE(inspector.has_value());
     CHECK(inspector->scope == SettingScope::PreferencesMachine);

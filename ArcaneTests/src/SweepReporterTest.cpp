@@ -48,6 +48,7 @@ namespace
     void CheckMeta(const char* name, Audience audience, SettingScope scope, ApplyMode apply, bool dev)
     {
         INFO("cvar " << name);
+        if (!Test::InThisBuild(name)) { CHECK(dev); return; }   // Dist: a Dev row is compiled out
         const auto e = CVarRegistry::Get().Explain(name);
         REQUIRE(e.has_value());
         CHECK(e->audience == audience);
@@ -191,6 +192,8 @@ TEST_CASE("sweep: a Live reporter setting reaches the next reporter spawn", "[sw
         ~Armed() { Diagnostics::Shutdown(); }
     } armed{ cfg };
 
+    Test::SkipIfCompiledOut("diagnostics.logTailLines");
+    Test::SkipIfCompiledOut("ui.copyFlashSeconds");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle tail  = reg.Find("diagnostics.logTailLines");
     const CVarHandle flash = reg.Find("ui.copyFlashSeconds");

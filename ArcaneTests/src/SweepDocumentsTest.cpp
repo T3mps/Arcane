@@ -144,6 +144,7 @@ TEST_CASE("sweep: the Custom body preview honours a non-default line cap and mar
 TEST_CASE("sweep: editor.shader.previewCheckerCell is the pre-sweep 32 texels", "[sweep][documents]")
 {
     CHECK(Editor::ShaderEditorSettings{}.previewCheckerCell == 32.0f);
+    if (!Test::InThisBuild("editor.shader.previewCheckerCell")) return;   // Dev: compiled out of Dist
     Test::RequireDefault("editor.shader.previewCheckerCell", CVarValue::Float32(32.0f));
     const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("editor.shader.previewCheckerCell");
     REQUIRE(d.has_value());

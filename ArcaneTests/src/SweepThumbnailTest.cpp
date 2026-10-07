@@ -28,6 +28,7 @@ TEST_CASE("sweep: thumbnail defaults are the golden-bound literals", "[sweep][th
     Test::RequireDefault("editor.thumbnail.meshFovDegrees", CVarValue::Float32(35.0f));
     Test::RequireDefault("editor.thumbnail.framingMargin", CVarValue::Float32(0.15f));
 
+    if (!Test::InThisBuild("editor.thumbnail.size")) return;   // Dev: compiled out of Dist
     const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("editor.thumbnail.size");
     REQUIRE(d.has_value());
     CHECK(d->scope == SettingScope::Project);

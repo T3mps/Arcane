@@ -4,6 +4,7 @@
 
 #include <Arcane/Host/ReferenceImages.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include <filesystem>
 #include <fstream>
@@ -130,7 +131,10 @@ TEST_CASE("reference: diff artifacts land under Saved/, which is gitignored", "[
     const auto root = TempProject("diffpath");
     const auto p = Arcane::DiffArtifactPath(root, "runtime-scene", "vulkan");
 
-    CHECK(p == root / "Saved" / "Verify" / "runtime-scene-vulkan-diff.png");
+    // Dist has no <project>/Saved (spec s11.0): the path is refused (empty),
+    // never a relative one, and both hosts then write no diff artifact.
+    CHECK(p == (Arcane::kDistBuild ? std::filesystem::path{}
+                                   : root / "Saved" / "Verify" / "runtime-scene-vulkan-diff.png"));
 }
 
 TEST_CASE("reference: a name with a path separator is REFUSED, not resolved", "[reference]")

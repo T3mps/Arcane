@@ -10,6 +10,7 @@
 #include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include <type_traits>
 
@@ -53,6 +54,12 @@ TEST_CASE("sweep: Diagnostics::Config is built from the settings, with no second
 
 TEST_CASE("sweep: the R2 capture switches are Dev and command-line only", "[sweep][diag]")
 {
+    if (!Test::InThisBuild("diagnostics.installCrashHandler"))
+    {
+        // Dist: the switch is compiled out, so nothing can turn crash capture off (inventory R2).
+        CHECK(Settings<DiagnosticsSettings>().installCrashHandler);
+        return;
+    }
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("diagnostics.installCrashHandler");
     REQUIRE_FALSE(h.IsStale());
@@ -131,7 +138,10 @@ TEST_CASE("sweep: --perf is diagnostics.perfLog on the CommandLine rung, and an 
     CVarRegistry::Get().RevertLayer(SetBy::CommandLine);
     cfg.cvarSets = { "diagnostics.perfLog=0" };
     HostBoot::ApplyEarlyConfigRungs(cfg, CommandLineCVarContext(), /*editor*/ false);
-    CHECK_FALSE(Settings<DiagnosticsSettings>().perfLog);
+    // Dist's --set runs in the LocalHost context (ruling I3), where a Game
+    // setting that is not Cheat is read-only (spec s3.2): the player's --set
+    // is refused and --perf's value stands. Elsewhere the explicit --set wins.
+    CHECK(Settings<DiagnosticsSettings>().perfLog == kDistBuild);
 }
 
 TEST_CASE("sweep: FramePerf follows diagnostics.perfLog and perfLogIntervalFrames live", "[sweep][diag]")

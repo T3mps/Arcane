@@ -35,6 +35,7 @@ TEST_CASE("sweep: every editor.input / editor.crash field registers as a per-mac
     for (const std::string_view n : { "editor.input.rebindTimeoutSeconds", "editor.input.liveHighlightBase",
                                       "editor.input.liveHighlightGain", "editor.crash.maxRows" })
     {
+        if (!Test::InThisBuild(n)) continue;   // Dev: compiled out of Dist
         const std::optional<CVarDescInfo> d = reg.Describe(n);
         INFO("cvar " << std::string(n));
         REQUIRE(d.has_value());

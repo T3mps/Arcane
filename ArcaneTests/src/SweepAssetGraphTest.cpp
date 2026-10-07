@@ -90,6 +90,7 @@ TEST_CASE("sweep: asset graph node geometry defaults are the pre-sweep literals"
     for (std::string_view name : { "editor.assetGraph.node.minWidth", "editor.assetGraph.node.padding",
                                    "editor.assetGraph.pinRadius", "editor.assetGraph.labelPad" })
     {
+        if (!Test::InThisBuild(name)) continue;   // Dev: compiled out of Dist
         const std::optional<CVarDescInfo> d = reg.Describe(name);
         INFO("cvar " << std::string(name));
         REQUIRE(d.has_value());

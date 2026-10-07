@@ -23,6 +23,7 @@
 #include <string>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 namespace fs = std::filesystem;
 using namespace Arcane;
@@ -209,6 +210,37 @@ TEST_CASE("Runtime keeps a preset Paths dist across OpenProject and CloseProject
 
         runtime.CloseProject();
         CHECK(Paths::Current().dist);
+    }
+    fs::remove_all(root);
+}
+
+// S7-DIST: a Dist test run never writes the real user profile. test_main
+// points the per-user bases at a private folder under TEMP before anything
+// resolves a path (PrivateUserDataRoot), so a project's User rung resolves
+// there -- not where the same game's would on the player's machine.
+TEST_CASE("Tests keep a project's per-user folders out of the real user profile", "[paths]")
+{
+    const fs::path root = MakeProbeProject("Starworks QA");
+    const fs::path user = Test::UserConfigDir(root);
+    REQUIRE_FALSE(user.empty());
+    const auto under = [](const fs::path& p, const fs::path& dir)
+    {
+        const fs::path rel = p.lexically_normal().lexically_relative(dir.lexically_normal());
+        return !rel.empty() && *rel.begin() != "..";
+    };
+    if (!kDistBuild)
+    {
+        CHECK(user == root / "Saved" / "Config");   // dev: the project's own Saved/
+        CHECK(Test::SuiteUserDataState().privateRoot.empty());
+    }
+    else
+    {
+        const Test::SuiteUserData& suite = Test::SuiteUserDataState();
+        REQUIRE_FALSE(suite.privateRoot.empty());
+        CHECK(under(user, suite.privateRoot));
+        CHECK(under(Paths::UserRoot(), suite.privateRoot));
+        const fs::path shipped = Paths::ResolveGameUserDir(Test::ProjectPathsConfig(root), Paths::kHostPlatform, suite.real);
+        CHECK(user.parent_path().lexically_normal() != shipped.lexically_normal());
     }
     fs::remove_all(root);
 }

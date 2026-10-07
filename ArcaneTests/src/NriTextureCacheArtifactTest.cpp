@@ -75,6 +75,7 @@
 #include <vector>
 
 #include "Helpers/GpuCapability.hpp"
+#include "Helpers/SettingsSweep.hpp"
 
 // =============================================================================
 // PART 1 -- CPU: the state machine and the pitch arithmetic
@@ -273,6 +274,7 @@ TEST_CASE("nri texture cache: the PendingCook re-poll cadence matches "
 TEST_CASE("nri texture cache: a lowered assets.cook.pendingRepollInterval re-polls sooner",
           "[nri][artifact][texcache-artifact][sweep][assets]")
 {
+    Arcane::Test::SkipIfCompiledOut("assets.cook.pendingRepollInterval");
     using Arcane::NriTextureCache;
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     const Arcane::CVarHandle h = reg.Find("assets.cook.pendingRepollInterval");

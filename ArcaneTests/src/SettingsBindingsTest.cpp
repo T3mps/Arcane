@@ -437,6 +437,7 @@ TEST_CASE("ToAstraSaveConfig: the default is Astra's SaveConfig; None turns comp
     off.compression = AstraSnapshotCompression::None;
     CHECK(Editor::ToAstraSaveConfig(off).compressionMode == Astra::CompressionMode::None);
 
+    if (!Test::InThisBuild("astra.snapshot.compression")) return;   // Dev: compiled out of Dist
     const std::optional<CVarDescInfo> d = CVarRegistry::Get().Describe("astra.snapshot.compression");
     REQUIRE(d.has_value());
     CHECK(d->type == CVarType::Enum);
@@ -450,6 +451,7 @@ TEST_CASE("ToAstraSaveConfig: the default is Astra's SaveConfig; None turns comp
 
 TEST_CASE("astra.snapshot.compression reaches Runtime::SnapshotRegistry through the editor's publish callback", "[settings]")
 {
+    Arcane::Test::SkipIfCompiledOut("astra.snapshot.compression");
     // Core's own default, before and after: Astra's SaveConfig{}.
     REQUIRE(Runtime::SnapshotSaveConfig().compressionMode == Astra::Registry::SaveConfig{}.compressionMode);
 

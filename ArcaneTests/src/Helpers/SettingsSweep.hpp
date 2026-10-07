@@ -15,6 +15,40 @@
 
 namespace Arcane::Test
 {
+    // Dist compiles Dev cvars out (spec s3.2 "Dev: compiled out of Dist";
+    // CVarRegistry::Get() is built with devCvars=false under ARC_BUILD_DIST).
+    // True only in Dist, for a name the process registry refused AS Dev
+    // (IsCompiledOut) -- never for a typo or a lost registration. Asserts nothing.
+    inline bool CompiledOutOfThisBuild(std::string_view name)
+    {
+#if defined(ARC_BUILD_DIST)
+        return CVarRegistry::Get().IsCompiledOut(name);
+#else
+        (void)name;
+        return false;
+#endif
+    }
+
+    // Whether `name` exists in THIS build -- the one place a test learns it.
+    // Registered: true. Otherwise it REQUIREs CompiledOutOfThisBuild, so in
+    // Dist the suite proves the compile-out (and any other absence fails),
+    // and returns false.
+    inline bool InThisBuild(std::string_view name)
+    {
+        if (CVarRegistry::Get().Explain(name).has_value()) return true;
+        INFO("cvar " << std::string(name) << " is not registered");
+        REQUIRE(CompiledOutOfThisBuild(name));
+        return false;
+    }
+
+    // For a case whose subject is a Dev cvar: in Dist, proves the name is
+    // compiled out (InThisBuild) and skips the rest of the case.
+    inline void SkipIfCompiledOut(std::string_view name)
+    {
+        if (!InThisBuild(name))
+            SKIP("Dev cvar " << std::string(name) << " is compiled out of Dist");
+    }
+
     inline CVarValue RegisteredDefault(std::string_view name)
     {
         const std::optional<CVarExplain> e = CVarRegistry::Get().Explain(name);
@@ -26,8 +60,10 @@ namespace Arcane::Test
         return CVarValue::Bool(false);
     }
 
+    // In Dist a Dev name proves its compile-out instead (InThisBuild).
     inline void RequireDefault(std::string_view name, const CVarValue& expected)
     {
+        if (!InThisBuild(name)) return;
         const CVarValue got = RegisteredDefault(name);
         INFO("cvar " << std::string(name));
         REQUIRE(got.type == expected.type);

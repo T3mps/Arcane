@@ -71,6 +71,7 @@ TEST_CASE("sweep: every editor.gizmo.* default is the declared literal", "[sweep
                                   "editor.gizmo.ringSegments", "editor.gizmo.minScale", "editor.gizmo.brighten",
                                   "editor.gizmo.darken", "editor.gizmo.hotFillAlpha" })
     {
+        if (!Test::InThisBuild(dev)) continue;   // Dist: compiled out
         INFO(std::string(dev));
         CHECK(HasFlag(flagsOf(dev), CVarFlags::Dev));
     }
@@ -90,13 +91,15 @@ TEST_CASE("sweep: MakeGizmoSnap and MakeGizmoTuning read the published editor.gi
     reg.Set(reg.Find("editor.gizmo.snap.translate"), CVarValue::Float32(2.0f), SetBy::Code);
     reg.Set(reg.Find("editor.gizmo.snap.rotateDegrees"), CVarValue::Float32(45.0f), SetBy::Code);
     reg.Set(reg.Find("editor.gizmo.pickRadiusPx"), CVarValue::Float32(16.0f), SetBy::Code);
-    reg.Set(reg.Find("editor.gizmo.ringSegments"), CVarValue::Int32(16), SetBy::Code);
+    // editor.gizmo.ringSegments is a Dev row: compiled out of Dist, where the tuning keeps the default.
+    const bool ringRow = Test::InThisBuild("editor.gizmo.ringSegments");
+    if (ringRow) reg.Set(reg.Find("editor.gizmo.ringSegments"), CVarValue::Int32(16), SetBy::Code);
     reg.PublishImmediate();
 
     const GizmoSnap s = Editor::MakeGizmoSnap(false);
     CHECK_FALSE(s.enabled); CHECK(s.translate == 2.0f); CHECK(s.rotationDeg == 45.0f); CHECK(s.scale == 0.1f);
     const GizmoTuning t = Editor::MakeGizmoTuning();
-    CHECK(t.pickRadiusPx == 16.0f); CHECK(t.ringSegments == 16); CHECK(t.minScale == 0.01f);
+    CHECK(t.pickRadiusPx == 16.0f); CHECK(t.ringSegments == (ringRow ? 16 : 48)); CHECK(t.minScale == 0.01f);
 
     reg.RevertLayer(SetBy::Code); reg.PublishImmediate();
     CHECK(Editor::MakeGizmoSnap(true).translate == 0.5f);

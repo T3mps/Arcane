@@ -35,6 +35,7 @@
 #include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders (the faked seam below)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
 #include "Widgets/UiMetrics.hpp"         // Ui::ScopedMetrics -- the strip at a non-default UI scale
+#include "Helpers/SettingsSweep.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -818,6 +819,8 @@ TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts,
 // screen-space chrome -- the selection strip -- is drawn at Ui::Px(base).
 TEST_CASE("Asset Graph (S6-44): a published node width band sizes every node", "[editor][graphcanvas][sweep]")
 {
+    Arcane::Test::SkipIfCompiledOut("editor.assetGraph.node.minWidth");
+    Arcane::Test::SkipIfCompiledOut("editor.assetGraph.node.maxWidth");
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle minW = reg.Find("editor.assetGraph.node.minWidth");
     const CVarHandle maxW = reg.Find("editor.assetGraph.node.maxWidth");

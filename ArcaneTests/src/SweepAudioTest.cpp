@@ -17,11 +17,14 @@ TEST_CASE("sweep: audio defaults are the pre-sweep literals", "[sweep][audio]")
 
 TEST_CASE("sweep: audio rows carry the inventory metadata", "[sweep][audio]")
 {
-    const auto rate = CVarRegistry::Get().Explain("audio.sampleRate");
-    REQUIRE(rate);
-    CHECK(HasFlag(rate->flags, CVarFlags::Dev));
-    CHECK(rate->scope == SettingScope::Project);
-    CHECK(rate->apply == ApplyMode::Restart);
+    if (Test::InThisBuild("audio.sampleRate"))
+    {
+        const auto rate = CVarRegistry::Get().Explain("audio.sampleRate");
+        REQUIRE(rate);
+        CHECK(HasFlag(rate->flags, CVarFlags::Dev));
+        CHECK(rate->scope == SettingScope::Project);
+        CHECK(rate->apply == ApplyMode::Restart);
+    }
 
     const auto channels = CVarRegistry::Get().Explain("audio.channels");
     REQUIRE(channels);

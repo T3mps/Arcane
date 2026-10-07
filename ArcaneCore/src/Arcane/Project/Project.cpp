@@ -6,6 +6,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/Diagnostics and editor.lock resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
+#include <Arcane/Project/ProjectPaths.hpp>   // PathsConfigFor, kDistBuild
 
 #include <Json.hpp>
 
@@ -177,6 +178,17 @@ namespace Arcane
             }
 #endif
             return true;
+        }
+
+        // Paths for THIS project's identity (company and game from its
+        // manifest), so a Dist build resolves DiagnosticsDir under this
+        // project's own per-user folder. Paths::ForProject keeps Current()'s
+        // names, and a Runtime opens a project before it configures Paths for
+        // it (S7-DIST). The dist rule is Runtime's: always in Dist, else a preset.
+        Paths::Config PathsOf(const Project& project)
+        {
+            const Paths::Config current = Paths::Current();
+            return PathsConfigFor(project, current.engineDir, kDistBuild || current.dist);
         }
     }
 
@@ -368,7 +380,7 @@ namespace Arcane
         // (below) still lists this root unconditionally, so a run that ITSELF
         // writes a report mid-session can still mount diag:// -- out of scope,
         // the defect is enumeration of PRE-EXISTING crash history at open time.
-        const std::filesystem::path diagDir = Paths::Resolve(Paths::Location::DiagnosticsDir, Paths::ForProject(root));
+        const std::filesystem::path diagDir = Paths::Resolve(Paths::Location::DiagnosticsDir, PathsOf(proj));
         if (opts.mountDiagnostics && std::filesystem::is_directory(diagDir, ec))
         {
             proj.m_mounts.Mount("diag", diagDir);
@@ -582,7 +594,7 @@ namespace Arcane
         // unconditionally is safe.
         std::vector<std::pair<std::string, std::filesystem::path>> roots;
         roots.emplace_back("game", m_root / "Content");
-        roots.emplace_back("diag", Paths::Resolve(Paths::Location::DiagnosticsDir, Paths::ForProject(m_root)));
+        roots.emplace_back("diag", Paths::Resolve(Paths::Location::DiagnosticsDir, PathsOf(*this)));
         // source:// listed unconditionally for the same reason diag:// is: a
         // Source/ created after Open() (a first New C++ Class, one day) must
         // still find its root here rather than warn "outside every content
