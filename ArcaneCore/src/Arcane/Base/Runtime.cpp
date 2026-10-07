@@ -86,15 +86,14 @@ namespace Arcane
         // one. The cold-boot EngineConfig rung, the JSON Config layer and
         // CVarLayerSources (what a module reload re-layers) all read this
         // folder, so a host-configured engine dir is honoured by all three.
+        // A Dist build also sets Paths' dist here, host engine dir or not
+        // (ApplyEngineDirDefaults), so HostBoot's early User rung already
+        // resolves GameUserDir under the OS per-user dir (settings S7).
         std::filesystem::path EngineConfigDir()
         {
             Paths::Config paths = Paths::Current();
-            if (paths.engineDir.empty())
-            {
-                paths.engineDir = ExeDir();
-                paths.dist = kDistBuild;   // Dist resolves GameUserDir under the OS per-user dir (settings S7)
+            if (ApplyEngineDirDefaults(paths, ExeDir(), kDistBuild))
                 Paths::Configure(paths);
-            }
             return Paths::Get(Paths::Location::EngineConfig);
         }
 

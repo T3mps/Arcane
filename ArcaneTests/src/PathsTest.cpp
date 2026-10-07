@@ -15,6 +15,7 @@
 #include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // ApplyEngineDirDefaults, kDistBuild
 
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"
@@ -357,6 +358,70 @@ TEST_CASE("HostBoot: a host-configured engine dir is the early EngineConfig rung
         CHECK(probe.Value() == 5);
         CHECK(cvars.Get(exeOnly)->AsInt32() == 1);
         CHECK(probe.EngineRecords() == 1);
+    }
+    std::error_code ec;
+    fs::remove_all(engine, ec);
+}
+
+// S7-9 fix round 1 (spec s8.2, s11.1): the defaults the EngineConfig rung
+// fills into Paths. The exe dir only when no host named an engine dir; a Dist
+// build's `dist` even under a host's engine dir (HostBoot's early User rung
+// resolves GameUserDir from Current() right after); a dev build never clears a
+// `dist` a host or test set. Pure, so the Dist branch is pinned from dev too.
+TEST_CASE("ApplyEngineDirDefaults: exe dir only when unset; a Dist build sets dist under a host's engine dir; dev never clears it", "[paths]")
+{
+    const fs::path exe = "X:/exe";
+    for (const bool distBuild : { false, true })
+    {
+        CAPTURE(distBuild);
+        Arcane::Paths::Config fresh;                                         // a fresh process
+        CHECK(Arcane::ApplyEngineDirDefaults(fresh, exe, distBuild));
+        CHECK(fresh.engineDir == exe);
+        CHECK(fresh.dist == distBuild);
+        CHECK_FALSE(Arcane::ApplyEngineDirDefaults(fresh, exe, distBuild));  // idempotent
+
+        for (const bool preset : { false, true })
+        {
+            CAPTURE(preset);
+            Arcane::Paths::Config host;                                      // a host configured Paths first
+            host.engineDir = "H:/host-engine";
+            host.projectDir = fs::path("P:/proj");
+            host.companyName = "Starworks";
+            host.gameName = "Aphelyon";
+            host.dist = preset;
+            CHECK(Arcane::ApplyEngineDirDefaults(host, exe, distBuild) == (distBuild && !preset));
+            CHECK(host.engineDir == fs::path("H:/host-engine"));             // the host's engine dir is kept
+            CHECK(host.dist == (distBuild || preset));                       // Dist sets it; dev never clears it
+            REQUIRE(host.projectDir);
+            CHECK(*host.projectDir == fs::path("P:/proj"));
+            CHECK(host.companyName == "Starworks");
+            CHECK(host.gameName == "Aphelyon");
+        }
+    }
+}
+
+// The same seam through the real call: a host-configured engine dir survives
+// ApplyEngineConfigRung, and Paths' dist is this build's (or the preset).
+// EngineRungProbe restores Paths and re-applies the exe dir's rung after.
+TEST_CASE("ApplyEngineConfigRung keeps a host-configured engine dir and sets dist == (kDistBuild || preset)", "[paths][cvar]")
+{
+    const fs::path engine = FreshDir("arcane_s7_engine_dist");
+    WriteText(engine / "data" / "EngineConfig" / "s2hengine.json", R"({ "knob": 4 })");
+    const EngineRungProbe probe;
+    REQUIRE_FALSE(probe.knob.IsStale());
+    for (const bool preset : { false, true })
+    {
+        CAPTURE(preset);
+        Arcane::Paths::Config paths = Arcane::Paths::Current();
+        paths.engineDir = engine;
+        paths.dist = preset;
+        Arcane::Paths::Configure(paths);
+        (void)Arcane::ApplyEngineConfigRung();
+        Arcane::CVarRegistry::Get().PublishImmediate();
+        CHECK(Same(Arcane::Paths::Current().engineDir, engine));                         // untouched
+        CHECK(Arcane::Paths::Current().dist == (Arcane::kDistBuild || preset));
+        CHECK(Same(Arcane::Paths::Get(L::EngineConfig), engine / "data" / "EngineConfig"));
+        CHECK(probe.Value() == 4);                                                       // the host's folder is the rung
     }
     std::error_code ec;
     fs::remove_all(engine, ec);
