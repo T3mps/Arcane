@@ -8,6 +8,8 @@
 
 #include <Arcane/Plugin/PluginABI.hpp>
 
+#include "Helpers/ReferenceProjectDir.hpp"
+
 #include <Json.hpp>
 
 #include <filesystem>
@@ -379,4 +381,13 @@ TEST_CASE("SetInputActionsAsset persists selection and clear across reopen", "[p
     CHECK(reopened->Manifest().inputActions.empty());
     std::error_code error;
     fs::remove_all(dir, error);
+}
+
+TEST_CASE("the committed ReferenceProject manifest is stamped with this engine's plugin ABI", "[project]")
+{
+    const std::filesystem::path dir = Arcane::Test::FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());
+    const auto manifest = Arcane::ProjectManifest::LoadFile(dir / "ReferenceProject.arcproj");
+    REQUIRE(manifest);
+    CHECK(manifest->engineAbi == static_cast<int>(Arcane::kGamePluginABIVersion));
 }

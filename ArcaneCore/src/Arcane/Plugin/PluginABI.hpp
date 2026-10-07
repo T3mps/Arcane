@@ -1079,8 +1079,46 @@ namespace Arcane
     //     Register); S3-GATE deferred its bump here. A v52 module was compiled
     //     against the old layouts and lacks the new imports; reject the pairing.
     //     ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    // v54 (2026-10-07, settings arc S7 -- players and server, spec s8, s9; one
+    //     bump for every exported change since v53, S4..S7 -- carry ruling 05:03):
+    //   - S7: `ProjectManifest` gained `company` (an exported Core struct a
+    //     module reads through Project::Manifest() -- its layout moved).
+    //     ArcaneCore exports PlayerSettings (List/Set/SetSessionMode/
+    //     SessionMode/SessionContext), CVarContextFor, CVarRegistry::ListEx (+
+    //     the CVarListEntryEx struct), RemoteCVarService, Paths::
+    //     ResolveGameUserDir/SanitizePathSegment/CurrentPlatformDirs, and
+    //     PathsConfigFor/PathsConfigWithoutProject.
+    //   - S6 layouts: ProjectManifest dropped its splash/physics stores for
+    //     `legacySettings`; HostConfig gained `backendSupplied`;
+    //     DiagnosticsSettings gained `logTailLines`; settings blocks grew
+    //     (Physics2DWorldSettings `gravity`, JobsSettings, SimSettings,
+    //     NetSettings, RenderSettings, RenderMeshDefaultLightSettings);
+    //     PhysicsDebugDrawOptions was rebuilt; GridSceneDesc and
+    //     GizmoAxisColors grew; GizmoSnap lost its member defaults; the
+    //     frames-in-flight node arrays (GpuScene, VisibilityRing, Batch2DNode,
+    //     the fullscreen/grid/mesh/pick/outline nodes) grew to
+    //     kMaxFramesInFlight; NriGraphContext, Batch2DNode, PostChainNode,
+    //     GpuScene, MeshNode, NriMeshBufferCache and ImGuiNri gained members.
+    //   - S6 signatures: HostBoot::ApplyEarlyConfigRungs; Gizmo HitTest/Draw/
+    //     ApplyDrag take a GizmoTuning; Batch2DNode::CapsFrom/PoolSizes take
+    //     framesInFlight and Record a clear colour; ShaderCompiler::Initialize
+    //     split (InitializeWithDebounce); ProtocolLoader::GetSettings returns
+    //     by value.
+    //   - S6 new exports: Diagnostics::ReporterSettingsArgs/
+    //     CurrentReporterSettingsArgs/AttachMissingCVarCallbacks,
+    //     ApplyLegacyManifestSettings and the Project migration methods,
+    //     ColorFromSrgb8/ToSrgb8, CheckFramesInFlightLatch, GraphCanvasFormat/
+    //     GraphDepthFormat/LatchedCanvasFormat/LatchedDepthFormat/
+    //     CheckGraphFormatLatch, OutlineMaxThicknessPx, PickSupersample,
+    //     HostBoot::ShouldReportScanProgress, Window::IsFocused,
+    //     ConsoleModel::AppendLine, Runtime::SetSnapshotSaveConfig/
+    //     SnapshotSaveConfig, imgui's SetColorMarkerColors/
+    //     GetColorMarkerColors; S2-H's ApplyEngineConfigRung and
+    //     WarnUnlistedSettingsEnumValue.
+    //   A v53 module was compiled against the old layouts; reject the pairing.
+    //   ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr uint32_t kGamePluginABIVersion = 53;
+    inline constexpr uint32_t kGamePluginABIVersion = 54;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
