@@ -28,7 +28,7 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 | D7 | Vim depth: **near-full emulation, as far as reasonable** -- a selling point for the power users Arcane targets (s6). |
 | D8 | Split view of one buffer moves **into v1** (vim's `:sp`/`:vs` need it). |
 | D9 | A dev-only **headless Neovim oracle** generates/verifies the vim behaviour tables (s11). |
-| D10 | "Open as Text" on an asset that has a dedicated editor opens **read-only with an Enable editing unlock** (s8.4). |
+| D10 | "Open as Text" on an asset that has a dedicated editor opens **read-only with an Enable editing unlock** (s5.4). |
 | D11 | Regex engine: **PCRE2 with JIT**, vendored; the one regex flavour for grammars, find/replace and vim. |
 
 ### 1.2 Non-goals
