@@ -1,6 +1,6 @@
 # Settings and cvar completion -- design
 
-**Status:** Implemented 2026-10-07 on branch `feat/settings-s7` (tip `79c3f14a`; it contains `feat/settings` through merge `f5b40c29`; S1-S7 gates green, plugin ABI 54). Written 2026-10-03 from the brainstorm with the user; decisions in s16. What shipped: s14.5.
+**Status:** Implemented 2026-10-07 on branch `feat/settings-s7` (close-verification commit `79c3f14a`, the branch head when this record was written; the record itself is the next commit; the branch contains `feat/settings` through merge `f5b40c29`; S1-S7 gates green, plugin ABI 54). Written 2026-10-03 from the brainstorm with the user; decisions in s16. What shipped: s14.5.
 **Supersedes for scope:**
 - the cvar plan's "Hygiene pass 2026-09-28: what the review found owed" list (`docs/plans/2026-09-24-cvar-system-plan.md`);
 - the never-built v1 items of `docs/specs/2026-09-02-cvar-system-design.md` (the server surface, `ARC_CVAR_ALIAS`);
@@ -595,7 +595,7 @@ S1 -> S2 -> (S3 || S5) -> S4 -> S6 -> S7. The audit (S5) needs only S1-S2's voca
 Push; `git add -A`; touch the user's untracked files; SendInput or focus stealing during desk checks; re-bless a golden during the sweep.
 
 ### 14.5 What shipped (S7-CLOSE, 2026-10-07)
-Every fact below was read from git, the gate commits and the gate reports. Nothing is pushed. The branch is `feat/settings-s7` (worktree `Arcane-settings-c`). It forked from `feat/settings` at the S1 gate (`79b1e1b4`) and merged `feat/settings` back at `f5b40c29`. `feat/settings` was cut from main `8926eecb`. The branch holds 242 commits that are not on main (231 not counting merges). Main has 10 commits the branch lacks, all docs.
+Every fact below was read from git, the gate commits and the gate reports. Nothing is pushed. The branch is `feat/settings-s7` (worktree `Arcane-settings-c`). It forked from `feat/settings` at the S1 gate (`79b1e1b4`) and merged `feat/settings` back at `f5b40c29`. `feat/settings` was cut from main `8926eecb`. At `512c9adc`, before the two closeout commits, the branch held 242 commits not on main (231 not counting merges); the closeout adds `79c3f14a` and this record (244 / 233 at the record commit). Main has 10 commits the branch lacks, all docs.
 
 **Plugin ABI 54.** There were three bumps, as ruling I1 set out:
 - 51 -> 52 at `e2b476b8` (S1 gate);
