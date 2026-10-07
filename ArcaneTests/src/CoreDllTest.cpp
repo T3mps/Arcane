@@ -29,6 +29,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#elif ARCANE_PLATFORM_MACOS
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <cstdint>
+#include <cstring>
 #else
 #include <dlfcn.h>
 #include <link.h>
@@ -49,6 +54,34 @@ namespace
 
     HMODULE CoreModule()   { return ::GetModuleHandleW(L"ArcaneCore.dll"); }
     HMODULE ClientModule() { return ::GetModuleHandleW(L"ArcaneClient.dll"); }
+#elif ARCANE_PLATFORM_MACOS
+    using ModuleId = const void*;   // the owning image's mach_header
+
+    ModuleId OwnerOf(const void* addr)
+    {
+        Dl_info info{};
+        if (::dladdr(addr, &info) == 0)
+            return nullptr;
+        return info.dli_fbase;
+    }
+
+    // Already-loaded only, by file name: dyld's image list, never a load.
+    ModuleId LoadedModule(const std::string& fileName)
+    {
+        for (std::uint32_t i = 0; i < ::_dyld_image_count(); ++i)
+        {
+            const char* path = ::_dyld_get_image_name(i);
+            if (!path)
+                continue;
+            const char* leaf = std::strrchr(path, '/');
+            if (fileName == (leaf ? leaf + 1 : path))
+                return ::_dyld_get_image_header(i);
+        }
+        return nullptr;
+    }
+
+    ModuleId CoreModule()   { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneCore")); }
+    ModuleId ClientModule() { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneClient")); }
 #else
     using ModuleId = const void*;   // the owning object's link_map
 
