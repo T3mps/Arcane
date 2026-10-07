@@ -387,10 +387,11 @@ namespace Arcane::Diagnostics::Internal::Posix
     {
         if (g_snapInstalled) return true;
 #if ARCANE_PLATFORM_MACOS
-        // No signal on macOS: SnapshotThread suspends the target with Mach.
+        // No signal on macOS (and no SIGRTMIN): SnapshotThread suspends the
+        // target with Mach.
         g_snapInstalled = true;
         return true;
-#endif
+#else
         g_snapSignal = SIGRTMIN + 4;
         struct sigaction sa{};
         sa.sa_sigaction = &OnSnapshotSignal;
@@ -402,16 +403,15 @@ namespace Arcane::Diagnostics::Internal::Posix
         if (::sigaction(g_snapSignal, &sa, &g_snapPrevious) != 0) return false;
         g_snapInstalled = true;
         return true;
+#endif
     }
 
     void RemoveSnapshotSignal() noexcept
     {
         if (!g_snapInstalled) return;
-#if ARCANE_PLATFORM_MACOS
-        g_snapInstalled = false;
-        return;
-#endif
+#if !ARCANE_PLATFORM_MACOS
         ::sigaction(g_snapSignal, &g_snapPrevious, nullptr);
+#endif
         g_snapInstalled = false;
     }
 

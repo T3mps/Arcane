@@ -1080,11 +1080,47 @@ namespace
     bool      g_watchdogRunning = false;
     pthread_t g_watchdogOrphan{};
     bool      g_haveWatchdogOrphan = false;
+
+#if ARCANE_PLATFORM_MACOS
+    // macOS has no pthread_tryjoin_np / pthread_timedjoin_np: each watchdog
+    // thread raises its slot's flag as its LAST act, and a join is only
+    // attempted once the flag is up (it then returns at once). Two slots:
+    // the running watchdog and at most one orphan, which is all the
+    // bounded-join rule below ever tracks.
+    std::atomic<bool> g_watchdogExited[2]{};
+    int               g_watchdogSlot = 0;
+    int               g_orphanSlot   = 0;
+
+    int TryJoinWatchdog(pthread_t t, int slot) noexcept
+    {
+        if (!g_watchdogExited[slot].load(std::memory_order_acquire)) return EBUSY;
+        return ::pthread_join(t, nullptr);
+    }
+
+    int TimedJoinWatchdog(pthread_t t, int slot, const timespec& deadline) noexcept
+    {
+        for (;;)
+        {
+            if (g_watchdogExited[slot].load(std::memory_order_acquire)) return ::pthread_join(t, nullptr);
+            timespec now{};
+            ::clock_gettime(CLOCK_REALTIME, &now);
+            if (now.tv_sec > deadline.tv_sec || (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+                return ETIMEDOUT;
+            const timespec step{ 0, 1000000 };
+            ::nanosleep(&step, nullptr);
+        }
+    }
+#endif
     void    (*g_watchdogBody)() = nullptr;
 
-    void* WatchdogThreadProc(void*)
+    void* WatchdogThreadProc(void* arg)
     {
         g_watchdogBody();
+#if ARCANE_PLATFORM_MACOS
+        g_watchdogExited[reinterpret_cast<std::intptr_t>(arg)].store(true, std::memory_order_release);
+#else
+        (void)arg;
+#endif
         return nullptr;
     }
 
@@ -1138,7 +1174,11 @@ void StartWatchdog(void (*body)()) noexcept
     if (g_watchdogRunning) return;
     if (g_haveWatchdogOrphan)
     {
+#if ARCANE_PLATFORM_MACOS
+        if (TryJoinWatchdog(g_watchdogOrphan, g_orphanSlot) != 0)
+#else
         if (::pthread_tryjoin_np(g_watchdogOrphan, nullptr) != 0)
+#endif
         {
             std::fprintf(stderr, "Diagnostics: a previous hang watchdog is still parked; not starting another\n");
             return;
@@ -1153,7 +1193,14 @@ void StartWatchdog(void (*body)()) noexcept
     pthread_attr_t attr;
     ::pthread_attr_init(&attr);
     ::pthread_attr_setstacksize(&attr, 256 * 1024);
+#if ARCANE_PLATFORM_MACOS
+    g_watchdogSlot = g_haveWatchdogOrphan ? 1 - g_orphanSlot : 0;
+    g_watchdogExited[g_watchdogSlot].store(false, std::memory_order_release);
+    g_watchdogRunning = ::pthread_create(&g_watchdog, &attr, &WatchdogThreadProc,
+                                         reinterpret_cast<void*>(static_cast<std::intptr_t>(g_watchdogSlot))) == 0;
+#else
     g_watchdogRunning = ::pthread_create(&g_watchdog, &attr, &WatchdogThreadProc, nullptr) == 0;
+#endif
     ::pthread_attr_destroy(&attr);
 }
 
@@ -1165,9 +1212,16 @@ void StopWatchdog() noexcept
     timespec deadline{};
     ::clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 5;
+#if ARCANE_PLATFORM_MACOS
+    if (TimedJoinWatchdog(g_watchdog, g_watchdogSlot, deadline) != 0)
+#else
     if (::pthread_timedjoin_np(g_watchdog, nullptr, &deadline) != 0)
+#endif
     {
         if (g_haveWatchdogOrphan) ::pthread_detach(g_watchdogOrphan);
+#if ARCANE_PLATFORM_MACOS
+        g_orphanSlot         = g_watchdogSlot;
+#endif
         g_watchdogOrphan     = g_watchdog;
         g_haveWatchdogOrphan = true;
         std::fprintf(stderr, "Diagnostics: the hang watchdog is still parked mid-report; it will finish on its own\n");
