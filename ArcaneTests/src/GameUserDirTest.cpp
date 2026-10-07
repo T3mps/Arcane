@@ -16,6 +16,7 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -169,5 +170,45 @@ TEST_CASE("Runtime: the User rung is GameUserDir/Config -- a player's PlayerSafe
         CHECK(Paths::Get(Paths::Location::GameUserDir).empty() == !kDistBuild);   // dev: no project, no dir
     }
     reg.UnregisterModule("test-s7-paths");
+    fs::remove_all(root);
+}
+
+// S7-GATE (the S7-9 deferred minor): a `dist` a host or test preset survives
+// OpenProject and CloseProject, as it survives the EngineConfig rung
+// (ApplyEngineDirDefaults). Otherwise a preset run splits the User rung across
+// two folders in one boot: HostBoot's early rung under the per-user OS dir
+// (Paths::ForProject(Current())), the project's live rung under Saved/Config.
+// Nothing is saved, so nothing is written under the per-user dir.
+TEST_CASE("Runtime keeps a preset Paths dist across OpenProject and CloseProject; the User rung follows Paths", "[paths]")
+{
+    const Paths::Config saved = Paths::Current();
+    struct RestorePaths
+    {
+        const Paths::Config& config;
+        ~RestorePaths() { Paths::Configure(config); }
+    } restore{ saved };
+
+    Paths::Config preset = saved;
+    preset.dist = true;
+    Paths::Configure(preset);
+
+    const fs::path root = MakeProbeProject("Starworks QA");
+    {
+        Runtime runtime(Test::Process());
+        REQUIRE(runtime.OpenProject(root));
+        CHECK(Paths::Current().dist);
+
+        const fs::path userDir = Paths::Get(Paths::Location::GameUserDir);
+        CHECK_FALSE(userDir.empty());
+        CHECK(userDir != root / "Saved");                                       // the per-user OS dir, not Saved/
+        const LayerSources layers = runtime.CVarLayerSources();
+        const auto user = std::find_if(layers.dirs.begin(), layers.dirs.end(),
+                                       [](const CVarLayerDir& d) { return d.by == SetBy::User; });
+        REQUIRE(user != layers.dirs.end());
+        CHECK(user->dir == userDir / "Config");                                 // one User folder per boot
+
+        runtime.CloseProject();
+        CHECK(Paths::Current().dist);
+    }
     fs::remove_all(root);
 }

@@ -97,6 +97,16 @@ namespace Arcane
             return Paths::Get(Paths::Location::EngineConfig);
         }
 
+        // Whether Paths resolves user data the Dist way: always in a Dist
+        // build; in a dev build only when a host or test preset it. A project
+        // open, switch or close keeps that preset, as the EngineConfig rung
+        // does (ApplyEngineDirDefaults), so one boot never splits the User
+        // rung between the per-user OS dir and Saved/Config (S7-GATE).
+        bool DistPaths()
+        {
+            return kDistBuild || Paths::Current().dist;
+        }
+
         // The folder the EngineConfig rung was last applied from, by
         // ApplyEngineConfigRung (HostBoot's early rungs or a Runtime ctor).
         // Main thread only.
@@ -143,7 +153,7 @@ namespace Arcane
         {
             Paths::Config paths = Paths::Current();
             if (!paths.projectDir || *paths.projectDir != root) return;
-            Paths::Configure(PathsConfigWithoutProject(paths.engineDir, kDistBuild));
+            Paths::Configure(PathsConfigWithoutProject(paths.engineDir, DistPaths()));
         }
 
         // ASCII name for a SerializationError so a Save failure logs a readable
@@ -661,7 +671,7 @@ namespace Arcane
         std::filesystem::path UserCVarDir(const Project& project)
         {
             return Paths::Join(Paths::Location::GameUserDir,
-                               PathsConfigFor(project, Paths::Current().engineDir, kDistBuild), "Config");
+                               PathsConfigFor(project, Paths::Current().engineDir, DistPaths()), "Config");
         }
 
         // The cvar Project layer's home, resolved through Arcane::Paths the same
@@ -830,7 +840,7 @@ namespace Arcane
             // from PathsConfigFor (settings S7): a Dist build's GameUserDir
             // resolves under the OS per-user config dir. The engine dir stays
             // the one already configured (a host's, else the exe dir).
-            Paths::Configure(PathsConfigFor(*m_impl->project, Paths::Current().engineDir, kDistBuild));
+            Paths::Configure(PathsConfigFor(*m_impl->project, Paths::Current().engineDir, DistPaths()));
         }
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
