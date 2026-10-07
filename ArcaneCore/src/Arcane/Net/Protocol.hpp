@@ -1,5 +1,6 @@
 #pragma once
 
+#include <charconv>
 #include <cstdint>
 #include <fstream>
 #include <optional>
@@ -379,24 +380,32 @@ namespace Arcane
 
             size_t secondPipe = body.find('|', firstPipe + 1);
 
-            try
-            {
-                msg.type = static_cast<MsgId>(std::stoi(body.substr(0, firstPipe)));
+            // Fuzz finding (fuzz/regressions/protocol, 2026-10-07): TYPE used
+            // to go through std::stoi + a cast to uint16, which accepted
+            // leading whitespace, a sign, trailing junk ("2\xC1\xBF" -> 2,
+            // "1abc" -> 1) and wrapped out-of-range ids ("65537" -> 1,
+            // "-65535" -> 1) -- the same partial-parse class M-V4-5 closed
+            // for the LENGTH prefix. TYPE must be plain ASCII decimal that
+            // names an id in [1, 65535]; anything else is kInvalidMsgId with
+            // an empty token/payload, which the dispatcher already refuses.
+            const char* typeBegin = body.data();
+            const char* typeEnd   = body.data() + firstPipe;
+            unsigned long typeValue = 0;
+            const auto [parsedEnd, ec] = std::from_chars(typeBegin, typeEnd, typeValue);
+            if (firstPipe == 0 || ec != std::errc{} || parsedEnd != typeEnd ||
+                typeValue == kInvalidMsgId || typeValue > 0xFFFFu)
+                return msg;
 
-                if (secondPipe != std::string::npos)
-                {
-                    msg.token   = body.substr(firstPipe + 1, secondPipe - firstPipe - 1);
-                    msg.payload = body.substr(secondPipe + 1);
-                }
-                else
-                {
-                    msg.token   = "";
-                    msg.payload = body.substr(firstPipe + 1);
-                }
-            }
-            catch (const std::exception&)
+            msg.type = static_cast<MsgId>(typeValue);
+            if (secondPipe != std::string::npos)
             {
-                msg.type = kInvalidMsgId;
+                msg.token   = body.substr(firstPipe + 1, secondPipe - firstPipe - 1);
+                msg.payload = body.substr(secondPipe + 1);
+            }
+            else
+            {
+                msg.token   = "";
+                msg.payload = body.substr(firstPipe + 1);
             }
 
             return msg;
