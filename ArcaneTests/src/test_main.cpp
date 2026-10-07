@@ -11,6 +11,8 @@
 #include <Arcane/Render/AgilitySdk.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
+#include <cstdio>
+
 // Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
 ARC_AGILITY_SDK_EXPORTS();
 
@@ -19,6 +21,11 @@ int main(int argc, char* argv[]) {
     // S7). Point it at a private folder under TEMP before anything resolves a
     // path -- the pin below included -- so no case writes the real profile.
     const Arcane::Test::PrivateUserDataRoot userData;
+    if (!userData.Ok())
+    {
+        std::fprintf(stderr, "ArcaneTests: no private per-user root, refusing to run: %s\n", userData.Error().c_str());
+        return 2;
+    }
     // Install the shared context in the TEST module BEFORE any test computes a
     // component TypeID, so engine/plugin/test agree (TypeID caches per-module).
     Astra::SetTypeContext(&Arcane::Test::SharedTypeContext());

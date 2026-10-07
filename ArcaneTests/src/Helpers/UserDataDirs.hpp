@@ -60,13 +60,21 @@ namespace Arcane::Test
 
     // UserConfigDir, emptied. In Dist every project with one game name shares
     // that folder, so a case that did not empty it would read an earlier
-    // case's archive. REQUIREs a folder (never a relative path).
+    // case's archive. REQUIREs a folder (never a relative path), a clean
+    // removal and the folder's absence: a stale archive fails the case.
     inline std::filesystem::path FreshUserConfigDir(const std::filesystem::path& root)
     {
         const std::filesystem::path dir = UserConfigDir(root);
         REQUIRE_FALSE(dir.empty());
+        INFO("user config dir " << dir.string());
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
+        INFO("remove_all: " << ec.message());
+        REQUIRE_FALSE(ec);
+        const bool present = std::filesystem::exists(dir, ec);
+        INFO("exists: " << ec.message());
+        REQUIRE_FALSE(ec);
+        REQUIRE_FALSE(present);
         return dir;
     }
 
@@ -87,9 +95,9 @@ namespace Arcane::Test
         if (const wchar_t* v = _wgetenv(name)) return EnvString(v);
         return std::nullopt;
     }
-    inline void SetUserDataEnv(const wchar_t* name, const std::optional<EnvString>& value)
+    inline bool SetUserDataEnv(const wchar_t* name, const std::optional<EnvString>& value)
     {
-        _wputenv_s(name, value ? value->c_str() : L"");   // L"" removes it
+        return _wputenv_s(name, value ? value->c_str() : L"") == 0;   // L"" removes it
     }
 #else
     inline constexpr const char* kUserDataEnv[] = { "XDG_DATA_HOME", "XDG_CONFIG_HOME" };
@@ -98,15 +106,15 @@ namespace Arcane::Test
         if (const char* v = std::getenv(name)) return EnvString(v);
         return std::nullopt;
     }
-    inline void SetUserDataEnv(const char* name, const std::optional<EnvString>& value)
+    inline bool SetUserDataEnv(const char* name, const std::optional<EnvString>& value)
     {
-        if (value) ::setenv(name, value->c_str(), 1);
-        else ::unsetenv(name);
+        return (value ? ::setenv(name, value->c_str(), 1) : ::unsetenv(name)) == 0;
     }
 #endif
 
     // Points the per-user bases at `base` for the scope (this process and the
-    // children it starts), then restores them.
+    // children it starts), then restores them. Ok() is false unless every
+    // base was set and reads back as `base`.
     class ScopedUserDataBase
     {
     public:
@@ -115,20 +123,33 @@ namespace Arcane::Test
             for (std::size_t i = 0; i < std::size(kUserDataEnv); ++i)
             {
                 m_saved[i] = GetUserDataEnv(kUserDataEnv[i]);
-                SetUserDataEnv(kUserDataEnv[i], base.native());
+                const bool set = SetUserDataEnv(kUserDataEnv[i], base.native());
+                const std::optional<EnvString> now = GetUserDataEnv(kUserDataEnv[i]);
+                m_ok = m_ok && set && now && *now == base.native();
             }
         }
         ~ScopedUserDataBase()
         {
             for (std::size_t i = 0; i < std::size(kUserDataEnv); ++i)
-                SetUserDataEnv(kUserDataEnv[i], m_saved[i]);
+                (void)SetUserDataEnv(kUserDataEnv[i], m_saved[i]);
         }
         ScopedUserDataBase(const ScopedUserDataBase&) = delete;
         ScopedUserDataBase& operator=(const ScopedUserDataBase&) = delete;
 
+        [[nodiscard]] bool Ok() const { return m_ok; }
+
     private:
         std::optional<EnvString> m_saved[std::size(kUserDataEnv)];
+        bool m_ok = true;
     };
+
+    // True when `p` is `dir` or lies below it (lexically).
+    inline bool IsUnder(const std::filesystem::path& p, const std::filesystem::path& dir)
+    {
+        if (p.empty() || dir.empty()) return false;
+        const std::filesystem::path rel = p.lexically_normal().lexically_relative(dir.lexically_normal());
+        return !rel.empty() && *rel.begin() != "..";
+    }
 
     struct SuiteUserData
     {
@@ -145,41 +166,88 @@ namespace Arcane::Test
     // Dist only: a dev build keeps game data in the project's Saved/. Points
     // the per-user bases at <TEMP>/arcane-tests-userdata-<pid> for the whole
     // run (ScopedUserDataBase) and removes that folder on destruction.
+    //
+    // Every step is checked: the temp dir, clearing a stale root, creating
+    // it, setting each base, and Paths resolving UserRoot and a Dist
+    // GameUserDir under it. Ok() is false and Error() says which step failed
+    // otherwise; test_main then runs no case (a run without the redirect
+    // could write the real profile).
     class PrivateUserDataRoot
     {
     public:
         PrivateUserDataRoot()
         {
             if (!kDistBuild) return;
-            SuiteUserData& state = SuiteUserDataState();
-            state.real = Paths::CurrentPlatformDirs();
-            std::error_code ec;
-#if defined(_WIN32)
-            const std::string tag = std::to_string(_getpid());
-#else
-            const std::string tag = std::to_string(::getpid());
-#endif
-            const std::filesystem::path root = std::filesystem::temp_directory_path(ec) / ("arcane-tests-userdata-" + tag);
-            std::filesystem::remove_all(root, ec);
-            std::filesystem::create_directories(root, ec);
-            m_base.emplace(root);
-            state.privateRoot = root;
+            m_error = Install();
+            if (!m_error.empty())
+            {
+                m_base.reset();   // restore the real bases before anything else runs
+                SuiteUserDataState().privateRoot.clear();
+            }
         }
 
         ~PrivateUserDataRoot()
         {
-            SuiteUserData& state = SuiteUserDataState();
-            if (state.privateRoot.empty()) return;
             m_base.reset();
-            std::error_code ec;
-            std::filesystem::remove_all(state.privateRoot, ec);
-            state.privateRoot.clear();
+            if (!m_root.empty())
+            {
+                std::error_code ec;
+                std::filesystem::remove_all(m_root, ec);
+            }
+            SuiteUserDataState().privateRoot.clear();
         }
 
         PrivateUserDataRoot(const PrivateUserDataRoot&) = delete;
         PrivateUserDataRoot& operator=(const PrivateUserDataRoot&) = delete;
 
+        [[nodiscard]] bool Ok() const { return m_error.empty(); }
+        [[nodiscard]] const std::string& Error() const { return m_error; }
+
     private:
+        // Empty on success, else the failed step.
+        std::string Install()
+        {
+            SuiteUserData& state = SuiteUserDataState();
+            state.real = Paths::CurrentPlatformDirs();
+            std::error_code ec;
+            const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
+            if (ec) return "no temp directory: " + ec.message();
+            if (temp.empty() || !temp.is_absolute()) return "temp directory is not absolute: '" + temp.string() + "'";
+#if defined(_WIN32)
+            const std::string tag = std::to_string(_getpid());
+#else
+            const std::string tag = std::to_string(::getpid());
+#endif
+            const std::filesystem::path root = temp / ("arcane-tests-userdata-" + tag);
+            std::filesystem::remove_all(root, ec);
+            if (ec) return "cannot clear a stale " + root.string() + ": " + ec.message();
+            m_root = root;   // ours from here: the destructor removes it
+            std::filesystem::create_directories(root, ec);
+            if (ec) return "cannot create " + root.string() + ": " + ec.message();
+            if (!std::filesystem::is_directory(root, ec) || ec) return "not a directory after create: " + root.string();
+
+            m_base.emplace(root);
+            if (!m_base->Ok()) return "cannot point the per-user environment at " + root.string();
+
+            // Paths reads the bases fresh every call: prove it now resolves the
+            // per-user locations under the private root.
+            const std::filesystem::path userRoot = Paths::UserRoot();
+            if (!IsUnder(userRoot, root))
+                return "Paths::UserRoot() is '" + userRoot.string() + "', not under " + root.string();
+            Paths::Config probe;
+            probe.dist = true;
+            probe.companyName = "ArcaneTests";
+            probe.gameName = "PrivateRootProbe";
+            const std::filesystem::path gameUser = Paths::Resolve(Paths::Location::GameUserDir, probe);
+            if (!IsUnder(gameUser, root))
+                return "the Dist GameUserDir is '" + gameUser.string() + "', not under " + root.string();
+
+            state.privateRoot = root;
+            return {};
+        }
+
+        std::filesystem::path m_root;
         std::optional<ScopedUserDataBase> m_base;
+        std::string m_error;
     };
 }

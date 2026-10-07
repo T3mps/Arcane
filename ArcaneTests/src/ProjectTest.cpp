@@ -633,6 +633,7 @@ TEST_CASE("Project::Open mounts diag:// from the opened project's own per-user f
     } restore{ saved };
     const auto base = TempDir("open_diag_dist_base");
     const Arcane::Test::ScopedUserDataBase userData(base);
+    REQUIRE(userData.Ok());
     Arcane::Paths::Config previous = saved;
     previous.dist = true;
     previous.projectDir.reset();
