@@ -23,6 +23,7 @@
 
 #include "App/EditorApp.hpp"
 #include <Arcane/Platform/Platform.hpp>
+#include <Arcane/Platform/Process.hpp>   // UserDataDirectory: the layouts root off-Windows
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -1657,11 +1658,10 @@ namespace Arcane::Editor
         if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
             dir = std::filesystem::path(localAppData) / L"Arcane" / L"editor" / L"layouts";
 #else
-        // XDG base-directory spec: $XDG_DATA_HOME, else ~/.local/share.
-        if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
-            dir = std::filesystem::path(xdg) / "Arcane" / "editor" / "layouts";
-        else if (const char* home = std::getenv("HOME"); home && *home)
-            dir = std::filesystem::path(home) / ".local" / "share" / "Arcane" / "editor" / "layouts";
+        // Linux: the XDG base-directory spec ($XDG_DATA_HOME, else
+        // ~/.local/share); macOS: ~/Library/Application Support.
+        if (const std::filesystem::path root = Arcane::Platform::UserDataDirectory(); !root.empty())
+            dir = root / "Arcane" / "editor" / "layouts";
 #endif
         if (dir.empty())
             return;

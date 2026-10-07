@@ -172,8 +172,8 @@ namespace Arcane
 // the compile path below is shared; only module loading, the smart pointer,
 // the exe path and the crash guard differ.
 #include <dlfcn.h>
-#include <link.h>      // dlinfo(RTLD_DI_LINKMAP): the loaded library's path
 #include <dxcapi.h>
+#include <Arcane/Platform/Process.hpp>   // LoadedLibraryPath, ExecutablePath (Linux + macOS)
 #endif
 
 #include <Arcane/Base/ServiceThread.hpp>
@@ -224,10 +224,7 @@ namespace Arcane
         // A loaded shared object's own path (the toolchain hash reads its bytes).
         std::filesystem::path LoadedLibraryPath(void* handle)
         {
-            link_map* map = nullptr;
-            if (handle && ::dlinfo(handle, RTLD_DI_LINKMAP, &map) == 0 && map && map->l_name)
-                return std::filesystem::path(map->l_name);
-            return {};
+            return Platform::LoadedLibraryPath(handle);
         }
 #endif
 
@@ -266,9 +263,9 @@ namespace Arcane
             GetModuleFileNameW(nullptr, buf, MAX_PATH);
             return std::filesystem::path(buf).parent_path();
 #else
+            const std::filesystem::path exe = Platform::ExecutablePath();
             std::error_code ec;
-            const std::filesystem::path exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-            return ec ? std::filesystem::current_path(ec) : exe.parent_path();
+            return exe.empty() ? std::filesystem::current_path(ec) : exe.parent_path();
 #endif
         }
 
@@ -656,20 +653,31 @@ namespace Arcane
         // Linux: the fetched release's libdxil.so/libdxcompiler.so beside the
         // exe first (the postbuild copies them when scripts/fetch-dxc-linux.sh
         // has run), then the loader's search path. Same order and the same
-        // degradations as the Windows trio above.
+        // degradations as the Windows trio above. macOS: the Vulkan SDK's
+        // libdxcompiler.dylib (scripts/fetch-vulkan-sdk-macos.sh); the SDK
+        // ships no libdxil, so DXIL is unsigned there -- and never loaded, a
+        // Mac running the Vulkan backend only.
         const std::filesystem::path exeDir = ExeDirectory();
-        im.hDxil = ::dlopen((exeDir / "libdxil.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+        const std::string dxilName = Platform::SharedLibraryFileName("dxil");
+        const std::string compilerName = Platform::SharedLibraryFileName("dxcompiler");
+        im.hDxil = ::dlopen((exeDir / dxilName).c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!im.hDxil)
-            im.hDxil = ::dlopen("libdxil.so", RTLD_NOW | RTLD_LOCAL);
+            im.hDxil = ::dlopen(dxilName.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!im.hDxil)
-            ARC_WARN("ShaderCompiler: libdxil.so not found -- DXIL output will be unsigned");
+        {
+#if ARCANE_PLATFORM_MACOS
+            ARC_INFO("ShaderCompiler: no {} on macOS -- DXIL output (unused here) will be unsigned", dxilName);
+#else
+            ARC_WARN("ShaderCompiler: {} not found -- DXIL output will be unsigned", dxilName);
+#endif
+        }
 
-        im.hCompiler = ::dlopen((exeDir / "libdxcompiler.so").c_str(), RTLD_NOW | RTLD_LOCAL);
+        im.hCompiler = ::dlopen((exeDir / compilerName).c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!im.hCompiler)
-            im.hCompiler = ::dlopen("libdxcompiler.so", RTLD_NOW | RTLD_LOCAL);
+            im.hCompiler = ::dlopen(compilerName.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!im.hCompiler)
         {
-            ARC_ERROR("ShaderCompiler: libdxcompiler.so not found -- runtime compiles unavailable");
+            ARC_ERROR("ShaderCompiler: {} not found -- runtime compiles unavailable", compilerName);
             return false;
         }
 
@@ -677,7 +685,7 @@ namespace Arcane
             ::dlsym(im.hCompiler, "DxcCreateInstance"));
         if (!im.createInstance)
         {
-            ARC_ERROR("ShaderCompiler: DxcCreateInstance export missing from libdxcompiler.so");
+            ARC_ERROR("ShaderCompiler: DxcCreateInstance export missing from {}", compilerName);
             return false;
         }
 
