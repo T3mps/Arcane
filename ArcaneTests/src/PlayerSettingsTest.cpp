@@ -256,10 +256,10 @@ TEST_CASE("PlayerSettings::List skips Protected PlayerSafe rows outside Editor a
 
 TEST_CASE("the inventory's PlayerSafe rows are what a game's settings menu lists; no editor setting ever is", "[player-settings]")
 {
-    // Names from the frozen inventory (S5). If S5's review renamed a row, use the frozen name.
-    // S6 owns converting those rows onto the process registry. Until then this
-    // integration case skips the name CHECKs; the fixture case above always
-    // verifies List against registered copies of the same names.
+    // Names from the frozen inventory (S5). S6 registered every one of them on the
+    // process registry (RenderSettings, RenderWindowSettings, InputDeadzoneSettings,
+    // AudioSettings), so a missing name is a failure, never a skip: a skip here
+    // would pass vacuously the moment a row is renamed or dropped (S7-GATE).
     const std::vector<CVarListEntryEx> all = PlayerSettings::List("");
     for (const CVarListEntryEx& e : all)
     {
@@ -268,21 +268,10 @@ TEST_CASE("the inventory's PlayerSafe rows are what a game's settings menu lists
         CHECK_FALSE(e.name.starts_with("editor."));
     }
 
-    bool anyRegistered = false;
-    for (const char* name : kInventoryPlayerSafeNames)
-    {
-        if (!CVarRegistry::Get().Find(name).IsStale())
-        {
-            anyRegistered = true;
-            break;
-        }
-    }
-    if (!anyRegistered)
-        SKIP("inventory PlayerSafe rows not on the process registry yet (S6)");
-
     for (const char* name : kInventoryPlayerSafeNames)
     {
         INFO(name);
+        CHECK_FALSE(CVarRegistry::Get().Find(name).IsStale());
         CHECK(std::any_of(all.begin(), all.end(), [&](const CVarListEntryEx& e) { return e.name == name; }));
     }
 }

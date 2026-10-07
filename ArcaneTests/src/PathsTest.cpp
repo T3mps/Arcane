@@ -235,7 +235,13 @@ TEST_CASE("Runtime keeps Paths in step: the engine dir at construction, the proj
     REQUIRE(rt.OpenProject(dir / "A"));
     CHECK(Same(Arcane::Paths::Get(L::ProjectDir), rt.CurrentProject()->Root()));
     CHECK(Arcane::Paths::Current().gameName == "Alpha");
-    CHECK(Same(Arcane::Paths::Get(L::GameUserDir) / "Config", rt.CurrentProject()->Root() / "Saved" / "Config"));   // the User rung's home, unchanged
+    // The User rung's home: unchanged in dev; a Dist build's is the per-user
+    // OS dir named by the project's identity (settings S7, spec s8.2).
+    const fs::path userHome = Arcane::kDistBuild
+        ? Arcane::Paths::ResolveGameUserDir(Arcane::PathsConfigFor(*rt.CurrentProject(), "", true),
+                                            Arcane::Paths::kHostPlatform, Arcane::Paths::CurrentPlatformDirs())
+        : rt.CurrentProject()->Root() / "Saved";
+    CHECK(Same(Arcane::Paths::Get(L::GameUserDir) / "Config", userHome / "Config"));
     rt.CloseProject();
     CHECK(Arcane::Paths::Get(L::ProjectDir).empty());
     CHECK(Arcane::Paths::Current().gameName.empty());

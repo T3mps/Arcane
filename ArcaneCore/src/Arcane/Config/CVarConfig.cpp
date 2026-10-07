@@ -388,6 +388,12 @@ namespace Arcane
             d.scope = DiagScope::Project;
             if (issue.kind == CVarConfigIssue::Kind::UnknownKey)
             {
+                // Expected on a non-editor host in a dev build (S7-GATE): the
+                // editor archives its per-project preferences to Saved/Config/
+                // editor.json, the same User folder ArcaneRuntime/ArcaneServer
+                // read, and Editor-audience settings are declared only by the
+                // editor (spec s3.2), so those keys are reported, not applied
+                // (s4.8). A Dist game's per-user folder never holds them.
                 d.severity = DiagSeverity::Warning;
                 d.code     = "config.cvar.unknown-key";
                 d.message  = "Unknown setting '" + issue.key + "' in " + fileName + ".";

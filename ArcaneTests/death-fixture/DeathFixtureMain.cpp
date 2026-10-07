@@ -40,7 +40,16 @@ namespace
     struct Base { virtual ~Base() { Call(); } virtual void Pure() = 0; void Call() { Pure(); } };
     struct Derived : Base { void Pure() override {} };
     volatile int g_sink = 0;
+    // The stack-overflow death is the point: C4717 ("recursive on all control
+    // paths") describes exactly that, so it is silenced for this function only.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4717)
+#endif
     int Recurse(int depth) { volatile char pad[4096]; pad[0] = static_cast<char>(depth); g_sink += pad[0]; return Recurse(depth + 1) + 1; }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
 
 int main(int argc, char** argv)
