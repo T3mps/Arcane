@@ -40,7 +40,7 @@ namespace Arcane::HostBoot
                 Diagnostic manifestDiag;
                 if (const auto projectManifest = ProjectManifest::LoadFile(*manifest, &manifestDiag))
                 {
-                    ApplyLegacyManifestSettings(cvars, *projectManifest);
+                    ApplyLegacyManifestSettings(cvars, *projectManifest, *manifest);
                     // The project's identity names a Dist build's GameUserDir
                     // (settings S7), as Runtime::OpenProject's PathsConfigFor does.
                     projectPaths.companyName = projectManifest->company;

@@ -1121,6 +1121,10 @@ namespace Arcane
     //     (projectRoots) grew; ApplyCVarDirectory took projectRoots; new
     //     exports CVarDirInsideAny, CheckLaunchPath/LaunchPathStatusText/
     //     HasCommandLineBreaker/QuoteWindowsArg and Diagnostics::ReporterExeFor.
+    //     Its fix round 1: ApplyLegacyManifestSettings takes the manifest
+    //     file; new exports Diagnostics::ReportDirFor/ReporterStemSafe/
+    //     MonitorCommandFor (and the MonitorCommand struct), plus the inline
+    //     Project::ManifestFile().
     //   A v53 module was compiled against the old layouts; reject the pairing.
     //   ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")

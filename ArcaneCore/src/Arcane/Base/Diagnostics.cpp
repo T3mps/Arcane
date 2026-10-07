@@ -389,27 +389,34 @@ namespace
     bool             g_walkedContextValid = false;
 #endif
 
+    // The host exe's folder (the default report dir's parent), or "." when
+    // the exe path is unknown.
+    [[nodiscard]] std::filesystem::path HostExeDir()
+    {
+        const std::string exe = ExecutablePathUtf8();
+        return exe.empty() ? std::filesystem::path(".") : std::filesystem::path(exe).parent_path();
+    }
+
     [[nodiscard]] std::filesystem::path ReportDir()
     {
+        // Beside the exe unless configured, never the CWD: the hosts are
+        // documented as cd-then-run, so a CWD-relative report is a report
+        // nobody finds. A configured dir that could break the reporter's
+        // command line falls back the same way (ReportDirFor, S7-SEC).
+        const std::filesystem::path dir = ReportDirFor(g_cfg.dumpDir, HostExeDir());
         std::error_code ec;
-        std::filesystem::path dir;
-
-        if (!g_cfg.dumpDir.empty())
-        {
-            dir = std::filesystem::path(g_cfg.dumpDir);
-        }
-        else
-        {
-            // Beside the exe, never the CWD: the hosts are documented as
-            // cd-then-run, so a CWD-relative report is a report nobody finds.
-            const std::string exe = ExecutablePathUtf8();
-            dir = exe.empty() ? std::filesystem::path(".")
-                              : std::filesystem::path(exe).parent_path();
-            dir /= "diagnostics";
-        }
-
         std::filesystem::create_directories(dir, ec);
         return dir;
+    }
+
+    // Install's and RetargetDumpDir's warning for a dumpDir ReportDirFor
+    // refused (S7-SEC fix round 1). Off the crash path.
+    void WarnIfDumpDirRefused()
+    {
+        std::string refusal;
+        (void)ReportDirFor(g_cfg.dumpDir, HostExeDir(), &refusal);
+        if (!refusal.empty())
+            ARC_WARN("Diagnostics: {}", refusal);
     }
 
     // Both stamp helpers write into a caller-supplied buffer: neither may
@@ -1103,6 +1110,14 @@ namespace
             CloseHandle(g_reporterProcess);
             g_reporterProcess = nullptr;
         }
+
+        // The stem rides the line inside a plain quote wrap: a '"', CR or LF
+        // in it could add arguments of its own (the reporter honours
+        // --relaunch), and the crash thread may not call the allocating
+        // QuoteWindowsArg. ReportDirFor already refuses such a dumpDir at
+        // Install/RetargetDumpDir; this scan is the crash-thread backstop
+        // (S7-SEC fix round 1). No spawn: the caller says where the report is.
+        if (!ReporterStemSafe(stemUtf8)) return false;
 
         wchar_t wideStem[kPathMax];
         wchar_t wideKind[64];
@@ -2493,11 +2508,14 @@ namespace
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
         std::vector<unsigned char> attrStorage(attrSize);
         auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
-        std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
-                         + L" --host-handle ";
-        const std::wstring cmdTail = L" --session \"" + std::wstring(g_sessionPathWide) + L"\""
-                                   + (g_cfg.unattended ? L" --unattended" : L"")
-                                   + std::wstring(g_reporterSettingsArgs);
+        // The exe and the session path go through QuoteWindowsArg (S7-SEC fix
+        // round 1): the session path is derived from diagnostics.dumpDir,
+        // which a project may suggest, so it is quoted by the rules the
+        // reporter's CommandLineToArgvW reads back, never by a plain wrap.
+        const MonitorCommand line = MonitorCommandFor(g_reporterExe, static_cast<unsigned long>(GetCurrentProcessId()),
+                                                      g_sessionPathWide, g_cfg.unattended, g_reporterSettingsArgs);
+        std::wstring cmd = line.head;
+        const std::wstring& cmdTail = line.tail;
         cmd.reserve(cmd.size() + 24 + cmdTail.size());
 
         HANDLE self = nullptr;
@@ -2510,10 +2528,9 @@ namespace
             return;
         }
 
-        // A path and three numbers: nothing here needs escaping (a Windows
-        // path cannot contain a double quote). The handle's digits go into
-        // the capacity reserved above, and swprintf writes them without
-        // allocating (at most 20 digits for a u64).
+        // The handle's digits go into the capacity reserved above, and
+        // swprintf writes them without allocating (at most 20 digits for a
+        // u64); the quoted parts were composed before the handle existed.
         wchar_t digits[24];
         _snwprintf_s(digits, std::size(digits), _TRUNCATE, L"%llu",
                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(self)));
@@ -2658,6 +2675,36 @@ std::filesystem::path ReporterExeFor(std::string_view configured, const std::fil
     return bundled;
 }
 
+std::filesystem::path ReportDirFor(std::string_view configured, const std::filesystem::path& exeDir, std::string* refusal)
+{
+    const std::filesystem::path fallback = exeDir / "diagnostics";
+    if (configured.empty())
+        return fallback;
+    if (!HasCommandLineBreaker(configured))
+        return std::filesystem::path(std::string(configured));
+    if (refusal)
+        *refusal = "diagnostics.dumpDir '" + std::string(configured) + "' contains a quote or a line break, which the "
+                   "crash reporter's command line cannot carry; reports go to '" + fallback.string() + "' instead";
+    return fallback;
+}
+
+bool ReporterStemSafe(const char* stemUtf8) noexcept
+{
+    // std::string_view over a C string does not allocate, and '"', CR and LF
+    // are single bytes that never occur inside a UTF-8 multibyte sequence.
+    return stemUtf8 && stemUtf8[0] && !HasCommandLineBreaker(stemUtf8);
+}
+
+MonitorCommand MonitorCommandFor(const std::wstring& exe, unsigned long pid, const std::wstring& session,
+                                 bool unattended, std::wstring_view settingsArgs)
+{
+    MonitorCommand line;
+    line.head = QuoteWindowsArg(exe) + L" --monitor " + std::to_wstring(pid) + L" --host-handle ";
+    line.tail = L" --session " + QuoteWindowsArg(session) + (unattended ? L" --unattended" : L"")
+              + std::wstring(settingsArgs);
+    return line;
+}
+
 std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s, std::uint32_t logTailLines, double copyFlashSeconds)
 {
     // One flag per ReporterArgs field, in the struct's order. 512 holds the
@@ -2799,6 +2846,7 @@ void Install(const Config& cfg)
     AttachLogSink();
     if (!g_reporterRefusal.empty())
         ARC_WARN("Diagnostics: {}", g_reporterRefusal);
+    WarnIfDumpDirRefused();
 
     // The module table the portable stack resolves against. Unfrozen first:
     // a report interrupted in a previous arming could otherwise have left it
@@ -2986,6 +3034,9 @@ void RetargetDumpDir(const std::filesystem::path& dir)
     // thread is mid-way through writing.
     std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
     g_cfg.dumpDir = dir.string();
+    // A dir holding '"', CR or LF is refused for the default (ReportDirFor,
+    // S7-SEC fix round 1); say so once per retarget.
+    WarnIfDumpDirRefused();
 #if defined(_WIN32)
     // What the session record names until the rewrite below lands (R103).
     const std::string previousReportDir = g_reportDirSnap;

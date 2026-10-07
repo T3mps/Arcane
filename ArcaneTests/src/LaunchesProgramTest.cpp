@@ -12,7 +12,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8: the default report dir
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Build/BuildToolSettings.hpp>
@@ -47,6 +49,18 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>   // CommandLineToArgvW: the crash monitor's line parses back exactly
+#pragma comment(lib, "Shell32.lib")
+#endif
 
 using namespace Arcane;
 
@@ -298,9 +312,11 @@ TEST_CASE("S7-SEC: the legacy .arcproj settings block cannot name a program", "[
         manifest.legacySettings["build"][key] = exe.generic_string();
     manifest.legacySettings["diagnostics"]["reporterPath"] = exe.generic_string();
 
+    // The warning names the .arcproj the block came from (fix round 1).
+    const fs::path manifestFile = dir / "P" / "LegacyProbe.arcproj";
     LogCapture log;
     CVarRegistry& reg = CVarRegistry::Get();
-    ApplyLegacyManifestSettings(reg, manifest);
+    ApplyLegacyManifestSettings(reg, manifest, manifestFile);
     reg.PublishImmediate();
     for (const std::string& name : LaunchingNamesInThisBuild())
     {
@@ -309,7 +325,8 @@ TEST_CASE("S7-SEC: the legacy .arcproj settings block cannot name a program", "[
         CHECK_FALSE(HoldsRung(name, SetBy::Project));
         CHECK(CountOf(log.text, "config.cvar.refused '" + name + "'") == 1);
         const std::string line = log.LineFor(name);
-        CHECK(line.find(".arcproj") != std::string::npos);
+        INFO(line);
+        CHECK(line.find(manifestFile.generic_string()) != std::string::npos);
         CHECK(line.find(std::string(kProgramReason)) != std::string::npos);
     }
     std::error_code ec;
@@ -639,3 +656,165 @@ TEST_CASE("S7-SEC: the module build's command line refuses a path that could inj
     b.command = "build|calc";
     CHECK(Editor::ModuleBuild::ComposeDriverCommand(b).empty());
 }
+
+// Fix round 1: arccook's project Config read is a load, so a key the Project
+// rung refuses warns ONCE per key per load there too, naming the folder, the
+// key and the reason (it used to be refused silently).
+TEST_CASE("S7-SEC: arccook's project Config read warns once per refused key", "[cvar][launch][pipeline]")
+{
+    const RungCleanup cleanup;
+    const fs::path dir = Scratch("arccook");
+    const fs::path project = dir / "P";
+    WriteProgramKeys(project / "Config", MakeExe(dir, "evil.exe"));
+    const std::string folder = (project / "Config").generic_string();
+    CVarRegistry& reg = CVarRegistry::Get();
+    for (int load = 1; load <= 2; ++load)
+    {
+        INFO("load " << load);
+        LogCapture log;
+        (void)AssetPipeline::ApplyProjectCookConfig(project);
+        for (const std::string& name : LaunchingNamesInThisBuild())
+        {
+            INFO(name);
+            CHECK(reg.Get(reg.Find(name))->AsString().empty());
+            CHECK_FALSE(HoldsRung(name, SetBy::Project));
+            CHECK(CountOf(log.text, "config.cvar.refused '" + name + "'") == 1);
+            const std::string line = log.LineFor(name);
+            INFO(line);
+            CHECK(line.find(folder) != std::string::npos);
+            CHECK(line.find(std::string(kProgramReason)) != std::string::npos);
+        }
+        if constexpr (kDistBuild)
+            CHECK(log.text.find("config.cvar.refused 'build.premakePath'") == std::string::npos);   // compiled out: silent
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// Fix round 1: the report stem rides the crash reporter's command line in a
+// plain quote wrap, built on the crash thread where QuoteWindowsArg (heap) is
+// forbidden. So a dumpDir holding '"', CR or LF is refused for the default
+// dir at Install/RetargetDumpDir, and the crash thread scans the stem
+// (ReporterStemSafe) and skips the spawn as a backstop.
+TEST_CASE("S7-SEC: a dump dir or report stem that could break the reporter's command line is refused", "[launch][diag]")
+{
+    const fs::path exeDir = fs::path("C:/Arcane/bin");
+    std::string refused;
+    CHECK(Diagnostics::ReportDirFor("", exeDir, &refused) == exeDir / "diagnostics");
+    CHECK(refused.empty());
+    CHECK(Diagnostics::ReportDirFor("D:/Dumps/My Game", exeDir, &refused) == fs::path("D:/Dumps/My Game"));
+    CHECK(refused.empty());
+    for (const char* bad : { "D:/Dumps/x\" --relaunch \"calc.exe", "D:/Dumps/x\rcalc", "D:/Dumps/x\ncalc" })
+    {
+        INFO(bad);
+        refused.clear();
+        CHECK(Diagnostics::ReportDirFor(bad, exeDir, &refused) == exeDir / "diagnostics");
+        CHECK(refused.find("diagnostics.dumpDir") != std::string::npos);
+        CHECK(refused.find("quote or a line break") != std::string::npos);
+    }
+
+    CHECK(Diagnostics::ReporterStemSafe("C:\\Arcane\\bin\\diagnostics\\ArcaneEditor-2026-10-07_12-00-00-pid1"));
+    CHECK(Diagnostics::ReporterStemSafe("D:/Dumps/My Game/ArcaneEditor-x"));
+    CHECK_FALSE(Diagnostics::ReporterStemSafe(nullptr));
+    CHECK_FALSE(Diagnostics::ReporterStemSafe(""));
+    CHECK_FALSE(Diagnostics::ReporterStemSafe("D:/Dumps/x\" --relaunch \"calc.exe/ArcaneEditor-x"));
+    CHECK_FALSE(Diagnostics::ReporterStemSafe("D:/Dumps/x\r/ArcaneEditor-x"));
+    CHECK_FALSE(Diagnostics::ReporterStemSafe("D:/Dumps/x\n/ArcaneEditor-x"));
+}
+
+#if defined(_WIN32)
+// Fix round 1: the live path. Install and RetargetDumpDir with a dumpDir that
+// holds a quote or a line break warn once each and write the reports beside
+// the exe instead; the reporter is never spawned here (spawnReporter off).
+TEST_CASE("S7-SEC: Install and RetargetDumpDir refuse a dump dir that could break the reporter's command line", "[launch][diag]")
+{
+    const fs::path dir = Scratch("dumpdir");
+    const fs::path good = dir / "good";
+    const fs::path expected = fs::path(ExecutablePathUtf8()).parent_path() / "diagnostics";
+
+    Diagnostics::Config cfg;
+    cfg.appName             = "S7SecDumpDir";
+    cfg.dumpDir             = (dir / "x\" --relaunch \"calc.exe").string();
+    cfg.logDir              = (dir / "Logs").string();   // never the exe dir's Logs
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+    cfg.spawnReporter       = false;
+
+    std::vector<std::string> written;
+    {
+        LogCapture log;
+        struct Armed
+        {
+            explicit Armed(const Diagnostics::Config& c) { Diagnostics::Install(c); }
+            ~Armed() { Diagnostics::Shutdown(); }
+            Armed(const Armed&) = delete;
+            Armed& operator=(const Armed&) = delete;
+        } armed(cfg);
+        struct Restore
+        {
+            fs::path to;
+            ~Restore() { Diagnostics::RetargetDumpDir(to); }
+        } restore{ good };
+
+        CHECK(CountOf(log.text, "diagnostics.dumpDir '") == 1);
+        const std::string first = Diagnostics::WriteReport("s7-sec dumpdir probe");
+        REQUIRE_FALSE(first.empty());
+        written.push_back(first);
+        CHECK(first.find('"') == std::string::npos);
+        CHECK(fs::equivalent(fs::path(first).parent_path(), expected));
+
+        Diagnostics::RetargetDumpDir(dir / "y\ncalc");
+        CHECK(CountOf(log.text, "diagnostics.dumpDir '") == 2);
+        const std::string second = Diagnostics::WriteReport("s7-sec dumpdir probe");
+        REQUIRE_FALSE(second.empty());
+        written.push_back(second);
+        CHECK(fs::equivalent(fs::path(second).parent_path(), expected));
+
+        Diagnostics::RetargetDumpDir(good);   // a clean dir is honoured again, silently
+        CHECK(CountOf(log.text, "diagnostics.dumpDir '") == 2);
+        const std::string third = Diagnostics::WriteReport("s7-sec dumpdir probe");
+        REQUIRE_FALSE(third.empty());
+        CHECK(fs::equivalent(fs::path(third).parent_path(), good));
+    }
+
+    // The reports this case wrote beside the exe: every <stem>.* sibling.
+    std::error_code ec;
+    for (const std::string& txt : written)
+    {
+        const std::string stem = fs::path(txt).stem().string();
+        std::vector<fs::path> mine;
+        for (const auto& entry : fs::directory_iterator(expected, ec))
+            if (entry.path().filename().string().starts_with(stem))
+                mine.push_back(entry.path());
+        for (const fs::path& p : mine)
+            fs::remove(p, ec);
+    }
+    fs::remove_all(dir, ec);
+}
+
+// Fix round 1: the crash monitor's line (LaunchMonitor, at Install) quotes the
+// exe and the session path with QuoteWindowsArg, so the reporter reads every
+// argument back exactly -- a session path holding a space or a quote included.
+TEST_CASE("S7-SEC: the crash monitor's command line quotes the exe and the session path", "[launch][diag]")
+{
+    const std::wstring exe = L"C:\\Program Files\\Arcane\\ArcaneCrashReporter.exe";
+    const std::wstring sessions[] = {
+        L"C:\\Arcane\\diagnostics\\ArcaneEditor-pid42.session",
+        L"D:\\My Dumps\\x\" --relaunch \"calc.exe\\Editor-pid42.session",
+        L"D:\\trailing\\",
+    };
+    for (const std::wstring& session : sessions)
+    {
+        const Diagnostics::MonitorCommand line = Diagnostics::MonitorCommandFor(exe, 42, session, true, L" --deadline 5");
+        const std::wstring cmd = line.head + L"1234" + line.tail;
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(cmd.c_str(), &argc);
+        REQUIRE(argv);
+        const std::vector<std::wstring> args(argv, argv + argc);
+        LocalFree(argv);
+        const std::vector<std::wstring> want = { exe, L"--monitor", L"42", L"--host-handle", L"1234",
+                                                 L"--session", session, L"--unattended", L"--deadline", L"5" };
+        CHECK(args == want);
+    }
+}
+#endif

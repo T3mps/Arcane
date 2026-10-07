@@ -192,7 +192,8 @@ namespace Arcane
         }
     }
 
-    void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest)
+    void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest,
+                                     const std::filesystem::path& manifestFile)
     {
         for (const auto& [category, block] : manifest.legacySettings.items())
         {
@@ -200,8 +201,8 @@ namespace Arcane
             // folder ValidateCVarLayers reads, so the warning is said here.
             const CVarApplyReport report = ApplyCVarCategory(registry, category, block, SetBy::Project, false, "project-manifest");
             for (const CVarRefusedKey& refused : report.refused)
-                ARC_WARN("cvar config: config.cvar.refused '{}' in the .arcproj settings block of '{}' -- {}",
-                         refused.key, manifest.name, RungRefusalReason(refused.why));
+                ARC_WARN("cvar config: config.cvar.refused '{}' in the settings block of {} (project '{}') -- {}",
+                         refused.key, manifestFile.generic_string(), manifest.name, RungRefusalReason(refused.why));
         }
     }
 

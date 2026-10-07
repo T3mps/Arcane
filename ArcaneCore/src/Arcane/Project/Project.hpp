@@ -21,7 +21,10 @@ namespace Arcane
 {
     class CVarRegistry;
 
-    ARC_CORE_API void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest);
+    // `manifestFile` is the .arcproj the block was read from: each refusal's
+    // warning names it, with the key and the reason (settings S7-SEC).
+    ARC_CORE_API void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest,
+                                                  const std::filesystem::path& manifestFile);
 
     class ARC_CORE_API Project
     {
@@ -77,6 +80,7 @@ namespace Arcane
 
         const ProjectManifest&       Manifest() const { return m_manifest; }
         const std::filesystem::path& Root()     const { return m_root; }
+        const std::filesystem::path& ManifestFile() const { return m_manifestFile; }
         const MountTable&            Mounts()   const { return m_mounts; }
         const AssetRegistry&         Registry() const { return m_registry; }
 

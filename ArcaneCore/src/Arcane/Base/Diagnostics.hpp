@@ -307,6 +307,36 @@ namespace Arcane::Diagnostics
                                                                     const std::filesystem::path& exeDir,
                                                                     std::string* refusal = nullptr);
 
+    // The report directory Install and RetargetDumpDir arm (settings S7-SEC
+    // fix round 1): `configured` (diagnostics.dumpDir, Config::dumpDir) unless
+    // it is empty or holds a '"', CR or LF -- the report stem rides the crash
+    // reporter's command line inside quotes, so such a path could add
+    // arguments of its own (a project may suggest dumpDir). Otherwise
+    // <exeDir>/diagnostics. A refused path fills `refusal` (the caller warns).
+    [[nodiscard]] ARC_CORE_API std::filesystem::path ReportDirFor(std::string_view configured,
+                                                                  const std::filesystem::path& exeDir,
+                                                                  std::string* refusal = nullptr);
+
+    // The crash thread's gate before it spawns the reporter (settings S7-SEC
+    // fix round 1): true when `stemUtf8` is non-empty and holds no '"', CR or
+    // LF, so the plain quote wrap around <stem>.arcdiag parses back exactly (the
+    // stem never ends in a backslash: it ends in the report's file name). No
+    // heap, noexcept: SpawnReporter skips the spawn when it is false.
+    [[nodiscard]] ARC_CORE_API bool ReporterStemSafe(const char* stemUtf8) noexcept;
+
+    // The crash monitor's command line (settings S7-SEC fix round 1), split
+    // around the host-handle digits LaunchMonitor appends once the handle
+    // exists: head + <digits> + tail. The exe and the session path are quoted
+    // by QuoteWindowsArg, so CommandLineToArgvW reads each back exactly.
+    struct MonitorCommand
+    {
+        std::wstring head;   // <exe> --monitor <pid> --host-handle (with the trailing space)
+        std::wstring tail;   // " --session <session>[ --unattended]<settingsArgs>"
+    };
+    [[nodiscard]] ARC_CORE_API MonitorCommand MonitorCommandFor(const std::wstring& exe, unsigned long pid,
+                                                                const std::wstring& session, bool unattended,
+                                                                std::wstring_view settingsArgs);
+
     // The crash reporter's settings as the tail of its command line (settings
     // arc S6-4): " --deadline <s> --max-frames-thread <n> ... --copy-flash <s>",
     // every flag ReporterArgs parses back, the double printed round-trip

@@ -887,7 +887,7 @@ namespace Arcane
             // Its named values retain migration's merge-patch precedence over
             // an older Config key, then EditorUser/User/--set may still win.
             if (layer.by == SetBy::Project && !m_impl->project->Manifest().legacySettings.empty())
-                ApplyLegacyManifestSettings(cvars, m_impl->project->Manifest());
+                ApplyLegacyManifestSettings(cvars, m_impl->project->Manifest(), m_impl->project->ManifestFile());
         }
         cvars.Publish();
         // Unknown keys and type mismatches in any rung's files go to the

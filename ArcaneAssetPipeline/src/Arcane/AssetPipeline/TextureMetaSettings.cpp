@@ -5,11 +5,14 @@
 #include <Arcane/Platform/Paths.hpp>
 
 #include <Arcane/Util/Logger.hpp>
+// After Util/Logger.hpp: it defines SPDLOG_ACTIVE_LEVEL before spdlog is first included.
+#include <Arcane/Base/Log.hpp>   // ARC_WARN: config.cvar.refused goes to the engine log (S7-SEC)
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 
 // Settings arc S6-6: assets.import.texture.* registered HERE, in the TU that
@@ -118,11 +121,21 @@ namespace Arcane::AssetPipeline
 
     TextureMetaSettings ApplyProjectCookConfig(const std::filesystem::path& projectDir)
     {
-        // The report is advisory here (unknown keys/files are logged by the apply itself);
-        // a project with no Config folder simply leaves the struct defaults in place.
-        (void)ApplyCVarDirectory(CVarRegistry::Get(),
-                                 Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(projectDir)),
-                                 SetBy::Project, "project");
+        // A project with no Config folder simply leaves the struct defaults in place.
+        // Unknown keys stay silent here (the editor's ValidateCVarLayers reports them),
+        // but a key the Project rung refuses -- one that names a program, or a
+        // machine-wide preference (settings S7-SEC) -- warns once per key per load,
+        // naming the folder, the key and the reason, as the editor's rungs do.
+        const std::filesystem::path configDir =
+            Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(projectDir));
+        const std::filesystem::path roots[] = { projectDir };
+        const CVarApplyReport report = ApplyCVarDirectory(CVarRegistry::Get(), configDir, SetBy::Project,
+                                                          "project", {}, roots);
+        std::set<std::string> warned;
+        for (const CVarRefusedKey& refused : report.refused)
+            if (warned.insert(refused.key).second)
+                ARC_WARN("cvar config: config.cvar.refused '{}' in {} -- {}",
+                         refused.key, configDir.generic_string(), RungRefusalReason(refused.why));
         CVarRegistry::Get().PublishImmediate();
         return Settings<TextureMetaSettings>();
     }
