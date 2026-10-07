@@ -1,6 +1,6 @@
 # Arcane Text Editor -- design
 
-**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revisions 2 and 3 fold in two independent reviews -- see s13 and s14; awaiting written-spec review)
+**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revisions 2-4 fold in three independent reviews -- see s13-s15; awaiting written-spec review)
 **Scope:** spec 1 of 2. Spec 2 (editor-wide Command Palette, Goto Anything, Find in Files) follows this one and consumes the hooks defined in s9.
 **Research:** lite-xl (`D:\dev\_reference\lite-xl-master`, MIT), Zed (`D:\dev\_reference\zed-main`, GPL editor crates / Apache `sum_tree`), Zep, ImGuiColorTextEdit (BalazsJako + santaclose + goossens forks), Sublime Text's `.sublime-syntax` model, tree-sitter, Lexilla. Findings are summarised where they drive a decision.
 
@@ -32,6 +32,7 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 | D11 | Regex engine: **PCRE2 with JIT**, vendored; the one regex *engine* for grammars, find/replace and vim. Vim patterns reach it through a vim-to-PCRE2 translator (s6.5). |
 | D12 | **Release gate after step 4** plus the step-6 essentials (s12). Vim ships behind an **Experimental** label that widens with each vim pass and drops when the last pass and the oracle suite are green. |
 | D13 | Vim flavour: **Neovim defaults** (`Y` = `y$`, `hlsearch`/`incsearch` on, `startofline` off, `&` remapped, `nrformats` without octal). Classic-Vim behaviour stays reachable through options. |
+| D14 | **Read-only files are treated as VCS-locked until proven otherwise.** The save banner names the likely VCS (git/Git LFS lockable, Perforce, Lore, Unity VCS) and puts "Remove read-only and save" behind a confirmation. Source-control integration is a separate future spec: git first, Lore eventually. |
 
 ### 1.2 Non-goals
 
@@ -41,6 +42,7 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 - A hex/binary viewer. Binary files are refused with a message.
 - Minimap, soft wrap, word completion, diff view: later steps, not v1 (s12.3).
 - Collaborative editing. (Zed's CRDT machinery -- Lamport clocks, fragment/locator anchors, version vectors -- is deliberately not reproduced.)
+- Source-control integration (status, lock, check-out, diff). Arcane has none today; v1 only *identifies* a likely VCS to word the read-only banner (D14, s5.3). Integration is its own future spec: git (GitHub-hosted projects) first, Epic's Lore later, Perforce / Unity VCS only if users ask.
 - **Text-rendering limits (inherited from ImGui):** no complex-script shaping (Arabic, Devanagari render wrong), no bidi, no automatic font fallback (CJK needs a fallback font merged into the atlas; not shipped in v1), no colour emoji. Grapheme-correct cursor movement (s5.1) does not fix rendering; these are display limits, stated so nobody mistakes them for bugs.
 
 ---
@@ -108,7 +110,7 @@ This is what makes every command multi-cursor-correct and atomic, and what lets 
 |---|---|
 | Line endings | **Every line keeps its original ending.** The rope stores LF; an `EolMap` records the file's dominant style plus a sparse set of exception rows (CRLF in an LF file, LF in a CRLF file, lone `\r`), shifted by edits like anchors. A lone `\r` (classic Mac) is a line break. New lines take the dominant style. An unedited file saves back **byte-identical**; a one-character edit changes one line in version control. Converting is explicit: the status strip's line-ending menu (and a `text.convertLineEndings` action) rewrites every line in one undo step. Mixed files show a status-strip note but are never silently normalised. |
 | Encodings | UTF-8 (BOM preserved if present) and UTF-16 LE/BE with BOM are decoded and saved back in the same encoding. **Windows-1252** (common in old `.bat`/`.ini` files) is supported through **Reopen with Encoding** (status strip and Inspector): the file is decoded as 1252 and saved back as 1252. The chosen encoding is remembered per file in the view state. |
-| Invalid bytes / binary | Invalid UTF-8 or binary content (NUL bytes in the first 8 KB) opens **read-only** with a banner explaining why and offering **Reopen with Encoding -> Windows-1252** (which makes it editable when it is a legacy text file); saving can never corrupt the file. Pure binary formats with no text editor are refused with a message. |
+| Invalid bytes / binary | Invalid UTF-8 or binary content (NUL bytes in the first 8 KB) opens **read-only** with a banner explaining why and offering **Reopen with Encoding -> Windows-1252** (which makes it editable when it is a legacy text file); saving can never corrupt the file. Pure binary formats with no text editor are refused with a message. Defined end to end: <br>- the rope holds the file's **raw bytes** unchanged (never lossy-decoded, so nothing about the file is altered); <br>- each invalid byte **draws as a hex box** (`<E9>`), in the comment colour; <br>- grapheme iteration treats **each invalid byte as its own cluster**, so cursors, selection and vim motions step over them one at a time; <br>- PCRE2 is compiled with **`PCRE2_MATCH_INVALID_UTF`** everywhere, so find, vim search and grammars work on these files instead of returning an error; invalid bytes never match `.` or a class. |
 | Size thresholds | Above `editor.text.syntaxMaxMB` (default 32), stateful grammars stop highlighting; **line-local grammars keep highlighting at any size** (s4.4), so logs never lose their level colours. Above `editor.text.openMaxMB` (default 512) the file is not opened ("open externally" notice). |
 | Long lines | A line longer than `editor.text.longLineMaxBytes` (default 64 KB; e.g. one-line minified JSON) is tokenized only up to the cap; the rest of that line draws plain, and the **next** line restarts from the grammar's root state so nothing after it is held hostage. This is a **deliberate, named exception** to s4.4's no-heuristic-resync rule, and the tokenizer applies it identically in every mode (incremental, worker, full), so "incremental == full" (s11.2) still holds by construction. Drawing such a line clips to the visible horizontal window. |
 | Append-only growth | Detected cheaply: the size grew **and** a hash of a small window (4 KB) just before the old end still matches. A shrink (truncation) or a window mismatch (rotation, rewrite) is a full reload under the s5.3 external-change rules. **Appending happens only when the document is clean or read-only**; a dirty document whose file grows gets the s5.3 dirty banner instead. An append: <br>- is **not an undo entry** and does not count toward `undoMemoryMB`; <br>- leaves `changeId` and `savedChangeId` both unchanged, so a clean document stays clean (the buffer still equals the file); existing undo history stays valid because the append only adds text after every recorded range; <br>- does bump the buffer `version` (s4.4), so caches and searches see it. <br>A **Follow** toggle (status strip) keeps the view at the end, like `tail -f`. |
@@ -228,7 +230,7 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 - **Text area:** current-line highlight, per-row selection rectangles, multiple carets (`editor.text.caretBlink`), bracket-pair boxes, search-match backgrounds (active match distinct), indent guides, optional whitespace rendering, column rulers (`editor.text.rulers`).
 - **Scrollbar annotations:** search matches, other cursors, Problems.
 - **Long lines:** horizontal scroll; each visible line's glyph x-prefix is cached so column <-> x is O(log n), not O(line length) (a known lite-xl weak spot).
-- **Unicode:** the cursor moves by grapheme cluster (a UAX #29 subset: combining marks, ZWJ emoji sequences, regional-indicator pairs), so accents and emoji are never split.
+- **Unicode:** the cursor moves by grapheme cluster (a UAX #29 subset: combining marks, ZWJ emoji sequences, regional-indicator pairs), so accents and emoji are never split. Invalid UTF-8 bytes are single-byte clusters (s3.5).
 - **IME:** composition position reported through ImGui's platform IME data at the primary caret; the composition string is drawn inline (underlined) until committed. With vim on, the IME is **disabled in Normal, Visual and operator-pending modes** and re-enabled in Insert/Replace and the command line, so a Japanese IME never turns `j` into a composition.
 - **Keyboard input and layouts (s5.5).**
 - **Mouse:** click, drag, double-click word, triple-click line, Ctrl+click add/remove cursor, Alt+drag column selection, drag-select auto-scroll.
@@ -242,20 +244,24 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 
 ### 5.3 `TextDocument`
 
-- An `EditorDocument` (and `InspectorSource`). **Identity is the canonical path, always** -- `GetFinalPathNameByHandleW` on an open handle, which resolves case, 8.3 short names, junctions and symlinks. An asset's GUID is only a *lookup into* that path, never a second key, so opening the same file through the Asset Browser, a Console `file:line` link and (spec 2) Find in Files always focuses one tab. `DocumentHost` gains the canonical-path index; an asset move (`NoteMoved`) re-keys the document.
+- An `EditorDocument` (and `InspectorSource`). **Identity is the canonical path, always** -- `GetFinalPathNameByHandleW` on an open handle, which resolves case, 8.3 short names, junctions and symlinks. An asset's GUID is only a *lookup into* that path, never a second key, so opening the same file through the Asset Browser, a Console `file:line` link and (spec 2) Find in Files always focuses one tab. `DocumentHost` gains the canonical-path index; an asset move (`NoteMoved`) re-keys the document. **Known limitation:** two hard links to one file have different canonical paths and open as two tabs; a file-ID key would not help, because `ReplaceFileW` changes the file index on every save.
 - **Registration:** `DocumentHost` gets a **fallback factory** used when no extension factory claims a path and the file sniffs as text; C++ extensions stay routed to `IdeLaunch`. Text extensions with no dedicated editor (`.md .ini .log .hlsl .lua .toml .yaml .xml .txt ...`) register this factory explicitly.
 - **Reading:** files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, so a running game (or the editor's own logger) can keep writing, rotating or deleting the log being viewed.
 - **Save** preserves encoding, BOM and per-line endings (s3.5). `editor.text.ensureFinalNewline` and `editor.text.trimTrailingWhitespace`, both off by default.
   - **Temp file:** written beside the target as `<name>.arctmp~<pid>-<n>`. The asset registry, project watchers and Content scanning **ignore the `.arctmp~` pattern** (one shared rule, tested), so a save never produces spurious create/delete or import events in Content or Config.
-  - **Atomic replace:** flush the temp, then **`ReplaceFileW`** (not a plain rename), which keeps the original's ACLs, attributes, alternate data streams and file identity for other watchers. A file that does not exist yet is created with `MoveFileExW(MOVEFILE_WRITE_THROUGH)`.
+  - **Atomic replace:** flush the temp, then **`ReplaceFileW`** (not a plain rename). It preserves the original's ACLs, attributes, alternate data streams, creation time and object ID; it does **not** preserve the file index, and handles other processes hold do **not** follow to the new file. A file that does not exist yet is created with `MoveFileExW(MOVEFILE_WRITE_THROUGH)`.
+  - **A writer would be orphaned.** If another process holds the file open for writing with delete sharing (common for loggers, and the editor's own reader does the same), `ReplaceFileW` succeeds but that process keeps writing into the replaced file, now pending deletion, and its output silently disappears. So before replacing, the save asks the Windows Restart Manager (`RmGetList`) which processes hold the file. If any do -- and always for a file that is under Follow or was modified externally in the last `editor.text.recentWriteSeconds` (default 10) -- the save shows a banner naming the process(es): **Overwrite in place** (truncate and rewrite through a write-shared handle, so the writer keeps writing into the same file), **Save anyway** (replace; the writer is detached), or **Cancel**.
   - **Fallback:** where `ReplaceFileW` is unsupported (some network shares and non-NTFS volumes return `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED`), `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` is used; it loses ACL preservation, which the save notes once in the status strip.
   - **Partial-failure recovery:** `ERROR_UNABLE_TO_MOVE_REPLACEMENT` (original intact, temp still present) -> delete the temp, report, buffer stays dirty. `ERROR_UNABLE_TO_MOVE_REPLACEMENT_2` (the original now sits under the backup name) -> **move the backup back** to the original name before reporting; if that also fails, the banner names both files so nothing is lost. The save code handles these states; it does not just surface them.
-  - **Read-only attribute:** the save is **refused** with a banner offering **Remove read-only and save** (clears `FILE_ATTRIBUTE_READONLY`, then saves) and **Save As...**. ACL denials get the same banner without the remove option.
+  - **Read-only attribute -- VCS-aware (D14).** In game projects a read-only file usually means *locked by source control*, not *protected*: Perforce leaves files that are not checked out read-only, Git LFS makes `lockable` files read-only until you `git lfs lock` them, and Unity Version Control and Epic's Lore can do the same for locked files. Removing the flag behind the VCS's back is a classic way to lose work. So the save is **refused** with a banner that:
+    - names the likely reason, from a cheap `VcsProbe` that walks up from the file: a `.git` root with the path matching a `lockable` attribute in `.gitattributes` ("locked by Git LFS -- run `git lfs lock`"), a `.p4config` / `P4CONFIG` ("not checked out in Perforce"), a Lore workspace, a Unity VCS workspace, or none found ("may be under version control");
+    - offers **Save As...** first, and **Remove read-only and save** only behind an explicit confirmation that repeats the VCS warning.
+    - ACL denials get the same banner without the remove option. Real VCS actions (**Lock and save**, **Check out and save**) wait for the source-control spec (s12.3); `VcsProbe` is the seam they will extend.
   - **Sharing violation** (the file is open without delete sharing, e.g. a log held by a running process): the save fails cleanly with a banner -- *"<file> is in use by another program"* -- offering **Retry**, **Save As...**, and, when the holder allows write sharing, **Overwrite in place (not atomic)**, which truncates and rewrites the file through a write-shared handle. The buffer stays dirty until a save succeeds; nothing is lost.
   - **Self-save suppression:** after a save the document records the written size, mtime and a content hash; watcher events matching them are ignored, so saving never triggers a "changed on disk" reload of itself.
 - **External changes** (file watcher, debounced):
-  - clean document -> silent reload keeping cursors and scroll (positions mapped by line/col);
-  - dirty document -> banner: **Reload** / **Keep mine**;
+  - clean document -> silent reload keeping cursors and scroll (positions mapped by line/col), **recorded as one undoable transaction** (old text -> new text), so Ctrl+Z after a reload restores the previous version and the existing history stays valid behind it, as in VS Code; if the reload's old text exceeds `undoMemoryMB`, the history is cleared instead, with the s5.4 note;
+  - dirty document -> banner: **Reload** / **Keep mine**; choosing Reload is recorded the same way (one undoable transaction holding the user's unsaved text), so even a mistaken Reload is one Ctrl+Z away;
   - append-only growth -> append, **only if the document is clean or read-only** (s3.5); a dirty document gets the dirty banner; truncation or rotation -> reload under the two rules above;
   - deleted -> banner; Save recreates the file.
 - **Crash safety:** unsaved text documents join the editor's existing autosave/recovery path (crash-window arc). Only **dirty** buffers are snapshotted; the write happens on a worker from a `RopeSnapshot` (never stalling the frame); buffers above `editor.text.recoveryMaxMB` (default 16) are skipped with a one-time note in the status strip; snapshots are offered back after a crash.
@@ -274,12 +280,14 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 ### 5.5 Keyboard input and layouts
 
 Two input streams, never mixed:
-- **Chords** -- keys plus modifiers, through the action table's `KeyChord` (Labelled = the key that prints that letter on the user's layout, Physical = a position, already in `EditorActions`). Ctrl-letter chords in vim (`Ctrl+V`, `Ctrl+R`, ...) are Labelled too.
+- **Chords** -- keys plus modifiers, through the action table's `KeyChord` (Labelled / Physical, already in `EditorActions`). **For letters, Labelled means the Latin letter of the key** (the virtual-key code), which is the Windows convention and what SDL3's default `latin_letters` keycode option gives: on Russian, Greek or other non-Latin layouts, `Ctrl+V` is the key whose VK is V, so every Ctrl-letter chord stays reachable. (The plan verifies Arcane's `KeyLayout` honours this.) Ctrl-letter chords in vim (`Ctrl+V`, `Ctrl+R`, ...) follow the same rule.
 - **Characters** -- ImGui's input character queue (`WM_CHAR`), which is what the OS layout actually produced. Typed text comes from here, and so do **all vim keys that are characters**: `$ % { } " ^ ~ \` ' : / ? * #` and every letter. The vim keymap is keyed on characters plus named keys (`Esc`, `Enter`, `Tab`, arrows) plus Ctrl chords; it never reads `ImGuiKey_4` to mean `$`.
 
 Layout rules:
-- **AltGr.** Windows delivers AltGr as Left Ctrl + Right Alt. A Ctrl+Alt key event that produces a character in the same frame -- or any key with Right Alt held as AltGr on a layout that has AltGr -- is **text, never a chord**: it does not fire `text.*` actions, vim Ctrl handling, or Global actions. So `{` on German (AltGr+7) or `@` on Polish never adds a cursor. Default `TextDocument` bindings use Ctrl+Alt only with non-printing keys (arrows), which keeps the rule simple.
-- **Dead keys.** On US-International, German, French and similar layouts, `^ \` ' " ~` are dead keys: the OS composes them with the next keystroke and delivers a character only then. Vim consumes whatever character arrives; a lone dead key followed by Space delivers the bare symbol, as in every other Windows application. Nothing in vim times out on a pending dead key (the OS holds it, not vim). Users who want a non-dead binding remap it (s6.4).
+- **AltGr.** Windows delivers AltGr as Left Ctrl + Right Alt. Whether the active layout **has** AltGr is asked of the layout itself (`VkKeyScanExW` / `ToUnicodeEx` on the active HKL, re-queried on `WM_INPUTLANGCHANGE`), not inferred from event timing. On such layouts, Right Alt held means AltGr: the key event is **text, never a chord** -- it fires no `text.*` action, no vim Ctrl handling, no Global action. So `{` on German (AltGr+7) or `@` on Polish never adds a cursor. Default `TextDocument` bindings use Ctrl+Alt only with non-printing keys (arrows).
+- **Dead keys.** On US-International, German, French and similar layouts, `^ \` ' " ~` are dead keys that the OS composes with the next keystroke. That is right for typing (Insert, Replace, command line, find bar) and wrong for vim commands: on US-International `"a` composes to `ä`, so `"ayy` would never select register `a`. So **in Normal, Visual and operator-pending modes**, a hook on SDL3's Windows message hook (`SDL_SetWindowsMessageHook`, already used by `Platform/Window.cpp`, chained) turns `WM_DEADCHAR` into the bare symbol and **clears the layout's dead-key state** (a `ToUnicodeEx` call that consumes it), so the next key arrives uncomposed. In the text-entry modes the hook stays out of the way and composition works normally. This cannot be done from ImGui's character queue alone.
+- **Non-Latin layouts in vim.** On a Cyrillic or Greek layout, Normal mode would receive Cyrillic/Greek characters and do nothing. `editor.text.vim.latinLettersInNormal` (default **auto**: on whenever the active layout's letter keys are non-Latin) makes letters in Normal, Visual and operator-pending modes come from the key's Latin letter (VK code); Insert mode always types the layout's characters. This covers the common case without a full `langmap`.
+- **Control characters.** `Ctrl+letter` also produces a control character (0x01-0x1A) in `WM_CHAR`; the character stream **drops 0x00-0x1F except Tab and Enter**, so vim and the buffer never see both the chord and its character.
 - **`Ctrl+[`** is a Labelled chord: on layouts where `[` needs AltGr it may be unreachable. `Esc` always works; vim users on such layouts typically remap (`jk` -> `Esc` is the documented example).
 - **IME** is disabled outside Insert/Replace/command line when vim is on (s5.1).
 
@@ -318,7 +326,7 @@ Layout rules:
 | Area | Coverage |
 |---|---|
 | Motions | `h j k l w W b B e E ge gE 0 ^ $ g_ gg G \| f F t T ; , % ( ) { } H M L`, `/ ? n N * #`, `` ` `` / `'` marks, `Ctrl+D Ctrl+U Ctrl+F Ctrl+B Ctrl+E Ctrl+Y zz zt zb` |
-| Operators | `d c y > < = g~ gu gU J gJ zf`, `gc` (comment toggle from the grammar's `comment`), `Ctrl+A` / `Ctrl+X` |
+| Operators | `d c y > < = g~ gu gU J gJ zf`, `gc` (comment toggle from the grammar's `comment`, padded with one space like Neovim's `gc`: `// text`), `Ctrl+A` / `Ctrl+X` |
 | Text objects | `iw aw iW aW is as ip ap`, `i" a" i' a' i\` a\``, `i( a( ib i{ a{ iB i[ a[ i< a<`, `it at` (XML) |
 | Registers | `"` unnamed, `0-9` (deletes shift), `a-z` (`A-Z` append), `-` `_` `+` `*` `/` `:` `.` `%`. Multi-cursor yank stores one entry per cursor; paste with an equal cursor count distributes. `editor.text.vim.useSystemClipboard` makes `"` alias `+`. |
 | Repeat | `.` replays the last change (recorded commands + inserted text). `q{reg}` / `@{reg}` / `@@`: macros are **key text stored in the register**, so `"ap` pastes a macro for editing, as in vim. |
@@ -351,7 +359,7 @@ Vim's regex dialect differs from PCRE2 (`\<` `\>`, `\(` `\)`, `\|`, `\{n,m}`, ma
 | `\k` `\K`, `\i` `\I` | `[K]` / `[K]` minus digits (keyword); `\i` uses the same class (identifier) in v1 |
 | `\s` `\S` | `[ \t]` / `[^ \t]` -- **vim's `\s` is space/tab only**, unlike PCRE's |
 | `\d \D \x \X \o \O \w \W \h \H \a \A \l \L \u \U` | `[0-9]` `[^0-9]` `[0-9A-Fa-f]` `[^0-9A-Fa-f]` `[0-7]` `[^0-7]` `[0-9A-Za-z_]` `[^0-9A-Za-z_]` `[A-Za-z_]` `[^A-Za-z_]` `[A-Za-z]` `[^A-Za-z]` `[a-z]` `[^a-z]` `[A-Z]` `[^A-Z]` (ASCII, as vim defines them) |
-| `\zs` `\ze` | `\K` / a lookahead wrapping the remainder |
+| `\zs` `\ze` | **top level only**: `\zs` -> `\K` emitted at the top level of the pattern (never inside a lookaround, so `PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK` is never needed); `\ze` -> the rest of the top-level pattern wrapped in a lookahead. Either one inside a group or an alternation (`foo\zebar\|baz`) is a documented divergence with its error. |
 | `\c` `\C` anywhere | `(?i)` / `(?-i)` for the whole pattern, overriding `ignorecase`/`smartcase` |
 | `~` (last substitute string) | the escaped literal of the previous `:s` replacement |
 | `\_s` `\_.` `\_x` (any `\_` class), `\n` | multi-line classes -> the multi-line search path (s4.2) |
@@ -465,8 +473,9 @@ All under `editor.text.*` (Preferences scope unless noted), registered through t
 - **Neovim oracle (D9, D13):** `scripts/vim-oracle.ps1` runs each case through `nvim --headless --clean` and writes or verifies the expected columns. Dev-time only; tests never require Neovim.
   - **Pinned version.** The script pins one Neovim release (checked at start; it refuses another). Defaults change between minor versions, so bumping the pin is a deliberate re-bless with a reviewed diff of changed expectations.
   - **Neovim's defaults are the target**, including the ones beyond D13's list that change outcomes, and Arcane emulates them: `formatoptions` contains `j` (`J` removes comment leaders, using the grammar's `comment` tokens), `autoindent` on, `nojoinspaces`.
-  - **Every case declares a filetype** (`json`, `lua`, `markdown`, ...). The oracle sets `filetype` so `commentstring` (and therefore Neovim 0.10+'s built-in `gc`) matches the Arcane grammar's `comment` for that language; Arcane runs the case with the matching grammar.
-  - **Known divergences up front:** `=` (Neovim without an `indentexpr` behaves nothing like grammar-driven re-indent; Arcane's `=` uses the grammar's `indent` rules), and the s6.5 pattern items. Each divergent case carries a `divergence` note instead of an oracle expectation.
+  - **No filetype is ever set.** Neovim enables `filetype plugin indent on` by default and `--clean` still loads the runtime, so setting `filetype=lua` would load `ftplugin/lua` and `indent/lua.vim` and change `indentexpr`, `formatoptions` and `iskeyword` -- every `o`, `O`, `cc` and Insert-mode Enter case would compare against Neovim's Lua indenter instead of Arcane's grammar rules. Instead, each case declares the Arcane grammar it runs with, and the oracle sets **`commentstring` directly from that grammar's `comment`** (with Neovim's padding convention, `// %s`) and keeps indentation options fixed (`autoindent` on, no `indentexpr`).
+  - **Word characters are aligned.** Neovim's default `iskeyword` is `@,48-57,_,192-255` and treats characters above 255 by Unicode class. Arcane's word class is the grammar's `wordChars` **plus every non-ASCII letter and digit** (`\p{L}\p{N}`), so `w` over `café` matches Neovim; grammars that narrow it say so, and such cases carry a divergence note.
+  - **Known divergences up front:** `=` (Arcane's `=` uses the grammar's `indent` rules; the oracle has no `indentexpr`), `\ze` inside a group or alternation (s6.5), and the s6.5 pattern items. Each divergent case carries a `divergence` note instead of an oracle expectation.
 - **Multi-cursor vim cases are hand-written.** Neovim has no multi-cursor, so the oracle cannot produce them. They live in their own table file, are reviewed as their own task, and are derived from the rule "each cursor behaves as a single-cursor vim would, then selections merge" (s2.1, s6.2).
 
 ### 11.4 View and document
@@ -513,7 +522,7 @@ Baselines live with the existing automation baselines; regressions fail the suit
 - Spec 2 (palette, Goto Anything, Find in Files) can start after the first gate; it does not wait for vim.
 
 ### 12.3 After v1 (not in this spec)
-Minimap; soft wrap (likely first, for Markdown and logs -- a second `DisplayMap` layer); word completion; diff view; tree-sitter for structural folding/outline/syntax-aware text objects behind the scope interface; shader editor snippet fields and crash log tail adopting the core; CJK fallback font; digraphs; opt-in confirmed `:!`.
+Minimap; soft wrap (likely first, for Markdown and logs -- a second `DisplayMap` layer); word completion; diff view; tree-sitter for structural folding/outline/syntax-aware text objects behind the scope interface; shader editor snippet fields and crash log tail adopting the core; CJK fallback font; digraphs; opt-in confirmed `:!`; **source-control integration** (its own spec: git first, then Lore; adds Lock/Check out and save on top of `VcsProbe`).
 
 ---
 
@@ -561,4 +570,21 @@ All findings accepted. Items 1-4 changed the shape of the code and were required
 | Windows-1252 files stuck read-only | Reopen with Encoding -> Windows-1252 in v1 (s3.5) |
 | Crash recovery could stall on big buffers | Dirty-only, worker-written from snapshots, `recoveryMaxMB` cap (s5.3) |
 | Multi-cursor vim expectations can't come from the oracle | Hand-written table file with its own review (s11.3) |
+
+---
+
+## 15. Revision 4 (2026-10-07): third independent review folded in
+
+The reviewer recommended stopping spec revisions after this round and moving to the plan; agreed.
+
+| Finding | Resolution |
+|---|---|
+| Setting a filetype in the oracle loads Neovim's ftplugins and indenters | No filetype; `commentstring` set from the Arcane grammar; fixed indent options; `gc` padding matches Neovim; word class aligned with Neovim's `iskeyword` (s6.3, s11.3) |
+| Dead keys break `"a` on US-International | `WM_DEADCHAR` -> bare symbol + dead state cleared in Normal/Visual/operator-pending, via the existing SDL3 Windows message hook (s5.5) |
+| Non-Latin layouts: Ctrl-letter chords unreachable, Normal mode inert | Letters match on the Latin VK letter; `vim.latinLettersInNormal` (auto) (s5.5) |
+| `ReplaceFileW` silently orphans a process still writing the file; identity claim overstated | Restart Manager check + Overwrite in place / Save anyway / Cancel; claim corrected (s5.3) |
+| Undo history after a non-append reload unspecified | Reload recorded as one undoable transaction (VS Code behaviour); cleared with a note only above `undoMemoryMB` (s5.3) |
+| Invalid UTF-8 not defined end to end | Raw bytes kept, hex-box drawing, one cluster per invalid byte, `PCRE2_MATCH_INVALID_UTF` (s3.5, s5.1) |
+| Read-only usually means VCS-locked (Perforce) | D14: VCS-aware banner over git/Git LFS, Perforce, Lore, Unity VCS; integration is a future spec, git first then Lore (s5.3, s1.2) |
+| Nits: AltGr by timing, control characters, `\ze` in groups, `\K` in lookarounds, hard links | Layout-queried AltGr; 0x00-0x1F dropped (except Tab/Enter); `\zs`/`\ze` top level only; hard links a known limitation (s5.5, s6.5, s5.3) |
 
