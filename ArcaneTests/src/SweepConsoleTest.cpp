@@ -23,6 +23,7 @@ using namespace Arcane;
 
 TEST_CASE("sweep: console defaults; console.maxLines 0 keeps every line", "[sweep][console]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(Editor::EditorConsoleSettings{}.ringLines == 512);
     CHECK(Editor::EditorConsoleSettings{}.displayLineCap == 512);
     CHECK(Editor::EditorConsoleSettings{}.wrap);

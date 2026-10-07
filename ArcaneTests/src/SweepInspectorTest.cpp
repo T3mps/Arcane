@@ -93,6 +93,7 @@ TEST_CASE("sweep: the asset page thumbnail honours a non-default maximum and kee
 TEST_CASE("sweep: a published editor.inspector.historyDepth caps the history ring at the next push",
           "[sweep][inspector]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     struct SweepPage final : Editor::InspectorPage
     {
         std::vector<Editor::InspectorCrumb> Breadcrumb() const override { return {}; }

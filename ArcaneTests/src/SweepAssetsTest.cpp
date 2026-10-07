@@ -38,28 +38,6 @@ namespace
         CHECK_FALSE(e->help.empty());
     }
 
-    // A Code-rung override that is removed again however the case exits.
-    struct CodeOverride
-    {
-        CodeOverride(const char* name, const CVarValue& value)
-            : handle(CVarRegistry::Get().Find(name))
-        {
-            INFO("cvar " << name);
-            REQUIRE_FALSE(handle.IsStale());
-            REQUIRE(CVarRegistry::Get().Set(handle, value, SetBy::Code) == SetResult::Applied);
-            CVarRegistry::Get().PublishImmediate();
-        }
-        ~CodeOverride()
-        {
-            CVarRegistry::Get().ClearRung(handle, SetBy::Code);
-            CVarRegistry::Get().PublishImmediate();
-        }
-        CodeOverride(const CodeOverride&) = delete;
-        CodeOverride& operator=(const CodeOverride&) = delete;
-
-        CVarHandle handle;
-    };
-
     fs::path FreshDir(const char* leaf)
     {
         const fs::path dir = fs::temp_directory_path() / leaf;
@@ -116,7 +94,7 @@ TEST_CASE("sweep: a newly minted sprite is seeded from assets.sprite.defaultPixe
     }
 
     const fs::path dir = FreshDir("arc_sweep_sprite_ppu");
-    const CodeOverride ppu("assets.sprite.defaultPixelsPerUnit", CVarValue::Float32(32.0f));
+    const Test::ScopedCodeRung ppu("assets.sprite.defaultPixelsPerUnit", CVarValue::Float32(32.0f));
 
     // The seed survives a save/load: the writer always writes ppu.
     const SpriteAssetData minted = Editor::SpriteDocument::NewSpriteData(texture, "pixel-art");
@@ -171,7 +149,7 @@ TEST_CASE("sweep: SpritePixelsPerUnitRange is assets.sprite.defaultPixelsPerUnit
     CHECK(declared->max == row->max);
 
     // A default above the old 4096 cap seeds a sprite whose value the row holds.
-    const CodeOverride ppu("assets.sprite.defaultPixelsPerUnit", CVarValue::Float32(5000.0f));
+    const Test::ScopedCodeRung ppu("assets.sprite.defaultPixelsPerUnit", CVarValue::Float32(5000.0f));
     const SpriteAssetData minted = Editor::SpriteDocument::NewSpriteData(Guid::Generate(), "big");
     CHECK(minted.ppu == 5000.0f);
     CHECK(static_cast<double>(minted.ppu) >= row->min);
@@ -203,7 +181,7 @@ TEST_CASE("sweep: assets.material.maxParentDepth bounds the parent-chain walk li
     CHECK(assets->MaterialSurfaceFor(*instId) == MaterialSurface::Sprite);
     {
         // One step reads only the instance itself: its parent is past the bound.
-        const CodeOverride depth("assets.material.maxParentDepth", CVarValue::Int32(1));
+        const Test::ScopedCodeRung depth("assets.material.maxParentDepth", CVarValue::Int32(1));
         CHECK(assets->MaterialSurfaceFor(*baseId) == MaterialSurface::Sprite);
         CHECK_FALSE(assets->MaterialSurfaceFor(*instId).has_value());
     }

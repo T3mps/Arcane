@@ -11,6 +11,7 @@ using namespace Arcane;
 
 TEST_CASE("sweep: frames in flight defaults to 2 under a ceiling of 3", "[sweep][frames-in-flight]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(RenderSettings{}.framesInFlight == 2u);
     STATIC_REQUIRE(kMaxFramesInFlight == 3u);
     Test::RequireDefault("render.framesInFlight", CVarValue::UInt32(2u));
@@ -26,6 +27,7 @@ TEST_CASE("sweep: frames in flight defaults to 2 under a ceiling of 3", "[sweep]
 
 TEST_CASE("sweep: a frames-in-flight latch that beat the config rungs is reported", "[sweep][frames-in-flight]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     // The process latch is already fixed (or is fixed here) at the default 2.
     CHECK(FramesInFlight() == 2u);
     CHECK(CheckFramesInFlightLatch());   // latched == published: silent

@@ -47,6 +47,7 @@ TEST_CASE("sweep: asset graph caps are per-project, the rest per-machine", "[swe
 
 TEST_CASE("sweep: a published depth/breadth reaches the Graph lens's query", "[sweep][asset-graph]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle depth   = reg.Find("editor.assetGraph.defaultDepth");
     const CVarHandle breadth = reg.Find("editor.assetGraph.breadthCap");

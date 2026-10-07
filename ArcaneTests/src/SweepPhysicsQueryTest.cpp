@@ -63,6 +63,7 @@ TEST_CASE("sweep: physics.ground / render.ortho2D descriptors match the inventor
 
 TEST_CASE("sweep: the 2D view's depth is render.ortho2D.depthRange, read live", "[sweep][physics-query][camera]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     const glm::vec2  center{ 3.0f, -2.0f };
     const glm::uvec2 viewport{ 800u, 600u };
 

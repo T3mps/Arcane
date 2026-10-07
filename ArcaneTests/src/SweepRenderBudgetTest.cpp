@@ -125,6 +125,7 @@ TEST_CASE("sweep: Batch2D's sprite-texture cap is clamped to the 2048-sampler he
 TEST_CASE("sweep: the ImGui pool chain and the mesh cache latch their budgets at creation (Restart)",
           "[sweep][render-budget]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     // Device-less (the NONE backend), so this runs without a GPU: the pool
     // chain's bookkeeping and the cache's budget are CPU state.
     CVarRegistry& reg = CVarRegistry::Get();

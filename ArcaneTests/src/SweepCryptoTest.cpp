@@ -11,6 +11,7 @@ using namespace Arcane;
 
 TEST_CASE("sweep: pbkdf2 iterations default 200000 and never go below it", "[sweep][crypto]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(CryptoSettings{}.pbkdf2Iterations == 200000);
     Test::RequireDefault("crypto.pbkdf2Iterations", CVarValue::Int32(200000));
     CHECK(Crypto::DefaultIterations() == 200000);

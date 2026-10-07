@@ -206,6 +206,7 @@ TEST_CASE("sweep: editor.graph.pinRing.* and editor.graph.nodePadding defaults a
 TEST_CASE("sweep: a published pin ring reaches the shader canvas; node padding waits for a restart",
           "[sweep][graph-canvas][graphcanvas]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     namespace ed = ax::NodeEditor;
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle ring = reg.Find("editor.graph.pinRing.width");

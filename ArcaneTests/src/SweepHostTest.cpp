@@ -94,6 +94,7 @@ TEST_CASE("sweep: ShouldReportScanProgress is the one throttle for both hosts", 
 
 TEST_CASE("sweep: boot.scanProgressStride reaches the throttle live", "[sweep][host]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("boot.scanProgressStride"), CVarValue::UInt32(10u), SetBy::Code);
     reg.PublishImmediate();

@@ -8,6 +8,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <limits>
+#include <stdexcept>
 
 using namespace Arcane;
 using namespace Arcane::Test;
@@ -37,4 +38,38 @@ TEST_CASE("sweep helpers: SameBits compares representations, not values", "[swee
     CHECK_FALSE(SameBits(0.1, static_cast<double>(0.1f)));    // a float literal widened is not the double
     const float nan = std::numeric_limits<float>::quiet_NaN();
     CHECK(SameBits(nan, nan));                                // == says unequal; the bits agree
+}
+
+// S6-GATE (the controller's sweep-hygiene ruling): a sweep case whose REQUIRE
+// fails mid-way unwinds by exception; its RAII guard must still revert the
+// Code rung and publish, so later random-order cases see the defaults.
+TEST_CASE("sweep hygiene: a case that throws mid-way leaves the registry at its defaults", "[sweep]")
+{
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle steps = reg.Find("sim.maxStepsPerFrame");
+    const CVarHandle delta = reg.Find("sim.maxFrameDeltaSeconds");
+    REQUIRE_FALSE(steps.IsStale());
+    REQUIRE_FALSE(delta.IsStale());
+    const CVarValue stepsDefault = Test::RegisteredDefault("sim.maxStepsPerFrame");
+    const CVarValue deltaDefault = Test::RegisteredDefault("sim.maxFrameDeltaSeconds");
+
+    CHECK_THROWS_AS([&] {
+        const Test::ScopedCodeLayer layer;
+        REQUIRE(reg.Set(steps, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+        REQUIRE(reg.Set(delta, CVarValue::Float64(0.5), SetBy::Code) == SetResult::Applied);
+        reg.PublishImmediate();
+        REQUIRE(*reg.Get(steps) == CVarValue::Int32(1));
+        throw std::runtime_error("a failed REQUIRE mid-case");
+    }(), std::runtime_error);
+    CHECK_FALSE(reg.RungValue("sim.maxStepsPerFrame", SetBy::Code).has_value());
+    CHECK_FALSE(reg.RungValue("sim.maxFrameDeltaSeconds", SetBy::Code).has_value());
+    CHECK(*reg.Get(steps) == stepsDefault);   // published, not just cleared
+    CHECK(*reg.Get(delta) == deltaDefault);
+
+    CHECK_THROWS_AS([&] {
+        const Test::ScopedCodeRung one("sim.maxStepsPerFrame", CVarValue::Int32(2));
+        throw std::runtime_error("a failed REQUIRE mid-case");
+    }(), std::runtime_error);
+    CHECK_FALSE(reg.RungValue("sim.maxStepsPerFrame", SetBy::Code).has_value());
+    CHECK(*reg.Get(steps) == stepsDefault);
 }

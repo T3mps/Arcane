@@ -40,6 +40,7 @@ namespace
 
 TEST_CASE("sweep: input.pressThreshold and input.deadzone.* reach the evaluator live", "[sweep][input]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     auto input = InputActions::Create();
     REQUIRE(input->LoadJson(TriggerDoc()));
     input->SetBaseContext("demo");
@@ -115,6 +116,7 @@ namespace
 
 TEST_CASE("sweep: input.holdSeconds and input.tapSeconds reach a loaded asset live", "[sweep][input]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     auto input = InputActions::Create();
     REQUIRE(input->LoadJson(InteractionDoc()));
     input->SetBaseContext("demo");

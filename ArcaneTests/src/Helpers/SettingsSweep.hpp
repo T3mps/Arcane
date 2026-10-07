@@ -60,6 +60,24 @@ namespace Arcane::Test
         CVarHandle m_handle;
     };
 
+    // Reverts the WHOLE Code rung and publishes when the case exits, however
+    // it exits (S6-GATE, the controller's sweep-hygiene ruling): a sweep case
+    // that sets several Code values, or re-sets one, declares this first, so
+    // a failed REQUIRE mid-way cannot leak an override into a later
+    // random-order case. Sweep cases never own a Code record outside the case.
+    class ScopedCodeLayer
+    {
+    public:
+        ScopedCodeLayer() = default;
+        ~ScopedCodeLayer()
+        {
+            CVarRegistry::Get().RevertLayer(SetBy::Code);
+            CVarRegistry::Get().PublishImmediate();
+        }
+        ScopedCodeLayer(const ScopedCodeLayer&) = delete;
+        ScopedCodeLayer& operator=(const ScopedCodeLayer&) = delete;
+    };
+
     inline bool SameBits(float a, float b)   { return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b); }
     inline bool SameBits(double a, double b) { return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b); }
 }

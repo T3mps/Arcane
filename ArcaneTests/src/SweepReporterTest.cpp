@@ -178,6 +178,7 @@ TEST_CASE("sweep: malformed reporter settings flags are refused, not absorbed", 
 // same session must carry the new values -- not Install's snapshot.
 TEST_CASE("sweep: a Live reporter setting reaches the next reporter spawn", "[sweep][reporter]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     Diagnostics::Config cfg;
     cfg.appName             = "SweepReporterTest";
     cfg.dumpDir             = (std::filesystem::temp_directory_path() / "arcane-sweep-reporter").string();

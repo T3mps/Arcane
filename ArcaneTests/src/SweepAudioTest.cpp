@@ -45,6 +45,7 @@ TEST_CASE("sweep: audio rows carry the inventory metadata", "[sweep][audio]")
 
 TEST_CASE("sweep: audio.defaultLoadMode reaches the next SoundLoadDesc", "[sweep][audio]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("audio.defaultLoadMode"), CVarValue::Enum(1), SetBy::Code);
     reg.PublishImmediate();

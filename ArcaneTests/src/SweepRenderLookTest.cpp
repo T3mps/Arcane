@@ -67,6 +67,7 @@ TEST_CASE("sweep: the canvas and depth format settings map to the NRI formats th
 
 TEST_CASE("sweep: a graph format latch that beat the config rungs is reported", "[sweep][render-look]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     // The process latches are already fixed (or are fixed here) at the defaults.
     CHECK(GraphCanvasFormat() == nri::Format::RGBA16_SFLOAT);
     CHECK(GraphDepthFormat() == nri::Format::D32_SFLOAT);

@@ -81,6 +81,7 @@ TEST_CASE("sweep: the activity log wraps at the capacity it was built with", "[s
 TEST_CASE("sweep: editor.assets.mountDiagnostics only ever declines the host's diag:// mount",
           "[sweep][asset-browser]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     ProjectOpenOptions hostOn;  hostOn.mountDiagnostics = true;
     ProjectOpenOptions hostOff; hostOff.mountDiagnostics = false;
     CHECK(Editor::EditorOpenOptions(hostOn).mountDiagnostics);    // default: unchanged

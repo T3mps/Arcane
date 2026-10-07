@@ -35,6 +35,7 @@ TEST_CASE("sweep: physics debug defaults are the pre-sweep literals", "[sweep][p
 
 TEST_CASE("sweep: MakePhysicsDebugDrawOptions carries the published values", "[sweep][physics-debug]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("debug.physics.draw.aabbs"), CVarValue::Bool(true), SetBy::Code);
     reg.PublishImmediate();
@@ -142,6 +143,7 @@ namespace
 
 TEST_CASE("sweep: the narrowphase overlay draws with the published debug.physics.style", "[sweep][physics-debug]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     // A separated trace of two point shapes (no manifold points, no axes): the
     // overlay emits the two shape discs (2 px) and the contact-anchor ring.
     const Manifold2D::Physics::NarrowphaseTrace trace{};

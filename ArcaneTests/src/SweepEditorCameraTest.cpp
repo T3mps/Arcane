@@ -27,6 +27,7 @@ TEST_CASE("sweep: editor camera defaults are the pre-sweep literals", "[sweep][e
 
 TEST_CASE("sweep: Dolly uses editor.camera.wheelZoomStep", "[sweep][editor-camera]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     EditorCamera cam; cam.orbit.distance = 10.0f;
     cam.Dolly(1.0f);
     CHECK(cam.orbit.distance == 10.0f / 1.12f);
@@ -81,6 +82,7 @@ TEST_CASE("sweep: every editor.camera.* default is the declared literal", "[swee
 
 TEST_CASE("sweep: the fresh-camera pose follows editor.camera.default*", "[sweep][editor-camera]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     EditorCamera cam;
     ApplyFreshPose(cam);   // at the defaults: unchanged
@@ -103,6 +105,7 @@ TEST_CASE("sweep: the fresh-camera pose follows editor.camera.default*", "[sweep
 
 TEST_CASE("sweep: clip planes, sensitivities, boost and the distance scale follow the snapshot", "[sweep][editor-camera]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     const auto set = [&](std::string_view n, const CVarValue& v) { reg.Set(reg.Find(n), v, SetBy::Code); };
 

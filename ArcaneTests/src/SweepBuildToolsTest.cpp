@@ -12,6 +12,7 @@
 using namespace Arcane;
 TEST_CASE("sweep: an explicit build.premakePath wins over discovery; empty discovers", "[sweep][build]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(BuildToolSettings{}.premakePath.empty());
     Test::RequireDefault("build.premakePath", CVarValue::String(""));
     const auto fake = std::filesystem::temp_directory_path() / "fake-premake5.exe";
@@ -26,6 +27,7 @@ TEST_CASE("sweep: an explicit build.premakePath wins over discovery; empty disco
 
 TEST_CASE("sweep: build.msbuildPath/makePath/ninjaPath/ideExecutable win over discovery", "[sweep][build]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CHECK(BuildToolSettings{}.msbuildPath.empty());
     CHECK(BuildToolSettings{}.makePath.empty());
     CHECK(BuildToolSettings{}.ninjaPath.empty());
@@ -51,6 +53,7 @@ TEST_CASE("sweep: build.msbuildPath/makePath/ninjaPath/ideExecutable win over di
 
 TEST_CASE("sweep: a changed build.ideExecutable is what the next IDE launch resolves (Live)", "[sweep][build]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     // S6-15 carried gap: the editor cached its devenv answer for the whole
     // session, so a changed setting reached "Open Visual Studio" only on the
     // next launch. Both values are real files, so no vswhere is spawned.
@@ -80,6 +83,7 @@ TEST_CASE("sweep: a changed build.ideExecutable is what the next IDE launch reso
 
 TEST_CASE("sweep: a build.ninjaPath that is not a file falls back to discovery", "[sweep][build]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     const std::filesystem::path discovered = Toolchain::ResolveNinja();
     CVarRegistry& reg = CVarRegistry::Get();
     const auto missing = std::filesystem::temp_directory_path() / "no-such-ninja.exe";

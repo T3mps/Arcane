@@ -85,6 +85,7 @@ TEST_CASE("sweep: every editor.gizmo.* default is the declared literal", "[sweep
 
 TEST_CASE("sweep: MakeGizmoSnap and MakeGizmoTuning read the published editor.gizmo.* values", "[sweep][gizmo]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("editor.gizmo.snap.translate"), CVarValue::Float32(2.0f), SetBy::Code);
     reg.Set(reg.Find("editor.gizmo.snap.rotateDegrees"), CVarValue::Float32(45.0f), SetBy::Code);
@@ -110,6 +111,7 @@ TEST_CASE("sweep: MakeGizmoSnap and MakeGizmoTuning read the published editor.gi
 // the CURRENT snapshot (an incoming project's rung), not a boot-time copy.
 TEST_CASE("sweep: editor.gizmo.default* -> the session start, re-read from the snapshot, --tool on top", "[sweep][gizmo]")
 {
+    const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
     using Editor::GizmoSessionState;
     const GizmoSessionState def = Editor::ToGizmoSessionState(Editor::EditorGizmoSettings{});
     CHECK(def.mode == GizmoMode::Translate); CHECK(def.space == GizmoSpace::World); CHECK_FALSE(def.enabled);
