@@ -1,6 +1,9 @@
 #include <Arcane/Base/Runtime.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/Bindings/AstraBinding.hpp>
+#include <Arcane/Config/Bindings/JobsBinding.hpp>
+#include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Config.hpp>
@@ -24,6 +27,7 @@
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
 #include <Arcane/Sim/NetDriver.hpp>   // INetDriver::IsActive (the hot-reload refusal asks it)
+#include <Arcane/Sim/SimSettings.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentModule.hpp>
@@ -32,6 +36,9 @@
 #include <Astra/Core/WorkScheduler.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
 
+#include <cmath>       // Runtime::SetFixedHz refuses a non-finite rate
+#include <exception>   // ~Runtime / ReleaseProjectCVarLayers guard the release (S4-GATE)
+#include <mutex>      // the process-wide snapshot SaveConfig (S6-45)
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -73,9 +80,66 @@ namespace Arcane
             return std::filesystem::current_path();
         }
 
-        // Paths follows the OPEN project (settings spec s11.0). It is cleared
-        // only when the project being dropped is still the configured one,
-        // because another Runtime may own the current project.
+        // The ONE engine-config folder (S2-H): Arcane::Paths names the engine
+        // dir once per process (settings spec s11.0) -- the exe dir, where the
+        // shipped data/EngineConfig defaults sit, unless a host already set
+        // one. The cold-boot EngineConfig rung, the JSON Config layer and
+        // CVarLayerSources (what a module reload re-layers) all read this
+        // folder, so a host-configured engine dir is honoured by all three.
+        std::filesystem::path EngineConfigDir()
+        {
+            Paths::Config paths = Paths::Current();
+            if (paths.engineDir.empty())
+            {
+                paths.engineDir = ExeDir();
+                paths.dist = kDistBuild;   // Dist resolves GameUserDir under the OS per-user dir (settings S7)
+                Paths::Configure(paths);
+            }
+            return Paths::Get(Paths::Location::EngineConfig);
+        }
+
+        // The folder the EngineConfig rung was last applied from, by
+        // ApplyEngineConfigRung (HostBoot's early rungs or a Runtime ctor).
+        // Main thread only.
+        std::filesystem::path g_engineRungDir;
+
+        // The EngineConfig cvar rung, applied BEFORE Impl reads any setting
+        // (settings arc S2). JobSystem's size (jobs.workerThreads, Restart) and
+        // the first registry's Astra config (astra.memory.*, NextWorld) are read
+        // while Impl constructs, so the engine-config values must already be
+        // published. Returns the JobSystem ctor argument.
+        // Once per process (S2-H): ApplyEngineConfigRung layers the folder
+        // only when it is not the one already applied -- by HostBoot's early
+        // rungs or an earlier Runtime -- so the first Runtime after HostBoot,
+        // the editor's embedded server and a PIE world neither re-read the
+        // folder nor publish. A module that (re)loads still gets the rung
+        // through ApplyLayersFor (CVarLayerSources names the same folder).
+        std::uint32_t ApplyEngineRungAndResolveWorkers()
+        {
+            if (ApplyEngineConfigRung())
+                CVarRegistry::Get().PublishImmediate();   // asserts the main thread (settings spec s4.6)
+            return ResolveWorkerThreads(Settings<JobsSettings>());
+        }
+
+        // The process's project state -- Arcane::Paths' project (settings spec
+        // s11.0) and the User, Project and Plugin cvar rungs on the
+        // process-wide registry (s4.5) -- follows ONE Runtime (S2-H). The
+        // first Runtime to open a project owns it until it closes it or dies;
+        // a project switch keeps the owner. Every host opens its project in
+        // exactly one Runtime today (the editor's, ProjectBoot's, ServerApp's;
+        // the embedded server and PIE worlds never open one), so this only
+        // decides what a second Runtime that does open one may touch: nothing
+        // process-wide. Its OpenProject neither configures Paths nor layers
+        // its rungs over the owner's, and its CloseProject or destruction
+        // releases nothing of the owner's. The Impl address is the identity.
+        // Touched only by OpenProject, CloseProject and ~Runtime, which a host
+        // already serializes (ProjectBoot's project_open stage runs on a boot
+        // worker, ordered after runtime_create and before any close).
+        const void* g_projectOwner = nullptr;
+
+        // Paths follows the OWNER's project. It is cleared only when the
+        // project being dropped is still the configured one (a host may have
+        // re-pointed Paths itself).
         void ForgetProjectPaths(const std::filesystem::path& root)
         {
             Paths::Config paths = Paths::Current();
@@ -104,6 +168,19 @@ namespace Arcane
         }
     }
 
+    bool ApplyEngineConfigRung()
+    {
+        const std::filesystem::path dir = EngineConfigDir();
+        if (dir == g_engineRungDir)
+            return false;
+        CVarRegistry& cvars = CVarRegistry::Get();
+        if (!g_engineRungDir.empty())
+            cvars.RevertLayer(SetBy::EngineConfig);   // the previous folder's records leave with it
+        ApplyCVarDirectory(cvars, dir, SetBy::EngineConfig, "engine-config");
+        g_engineRungDir = dir;
+        return true;
+    }
+
     struct Runtime::Impl
     {
         JobSystem                                   jobs;
@@ -117,9 +194,10 @@ namespace Arcane
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         std::unique_ptr<Assets>                     assets;
         Config                                      config;          // layered engine+project config (Slice 3)
-        std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
+        std::filesystem::path                       engineConfigDir; // EngineConfigDir(): <engine dir>/data/EngineConfig
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
         bool                                        archiveUserCVars = false;   // SetUserCVarArchiving (T3-D2)
+        std::filesystem::path                       editorUserConfigDir; // settings arc S2; empty = no EditorUser rung
         std::vector<std::string>                    cvarCommandLine;                                   // SetCVarCommandLine
         CVarContext                                 cvarCommandLineContext = CVarContext::Editor;
         // The client seam (spec s2, plan 1 P6). Both null on a headless host; a
@@ -133,11 +211,18 @@ namespace Arcane
         NetMode                                     mode    = NetMode::Standalone;
         INetDriver*                                 net     = nullptr;
 
+        // True when THIS Runtime's open project is the one the process's
+        // Paths and project cvar rungs follow (g_projectOwner, S2-H).
+        bool OwnsProject() const noexcept { return project && g_projectOwner == this; }
+        // CloseProject's and ~Runtime's one release path; defined below,
+        // beside the rung helpers it calls.
+        void ReleaseProject();
+
         // `sharedComponents` non-null = a SECONDARY world built on the PRIMARY's
         // ComponentRegistry (spec s4; Runtime.hpp's three-argument ctor explains
         // why a per-world registry would break every module-defined type).
         Impl(ProcessContext& proc, NetMode netMode, std::shared_ptr<Astra::ComponentRegistry> sharedComponents)
-            : jobs(), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
+            : jobs(ApplyEngineRungAndResolveWorkers()), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
         {
             context = &proc.TypeContext();
 
@@ -225,28 +310,29 @@ namespace Arcane
             // same order == same numbering as before.
             RegisterRoster(*engineModule, EngineComponentRoster{});
 
-            Astra::Registry::Config cfg;
-            cfg.workScheduler = sched;
-            registry   = std::make_unique<Astra::Registry>(components, cfg);
+            registry   = std::make_unique<Astra::Registry>(components, ToAstraConfig(Settings<AstraMemorySettings>(), sched));
             schedulers = std::make_unique<SystemSchedulers>(sched);
+            // sim.fixedHz (settings arc S2, NextWorld): this Runtime's step,
+            // read once. InstallEngineSystems and PhysicsEditPass read loopCfg.
+            // Restore/ResetRegistry REBIND this loop, so a changed fixedHz
+            // waits for the next Runtime. sim.maxStepsPerFrame (S6-8) is Live:
+            // read here for the first frame, then each frame by the hosts
+            // (ApplySimStepCap).
+            loopCfg.fixedHz          = Settings<SimSettings>().fixedHz;
+            loopCfg.maxStepsPerFrame = Settings<SimSettings>().maxStepsPerFrame;
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
-            assets = Assets::Create();
+            // assets.cache.byteBudget (Restart): read once, here, after the
+            // early config rungs.
+            assets = Assets::Create(AssetsDesc{ .byteBudget = Settings<AssetsCacheSettings>().byteBudget });
             // Engine-default config layer (shipped beside the exe). A host with no
             // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
             // OpenProject re-layers the project + user files on top.
-            // Arcane::Paths names the engine dir once per process (settings spec
-            // s11.0): the first Runtime sets it to the exe dir -- where the shipped
-            // data/EngineConfig defaults sit -- unless a host already did.
-            Paths::Config paths = Paths::Current();
-            if (paths.engineDir.empty())
-            {
-                Paths::Configure(PathsConfigWithoutProject(ExeDir(), kDistBuild));
-            }
-            engineConfigDir = Paths::Get(Paths::Location::EngineConfig);
+            // The EngineConfig cvar rung was applied at the top of Impl (before
+            // JobSystem and the first registry) from this same folder
+            // (EngineConfigDir), so only the JSON Config layer remains here.
+            engineConfigDir = EngineConfigDir();
             config.LoadEngineDefaults(engineConfigDir);
-            ApplyCVarDirectory(CVarRegistry::Get(), engineConfigDir, SetBy::EngineConfig, "engine-config");
-            CVarRegistry::Get().Publish();
             // The audio device that used to be initialized here is ClientRuntime's
             // (its RuntimePresentation member, initialized from its own ctor with
             // the enableAudioDevice flag that moved there with it).
@@ -275,8 +361,26 @@ namespace Arcane
     }
     Runtime::~Runtime()   // do not reset the module slot: a later Runtime re-installs
     {
-        if (m_impl && m_impl->project)
-            ForgetProjectPaths(m_impl->project->Root());
+        // Dying with its project open releases it exactly as CloseProject
+        // does (S2-H): the User layer archived when this host archives, the
+        // project rungs dropped and published, Paths' project forgotten -- so
+        // the next Runtime starts from the files alone.
+        if (!m_impl) return;
+        // A destructor is noexcept: an exception out of the release (a cvar
+        // callback during Publish, say) would std::terminate the host at exit.
+        // Log it and let the rest of teardown run (S4-GATE).
+        try
+        {
+            m_impl->ReleaseProject();
+        }
+        catch (const std::exception& e)
+        {
+            ARC_ERROR("Runtime: releasing the project at teardown threw ({}) -- teardown continues", e.what());
+        }
+        catch (...)
+        {
+            ARC_ERROR("Runtime: releasing the project at teardown threw a non-standard exception -- teardown continues");
+        }
     }
 
     ProcessContext& Runtime::Process()      noexcept { return *m_impl->process; }
@@ -315,6 +419,20 @@ namespace Arcane
     Astra::Registry&  Runtime::Registry()   noexcept { return *m_impl->registry; }
     SystemSchedulers& Runtime::Schedulers() noexcept { return *m_impl->schedulers; }
     RunLoop&          Runtime::Loop()       noexcept { return *m_impl->loop; }
+
+    void Runtime::SetFixedHz(double hz)
+    {
+        if (!(hz > 0.0) || !std::isfinite(hz)) return;
+        // loopCfg is what InstallEngineSystems (a ClearSystems reinstall) and
+        // PhysicsEditPass read, so every later step agrees with the loop.
+        m_impl->loopCfg.fixedHz = hz;
+        m_impl->loop->SetFixedHz(hz);
+        // PhysicsSystem captured its dt at AddSystem: re-add it at the new
+        // rate (its Before<TransformPropagationSystem> keeps it ordered).
+        m_impl->schedulers->fixedUpdate.RemoveSystem<PhysicsSystem>();
+        InstallEngineSystems();
+    }
+
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Mosaic::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
@@ -335,13 +453,41 @@ namespace Arcane
     // bind has been a no-op and the facade stays device-less for its whole life.
     // Deleted at Task 9 -- ABI 14.
 
+    namespace
+    {
+        std::mutex& SnapshotSaveConfigMutex()
+        {
+            static std::mutex m;
+            return m;
+        }
+        Astra::Registry::SaveConfig& SnapshotSaveConfigSlot()
+        {
+            static Astra::Registry::SaveConfig config{};   // Astra's default until the editor pushes its setting
+            return config;
+        }
+    }
+
+    void Runtime::SetSnapshotSaveConfig(const Astra::Registry::SaveConfig& config)
+    {
+        std::lock_guard lock(SnapshotSaveConfigMutex());
+        SnapshotSaveConfigSlot() = config;
+    }
+
+    Astra::Registry::SaveConfig Runtime::SnapshotSaveConfig()
+    {
+        std::lock_guard lock(SnapshotSaveConfigMutex());
+        return SnapshotSaveConfigSlot();
+    }
+
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
         // A real Save failure must be named at its source: an empty-but-"ok"
         // snapshot would resurface much later as a generic "reload lost state"
         // with the root cause erased. FinishSnapshot propagates the exact
         // SerializationError; log it here so the hot-reload path names the cause.
-        auto save = Serialization::FinishSnapshot(m_impl->registry->Save());
+        // The Save configuration is the process-wide one (SetSnapshotSaveConfig:
+        // the editor's astra.snapshot.compression, S6-45).
+        auto save = Serialization::FinishSnapshot(m_impl->registry->Save(SnapshotSaveConfig()));
         if (save.IsErr())
         {
             const Astra::SerializationError err =
@@ -371,9 +517,8 @@ namespace Arcane
         if (frame.IsErr())
             return false;
 
-        Astra::Registry::Config cfg;
-        cfg.workScheduler = m_impl->sched;
-        auto r = Astra::Registry::Load(frame.GetValue()->registry, m_impl->components, cfg);   // 3.3 Config overload
+        auto r = Astra::Registry::Load(frame.GetValue()->registry, m_impl->components,
+                                       ToAstraConfig(Settings<AstraMemorySettings>(), m_impl->sched));   // 3.3 Config overload
         if (r.IsErr())
             return false;
         std::unique_ptr<Astra::Registry> loaded = std::move(*r.GetValue());
@@ -401,9 +546,8 @@ namespace Arcane
     {
         // Fresh-boot reload: replace the registry with an empty one (same shared
         // ComponentRegistry + scheduler) so the plugin's Init rebuilds its scene.
-        Astra::Registry::Config cfg;
-        cfg.workScheduler = m_impl->sched;
-        m_impl->registry = std::make_unique<Astra::Registry>(m_impl->components, cfg);
+        m_impl->registry = std::make_unique<Astra::Registry>(m_impl->components,
+                                                             ToAstraConfig(Settings<AstraMemorySettings>(), m_impl->sched));
         // Rebind the existing loop (keep the object stable so cached RunLoop* holders
         // do not dangle) -- see RestoreRegistry.
         m_impl->loop->Rebind(*m_impl->registry);
@@ -452,9 +596,8 @@ namespace Arcane
 
     glm::vec2 Runtime::ResolvedGravity() const
     {
-        glm::vec2 g = ProjectManifest::PhysicsConfig{}.gravity;
-        if (m_impl->project)
-            g = m_impl->project->Manifest().physics.gravity;
+        const CVarVec2 p = Settings<Physics2DWorldSettings>().gravity;
+        glm::vec2 g{p.x, p.y};
         if (const SceneRoot* sr = m_impl->registry->GetResource<SceneRoot>())
             if (const PhysicsSettings* ps = std::as_const(*m_impl->registry).GetComponent<PhysicsSettings>(sr->entity))
                 g = ps->gravity;
@@ -475,10 +618,18 @@ namespace Arcane
             // current Transforms on the next pass (PASS 1 sees every handle
             // invalid against the new world; PASS 2 self-heals).
         }
-        Manifold2D::Physics::WorldDef wd;
+        // physics.* (settings arc S2): NextWorld -- read here, where a world is minted.
+        const Physics2DWorldSettings& settings = Settings<Physics2DWorldSettings>();
+        Manifold2D::Physics::WorldDef wd = ToWorldDef(settings);
         wd.gravityX = g.x;
         wd.gravityY = g.y;
-        reg.SetResource(PhysicsResource{ std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
+        auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
+        // physics.parallelSolver (default OFF: the serial solver, bit-identical
+        // to before). The pool is this Runtime's JobSystem, which outlives every
+        // registry (Impl declares it first).
+        if (settings.parallelSolver)
+            world->SetExecutor(m_impl->sched.get());
+        reg.SetResource(PhysicsResource{ std::move(world), {} });
         reg.SetResource(PhysicsInterpBuffer{});
     }
 
@@ -505,10 +656,13 @@ namespace Arcane
         // the archive (T3-D2). One definition, so the two can never disagree.
         // Resolved through Arcane::Paths (settings spec s11.1): <project>/Saved/
         // Config in dev, byte-identical to before; the per-user OS dir in Dist.
-        std::filesystem::path UserCVarDir()
+        // The project's own identity resolves it (PathsConfigFor, settings S7),
+        // not whatever project Paths is configured for, so the outgoing project
+        // of a switch archives to its own folder. Empty when the location is.
+        std::filesystem::path UserCVarDir(const Project& project)
         {
-            const std::filesystem::path dir = Paths::Get(Paths::Location::GameUserDir);
-            return dir.empty() ? dir : dir / "Config";
+            return Paths::Join(Paths::Location::GameUserDir,
+                               PathsConfigFor(project, Paths::Current().engineDir, kDistBuild), "Config");
         }
 
         // The cvar Project layer's home, resolved through Arcane::Paths the same
@@ -524,29 +678,101 @@ namespace Arcane
         // User layer (archived first when this host archives, T3-D2), its
         // Project layer and its plugins' layers, so the next project starts from
         // its own files and never inherits a key only the old one set.
-        void ReleaseProjectCVarLayers(bool archive)
+        // The machine-wide EditorUser layer is written too when this host
+        // archives, but it STAYS (settings arc S2).
+        void ReleaseProjectCVarLayers(const Project& outgoing, bool archive, const std::filesystem::path& editorUserDir)
         {
             CVarRegistry& cvars = CVarRegistry::Get();
-            const std::filesystem::path dir = UserCVarDir();
-            if (archive && !dir.empty())
-                WriteCVarArchive(cvars, dir);
+            if (archive)
+            {
+                // A failed archive write must not leave the layers half released
+                // (S4-GATE): nlohmann::json::dump throws on a string value that is
+                // not UTF-8, and this also runs from ~Runtime. One guard PER
+                // RUNG (S6-GATE): a project User value that cannot be written
+                // must not cost the machine-wide EditorUser edits too.
+                // An empty User dir (Dist with no per-user OS base) archives
+                // nothing (settings S7).
+                const std::filesystem::path userDir = UserCVarDir(outgoing);
+                if (!userDir.empty())
+                {
+                    try
+                    {
+                        WriteCVarArchive(cvars, userDir);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        ARC_ERROR("cvar: archiving the user settings of '{}' failed ({}) -- unsaved edits are lost; the project still closes",
+                                  outgoing.Manifest().name, e.what());
+                    }
+                }
+                if (!editorUserDir.empty())
+                {
+                    try
+                    {
+                        WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        ARC_ERROR("cvar: archiving the editor-wide settings to '{}' failed ({}) -- unsaved editor edits are lost",
+                                  editorUserDir.string(), e.what());
+                    }
+                }
+            }
             cvars.RevertLayer(SetBy::User);
             cvars.RevertLayer(SetBy::Project);
             cvars.RevertLayer(SetBy::Plugin);
         }
+
+        // The EditorUser layer from disk, dropped first so a key removed from a
+        // file does not linger.
+        void ReapplyEditorUserLayer(const std::filesystem::path& dir)
+        {
+            CVarRegistry& cvars = CVarRegistry::Get();
+            cvars.RevertLayer(SetBy::EditorUser);
+            if (dir.empty()) return;
+            ApplyCVarDirectory(cvars, dir, SetBy::EditorUser, "editor-user");
+        }
+    }
+
+    void Runtime::Impl::ReleaseProject()
+    {
+        if (!OwnsProject()) return;   // a second Runtime's project: nothing process-wide is its to release
+        // The project's paths and ownership are dropped however the release
+        // exits (S6-GATE): a cvar callback throwing out of Publish must not
+        // leave a destroyed Runtime as g_projectOwner, or the next Runtime
+        // would layer nothing for its own project.
+        struct DropOwnership
+        {
+            Impl& impl;
+            ~DropOwnership()
+            {
+                ForgetProjectPaths(impl.project->Root());
+                g_projectOwner = nullptr;
+            }
+        } drop{ *this };
+        ReleaseProjectCVarLayers(*project, archiveUserCVars, editorUserConfigDir);
+        CVarRegistry::Get().Publish();
     }
 
     LayerSources Runtime::CVarLayerSources() const
     {
         LayerSources layers;
         layers.dirs.push_back(CVarLayerDir{ SetBy::EngineConfig, m_impl->engineConfigDir, "engine-config" });
-        if (m_impl->project)
+        // The project's rungs only for the Runtime that owns the process's
+        // project state (S2-H): a second Runtime's module reload must not
+        // layer its project over the owner's.
+        if (m_impl->OwnsProject())
         {
             for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
                 layers.dirs.push_back(CVarLayerDir{ SetBy::Plugin, pluginRoot / "Config", pluginRoot.filename().string() });
             layers.dirs.push_back(CVarLayerDir{ SetBy::Project, ProjectCVarDir(*m_impl->project), "project" });
-            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(), "user" });
         }
+        // EditorUser sits between Project and User and survives a missing
+        // project (the start page is themed too). Empty = no EditorUser rung.
+        if (!m_impl->editorUserConfigDir.empty())
+            layers.dirs.push_back(CVarLayerDir{ SetBy::EditorUser, m_impl->editorUserConfigDir, "editor-user" });
+        if (m_impl->OwnsProject())
+            layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         layers.commandLine = m_impl->cvarCommandLine;
         layers.commandLineContext = m_impl->cvarCommandLineContext;
         return layers;
@@ -586,12 +812,27 @@ namespace Arcane
                      proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
         }
 
+        // Only the owner of the process's project state configures Paths and
+        // layers the cvar rungs (g_projectOwner, S2-H): the first Runtime to
+        // open a project, and the same Runtime on a switch.
+        const bool owner = g_projectOwner == nullptr || g_projectOwner == m_impl.get();
+        if (!owner)
+            ARC_WARN("Runtime::OpenProject: '{}' opens in a second Runtime while another Runtime's project "
+                     "owns Paths and the project cvar rungs -- they stay the owner's", proj->Manifest().name);
         // A switch: the outgoing project's settings are archived (if this host
         // archives) and its rungs dropped before the incoming one layers.
-        if (m_impl->project)
-            ReleaseProjectCVarLayers(m_impl->archiveUserCVars);
+        if (m_impl->OwnsProject())
+            ReleaseProjectCVarLayers(*m_impl->project, m_impl->archiveUserCVars, m_impl->editorUserConfigDir);
         m_impl->project = std::move(*proj);
-        Paths::Configure(PathsConfigFor(*m_impl->project, ExeDir(), kDistBuild));
+        if (owner)
+        {
+            g_projectOwner = m_impl.get();
+            // The project's identity (company, game) and the Dist flag come
+            // from PathsConfigFor (settings S7): a Dist build's GameUserDir
+            // resolves under the OS per-user config dir. The engine dir stays
+            // the one already configured (a host's, else the exe dir).
+            Paths::Configure(PathsConfigFor(*m_impl->project, Paths::Current().engineDir, kDistBuild));
+        }
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
         // GUID loads resolve through THIS project's registry (Assets AssetId seam).
@@ -606,14 +847,32 @@ namespace Arcane
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
         for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
             m_impl->config.LayerDir(pluginRoot / "Config");
-        m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir());
+        m_impl->config.LayerProject(ProjectCVarDir(*m_impl->project), UserCVarDir(*m_impl->project));
+        if (!owner)
+            return true;
         // The cvar rungs come from the ONE source a module that loads later is
         // re-layered from (CVarLayerSources; settings spec s4.4), so the two
         // can never disagree.
         CVarRegistry& cvars = CVarRegistry::Get();
+        // Preserve edits made before the first project opens as well as edits
+        // made during a project. Then drop the in-memory EditorUser records so
+        // a key removed from a file does not linger; CVarLayerSources re-reads
+        // the folder
+        // between Project and User (S1-30: one rung list for OpenProject,
+        // ApplyLayersFor and ValidateCVarLayers).
+        if (m_impl->archiveUserCVars && !m_impl->editorUserConfigDir.empty())
+            WriteCVarArchive(cvars, m_impl->editorUserConfigDir, SetBy::EditorUser);
+        cvars.RevertLayer(SetBy::EditorUser);
         const LayerSources layers = CVarLayerSources();
         for (const CVarLayerDir& layer : layers.dirs)
+        {
             ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
+            // A shipped/read-only legacy manifest could not be rewritten.
+            // Its named values retain migration's merge-patch precedence over
+            // an older Config key, then EditorUser/User/--set may still win.
+            if (layer.by == SetBy::Project && !m_impl->project->Manifest().legacySettings.empty())
+                ApplyLegacyManifestSettings(cvars, m_impl->project->Manifest());
+        }
         cvars.Publish();
         // Unknown keys and type mismatches in any rung's files go to the
         // Problems panel (settings spec s4.8, s12); the whole set is replaced.
@@ -645,12 +904,8 @@ namespace Arcane
         // The cvar User, Project and Plugin rungs leave with the project (the
         // User layer archived first when this host archives); the engine,
         // EditorUser, command-line, code and console rungs are untouched.
-        if (m_impl->project)
-        {
-            ReleaseProjectCVarLayers(m_impl->archiveUserCVars);
-            CVarRegistry::Get().Publish();
-            ForgetProjectPaths(m_impl->project->Root());
-        }
+        // Only the owner releases (ReleaseProject, shared with ~Runtime).
+        m_impl->ReleaseProject();
         m_impl->project.reset();
         m_impl->assets->SetContentRoot({});
         m_impl->assets->SetAssetResolver({});
@@ -661,7 +916,10 @@ namespace Arcane
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
         // The project's config rows go away with it; only the engine rung remains
         // (a shrinking set logs nothing: the log is a delta against the last logged set).
-        PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()), CVarConfigLog::Now);
+        // The set is process-wide: while another Runtime owns a project, its
+        // rows stay.
+        if (g_projectOwner == nullptr)
+            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), CVarLayerSources()), CVarConfigLog::Now);
     }
 
     void Runtime::SetUserCVarArchiving(bool enabled) noexcept
@@ -669,15 +927,45 @@ namespace Arcane
         m_impl->archiveUserCVars = enabled;
     }
 
+    void Runtime::SetEditorUserConfigDir(std::filesystem::path dir)
+    {
+        // Leaving a folder with archiving on: keep its unsaved edits.
+        if (!m_impl->editorUserConfigDir.empty() && m_impl->archiveUserCVars)
+            WriteCVarArchive(CVarRegistry::Get(), m_impl->editorUserConfigDir, SetBy::EditorUser);
+        m_impl->editorUserConfigDir = std::move(dir);
+        if (m_impl->editorUserConfigDir.empty())
+            CVarRegistry::Get().RevertLayer(SetBy::EditorUser);
+        else
+            ReapplyEditorUserLayer(m_impl->editorUserConfigDir);
+        CVarRegistry::Get().Publish();
+    }
+
+    const std::filesystem::path& Runtime::EditorUserConfigDir() const noexcept
+    {
+        return m_impl->editorUserConfigDir;
+    }
+
     bool Runtime::SaveUserCVars()
     {
-        if (!m_impl->archiveUserCVars || !m_impl->project)
+        if (!m_impl->archiveUserCVars)
             return false;
-        const std::filesystem::path dir = UserCVarDir();
-        if (dir.empty())
-            return false;
-        WriteCVarArchive(CVarRegistry::Get(), dir);
-        return true;
+        bool wrote = false;
+        if (m_impl->OwnsProject())   // the User rung holds the OWNER's project values (S2-H)
+        {
+            // Empty in Dist with no per-user OS base (settings S7): nothing to write.
+            const std::filesystem::path userDir = UserCVarDir(*m_impl->project);
+            if (!userDir.empty())
+            {
+                WriteCVarArchive(CVarRegistry::Get(), userDir);
+                wrote = true;
+            }
+        }
+        if (!m_impl->editorUserConfigDir.empty())
+        {
+            WriteCVarArchive(CVarRegistry::Get(), m_impl->editorUserConfigDir, SetBy::EditorUser);
+            wrote = true;
+        }
+        return wrote;
     }
 
     std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)

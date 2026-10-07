@@ -241,6 +241,8 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.glm}",            -- F2c Task 7: MeshImporter's bake math (node-transform
                                          -- composition, inverse-transpose normals, winding-flip
                                          -- cross/dot). Header-only -- no link.
+        "%{IncludeDir.Astra}",          -- settings arc S6-6: TextureMetaSettings is a reflected settings struct
+        "%{IncludeDir.Mosaic}",         -- ...and Astra's platform layer
     }
 
     defines {
@@ -304,6 +306,8 @@ project "arccook"
         -- CookSession.hpp pulls in TextureMetaSettings.hpp (a public
         -- ArcaneAssetPipeline header), which needs <Json.hpp>.
         "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.Astra}",      -- settings arc S6-6: TextureMetaSettings.hpp (reflected settings struct)
+        "%{IncludeDir.Mosaic}",     -- ...and Astra's platform layer
     }
 
     -- bc7enc_rdo: ArcaneAssetPipeline's TextureImporter calls into it for the BC7 encode
@@ -1094,6 +1098,8 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         -- Task C (F2c debts): wipe the staged Content/Source/Verify subtrees before the
         -- whole-tree {COPYDIR} below re-populates them, same reasoning (and NOT-mirrored
         -- list -- Intermediate/, Saved/, Binaries/, the .arcproj, and any other non-source-of-
@@ -1246,9 +1252,38 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
-        -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
+        -- editor.undo.* (T1-B10; S6-33): EditorUndoSettings + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
+        -- astra.snapshot.compression (S6-45 fix): the Editor setting + its push into Runtime::SetSnapshotSaveConfig.
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorSnapshotSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/InspectorSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiStyleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorViewportSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/FontsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/LayoutLibrary.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/LayoutSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/LayoutPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
+        "%{wks.location}/ArcaneEditor/src/Input/EditorActionTable.cpp",
+        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportActions.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
@@ -1630,6 +1665,18 @@ project "ArcaneTests"
         -- (its pure halves here; the cell joins in T2-B2). InspectorView's
         -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
+        -- Settings arc S3: the settings windows' model/edit/apply/rows/window/host/pages, driven headless by the [settings-ui] units.
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsModel.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsEdit.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsApply.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsRows.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsWindow.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsHost.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ProjectSettingsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorRestart.cpp",
+        -- S6-5: assets.sprite.* (Editor audience), read by SpriteDocument::NewSpriteData above.
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetsSpriteSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPerfSettings.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
@@ -1764,8 +1811,23 @@ project "ArcaneTests"
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        -- The editor's bundled fonts at the editor's exe-relative paths, so
+        -- EditorFontsTest's InstallEditorFonts falls back to the real bundled
+        -- faces (mirrors ArcaneEditor's font lines).
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/jetbrainsmono"',
+        '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',

@@ -277,7 +277,7 @@ TEST_CASE("pipeline: TextureMetaSettings JSON round-trip, including absent-block
     settings.maxSize = 2048;
 
     const nlohmann::json j = settings.ToMetaJson();
-    const TextureMetaSettings back = TextureMetaSettings::FromMetaJson(j);
+    const TextureMetaSettings back = TextureMetaSettings::FromMetaJson(j, TextureMetaSettings{});
 
     CHECK(back.format == settings.format);
     CHECK(back.srgb == settings.srgb);
@@ -286,7 +286,7 @@ TEST_CASE("pipeline: TextureMetaSettings JSON round-trip, including absent-block
 
     // Absent block (empty object -- no "texture" key at all in a real .meta file resolves to
     // this) falls back to every field's own struct default.
-    const TextureMetaSettings defaulted = TextureMetaSettings::FromMetaJson(nlohmann::json::object());
+    const TextureMetaSettings defaulted = TextureMetaSettings::FromMetaJson(nlohmann::json::object(), TextureMetaSettings{});
     CHECK(defaulted.format == TextureMetaSettings::Format::Auto);
     CHECK(defaulted.srgb == true);
     CHECK(defaulted.generateMips == true);
@@ -298,7 +298,7 @@ TEST_CASE("pipeline: TextureMetaSettings JSON round-trip, including absent-block
     nlohmann::json partiallyWrong;
     partiallyWrong["srgb"] = "not-a-bool";
     partiallyWrong["maxSize"] = 512;
-    const TextureMetaSettings tolerant = TextureMetaSettings::FromMetaJson(partiallyWrong);
+    const TextureMetaSettings tolerant = TextureMetaSettings::FromMetaJson(partiallyWrong, TextureMetaSettings{});
     CHECK(tolerant.srgb == true);        // default, wrong type ignored
     CHECK(tolerant.maxSize == 512u);     // well-typed field still read
 }
@@ -333,16 +333,16 @@ TEST_CASE("pipeline: TextureMetaSettings format parse is case-insensitive; a gar
     // Case-insensitive spellings (spec s4: auto|bc7|rgba8) all parse to the SAME values the
     // exact-case spellings already did.
     nlohmann::json lowerBc7; lowerBc7["format"] = "bc7";
-    CHECK(TextureMetaSettings::FromMetaJson(lowerBc7).format == TextureMetaSettings::Format::Bc7);
+    CHECK(TextureMetaSettings::FromMetaJson(lowerBc7, TextureMetaSettings{}).format == TextureMetaSettings::Format::Bc7);
 
     nlohmann::json upperBc7; upperBc7["format"] = "BC7";
-    CHECK(TextureMetaSettings::FromMetaJson(upperBc7).format == TextureMetaSettings::Format::Bc7);
+    CHECK(TextureMetaSettings::FromMetaJson(upperBc7, TextureMetaSettings{}).format == TextureMetaSettings::Format::Bc7);
 
     nlohmann::json mixedRgba8; mixedRgba8["format"] = "RgBa8";
-    CHECK(TextureMetaSettings::FromMetaJson(mixedRgba8).format == TextureMetaSettings::Format::Rgba8);
+    CHECK(TextureMetaSettings::FromMetaJson(mixedRgba8, TextureMetaSettings{}).format == TextureMetaSettings::Format::Rgba8);
 
     nlohmann::json lowerAuto; lowerAuto["format"] = "auto";
-    CHECK(TextureMetaSettings::FromMetaJson(lowerAuto).format == TextureMetaSettings::Format::Auto);
+    CHECK(TextureMetaSettings::FromMetaJson(lowerAuto, TextureMetaSettings{}).format == TextureMetaSettings::Format::Auto);
 
     // Garbage falls back to Auto AND warns -- watched via a temporary sink pushed onto the
     // "AssetPipeline" named logger, removed again immediately after.
@@ -351,7 +351,7 @@ TEST_CASE("pipeline: TextureMetaSettings format parse is case-insensitive; a gar
     logger->sinks().push_back(sink);
 
     nlohmann::json garbage; garbage["format"] = "not-a-real-format";
-    const TextureMetaSettings result = TextureMetaSettings::FromMetaJson(garbage);
+    const TextureMetaSettings result = TextureMetaSettings::FromMetaJson(garbage, TextureMetaSettings{});
 
     logger->sinks().pop_back();   // never leak this probe into any other test's logger
 

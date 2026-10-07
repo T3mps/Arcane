@@ -91,19 +91,6 @@ namespace Arcane::Server
         rep.netMode                  = Arcane::ToString(m_runtime->Mode());
         rep.isDedicatedServerProcess = m_process->IsDedicatedServerProcess();
 
-        // Review round 1: make --fixed-dt REAL. RunLoop's internal accumulator
-        // ticks at RunLoop::Config::fixedHz (default 60), independent of the
-        // realDt passed to Advance() below -- so without this call, --fixed-dt
-        // would only repace the host loop and never the physics step size.
-        // SetFixedHz(1/cfg.fixedDtSeconds) makes the REQUESTED step the loop's
-        // ACTUAL one; the tick loop below still advances by cfg.fixedDtSeconds
-        // of wall time per host frame, i.e. one fixed step per frame, as before.
-        // rep.fixedDt is derived back FROM THE LOOP, not echoed from m_cfg, so a
-        // future refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported
-        // honestly rather than optimistically.
-        m_runtime->Loop().SetFixedHz(1.0 / m_cfg.fixedDtSeconds);
-        rep.fixedDt = 1.0 / m_runtime->Loop().FixedHz();
-
         if (!m_runtime->OpenProject(m_cfg.projectPath))
             return Finish(rep, "project-open-failed", 1);
 
@@ -111,6 +98,28 @@ namespace Arcane::Server
         // in (settings spec s3.2). After OpenProject, so the Project rung is known.
         if (ApplyDedicatedServerDefaults(Arcane::CVarRegistry::Get()))
             Arcane::CVarRegistry::Get().Publish();
+
+        // Review round 1: make --fixed-dt REAL. RunLoop's internal accumulator
+        // ticks at RunLoop::Config::fixedHz (default 60), independent of the
+        // realDt passed to Advance() below -- so without this call, --fixed-dt
+        // would only repace the host loop and never the physics step size.
+        // SetFixedHz makes the REQUESTED step the loop's ACTUAL one; the tick
+        // loop below still advances by cfg.fixedDtSeconds of wall time per host
+        // frame, i.e. one fixed step per frame, as before. rep.fixedDt is
+        // derived back FROM THE LOOP, not echoed from m_cfg, so a future
+        // refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported honestly
+        // rather than optimistically.
+        // Settings arc S6-8: with no --fixed-dt the rate is server.tickHz
+        // (Restart), read here, AFTER OpenProject applied the project's
+        // Config rung, and the wall-clock pacing follows it.
+        // Runtime::SetFixedHz, not Loop().SetFixedHz: the physics step
+        // follows the tick too, so a server.tickHz != sim.fixedHz no longer
+        // runs the simulation at the wrong speed (S6-8 deferral, S6-GATE).
+        const double tickHz = m_cfg.FixedHz();
+        m_runtime->SetFixedHz(tickHz);
+        if (!m_cfg.fixedDtSupplied)
+            m_cfg.fixedDtSeconds = 1.0 / tickHz;
+        rep.fixedDt = 1.0 / m_runtime->Loop().FixedHz();
 
         const Arcane::Project* proj = m_runtime->CurrentProject();
         rep.projectOpened = true;

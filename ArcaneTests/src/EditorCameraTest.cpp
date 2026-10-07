@@ -69,9 +69,9 @@ TEST_CASE("ZoomAt2D keeps the world point under the cursor fixed and clamps", "[
     cam.ZoomAt2D(cursor, 3.0f, kVp);
     const glm::vec3 s = cam.Resolve(kVp).WorldToScreen(r.origin);
     CHECK(s.x == Approx(cursor.x).margin(1e-2f)); CHECK(s.y == Approx(cursor.y).margin(1e-2f));
-    CHECK(cam.ortho.halfHeight == Approx(5.0f / std::pow(EditorCamera::kWheelStep, 3.0f)));
-    cam.ZoomAt2D(cursor, -1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCamera::kMaxHalfHeight));
-    cam.ZoomAt2D(cursor,  1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCamera::kMinHalfHeight));
+    CHECK(cam.ortho.halfHeight == Approx(5.0f / std::pow(EditorCameraSettings{}.wheelZoomStep, 3.0f)));
+    cam.ZoomAt2D(cursor, -1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCameraSettings{}.orthoMaxHalfHeight));
+    cam.ZoomAt2D(cursor,  1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCameraSettings{}.orthoMinHalfHeight));
 }
 TEST_CASE("Perspective Resolve: the eye orbits the pivot at yaw/pitch/distance and looks at it", "[editor][camera]")
 {
@@ -101,19 +101,19 @@ TEST_CASE("Fly moves eye and pivot together along the camera axes, scaled by dis
     EditorCamera cam; cam.mode = ViewMode::Perspective;   // distance 10 -> scale 1
     const glm::vec3 eye0 = cam.Eye(), piv0 = cam.orbit.pivot;
     cam.Fly({0,0,1}, 1.0f, false);                         // forward for one second
-    CHECK(glm::length(cam.Eye() - eye0) == Approx(EditorCamera::kBaseFlySpeed));
-    CHECK(glm::length(cam.orbit.pivot - piv0) == Approx(EditorCamera::kBaseFlySpeed));
+    CHECK(glm::length(cam.Eye() - eye0) == Approx(EditorCameraSettings{}.baseFlySpeed));
+    CHECK(glm::length(cam.orbit.pivot - piv0) == Approx(EditorCameraSettings{}.baseFlySpeed));
     CHECK(glm::dot(cam.Eye() - eye0, cam.Forward()) > 0.0f);
     cam.speedScalar = 2.0f; cam.orbit.distance = 20.0f;
     const glm::vec3 eye1 = cam.Eye();
     cam.Fly({1,0,0}, 0.5f, true);                          // right, half a second, boosted x2
-    CHECK(glm::length(cam.Eye() - eye1) == Approx(EditorCamera::kBaseFlySpeed * 2.0f * 2.0f * 2.0f * 0.5f));
+    CHECK(glm::length(cam.Eye() - eye1) == Approx(EditorCameraSettings{}.baseFlySpeed * 2.0f * 2.0f * 2.0f * 0.5f));
 }
 TEST_CASE("Dolly scales the distance about the pivot; AdjustSpeed steps x1.1 within limits", "[editor][camera]")
 {
     EditorCamera cam; cam.mode = ViewMode::Perspective;
-    cam.Dolly(1.0f); CHECK(cam.orbit.distance == Approx(10.0f / EditorCamera::kWheelStep));
-    cam.Dolly(-1000.0f); CHECK(cam.orbit.distance == Approx(EditorCamera::kMaxDistance));
+    cam.Dolly(1.0f); CHECK(cam.orbit.distance == Approx(10.0f / EditorCameraSettings{}.wheelZoomStep));
+    cam.Dolly(-1000.0f); CHECK(cam.orbit.distance == Approx(EditorCameraSettings{}.maxOrbitDistance));
     cam.AdjustSpeed(1.0f); CHECK(cam.speedScalar == Approx(1.1f));
     cam.AdjustSpeed(-100.0f); CHECK(cam.speedScalar >= 0.01f);
 }
@@ -129,7 +129,7 @@ TEST_CASE("Frame: 2D fits the tighter axis with the margin; perspective solves d
     cam.Frame(b, kVp);
     CHECK(cam.orbit.pivot == glm::vec3(0, 0, 0));
     const float radius = glm::length(glm::vec3(2, 1, 0));
-    CHECK(cam.orbit.distance == Approx(radius / (std::tan(glm::radians(30.0f)) * 1.0f) / EditorCamera::kFrameFill));
+    CHECK(cam.orbit.distance == Approx(radius / (std::tan(glm::radians(30.0f)) * 1.0f) / EditorCameraSettings{}.frameFill));
 }
 TEST_CASE("Frame ignores an invalid bounds and a zero viewport; CentreOrigin resets the 2D centre only", "[editor][camera]")
 {

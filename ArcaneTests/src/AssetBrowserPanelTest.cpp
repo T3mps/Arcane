@@ -9,11 +9,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
+#include "Input/EditorActions.hpp"
 #include "Panels/AssetBrowserPanel.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/EditorPanels.hpp"
 
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ActivateItemByID, FindWindowByName, GImGui
@@ -57,7 +59,7 @@ namespace
             REQUIRE(best); return best;
         }
         ImVec2 RowCenter(int i) const   // Rows()[i] under the frozen 24 px header
-        { const ImGuiWindow* w = RowsWindow(); return ImVec2(w->Pos.x + 60, w->Pos.y + kTableRowHeight * (i + 1.5f)); }
+        { const ImGuiWindow* w = RowsWindow(); return ImVec2(w->Pos.x + 60, w->Pos.y + TableRowHeight() * (i + 1.5f)); }
         // A left-button drag from `a` to `b` in eight mouse steps, one frame each.
         void Drag(ImVec2 a, ImVec2 b)
         {
@@ -120,6 +122,24 @@ TEST_CASE("Asset Browser F2 opens the inline rename; Enter commits a Rename; Esc
     }
     SECTION("Esc reverts") { CHECK_FALSE(h.Key(ImGuiKey_Escape).fileOp); CHECK_FALSE(h.state.renameTarget.IsValid()); }
 }
+TEST_CASE("Asset Browser: a rebound assets.rename opens rename on its new key, F2 no longer", "[editor][assetops][shortcuts]")
+{
+    Arcane::Editor::EditorActions& keys = Arcane::Editor::EditorActions::Get();
+    Arcane::CVarRegistry& reg = keys.Registry();
+    reg.Set(keys.HandleOf("assets.rename"), Arcane::CVarValue::String("F3"), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
+    BrowserHarness h("arcane_browser_rebound_rename_test"); (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid; h.model.Select(g);
+    (void)h.Key(ImGuiKey_F2);
+    CHECK_FALSE(h.state.renameTarget.IsValid());
+
+    (void)h.Key(ImGuiKey_F3);
+    CHECK(h.state.renameTarget == g);
+    reg.RevertLayer(Arcane::SetBy::EditorUser);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
+}
 TEST_CASE("Asset Browser Ctrl+D raises a Duplicate and keeps the keys from the entity clipboard", "[editor][assetops]")
 {
     BrowserHarness h("arcane_browser_dup_test"); (void)h.Frame(true); h.model.Select(h.model.Rows()[1].guid);
@@ -150,7 +170,7 @@ TEST_CASE("Asset Browser box selection: a drag from the void or from a row selec
     BrowserHarness h("arcane_browser_boxselect_test", 4); (void)h.Frame(true);   // 5 rows: void below them
     const auto& rows = h.model.Rows(); REQUIRE(rows.size() == 5);
     const ImGuiWindow* w = BrowserHarness::RowsWindow();
-    const ImVec2 voidPt(w->Pos.x + 60, w->Pos.y + kTableRowHeight * 6.0f + 12.0f);   // under the last row's bottom (6 x 24 px)
+    const ImVec2 voidPt(w->Pos.x + 60, w->Pos.y + TableRowHeight() * 6.0f + 12.0f);   // under the last row's bottom (6 x 24 px)
     REQUIRE(w->InnerRect.Contains(voidPt));
     SECTION("from the void, upward over rows 2..4")
     {

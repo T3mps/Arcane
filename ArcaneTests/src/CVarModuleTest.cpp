@@ -65,3 +65,55 @@ TEST_CASE("module capture: a module's callbacks leave with it; built-in commands
     CHECK(reg.Execute("cvarlist", CVarContext::Editor).ok);
     CHECK(reg.Execute("cvar_explain cap.engineKnob", CVarContext::Editor).ok);
 }
+
+TEST_CASE("an untagged AddCallback whose fn lies in a published module image is attributed to that module", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle knob = reg.Register(Test::Desc("img.knob", CVarValue::Int32(0)));
+    int fires = 0;
+    CVarRegistry::ChangeFn fn = [](CVarHandle, void* u) { ++*static_cast<int*>(u); };
+    reg.RegisterModuleImage("img-mod", reinterpret_cast<const void*>(fn), 16);
+    reg.AddCallback(knob, fn, &fires);   // no CVarModuleScope
+    REQUIRE(reg.Set(knob, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(fires == 1);
+    reg.UnregisterModule("img-mod");
+    REQUIRE(reg.Set(knob, CVarValue::Int32(2), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(fires == 1);
+}
+
+TEST_CASE("UnregisterModuleRange drops callbacks by image address", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle knob = reg.Register(Test::Desc("img.rangeKnob", CVarValue::Int32(0)));
+    int fires = 0;
+    CVarRegistry::ChangeFn fn = [](CVarHandle, void* u) { ++*static_cast<int*>(u); };
+    reg.AddCallback(knob, fn, &fires);   // unscoped, unpublished image
+    CHECK(reg.UnregisterModuleRange(reinterpret_cast<const void*>(fn), 16) >= 1);
+    REQUIRE(reg.Set(knob, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(fires == 0);
+}
+
+TEST_CASE("UnregisterModuleRange does not drop another image's same-named registrations", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle knob = reg.Register(Test::Desc("img.sharedKnob", CVarValue::Int32(0)));
+    int firesA = 0;
+    int firesB = 0;
+    CVarRegistry::ChangeFn fnA = [](CVarHandle, void* u) { ++*static_cast<int*>(u); };
+    CVarRegistry::ChangeFn fnB = [](CVarHandle, void* u) { *static_cast<int*>(u) += 10; };
+    REQUIRE(fnA != fnB);
+    // Size 1 so the two fake images cannot overlap even if the thunks sit next
+    // to each other in this test binary.
+    reg.RegisterModuleImage("shared-stem", reinterpret_cast<const void*>(fnA), 1);
+    reg.RegisterModuleImage("shared-stem", reinterpret_cast<const void*>(fnB), 1);
+    reg.AddCallback(knob, fnA, &firesA);
+    reg.AddCallback(knob, fnB, &firesB);
+    CHECK(reg.UnregisterModuleRange(reinterpret_cast<const void*>(fnA), 1) >= 1);
+    REQUIRE(reg.Set(knob, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(firesA == 0);
+    CHECK(firesB == 10);
+}

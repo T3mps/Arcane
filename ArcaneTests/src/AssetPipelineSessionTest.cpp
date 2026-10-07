@@ -27,6 +27,7 @@
 #include <Arcane/AssetPipeline/MeshImporter.hpp>
 #include <Arcane/AssetPipeline/MeshMetaSettings.hpp>
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <Json.hpp>
@@ -654,4 +655,99 @@ TEST_CASE("cook session: a second pass over an unchanged source reports its guid
     REQUIRE(second.upToDate == 1u);
     REQUIRE(second.upToDateGuids.size() == 1u);   // the count and the list agree
     CHECK(second.upToDateGuids[0] == meshGuid);
+}
+
+// ---- Project texture defaults (settings arc S6-6) -----------------------------------------
+
+TEST_CASE("pipeline: an absent .meta texture field cooks with the session's project defaults",
+          "[pipeline][sweep][texture-import]")
+{
+    const fs::path project = TempProjectDir("project-texture-defaults");
+    const fs::path pngAbsent = project / "Content" / "textures" / "absent.png";
+    const fs::path pngSet = project / "Content" / "textures" / "set.png";
+    WritePngFile(pngAbsent, 4, 4, SolidPixels(4, 4, 10, 20, 30, 255));
+    WritePngFile(pngSet, 4, 4, SolidPixels(4, 4, 40, 50, 60, 255));
+    WriteMetaSidecar(pngAbsent, Guid::Generate());                                    // no "texture" block
+    WriteMetaSidecar(pngSet, Guid::Generate(), nlohmann::json{ { "srgb", true } });  // overrides srgb only
+
+    TextureMetaSettings projectDefaults{};
+    projectDefaults.srgb = false;
+    CookSession session;
+    session.SetTextureDefaults(projectDefaults);
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 2u);
+    CHECK(result.failed == 0u);
+
+    TextureMetaSettings overridden = projectDefaults;
+    overridden.srgb = true;
+    CHECK(fs::exists(ExpectedArtifactPath(project, pngAbsent, projectDefaults)));   // resolved to the project
+    CHECK(fs::exists(ExpectedArtifactPath(project, pngSet, overridden)));          // the .meta wins
+    CHECK_FALSE(fs::exists(ExpectedArtifactPath(project, pngAbsent, TextureMetaSettings{})));
+
+    // A session with the same defaults agrees the project is current; one with
+    // other defaults sees the absent-field texture as needing a cook.
+    CookSession same;
+    same.SetTextureDefaults(projectDefaults);
+    CHECK_FALSE(same.CheckProject(project));
+    CookSession structDefaults;
+    CHECK(structDefaults.CheckProject(project));
+}
+
+// The out-of-editor bootstrap arccook runs (ApplyProjectCookConfig): the project's own
+// Config rung reaches Settings<TextureMetaSettings>(), and a session seeded with it cooks
+// an absent-field texture under a different key than a struct-default cook.
+TEST_CASE("pipeline: ApplyProjectCookConfig applies the project's Config rung to the cook defaults",
+          "[pipeline][sweep][texture-import][settings]")
+{
+    using Arcane::CVarRegistry;
+    using Arcane::SetBy;
+
+    // The global registry outlives this case: drop the Project rung it adds, even on failure.
+    struct ProjectRungGuard
+    {
+        ~ProjectRungGuard()
+        {
+            CVarRegistry& reg = CVarRegistry::Get();
+            (void)reg.RevertRung("assets.import.texture.maxSize", SetBy::Project);
+            (void)reg.RevertRung("assets.import.texture.srgb", SetBy::Project);
+            reg.PublishImmediate();
+        }
+    } guard;
+
+    const fs::path project = TempProjectDir("project-cook-config");
+    fs::create_directories(project / "Config");
+    {
+        std::ofstream out(project / "Config" / "assets.json", std::ios::binary | std::ios::trunc);
+        REQUIRE(out.good());
+        out << R"({ "import": { "texture": { "maxSize": 2, "srgb": false } } })";
+    }
+    const fs::path png = project / "Content" / "textures" / "solo.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 10, 20, 30, 255));
+    WriteMetaSidecar(png, Guid::Generate());   // no "texture" block: every field is the project's
+
+    const TextureMetaSettings resolved = ApplyProjectCookConfig(project);
+    CHECK(resolved.maxSize == 2u);
+    CHECK_FALSE(resolved.srgb);
+    CHECK(resolved.format == TextureMetaSettings{}.format);        // fields the file leaves out keep the default
+    CHECK(resolved.generateMips == TextureMetaSettings{}.generateMips);
+    CHECK(Arcane::Settings<TextureMetaSettings>() == resolved);   // published, not merely pending
+    const auto explain = CVarRegistry::Get().Explain("assets.import.texture.maxSize");
+    REQUIRE(explain.has_value());
+    CHECK(explain->setBy == SetBy::Project);
+
+    CookSession session;
+    session.SetTextureDefaults(resolved);
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 1u);
+    CHECK(result.failed == 0u);
+
+    const fs::path projectArtifact = ExpectedArtifactPath(project, png, resolved);
+    const fs::path defaultArtifact = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    CHECK(projectArtifact != defaultArtifact);   // the cook key carries the project's values
+    CHECK(fs::exists(projectArtifact));
+    CHECK_FALSE(fs::exists(defaultArtifact));
+
+    // A struct-default session (a cook that skipped the rung) sees the texture as stale.
+    CookSession structDefaults;
+    CHECK(structDefaults.CheckProject(project));
 }

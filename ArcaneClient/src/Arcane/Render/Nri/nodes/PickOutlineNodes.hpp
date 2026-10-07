@@ -52,11 +52,11 @@
 //     slot safe to reuse at all -- i.e. the submission that last recorded into
 //     frame slot s has RETIRED by the time any exec fn of this frame runs;
 //   * so the readback node's exec fn drains slot s FIRST and records into it
-//     SECOND, and the value it drains is the one written kSwapchainFramesInFlight
+//     SECOND, and the value it drains is the one written FramesInFlight()
 //     frames ago. No fence query, no idle, no extra API: the same argument that
 //     makes Batch2DNode's constant-buffer arena safe.
 //
-// LATENCY IS THEREFORE kSwapchainFramesInFlight FRAMES, not one -- which is
+// LATENCY IS THEREFORE FramesInFlight() FRAMES, not one -- which is
 // why --pick-probe refuses an open-ended run (HostConfig::Parse) and why a
 // probe wants a --frames N comfortably above that.
 //
@@ -108,6 +108,7 @@
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Mesh/MeshBuilder.hpp>              // MeshVertex -- the mesh half's vertex layout
@@ -115,9 +116,11 @@
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
-#include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
+#include <Arcane/Render/RenderOutlineSettings.hpp>   // OutlineMaxThicknessPx, PickSupersample
+#include <Arcane/Render/FramePacing.hpp>       // kMaxFramesInFlight, FramesInFlight()
 #include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
 
+#include <glm/glm.hpp>
 #include <glm/mat4x4.hpp>
 
 #include <cstdint>
@@ -143,12 +146,14 @@ namespace Arcane
     // both backends.
     inline constexpr nri::Format kGraphOutlineFieldFormat = nri::Format::RGBA16_SNORM;
 
-    // The outline field's maximum useful radius, in 1x px --
-    // the deleted SelectionOutline.cpp's `kMaxThicknessPx`, and the ONLY input to the
-    // jump-flood schedule below. The composite discards any pixel farther than
-    // half the outline width from an edge, so the field only has to be exact
-    // near a silhouette; the field is deliberately EMPTY (w == 0) beyond this.
-    inline constexpr std::uint32_t kOutlineMaxThicknessPx = 32;
+    // The outline field's maximum useful radius, in 1x px, is the Restart
+    // setting render.outline.maxThicknessPx (default 32), read through the
+    // process latch Arcane::OutlineMaxThicknessPx() (RenderOutlineSettings.hpp,
+    // settings S6-21) -- the deleted SelectionOutline.cpp's `kMaxThicknessPx`,
+    // and the ONLY input to the jump-flood schedule below. The composite
+    // discards any pixel farther than half the outline width from an edge, so
+    // the field only has to be exact near a silhouette; the field is
+    // deliberately EMPTY (w == 0) beyond this.
 
     // How many jump-flood steps the chain declares for a `maxThicknessPx`-px
     // field: the halving schedule 2^(N-1) .. 1 (N = ceil(log2(maxThicknessPx)),
@@ -263,7 +268,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t ReadbackBytes()  const noexcept { return m_readbackBytes; }
 
         // The most recently DRAINED id, or nullopt until one has landed (the
-        // first kSwapchainFramesInFlight frames of a probe run). 0 is a
+        // first FramesInFlight() frames of a probe run). 0 is a
         // legitimate value: it means the probed pixel was background.
         [[nodiscard]] std::optional<std::uint32_t> LastProbeId() const noexcept
         {
@@ -280,19 +285,20 @@ namespace Arcane
         [[nodiscard]] std::uint64_t LastProbeTicket() const noexcept { return m_probeTicket; }
 
         // The id pass's supersample factor: the id target is declared at
-        // kSuperSample*width x kSuperSample*height while the root constants stay
+        // SuperSample()*width x SuperSample()*height while the root constants stay
         // LOGICAL, so the same silhouettes rasterise at ss x density and the
         // seed shader averages them into a sub-pixel edge centroid through
-        // gSuperSample. Stated as a constant rather than left implicit so the id
-        // target's extent, the seed CB and the readback texel cannot disagree
-        // about it.
+        // gSuperSample. Stated as ONE accessor rather than left implicit so the
+        // id target's extent, the seed CB and the readback texel cannot
+        // disagree about it.
         //
-        // IT MUST NOT BE 1. At 1 every seed position shifts by a quarter
-        // pixel and the outline edge visibly changes, because the seed shader
-        // averages the supersampled silhouettes into a sub-pixel centroid.
-        // The value is Arcane::kPickSupersample and this node is its only
-        // reader -- see PickEmit.hpp.
-        static constexpr std::uint32_t kSuperSample = kPickSupersample;
+        // CHANGING IT MOVES THE OUTLINE. At 1 every seed position shifts by a
+        // quarter pixel and the outline edge visibly changes, because the seed
+        // shader averages the supersampled silhouettes into a sub-pixel
+        // centroid -- a value other than the default 2 re-blesses the goldens.
+        // The value is Arcane::PickSupersample() (render.outline.supersample,
+        // latched for the process) -- see PickEmit.hpp.
+        [[nodiscard]] static std::uint32_t SuperSample() noexcept { return PickSupersample(); }
 
         // entity_id.hlsl's BatchConstants and entity_id_mesh.hlsl's MeshIdConstants:
         // BOTH 80 bytes, so ONE pipeline layout (root constants b0, vertex + fragment)
@@ -331,7 +337,9 @@ namespace Arcane
         // See Batch2DNode::kShaderPairBase / TonemapNode::kShaderPairId: one
         // shared pipeline cache, so the nodes' opaque shader-pair id spaces
         // must not overlap. Two pairs here: the 2D half and the mesh half.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kShaderPairId     = 0x4100;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kMeshShaderPairId = 0x4101;
 
         NriDevice*        m_device    = nullptr;
@@ -357,7 +365,7 @@ namespace Arcane
         nri::VertexStreamDesc    m_meshStream{};
         nri::VertexInputDesc     m_meshVertexInput{};
 
-        // The readback staging buffer: kSwapchainFramesInFlight regions of
+        // The readback staging buffer: FramesInFlight() regions of
         // m_readbackStride bytes, persistently mapped (NRI's D3D12 UnmapBuffer
         // is a no-op anyway). NONE-backend MapBuffer returns null, so this node
         // is a [gpu] path from Create() down -- the same footgun the upload
@@ -371,11 +379,11 @@ namespace Arcane
         // Which frame slots hold a copy that has been recorded but not yet
         // drained. Cleared by the drain, set by the record -- both inside the
         // readback node's exec fn.
-        bool m_pending[kSwapchainFramesInFlight]{};
+        bool m_pending[kMaxFramesInFlight]{};
         // The ticket each pending copy carried, written beside m_pending and
         // published to m_probeTicket by the drain. Per SLOT because that is the
         // granularity the copies themselves have.
-        std::uint64_t m_ticket[kSwapchainFramesInFlight]{};
+        std::uint64_t m_ticket[kMaxFramesInFlight]{};
 
         // The prepared geometry for the frame being declared. Members rather
         // than per-frame vectors so a steady-state probe run allocates nothing.
@@ -416,7 +424,7 @@ namespace Arcane
     //   * the one space-0 pipeline layout ({ b0 CB, t0 texture }, FRAGMENT),
     //     registered in the vehicle's NriPipelineCache;
     //   * one descriptor pool holding kCbRegionsPerFrame x
-    //     kSwapchainFramesInFlight sets -- one per (region, frame slot);
+    //     FramesInFlight() sets -- one per (region, frame slot);
     //   * the per-frame-slot HOST_UPLOAD constant arena those sets' b0 views
     //     name, carved into fixed regions: 0 the seed CB, 1 the composite CB,
     //     2 + step the step's JFA CB;
@@ -456,6 +464,17 @@ namespace Arcane
         // Over kMaxSelectedIds the first kMaxSelectedIds are kept, with one WARN.
         void PrepareSelection(std::span<const std::uint32_t> selectedIds);
 
+        // The composite's two colours (settings arc S4; ruling I5, S6-21 reuses
+        // this transport): the editor pushes editor.theme.amber (selected) and
+        // the graph hover border (hovered) every frame. The member defaults
+        // are the values this node always drew, kept for the producer with no
+        // theme -- ArcaneRuntime's --pick-probe outline.
+        void SetColors(const glm::vec4& select, const glm::vec4& hover) noexcept
+        {
+            m_selectColor[0] = select.x; m_selectColor[1] = select.y; m_selectColor[2] = select.z; m_selectColor[3] = select.w;
+            m_hoverColor[0]  = hover.x;  m_hoverColor[1]  = hover.y;  m_hoverColor[2]  = hover.z;  m_hoverColor[3]  = hover.w;
+        }
+
         // Pass 1: the SUPERSAMPLED R32_UINT id buffer -> a boundary-seeded
         // RGBA16_SNORM field at 1x, over the selection PrepareSelection copied.
         // A cursor of (-1,-1) means no hover.
@@ -482,19 +501,25 @@ namespace Arcane
         //
         // 16 steps floods a 65536-px field; the declarator clamps to this and
         // says so once.
+        ARC_CONSTANT("layout: constant-buffer region count; the log2 ceiling of the JFA schedule")
         static constexpr std::uint32_t kMaxJfaSteps = 16;
         // outline_seed.hlsl's `uint4 gSelectedIds[16]` -- 64 ids. Pinned by
         // the .cpp's static_assert(kMaxSelectedIds * sizeof(std::uint32_t)
         // == 256, ...) against outline_seed.hlsl's uint4[16].
+        ARC_CONSTANT("shader contract: the 256-byte cbuffer id array the outline shader reads (static_assert)")
         static constexpr std::uint32_t kMaxSelectedIds = 64;
         // The largest of the three constant blocks: SeedCB is 288 bytes
         // (32 header + 256 ids). Pinned by a static_assert in the .cpp.
+        ARC_CONSTANT("layout: constant-buffer placement size; the struct must fit")
         static constexpr std::uint32_t kCbMaxBytes = 288;
 
         // Region 0 is the seed CB, region 1 the composite CB, region 2 + step
         // the JFA step's. One descriptor set per (region, frame slot).
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kSeedRegion         = 0;
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kCompositeRegion    = 1;
+        ARC_CONSTANT("layout: constant-buffer region index")
         static constexpr std::uint32_t kJfaRegionBase      = 2;
         static constexpr std::uint32_t kCbRegionsPerFrame  = kJfaRegionBase + kMaxJfaSteps;
 
@@ -561,8 +586,11 @@ namespace Arcane
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the nodes'
         // opaque id spaces must not overlap. PickNode is 0x4100-0x4101.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kSeedPairId      = 0x4000;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kJfaPairId       = 0x4001;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
         static constexpr std::uint64_t kCompositePairId = 0x4002;
 
         NriDevice*        m_device    = nullptr;
@@ -577,15 +605,15 @@ namespace Arcane
 
         nri::DescriptorPool* m_pool = nullptr;
         // One set per (frame slot, region) -- SetIndex() is the flattening.
-        nri::DescriptorSet*  m_sets[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::DescriptorSet*  m_sets[kMaxFramesInFlight * kCbRegionsPerFrame]{};
         // What each set currently has bound at t0; a rebind happens only when
         // it changes.
-        nri::Texture*        m_bound[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::Texture*        m_bound[kMaxFramesInFlight * kCbRegionsPerFrame]{};
 
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_cbView[kSwapchainFramesInFlight * kCbRegionsPerFrame]{};
+        nri::Descriptor* m_cbView[kMaxFramesInFlight * kCbRegionsPerFrame]{};
 
         // SHADER_RESOURCE views over graph transients, keyed by texture. Buried
         // wholesale when the pool epoch moves.
@@ -603,6 +631,9 @@ namespace Arcane
 
         bool m_warnedViewChurn = false;
         bool m_warnedIdOverflow = false;
+
+        float m_selectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
+        float m_hoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
     };
 
     // =====================================================================
@@ -614,7 +645,7 @@ namespace Arcane
 
     struct RgPickHandles
     {
-        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::kSuperSample x
+        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::SuperSample() x
         RgTexture depth{};      // the pass-local D32 transient (spec s7.1), supersampled like ids
         RgBuffer  readback{};   // the imported HOST_READBACK staging buffer
     };
@@ -622,13 +653,13 @@ namespace Arcane
     // Declares "pick" (Raster, the id pass) and "pickreadback" (Copy, the
     // 1-texel probe copy) into `graph`. `width`/`height` are the LOGICAL 1x
     // extent: the id target AND the pass's own depth are created here at
-    // PickNode::kSuperSample times that; the id target is read by both the
+    // PickNode::SuperSample() times that; the id target is read by both the
     // readback and the outline seed (which are told the factor rather than
     // left to infer it), the depth by nothing outside the pass.
     ARC_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
                                           std::uint32_t width, std::uint32_t height);
 
-    // Declares "outlineseed" plus OutlineJfaStepCount(kOutlineMaxThicknessPx)
+    // Declares "outlineseed" plus OutlineJfaStepCount(OutlineMaxThicknessPx())
     // "outlinejfaN" nodes, and hands back the LAST step's target -- the field
     // the composite samples. Every target is its OWN RGBA16_SNORM transient at
     // the 1x extent; the two-physical-texture ping-pong is the transient pool

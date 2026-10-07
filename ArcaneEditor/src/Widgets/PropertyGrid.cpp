@@ -1,7 +1,9 @@
 #include "Widgets/PropertyGrid.hpp"
+#include "Input/EditorActions.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"   // ICON_LC_ROTATE_CCW (the reset slot)
+#include "Widgets/UiScale.hpp"     // UiStyle: editor.ui.propertyDragSpeed / intStep{,Fast} (settings S6-28)
 #include <imgui_internal.h>   // ClearActiveID (numeric-row Escape cancel)
 
 #include <cfloat>
@@ -10,6 +12,8 @@
 
 namespace Arcane::Editor
 {
+    float PropertyDragSpeed() { return UiStyle().propertyDragSpeed; }
+
     void PropertyGrid::ProbeItem(const char* label)
     {
         if (!m_state.probe) return;
@@ -138,7 +142,7 @@ namespace Arcane::Editor
         // re-arm has no new edit): the rename box's IsItemDeactivated rule (D4).
         // A draft created this frame is CommitOrphans' flushed one (see below).
         if (reason && !inserted && ImGui::IsItemDeactivated()
-            && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+            && EditorActions::Get().Pressed("ui.confirm"))
         {
             draft.hold = true; draft.holdFrame = now; draft.focusPending = true;   // keep text + re-arm
             ImGui::PopID();
@@ -196,6 +200,24 @@ namespace Arcane::Editor
         m_hasDecor = false;
     }
 
+    void PropertyGrid::LabelCell(const char* label, bool dimmed, const std::function<void(bool)>& hook)
+    {
+        if (!hook)
+        {
+            (void)FieldLabelCell(label, dimmed);
+            return;
+        }
+        // FieldLabelCell's shape (EditorWidgets.cpp:448-467), with the hook run
+        // between the label and the value column.
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        const bool hovered = FieldLabelText(label, dimmed);
+        hook(hovered);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+    }
+
     void PropertyGrid::BeginValueCell(const char* label, bool dimmed)
     {
         m_events = {};
@@ -220,12 +242,13 @@ namespace Arcane::Editor
             if (m_state.probe) ProbeItem((std::string(label) + "#override").c_str());
             ImGui::PopID();
             ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-            (void)FieldLabelText(label, dimmed);
+            const bool labelHovered = FieldLabelText(label, dimmed);
+            if (decor.label) decor.label(labelHovered);
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
         }
         else
-            (void)FieldLabelCell(label, dimmed);
+            LabelCell(label, dimmed, decor.label);
         ImGui::PushID(label);
         if (decor.lead)
         {
@@ -321,7 +344,7 @@ namespace Arcane::Editor
             draft.active = ImGui::IsItemActive();            // grouped rows: EndGroup forwarded the live id
             // Escape mid-DRAG (button held; text mode has no button down and
             // InputText reverts on its own): restore the seed, end the gesture.
-            if (draft.active && ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            if (draft.active && ImGui::IsMouseDown(ImGuiMouseButton_Left) && EditorActions::Get().Pressed("ui.cancel"))
             {
                 for (int i = 0; i < count; ++i) value[i] = static_cast<T>(draft.seed[i]);
                 ImGui::ClearActiveID();
@@ -352,10 +375,12 @@ namespace Arcane::Editor
                 (void)RangedDragInt("##value", v, range, format);
             else
             {
-                // InputInt spelled out (imgui_widgets.cpp: InputScalar S32,
-                // step 1, fast 100) so it can take `format`; same id, same
-                // step buttons.
-                const int step = 1, stepFast = 100;
+                // InputInt spelled out (imgui_widgets.cpp: InputScalar S32)
+                // so it can take `format`; same id, same step buttons. The
+                // steps are editor.ui.intStep / intStepFast (settings S6-28;
+                // 1 / 100, ImGui's InputInt defaults).
+                const EditorUiStyleSettings& ui = UiStyle();
+                const int step = ui.intStep, stepFast = ui.intStepFast;
                 ImGui::InputScalar("##value", ImGuiDataType_S32, v, &step, &stepFast, format);
             }
         });
@@ -450,17 +475,19 @@ namespace Arcane::Editor
 
     void PropertyGrid::ReadOnlyRow(const char* label, std::string_view text)
     {
-        // RowDecor::lead is the one decoration a read-only row takes.
+        // RowDecor::lead and ::label are the decorations a read-only row takes.
         std::function<std::string()> lead;
+        std::function<void(bool)> labelHook;
         if (m_hasDecor)
         {
-            IM_ASSERT(!m_decor.overridden && !m_decor.reset && "ReadOnlyRow: only RowDecor::lead applies");
+            IM_ASSERT(!m_decor.overridden && !m_decor.reset && "ReadOnlyRow: only RowDecor::lead and ::label apply");
             lead = std::move(m_decor.lead);
+            labelHook = std::move(m_decor.label);
             m_decor = RowDecor{};
             m_hasDecor = false;
         }
         BeginPlainRow();
-        (void)FieldLabelCell(label, true);
+        LabelCell(label, true, labelHook);
         ImGui::PushID(label);
         std::string folded;
         if (lead)

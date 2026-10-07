@@ -15,21 +15,21 @@
 using Arcane::Editor::SceneRecents::List;
 namespace SceneRecents = Arcane::Editor::SceneRecents;
 
-TEST_CASE("SceneRecents push dedups to front and caps at kMaxEntries", "[editor]")
+TEST_CASE("SceneRecents push dedups to front and caps at MaxEntries()", "[editor]")
 {
     List list;
     for (int i = 0; i < 12; ++i)
         SceneRecents::Push(list, "D:/proj/scene" + std::to_string(i) + ".arcscene");
 
     // Capped, and the cap keeps the NEWEST entries.
-    REQUIRE(list.paths.size() == SceneRecents::kMaxEntries);
+    REQUIRE(list.paths.size() == SceneRecents::MaxEntries());
     CHECK(list.paths.front() == "D:/proj/scene11.arcscene");
     CHECK(list.paths.back() == "D:/proj/scene2.arcscene");
 
     // Re-pushing an existing entry moves it to the front rather than
     // duplicating it or growing the list past the cap.
     SceneRecents::Push(list, "D:/proj/scene5.arcscene");
-    REQUIRE(list.paths.size() == SceneRecents::kMaxEntries);
+    REQUIRE(list.paths.size() == SceneRecents::MaxEntries());
     CHECK(list.paths.front() == "D:/proj/scene5.arcscene");
     std::size_t count = 0;
     for (const std::string& p : list.paths)

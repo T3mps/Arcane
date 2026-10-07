@@ -15,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -144,6 +145,7 @@ namespace Arcane
     // table). The unassigned slot stays kNoSlot.
     struct ParamDecl
     {
+        ARC_CONSTANT("ID space / sentinel: no texture slot")
         static constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
 
         std::string   name;

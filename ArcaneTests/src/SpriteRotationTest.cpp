@@ -27,6 +27,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Render/SpriteGeometry.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -187,7 +188,7 @@ namespace
     // through it would move every expectation below.
     Arcane::ViewTransform PixelView()
     {
-        return Arcane::ViewTransform::Orthographic({37.0f, -11.0f}, 3.0f, {800u, 600u});
+        return Arcane::Ortho2DView({37.0f, -11.0f}, 3.0f, {800u, 600u});
     }
 
     // Spawn a single sprite of `shape` at an identity-rotation world transform

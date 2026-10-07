@@ -7,16 +7,24 @@
 #include <Arcane/Config/CVarRef.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 namespace Arcane
 {
@@ -30,6 +38,7 @@ namespace Arcane
             case SetBy::EngineConfig: return "EngineConfig";
             case SetBy::Plugin: return "Plugin";
             case SetBy::Project: return "Project";
+            case SetBy::EditorUser: return "EditorUser";
             case SetBy::User: return "User";
             case SetBy::CommandLine: return "CommandLine";
             case SetBy::Code: return "Code";
@@ -176,6 +185,7 @@ namespace Arcane
         std::string name;
         std::string help;
         std::string declaredBy;
+        const void* source = nullptr;   // declaring code address (RegisterDeclaredCVar caller, or Register)
         std::optional<CVarValue> min;
         std::optional<CVarValue> max;
         CVarValue defaultValue = CVarValue::Bool(false);
@@ -188,9 +198,11 @@ namespace Arcane
         std::int32_t order = 0;
         std::string categoryPath;
         std::vector<std::string> enumNames;
+        std::string group;
         CVarValue published = CVarValue::Bool(false);
         std::vector<CVarHistoryRecord> history;
         bool dirty = false;
+        std::uint64_t settingsType = 0;   // the settings struct this cvar is a field of; 0 = none
         struct Callback { ChangeFn fn = nullptr; void* user = nullptr; std::string module; };   // module: the ScopedModule at AddCallback
         std::vector<Callback> callbacks;
     };
@@ -206,6 +218,16 @@ namespace Arcane
         void* user = nullptr;
         bool alive = true;
         bool builtin = false;               // the registry's own (cvarlist, cvar_explain): survives every UnregisterModule
+    };
+
+    struct CVarRegistry::SettingsBinding
+    {
+        std::uint64_t                typeHash = 0;
+        std::string                  typeName;
+        std::string                  module;
+        std::shared_ptr<void>      (*make)() = nullptr;
+        std::vector<CVarHandle>      handles;   // per field; stale = refused (Dev in Dist, or logged error)
+        std::vector<SettingsWriteFn> writers;   // per field
     };
 
     struct CVarRegistry::Impl
@@ -227,16 +249,44 @@ namespace Arcane
         // mutates one it has stored.
         std::atomic<std::shared_ptr<const CVarSnapshot>> snapshot;
         std::uint64_t                                    serial = 0;
+        std::uint64_t                                    revision = 0;
         std::thread::id                                  mainThread = std::this_thread::get_id();
 
-        void RebuildSnapshot()
+        std::vector<SettingsBinding> settings;
+        // The two snapshots before the current one, kept alive so a
+        // Settings<T>() reference survives two publishes (settings arc S2).
+        std::array<std::shared_ptr<const CVarSnapshot>, 2> retired;
+
+        struct ModuleImage
+        {
+            std::string module;
+            const void* base = nullptr;
+            std::size_t size = 0;
+        };
+        std::vector<ModuleImage> images;
+
+        std::string_view NameForAddress(const void* p) const noexcept
+        {
+            if (!p) return {};
+            const auto* addr = static_cast<const unsigned char*>(p);
+            for (const ModuleImage& img : images)
+            {
+                if (!img.base || img.size == 0) continue;
+                const auto* base = static_cast<const unsigned char*>(img.base);
+                if (addr >= base && addr < base + img.size) return img.module;
+            }
+            return {};
+        }
+
+        void RebuildSnapshot(CVarRegistry& registry)
         {
             auto next = std::make_shared<CVarSnapshot>();
             next->serial = ++serial;
             next->entries.reserve(slots.size());
             for (const Slot& s : slots)
                 next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
-            snapshot.store(std::shared_ptr<const CVarSnapshot>(std::move(next)), std::memory_order_release);
+            registry.FillSettingsBlocks(*next, {});
+            registry.StoreSnapshot(std::move(next));
         }
 
         // Both RegisterCommand overloads land here; exactly one of fn / legacy is set.
@@ -246,6 +296,12 @@ namespace Arcane
             if (name.empty() || (!fn && !legacy)) return false;
             if (byName.contains(name) || commandByName.contains(name) || aliases.contains(name)) return false;
             if (HasFlag(flags, CVarFlags::Dev) && !devCvars) return false;
+            if (module.empty())
+            {
+                const void* source = fn ? reinterpret_cast<const void*>(fn) : reinterpret_cast<const void*>(legacy);
+                if (const std::string_view fromImage = NameForAddress(source); !fromImage.empty())
+                    module = std::string(fromImage);
+            }
             const std::uint32_t index = static_cast<std::uint32_t>(commands.size());
             Command command;
             command.name = std::move(name);
@@ -389,6 +445,25 @@ namespace Arcane
         // The CVarModuleScope stack of this thread (settings spec s4.3). A
         // deque, so pushing an inner scope never moves an outer scope's string.
         thread_local std::deque<std::string> t_moduleScopes;
+        // Set by RegisterDeclaredCVar so Register records the PLUGIN's
+        // instantiating frame, not RegisterDeclaredCVar in ArcaneCore.
+        thread_local const void* t_registerSource = nullptr;
+
+#if defined(_MSC_VER)
+#define ARC_CVAR_RETURN_ADDRESS() _ReturnAddress()
+#elif defined(__GNUC__)
+#define ARC_CVAR_RETURN_ADDRESS() __builtin_return_address(0)
+#else
+#define ARC_CVAR_RETURN_ADDRESS() nullptr
+#endif
+
+        bool AddressInRange(const void* p, const void* base, std::size_t size) noexcept
+        {
+            if (!p || !base || size == 0) return false;
+            const auto* addr = static_cast<const unsigned char*>(p);
+            const auto* b = static_cast<const unsigned char*>(base);
+            return addr >= b && addr < b + size;
+        }
     }
 
     CVarModuleScope::CVarModuleScope(std::string_view module) { t_moduleScopes.emplace_back(module); }
@@ -418,7 +493,7 @@ namespace Arcane
     CVarRegistry::CVarRegistry(bool devCvars) : m(new Impl)
     {
         m->devCvars = devCvars;
-        m->RebuildSnapshot();   // readers never see a null snapshot
+        m->RebuildSnapshot(*this);   // readers never see a null snapshot
         // The registry's own: declared by the module it lives in (ArcaneCore)
         // and, as built-ins, kept through every UnregisterModule.
         const bool listed = RegisterCommand("cvarlist", CVarFlags::ServerCanExecute, "List registered cvars.",
@@ -440,6 +515,15 @@ namespace Arcane
             .help = "Command-line history depth.",
             .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
         (void)history;
+        // Settings sweep S6-41: the console's output line cap, beside the
+        // history depth for the same reason (every registry; ConsoleModel reads
+        // the registry it is handed). 0 = unbounded, the pre-sweep behaviour.
+        const CVarHandle maxLines = Register(CVarDesc{
+            .name = "console.maxLines", .type = CVarType::Int32, .defaultValue = CVarValue::Int32(0),
+            .min = CVarValue::Int32(0), .max = CVarValue::Int32(1000000), .flags = CVarFlags::Archive,
+            .help = "Console output lines kept; the oldest drop past it. 0 keeps every line.",
+            .audience = Audience::Game, .scope = SettingScope::PreferencesProject });
+        (void)maxLines;
         // Settings spec s3.2: the cheats gate and the two engine knobs, on EVERY
         // registry (test registries included), like console.historySize. They
         // are Server audience: a LocalHost or ServerAdmin console sets them, and
@@ -543,7 +627,16 @@ namespace Arcane
     CVarHandle CVarRegistry::Register(const CVarDesc& desc)
     {
         m->lastError.clear();
-        const std::string module = desc.module.empty() ? std::string(CurrentModule()) : std::string(desc.module);
+        const void* source = t_registerSource ? t_registerSource : ARC_CVAR_RETURN_ADDRESS();
+        std::string module;
+        if (!desc.module.empty())
+            module = std::string(desc.module);
+        else if (!ScopedModule().empty())
+            module = std::string(ScopedModule());
+        else if (const std::string_view fromImage = m->NameForAddress(source); !fromImage.empty())
+            module = std::string(fromImage);
+        else
+            module = std::string(CurrentModule());
         const std::string name{ desc.name };
         const auto refuse = [&](const std::string& why) {
             m->lastError = "cvar '" + name + "' " + why;
@@ -638,6 +731,7 @@ namespace Arcane
         slot.name = desc.name;
         slot.help = desc.help;
         slot.declaredBy = module;
+        slot.source = source;
         slot.min = desc.min;
         slot.max = desc.max;
         slot.published = Clamp(desc.defaultValue, slot.min, slot.max);
@@ -650,10 +744,12 @@ namespace Arcane
         slot.order = desc.order;
         slot.categoryPath = desc.categoryPath.empty() ? DeriveCVarCategoryPath(desc.name) : std::string(desc.categoryPath);
         slot.enumNames = desc.enumNames;
+        slot.group = desc.group;
         slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         slot.dirty = false;
         m->byName.emplace(slot.name, index);
-        m->RebuildSnapshot();
+        m->RebuildSnapshot(*this);
+        ++m->revision;
         return CVarHandle{ index, generation };
     }
 
@@ -714,6 +810,7 @@ namespace Arcane
         out.order = slot.order;
         out.categoryPath = slot.categoryPath;
         out.enumNames = slot.enumNames;
+        out.group = slot.group;
         return out;
     }
 
@@ -738,6 +835,11 @@ namespace Arcane
         if (m->slots[handle.index].type == CVarType::Enum &&
             (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= m->slots[handle.index].enumNames.size()))
             return SetResult::TypeMismatch;   // an ordinal outside the declared names
+        // Inventory R2: an evidence-capture switch is `--set` only. No file
+        // rung, console, settings window or policy may turn it off.
+        if (HasFlag(m->slots[handle.index].flags, CVarFlags::CommandLineOnly)
+            && by != SetBy::Default && by != SetBy::CommandLine && by != SetBy::Code)
+            return SetResult::Denied;
 
         const Impl::Decision decision = m->Decide(*this, m->slots[handle.index], ctx, caller, true, &value);
         // The policy is game code. It may register a cvar and move the slot
@@ -775,28 +877,71 @@ namespace Arcane
         return wins ? SetResult::Applied : SetResult::RefusedWeaker;
     }
 
-    void CVarRegistry::UnregisterModule(std::string_view module)
+    std::size_t CVarRegistry::DropMatching(std::string_view module, const void* base, std::size_t size)
     {
+        const auto matchesName = [module](std::string_view m) {
+            return !module.empty() && m == module;
+        };
+        const auto matchesAddr = [base, size](const void* p) {
+            return AddressInRange(p, base, size);
+        };
+
+        const auto keepSettingsHash = [&](std::uint64_t typeHash) {
+            for (const SettingsBinding& b : m->settings)
+                if (b.typeHash == typeHash) return true;
+            return false;
+        };
+
+        const std::size_t settingsBefore = m->settings.size();
+        std::erase_if(m->settings, [&](const SettingsBinding& b) {
+            return matchesName(b.module) || matchesAddr(reinterpret_cast<const void*>(b.make));
+        });
+        const bool droppedSettings = m->settings.size() != settingsBefore;
+        std::size_t dropped = settingsBefore - m->settings.size();
+
+        // Pin dropped blocks BEFORE RebuildSnapshot. StoreSnapshot evicts the
+        // oldest retired snapshot; a SettingsShared holder of that snapshot's
+        // unique block would otherwise escape the Debug guard.
+        std::vector<std::shared_ptr<const void>> heldBlocks;
+        if (droppedSettings)
+        {
+            std::unordered_set<const void*> seen;
+            const auto takeDropped = [&](const std::shared_ptr<const CVarSnapshot>& snap) {
+                if (!snap) return;
+                for (const CVarSettingsBlock& block : snap->settings)
+                {
+                    if (keepSettingsHash(block.typeHash) || !block.data) continue;
+                    if (seen.insert(block.data.get()).second)
+                        heldBlocks.push_back(block.data);
+                }
+            };
+            takeDropped(m->retired[0]);
+            takeDropped(m->retired[1]);
+            takeDropped(Snapshot());
+        }
+
         std::vector<std::uint32_t> kill;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
         {
             Slot& slot = m->slots[i];
             if (!slot.alive) continue;
-            if (slot.declaredBy == module)
+            if (matchesName(slot.declaredBy) || matchesAddr(slot.source))
             {
                 kill.push_back(i);
                 continue;
             }
-            // The module's callbacks into its own image leave with it (spec s4.4).
-            std::erase_if(slot.callbacks, [&](const Slot::Callback& c) { return c.module == module; });
+            const auto cbBefore = slot.callbacks.size();
+            std::erase_if(slot.callbacks, [&](const Slot::Callback& c) {
+                return matchesName(c.module) || matchesAddr(reinterpret_cast<const void*>(c.fn));
+            });
+            dropped += cbBefore - slot.callbacks.size();
             const auto before = slot.history.size();
-            std::erase_if(slot.history, [&](const CVarHistoryRecord& h) { return h.module == module; });
+            std::erase_if(slot.history, [&](const CVarHistoryRecord& h) { return matchesName(h.module); });
             if (slot.history.size() != before) slot.dirty = true;
             if (slot.history.empty())
-            {
                 slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
-            }
         }
+        dropped += kill.size();
         for (std::uint32_t index : kill)
         {
             Slot& slot = m->slots[index];
@@ -807,18 +952,97 @@ namespace Arcane
             slot.alive = false;
             m->freeSlots.push_back(index);
         }
+        if (!kill.empty()) ++m->revision;
         for (Command& command : m->commands)
         {
-            if (command.alive && !command.builtin && command.module == module)
+            if (!command.alive || command.builtin) continue;
+            const void* fn = command.fn ? reinterpret_cast<const void*>(command.fn)
+                                        : reinterpret_cast<const void*>(command.legacy);
+            if (matchesName(command.module) || matchesAddr(fn))
             {
                 m->commandByName.erase(command.name);
                 command.alive = false;
+                ++dropped;
             }
         }
-        // The module's policy leaves with it: never call into an unloaded image.
-        if (m->policy && m->policyModule == module)
+        if (m->policy && (matchesName(m->policyModule) || matchesAddr(reinterpret_cast<const void*>(m->policy))))
             SetPolicy(nullptr, nullptr, {});
-        m->RebuildSnapshot();
+
+        m->RebuildSnapshot(*this);
+        if (droppedSettings)
+        {
+            // Dropped blocks' deleters are the unloading module's code. Strip
+            // them from the retire ring while the image is still mapped, and
+            // keep other modules' blocks so a Settings<T>() reference survives
+            // its two-publish lifetime. An outside SettingsShared<T> holder
+            // keeps its copy; holding one across a hot reload is the holder's
+            // bug.
+            const auto stripDropped = [&](std::shared_ptr<const CVarSnapshot>& snap) {
+                if (!snap) return;
+                bool hasDropped = false;
+                for (const CVarSettingsBlock& block : snap->settings)
+                    if (!keepSettingsHash(block.typeHash)) { hasDropped = true; break; }
+                if (!hasDropped) return;
+                auto clone = std::make_shared<CVarSnapshot>(*snap);
+                std::erase_if(clone->settings, [&](const CVarSettingsBlock& block) {
+                    return !keepSettingsHash(block.typeHash);
+                });
+                snap = std::move(clone);
+            };
+            stripDropped(m->retired[0]);
+            stripDropped(m->retired[1]);
+#if !defined(NDEBUG)
+            for (const std::shared_ptr<const void>& data : heldBlocks)
+            {
+                const long uses = data.use_count();
+                if (uses > 1)
+                {
+                    ARC_WARN("cvar: module '{}': a SettingsShared holder still owns a dropped "
+                             "settings block (use_count={}); releasing it after unmap calls the "
+                             "module deleter",
+                             module.empty() ? std::string_view("<image>") : module, uses);
+                    ARC_ENSURE(uses <= 1, "SettingsShared holder outlived UnregisterModule");
+                }
+            }
+#endif
+        }
+        return dropped;
+    }
+
+    void CVarRegistry::UnregisterModule(std::string_view module)
+    {
+        (void)DropMatching(module, nullptr, 0);
+    }
+
+    std::size_t CVarRegistry::UnregisterModuleRange(const void* base, std::size_t size)
+    {
+        // Address only: two images can share a stem, and name-matching would
+        // drop the other image's registrations (Review Focus 2, Plugin::Load).
+        const std::size_t dropped = DropMatching({}, base, size);
+        Log::UnregisterMosaicLevelTargetsInRange(base, size);
+        UnregisterModuleImage(base, size);
+        return dropped;
+    }
+
+    void CVarRegistry::RegisterModuleImage(std::string_view module, const void* base, std::size_t size)
+    {
+        if (!base || size == 0) return;
+        for (Impl::ModuleImage& img : m->images)
+        {
+            if (img.base == base)
+            {
+                img.module = std::string(module);
+                img.size = size;
+                return;
+            }
+        }
+        m->images.push_back(Impl::ModuleImage{ std::string(module), base, size });
+    }
+
+    void CVarRegistry::UnregisterModuleImage(const void* base, std::size_t size)
+    {
+        (void)size;
+        std::erase_if(m->images, [base](const Impl::ModuleImage& img) { return img.base == base; });
     }
 
     void CVarRegistry::RevertCheats()
@@ -839,6 +1063,20 @@ namespace Arcane
         }
     }
 
+    bool CVarRegistry::ClearRung(CVarHandle handle, SetBy rung)
+    {
+        if (rung == SetBy::Default || handle.index >= m->slots.size()) return false;
+        Slot& slot = m->slots[handle.index];
+        if (!slot.alive || slot.generation != handle.generation) return false;
+        const auto before = slot.history.size();
+        std::erase_if(slot.history, [rung](const CVarHistoryRecord& h) { return h.by == rung; });
+        if (slot.history.size() == before) return false;
+        if (slot.history.empty())
+            slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
+        slot.dirty = true;
+        return true;
+    }
+
     void CVarRegistry::SetPolicy(CVarPolicyFn fn, void* user, std::string_view module)
     {
         m->policy = fn;
@@ -856,6 +1094,14 @@ namespace Arcane
     {
         if (m->publishing) return;
         m->publishing = true;
+        // Cleared however Publish exits (S6-GATE): a callback that throws
+        // propagates to the caller, but must not leave `publishing` latched,
+        // or every later Publish would be a silent no-op for the process.
+        struct PublishingReset
+        {
+            bool& flag;
+            ~PublishingReset() { flag = false; }
+        } publishingReset{ m->publishing };
         const bool cheatsWere = CheatsEnabled();
         std::vector<std::uint32_t> dirty;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
@@ -863,7 +1109,16 @@ namespace Arcane
         // The snapshot is swapped between the promote and the dispatch, so the
         // callbacks and the CVarRef readers inside them already see the new values.
         const std::vector<std::uint32_t> changed = m->Promote(dirty);
-        if (!changed.empty()) m->RebuildSnapshot();
+        if (!changed.empty())
+        {
+            auto next = std::make_shared<CVarSnapshot>();
+            next->serial = ++m->serial;
+            next->entries.reserve(m->slots.size());
+            for (const auto& s : m->slots)
+                next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
+            FillSettingsBlocks(*next, changed);   // settings arc S2: typed blocks, BEFORE the swap, so callbacks read them
+            StoreSnapshot(std::move(next));
+        }
         m->Dispatch(changed);
         // server.cheats went off in this publish (spec s4.5, O4). The Cheat
         // settings revert through the SAME promote-and-dispatch path, so their
@@ -872,10 +1127,18 @@ namespace Arcane
         if (cheatsWere && !CheatsEnabled())
         {
             const std::vector<std::uint32_t> reverted = m->Promote(m->DropCheatHistory());
-            if (!reverted.empty()) m->RebuildSnapshot();
+            if (!reverted.empty())
+            {
+                auto next = std::make_shared<CVarSnapshot>();
+                next->serial = ++m->serial;
+                next->entries.reserve(m->slots.size());
+                for (const auto& s : m->slots)
+                    next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
+                FillSettingsBlocks(*next, reverted);
+                StoreSnapshot(std::move(next));
+            }
             m->Dispatch(reverted);
         }
-        m->publishing = false;
     }
 
     std::shared_ptr<const CVarSnapshot> CVarRegistry::Snapshot() const
@@ -907,6 +1170,9 @@ namespace Arcane
         out.pending = slot.history.back().value;
         out.setBy = slot.history.back().by;
         out.history = slot.history;
+        out.audience = slot.audience;
+        out.scope = slot.scope;
+        out.apply = slot.apply;
         return out;
     }
 
@@ -972,6 +1238,80 @@ namespace Arcane
         }
         return out;
     }
+
+    std::optional<CVarDescInfo> CVarRegistry::Describe(std::string_view name) const
+    {
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return std::nullopt;
+        const Slot& slot = m->slots[handle.index];
+        CVarDescInfo out;
+        out.name = slot.name;
+        out.help = slot.help;
+        out.displayName = slot.displayName;
+        out.keywords = slot.keywords;
+        out.widget = slot.widget;
+        out.categoryPath = slot.categoryPath;
+        out.module = slot.declaredBy;
+        out.type = slot.type;
+        out.flags = slot.flags;
+        out.min = slot.min;
+        out.max = slot.max;
+        out.audience = slot.audience;
+        out.scope = slot.scope;
+        out.apply = slot.apply;
+        out.order = slot.order;
+        out.enumNames = slot.enumNames;
+        out.group = slot.group;
+        out.defaultValue = slot.defaultValue;
+        return out;
+    }
+
+    std::vector<std::string> CVarRegistry::Names(bool includeHidden) const
+    {
+        std::vector<std::string> out;
+        for (const Slot& slot : m->slots)
+        {
+            if (!slot.alive) continue;
+            if (!includeHidden && HasFlag(slot.flags, CVarFlags::Hidden)) continue;
+            if (HasFlag(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            out.push_back(slot.name);
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
+    std::optional<CVarValue> CVarRegistry::RungValue(std::string_view name, SetBy by) const
+    {
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return std::nullopt;
+        const Slot& slot = m->slots[handle.index];
+        for (auto it = slot.history.rbegin(); it != slot.history.rend(); ++it)
+            if (it->by == by) return it->value;
+        return std::nullopt;
+    }
+
+    bool CVarRegistry::SetRung(std::string_view name, SetBy by, CVarValue value, std::string_view sourceModule)
+    {
+        if (by == SetBy::Default) return false;
+        const CVarHandle handle = Find(name);
+        if (handle.IsStale()) return false;
+        Slot& slot = m->slots[handle.index];
+        if (value.type != slot.type) return false;
+        if (slot.type == CVarType::Enum &&
+            (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
+            return false;
+        value = Clamp(std::move(value), slot.min, slot.max);
+        std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
+        // History is in rung order (Set refuses a weaker rung, S1 replaces in place):
+        // insert before the first stronger record, so the winner stays the winner.
+        const auto at = std::find_if(slot.history.begin(), slot.history.end(),
+                                     [by](const CVarHistoryRecord& h) { return h.by > by; });
+        slot.history.insert(at, CVarHistoryRecord{ by, std::move(value), std::string(sourceModule) });
+        slot.dirty = true;
+        return true;
+    }
+
+    std::uint64_t CVarRegistry::Revision() const noexcept { return m->revision; }
 
     ExecResult CVarRegistry::Execute(std::string_view line, CVarContext ctx, SetBy by, const CVarCaller* caller)
     {
@@ -1051,7 +1391,22 @@ namespace Arcane
         if (handle.index >= m->slots.size()) return;
         Slot& slot = m->slots[handle.index];
         if (!slot.alive || slot.generation != handle.generation || !fn) return;
-        slot.callbacks.push_back(Slot::Callback{ fn, user, std::string(ScopedModule()) });
+        std::string module = std::string(ScopedModule());
+        if (module.empty())
+        {
+            if (const std::string_view fromImage = m->NameForAddress(reinterpret_cast<const void*>(fn)); !fromImage.empty())
+            {
+                module = std::string(fromImage);
+#if !defined(NDEBUG)
+                ARC_WARN("cvar: AddCallback from module '{}' had no CVarModuleScope; attributed by image address",
+                         module);
+#endif
+            }
+        }
+        for (const Slot::Callback& c : slot.callbacks)
+            if (c.fn == fn && c.user == user && c.module == module)
+                return;
+        slot.callbacks.push_back(Slot::Callback{ fn, user, std::move(module) });
     }
 
     bool CVarRegistry::CheatsEnabled() const
@@ -1097,6 +1452,141 @@ namespace Arcane
         return std::vector<std::pair<std::string, std::string>>(m->aliases.begin(), m->aliases.end());
     }
 
+    void CVarRegistry::StoreSnapshot(std::shared_ptr<const CVarSnapshot> next)
+    {
+        std::shared_ptr<const CVarSnapshot> outgoing = m->snapshot.exchange(std::move(next), std::memory_order_acq_rel);
+        m->retired[1] = std::move(m->retired[0]);
+        m->retired[0] = std::move(outgoing);
+    }
+
+    std::shared_ptr<const void> CVarRegistry::BuildSettingsBlock(const SettingsBinding& binding) const
+    {
+        std::shared_ptr<void> block = binding.make();
+        for (std::size_t i = 0; i < binding.handles.size(); ++i)
+        {
+            const CVarHandle h = binding.handles[i];
+            if (h.IsStale() || h.index >= m->slots.size()) continue;
+            const Slot& slot = m->slots[h.index];
+            if (!slot.alive || slot.generation != h.generation) continue;
+            binding.writers[i](block.get(), slot.published);
+        }
+        return block;
+    }
+
+    void CVarRegistry::FillSettingsBlocks(CVarSnapshot& next, const std::vector<std::uint32_t>& changedSlots) const
+    {
+        const std::shared_ptr<const CVarSnapshot> previous = Snapshot();
+        std::vector<std::uint64_t> touched;
+        for (std::uint32_t index : changedSlots)
+        {
+            const std::uint64_t type = m->slots[index].settingsType;
+            if (type != 0 && std::find(touched.begin(), touched.end(), type) == touched.end())
+                touched.push_back(type);
+        }
+        next.settings.clear();
+        next.settings.reserve(m->settings.size());
+        for (const SettingsBinding& b : m->settings)
+        {
+            const CVarSettingsBlock* old = previous ? previous->FindSettingsEntry(b.typeHash) : nullptr;
+            const bool rebuild = !old || std::find(touched.begin(), touched.end(), b.typeHash) != touched.end();
+            next.settings.push_back(rebuild ? CVarSettingsBlock{ b.typeHash, BuildSettingsBlock(b) } : *old);
+        }
+        std::sort(next.settings.begin(), next.settings.end(),
+                  [](const CVarSettingsBlock& a, const CVarSettingsBlock& b) { return a.typeHash < b.typeHash; });
+    }
+
+    void CVarRegistry::ReplaceSnapshotSettings(std::vector<CVarSettingsBlock> blocks)
+    {
+        const std::shared_ptr<const CVarSnapshot> current = Snapshot();
+        if (!current) return;   // no snapshot yet: the first Publish's FillSettingsBlocks builds every block
+        auto next = std::make_shared<CVarSnapshot>(*current);
+        std::sort(blocks.begin(), blocks.end(),
+                  [](const CVarSettingsBlock& a, const CVarSettingsBlock& b) { return a.typeHash < b.typeHash; });
+        next->settings = std::move(blocks);
+        StoreSnapshot(std::move(next));
+    }
+
+    bool CVarRegistry::RegisterSettings(const SettingsTypeDesc& desc)
+    {
+        m->lastError.clear();
+        if (!desc.error.empty() || !desc.make)
+        {
+            m->lastError = "settings '" + desc.typeName + "': " + (desc.error.empty() ? std::string("no factory") : desc.error);
+            ARC_ERROR("cvar: {}", m->lastError);
+            return false;
+        }
+        for (const SettingsBinding& b : m->settings)
+            if (b.typeHash == desc.typeHash)
+            {
+                m->lastError = "settings '" + desc.typeName + "' already registered by module '" + b.module + "'";
+                return false;
+            }
+
+        SettingsBinding binding;
+        binding.typeHash = desc.typeHash;
+        binding.typeName = desc.typeName;
+        binding.module   = desc.module;
+        if (binding.module.empty())
+        {
+            if (!ScopedModule().empty())
+                binding.module = std::string(ScopedModule());
+            else if (const std::string_view fromImage = m->NameForAddress(reinterpret_cast<const void*>(desc.make));
+                     !fromImage.empty())
+                binding.module = std::string(fromImage);
+        }
+        binding.make     = desc.make;
+        for (std::size_t i = 0; i < desc.fields.size(); ++i)
+        {
+            const SettingsFieldDesc& f = desc.fields[i];
+            CVarDesc cv;
+            cv.name         = f.name;
+            cv.type         = f.type;
+            cv.defaultValue = f.defaultValue;
+            cv.min          = f.min;
+            cv.max          = f.max;
+            cv.flags        = f.flags;
+            cv.help         = f.help;
+            cv.module       = binding.module;
+            cv.displayName  = f.displayName;
+            cv.keywords     = f.keywords;
+            cv.widget       = f.widget;
+            cv.audience     = f.audience;
+            cv.scope        = f.scope;
+            cv.apply        = f.apply;
+            cv.order        = static_cast<std::int32_t>(i);
+            cv.enumNames    = f.enumNames;
+            cv.group        = f.group;
+            cv.categoryPath = f.categoryPath;
+            const CVarHandle h = Register(cv);
+            if (!h.IsStale())
+            {
+                m->slots[h.index].settingsType = desc.typeHash;
+                for (const std::string& alias : f.aliases)
+                    (void)RegisterAlias(alias, f.name);
+            }
+            else if (!(HasFlag(f.flags, CVarFlags::Dev) && !m->devCvars))
+                ARC_ERROR("cvar: settings '{}' field '{}' not registered: {}", desc.typeName, f.name, m->lastError);
+            binding.handles.push_back(h);
+            binding.writers.push_back(f.write);
+        }
+        m->settings.push_back(std::move(binding));
+        // Publish the block NOW, so Settings<T>() answers before the next frame's Publish.
+        if (const std::shared_ptr<const CVarSnapshot> current = Snapshot())
+        {
+            std::vector<CVarSettingsBlock> blocks = current->settings;
+            blocks.push_back(CVarSettingsBlock{ desc.typeHash, BuildSettingsBlock(m->settings.back()) });
+            ReplaceSnapshotSettings(std::move(blocks));
+        }
+        m->lastError.clear();
+        return true;
+    }
+
+    const void* CVarRegistry::SettingsBlock(std::uint64_t typeHash) const noexcept
+    {
+        const std::shared_ptr<const CVarSnapshot> snap = Snapshot();
+        return snap ? snap->FindSettings(typeHash) : nullptr;
+    }
+
     bool Detail::RegisterDeclaredAlias(std::string_view oldName, std::string_view newName)
     {
         const bool ok = CVarRegistry::Get().RegisterAlias(oldName, newName);
@@ -1108,8 +1598,11 @@ namespace Arcane
 
     CVarHandle Detail::RegisterDeclaredCVar(const CVarDesc& desc)
     {
+        const void* previous = t_registerSource;
+        t_registerSource = ARC_CVAR_RETURN_ADDRESS();
         CVarRegistry& registry = CVarRegistry::Get();
         const CVarHandle handle = registry.Register(desc);
+        t_registerSource = previous;
 #if defined(ARC_BUILD_DIST)
         const bool compiledOut = HasFlag(desc.flags, CVarFlags::Dev);   // Get()'s registry is built without Dev cvars
 #else
@@ -1119,5 +1612,17 @@ namespace Arcane
             ARC_ERROR("cvar: the declaration of '{}' (module '{}') was refused: {}", desc.name, desc.module,
                       registry.LastError());
         return handle;
+    }
+
+    void Detail::WarnUnlistedSettingsEnumValue(std::string_view enumType, std::int64_t raw)
+    {
+        static std::mutex lock;
+        static std::set<std::pair<std::string, std::int64_t>> warned;
+        {
+            const std::lock_guard guard(lock);
+            if (!warned.emplace(std::string(enumType), raw).second) return;
+        }
+        ARC_WARN("settings: {} value {} is not in its reflected enum table -- the cvar reads it as index 0; "
+                 "reflect the enumerator (ARC_REFLECT_ENUM_VALUE) or change the value (warned once)", enumType, raw);
     }
 }

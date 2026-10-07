@@ -62,14 +62,16 @@ TEST_CASE("Pin paint: fixed pins keep their colour, a resolved dynamic pin takes
         CHECK(resolved.adapts);
     }
     const GraphPinPaint unresolved = PinPaintFor(0, 0);
-    CHECK(Same(unresolved.color, kPinDynamicColor));
+    CHECK(Same(unresolved.color, PinColorForWidth(0)));
     CHECK_FALSE(unresolved.adapts);
-    // No new colours: four, one per value type, all distinct.
-    CHECK_FALSE(Same(kPinScalarColor, kPinVec2Color));
-    CHECK_FALSE(Same(kPinScalarColor, kPinVec4Color));
-    CHECK_FALSE(Same(kPinVec2Color, kPinVec4Color));
-    CHECK_FALSE(Same(kPinDynamicColor, kPinScalarColor));
-    CHECK(Same(PinColorForWidth(0), kPinDynamicColor));
+    // No new colours: four, one per value type, all distinct (the defaults,
+    // GraphThemeDefaults; editor.theme.graph.pin* may re-tone them).
+    namespace D = GraphThemeDefaults;
+    CHECK_FALSE(Same(D::kPinScalar, D::kPinVec2));
+    CHECK_FALSE(Same(D::kPinScalar, D::kPinVec4));
+    CHECK_FALSE(Same(D::kPinVec2, D::kPinVec4));
+    CHECK_FALSE(Same(D::kPinDynamic, D::kPinScalar));
+    CHECK(Same(PinColorForWidth(0), D::kPinDynamic));   // drawn at the default: the constant itself
 }
 
 TEST_CASE("editor.graph.showPinLegend is an Archive Bool cvar defaulting to true; the legend toggle writes it",

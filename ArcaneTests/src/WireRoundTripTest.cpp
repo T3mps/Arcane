@@ -12,6 +12,12 @@
 using Arcane::ExtractLengthFramed;
 using Arcane::Message;
 
+namespace
+{
+    // net.maxReceiveBufferBytes: the bound every service passes (settings arc S6-11).
+    std::size_t MaxBody() { return static_cast<std::size_t>(Arcane::Settings<Arcane::NetSettings>().maxReceiveBufferBytes); }
+}
+
 TEST_CASE("wire round-trip property", "[wire][property]")
 {
     rc::prop("serialize/extract/parse preserves all fields",
@@ -24,7 +30,7 @@ TEST_CASE("wire round-trip property", "[wire][property]")
         m.token   = std::string(64, 'f');
         m.payload = payload;
 
-        auto framed = ExtractLengthFramed(m.Serialize());
+        auto framed = ExtractLengthFramed(m.Serialize(), MaxBody());
         RC_ASSERT(!framed.error);
         RC_ASSERT(!framed.needMoreData);
 

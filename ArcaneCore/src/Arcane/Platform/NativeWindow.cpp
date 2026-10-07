@@ -1,5 +1,7 @@
 #include <Arcane/Platform/NativeWindow.hpp>
 
+#include <Arcane/Core/Constant.hpp>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -31,6 +33,7 @@ namespace Arcane
     namespace
     {
         constexpr UINT kMsgUserBase = WM_APP;           // OnUser(msg) <-> WM_APP + msg, msg < 0x100
+        ARC_CONSTANT("ID space / sentinel: the window thread's private WM_APP message id for a title change")
         constexpr UINT kMsgSetTitle = WM_APP + 0x100;   // lParam = wchar_t[] the window thread frees
 
         LRESULT CALLBACK NativeProc(HWND h, UINT msg, WPARAM w, LPARAM l)

@@ -56,6 +56,10 @@
 
 namespace Arcane::Editor
 {
+    // FloatRow / VecRow's default drag speed: editor.ui.propertyDragSpeed
+    // (settings S6-28), 0.01 at the default.
+    [[nodiscard]] float PropertyDragSpeed();
+
     // Persistent, per-panel-instance: the shared label split (UE's one split
     // per Details panel) and the in-flight TextRow / numeric drafts. Owned by
     // whoever owns the window (InspectorState::grid for the scene panel; one
@@ -151,6 +155,11 @@ namespace Arcane::Editor
         bool  reset = false;          // base/default reset slot
         bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
         std::function<std::string()> lead;   // value-cell lead painter -> its folded text (see above); empty = none
+        // A caller hook run right after the LABEL cell is drawn, while the
+        // label is still the last item (settings arc S3-7): `hovered` is its
+        // ForTooltip hover; IsItemHovered / BeginPopupContextItem attach to
+        // the label here. Honoured by every decorated row, ReadOnlyRow included.
+        std::function<void(bool hovered)> label;
     };
 
     class PropertyGrid
@@ -202,14 +211,14 @@ namespace Arcane::Editor
         bool IntRow(const char* label, int& value,
                     const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%d");
         // FloatRow: a range routes through RangedDragFloat (DragSpeedFor + ClampOnInput).
-        bool FloatRow(const char* label, float& value, float speed = 0.01f,
+        bool FloatRow(const char* label, float& value, float speed = PropertyDragSpeed(),
                       const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.2f");
         // SliderRow (drafting pick, 9.28): SliderFloat(min, max, format), the
         // widget material Float params use today; no clamp flags.
         bool SliderRow(const char* label, float& value, float min, float max, const char* format = "%.3f");
         // 2-4 float components through AxisDragFloatN (axis bars, per-component
         // ids). Same draft/commit/Escape rules as FloatRow, across all n.
-        bool VecRow(const char* label, float* v, int n, float speed = 0.01f,
+        bool VecRow(const char* label, float* v, int n, float speed = PropertyDragSpeed(),
                     const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.3f");
         // FieldLabelCell + a 4-channel draft + ColorValue("##value"). The boxes
         // behave like VecRow; the popup writes through every frame and commits
@@ -250,6 +259,8 @@ namespace Arcane::Editor
         // reset slot, inherited BeginDisabled) + PushID(label) / ProbeItem +
         // PopID. Plain rows (Text/ReadOnly/Button/Meter) reset the events and
         // IM_ASSERT that no decoration is pending.
+        // FieldLabelCell, or -- with a hook -- its shape with the hook run while the label is the last item.
+        void LabelCell(const char* label, bool dimmed, const std::function<void(bool)>& hook);
         void BeginValueCell(const char* label, bool dimmed);
         void EndValueCell(const char* label);
         void BeginPlainRow();

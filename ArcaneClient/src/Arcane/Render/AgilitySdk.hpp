@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Arcane/Core/Constant.hpp>
+
 // The D3D12 Agility SDK handshake (settings inventory R3: a must-match pair
 // that every EXE spelled out). The D3D12 loader reads two EXPORTED data
 // symbols from the EXE and redirects device creation into the vendored
@@ -13,6 +15,7 @@
 
 namespace Arcane::AgilitySdk
 {
+    ARC_CONSTANT("must match the vendored Agility SDK package (ThirdParty D3D12Core.dll)")
     inline constexpr unsigned kVersion = 619;
     inline constexpr const char* kPath = ".\\D3D12\\";
 }

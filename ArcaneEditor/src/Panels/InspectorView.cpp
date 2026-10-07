@@ -8,7 +8,9 @@
 #include "Widgets/IconsLucide.h"        // ICON_LC_PLUS -- the vector row's [+]
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
+#include "Settings/InspectorSettings.hpp"   // editor.inspector.dragSpeed / rotationDragSpeedDeg (settings S6-37)
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
 
@@ -36,6 +38,10 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // editor.inspector.dragSpeed: a float / vector field's per-pixel drag
+        // step when the field declares no Range step of its own.
+        [[nodiscard]] float FieldDragSpeed() { return Arcane::Settings<InspectorSettings>().dragSpeed; }
+
         // The authored Range as a [lo, hi] pair, or nullopt when the field has no
         // Range or the authored one does not actually bind.
         //
@@ -711,7 +717,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = RangedDragFloat(f, widgetId.c_str(), &v, 0.1f);
+                        bool changed = RangedDragFloat(f, widgetId.c_str(), &v, FieldDragSpeed());
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -739,7 +745,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 2, 0.1f);
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 2, FieldDragSpeed());
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -764,7 +770,7 @@ namespace Arcane::Editor
                             }
                             break;
                         }
-                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 3, 0.1f);
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 3, FieldDragSpeed());
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -849,7 +855,7 @@ namespace Arcane::Editor
                                               { if (glm::vec4* p = f.GetPtr<glm::vec4>(d)) *p = v; });
                             break;
                         }
-                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 4, 0.1f);
+                        bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 4, FieldDragSpeed());
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                             ForEachTarget(instance, [&](Astra::Entity, void* d)
@@ -950,11 +956,15 @@ namespace Arcane::Editor
 
                         // A degree drag and a radian drag want visibly different
                         // step sizes for the same "feels like this much rotation"
-                        // -- 0.5 degrees/pixel matches the Vec3/Vec4 rows' 0.1
-                        // units/pixel feel; the radian fallback is scaled down by
-                        // the same ratio degrees->radians would apply.
+                        // -- editor.inspector.rotationDragSpeedDeg (0.5
+                        // degrees/pixel) matches the Vec3/Vec4 rows' 0.1
+                        // units/pixel feel; the radian fallback follows it at
+                        // the pre-sweep 0.5 deg : 0.01 rad ratio (x 0.02, exact
+                        // at the default -- a rounder step than the 0.00873 the
+                        // unit conversion would give).
+                        const float degSpeed = Arcane::Settings<InspectorSettings>().rotationDragSpeedDeg;
                         bool changed = AxisDragFloatN(widgetId.c_str(), &v.x, 3,
-                                                      degrees ? 0.5f : 0.01f);
+                                                      degrees ? degSpeed : degSpeed * 0.02f);
                         BeginGestureIfActivated(rawName, instance);
                         if (changed)
                         {

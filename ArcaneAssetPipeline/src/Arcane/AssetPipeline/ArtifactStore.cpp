@@ -2,6 +2,8 @@
 
 #include "Arcane/AssetPipeline/ArtifactFormat.hpp"
 
+#include <Arcane/Core/Constant.hpp>
+
 #include <atomic>
 #include <optional>
 #include <string>
@@ -22,6 +24,7 @@ namespace Arcane::AssetPipeline
 {
     namespace
     {
+        ARC_CONSTANT("file format: a cook key (u64) as 16 hex digits in artifact file names")
         constexpr std::size_t kHexDigits = 16;   // std::uint64_t as lowercase hex, zero-padded
 
         // Explicit digit-by-digit formatting -- no <sstream>/<iomanip> locale surprises, and

@@ -28,12 +28,15 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor::ClassTemplates
 {
     enum class Kind : int { Component = 0, System, PlainClass, Count };
 
+    ARC_CONSTANT("enum and array arity: one per system phase choice")
     inline constexpr int kSystemPhaseChoiceCount = 3;
+    ARC_CONSTANT("enum and array arity: one per system role choice")
     inline constexpr int kSystemRoleChoiceCount  = 3;
 
     struct SystemOptions

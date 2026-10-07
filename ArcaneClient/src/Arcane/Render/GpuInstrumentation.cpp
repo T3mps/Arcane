@@ -1,5 +1,5 @@
-#include <Arcane/Config/CVarDecl.hpp>
-#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 
 #include <Arcane/Base/Diagnostics.hpp>
@@ -20,14 +20,6 @@ namespace Arcane
         // impossible for a pointer-width atomic.
         std::atomic<IGpuCrashBackend*> g_activeBackend{ nullptr };
 
-        // A Dev cvar: EngineConfig/diagnostics.json, --set and the console
-        // write it, the frame driver's Publish makes it visible, and
-        // GpuDrawMarkersEnabled reads the published value. There is no
-        // draw-granular marker scope to read it yet -- see the header's banner.
-        ARC_CVAR(cvar_drawMarkers, "diagnostics.drawMarkers", bool, false,
-                 .flags = CVarFlags::Dev, .audience = Audience::Game, .scope = SettingScope::Project,
-                 .help = "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
-
         // The device-lost latch (see the header). Written by the device layer
         // after the gpu-crash report lands; read once per host frame.
         std::atomic<bool> g_deviceLost{ false };
@@ -36,6 +28,7 @@ namespace Arcane
         // OS scheduling quantum a "sleep" degrades into a spin, and burning a
         // core to shave sub-millisecond latency off a frame that is already
         // waiting on the GPU is a bad trade.
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kSlotPollSleepNs = 1'000'000;
 
         // How long to keep polling before parking in the blocking wait. Chosen
@@ -45,6 +38,7 @@ namespace Arcane
         // A host configuring a gpuStallSeconds ABOVE this would lose the polling
         // window's benefit -- that is the one coupling here, and it is why this
         // constant lives next to that comment rather than in a header.
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kSlotPollWindow{ 15 };
     }
 
@@ -96,7 +90,8 @@ namespace Arcane
 
     bool GpuDrawMarkersEnabled() noexcept
     {
-        return cvar_drawMarkers.Get();   // missing (Dist) reads the declared default: off
+        // diagnostics.drawMarkers (DiagnosticsSettings, settings arc S2). Dist: the default, off.
+        return Settings<DiagnosticsSettings>().drawMarkers;
     }
 
     // ---------------------------------------------------------------------

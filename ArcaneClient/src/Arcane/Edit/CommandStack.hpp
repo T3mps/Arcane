@@ -6,6 +6,7 @@
 // step. ARC_API; Arcane Editor owns one and brackets its Inspector edits.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/UndoPayload.hpp>
 
@@ -36,9 +37,12 @@ namespace Arcane
     // the editor pushes editor.undo.* in through SetLimits (s2.4).
     struct UndoLimits
     {
-        std::size_t   maxSteps       = 100;                    // 0 clamps to 1
-        std::uint64_t byteBudget     = 512ull * 1024 * 1024;   // RAM + spilled bytes
-        std::uint64_t spillThreshold = 256ull * 1024;          // payloads ABOVE it spill
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::size_t   maxSteps       = 100;              // 0 clamps to 1
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::uint64_t byteBudget     = 512ull << 20;     // RAM + spilled bytes
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::uint64_t spillThreshold = 256ull << 10;     // payloads ABOVE it spill
         friend bool operator==(const UndoLimits&, const UndoLimits&) = default;
     };
 

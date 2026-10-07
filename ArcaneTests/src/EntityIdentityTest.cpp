@@ -10,6 +10,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>
@@ -118,7 +119,7 @@ TEST_CASE("RenderSubmissionSystem skips Hidden entities", "[outliner][render]")
     CountingBatcher batcher;
     // Any orthographic view: the count is what this case measures (F4 plan 1 T3).
     reg->SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &batcher, Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}) });
+        Arcane::RenderContext2D{ &batcher, Arcane::Ortho2DView({0.0f, 0.0f}, 5.0f, {800u, 600u}) });
 
     auto sprite = [&](bool hidden)
     {

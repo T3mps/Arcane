@@ -14,6 +14,7 @@
 #include <Arcane/Host/BootSequence.hpp>  // BootStage/BootThread/BootPolicy (CoreStages)
 #include <Arcane/Host/HostConfig.hpp>     // HostConfig (OpenOptionsFor -- the ONE verify-run diag:// rule)
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Input/InputSettings.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>   // Core-DLL split Task 6: VerifySharedTypeContext/GameModule/
@@ -111,13 +112,13 @@ namespace Arcane::HostBoot
 
     // Load the input action maps from the layered config's "input" category (engine
     // default EngineConfig/input.json, deep-merged with the project's Config/input.json).
-    // Sets the "demo" base context on success. Returns false if the category is
+    // Sets the input.baseContext base context on success. Returns false if the category is
     // absent/malformed (the host logs and continues -- input stays inert).
     inline bool LoadInputConfig(Arcane::InputActions& input, const Arcane::Config& config)
     {
         if (!input.LoadJson(config.Category("input")))
             return false;
-        input.SetBaseContext("demo");
+        input.SetBaseContext(Arcane::Settings<Arcane::InputSettings>().baseContext);
         return true;
     }
 

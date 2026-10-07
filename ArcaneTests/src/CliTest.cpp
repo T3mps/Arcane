@@ -158,3 +158,19 @@ TEST_CASE("cli: Supplied distinguishes explicit-non-default, explicit-equal-to-d
     CHECK_FALSE(r3.Supplied("fixed-dt"));
     CHECK(r3.Get("fixed-dt") == "0.0166666666666666666");
 }
+
+TEST_CASE("Cli: usage prints a default only when the option has one", "[cli]") {
+    // S6-GATE (S6-8 deferral): ArcaneServer --help printed "(default )" for
+    // --fixed-dt, whose empty default means "1/server.tickHz".
+    Cli cli("prog", "test tool");
+    cli.Option("fixed-dt", "", "seconds per fixed tick").Type(CliType::Double);
+    cli.Option("frames", "60", "frames to run").Type(CliType::Int);
+    cli.Flag("headless", "no window");
+    const std::string usage = cli.Usage();
+    INFO(usage);
+    CHECK(usage.find("(default )") == std::string::npos);
+    CHECK(usage.find("  --fixed-dt         seconds per fixed tick\n") != std::string::npos);
+    CHECK(usage.find("  --frames           frames to run (default 60)\n") != std::string::npos);
+    CHECK(usage.find("  --headless         no window\n") != std::string::npos);
+    CHECK(usage.find("  --help             show this help\n") != std::string::npos);
+}

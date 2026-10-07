@@ -7,8 +7,11 @@
 // spec built on this; the asset system's mounts are unchanged.
 //
 // Hosts call Configure at boot and on project open/close. Runtime does both:
-// the engine dir at its first construction, the project on OpenProject and
-// CloseProject. Dist game user data resolves under the OS per-user config dir.
+// the engine dir when the EngineConfig rung is first applied
+// (ApplyEngineConfigRung: HostBoot's early rungs or the first Runtime ctor),
+// the project on OpenProject and CloseProject. Dist game user data resolves
+// under the OS per-user config dir (settings S7: Config::dist is set by the
+// Dist build's Runtime, PathsConfigFor/PathsConfigWithoutProject).
 
 #include <Arcane/Core/Api.hpp>
 

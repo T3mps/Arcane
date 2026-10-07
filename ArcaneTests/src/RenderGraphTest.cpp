@@ -41,7 +41,8 @@
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts
 #include <Arcane/Render/PostChainCache.hpp>    // PostChainDesc -- the frame's post-chain wiring
 #include <Arcane/Material/MaterialSource.hpp>  // kSceneInput
-#include <Arcane/Render/FramePacing.hpp>         // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>         // FramesInFlight()
+#include <Arcane/Render/RenderBudgetSettings.hpp>  // render.batch2d/post/imgui defaults -- the caps the nodes latch
 
 // AFTER the NRI + engine headers, deliberately: this file's include-order note
 // above pins NRI first, and imgui.h is an ordinary header with no ERROR clash.
@@ -1986,7 +1987,7 @@ TEST_CASE("uploadring layout: Reset (BeginFrame's half) zeroes the cursor but le
 
 TEST_CASE("uploadring layout: two independent slots never see each other's allocations", "[nri]")
 {
-    // NriUploadRing owns kSwapchainFramesInFlight of these; nothing in
+    // NriUploadRing owns FramesInFlight() of these; nothing in
     // RingLayout itself is shared across instances -- this proves it.
     Arcane::RingLayout slotA, slotB;
     slotA.Init(16);
@@ -2315,7 +2316,7 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
     // THE loop shape Task 7's frame driver runs. Before fix round 1, Reset()
     // buried the pool, so this -- the only way a real driver can clear
     // declarations -- re-created every render target every frame and buried
-    // the old ones, reaped kSwapchainFramesInFlight frames later.
+    // the old ones, reaped FramesInFlight() frames later.
     const std::uint64_t before = Arcane::RenderErrorCount();
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
@@ -2335,7 +2336,7 @@ TEST_CASE("rendergraph exec: the per-frame Reset-redeclare-compile-execute loop 
 
         const Arcane::RgCompiled    compiled = CompileOk(graph);
         const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
-                                          frame % Arcane::kSwapchainFramesInFlight };
+                                          frame % Arcane::FramesInFlight() };
         REQUIRE(graph.Execute(desc, compiled));
 
         if (frame == 0)
@@ -3299,7 +3300,7 @@ TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its
         shape.Declare(graph);
 
         const Arcane::RgExecuteDesc desc{ *device, viewportLane, nullptr, ring, pipelines,
-                                          Arcane::kSwapchainFramesInFlight };
+                                          Arcane::FramesInFlight() };
         CHECK_FALSE(graph.Execute(desc, CompileOk(graph)));
 
         // ENTERED: the lane and the device are latched. NEVER SUCCEEDED: the
@@ -3438,7 +3439,7 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
         CHECK(backend.HasEntryFor(output));
         CHECK(backend.LiveTextureCount() == 1);
         // The retired set is NOT recycled into it -- no frame has been recorded
-        // since the retirement, so the gate (kSwapchainFramesInFlight recorded
+        // since the retirement, so the gate (FramesInFlight() recorded
         // frames) has not opened and a fresh one was allocated instead.
         CHECK(backend.RetiredSetCount() == 1);
 
@@ -3499,36 +3500,42 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("imgui-nri: the pool chain's link capacities start at kFirstPoolSets, double, and clamp "
-          "at kMaxPoolSets", "[nri]")
+TEST_CASE("imgui-nri: the pool chain's link capacities start at render.imgui.firstPoolSets, double, "
+          "and clamp at render.imgui.maxPoolSetsPerLink", "[nri]")
 {
     // THE GROWTH POLICY, pinned without a device. The old backend had ONE
     // 32-set pool and refused the 33rd concurrent texture; the chain replaces
-    // that cap, and these are the numbers it grows by.
+    // that cap, and these are the numbers it grows by at the default caps.
     using Arcane::ImGuiNri;
-    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(0) == ImGuiNri::kFirstPoolSets);
-    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(1) == ImGuiNri::kFirstPoolSets * 2u);
-    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(2) == ImGuiNri::kFirstPoolSets * 4u);
+    constexpr Arcane::RenderImguiSettings kCaps{};
+    constexpr std::uint32_t kFirst = kCaps.firstPoolSets;
+    constexpr std::uint32_t kMax   = kCaps.maxPoolSetsPerLink;
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(0, kFirst, kMax) == kFirst);
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(1, kFirst, kMax) == kFirst * 2u);
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(2, kFirst, kMax) == kFirst * 4u);
 
     // Monotone, never above the clamp, and AT the clamp from some link on --
     // forever after, including for an absurd index (no overflow on the way).
     std::uint32_t previous = 0;
     for (std::size_t i = 0; i < 64; ++i)
     {
-        const std::uint32_t capacity = ImGuiNri::PoolCapacityFor(i);
+        const std::uint32_t capacity = ImGuiNri::PoolCapacityFor(i, kFirst, kMax);
         CHECK(capacity >= previous);
-        CHECK(capacity <= ImGuiNri::kMaxPoolSets);
+        CHECK(capacity <= kMax);
         previous = capacity;
     }
-    CHECK(previous == ImGuiNri::kMaxPoolSets);
-    CHECK(ImGuiNri::PoolCapacityFor(std::size_t{ 1 } << 40) == ImGuiNri::kMaxPoolSets);
+    CHECK(previous == kMax);
+    CHECK(ImGuiNri::PoolCapacityFor(std::size_t{ 1 } << 40, kFirst, kMax) == kMax);
+    // A first link larger than the clamp is clamped too (the two settings
+    // are independent, so nothing else keeps first <= max).
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(0, 1024u, 64u) == 64u);
 
     // The D3D12 shader-visible SAMPLER heap tops out at 2048 descriptors and
     // every set here takes one, so a link must stay inside it (header).
-    STATIC_REQUIRE(ImGuiNri::kMaxPoolSets <= 2048u);
+    STATIC_REQUIRE(kMax <= 2048u);
     // Comfortably past the editor's first-boot count (~29 thumbnails + the
     // atlas + previews) in the first link alone.
-    STATIC_REQUIRE(ImGuiNri::kFirstPoolSets > 32u);
+    STATIC_REQUIRE(kFirst > 32u);
 }
 
 TEST_CASE("imgui-nri: more concurrent textures than one pool holds GROW the chain instead of "
@@ -3566,13 +3573,12 @@ TEST_CASE("imgui-nri: more concurrent textures than one pool holds GROW the chai
         REQUIRE(backend.Init(*device, pipelines, vsBytes, psBytes));
         CHECK(backend.PoolCount() == 1);   // Init builds the first link, and only it
 
-        // 200 > kFirstPoolSets + 2*kFirstPoolSets (192): exactly three links.
+        // 200 > firstPoolSets + 2*firstPoolSets (192 at the defaults this
+        // process runs with): exactly three links.
         constexpr std::uintptr_t kTextures = 200;
-        static_assert(kTextures > Arcane::ImGuiNri::PoolCapacityFor(0)
-                                  + Arcane::ImGuiNri::PoolCapacityFor(1));
-        static_assert(kTextures <= Arcane::ImGuiNri::PoolCapacityFor(0)
-                                   + Arcane::ImGuiNri::PoolCapacityFor(1)
-                                   + Arcane::ImGuiNri::PoolCapacityFor(2));
+        REQUIRE(backend.LinkCapacity(0) == Arcane::RenderImguiSettings{}.firstPoolSets);
+        REQUIRE(kTextures > backend.LinkCapacity(0) + backend.LinkCapacity(1));
+        REQUIRE(kTextures <= backend.LinkCapacity(0) + backend.LinkCapacity(1) + backend.LinkCapacity(2));
 
         // Distinct stand-in addresses -- the cache is keyed by pointer, and on
         // NONE nothing dereferences them (the invalidation case's reasoning).
@@ -3789,7 +3795,7 @@ TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
     const Arcane::RgCompiled compiled = CompileOk(graph);
 
     const Arcane::RgExecuteDesc desc{ *device, device->Graves(), nullptr, ring, pipelines,
-                                      Arcane::kSwapchainFramesInFlight };
+                                      Arcane::FramesInFlight() };
     CHECK_FALSE(graph.Execute(desc, compiled));
     CHECK(graph.DebugSubmitCount() == 0);
     CHECK(shape.execCount[0] == 0);
@@ -5407,29 +5413,37 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
     // slot -- so two regions overlapping would mean one frame's memcpy
     // corrupting another frame's in-flight constants.
     using Node = Arcane::Batch2DNode;
-    CHECK(Node::kCbRegionsPerFrame == Node::kMaxMaterialSlots + 1);
+    // The default caps (render.batch2d.*), the ones every node in this
+    // process latches.
+    const Node::Caps caps = Node::CapsFrom(Arcane::RenderBatch2dSettings{});
+    const std::uint32_t regionsPerFrame = Node::CbRegionsPerFrame(caps);
+    CHECK(regionsPerFrame == caps.materialSlots + 1);
 
     // THE STRIDE ITSELF, over every alignment a real device might report for
     // deviceDesc.memoryAlignment.constantBufferOffset -- including 512, which is
-    // LARGER than kMaterialCbMaxBytes and is the case a naive "just use 256"
+    // LARGER than the region size and is the case a naive "just use 256"
     // would get wrong. Two invariants, and violating either is silent: a stride
     // that is not a multiple of the device's alignment misaligns every CB view
-    // past the first, and a stride below kMaterialCbMaxBytes lets a material's
+    // past the first, and a stride below the region size lets a material's
     // packed bytes spill into the next region.
     const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
     for (const std::uint64_t alignment : alignments)
     {
-        const std::uint64_t stride = Arcane::Batch2DNode::CbRegionStride(alignment);
-        REQUIRE(stride >= Arcane::Batch2DNode::kMaterialCbMaxBytes);
+        const std::uint64_t stride = Node::CbRegionStride(caps.materialCbBytes, alignment);
+        REQUIRE(stride >= caps.materialCbBytes);
         if (alignment > 1)
             CHECK(stride % alignment == 0);
         // ...and it is the SMALLEST such value: no region is wasted.
-        CHECK(stride - (alignment > 1 ? alignment : 1)
-              < Arcane::Batch2DNode::kMaterialCbMaxBytes);
+        CHECK(stride - (alignment > 1 ? alignment : 1) < caps.materialCbBytes);
     }
-    // A 256-byte alignment is exactly one region -- the D3D12 case the constant
+    // A 256-byte alignment is exactly one region -- the D3D12 case the default
     // was chosen for.
-    CHECK(Node::CbRegionStride(256) == Node::kMaterialCbMaxBytes);
+    CHECK(Node::CbRegionStride(caps.materialCbBytes, 256) == caps.materialCbBytes);
+    // A region size that is not a multiple of 256 is rounded DOWN by CapsFrom
+    // (the node WARNs once), never up past what the setting asked for.
+    Arcane::RenderBatch2dSettings odd;
+    odd.materialCbBytes = 700;
+    CHECK(Node::CapsFrom(odd).materialCbBytes == 512u);
 
     // The OFFSET arithmetic, over two stride values -- deliberately including
     // one (64) no device would produce, because CbRegionOffset must be correct
@@ -5439,13 +5453,13 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)regionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
-            for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
+            for (std::uint32_t region = 0; region < regionsPerFrame; ++region)
             {
-                const std::uint64_t offset = Node::CbRegionOffset(stride, slot, region);
+                const std::uint64_t offset = Node::CbRegionOffset(stride, regionsPerFrame, slot, region);
                 CHECK(offset % stride == 0);
                 for (const std::uint64_t other : seen)
                     REQUIRE(offset != other);            // no aliasing, ever
@@ -5454,15 +5468,15 @@ TEST_CASE("nri batch2d constant arena: every (frame slot, region) pair owns a di
             }
         }
         // Every region of the buffer Batch2DNode allocates is claimed exactly once.
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)regionsPerFrame * Arcane::FramesInFlight());
     }
 
     // Region 0 of each frame slot is the GLOBALS CB and material slot n is
     // region 1 + n -- the indexing Batch2DNode::ArenaOffset and
     // MaterialSlot::cbRegion agree on.
-    CHECK(Node::CbRegionOffset(256, 0, 0) == 0);
-    CHECK(Node::CbRegionOffset(256, 0, 1) == 256);
-    CHECK(Node::CbRegionOffset(256, 1, 0) == (std::uint64_t)Node::kCbRegionsPerFrame * 256);
+    CHECK(Node::CbRegionOffset(256, regionsPerFrame, 0, 0) == 0);
+    CHECK(Node::CbRegionOffset(256, regionsPerFrame, 0, 1) == 256);
+    CHECK(Node::CbRegionOffset(256, regionsPerFrame, 1, 0) == (std::uint64_t)regionsPerFrame * 256);
 }
 
 // ======================================================================
@@ -5620,8 +5634,8 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
 {
     // The post arena is the second one on this path and it is a SEPARATE,
     // smaller one -- two fixed regions per frame slot (globals + the ONE
-    // material CB a chain shares) against Batch2DNode's 1 + kMaxMaterialSlots.
-    // Same invariants, same silence when they break: a stride below kCbMaxBytes
+    // material CB a chain shares) against Batch2DNode's 1 + maxMaterialSlots.
+    // Same invariants, same silence when they break: a stride below the region size
     // lets the packed bytes spill into the next region, and one that is not a
     // multiple of the device's alignment misaligns every view past the first.
     using Node = Arcane::PostChainNode;
@@ -5629,27 +5643,34 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
     CHECK(Node::kGlobalsRegion == 0);
     CHECK(Node::kMaterialRegion == 1);
 
+    // The default caps (render.post.*), the ones every node in this process latches.
+    const Node::Caps caps = Node::CapsFrom(Arcane::RenderPostSettings{});
+    const std::uint32_t regionBytes = caps.materialCbBytes;
+
     const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
     for (const std::uint64_t alignment : alignments)
     {
-        const std::uint64_t stride = Node::CbRegionStride(alignment);
-        REQUIRE(stride >= Node::kCbMaxBytes);
+        const std::uint64_t stride = Node::CbRegionStride(regionBytes, alignment);
+        REQUIRE(stride >= regionBytes);
         if (alignment > 1)
             CHECK(stride % alignment == 0);
         // ...and it is the SMALLEST such value: no region is wasted. 512 is
-        // the case that earns this -- it is LARGER than kCbMaxBytes, so a
-        // "just use 256" implementation passes every other alignment.
-        CHECK(stride - (alignment > 1 ? alignment : 1) < Node::kCbMaxBytes);
+        // the case that earns this -- it is LARGER than the 256-byte default,
+        // so a "just use 256" implementation passes every other alignment.
+        CHECK(stride - (alignment > 1 ? alignment : 1) < regionBytes);
     }
-    CHECK(Node::CbRegionStride(256) == Node::kCbMaxBytes);
+    CHECK(Node::CbRegionStride(regionBytes, 256) == regionBytes);
+    Arcane::RenderPostSettings odd;
+    odd.materialCbBytes = 300;
+    CHECK(Node::CapsFrom(odd).materialCbBytes == 256u);   // rounded DOWN to a multiple of 256
 
     const std::uint64_t strides[] = { 256, 64 };
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
             {
@@ -5661,7 +5682,7 @@ TEST_CASE("nri post chain arena: every (frame slot, region) pair owns a distinct
                 seen.push_back(offset);
             }
         }
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight());
     }
 
     // The globals CB and the material CB are DIFFERENT regions of the same
@@ -5702,7 +5723,7 @@ TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected se
     // is no second opinion to cross-check against; the expected sequence below
     // is spelled out instead. On a pure function that is just as effective a
     // regression guard -- any change to the formula still trips here.
-    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx());
     REQUIRE(steps <= Arcane::OutlineNode::kMaxJfaSteps);   // never clamped away
 
     std::vector<std::int32_t> graphJumps;
@@ -5718,13 +5739,13 @@ TEST_CASE("outline jfa: the graph's jump schedule matches the pinned expected se
     CHECK(graphJumps[steps - 2] == 1);
 
     // The reach still covers the field the composite can actually draw into:
-    // every pixel within kOutlineMaxThicknessPx of a silhouette must be able to
+    // every pixel within OutlineMaxThicknessPx() of a silhouette must be able to
     // see it. Beyond that the field is empty BY DESIGN and the composite
     // discards -- which is why the count is thickness-derived, not extent-derived.
     std::uint64_t reach = 0;
     for (const std::int32_t jump : graphJumps)
         reach += (std::uint64_t)jump;
-    CHECK(reach >= Arcane::kOutlineMaxThicknessPx);
+    CHECK(reach >= Arcane::OutlineMaxThicknessPx());
 
     // Degenerate thickness still asks for passes rather than none: a zero-step
     // chain would leave the composite reading a never-written transient, which
@@ -5745,8 +5766,8 @@ TEST_CASE("outline jfa: the graph's id pass supersamples by the pinned constant"
     // AA ramp. That is why the constant is pinned rather than tuned freely.
     //
     // ONE constant: PickNode sizes its graph transient by it.
-    CHECK(Arcane::kPickSupersample >= 1);
-    CHECK(Arcane::PickNode::kSuperSample == Arcane::kPickSupersample);
+    CHECK(Arcane::PickSupersample() >= 1);
+    CHECK(Arcane::PickNode::SuperSample() == Arcane::PickSupersample());
 }
 
 TEST_CASE("nri graph frame: the pick + outline chain is absent unless the frame asks for it", "[nri]")
@@ -5792,7 +5813,7 @@ TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap a
     // NOT a function of the 320x200 canvas: see the "the graph's jump schedule
     // matches the pinned expected sequence" case for why the count is
     // thickness-derived.
-    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx);
+    const std::uint32_t steps = Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx());
     REQUIRE(steps == 7);
     CHECK(handles.jfaStepCount == steps);
 
@@ -6770,7 +6791,7 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
@@ -6779,11 +6800,11 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
     REQUIRE(graph.IsHandleValid(canvas));
 
     // The format is the one the test-local node above created `canvas` with --
-    // AddMeshNode takes it rather than assuming kGraphCanvasFormat, because
+    // AddMeshNode takes it rather than assuming GraphCanvasFormat(), because
     // RenderGraph exposes no way to read a handle's format back and a PSO built
     // for the wrong one is an undefined attachment mismatch on both backends.
     const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas,
-                                                        Arcane::kGraphCanvasFormat,
+                                                        Arcane::GraphCanvasFormat(),
                                                         scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
     CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // declared by AddMeshNode, ahead of cull + mesh
@@ -6862,7 +6883,7 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads four imported buffers wi
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
@@ -6870,7 +6891,7 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads four imported buffers wi
         [](Arcane::RenderGraphNodeContext&) {});
 
     const Arcane::RgTexture depth = Arcane::AddMeshNode(graph, nullptr, canvas,
-                                                        Arcane::kGraphCanvasFormat,
+                                                        Arcane::GraphCanvasFormat(),
                                                         scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
 
@@ -7063,7 +7084,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
     Arcane::MeshSceneDesc scene;
     scene.instances = instances;
 
-    Arcane::GridSceneDesc grid;   // defaults: XZ plane, 1 m / 10 m, the editor's view
+    Arcane::GridSceneDesc grid;   // XZ plane; the tunables are zero (MakeGridScene fills them) -- the declaration shape does not read them
 
     SECTION("with a mesh scene: batch2d, gpuscene-sync, mesh-cull, mesh, grid, tonemap -- one shared depth transient")
     {
@@ -7169,13 +7190,13 @@ TEST_CASE("nri graph frame: (T10F4) driven directly, the grid node declares Colo
         [&](Arcane::RenderGraphBuilder& builder)
         {
             Arcane::RgTextureDesc desc;
-            desc.format = Arcane::kGraphCanvasFormat;
+            desc.format = Arcane::GraphCanvasFormat();
             desc.width  = 320;
             desc.height = 200;
             canvas = builder.CreateTexture("canvas", desc);
 
             Arcane::RgTextureDesc depthDesc;
-            depthDesc.format       = Arcane::kGraphDepthFormat;
+            depthDesc.format       = Arcane::GraphDepthFormat();
             depthDesc.width        = 320;
             depthDesc.height       = 200;
             depthDesc.depthStencil = true;
@@ -7186,7 +7207,7 @@ TEST_CASE("nri graph frame: (T10F4) driven directly, the grid node declares Colo
     REQUIRE(graph.IsHandleValid(depth));
 
     Arcane::GridSceneDesc grid;
-    Arcane::AddGridNode(graph, nullptr, canvas, Arcane::kGraphCanvasFormat, depth, grid, 320, 200);
+    Arcane::AddGridNode(graph, nullptr, canvas, Arcane::GraphCanvasFormat(), depth, grid, 320, 200);
     REQUIRE(graph.NodeCount() == 2);
     CHECK(std::string(graph.NodeName(1)) == "grid");
     CHECK(graph.WasWritten(canvas));
@@ -7255,9 +7276,9 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
     const std::uint64_t strides[] = { 256, 64 };
     for (const std::uint64_t stride : strides)
     {
-        const std::uint64_t arenaBytes = (std::uint64_t)Arcane::kSwapchainFramesInFlight * stride;
+        const std::uint64_t arenaBytes = (std::uint64_t)Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             const std::uint64_t offset = Node::CbRegionOffset(stride, slot);
             CHECK(offset % stride == 0);
@@ -7267,7 +7288,7 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
             seen.push_back(offset);
         }
         // Every region of the buffer MeshNode allocates is claimed exactly once.
-        CHECK(seen.size() == (std::size_t)Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Arcane::FramesInFlight());
     }
 
     // Slot 0 starts the buffer and slot n is n strides in -- the indexing
@@ -7275,8 +7296,8 @@ TEST_CASE("nri mesh arena: every frame slot owns a distinct, alignment-legal con
     // the arena DOUBLE-BUFFERED rather than shared.
     CHECK(Node::CbRegionOffset(256, 0) == 0);
     CHECK(Node::CbRegionOffset(256, 1) == 256);
-    static_assert(Arcane::kSwapchainFramesInFlight >= 2,
-                  "an arena with one region is not double-buffered against anything");
+    // An arena with one region is not double-buffered against anything.
+    CHECK(Arcane::FramesInFlight() >= 2);
 }
 
 TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it allocates", "[nri]")
@@ -7288,7 +7309,7 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // the whole vehicle (MeshNode is built eagerly). No device can show the
     // numbers agree; this can.
     //
-    // The expectations are recomputed here from kSwapchainFramesInFlight,
+    // The expectations are recomputed here from FramesInFlight(),
     // MeshNode::kBindlessCapacity and mesh.hlsl's register map rather than
     // copied from the implementation, so a set that gains a dimension
     // without the pool gaining one fails here.
@@ -7297,15 +7318,15 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // Task 8/10: ONE set per frame slot (b1 is the only per-frame thing left
     // in a set -- t0/s0 moved out, see below) PLUS ONE bindless set, shared
     // across every frame, that is not part of that per-frame dimension.
-    constexpr std::uint32_t kFrameSets = Arcane::kSwapchainFramesInFlight;
-    CHECK(pool.descriptorSetMaxNum == kFrameSets + 1);
+    const std::uint32_t frameSets = Arcane::FramesInFlight();
+    CHECK(pool.descriptorSetMaxNum == frameSets + 1);
 
     // ...each per-frame set carries exactly b1; the bindless set carries up
     // to kBindlessCapacity t0 TEXTURE descriptors. s0 is a ROOT/immutable
     // sampler now (RootSamplerDesc, CreateBindings) -- "not allocated from a
     // descriptor pool" (NRIDescs.h's own words on RootSamplerDesc) -- so
     // samplerMaxNum claims nothing at all.
-    CHECK(pool.constantBufferMaxNum == kFrameSets);
+    CHECK(pool.constantBufferMaxNum == frameSets);
     CHECK(pool.textureMaxNum        == Arcane::MeshNode::kBindlessCapacity);
     CHECK(pool.samplerMaxNum        == 0);
 
@@ -7313,7 +7334,7 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // structured SRVs -- t0 (the instance rows) and t1 (this slot's visible
     // indices), space1 -- rewritten per slot when the scene's buffers change.
     // Two per frame set, no more.
-    CHECK(pool.structuredBufferMaxNum == 2 * kFrameSets);
+    CHECK(pool.structuredBufferMaxNum == 2 * frameSets);
 
     // Nothing else is claimed: this node binds no raw/storage buffers and no
     // acceleration structures, so a nonzero here would mean the pool was
@@ -7353,9 +7374,9 @@ TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal 
             if (slice > 1)
                 CHECK(stride % slice == 0);    // ...and every region offset is legal
 
-            const std::uint64_t bytes = stride * Arcane::kSwapchainFramesInFlight;
+            const std::uint64_t bytes = stride * Arcane::FramesInFlight();
             std::vector<std::uint64_t> seen;
-            for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+            for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
             {
                 const std::uint64_t offset = slot * stride;
                 if (slice > 1)
@@ -7370,7 +7391,7 @@ TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal 
 
     // ONE REGION PER FRAME IN FLIGHT is the whole latency contract: fewer, and
     // the CPU would read a region the GPU is still writing.
-    CHECK(Arcane::kSwapchainFramesInFlight >= 2);
+    CHECK(Arcane::FramesInFlight() >= 2);
 }
 
 TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, stride-aligned "
@@ -7387,7 +7408,7 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
     CHECK(Node::kCbRegionsPerFrame == 2 + Node::kMaxJfaSteps);
     // The cap must cover the schedule the chain actually declares, with room
     // for a thicker outline than today's 32 px if one is ever authored.
-    CHECK(Arcane::OutlineJfaStepCount(Arcane::kOutlineMaxThicknessPx) <= Node::kMaxJfaSteps);
+    CHECK(Arcane::OutlineJfaStepCount(Arcane::OutlineMaxThicknessPx()) <= Node::kMaxJfaSteps);
     CHECK(Arcane::OutlineJfaStepCount(4096) <= Node::kMaxJfaSteps);
 
     const std::uint64_t alignments[] = { 0, 1, 16, 64, 256, 512 };
@@ -7409,9 +7430,9 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
     for (const std::uint64_t stride : strides)
     {
         const std::uint64_t arenaBytes =
-            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight * stride;
+            (std::uint64_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight() * stride;
         std::vector<std::uint64_t> seen;
-        for (std::uint32_t slot = 0; slot < Arcane::kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < Arcane::FramesInFlight(); ++slot)
         {
             for (std::uint32_t region = 0; region < Node::kCbRegionsPerFrame; ++region)
             {
@@ -7423,7 +7444,7 @@ TEST_CASE("nri outline arena: every (frame slot, region) pair owns a distinct, s
                 seen.push_back(offset);
             }
         }
-        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::kSwapchainFramesInFlight);
+        CHECK(seen.size() == (std::size_t)Node::kCbRegionsPerFrame * Arcane::FramesInFlight());
     }
 
     // Two DIFFERENT jump-flood steps never share a region -- the mistake that
@@ -7630,7 +7651,7 @@ TEST_CASE("nri graph frame: the batch's descriptor-set count is its distinct tex
 
     // And the cap that budget is measured against is a real number, not a
     // sentinel -- the node degrades to the white texel past it.
-    CHECK(Arcane::Batch2DNode::kMaxSpriteTextures >= 2);
+    CHECK(Arcane::Batch2DNode::CapsFrom(Arcane::RenderBatch2dSettings{}).spriteTextures >= 2);
 }
 
 TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its caps allow", "[nri]")
@@ -7647,35 +7668,47 @@ TEST_CASE("nri graph frame: the batch node's descriptor pool covers what its cap
     //
     // The expectations are recomputed here from the PUBLIC caps rather than
     // copied from the implementation, so a cap that moves without the pool
-    // moving with it fails here.
-    const nri::DescriptorPoolDesc pool = Arcane::Batch2DNode::PoolSizes();
+    // moving with it fails here -- at the defaults AND at a non-default set,
+    // because the caps are settings (render.batch2d.*) now.
+    Arcane::RenderBatch2dSettings custom;
+    custom.maxMaterialSlots    = 3;
+    custom.maxMaterialTextures = 5;
+    custom.maxSpriteTextures   = 200;
+    const Arcane::Batch2DNode::Caps capsUnderTest[] = {
+        Arcane::Batch2DNode::CapsFrom(Arcane::RenderBatch2dSettings{}),
+        Arcane::Batch2DNode::CapsFrom(custom),
+    };
+    for (const Arcane::Batch2DNode::Caps& caps : capsUnderTest)
+    {
+        const nri::DescriptorPoolDesc pool = Arcane::Batch2DNode::PoolSizes(caps);
 
-    constexpr std::uint32_t kSpriteTex   = Arcane::Batch2DNode::kMaxSpriteTextures;
-    constexpr std::uint32_t kMatSlots    = Arcane::Batch2DNode::kMaxMaterialSlots;
-    constexpr std::uint32_t kMatTextures = Arcane::Batch2DNode::kMaxMaterialTextures;
-    constexpr std::uint32_t kFrames      = Arcane::kSwapchainFramesInFlight;
+        const std::uint32_t spriteTex   = caps.spriteTextures;
+        const std::uint32_t matSlots    = caps.materialSlots;
+        const std::uint32_t matTextures = caps.materialTextures;
+        const std::uint32_t frames      = Arcane::FramesInFlight();
 
-    // Built-in sets: the nil-texture one plus one per distinct sprite texture.
-    // No frame-slot dimension -- their contents (t0 + s0) carry nothing
-    // per-frame, so each is written once and never rewritten.
-    constexpr std::uint32_t builtInSets = 1 + kSpriteTex;
-    // Material sets: per material slot, per FRAME SLOT, per texture variant --
-    // and variant 0 is the nil-texture one, hence (1 + kSpriteTex).
-    constexpr std::uint32_t materialSets = kMatSlots * kFrames * (1 + kSpriteTex);
+        // Built-in sets: the nil-texture one plus one per distinct sprite texture.
+        // No frame-slot dimension -- their contents (t0 + s0) carry nothing
+        // per-frame, so each is written once and never rewritten.
+        const std::uint32_t builtInSets = 1 + spriteTex;
+        // Material sets: per material slot, per FRAME SLOT, per texture variant --
+        // and variant 0 is the nil-texture one, hence (1 + spriteTex).
+        const std::uint32_t materialSets = matSlots * frames * (1 + spriteTex);
 
-    CHECK(pool.descriptorSetMaxNum >= builtInSets + materialSets);
-    // A built-in set binds t0 alone; a material set binds t0 plus its declared
-    // t1..N.
-    CHECK(pool.textureMaxNum >= builtInSets + (1 + kMatTextures) * materialSets);
-    // Every set of either family binds s0.
-    CHECK(pool.samplerMaxNum >= builtInSets + materialSets);
-    // Material sets alone carry constant buffers: b1 (numeric params) and b2
-    // (globals). Built-in sets carry neither.
-    CHECK(pool.constantBufferMaxNum >= 2 * materialSets);
+        CHECK(pool.descriptorSetMaxNum >= builtInSets + materialSets);
+        // A built-in set binds t0 alone; a material set binds t0 plus its declared
+        // t1..N.
+        CHECK(pool.textureMaxNum >= builtInSets + (1 + matTextures) * materialSets);
+        // Every set of either family binds s0.
+        CHECK(pool.samplerMaxNum >= builtInSets + materialSets);
+        // Material sets alone carry constant buffers: b1 (numeric params) and b2
+        // (globals). Built-in sets carry neither.
+        CHECK(pool.constantBufferMaxNum >= 2 * materialSets);
 
-    // The frame-slot dimension is genuinely IN the material count -- a pool
-    // sized for one frame slot would double-book the sets a frame in flight is
-    // still reading, which is the failure this multiplication exists to avoid.
-    static_assert(kFrames >= 2, "the arena and the material sets are double-buffered");
-    CHECK(pool.descriptorSetMaxNum >= kMatSlots * kFrames);
+        // The frame-slot dimension is genuinely IN the material count -- a pool
+        // sized for one frame slot would double-book the sets a frame in flight is
+        // still reading, which is the failure this multiplication exists to avoid.
+        CHECK(frames >= 2);   // the arena and the material sets are double-buffered
+        CHECK(pool.descriptorSetMaxNum >= matSlots * frames);
+    }
 }

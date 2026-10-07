@@ -135,6 +135,13 @@ namespace Arcane
         ::Arcane::Registry&       Registry()      noexcept;
         SystemSchedulers&         Schedulers()    noexcept;
         RunLoop&                  Loop()          noexcept;
+        // Re-rate this Runtime's fixed step (a dedicated server's tick, settings
+        // arc S6-GATE): the loop, the installed PhysicsSystem's step and the
+        // rate a ClearSystems reinstall uses all follow `hz`, so physics
+        // advances by the step the loop actually runs. Call before a game
+        // module loads (the PhysicsSystem is re-added). Ignores hz <= 0 or
+        // non-finite.
+        void                      SetFixedHz(double hz);
         ::Arcane::TypeContext*    TypeContext()   noexcept;
         ::Arcane::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*            TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
@@ -161,6 +168,13 @@ namespace Arcane
         IClientHooks*  ClientHooks() const noexcept;
 
         // --- project (Slice 1b) ---
+        // ONE Runtime owns the process's project state -- Arcane::Paths' project
+        // and the User/Project/Plugin cvar rungs on the process-wide registry
+        // (S2-H): the first to open a project, until it closes it or is
+        // destroyed (which releases it as CloseProject does). A second Runtime
+        // may open a project for its own assets and Config, but configures no
+        // Paths, layers no cvar rungs and releases nothing of the owner's.
+        //
         // Open a project folder or .arcproj: validate-then-commit. On success the
         // Project is adopted and the Assets facade's content root is set to the
         // project's game:// mount (root/Content); returns false and leaves ALL state
@@ -224,15 +238,31 @@ namespace Arcane
         // without it project A's User records would outlive A in any host,
         // shadow B's weaker rungs and (when archiving) land in B's file.
         void SetUserCVarArchiving(bool enabled) noexcept;
-        // Write the open project's archive NOW (no layer is dropped). The
-        // editor calls it before unloading its game module (whose cvars would
-        // then be gone) and at exit. False when archiving is off or no project
-        // is open.
+        // Write the open project's User archive and, when configured, the
+        // EditorUser archive NOW (no layer is dropped). The editor calls it
+        // before unloading its game module (whose cvars would then be gone)
+        // and at exit. False when archiving is off, or when there is neither
+        // a project nor an EditorUser folder.
         bool SaveUserCVars();
+
+        // --- the EditorUser rung (settings arc S2, spec s11.1) ---
+        // Machine-wide editor preferences: SettingScope::PreferencesMachine
+        // cvars (theme, fonts, shortcuts, layouts) live in `dir`. The editor
+        // passes Paths::Get(EditorUserDir) / "Config" for an INTERACTIVE session
+        // only, so a scripted, headless or golden run never reads or writes
+        // machine state.
+        // Setting it applies the layer now (SetBy::EditorUser, between Project
+        // and User). Every OpenProject re-applies it, and it survives
+        // CloseProject and project switches. With archiving on, SaveUserCVars
+        // and a switch also write it (WriteCVarArchive(..., SetBy::EditorUser)).
+        // Empty = no EditorUser rung (the default).
+        void SetEditorUserConfigDir(std::filesystem::path dir);
+        [[nodiscard]] const std::filesystem::path& EditorUserConfigDir() const noexcept;
 
         // --- the cvar rungs (settings spec s4.4) ---
         // Every config rung this Runtime layers -- the engine rung, then each
-        // active plugin, the project and the user dir of the open project --
+        // active plugin, the project, the optional EditorUser folder, and the
+        // user dir of the open project --
         // plus the host's --set list. That is exactly what
         // CVarRegistry::ApplyLayersFor needs to give a module that (re)loads
         // later the values a cold boot would.
@@ -293,6 +323,15 @@ namespace Arcane
         // empty-but-"ok" vector that masks data loss as a later reload failure.
         ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const;
 
+        // The Save configuration every SnapshotRegistry uses, process-wide
+        // (settings arc S6-45). Core's default is Astra's SaveConfig{}. The knob
+        // that changes it, astra.snapshot.compression, is an Editor setting, so
+        // ArcaneEditor declares it (spec s3.2: a shipped game holds no Editor
+        // settings) and pushes its choice here from the setting's publish
+        // callback; a game keeps the default. Guarded: any thread may read.
+        static void SetSnapshotSaveConfig(const ::Arcane::Registry::SaveConfig& config);
+        [[nodiscard]] static ::Arcane::Registry::SaveConfig SnapshotSaveConfig();
+
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
         // (ClearSystems before the plugin's Init). Engine systems receive Registry& per Execute, so running
@@ -345,8 +384,11 @@ namespace Arcane
         // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
-        // Scene-root PhysicsSettings when present, else the project's physics
-        // block, else PhysicsConfig's default (0, -9.81; +Y up, F4).
+        // The scene-root PhysicsSettings component when present, else the
+        // `physics.gravity` setting (its project rung, else
+        // its default (0, -9.81; +Y up, F4)). Layered on purpose: gravity is
+        // authored content, so the built-in default yields to the project and
+        // the project to the per-scene PhysicsSettings component.
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:
@@ -356,4 +398,16 @@ namespace Arcane
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
+
+    // The EngineConfig cvar rung from the ONE engine-config folder (settings
+    // arc S2-H): <Paths engine dir>/data/EngineConfig, where the engine dir
+    // defaults to the exe dir (and Paths is configured so) unless a host
+    // already set one. Layered once per process per folder: a call whose
+    // folder is the one already applied does nothing and returns false; a new
+    // folder drops the previous folder's EngineConfig records first.
+    // HostBoot::ApplyEarlyConfigRungs and every Runtime ctor go through here,
+    // so the first Runtime after HostBoot does not re-read the folder. Does
+    // NOT publish: returns true when it layered, and the caller publishes.
+    // Main thread only.
+    ARC_CORE_API bool ApplyEngineConfigRung();
 }

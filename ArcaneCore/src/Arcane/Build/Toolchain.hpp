@@ -10,6 +10,13 @@
 // Studio". Presentation-free, std + Win32 only; ArcaneCore is also compiled
 // into the Server workspace, where nothing here is called.
 //
+// Tool-path preferences (BuildToolSettings, settings arc S6): ResolvePremake,
+// ResolveMsBuild, ResolveMake, ResolveNinja and ResolveDevenv first return the
+// matching build.* cvar (premakePath, msbuildPath, makePath, ninjaPath,
+// ideExecutable) when it names a runnable file (FindOnPath's test), absolute +
+// normalised; an empty value discovers as described below, and any other value
+// warns and discovers. The cvar is read on every call (Live).
+//
 // DiscoverSolution, FindOnPath and the concrete Resolve* lookups (Premake,
 // MsBuild, Make, Ninja, XcodeBuild) are pure enough to unit-test against a
 // temp directory and an explicit PATH/PATHEXT ([build], ToolchainTest.cpp).

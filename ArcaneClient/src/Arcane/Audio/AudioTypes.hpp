@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Arcane/Audio/AudioSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -53,20 +56,17 @@ namespace Arcane::Audio
 		}
 	};
 
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr SoundHandle kInvalidSound{ 0u, 0u };
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr VoiceHandle kInvalidVoice{ 0u, 0u };
+	ARC_CONSTANT("sentinel: the null handle {0, 0} of the audio handle encoding")
 	inline constexpr BusHandle kInvalidBus{ 0u, 0u }; // In descs, invalid/default means route to master.
-
-	enum class SoundLoadMode : std::uint8_t
-	{
-		DecodeToMemory,
-		StreamFromDisk,
-	};
 
 	struct AudioDeviceDesc
 	{
-		std::uint32_t sampleRate = 48000;
-		std::uint32_t channels = 2;
+		std::uint32_t sampleRate = AudioSettings{}.sampleRate;
+		std::uint32_t channels = AudioSettings{}.channels;
 
 		// Defaults to FALSE: opening a real OS audio device is opt-in. There is no
 		// device-less signal reachable when the Runtime constructs the AudioDevice (the
@@ -82,7 +82,9 @@ namespace Arcane::Audio
 
 	struct SoundLoadDesc
 	{
-		SoundLoadMode mode = SoundLoadMode::DecodeToMemory;
+		// audio.defaultLoadMode, read when the desc is built (LoadSound's default
+		// argument included), so a change reaches the next load: NextWorld in effect.
+		SoundLoadMode mode = Settings<AudioSettings>().defaultLoadMode;
 	};
 
 	struct BusDesc

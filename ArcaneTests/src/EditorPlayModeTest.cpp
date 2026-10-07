@@ -31,6 +31,7 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -40,6 +41,8 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // ApplySimStepCap
+#include <Arcane/Sim/Time.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>   // TransformPropagationSystem -- the engine pair's other half
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
@@ -554,6 +557,54 @@ TEST_CASE("Play as embedded server stands up a second DedicatedServer world on t
     CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
     CHECK(runtime.Loop().IsPaused());
     CHECK(CountEntities(runtime) == authored);
+}
+
+// Settings arc S6-8 (fix round 1): sim.maxStepsPerFrame is Live, and the
+// editor's primary loop takes it each frame (EditorAppFrame). The embedded
+// server world advances on the SAME clamped dt, so it must take the same cap
+// or a hitch steps the client world N times and the authority M times. The
+// server Runtime's ctor read the cap at Play; a change DURING Play has to
+// reach it on the next TickServer.
+TEST_CASE("Play as embedded server: the server world takes the live sim.maxStepsPerFrame each tick like the primary loop", "[editor][netmode][sim]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::EmbeddedServer));
+    Arcane::Runtime* server = play.ServerWorld();
+    REQUIRE(server != nullptr);
+    REQUIRE(server->Loop().FixedHz() == 60.0);
+    REQUIRE(server->Loop().MaxStepsPerFrame() == 5);   // the published default, read at construction
+
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const Arcane::CVarHandle h = reg.Find("sim.maxStepsPerFrame");
+    struct ClearCodeRung
+    {
+        Arcane::CVarHandle handle;
+        ~ClearCodeRung()
+        {
+            Arcane::CVarRegistry::Get().ClearRung(handle, Arcane::SetBy::Code);
+            Arcane::CVarRegistry::Get().PublishImmediate();
+        }
+    } restore{ h };
+    REQUIRE(reg.Set(h, Arcane::CVarValue::Int32(10), Arcane::SetBy::Code) == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+
+    // What the editor frame does to the primary loop before its Advance.
+    Arcane::ApplySimStepCap(runtime.Loop());
+    CHECK(runtime.Loop().MaxStepsPerFrame() == 10);
+
+    // A 0.2 s hitch owes 12 steps at 60 Hz: both worlds run exactly 10.
+    play.TickServer(0.2);
+    CHECK(server->Loop().MaxStepsPerFrame() == 10);
+    const Arcane::Time* t = server->Registry().GetResource<Arcane::Time>();
+    REQUIRE(t != nullptr);
+    CHECK(t->fixedStep == 10);   // was 5 when the server loop kept its ctor-read cap
+
+    REQUIRE(play.Stop(runtime));
 }
 
 TEST_CASE("Play as listen server flips the ONE world to ListenServer; Stop restores Standalone", "[editor][netmode]")

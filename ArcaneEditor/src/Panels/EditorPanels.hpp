@@ -8,7 +8,7 @@
 #include "Project/RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "Project/SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
 #include "Viewport/ViewportInput.hpp"
-#include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
+#include "Viewport/EditorCamera.hpp"   // ViewportToolState (ViewMode)
 #include "Widgets/PropertyGrid.hpp"   // PropertyGridState (InspectorState::grid)
 #include <Arcane/Config/ConsoleModel.hpp>   // ConsoleUiState::cvars (the command line's model)
 #include <Arcane/Edit/CommandStack.hpp>
@@ -46,6 +46,7 @@ namespace Arcane::Editor
         bool openProject = false;    // File -> Open Project      (file dialog)
         bool openProjectFolder = false;   // File -> Open Folder... / the start page (folder dialog: a folder IS a project, Project.hpp:46-62)
         bool showProjectSettings = false;
+        bool showPreferences = false;       // Edit -> Preferences... (settings arc S3)
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
         std::string openRecentPath;
@@ -82,6 +83,7 @@ namespace Arcane::Editor
         bool openScene = false;      // File -> Open Scene...     (open-file dialog)
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
+        bool closeDocument = false;  // File -> Close Document / Ctrl+W
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
         bool openIde = false;        // Build -> Open Visual Studio (IdeLaunch; generates the .slnx first if missing)
         bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
@@ -115,18 +117,6 @@ namespace Arcane::Editor
     // Header-inline so ArcaneTests reaches it without EditorPanels.cpp.
     inline void FoldEntityClipboardShortcuts(MenuRequests& r, const ClipboardShortcutEdges& s, bool browserOwnsEditKeys)
     { if (browserOwnsEditKeys) return; r.cutSelection |= s.cut; r.copySelection |= s.copy; r.paste |= s.paste; r.duplicateSelection |= s.duplicate; }
-
-    struct ProjectSettingsRequests
-    {
-        Guid selection;
-        bool select = false;
-        bool clear = false;
-        bool open = false;
-        bool create = false;
-    };
-
-    void DrawProjectSettings(const Arcane::Project* project, bool* open,
-                             ProjectSettingsRequests& requests);
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
     // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar
@@ -169,7 +159,8 @@ namespace Arcane::Editor
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents = nullptr,
-                        const SceneRecents::List* sceneRecents = nullptr);
+                        const SceneRecents::List* sceneRecents = nullptr,
+                        bool closeableDocument = false);
 
     // The default layout's "Assets only" Inspector window (inspector filters
     // spec s6): InspectorWindowTitle's id for InspectorHost::kAssetsInstanceId.
@@ -273,12 +264,11 @@ namespace Arcane::Editor
         bool showInfo    = true;
         bool showWarning = true;
         bool showError   = true;
-        bool collapse    = false;
-        bool autoScroll  = true;
-        bool wrap        = true;
+        // Collapse / Scroll / Wrap and the line cap are editor.console.* cvars
+        // (settings sweep S6-41): the panel reads them each frame and a toggle
+        // click writes the User rung, so they persist.
         char search[128] = {};
         std::string categoryFilter;   // "" = All categories (optional s8.2 combo)
-        int  lineCap     = 512;
         // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
         // swapped label holds until. A plain deadline the draw compares each
         // frame -- no timer, no animation state; 0 (any past time) = idle.
@@ -339,19 +329,17 @@ namespace Arcane::Editor
     // References into EditorApp's state, so a click on the overlay edits the
     // host's member directly and the host reads the new value next frame:
     // the view-mode segments assign `viewMode` exactly as the Alt+G / Alt+J
-    // keys do (EditorCamera::Resolve reads it), and the settings popup's
-    // fovYDeg / speedScalar / settings edits are live the same way. All of it
-    // persists through the [EditorViewport][Camera] ini block (Task 7's
-    // handler, ViewportSettings.hpp).
+    // keys do (EditorCamera::Resolve reads it); the view mode persists
+    // through the [EditorViewport][Camera] ini block (ViewportSettings.hpp).
+    // The settings popup edits no member: it writes the editor.viewport.* /
+    // editor.camera.* / editor.gizmo.* cvars (settings S6-29) at the User
+    // rung, and the host reads them from the next published snapshot.
     struct ViewportToolState
     {
         bool&                              gizmoEnabled;
         Arcane::GizmoMode&                 mode;
         Arcane::GizmoSpace&                space;
         Arcane::Editor::ViewMode&          viewMode;
-        Arcane::Editor::ViewportSettings&  settings;
-        float&                             fovYDeg;
-        float&                             speedScalar;
     };
 
     // What the viewport window shows around the image (node page phase s6.3/s6.4):

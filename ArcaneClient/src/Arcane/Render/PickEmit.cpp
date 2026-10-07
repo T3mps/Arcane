@@ -1,4 +1,5 @@
 #include <Arcane/Render/PickEmit.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Render/SpriteGeometry.hpp>   // SpriteWorldQuad -- THE sprite corner rule
 #include <Arcane/Render/VisibilitySystem.hpp>
@@ -250,6 +251,7 @@ namespace Arcane
         // around the bound, (-,-) (+,-) (+,+) (-,+), so the same two-triangle
         // index pattern a sprite Quad's TL,TR,BR,BL corners use serves both.
         // Winding is irrelevant: the 2D id pipeline culls nothing.
+        ARC_CONSTANT("math: unit-quad corner signs")
         static const glm::vec2 kSigns[4] = {
             { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
 

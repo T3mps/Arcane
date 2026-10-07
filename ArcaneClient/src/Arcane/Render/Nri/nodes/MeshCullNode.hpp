@@ -1,6 +1,7 @@
 #pragma once
 
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>
 
 #include <Arcane/Base/Api.hpp>
@@ -23,9 +24,9 @@ namespace Arcane
     class NriPipelineCache;
     struct GpuSceneNodeInputs;
 
-    inline constexpr bool kMeshCullEnabled = true; // declaration default of render.meshCull
-    // Published snapshot. Missing (Dev, compiled out) means the default: on.
+    // render.meshCull's published value (RenderSettings). Missing (Dev, compiled out) means the default: on.
     [[nodiscard]] ARC_API bool MeshCullFrustumEnabled();
+    ARC_CONSTANT("shader contract: must match numthreads(64) in data/shaders/mesh_cull.hlsl")
     inline constexpr std::uint32_t kMeshCullThreads = 64;
     [[nodiscard]] constexpr std::uint32_t MeshCullDispatchGroups(std::uint32_t rowCount) noexcept
     {
@@ -62,11 +63,11 @@ namespace Arcane
         std::span<const std::uint8_t> m_shader;
         std::uint32_t m_layoutId = 0xFFFFFFFFu;
         nri::DescriptorPool* m_pool = nullptr;
-        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
-        const nri::Descriptor* m_instanceViews[kSwapchainFramesInFlight]{};
-        const nri::Descriptor* m_batchViews[kSwapchainFramesInFlight]{};
-        const nri::Descriptor* m_visibleViews[kSwapchainFramesInFlight]{};
-        const nri::Descriptor* m_argViews[kSwapchainFramesInFlight]{};
+        nri::DescriptorSet* m_sets[kMaxFramesInFlight]{};
+        const nri::Descriptor* m_instanceViews[kMaxFramesInFlight]{};
+        const nri::Descriptor* m_batchViews[kMaxFramesInFlight]{};
+        const nri::Descriptor* m_visibleViews[kMaxFramesInFlight]{};
+        const nri::Descriptor* m_argViews[kMaxFramesInFlight]{};
         nri::Pipeline* m_pipeline = nullptr;
     };
 

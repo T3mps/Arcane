@@ -12,6 +12,8 @@
 // FieldInfo-taking convenience overloads live one level up. That is what lets
 // non-Inspector callers (documents, tool panels) reach the same widgets.
 
+#include "Widgets/UiMetrics.hpp"
+
 #include <Arcane/Util/FunctionRef.hpp>
 
 #include <Astra/Reflection/Attribute.hpp>   // Astra::Range ONLY -- see above
@@ -233,17 +235,18 @@ namespace Arcane::Editor
 
     // Pill line height (spec §11.2's pinned 16px). Exposed -- rather than kept
     // file-local to EditorWidgets.cpp, as it was until Plan 3 -- for the same
-    // reason kAssetRowThumbSize below is: a caller that positions a pill BY
+    // reason AssetRowThumbSize() below is: a caller that positions a pill BY
     // HAND (AssetStatusPanel.cpp's cards vertically centre one inside a row
     // rect instead of chaining SameLine) needs the number, and re-declaring it
     // there made two constants nothing kept in step.
-    inline constexpr float kPillLineHeight = 16.0f;
+    // The pill line (spec §11.2's 16 px at the 16 px UI font): tracks the text (settings S4).
+    [[nodiscard]] inline float PillLineHeight() noexcept { return Ui::TextPx(16.0f); }
 
     // 12px bordered label (spec §11.2). variant: 0 = neutral (#333333 border,
     // TextDisabled-ish #9a9a9a text), 1 = amber (border #7a5a20, text
     // Theme::kAmber), 2 = blue-grey scheme tint (border #3a4a5c, text
     // #9fb3c8), 3 = violet-grey scheme tint (border #4a3a5c, text #b8a3c8)
-    // (input editor spec s2.3). kPillLineHeight line height; chain several
+    // (input editor spec s2.3). PillLineHeight() line height; chain several
     // with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
@@ -253,7 +256,14 @@ namespace Arcane::Editor
     // e.g. a status badge overlaid on a corner of it -- can do so without
     // re-guessing the value; the Asset Browser's refused-marker badge (Task
     // 10 fix round 1) is the first such consumer.
-    inline constexpr float kAssetRowThumbSize = 18.0f;
+    // editor.ui.assetRowThumbPx (settings S6-28) at the UI scale and font size
+    // (Ui::TextPx): 18 px at the defaults.
+    [[nodiscard]] float AssetRowThumbSize();
+    // The asset tables' row pitch: editor.ui.tableRowHeight at the UI scale
+    // and font size (Ui::TextPx; settings S6-28). 24 px at the defaults. The
+    // Browser's tables, the Status panel's Unreferenced card and RowWithThumb's
+    // default all draw at it.
+    [[nodiscard]] float TableRowHeight();
 
     // One selectable asset row (spec §11.1/§11.2): an 18px thumb (`thumb`
     // == 0 falls back to the `iconUtf8` Lucide glyph), then `name`, then
@@ -261,11 +271,13 @@ namespace Arcane::Editor
     // (pills, right-aligned extras) should START. `indent` shifts where the
     // thumb and name start; the row's own Selectable still spans the full
     // width, so the row stays clickable everywhere regardless of indent.
-    // `rowHeight` defaults to the 24px table row (spec §11.2); rail rows --
-    // drawn with this SAME helper per §11.1 -- pass 26. (The brief's doc
-    // fixed this at 24px, which cannot serve both rows; controller ruling,
-    // 2026-09-06, makes it a parameter instead, defaulted to 24 so table
-    // call sites stay unchanged.)
+    // `rowHeight` defaults to the table row, TableRowHeight() (spec §11.2;
+    // 24px at the defaults); rail rows -- drawn with this SAME helper per
+    // §11.1 -- pass their own (Ui::TextPx(26)). (The brief's doc fixed this
+    // at 24px, which cannot serve both rows; controller ruling, 2026-09-06,
+    // makes it a parameter instead.) A caller that positions content
+    // against the row's pitch reads TableRowHeight(), never a literal: the
+    // pitch is the user's editor.ui.tableRowHeight at the UI scale.
     //
     // TASK 10 FIX ROUND 1 (review Critical 1): the thumb and name are pure
     // ImDrawList overdraw now, NOT ImGui::Image/TextUnformatted items --
@@ -306,7 +318,7 @@ namespace Arcane::Editor
     };
     AssetRowResult RowWithThumb(const char* id, ImTextureID thumb, const char* iconUtf8,
                                 const char* name, bool selected, float indent,
-                                float rowHeight = 24.0f);
+                                float rowHeight = TableRowHeight());
 
     // ---- status lens vocabulary (Plan 2) -----------------------------------
     // Model-free ImGui draw helpers the Status lens dashboard draws out of

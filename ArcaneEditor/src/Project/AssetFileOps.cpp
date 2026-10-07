@@ -1,6 +1,7 @@
 #include "Project/AssetFileOps.hpp"
 
 #include "Panels/AssetReferenceIndex.hpp" // the delete analysis walks inbound/outbound (s7.5)
+#include "Input/EditorActions.hpp"       // the footer names the bound undo chord
 #include "Panels/CreateAssetDialog.hpp"   // ValidateCreateNameSyntax (rules 0-2), ValidateRenameStemSyntax
 
 #include <Arcane/Base/Assert.hpp>
@@ -959,7 +960,10 @@ namespace Arcane::Editor
             for (const std::string& s : dirty) { if (!n.empty()) n += ", "; n += s; }
             t.unsaved = "Unsaved changes in " + n + " will be discarded.";
         }
-        t.footer = "Files go to the Recycle Bin. Ctrl+Z restores them while this session's undo history lasts.";
+        // The undo chord is the action's bound one (S4-GATE): a rebind must not leave this footer stale.
+        const std::string undoChord = EditorActions::Get().MenuShortcut("edit.undo");
+        t.footer = "Files go to the Recycle Bin. " + (undoChord.empty() ? std::string("Undo") : undoChord)
+                 + " restores them while this session's undo history lasts.";
         return t;
     }
 

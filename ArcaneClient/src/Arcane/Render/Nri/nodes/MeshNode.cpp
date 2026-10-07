@@ -6,6 +6,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include "MeshNode.hpp"
@@ -17,7 +18,9 @@
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderGpuSceneSettings -- the scratch-row fallback
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderLookSettings.hpp>     // render.textureAnisotropy (RenderSettings)
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 
 #undef ERROR
@@ -76,6 +79,7 @@ namespace Arcane
         // a separately-decided-against choice), which is the value that pairs
         // with CompareOp::LESS below. Flipping one without the other is
         // exactly the mistake that renders an empty frame.
+        ARC_CONSTANT("convention: standard-Z depth clear with a LESS compare; changing it is a bug")
         constexpr float kDepthClear = 1.0f;
 
         // THE ROOT BLOCK is MeshRootConstants (MeshNode.hpp, 8 bytes) since
@@ -98,9 +102,11 @@ namespace Arcane
         struct MeshFrameConstants
         {
             glm::mat4 viewProjection{1.0f};
-            glm::vec4 lightDirection{0.0f, 0.0f, 1.0f, 0.0f};
-            glm::vec4 lightColor{1.0f, 1.0f, 1.0f, 0.0f};
-            glm::vec4 ambient{0.0f, 0.0f, 0.0f, 0.0f};
+            // Zero here: Record writes all three from MeshSceneDesc every
+            // frame (render.mesh.defaultLight.* is where the defaults live).
+            glm::vec4 lightDirection{0.0f};
+            glm::vec4 lightColor{0.0f};
+            glm::vec4 ambient{0.0f};
         };
         static_assert(sizeof(MeshFrameConstants) == 112, "must match mesh.hlsl's MeshFrameCB");
         static_assert(sizeof(MeshFrameConstants) <= MeshNode::kFrameCbMaxBytes,
@@ -192,6 +198,10 @@ namespace Arcane
     {
         m_device    = &context.Device();
         m_pipelines = &context.Pipelines();
+        // The ad-hoc cap is the GPU scene's scratch region, latched by
+        // GpuScene::Create (built before this node, in InitCommon).
+        m_scratchRows = context.Scene() ? context.Scene()->ScratchRows()
+                                        : Settings<RenderGpuSceneSettings>().scratchRowsPerFrame;
 
         // THE GATE (Task 8/10 Step 1), FIRST -- before shader loads, before
         // any NRI object exists. This node's whole material model is a fixed-
@@ -294,18 +304,18 @@ namespace Arcane
 
     nri::DescriptorPoolDesc MeshNode::PoolSizes(bool bindlessUpdateAfterSet) noexcept
     {
-        // TWO dimensions now (Task 8/10): kSwapchainFramesInFlight per-frame
+        // TWO dimensions now (Task 8/10): FramesInFlight() per-frame
         // sets, each carrying exactly ONE CONSTANT_BUFFER descriptor (b1);
         // and ONE bindless set carrying up to kBindlessCapacity TEXTURE
         // descriptors. The root sampler (CreateBindings) consumes NO pool
         // budget at all -- static/immutable samplers are not allocated from
         // a descriptor pool on either backend (NRIDescs.h:1077's own words).
-        constexpr std::uint32_t kFrameSets = kSwapchainFramesInFlight;
+        const std::uint32_t frameSets = FramesInFlight();
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum      = kFrameSets + 1;      // +1: the one bindless set
-        poolDesc.constantBufferMaxNum     = kFrameSets;          // b1, one per frame slot
-        poolDesc.structuredBufferMaxNum   = 2 * kFrameSets;      // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
+        poolDesc.descriptorSetMaxNum      = frameSets + 1;       // +1: the one bindless set
+        poolDesc.constantBufferMaxNum     = frameSets;           // b1, one per frame slot
+        poolDesc.structuredBufferMaxNum   = 2 * frameSets;       // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
         poolDesc.textureMaxNum            = kBindlessCapacity;   // the bindless array's own budget
         // The pool-level update-after-set permission is conditional. Only the
         // bindless texture set needs it, and Vulkan may expose descriptor
@@ -371,7 +381,8 @@ namespace Arcane
         // THE ONE IMMUTABLE SAMPLER (Task 10's slice-one sampler strategy,
         // spec section 6): trilinear -- LINEAR min/mag/mip, unchanged from
         // the sampler this replaces -- and REPEAT (a mesh's UVs tile),
-        // anisotropy as the ONE tunable knob. A ROOT/static sampler
+        // anisotropy as the ONE tunable knob (render.textureAnisotropy, read
+        // here, once, when the layout is built: Restart). A ROOT/static sampler
         // (NRIDescs.h:1022's own words), baked into the pipeline layout
         // itself rather than a descriptor-set entry: it consumes no pool
         // budget and needs no per-frame write -- CmdSetPipelineLayout
@@ -388,7 +399,7 @@ namespace Arcane
         rootSampler.desc.filters.mip  = nri::Filter::LINEAR;
         rootSampler.desc.addressModes = { nri::AddressMode::REPEAT, nri::AddressMode::REPEAT,
                                           nri::AddressMode::REPEAT };
-        rootSampler.desc.anisotropy   = 16;    // THE ONE KNOB -- see the comment above
+        rootSampler.desc.anisotropy   = static_cast<std::uint8_t>(Settings<RenderSettings>().textureAnisotropy);   // THE ONE KNOB -- see the comment above
         rootSampler.desc.mipMax       = 16.0f;
         rootSampler.shaderStages      = nri::StageBits::FRAGMENT_SHADER;   // only ps_main samples
 
@@ -503,7 +514,7 @@ namespace Arcane
         // requires to be a multiple of 256 -- so the views name a whole region
         // and the shader simply reads less than it.
         m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
-        const std::uint64_t arenaBytes = m_arenaStride * kSwapchainFramesInFlight;
+        const std::uint64_t arenaBytes = m_arenaStride * FramesInFlight();
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -533,7 +544,7 @@ namespace Arcane
         // The b1 view per frame slot, created ONCE. Its contents change every
         // frame; its (buffer, offset) never does, which is exactly what lets a
         // descriptor set naming it be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -562,7 +573,7 @@ namespace Arcane
             return false;
         }
 
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             // setIndex 0: the ARRAY position of frameSetDesc in
             // CreateBindings' setDescs[2] -- an ARRAY INDEX, not a register
@@ -753,7 +764,7 @@ namespace Arcane
         // colour formats, and binding one inside a CmdBeginRendering whose
         // depth attachment carries a different format is undefined on both
         // backends.
-        key.depthFormat     = kGraphDepthFormat;
+        key.depthFormat     = GraphDepthFormat();
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = state.blend;
         key.depthWrite      = state.depthWrite;
@@ -869,7 +880,7 @@ namespace Arcane
         //    input regardless of whether anything can be drawn. CAPPED at the
         //    scratch capacity HERE, and the overflow WARNED HERE, once: the
         //    sync node only ever sees the capped span, so GpuScene::Reserve's
-        //    own `adHocCount > kScratchRows` guard can never fire on this
+        //    own `adHocCount > ScratchRows()` guard can never fire on this
         //    path (it stays as a second line of defence for any other
         //    caller). Row i here IS scratch row i on the device -- Apply
         //    copies the span contiguously and Record's pushRoot depends on it.
@@ -878,7 +889,7 @@ namespace Arcane
         {
             if (instance.mesh.IsNil())
                 continue;   // an empty slot is not an error -- see MeshInstance::mesh
-            if (m_adHocRows.size() >= GpuScene::kScratchRows)
+            if (m_adHocRows.size() >= m_scratchRows)
             {
                 ++dropped;
                 continue;   // counted, not staged -- the WARN below names the total
@@ -904,9 +915,9 @@ namespace Arcane
         {
             m_warnedScratchOverflow = true;
             ARC_WARN("[nri-graph] MeshNode: {} ad-hoc instance(s) exceed the {} scratch rows per frame slot "
-                     "(GpuScene::kScratchRows) and are DROPPED this frame -- the first {} are drawn; further "
-                     "occurrences are silent",
-                     dropped, GpuScene::kScratchRows, GpuScene::kScratchRows);
+                     "(render.gpuScene.scratchRowsPerFrame) and are DROPPED this frame -- the first {} are drawn; "
+                     "further occurrences are silent",
+                     dropped, m_scratchRows, m_scratchRows);
         }
     }
 
@@ -1050,7 +1061,7 @@ namespace Arcane
         // AddMaterial between passes; what does not change mid-pass is
         // WHICH set is bound). A null here means Create() failed part way
         // and already said so.
-        nri::DescriptorSet* set = frameSlot < kSwapchainFramesInFlight ? m_sets[frameSlot] : nullptr;
+        nri::DescriptorSet* set = frameSlot < FramesInFlight() ? m_sets[frameSlot] : nullptr;
         if (!set || !m_bindlessSet)
         {
             GraphError("MeshNode: no descriptor set for this frame slot -- nothing recorded");
@@ -1253,7 +1264,7 @@ namespace Arcane
         // Resolved at DECLARATION time on purpose: a PSO compile must not land
         // inside the recording window. See MeshNode::Prepare.
         //
-        // `canvasFormat` is the CALLER's, not kGraphCanvasFormat assumed --
+        // `canvasFormat` is the CALLER's, not GraphCanvasFormat() assumed --
         // see AddMeshNode's header comment for why this function cannot derive
         // it and what a wrong one costs.
         std::span<const GpuInstance> adHoc;
@@ -1291,7 +1302,7 @@ namespace Arcane
             [&](RenderGraphBuilder& builder)
             {
                 RgTextureDesc desc;
-                desc.format       = kGraphDepthFormat;
+                desc.format       = GraphDepthFormat();
                 desc.width        = width;
                 desc.height       = height;
                 desc.depthStencil = true;

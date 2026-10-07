@@ -90,7 +90,7 @@ namespace Arcane
         // splash: false means Present() leaves the splash on branding alone --
         // no status text, no taskbar percentage -- matching the spec default
         // for a player who never asked to watch asset scanning (ProjectManifest
-        // ::SplashConfig::showProgress, spec sec 6). Defaults to TRUE, matching
+        // app.splash.showProgress, spec sec 6). Defaults to TRUE, matching
         // this class's behaviour before this method existed (every existing
         // caller -- the editor, and every BootSplashPresenter test -- keeps
         // seeing status text/progress with zero code change). The runtime host

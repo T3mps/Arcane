@@ -73,7 +73,7 @@ namespace
 }
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
-    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+    : m_config(std::move(cfg)), m_splash(splash),
       m_splashPresenter(m_splash) {}
 
 // ---- Boot stages (Task 8: RuntimeApp::Init folded into RuntimeStages) ----
@@ -313,9 +313,9 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // a warn: sprites still resolve (no compile step), materials and the post
     // chain simply stay unbound.
     //
-    // Debounce is a HOT-RELOAD nicety: a 0.2 s quiet window keeps a designer
-    // holding Ctrl+S from firing a compile per keystroke.
-    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
+    // Debounce is a HOT-RELOAD nicety: the configured quiet window keeps a
+    // designer holding Ctrl+S from firing a compile per keystroke.
+    if (!m_shaderCompiler.Initialize())
     {
         // Degrades to a warning rather than refusing the boot: the missing
         // material is on screen and recoverable.
@@ -1387,6 +1387,11 @@ void RuntimeApp::ShutdownGraphPath()
         // -- a clean desk reports `[]`, and a red lane on a desk with an
         // overlay is attributable from this file alone.
         report.SetForeignModules(foreignModules);
+
+        // THE --set ECHO (schemaVersion 14, settings S6-GATE): each --set name
+        // with the value the registry PUBLISHED, so a witness proves its --set
+        // landed on a declared cvar.
+        report.SetCVarSets(Arcane::VerifyReport::EchoCVarSets(m_config.cvarSets));
 
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually

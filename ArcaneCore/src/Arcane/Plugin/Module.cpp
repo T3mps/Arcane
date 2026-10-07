@@ -19,6 +19,7 @@
     #define NOMINMAX
     #endif
     #include <windows.h>
+    #include <tlhelp32.h>
 #else
     #include <dlfcn.h>
 #endif
@@ -137,29 +138,107 @@ namespace Arcane
 #endif
     }
 
+    namespace
+    {
+        Module::ImageSpan ImageFromHandle(void* handle) noexcept
+        {
+            if (!handle)
+                return {};
+#if defined(_WIN32)
+            // On Windows an HMODULE IS the image base. SizeOfImage is read straight
+            // out of the mapped PE headers rather than via GetModuleInformation so
+            // this costs no psapi link. Both signatures are checked because a bad
+            // read here would hand back a range that disowns the wrong module's
+            // descriptors -- far worse than returning "unknown".
+            const auto* base = reinterpret_cast<const unsigned char*>(handle);
+            const auto* dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+                return {};
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE)
+                return {};
+            return Module::ImageSpan{handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
+#else
+            (void)handle;
+            return {};
+#endif
+        }
+    }
+
     Module::ImageSpan Module::Image() const noexcept
     {
-        if (!m_handle)
-            return {};
+        return ImageFromHandle(m_handle);
+    }
 
+    Module::ImageSpan Module::MappedImage(const std::filesystem::path& path) noexcept
+    {
 #if defined(_WIN32)
-        // On Windows an HMODULE IS the image base. SizeOfImage is read straight
-        // out of the mapped PE headers rather than via GetModuleInformation so
-        // this costs no psapi link. Both signatures are checked because a bad
-        // read here would hand back a range that disowns the wrong module's
-        // descriptors -- far worse than returning "unknown".
-        const auto* base = reinterpret_cast<const unsigned char*>(m_handle);
-        const auto* dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            return {};
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE)
-            return {};
-        return ImageSpan{m_handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
+        const HMODULE handle = ::GetModuleHandleW(path.c_str());
+        return ImageFromHandle(handle);
 #else
-        // POSIX: dladdr/link_map would give this, but no host ships here yet.
-        // Returning "unknown" makes callers skip disowning rather than guess.
-        return {};
+        void* handle = ::dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+        if (!handle)
+            return {};
+        const ImageSpan span = ImageFromHandle(handle);
+        ::dlclose(handle);
+        return span;
+#endif
+    }
+
+    std::vector<Module::MappedModule> Module::MappedModules() noexcept
+    {
+        std::vector<MappedModule> result;
+#if defined(_WIN32)
+        // ERROR_BAD_LENGTH is the documented transient failure while another
+        // thread is loading or unloading a module; retry it a few times.
+        HANDLE snapshot = INVALID_HANDLE_VALUE;
+        for (int attempt = 0; attempt < 8 && snapshot == INVALID_HANDLE_VALUE; ++attempt)
+        {
+            snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, ::GetCurrentProcessId());
+            if (snapshot == INVALID_HANDLE_VALUE && ::GetLastError() != ERROR_BAD_LENGTH)
+                break;
+        }
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return result;
+
+        MODULEENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (::Module32FirstW(snapshot, &entry))
+        {
+            do
+            {
+                result.push_back(MappedModule{
+                    std::filesystem::path(entry.szExePath),
+                    ImageSpan{entry.modBaseAddr, static_cast<std::size_t>(entry.modBaseSize)} });
+                entry.dwSize = sizeof(entry);
+            }
+            while (::Module32NextW(snapshot, &entry));
+        }
+        ::CloseHandle(snapshot);
+#endif
+        return result;
+    }
+
+    std::optional<Module> Module::PinMapped(const MappedModule& mapped) noexcept
+    {
+#if defined(_WIN32)
+        if (!mapped.image.base)
+            return std::nullopt;
+        HMODULE handle = nullptr;
+        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                  static_cast<LPCWSTR>(mapped.image.base), &handle) || !handle)
+            return std::nullopt;
+        if (static_cast<const void*>(handle) != mapped.image.base)
+        {
+            // The base now lies inside some OTHER image: the one asked about
+            // was unmapped and its range reused. Not ours to pin.
+            ::FreeLibrary(handle);
+            return std::nullopt;
+        }
+        return Module(mapped.path, reinterpret_cast<NativeHandle>(handle));
+#else
+        (void)mapped;
+        return std::nullopt;
 #endif
     }
 

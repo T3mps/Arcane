@@ -34,51 +34,25 @@ using SocketType = int;
 #define CloseSocket close
 #endif
 
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Net/NetSettings.hpp>
+
 #include <cstdint>
 #include <string>
 
 namespace Arcane
 {
     // ============================================================================
-    // Configuration Constants
+    // Configuration
     // ============================================================================
 
+    // The payload / buffer / timeout / connection-cap / backlog tunables are
+    // net.* settings (NetSettings.hpp, settings arc S6-11); keepalive timing is
+    // net.keepalive.*. Only the capacity hint below stays a compile-time value.
     namespace ServerConfig
     {
-        constexpr size_t MAX_PAYLOAD_SIZE = 8192;
-        constexpr size_t MAX_RECEIVE_BUFFER_SIZE = 65536;
+        ARC_CONSTANT("capacity hint: a stack recv buffer bound (Aphelyon ServiceClient/ServiceEndpoint/TcpServerBase)")
         constexpr size_t RECV_CHUNK_SIZE = 4096;
-        constexpr int RECV_TIMEOUT_MS = 100;
-
-        // Audit H-V4-10 (2026-06-03): connection caps for the public-facing
-        // TcpServerBase accept loop. One thread per connection at ~1.1MB
-        // stack means 1000 slow-loris IPs cost ~1.1GB + 1000 OS threads.
-        // Defaults sized for our DAU target with headroom; trip an error
-        // log when the cap fires so ops can spot the attack signature.
-        //
-        // Audit M-V5-6 networking (2026-06-04): these are now the fallback
-        // defaults. The runtime values live in TcpServerBase's
-        // m_maxConnPerIp / m_maxConnTotal, populated from
-        // protocol.json's settings.max_connections_per_ip /
-        // settings.max_connections_total at startup (see each consuming
-        // service's main.cpp). A protocol.json without the keys uses these
-        // constants -- no behavior change at default values.
-        //
-        // Topology assumptions baked into the per-IP cap:
-        //   - No reverse proxy or TLS-terminating front (Nginx, Envoy,
-        //     CloudFront). All 100% of accept calls would otherwise
-        //     return the proxy's IP and the cap would immediately fire
-        //     for every user.
-        //   - No CDN edge in front of the TCP listener.
-        //   - No PROXY-protocol v1/v2 framing on the inbound connection.
-        // Upgrade path when a TLS-terminating front lands: parse
-        // PROXY-protocol v1 in the accept handshake BEFORE perIpCount
-        // is incremented; the `clientIP` variable in TcpServerBase
-        // becomes the X-Forwarded-For / PROXY-protocol src address,
-        // not the immediate peer. Deferred until the launch topology
-        // is chosen (per spec 2026-06-04, Scope 1 out-of-scope notes).
-        constexpr size_t MAX_CONNECTIONS_TOTAL  = 2048;
-        constexpr size_t MAX_CONNECTIONS_PER_IP = 16;
     }
 
     // ============================================================================
@@ -109,12 +83,12 @@ namespace Arcane
     //
     // Parameters: probe after `idleSeconds` of no traffic, retry every
     // `intervalSeconds`, drop the connection after `probeCount` failures.
-    // Defaults sized for "tolerate flaky mobile/wifi (occasional 30s
-    // dropouts are normal) but catch a true dead peer within ~5min."
+    // The one-argument overload below reads them from net.keepalive.*
+    // (NetKeepaliveSettings); this explicit form stays for tests.
     inline void EnableTcpKeepAlive(SocketType socket,
-                                   int idleSeconds     = 120,
-                                   int intervalSeconds = 30,
-                                   int probeCount      = 8)
+                                   int idleSeconds,
+                                   int intervalSeconds,
+                                   int probeCount)
     {
 #ifdef _WIN32
         BOOL on = TRUE;
@@ -145,6 +119,12 @@ namespace Arcane
         setsockopt(socket, IPPROTO_TCP, TCP_KEEPCNT, &probeCount, sizeof(probeCount));
     #endif
 #endif
+    }
+
+    inline void EnableTcpKeepAlive(SocketType socket)
+    {
+        const NetKeepaliveSettings& ka = ::Arcane::Settings<NetKeepaliveSettings>();
+        EnableTcpKeepAlive(socket, ka.idleSeconds, ka.intervalSeconds, ka.probeCount);
     }
 
     inline bool IsSocketTimeoutError()
@@ -231,7 +211,7 @@ namespace Arcane
             return INVALID_SOCK;
         }
 
-        if (listen(sock, 10) < 0)
+        if (listen(sock, ::Arcane::Settings<NetSettings>().listenBacklog) < 0)
         {
             CloseSocket(sock);
             return INVALID_SOCK;
@@ -428,8 +408,10 @@ namespace Arcane
 
     // Parse one LENGTH:BODY\n frame from buffer without modifying it.
     // On success, body contains the raw payload and consumed is the total bytes to discard.
+    // maxBodySize: the caller's bound, normally net.maxReceiveBufferBytes
+    // (Settings<NetSettings>().maxReceiveBufferBytes).
     inline LengthFrameResult ExtractLengthFramed(const std::string& buffer,
-                                                  size_t maxBodySize = ServerConfig::MAX_RECEIVE_BUFFER_SIZE)
+                                                  size_t maxBodySize)
     {
         LengthFrameResult r;
         if (buffer.empty()) { r.needMoreData = true; return r; }

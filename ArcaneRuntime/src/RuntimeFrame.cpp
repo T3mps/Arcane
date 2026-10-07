@@ -9,10 +9,13 @@
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Config/ConsoleSettings.hpp>   // console.windowWidth/windowHeight (first-open size)
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/HostSettings.hpp>       // app.window.minimizedSleepMs
+#include <Arcane/Host/RuntimeSettings.hpp>    // runtime.hud.show (BuildHud)
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #include <Arcane/Input/InputActions.hpp>
@@ -22,7 +25,9 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
+#include <Arcane/Render/RenderLookSettings.hpp>       // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
+#include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 
 #include <imgui.h>
 #include <cstdio>
@@ -180,7 +185,7 @@ bool PumpAndResize(FrameIo& io)
     // there is nothing to gate.
     if (eventWindow.IsMinimized())
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
         io.skipFrame = true;
         return false;
     }
@@ -268,7 +273,7 @@ void AdvanceSim(FrameIo& io)
         // RunLoop::Advance below, i.e. FixedUpdateAll/UpdateAll -- gameplay
         // -- so a wall-clock simDt means `--frames 5` advances the sim by
         // however long five frames happened to take on THIS run's machine,
-        // and no two runs agree. The 0.25s spiral-of-death clamp stays
+        // and no two runs agree. The sim.maxFrameDeltaSeconds spiral-of-death clamp stays
         // wall-clock-only: fixedDtSeconds is refused at parse time unless
         // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
         // stall to guard against.
@@ -286,10 +291,11 @@ void AdvanceSim(FrameIo& io)
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - io.simPrev).count();
             io.simPrev = now;
-            if (simDt > 0.25) simDt = 0.25;
+            simDt = Arcane::ClampFrameDelta(simDt);   // sim.maxFrameDeltaSeconds: the one clamp editor Play shares
         }
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->EnsurePhysics();   // engine-owned physics (spec s4.3): mint/refresh the world before the step
+        Arcane::ApplySimStepCap(io.runtime->Loop());   // sim.maxStepsPerFrame (Live)
         io.runtime->Loop().Advance(simDt,
             [&](double dt)          { io.runtime->BeginGameInputFixedStep(); io.plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ io.plugin->UpdateAll(dt, a); });
@@ -303,6 +309,9 @@ void AdvanceSim(FrameIo& io)
 void BuildHud(FrameIo& io)
 {
     io.gpu->Imgui().BeginFrame();
+    // runtime.hud.show (S6-25, inventory R4): on in Debug/Release, where the
+    // goldens are captured; off in Dist unless the player turns it on.
+    if (Arcane::Settings<Arcane::RuntimeHudSettings>().show)
     {
         ImGui::Begin("ArcaneRuntime");
         // There is no RenderDevice to ask -- GpuContext builds none -- so
@@ -352,7 +361,9 @@ void BuildHud(FrameIo& io)
         static Arcane::ConsoleModel console;
         if (g_runtimeConsoleOpen)
         {
-            ImGui::SetNextWindowSize(ImVec2(640.0f, 280.0f), ImGuiCond_FirstUseEver);
+            const Arcane::ConsoleSettings& consoleSettings = Arcane::Settings<Arcane::ConsoleSettings>();
+            ImGui::SetNextWindowSize(ImVec2(float(consoleSettings.windowWidth), float(consoleSettings.windowHeight)),
+                                     ImGuiCond_FirstUseEver);
             bool open = g_runtimeConsoleOpen;
             if (ImGui::Begin("Console##runtime", &open))
             {
@@ -594,7 +605,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // Armed at the SAME pixel every frame (FirstPickProbe's answer does not
     // change frame to frame -- a run has exactly one `pick@x,y` request that
     // matters), which is what lets the readback -- landing
-    // kSwapchainFramesInFlight frames after the pass that wrote it -- settle
+    // FramesInFlight() frames after the pass that wrote it -- settle
     // well before ShutdownGraphPath reads NriGraphContext::ProbeId() after
     // the loop ends. A run combining this with the (windowed-only) dev
     // --pick-probe flag above has this block win FrameDesc::pickPixel for
@@ -662,13 +673,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         meshScene.view       = meshView->view;
         meshScene.projection = meshView->projection;
     }
-    // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
-    // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
-    // registers none -- so lightDirection/lightColor/ambient are left at
-    // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
-    // component is future work; inventing one here would land an unreviewed
-    // scene-schema change in a host .cpp with zero test coverage rather than
-    // in a reviewed, tested component.
+    // NO LIGHT COMPONENT YET: this engine has none anywhere --
+    // Scene/Components.hpp declares none and SceneModule.hpp registers
+    // none -- so the scene's one light is render.mesh.defaultLight.*
+    // (RenderLookSettings.hpp; Live, read once per frame). A light
+    // component is future work and a reviewed scene-schema change.
+    Arcane::ApplyDefaultLight(meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
     if (!meshScene.Empty())
         graphFrame.mesh = &meshScene;
 
@@ -760,7 +770,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         // deliberately does NOT advance -- the vehicle's own frame
         // counter did not either, and the two must stay in lockstep
         // for the command-slot recycling to be safe.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // app.window.minimizedSleepMs: the editor's skipped-frame twin reads it too.
+        std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
         return outcome;
     }
     return outcome;

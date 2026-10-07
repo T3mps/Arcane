@@ -198,7 +198,7 @@ namespace Arcane
     };
 
     // PhysicsSettings (2026-09-11, 2D physics wiring, spec s5): the PER-SCENE
-    // override of the project's physics block. Read by Runtime::EnsurePhysics
+    // override of the project's physics.gravity setting. Read by Runtime::EnsurePhysics
     // from the SCENE-ROOT entity only (SceneRoot resource) -- beside Camera
     // and PostProcess, where scene-level facts already live; on any other
     // entity it is ignored (pinned by RuntimeTest). Presence IS the override:
@@ -407,7 +407,7 @@ namespace Arcane
 
     ARC_REFLECT_TYPE(PhysicsSettings)
         ARC_REFLECT_FIELD(PhysicsSettings, gravity)
-            ARC_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics block while present.")
+            ARC_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics.gravity setting while present.")
     ARC_END_REFLECT_TYPE()
 
     // One field, so no Category -- see Transform above.

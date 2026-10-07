@@ -26,11 +26,13 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Diag
 {
     // The envelope format this module writes and the only one Parse accepts
     // today. Bump alongside a real Parse migration path when format 2 exists.
+    ARC_CONSTANT("file format: the diagnostics envelope version the crash reporter reads")
     inline constexpr std::uint32_t kFormatVersion = 1;
 
     struct Envelope

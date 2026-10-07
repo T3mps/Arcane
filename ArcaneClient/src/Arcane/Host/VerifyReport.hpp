@@ -29,6 +29,7 @@
 // that would be correct for LUMINANCE (Y), which this is deliberately not.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 // SettleBail, the --settle bail decision (Task 2). Header-only and constexpr
 // -- <cstdint> is its ONLY include -- so pulling it in here adds no link
 // dependency and leaves this component's standalone-parse property intact:
@@ -232,7 +233,15 @@ namespace Arcane
         // name, compile, preview, image} entry per open shader or mesh
         // document: its PreviewStatus ids (see SetDocumentPreviews). Absent
         // unless the editor set it; 12 remains readable.
-        static constexpr int kSchemaVersion                = 13;
+        //
+        // 14: cvarSets (settings arc S6-GATE) -- one {name, value} entry per
+        // --set the host was given: the PUBLISHED value after boot (null for
+        // a name no cvar answers to), so a witness asserts that its --set
+        // landed instead of only that no warning was logged. Absent unless
+        // the host set it; 13 remains readable.
+        ARC_CONSTANT("file format: verify-report schema version; readers gate on it")
+        static constexpr int kSchemaVersion                = 14;
+        ARC_CONSTANT("file format: verify-report schema version; readers gate on it")
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -522,6 +531,18 @@ namespace Arcane
         struct DocumentPreview { std::string guid, kind, name, compile, preview; bool image = false; };
         void SetDocumentPreviews(std::vector<DocumentPreview> documents);
 
+        // The --set list echoed back (schemaVersion 14, settings arc S6-GATE):
+        // for each "name=value" the host was given, the cvar's PUBLISHED value
+        // text at report time (FormatCVarValue), or no value when no cvar
+        // answers to the name. Emitted as a top-level `cvarSets` array ONLY
+        // when this was called; both hosts call it on every --report run, so
+        // a run without --set reports `[]`.
+        struct CVarSetEcho { std::string name; std::optional<std::string> value; };
+        void SetCVarSets(std::vector<CVarSetEcho> sets);
+        // Builds the echo from the host's --set list against the global
+        // CVarRegistry (aliases resolve; a malformed item is skipped).
+        [[nodiscard]] static std::vector<CVarSetEcho> EchoCVarSets(const std::vector<std::string>& sets);
+
         // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2
         // T5 for the last two arguments): the last frame's GpuSceneFrame as
         // the host saw it -- `total` live rows in the GPU-scene mirror (one
@@ -678,6 +699,10 @@ namespace Arcane
         // emission, so "never scanned" and "scanned, clean" stay distinct.
         bool                               m_foreignModulesSet = false;
         std::vector<ForeignModules::Match> m_foreignModules;
+
+        // The --set echo (schemaVersion 14) -- m_cvarSetsSet gates emission.
+        bool                     m_cvarSetsSet = false;
+        std::vector<CVarSetEcho> m_cvarSets;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

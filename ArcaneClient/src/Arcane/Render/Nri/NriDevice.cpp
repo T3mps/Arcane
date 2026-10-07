@@ -2,6 +2,7 @@
 // include-order rule (nri::Message::ERROR vs wingdi.h's ERROR macro) -- the
 // NRI headers MUST stay first in this file.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>
 #include <Extensions/NRIWrapperD3D12.h>
 #include <Extensions/NRIWrapperVK.h>
@@ -15,6 +16,7 @@
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the ONE device-lost latch (~NriDevice's teardown gate)
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.d3d12.* -- the D3D12 wrap's NRI knobs
 #include <Arcane/Render/ShaderConventions.hpp>
 
 // wingdi.h (via spdlog -> windows.h, and via vulkan.hpp's WIN32 platform
@@ -42,6 +44,7 @@ namespace Arcane
         // truth, which also feeds the offline compile script) instead of being
         // copied here: edit the shifts there and this either follows or stops
         // compiling.
+        ARC_CONSTANT("sentinel: no register shift")
         constexpr std::uint32_t kNoShift = 0xFFFFFFFFu;
 
         constexpr std::uint32_t ParseShift(std::string_view text)
@@ -311,19 +314,21 @@ namespace Arcane
         desc.callbackInterface = MakeNriCallbacks();
         // allocationCallbacks: left zeroed (NRI defaults them).
         // d3dShaderExtRegister / d3dZeroBufferSize: 0 means "NRI's default"
-        // in both cases (NRI_SHADER_EXT_REGISTER, and a 4 MB zero buffer) --
-        // we have no reason to move either yet.
+        // in both cases (NRI_SHADER_EXT_REGISTER, and a 4 MB zero buffer).
+        // The zero buffer is render.d3d12.zeroBufferBytes (default 0).
+        const RenderD3d12Settings& d3d12 = Settings<RenderD3d12Settings>();
         desc.d3dShaderExtRegister = 0;
-        desc.d3dZeroBufferSize    = 0;
+        desc.d3dZeroBufferSize    = static_cast<uint32_t>(d3d12.zeroBufferBytes);   // ranged 0..64 MiB
 
         desc.enableNRIValidation = creation.enableValidation;
         desc.enableMemoryZeroInitialization = false;
 
         // Item 13's desc half: enhanced barriers ON wherever the Agility
-        // runtime reports them (this flag is a DISABLE, so false = on). Task
-        // 3 vendored the redistributable precisely so this is not moot; the
-        // "Using ID3D12Device10+" proof line lands at the desk milestone.
-        desc.disableD3D12EnhancedBarriers = false;
+        // runtime reports them (this flag is a DISABLE, so false = on;
+        // render.d3d12.enhancedBarriers, default on). Task 3 vendored the
+        // redistributable precisely so this is not moot; the "Using
+        // ID3D12Device10+" proof line lands at the desk milestone.
+        desc.disableD3D12EnhancedBarriers = !d3d12.enhancedBarriers;
         // §2.6.2: NRI's wrapper-mode NVAPI logic reads inverted (the default
         // DISABLES NVAPI when wrapping). Moot for us -- NVAPI is out of the
         // vendoring, so NRI_ENABLE_NVAPI is 0 and this flag reaches no code.

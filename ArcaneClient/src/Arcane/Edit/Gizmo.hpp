@@ -12,6 +12,7 @@
 // landed 2026-09-17, ABI 33.)
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Reflection.hpp>            // GizmoMode / GizmoSpace: editor.gizmo.default* enum cvars
 #include <Arcane/Scene/ViewTransform.hpp>   // ViewTransform, Ray
 
 #include <glm/glm.hpp>
@@ -54,6 +55,19 @@ namespace Arcane
     enum class GizmoMode  { Translate, Rotate, Scale };
     enum class GizmoSpace { World, Local };
 
+    // Reflected for the editor's editor.gizmo.defaultMode / defaultSpace cvars
+    // (settings arc S6-31): stored as the declared ordinal, so append only.
+    ARC_REFLECT_ENUM(GizmoMode)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Translate)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Rotate)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Scale)
+    ARC_END_REFLECT_ENUM()
+
+    ARC_REFLECT_ENUM(GizmoSpace)
+        ARC_REFLECT_ENUM_VALUE(GizmoSpace, World)
+        ARC_REFLECT_ENUM_VALUE(GizmoSpace, Local)
+    ARC_END_REFLECT_ENUM()
+
     // Translate: X/Y/Z arrows, XY/YZ/XZ plane squares, Center = camera-plane
     // free move. Rotate: X/Y/Z rings + Screen (the camera-facing ring).
     // Scale: X/Y/Z boxes + Center = uniform.
@@ -89,12 +103,34 @@ namespace Arcane
         void Set(GizmoAxis a, bool on) noexcept;
     };
 
+    // The steps a snapped drag rounds to. No literal defaults: the editor fills
+    // the steps from its editor.gizmo.snap.* cvars (MakeGizmoSnap), so the
+    // engine holds no second copy of them. A zero step does not snap.
     struct GizmoSnap
     {
-        bool  enabled = false;   // Ctrl held during the drag
-        float translate = 0.5f;  // metres
-        float rotationDeg = 15.0f;
-        float scale = 0.1f;
+        bool  enabled{};       // Ctrl held during the drag
+        float translate{};     // metres
+        float rotationDeg{};
+        float scale{};         // ratio
+    };
+
+    // The gizmo's pick tolerances, tessellation, drag floor and shading
+    // (settings arc S6-31). Gizmo is engine code and the settings are the
+    // editor's: the editor fills this from its editor.gizmo.* cvars
+    // (MakeGizmoTuning) and passes it to HitTest / Draw / ApplyDrag. No
+    // literal defaults, for the same reason as GizmoSnap.
+    struct GizmoTuning
+    {
+        float        pickRadiusPx{};      // axis segment / screen ring pick radius
+        float        ringPickSlackPx{};   // added to the band half-width for the ring pick radius
+        float        minPlaneAreaPx2{};   // a plane corner with less projected area is not a target
+        float        planeEdgeOnCos{};    // a plane corner closer than this to edge-on is hidden
+        float        minAxisLenPx{};      // an arrow shorter on screen draws no cone head
+        std::int32_t ringSegments{};      // full-ring tessellation (the sweep sector follows it)
+        float        minScale{};          // floor on a scale drag's magnitude
+        float        brighten{};          // lit-side factor of the shaded rods, cones and cubes
+        float        darken{};            // shadow-side factor
+        float        hotFillAlpha{};      // alpha of the hot plane square and the rotate sweep
     };
 
     // Screen-constant sizing, Unreal's rule (UnrealWidget.cpp): the handle
@@ -121,7 +157,24 @@ namespace Arcane
     ARC_API GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
                                  const GizmoTransform& t, const ViewTransform& view,
                                  GizmoHandleMask handles, float sizeScale,
-                                 glm::vec2 mouseScreen);
+                                 glm::vec2 mouseScreen, const GizmoTuning& tuning);
+
+    // The colours the gizmo paints. The three axis colours (settings arc S4)
+    // are the gizmo's own display-space cousins of UE's palette; S5-2 option A:
+    // they stay the painted values until a unification re-bless (pending axis
+    // unification re-bless). The hot / screen / screen-arc / centre colours are
+    // the editor's editor.gizmo.color.* settings (inventory "Gizmo.cpp:61-64";
+    // S6-45), filled by Settings/AxisColors. Every default is the legacy value.
+    struct GizmoAxisColors
+    {
+        glm::vec4 x{ 0.96f, 0.28f, 0.22f, 1.0f };
+        glm::vec4 y{ 0.48f, 0.84f, 0.16f, 1.0f };
+        glm::vec4 z{ 0.24f, 0.58f, 0.98f, 1.0f };
+        glm::vec4 hot{ 1.00f, 0.86f, 0.18f, 1.0f };         // the hovered / dragged handle (UE's yellow)
+        glm::vec4 screen{ 0.90f, 0.91f, 0.93f, 1.0f };      // the screen-space handle
+        glm::vec4 screenArc{ 0.96f, 0.90f, 0.42f, 1.0f };   // the rotate mode's screen ring
+        glm::vec4 centre{ 0.97f, 0.97f, 0.98f, 1.0f };      // the centre disc
+    };
 
     // Screen-constant gizmo geometry for the current state, UNREAL'S WIDGET
     // (UnrealWidgetRender.cpp) in pixels: shaded rods with cone heads (cubes
@@ -136,7 +189,9 @@ namespace Arcane
                          const GizmoTransform& t, const ViewTransform& view,
                          GizmoHandleMask handles, float sizeScale,
                          GizmoAxis hovered, GizmoAxis active,
-                         const GizmoRotateSweep* sweep = nullptr);   // the active rotate drag, if any
+                         const GizmoTuning& tuning,
+                         const GizmoRotateSweep* sweep = nullptr,   // the active rotate drag, if any
+                         const GizmoAxisColors& colors = GizmoAxisColors{});
 
     // The sweep of an in-progress rotate drag on `axis` (X/Y/Z/Screen) --
     // nullopt for any other axis or when a mouse ray misses the ring's plane.
@@ -150,7 +205,7 @@ namespace Arcane
     ARC_API GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
                                         const GizmoTransform& start, const ViewTransform& view,
                                         glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
-                                        const GizmoSnap& snap);
+                                        const GizmoSnap& snap, const GizmoTuning& tuning);
 
     // A drag's effect on the PRIMARY, expressed so it can be replayed onto the
     // rest of a multi-selection. `translate` is a shared world delta;

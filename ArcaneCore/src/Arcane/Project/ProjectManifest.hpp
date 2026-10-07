@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include <glm/vec2.hpp>
 #include <Json.hpp>   // nlohmann::json (the vendored single header)
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -30,34 +30,6 @@ namespace Arcane
             bool        enabled = true;
         };
 
-        // The pre-device splash's own configuration (spec S6). Every field has
-        // a sane default so an absent "splash" block behaves exactly like this
-        // struct's defaults -- see FromJson's lenient parse.
-        struct SplashConfig
-        {
-            bool        enabled            = true;
-            std::string image;                        // empty -> engine branding
-            float       backgroundColor[3] = {0.05f, 0.05f, 0.06f};
-            // FALSE by default, deliberately. The editor always shows progress; a
-            // player does not. UE enforces the same split structurally --
-            // FFeedbackContext::ProgressReported is a no-op base and only the
-            // editor overrides it (FeedbackContextEditor.cpp:664-669), with the
-            // splash backend commenting that startup progress is "not interesting
-            // to an end-user" (WindowsPlatformSplash.cpp). A project MAY opt in
-            // for its own runtime boot by setting this true.
-            bool        showProgress       = false;
-            float       minDurationSeconds = 0.0f;    // avoids an ~80ms splash flash
-        };
-
-        // The project-wide physics defaults (2026-09-11, spec s5). A scene
-        // overrides them with a PhysicsSettings component on its root. Every
-        // field has a default so an absent "physics" block behaves exactly
-        // like this struct -- FromJson's lenient parse, as for splash.
-        struct PhysicsConfig
-        {
-            glm::vec2 gravity{0.0f, -9.81f};   // m/s^2; +Y is up (F4)
-        };
-
         // The manifest format this engine WRITES (Project::Create, and every
         // RewriteManifest edit upgrades the file it touches). History:
         //   1  2026-07-22 .. 2026-09-17: physics.gravity authored +Y DOWN --
@@ -66,6 +38,7 @@ namespace Arcane
         //      a v1 manifest that carries a physics.gravity block NEGATES
         //      gravity.y (FromJson, with an ARC_INFO); a v1 manifest without
         //      the block gets the v2 default. Nothing else changed meaning.
+        ARC_CONSTANT("file format: the .arcproj version this engine writes")
         static constexpr int   kFormatVersion = 2;
 
         int                    formatVersion = 0;
@@ -100,14 +73,10 @@ namespace Arcane
         // multiplayer-shape-and-project-layout.md s5 (L3).
         std::string            sourceDir = "Source";
 
-        // The pre-device splash's configuration. Defaults apply whenever the
-        // manifest has no "splash" block at all (see SplashConfig's own
-        // per-field comments for what those defaults are and why).
-        SplashConfig           splash;
-
-        // The project-wide physics defaults. Defaults apply whenever the
-        // manifest has no "physics" block (see PhysicsConfig above).
-        PhysicsConfig          physics;
+        // Legacy non-identity stores found while parsing an old manifest.
+        // Project::Open migrates these to Config/ when writable; shipped
+        // read-only projects apply the same object to the Project rung in memory.
+        nlohmann::json         legacySettings = nlohmann::json::object();
 
         // Parse + validate a JSON document. nullopt on schema violation.
         static ARC_CORE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);

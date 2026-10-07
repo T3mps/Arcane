@@ -58,7 +58,8 @@ TEST_CASE("every migrated Archive declaration keeps type, default, range and fla
         { "editor.graph.showPinLegend", CVarValue::Bool(true), std::nullopt, std::nullopt, ed, prefM, "ArcaneTests" },
         { "editor.inspector.materialPreviewFraction", CVarValue::Float32(0.45f), CVarValue::Float32(0.2f), CVarValue::Float32(0.8f), ed, prefM, "ArcaneTests" },
         { "editor.inspector.nodePageMinTextRun", CVarValue::Int32(16), CVarValue::Int32(0), CVarValue::Int32(256), ed, prefM, "ArcaneTests" },
-        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(140), ed, prefM, "ArcaneTests" },
+        // S6-37: the ceiling follows editor.inspector.assetThumbMaxPx's 512 (the reader clamps min <= max).
+        { "editor.inspector.assetThumbMinPx", CVarValue::Int32(64), CVarValue::Int32(32), CVarValue::Int32(512), ed, prefM, "ArcaneTests" },
         { "editor.inspector.assetThumbHeightFraction", CVarValue::Float32(0.30f), CVarValue::Float32(0.1f), CVarValue::Float32(0.6f), ed, prefM, "ArcaneTests" },
         { "editor.undo.maxSteps", CVarValue::Int32(100), CVarValue::Int32(1), CVarValue::Int32(10000), ed, prefP, "ArcaneTests" },
         { "editor.undo.byteBudgetMB", CVarValue::Int32(512), CVarValue::Int32(16), CVarValue::Int32(65536), ed, prefP, "ArcaneTests" },
@@ -101,7 +102,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     REQUIRE(meta.has_value());
     CHECK(meta->defaultValue == CVarValue::Bool(false));
     CHECK(meta->flags == CVarFlags::Dev);
-    CHECK(meta->module == "ArcaneClient");   // declared in Render/GpuInstrumentation.cpp, inside ArcaneClient.dll
+    CHECK(meta->module == "ArcaneCore");   // DiagnosticsSettings.cpp, inside ArcaneCore.dll
     CHECK(meta->scope == SettingScope::Project);
     CHECK_FALSE(GpuDrawMarkersEnabled());
     REQUIRE(reg.Set(markers, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
@@ -113,8 +114,9 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
 
     const auto cull = reg.Metadata(reg.Find("render.meshCull"));
     REQUIRE(cull.has_value());
-    CHECK(cull->defaultValue == CVarValue::Bool(kMeshCullEnabled));
+    CHECK(cull->defaultValue == CVarValue::Bool(true));
     CHECK(cull->flags == CVarFlags::Dev);
+    CHECK(cull->module == "ArcaneClient");   // RenderDebugSettings.cpp, inside ArcaneClient.dll
     CHECK(cull->audience == Audience::Game);
     CHECK(cull->scope == SettingScope::Project);
 

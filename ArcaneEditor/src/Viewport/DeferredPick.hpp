@@ -9,7 +9,7 @@
 // The readback is a graph COPY node into a per-frame-slot HOST_READBACK region,
 // and the CPU reads a region only at the moment the graph is about to overwrite
 // it -- so the value that comes back is the one written
-// kSwapchainFramesInFlight frames ago (PickOutlineNodes.hpp, THE READBACK). No
+// FramesInFlight() frames ago (PickOutlineNodes.hpp, THE READBACK). No
 // fence query, no idle, and no answer this frame.
 //
 // THAT LATENCY IS ACCEPTED. What is NOT accepted is applying the WRONG answer,
@@ -153,19 +153,26 @@ namespace Arcane::Editor
 
         // Called once per frame while a request is outstanding. True EXACTLY ON
         // the frame it gives up, so the caller can say so once.
+        // `maxFramesInFlight` is the budget: frames a request may stay in
+        // flight before this gives up -- editor.viewport.pickMaxFramesInFlight
+        // (settings S6-32; default 64). Two orders of magnitude above
+        // FramesInFlight(), because the only legitimate reason to
+        // exceed that is a run of SKIPPED frames (a collapsed viewport panel),
+        // and the budget must not turn a briefly collapsed panel into a lost
+        // click.
         //
         // A budget rather than a trust: the readback is guaranteed to drain
-        // after kSwapchainFramesInFlight rendered frames of the declared chain,
+        // after FramesInFlight() rendered frames of the declared chain,
         // and the caller keeps the chain declared for precisely that reason --
         // so this should never fire. It exists because the failure it guards is
         // a state machine that never returns to Idle, which would silently keep
         // an outline chain declared for the rest of the session; a bounded,
         // loud give-up is strictly better than an unbounded silent one.
-        bool TickAndMaybeAbandon()
+        bool TickAndMaybeAbandon(std::uint32_t maxFramesInFlight)
         {
             if (m_phase != Phase::InFlight)
                 return false;
-            if (++m_framesInFlight <= kMaxFramesInFlight)
+            if (++m_framesInFlight <= maxFramesInFlight)
                 return false;
             Reset();
             return true;
@@ -196,13 +203,6 @@ namespace Arcane::Editor
                 return Astra::Entity{};
             return m_ordered[id - 1];
         }
-
-        // Frames a request may stay in flight before TickAndMaybeAbandon gives
-        // up. Two orders of magnitude above kSwapchainFramesInFlight, because
-        // the only legitimate reason to exceed that is a run of SKIPPED frames
-        // (a collapsed viewport panel), and the budget must not turn a briefly
-        // collapsed panel into a lost click.
-        static constexpr std::uint32_t kMaxFramesInFlight = 64;
 
     private:
         Phase         m_phase    = Phase::Idle;

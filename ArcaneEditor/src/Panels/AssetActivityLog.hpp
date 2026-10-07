@@ -58,7 +58,8 @@ namespace Arcane::Editor
         std::string       detail;  // refusal reason etc.; may be empty
     };
 
-    // Session-only ring (~100, spec s9.2). Main-thread only -- see the file
+    // Session-only ring (editor.assets.activityLogCapacity, 100 by default;
+    // spec s9.2; latched at construction -- Restart). Main-thread only -- see the file
     // header. `when` is ALWAYS stamped by the caller, never taken here: a
     // test needs to control time to prove ordering/wrap, and every
     // production push site already has `std::chrono::steady_clock::now()`
@@ -66,9 +67,12 @@ namespace Arcane::Editor
     class AssetActivityLog
     {
     public:
-        static constexpr std::size_t kCapacity = 100;
+        // The default ring latches editor.assets.activityLogCapacity (settings
+        // S6-38, Restart); a test passes its own. A capacity of 0 is held at 1.
+        AssetActivityLog();
+        explicit AssetActivityLog(std::size_t capacity);
 
-        // Appends one entry, overwriting the oldest once kCapacity is
+        // Appends one entry, overwriting the oldest once Capacity() is
         // reached (plain modular index -- see the .cpp for the exact
         // wrap math).
         void Push(AssetActivityEntry e);
@@ -77,8 +81,11 @@ namespace Arcane::Editor
         // size, including zero (no-op).
         void ForEachNewestFirst(const std::function<void(const AssetActivityEntry&)>& fn) const;
 
-        // Current entry count, 0..kCapacity.
+        // Current entry count, 0..Capacity().
         [[nodiscard]] std::size_t Size() const;
+
+        // The ring size this log was built with.
+        [[nodiscard]] std::size_t Capacity() const noexcept { return m_capacity; }
 
         // Drops every entry -- the project-switch reset (EditorApp::
         // SwitchProject), same shape as AssetPanelModel::ResetForProjectSwitch
@@ -86,7 +93,8 @@ namespace Arcane::Editor
         void Clear();
 
     private:
-        std::vector<AssetActivityEntry> m_ring;   // grows to kCapacity, then wraps
+        std::size_t m_capacity;
+        std::vector<AssetActivityEntry> m_ring;   // grows to m_capacity, then wraps
         std::size_t m_next = 0;   // the slot the NEXT Push writes into
     };
 

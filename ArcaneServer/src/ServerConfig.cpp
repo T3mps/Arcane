@@ -1,6 +1,7 @@
 #include "ServerConfig.hpp"
 
 #include <Arcane/Cli/Cli.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // server.tickHz
 
 #include <cmath>
 #include <cstdio>
@@ -13,7 +14,7 @@ namespace Arcane::Server
         cli.Option("project", "", "project folder or .arcproj to open (REQUIRED unless --print-engine-info)");
         cli.Option("plugin",  "", "game DLL to host (empty = the project's gameModule; a server with nothing to host refuses boot)");
         cli.Option("frames",  "0", "tick N fixed steps then exit (0 = run until terminated)").Type(CliType::Uint);
-        cli.Option("fixed-dt", "0.016666666666666666", "seconds per fixed tick").Type(CliType::Double);
+        cli.Option("fixed-dt", "", "seconds per fixed tick (empty = 1/server.tickHz)").Type(CliType::Double);
         // The --report caveat is stated in the help text, not only in a doc: the
         // report is written when the tick loop ENDS (ServerApp::Finish), so with
         // --frames 0 a server that is killed writes none. A console-control
@@ -30,7 +31,8 @@ namespace Arcane::Server
         cfg.projectPath     = r.Get("project");
         cfg.pluginPath      = r.Get("plugin");
         cfg.frames          = r.GetAs<std::uint64_t>("frames");
-        cfg.fixedDtSeconds  = r.GetAs<double>("fixed-dt");
+        cfg.fixedDtSupplied = r.Supplied("fixed-dt");
+        cfg.fixedDtSeconds  = cfg.fixedDtSupplied ? r.GetAs<double>("fixed-dt") : 0.0;
         cfg.reportPath      = r.Get("report");
         cfg.printEngineInfo = r.Flag("print-engine-info");
         cfg.adminConsole    = !r.Flag("no-admin-console");
@@ -40,7 +42,7 @@ namespace Arcane::Server
         // false), so isfinite is checked explicitly. Refused, not clamped --
         // rule 3 (no silently inert/wrong flags): a caller who typed a bad
         // step size typed something they did not mean.
-        if (!std::isfinite(cfg.fixedDtSeconds) || cfg.fixedDtSeconds <= 0.0)
+        if (cfg.fixedDtSupplied && (!std::isfinite(cfg.fixedDtSeconds) || cfg.fixedDtSeconds <= 0.0))
         {
             std::fprintf(stderr, "error: --fixed-dt wants a positive, finite number of seconds\n");
             return { std::nullopt, 2 };
@@ -58,5 +60,10 @@ namespace Arcane::Server
         }
 
         return { cfg, 0 };
+    }
+
+    double ServerConfig::FixedHz() const
+    {
+        return fixedDtSupplied ? 1.0 / fixedDtSeconds : Settings<ServerSettings>().tickHz;
     }
 }

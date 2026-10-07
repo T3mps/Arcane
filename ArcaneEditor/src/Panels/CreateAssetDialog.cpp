@@ -2,10 +2,12 @@
 
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // CppClass: ValidateClassName + the Template combo's labels
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.newMaterialDefaultSurface (settings S6-38)
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>
@@ -13,11 +15,14 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
@@ -28,16 +33,20 @@ namespace Arcane::Editor
         // size-constraint with equal min/max on x), height auto-fits its
         // content -- the field count varies by kind and by whether the parent
         // picker is expanded.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kDialogWidth = 380.0f;
-        // Picker rows reuse the table row pitch (s11.2: "table rows | 24px"),
-        // the same value RowWithThumb defaults to -- the picker IS an asset
-        // list, so it gets the asset-list row, not a bespoke one.
-        constexpr float kPickerRowHeight = 24.0f;
+        // Picker rows reuse the table row pitch (s11.2: "table rows | 24px",
+        // now editor.ui.tableRowHeight at the UI scale, settings S6-28), the
+        // same value RowWithThumb defaults to -- the picker IS an asset list,
+        // so it gets the asset-list row, not a bespoke one.
+        float PickerRowHeight() { return TableRowHeight(); }
         // Six rows before the picker scrolls: enough to browse a small
         // project's materials without the modal growing past a comfortable
         // height on a big one.
+        ARC_CONSTANT("layout count, not px: rows the picker shows before it scrolls; each row is the scaled row height (s16.11)")
         constexpr int   kPickerVisibleRows = 6;
         // The mock's footer buttons.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kFooterButtonWidth = 92.0f;
 
         int IndexOfRelativeFolder(const std::vector<FolderChoice>& choices, std::string_view relative)
@@ -289,9 +298,9 @@ namespace Arcane::Editor
             const int rows = std::min(static_cast<int>(candidates.size()), kPickerVisibleRows);
             // + the bordered child's OWN vertical padding, both sides:
             // ImGuiChildFlags_Borders enables WindowPadding (imgui.h's own note
-            // on that flag), so a height of exactly rows*24 clips the last row
+            // on that flag), so a height of exactly rows*PickerRowHeight() clips the last row
             // by that padding instead of showing it.
-            const float height = std::max(kPickerRowHeight, kPickerRowHeight * static_cast<float>(rows))
+            const float height = PickerRowHeight() * static_cast<float>(std::max(rows, 1))
                                + ImGui::GetStyle().WindowPadding.y * 2.0f;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kWell);
             if (ImGui::BeginChild("##createparentlist", ImVec2(-FLT_MIN, height), ImGuiChildFlags_Borders))
@@ -305,7 +314,7 @@ namespace Arcane::Editor
                     ImGui::PushID(e->guid.ToString().c_str());
                     const AssetRowResult res =
                         RowWithThumb("##pick", 0, ICON_LC_PALETTE, e->name.c_str(),
-                                     st.parent == e->guid, 0.0f, kPickerRowHeight);
+                                     st.parent == e->guid, 0.0f, PickerRowHeight());
                     if (res.clicked)
                     {
                         st.parent = e->guid;
@@ -397,7 +406,7 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", counts);
 
             const int rows = std::min(static_cast<int>(candidates.size()), kPickerVisibleRows);
-            const float height = std::max(kPickerRowHeight, kPickerRowHeight * static_cast<float>(rows))
+            const float height = PickerRowHeight() * static_cast<float>(std::max(rows, 1))
                                + ImGui::GetStyle().WindowPadding.y * 2.0f;
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kWell);
             if (ImGui::BeginChild("##createtexturelist", ImVec2(-FLT_MIN, height), ImGuiChildFlags_Borders))
@@ -411,7 +420,7 @@ namespace Arcane::Editor
                     ImGui::PushID(e->guid.ToString().c_str());
                     const AssetRowResult res =
                         RowWithThumb("##pick", 0, ICON_LC_IMAGE, e->name.c_str(),
-                                     st.texture == e->guid, 0.0f, kPickerRowHeight);
+                                     st.texture == e->guid, 0.0f, PickerRowHeight());
                     if (res.clicked)
                     {
                         st.texture = e->guid;
@@ -423,6 +432,13 @@ namespace Arcane::Editor
             ImGui::EndChild();
             ImGui::PopStyleColor();
         }
+    }
+
+    int MaterialSurfaceDefaultIndex()
+    {
+        ARC_CONSTANT("enum and array arity: the last kMaterialSurfaceLabels index")
+        constexpr int kLast = static_cast<int>(std::size(kMaterialSurfaceLabels)) - 1;
+        return std::clamp(Arcane::Settings<AssetBrowserSettings>().newMaterialDefaultSurface, 0, kLast);
     }
 
     CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
@@ -441,7 +457,7 @@ namespace Arcane::Editor
             (request.prefillSurface >= 0 &&
              request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
                 ? MaterialSurfaceComboIndex(static_cast<Arcane::MaterialSurface>(request.prefillSurface))
-                : kMaterialSurfaceDefaultIndex;
+                : MaterialSurfaceDefaultIndex();
 
         // `prefillParent` is the kind's ONE asset-valued field (the field's own
         // doc comment): an instance's parent, or -- Task 13 -- a sprite's
@@ -542,8 +558,8 @@ namespace Arcane::Editor
         // Width pinned to spec s11.2's ~380px EXACTLY (equal min/max on x);
         // height auto-fits, because the field count varies by kind and by
         // whether the parent picker is expanded.
-        ImGui::SetNextWindowSizeConstraints(ImVec2(kDialogWidth, 0.0f),
-                                            ImVec2(kDialogWidth, FLT_MAX));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(Ui::Px(kDialogWidth), 0.0f),
+                                            ImVec2(Ui::Px(kDialogWidth), FLT_MAX));
 
         std::optional<CreateAssetResult> result;
         bool keepOpen = true;   // the title bar's x
@@ -643,15 +659,15 @@ namespace Arcane::Editor
             }
 
             // Footer: Cancel then Create, right-aligned (the mock's order).
-            const float footerWidth = kFooterButtonWidth * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            const float footerWidth = Ui::Px(kFooterButtonWidth) * 2.0f + ImGui::GetStyle().ItemSpacing.x;
             ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
                                           ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x
                                           - footerWidth));
-            if (ImGui::Button("Cancel", ImVec2(kFooterButtonWidth, 0.0f)))
+            if (ImGui::Button("Cancel", ImVec2(Ui::Px(kFooterButtonWidth), 0.0f)))
                 keepOpen = false;
             ImGui::SameLine();
             ImGui::BeginDisabled(!ready);
-            if (ImGui::Button("Create", ImVec2(kFooterButtonWidth, 0.0f)))
+            if (ImGui::Button("Create", ImVec2(Ui::Px(kFooterButtonWidth), 0.0f)))
             {
                 CreateAssetResult r;
                 r.kind      = st.request.kind;

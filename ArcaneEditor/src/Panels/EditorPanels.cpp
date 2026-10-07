@@ -1,9 +1,14 @@
 #include "Panels/EditorPanels.hpp"
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
+#include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT (the console colours)
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/UiSettings.hpp>   // ui.copyFlashSeconds -- the Copy All flash
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
@@ -14,11 +19,16 @@
 #include "Scene/EntityClipboard.hpp"
 #include "Panels/EntityList.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::Px -- the transport strip's pixel gaps follow editor.ui.scale
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
+#include "Settings/EditorConsoleSettings.hpp"    // editor.console.* (the Console toolbar toggles, reply lines, category width; S6-41)
+#include "Settings/EditorUiStyleSettings.hpp"    // editor.ui.toolbar.* (the brand cluster; S6-45)
+#include "Settings/EditorViewportSettings.hpp"   // the view-settings popup's cvars (settings S6-29)
+#include "Settings/InspectorSettings.hpp"        // editor.inspector row rhythm, editor.outliner.slowClickMaxSeconds (S6-37)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
@@ -56,6 +66,8 @@
 
 namespace Arcane::Editor
 {
+    using Arcane::Editor::EditorActions;
+    using Arcane::Editor::ActionContext;
     namespace
     {
         // The root guard's visible half (s3.1, 9.27.1): a root-only selection
@@ -141,7 +153,8 @@ namespace Arcane::Editor
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents,
-                        const SceneRecents::List* sceneRecents)
+                        const SceneRecents::List* sceneRecents,
+                        bool closeableDocument)
     {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
@@ -161,17 +174,16 @@ namespace Arcane::Editor
         // VISUAL-only -- the wiring pass is landing them task by task).
         // File's scene/project items (including both Open Recent submenus),
         // Save All, Exit, and Assets' Show in Explorer / Copy Path all land
-        // in `requests` now, as do Edit's clipboard and selection items. The
-        // one remaining placeholder, Edit > Preferences..., is disabled with
-        // a tooltip naming the configuration pass that will build it. Edit's
-        // Undo/Redo drive the CommandStack.
+        // in `requests` now, as do Edit's clipboard and selection items.
+        // Edit > Preferences... and Project Settings... open the settings windows (settings arc S3).
+        // Edit's Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
             {
                 requests.fileMenuOpen = true;
-                if (ImGui::MenuItem("New Scene", "Ctrl+N")) requests.newScene = true;
-                if (ImGui::MenuItem("Open Scene", "Ctrl+O")) requests.openScene = true;
+                if (ImGui::MenuItem("New Scene", MenuKey("file.newScene").c_str())) requests.newScene = true;
+                if (ImGui::MenuItem("Open Scene", MenuKey("file.openScene").c_str())) requests.openScene = true;
                 // Open Recent Scene: PER-PROJECT history (SceneRecents.hpp),
                 // unlike Open Recent Project below (the Hub's shared,
                 // machine-wide list) -- UE's "Recent Levels" shape. Greyed
@@ -203,7 +215,7 @@ namespace Arcane::Editor
                 // of "Save As..." only, and "Save" (the item carrying the Ctrl+S
                 // hint) is the one users reach for.
                 if (ImGui::MenuItem(sceneDirty ? "Save *" : "Save",
-                                    "Ctrl+S", false, !playing))
+                                    MenuKey("file.saveScene").c_str(), false, !playing))
                     requests.saveScene = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
@@ -211,6 +223,10 @@ namespace Arcane::Editor
                     requests.saveSceneAs = true;
                 if (playing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Stop play mode to save the scene");
+                if (ImGui::MenuItem("Close Document",
+                                    MenuKey("document.close").c_str(),
+                                    false, closeableDocument))
+                    requests.closeDocument = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
                 if (ImGui::MenuItem("Open Folder...")) requests.openProjectFolder = true;
@@ -269,10 +285,10 @@ namespace Arcane::Editor
                                                             undo.ClearedReason(), undo.UndoLabel());
                 const UndoMenuItem redoItem = UndoMenuState(undo.CanRedo(), playing, inTxn,
                                                             {}, undo.RedoLabel(), /*redo*/ true);
-                if (ImGui::MenuItem(undoItem.label.c_str(), "Ctrl+Z", false, undoItem.enabled)) undo.Undo();
+                if (ImGui::MenuItem(undoItem.label.c_str(), MenuKey("edit.undo").c_str(), false, undoItem.enabled)) undo.Undo();
                 if (!undoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", undoItem.tooltip.c_str());
-                if (ImGui::MenuItem(redoItem.label.c_str(), "Ctrl+Y", false, redoItem.enabled)) undo.Redo();
+                if (ImGui::MenuItem(redoItem.label.c_str(), MenuKey("edit.redo").c_str(), false, redoItem.enabled)) undo.Redo();
                 if (!redoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("%s", redoItem.tooltip.c_str());
                 ImGui::Separator();
@@ -287,21 +303,21 @@ namespace Arcane::Editor
                 // Rename stays enabled: the root is renameable.
                 const bool structural     = hasSelection && !selectionRootOnly && !playing;
                 const bool showRootReason = selectionRootOnly && !playing;
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, structural))
+                if (ImGui::MenuItem("Cut", MenuKey("edit.cut").c_str(), false, structural))
                     requests.cutSelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Cut);
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, structural))
+                if (ImGui::MenuItem("Copy", MenuKey("edit.copy").c_str(), false, structural))
                     requests.copySelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Copy);
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, !playing))
+                if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str(), false, !playing))
                     requests.paste = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, structural))
+                if (ImGui::MenuItem("Duplicate", MenuKey("edit.duplicate").c_str(), false, structural))
                     requests.duplicateSelection = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Duplicate);
                 // Same code paths as the Outliner's F2/Del bindings.
-                if (ImGui::MenuItem("Rename", "F2", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Rename", MenuKey("outliner.rename").c_str(), false, hasSelection && !playing))
                     requests.renameSelected = true;
-                if (ImGui::MenuItem("Delete", "Del", false, structural))
+                if (ImGui::MenuItem("Delete", MenuKey("outliner.delete").c_str(), false, structural))
                     requests.deleteSelected = true;
                 RootRefusalTooltip(showRootReason, SceneRootVerb::Delete);
                 ImGui::Separator();
@@ -311,13 +327,10 @@ namespace Arcane::Editor
                 ImGui::Separator();
                 // UE's placement and order: the Edit menu's closing section is
                 // Editor Preferences... then Project Settings... (vendored
-                // MainMenu.cpp:261-276). Project Settings is wired. Preferences
-                // is the ONE remaining placeholder: disabled with its reason
-                // until the configuration pass builds the settings window over
-                // the cvar registry here (node page phase s6.8, s10.2).
-                ImGui::MenuItem("Preferences...", nullptr, false, false);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("Settings window coming in the configuration pass");
+                // MainMenu.cpp:261-276). Both open the generated settings
+                // windows (settings arc S3, spec s6.1).
+                if (ImGui::MenuItem("Preferences..."))
+                    requests.showPreferences = true;
                 if (ImGui::MenuItem("Project Settings..."))
                     requests.showProjectSettings = true;
                 ImGui::EndMenu();
@@ -510,8 +523,8 @@ namespace Arcane::Editor
 
     // ---- The default layout's geometry: Panels/DefaultLayout.hpp (USER
     // DECISION 2026-09-30 -- the user's ReferenceProject layout is the default;
-    // the pixel targets, their clamps and the band's proportion are named
-    // there). ----
+    // the pixel targets, their clamps and the band's proportion are computed
+    // there from editor.layout.factory.*, LayoutFactorySettings). ----
 
     namespace
     {
@@ -543,7 +556,9 @@ namespace Arcane::Editor
         ImGui::DockBuilderRemoveNode(dockspaceId);
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspaceId, size);
-        const DefaultLayoutPixels px = ComputeDefaultLayoutPixels(size.x, size.y);
+        // editor.layout.factory.* (settings S6-32): read once, at build time.
+        const LayoutFactorySettings& factory = Arcane::Settings<LayoutFactorySettings>();
+        const DefaultLayoutPixels px = ComputeDefaultLayoutPixels(size.x, size.y, factory);
 
         // The central node follows the INHERITOR side of every split (the side
         // opposite the direction), so it ends up top-right of the left block.
@@ -561,11 +576,11 @@ namespace Arcane::Editor
         // entity page in the main Inspector. NOT a pixel target: neither
         // side of this split holds the central node, so ImGui re-divides it
         // by SizeRef ratio on every resize -- the user's 1920-scale
-        // proportion (kDefaultAssetsInspectorBandFraction) is right at every
+        // proportion (DefaultAssetsInspectorBandFraction) is right at every
         // size, a pixel target only at the build size.
         ImGuiID browserNodeId = 0;
         const ImGuiID assetsInspectorId = ImGui::DockBuilderSplitNode(bandId, ImGuiDir_Right,
-            kDefaultAssetsInspectorBandFraction, nullptr, &browserNodeId);
+            DefaultAssetsInspectorBandFraction(factory), nullptr, &browserNodeId);
 
         ImGui::DockBuilderDockWindow("Outliner", outlinerId);
         // The main Inspector owns the right column alone, full height: a
@@ -665,7 +680,7 @@ namespace Arcane::Editor
             // holds the central node (a pre-feature browser tab set sits in
             // its own bottom node), so ImGui divides this split by SizeRef
             // ratio on resize: it takes the default's SAME proportion
-            // (kDefaultAssetsInspectorBandFraction), not pixels. (Were the
+            // (DefaultAssetsInspectorBandFraction), not pixels. (Were the
             // browser docked INTO the central node, the central flag stays
             // with the browser's child and Inspector 2 keeps the pixels that
             // proportion gives it here -- still a sane width.)
@@ -682,7 +697,7 @@ namespace Arcane::Editor
                     node->Size = node->SizeRef;
                 ImGuiID left = browserDock;
                 const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right,
-                    kDefaultAssetsInspectorBandFraction, nullptr, &left);
+                    DefaultAssetsInspectorBandFraction(Arcane::Settings<LayoutFactorySettings>()), nullptr, &left);
                 ImGui::DockBuilderDockWindow(id.c_str(), right);
             }
             // An undocked (or non-leaf) browser splits nothing: the new
@@ -765,9 +780,10 @@ namespace Arcane::Editor
         // button row -- so the top/bottom padding also absorbs its overhang above/below.
         const ImGuiStyle& st = ImGui::GetStyle();
         const float btnH     = ImGui::GetFrameHeight();
-        const float logoH    = (logoTex != 0) ? std::floor(btnH * 1.35f) : btnH;
+        const EditorUiToolbarSettings& toolbar = Arcane::Settings<EditorUiToolbarSettings>();   // editor.ui.toolbar.*
+        const float logoH    = (logoTex != 0) ? std::floor(btnH * toolbar.logoScale) : btnH;
         const float overhang = (logoH - btnH) * 0.5f;   // logo extends this far above/below the row
-        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(3.0f) + overhang));
 
         // Measure the full strip at the button-row start so the transport centers in the
         // whole width (not the width left of the logo).
@@ -778,20 +794,20 @@ namespace Arcane::Editor
         // -- LEFT cluster (Unity-style branding): [pad] [logo] [wordmark], inset from the
         // window edge and vertically centered on the button row. Absolute SetCursorPos so it
         // never perturbs the transport's own placement. leftX tracks the running right edge.
-        const float leftPad = 8.0f;
+        const float leftPad = Ui::Px(8.0f);
         float leftX = lineStartX + leftPad;
         if (logoTex != 0)
         {
             ImGui::SetCursorPos(ImVec2(leftX, rowY - overhang));
             ImGui::Image((ImTextureID)logoTex, ImVec2(logoH, logoH));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Arcane");
-            leftX += logoH + 8.0f;   // gap between logo and wordmark
+            leftX += logoH + Ui::Px(8.0f);   // gap between logo and wordmark
         }
         if (ImFont* brand = GetEditorFonts().brand)
         {
             // "Arcane" wordmark in the display face, a touch shorter than the logo, centered
             // on the same row. PushFont(font, size) renders it at a display size (ImGui 1.92).
-            const float brandSize = std::floor(logoH * 0.80f);
+            const float brandSize = std::floor(logoH * toolbar.brandScale);
             ImGui::PushFont(brand, brandSize);
             const ImVec2 sz = ImGui::CalcTextSize("Arcane");
             ImGui::SetCursorPos(ImVec2(leftX, rowY + (btnH - sz.y) * 0.5f));
@@ -813,8 +829,8 @@ namespace Arcane::Editor
         // At 8 the buttons read as four separate objects instead of one instrument; the
         // group is an instrument. Everything else on the row keeps the global spacing,
         // which is why this is a scoped PushStyleVar and not a style change.
-        constexpr float kTransportGap = 2.0f;
-        constexpr float kCaretPadX    = 2.0f;   // the caret half is slimmer than a full icon button
+        const float kTransportGap = Ui::Px(2.0f);
+        const float kCaretPadX    = Ui::Px(2.0f);   // the caret half is slimmer than a full icon button
         auto btnW = [&](const char* icon)
         { return ImGui::CalcTextSize(icon).x + st.FramePadding.x * 2.0f; };
         // The split's two halves overlap by one border so the shared edge is a single
@@ -825,7 +841,7 @@ namespace Arcane::Editor
         const float transportW = splitW + btnW(ICON_LC_PAUSE) + btnW(ICON_LC_STEP_FORWARD)
                                + kTransportGap * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        const float transportX = std::max(centerStart, leftX + 12.0f);
+        const float transportX = std::max(centerStart, leftX + Ui::Px(12.0f));
         ImGui::SetCursorPos(ImVec2(transportX, rowY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
@@ -1015,7 +1031,7 @@ namespace Arcane::Editor
         {
             const ImVec2 afterTransport = ImGui::GetCursorPos();
             const float  rightEdge = lineStartX + fullContentW - leftPad;          // mirrors leftPad
-            const float  minX      = transportX + transportW + 12.0f;             // mirrors the left clamp
+            const float  minX      = transportX + transportW + Ui::Px(12.0f);             // mirrors the left clamp
             const float  gap       = st.ItemSpacing.x * 2.0f;
             const float  lineH     = ImGui::GetTextLineHeight();
             const StripStatusMetrics m = MeasureStripStatus(status.title);
@@ -1042,7 +1058,7 @@ namespace Arcane::Editor
             ImGui::SetCursorPos(afterTransport);
         }
 
-        ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(3.0f) + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
         return result;
     }
@@ -1053,6 +1069,13 @@ namespace Arcane::Editor
         // worker thread can push (and therefore evict) mid-frame. Snapshot
         // BEFORE Begin: the tab title carries the unseen count (s8.2).
         const std::vector<ConsoleEntry> entries = console.Snapshot();
+        // editor.console.* (settings sweep S6-41): the toolbar toggles are cvars;
+        // a click writes the User rung (visible from the next publish), and this
+        // frame draws with the clicked value.
+        const EditorConsoleSettings consoleSettings = Settings<EditorConsoleSettings>();   // a copy: held across the draw
+        bool collapse   = consoleSettings.collapse;
+        bool autoScroll = consoleSettings.autoScroll;
+        bool wrap       = consoleSettings.wrap;
         const std::size_t unseen = suppressBadges ? 0 : UnseenAlerts(entries, ui.lastSeenSeq);
         const bool tint = unseen > 0;
         if (tint)
@@ -1110,11 +1133,11 @@ namespace Arcane::Editor
                                               : "Copy###consolecopy",
                                     ImVec2(copyW, 0.0f));
         ImGui::SameLine();
-        ImGui::Checkbox("Collapse", &ui.collapse);
+        if (ImGui::Checkbox("Collapse", &collapse)) SetConsoleToggle(kConsoleCollapseCVar, collapse);
         ImGui::SameLine();
-        ImGui::Checkbox("Scroll", &ui.autoScroll);
+        if (ImGui::Checkbox("Scroll", &autoScroll)) SetConsoleToggle(kConsoleAutoScrollCVar, autoScroll);
         ImGui::SameLine();
-        ImGui::Checkbox("Wrap", &ui.wrap);
+        if (ImGui::Checkbox("Wrap", &wrap)) SetConsoleToggle(kConsoleWrapCVar, wrap);
 
         ImGui::SameLine(); (void)SeverityToggleFor("console_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);
         ImGui::SameLine(); (void)SeverityToggleFor("console_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning);
@@ -1150,9 +1173,10 @@ namespace Arcane::Editor
         // where another tab covers the Console hits this. So: no body in a
         // skipped child, period.
         // The cvar console's own history sits between the log rows and the
-        // input line: reserve the input line plus up to six reply lines.
-        // (Hygiene pass 2026-09-28: the replies were never drawn here.)
-        const std::size_t cvarLines = ui.cvars.Lines().size() < 6 ? ui.cvars.Lines().size() : std::size_t{ 6 };
+        // input line: reserve the input line plus up to editor.console.replyLines
+        // reply lines. (Hygiene pass 2026-09-28: the replies were never drawn here.)
+        const std::size_t replyCap = static_cast<std::size_t>(consoleSettings.replyLines > 0 ? consoleSettings.replyLines : 0);
+        const std::size_t cvarLines = ui.cvars.Lines().size() < replyCap ? ui.cvars.Lines().size() : replyCap;
         const float reserved = ImGui::GetFrameHeightWithSpacing() * (1.0f + static_cast<float>(cvarLines));
         if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -reserved)))
         {
@@ -1181,7 +1205,7 @@ namespace Arcane::Editor
         // outlives every use below.
         struct Row { const ConsoleEntry* e; std::size_t count; };
         std::vector<Row> rows;
-        if (ui.collapse)
+        if (collapse)
         {
             for (const CollapsedRow& r : CollapseConsole(entries))
                 if (r.first && visible(*r.first)) rows.push_back({ r.first, r.count });
@@ -1214,7 +1238,7 @@ namespace Arcane::Editor
         // empty console (or a filter that hides everything) writes nothing to
         // the clipboard and must not claim otherwise.
         if (wantCopyAll && copyRows(false))
-            ui.copyFlashUntil = ImGui::GetTime() + 0.75;
+            ui.copyFlashUntil = ImGui::GetTime() + Arcane::Settings<Arcane::UiSettings>().copyFlashSeconds;
 
         // Selection ids are entry seqs, not row indices: the ring evicts from
         // the front and the filter hides rows, so an index would name a
@@ -1240,13 +1264,14 @@ namespace Arcane::Editor
             const Row& row = rows[static_cast<std::size_t>(i)];
             const ConsoleEntry& e = *row.e;
 
+            ARC_CONSTANT("console info grey; unify with editor.theme.text in the axis re-bless task")
             ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
             if (e.level == Arcane::DiagSeverity::Error)        col = Theme::kError;
             else if (e.level == Arcane::DiagSeverity::Warning) col = Theme::kWarning;
 
             const std::string clock = ClockText(e.timestampMs);
             char cat[64];
-            std::snprintf(cat, sizeof(cat), "%-8s", e.category.c_str());
+            std::snprintf(cat, sizeof(cat), "%-*s", static_cast<int>(consoleSettings.categoryWidth), e.category.c_str());
             std::string msg = e.message;
             if (row.count > 1)
             {
@@ -1263,7 +1288,7 @@ namespace Arcane::Editor
             const float spacingX = ImGui::GetStyle().ItemSpacing.x;
             const float prefixW  = ImGui::CalcTextSize(clock.c_str()).x + spacingX +
                                    ImGui::CalcTextSize(cat).x + spacingX;
-            if (ui.wrap)
+            if (wrap)
             {
                 const float wrapW = ImGui::GetContentRegionAvail().x - prefixW;
                 if (wrapW > 1.0f)
@@ -1286,9 +1311,9 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", cat);
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, col);
-            if (ui.wrap) ImGui::PushTextWrapPos(0.0f);
+            if (wrap) ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(msg.c_str());
-            if (ui.wrap) ImGui::PopTextWrapPos();
+            if (wrap) ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
             ImGui::SetCursorPos(afterPos);
             ImGui::PopID();
@@ -1307,17 +1332,17 @@ namespace Arcane::Editor
         ms = ImGui::EndMultiSelect();
         s_selection.ApplyRequests(ms);
 
-        // Ctrl+C copies the selection while the log child has focus (clicking
-        // a row focuses it). Ctrl+A is BeginMultiSelect's own -- it arrives as
-        // a SelectAll request through ApplyRequests above.
-        if (s_selection.Size > 0 && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+        // Ctrl+C copies the selection while the log child has focus (settings
+        // S4: console.copy). Ctrl+A stays BeginMultiSelect's own.
+        if (ImGui::IsWindowFocused()) EditorActions::Get().MarkContextActive(ActionContext::Console);
+        if (s_selection.Size > 0 && ImGui::IsWindowFocused() && EditorActions::Get().Pressed("console.copy"))
             copyRows(true);
 
         // UE parity: the read-only text box's Copy/Select All, extended with
         // Clear Log (SOutputLog::ExtendTextBoxMenu).
         if (ImGui::BeginPopupContextWindow("##consolectx"))
         {
-            if (ImGui::MenuItem("Copy", "Ctrl+C", false, s_selection.Size > 0))
+            if (ImGui::MenuItem("Copy", MenuKey("console.copy").c_str(), false, s_selection.Size > 0))
                 copyRows(true);
             if (ImGui::MenuItem("Copy All"))
                 copyRows(false);
@@ -1336,7 +1361,7 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
-        if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        if (autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
         if (cvarLines > 0)
@@ -1345,7 +1370,11 @@ namespace Arcane::Editor
             for (std::size_t i = lines.size() - cvarLines; i < lines.size(); ++i)
             {
                 if (lines[i].ok) ImGui::TextUnformatted(lines[i].text.c_str());
-                else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
+                else
+                {
+                    ARC_CONSTANT("console error-detail red; unify with editor.theme.error in the axis re-bless task")
+                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
+                }
             }
         }
         (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::CVarContext::Editor);
@@ -1415,7 +1444,9 @@ namespace Arcane::Editor
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImU32  col = ImGui::GetColorU32(Theme::kAccent);
-            constexpr float t = 2.0f;
+            ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
+            constexpr float kPlayBandPx = 2.0f;
+            const float t = Ui::Px(kPlayBandPx);
             const ImVec2 a = origin;
             const ImVec2 b(origin.x + (float)texW, origin.y + (float)texH);
             dl->AddRectFilled(a, ImVec2(b.x, a.y + t), col);                          // top
@@ -1462,16 +1493,16 @@ namespace Arcane::Editor
             ImGui::BeginGroup();
 
             // --- View control: 2D | Persp + the settings gear ----------------
-            // MarkIniSettingsDirty on every edit here and in the popup, as the
-            // shader editor's preferences do (:716): the [EditorViewport]
+            // MarkIniSettingsDirty on every view-mode edit here (the popup's
+            // preferences are cvars), as the shader editor's do (:716): the [EditorViewport]
             // handler only WRITES when ImGui next saves, and a camera or
             // settings change on its own dirties nothing.
             const bool view2d = IconToggle(ICON_LC_SQUARE "##view_2d", tools.viewMode == ViewMode::TwoD);
-            tooltip("2D view (Alt+J)");
+            tooltip(WithChord("2D view", "editor.view.ortho2D").c_str());
             if (view2d) { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             const bool viewPersp = IconToggle(ICON_LC_BOX "##view_persp", tools.viewMode == ViewMode::Perspective);
-            tooltip("Perspective view (Alt+G)");
+            tooltip(WithChord("Perspective view", "editor.view.perspective").c_str());
             if (viewPersp) { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             if (iconBtn(ICON_LC_SETTINGS_2, "##view_settings", "View settings"))
@@ -1485,28 +1516,35 @@ namespace Arcane::Editor
                                     ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
             if (ImGui::BeginPopup("##viewsettings"))
             {
-                Arcane::Editor::ViewportSettings& settings = tools.settings;
-                bool edited = false;
+                // The preferences are cvars (settings S6-29): each widget edits
+                // a copy of the published value and writes the cvar at the User
+                // rung on change (SetViewportPref also queues the archive), so
+                // nothing here touches imgui.ini any more.
+                EditorViewportSettings view = Arcane::Settings<EditorViewportSettings>();
+                EditorCameraSettings   cam  = Arcane::Settings<EditorCameraSettings>();
+                float gizmoSize             = Arcane::Settings<EditorGizmoSettings>().size;
                 ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
-                edited |= ImGui::Checkbox("Show grid", &settings.showGrid);
+                if (ImGui::Checkbox("Show grid", &view.showGrid))
+                    SetViewportPref("editor.viewport.showGrid", Arcane::CVarValue::Bool(view.showGrid));
                 {
-                    int plane = static_cast<int>(settings.gridPlane);
+                    int plane = static_cast<int>(view.gridPlane);
                     if (ImGui::Combo("Grid plane", &plane, "XZ (ground)\0XY (2D plane)\0"))
-                    { settings.gridPlane = (plane == 1) ? GridPlane::XY : GridPlane::XZ; edited = true; }
+                        SetViewportPref("editor.viewport.gridPlane",
+                                        Arcane::CVarValue::Enum(static_cast<std::int32_t>(plane == 1 ? GridPlane::XY : GridPlane::XZ)));
                 }
                 // AlwaysClamp on every slider: a Ctrl+click typed value past the
-                // range would otherwise land in the persisted block, which
-                // ViewportSettings::ReadIniLine refuses WHOLE on the next boot.
-                edited |= ImGui::SliderFloat("Field of view", &tools.fovYDeg, 20.0f, 120.0f, "%.0f deg",
-                                             ImGuiSliderFlags_AlwaysClamp);
-                edited |= ImGui::SliderFloat("Camera speed", &tools.speedScalar,
-                                             Arcane::Editor::ViewportSettings::kMinSpeedScalar,
-                                             Arcane::Editor::ViewportSettings::kMaxSpeedScalar, "%.2fx",
-                                             ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-                edited |= ImGui::SliderFloat("Gizmo size", &settings.gizmoSize, 0.5f, 3.0f, "%.2f",
-                                             ImGuiSliderFlags_AlwaysClamp);
+                // range is held to the slider's ends, not just the cvar's range.
+                if (ImGui::SliderFloat("Field of view", &cam.fovYDeg, 20.0f, 120.0f, "%.0f deg",
+                                       ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.camera.fovYDeg", Arcane::CVarValue::Float32(cam.fovYDeg));
+                const auto [speedLo, speedHi] = CameraSpeedScalarRange();
+                if (ImGui::SliderFloat("Camera speed", &cam.speedScalar, speedLo, speedHi, "%.2fx",
+                                       ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.camera.speedScalar", Arcane::CVarValue::Float32(cam.speedScalar));
+                if (ImGui::SliderFloat("Gizmo size", &gizmoSize, 0.5f, 3.0f, "%.2f",
+                                       ImGuiSliderFlags_AlwaysClamp))
+                    SetViewportPref("editor.gizmo.size", Arcane::CVarValue::Float32(gizmoSize));
                 ImGui::PopItemWidth();
-                if (edited) ImGui::MarkIniSettingsDirty();
                 ImGui::EndPopup();
             }
             // The popup is a window of its own, so while the cursor is over it
@@ -1520,19 +1558,19 @@ namespace Arcane::Editor
 
             // --- Transform tools ---------------------------------------------
             const bool toolSel = IconToggle(ICON_LC_MOUSE_POINTER_2 "##tool_sel", !gizmoEnabled);
-            tooltip("Select (Q)");
+            tooltip(WithChord("Select", "editor.viewport.toolSelect").c_str());
             if (toolSel) gizmoEnabled = false;
             ImGui::SameLine();
             const bool toolT = IconToggle(ICON_LC_MOVE_3D "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate);
-            tooltip("Move (W)");
+            tooltip(WithChord("Move", "editor.viewport.toolTranslate").c_str());
             if (toolT) { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
             const bool toolR = IconToggle(ICON_LC_ROTATE_3D "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate);
-            tooltip("Rotate (E)");
+            tooltip(WithChord("Rotate", "editor.viewport.toolRotate").c_str());
             if (toolR) { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
             const bool toolS = IconToggle(ICON_LC_SCALE_3D "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale);
-            tooltip("Scale (R)");
+            tooltip(WithChord("Scale", "editor.viewport.toolScale").c_str());
             if (toolS) { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
             ImGui::SameLine();
             {
@@ -1918,11 +1956,12 @@ namespace Arcane::Editor
         // or Del/F2 would act on the selection behind the open menu. Keys stay
         // inert while any popup owns focus; the menu's own items act instead.
         const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy);
+        if (windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Outliner);
         // Shortcuts must not fire while any text field owns the keyboard
         // (e.g. the search box above) -- else Delete/F2 hijack typing.
         if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && sel.Count() == 1)
+            if (EditorActions::Get().Pressed("outliner.rename") && sel.Count() == 1)
             {
                 // Rename edits an EXISTING Identity -- Edit::RenameEntity
                 // refuses when there is none and never mints one
@@ -1933,7 +1972,7 @@ namespace Arcane::Editor
                         std::as_const(registry).GetComponent<Arcane::Identity>(sel.Primary()))
                     BeginRename(state, sel.Primary(), info->name);
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
+            if (EditorActions::Get().Pressed("outliner.delete") && sel.HasSelection())
                 DeleteSelection(registry, sel, undo, binding);
         }
 
@@ -2251,7 +2290,7 @@ namespace Arcane::Editor
                                 && sel.Count() == 1 && sel.Primary() == row.entity
                                 && state.lastClicked == row.entity
                                 && (now - state.lastClickTime) > ImGui::GetIO().MouseDoubleClickTime
-                                && (now - state.lastClickTime) < 1.2;
+                                && (now - state.lastClickTime) < Arcane::Settings<OutlinerSettings>().slowClickMaxSeconds;
                             if (slowSecond)
                                 BeginRename(state, row.entity, info->name);
                             else
@@ -2301,15 +2340,15 @@ namespace Arcane::Editor
                         // Edit-menu parity via the shared functions above.
                         // Acts on the SELECTION -- the right-click already
                         // selected this row when it was outside it.
-                        if (ImGui::MenuItem("Cut", "Ctrl+X", false, !rootOnly))
+                        if (ImGui::MenuItem("Cut", MenuKey("edit.cut").c_str(), false, !rootOnly))
                             CutSelection(registry, sel, undo, binding);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Cut);
-                        if (ImGui::MenuItem("Copy", "Ctrl+C", false, !rootOnly))
+                        if (ImGui::MenuItem("Copy", MenuKey("edit.copy").c_str(), false, !rootOnly))
                             CopySelectionToClipboard(registry, sel);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Copy);
-                        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+                        if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str()))
                             PasteFromClipboard(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !rootOnly))
+                        if (ImGui::MenuItem("Duplicate", MenuKey("edit.duplicate").c_str(), false, !rootOnly))
                             DuplicateSelection(registry, sel, undo, binding);
                         RootRefusalTooltip(rootOnly, SceneRootVerb::Duplicate);
                         ImGui::Separator();
@@ -2321,7 +2360,7 @@ namespace Arcane::Editor
                         // is what lets the explanation reach a greyed item.
                         const Arcane::Identity* rowInfo =
                             std::as_const(registry).GetComponent<Arcane::Identity>(row.entity);
-                        if (ImGui::MenuItem("Rename", "F2", false, rowInfo != nullptr))
+                        if (ImGui::MenuItem("Rename", MenuKey("outliner.rename").c_str(), false, rowInfo != nullptr))
                             BeginRename(state, row.entity, rowInfo->name);
                         if (rowInfo == nullptr
                             && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
@@ -2331,7 +2370,7 @@ namespace Arcane::Editor
                         // scope below (the standard deferred-OpenPopup pattern).
                         if (ImGui::MenuItem("Add Component..."))
                             state.addComponentPending = true;
-                        if (ImGui::MenuItem("Delete", "Del", false, !rootOnly))
+                        if (ImGui::MenuItem("Delete", MenuKey("outliner.delete").c_str(), false, !rootOnly))
                         {
                             if (!sel.Contains(row.entity))
                                 sel.Select(row.entity);
@@ -2446,7 +2485,7 @@ namespace Arcane::Editor
             // SceneRoot (the same Invalid-parent rule "New Entity" takes).
             DrawAddPrimitiveSubmenu(state, Astra::Entity::Invalid());
             ImGui::Separator();
-            if (ImGui::MenuItem("Paste", "Ctrl+V"))
+            if (ImGui::MenuItem("Paste", MenuKey("edit.paste").c_str()))
                 PasteFromClipboard(registry, sel, undo, binding);
             ImGui::EndPopup();
         }
@@ -2504,27 +2543,6 @@ namespace Arcane::Editor
         }
 
         ImGui::End();
-    }
-
-    namespace
-    {
-        // ---------------------------------------------------------------------
-        // Row rhythm (UE's Details rows read visibly tighter than ImGui's own
-        // theme defaults).
-        // ---------------------------------------------------------------------
-
-        // Starting values for the vertical-rhythm tuning knobs used below --
-        // NOT an applied tightening yet. Both equal ImGui's own stock style
-        // defaults (FramePadding = (4,3) at imgui.cpp:1531, ItemSpacing =
-        // (8,4) at imgui.cpp:1534) and nothing else in this editor modifies
-        // style, so the push at the loop site moves ZERO pixels as authored
-        // today. Per the spec's tune-at-desk flow, these constants are where
-        // a human pass narrows the rhythm once the layout is on screen. Only
-        // .y is a tuning target; the push site keeps the live style's .x so
-        // horizontal spacing elsewhere in the panel (search box, buttons) is
-        // untouched by a change scoped to vertical rhythm.
-        constexpr float kInspectorFramePaddingY = 3.0f;
-        constexpr float kInspectorItemSpacingY  = 4.0f;
     }
 
     void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
@@ -2659,10 +2677,18 @@ namespace Arcane::Editor
         // 7233-7239), which advances window->DC.Indent.x by g.Style.IndentSpacing
         // (imgui.cpp:12246) -- a third style var, distinct from the two pushed
         // here.
+        // Row rhythm (UE's Details rows read visibly tighter than ImGui's own
+        // theme defaults): editor.inspector.framePaddingY / itemSpacingY
+        // (settings S6-37), base px at the editor.ui.scale. The defaults (3, 4)
+        // are the pre-sweep constants, which equal ImGui's stock FramePadding.y
+        // / ItemSpacing.y. Only .y is a tuning target: the live style's .x is
+        // kept so horizontal spacing elsewhere in the panel (search box,
+        // buttons) is untouched.
+        const InspectorSettings& rhythm = Arcane::Settings<InspectorSettings>();
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-            ImVec2(ImGui::GetStyle().FramePadding.x, kInspectorFramePaddingY));
+            ImVec2(ImGui::GetStyle().FramePadding.x, Ui::Px(rhythm.framePaddingY)));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-            ImVec2(ImGui::GetStyle().ItemSpacing.x, kInspectorItemSpacingY));
+            ImVec2(ImGui::GetStyle().ItemSpacing.x, Ui::Px(rhythm.itemSpacingY)));
         for (const Astra::Registry::ComponentInfo& ci : components)
         {
             // An unreflected component has no name to show and no fields to
@@ -2971,60 +2997,5 @@ namespace Arcane::Editor
         // Drawn unconditionally at window scope: BeginPopup is a no-op until
         // the button above (or a previous frame's click) opened it.
         DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
-    }
-    void DrawProjectSettings(const Arcane::Project* project, bool* open,
-                             ProjectSettingsRequests& requests)
-    {
-        if (!ImGui::Begin("Project Settings", open)) { ImGui::End(); return; }
-        if (!project)
-        {
-            ImGui::TextDisabled("Open a project to configure gameplay input.");
-            ImGui::End();
-            return;
-        }
-
-        ImGui::TextUnformatted("Gameplay Input Actions");
-        ImGui::Separator();
-        const auto selected = Guid::FromString(project->Manifest().inputActions).value_or(Guid{});
-        const auto registered = project->Registry().All();
-        std::vector<std::pair<Guid, std::string>> choices;
-        for (const auto& [id, mountPath] : registered)
-        {
-            if (mountPath.size() >= 9 &&
-                mountPath.substr(mountPath.size() - 9) == ".arcinput")
-                choices.emplace_back(id, mountPath);
-        }
-        const bool missing = selected.IsValid() &&
-            std::none_of(choices.begin(), choices.end(),
-                [&](const auto& entry) { return entry.first == selected; });
-        if (missing)
-            ImGui::TextWrapped("Selected asset %s is missing from the project registry. Choose another asset or clear the selection.",
-                               selected.ToString().c_str());
-        else if (!selected.IsValid())
-            ImGui::TextDisabled("No gameplay input asset selected.");
-
-        if (ImGui::BeginCombo("Input Asset", missing ? "Missing asset" :
-            selected.IsValid() ? "Selected asset" : "None"))
-        {
-            if (ImGui::Selectable("None", !selected.IsValid())) requests.clear = true;
-            for (const auto& [id, path] : choices)
-            {
-                if (ImGui::Selectable(path.c_str(), selected == id))
-                { requests.selection = id; requests.select = true; }
-            }
-            ImGui::EndCombo();
-        }
-        if (choices.empty())
-            ImGui::TextDisabled("No .arcinput assets are registered in this project.");
-        if (selected.IsValid() && !missing)
-        {
-            for (const auto& [id, path] : choices)
-                if (id == selected) ImGui::TextWrapped("%s", path.c_str());
-            if (ImGui::Button("Open Asset")) requests.open = true;
-            ImGui::SameLine();
-            if (ImGui::Button("Clear Selection")) requests.clear = true;
-        }
-        if (ImGui::Button("Create Input Actions Asset")) requests.create = true;
-        ImGui::End();
     }
 }

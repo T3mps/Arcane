@@ -18,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Render/RenderDeviceDesc.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // RenderDebugSettings -- the per-configuration validation default
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 #include <Arcane/Render/Nri/NriCommon.hpp>
@@ -162,6 +163,7 @@ namespace
 
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
+        desc.enableValidation = Arcane::RenderDebugSettings{}.validation;   // the per-configuration default (on in Debug)
 
         // The creation half -- the same function the engine's own boot runs
         // (Render/DeviceCreation{D3D12,Vulkan}.cpp), so what gets wrapped here

@@ -50,6 +50,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Scene
 {
@@ -94,6 +95,7 @@ namespace Arcane::Scene
     // bytes a v5 file already carries stay readable, but they MEAN the mirror
     // image of what they used to, so the number is what tells the loader to
     // rewrite them.
+    ARC_CONSTANT("file format: the .arcscene JSON version this engine writes")
     inline constexpr int kSceneJsonVersion = 6;
 
     // The OLDEST schema this build still loads. v4's addition is additive, so a
@@ -108,6 +110,7 @@ namespace Arcane::Scene
     // test against kSceneJsonVersion: a clipboard payload is written by the
     // same running build that reads it, never persisted, so it has no old
     // corpus to stay compatible with.
+    ARC_CONSTANT("file format: the oldest .arcscene JSON version this engine still reads")
     inline constexpr int kSceneJsonVersionMin = 3;
 
     // Walks a type's serializable reflected fields, driving the given visitor.

@@ -3,6 +3,7 @@
 #include <glm/gtc/constants.hpp>
 
 #include <cmath>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -43,6 +44,7 @@ namespace Arcane
             glm::vec3 normal, u, v;
         };
 
+        ARC_CONSTANT("a change would be a bug: the unit cube's face bases (scale via Transform); the thumbnail goldens depend on them")
         constexpr FaceBasis kCubeFaces[6] =
         {
             { { 1.0f,  0.0f,  0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } },  // +X: Y x Z =  X
@@ -307,7 +309,9 @@ namespace Arcane
     {
         MeshData mesh;
 
+        ARC_CONSTANT("a change would be a bug: the unit cylinder's radius (scale via Transform); the thumbnail goldens depend on it")
         constexpr float kRadius = 0.5f;
+        ARC_CONSTANT("a change would be a bug: the unit cylinder's half height (scale via Transform); the thumbnail goldens depend on it")
         constexpr float kHalfHeight = 0.5f;
         const std::uint32_t cols = segments + 1;   // duplicate seam column, u 0..1
 

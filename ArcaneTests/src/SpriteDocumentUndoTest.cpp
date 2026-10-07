@@ -22,9 +22,12 @@
 #include "Documents/DocumentHost.hpp"
 #include "Documents/SpriteDocument.hpp"
 #include "Scene/UndoGate.hpp"
+#include "Settings/DocumentSettings.hpp"   // editor.sprite.* (the PPU row bounds)
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>   // the editor.sprite.ppuMax Code-rung override
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/AssetId.hpp>
@@ -482,6 +485,106 @@ TEST_CASE("SpriteDocument page: a Pixels Per Meter drag is one step", "[editor][
     fx.stack.Undo();
     CHECK(h.doc.Data().ppu == 100.0f);
     CHECK_FALSE(fx.stack.CanUndo());
+}
+
+// S6-5 fix round 1: a sprite seeded above the 4096 cap (assets.sprite.
+// defaultPixelsPerUnit reaches 10000) is re-editable in place. Under a plain
+// Range(1, 4096) a leftward drag from 5000 snaps to 4096 (ImGui clamps a moved
+// value to max); since S6-42 fix round 1 the row's editor.sprite.ppuMin/ppuMax
+// widen to include the current value, so it moves by the drag alone.
+TEST_CASE("SpriteDocument page: a Pixels Per Meter above 4096 drags without snapping to a cap", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    Arcane::SpriteAssetData d = Fixture();
+    d.ppu = 5000.0f;
+    SpritePageUi h(s, d);
+    h.Frame(); h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x - 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    CHECK(h.doc.Data().ppu < 5000.0f);   // the drag moved it
+    CHECK(h.doc.Data().ppu > 4096.0f);   // and no 4096 cap caught it
+    REQUIRE(fx.stack.CanUndo());
+    fx.stack.Undo();
+    CHECK(h.doc.Data().ppu == 5000.0f);
+}
+
+namespace
+{
+    // A Code-rung override on a Live editor setting, removed again however
+    // the case exits; PublishImmediate makes Settings<T>() see it this frame.
+    struct SpriteCodeOverride
+    {
+        SpriteCodeOverride(const char* name, const Arcane::CVarValue& value)
+            : handle(Arcane::CVarRegistry::Get().Find(name))
+        {
+            INFO("cvar " << name);
+            REQUIRE_FALSE(handle.IsStale());
+            REQUIRE(Arcane::CVarRegistry::Get().Set(handle, value, Arcane::SetBy::Code) == Arcane::SetResult::Applied);
+            Arcane::CVarRegistry::Get().PublishImmediate();
+        }
+        ~SpriteCodeOverride()
+        {
+            Arcane::CVarRegistry::Get().ClearRung(handle, Arcane::SetBy::Code);
+            Arcane::CVarRegistry::Get().PublishImmediate();
+        }
+        SpriteCodeOverride(const SpriteCodeOverride&) = delete;
+        SpriteCodeOverride& operator=(const SpriteCodeOverride&) = delete;
+
+        Arcane::CVarHandle handle;
+    };
+
+    // Presses the Pixels Per Meter row and drags it 300 px right: at the
+    // default 0.5 drag speed that asks for +150, past either cap below.
+    void DragPpuRight(SpritePageUi& h)
+    {
+        h.Frame(); h.Frame();
+        const ImVec2 at = h.At("Pixels Per Meter");
+        h.Move(at); h.Button(0, true);
+        h.Move(ImVec2(at.x + 300.0f, at.y));
+        h.Button(0, false); h.Frame();
+    }
+}
+
+// S6-42 fix round 1: editor.sprite.ppuMax is Live and bounds the row -- a
+// changed preference changes the editable limit (spec s3: a Live setting takes
+// effect at the next Publish). The seed setting's declared [1, 10000] no longer
+// widens it.
+TEST_CASE("SpriteDocument page: editor.sprite.ppuMax caps a Pixels Per Meter drag", "[editor][sprite][inspector]")
+{
+    REQUIRE(Arcane::Settings<Arcane::Editor::SpriteDocSettings>().ppuDragSpeed == 0.5f);   // the +150 arithmetic below
+
+    SECTION("a non-default ppuMax (200) caps a rightward drag from 100")
+    {
+        const SpriteCodeOverride cap("editor.sprite.ppuMax", Arcane::CVarValue::Float32(200.0f));
+        REQUIRE(Arcane::Settings<Arcane::Editor::SpriteDocSettings>().ppuMax == 200.0f);
+        UndoFixture fx;
+        SpriteDocument::Services s;
+        s.undo = [&fx] { return &fx.stack; };
+        SpritePageUi h(s);                       // Fixture(): ppu 100
+        DragPpuRight(h);
+        CHECK(h.doc.Data().ppu > 100.0f);        // the drag moved it
+        CHECK(h.doc.Data().ppu <= 200.0f);       // and the preference caught it (unclamped: 250)
+        REQUIRE(fx.stack.CanUndo());
+        fx.stack.Undo();
+        CHECK(h.doc.Data().ppu == 100.0f);
+    }
+    SECTION("the default ppuMax (4096) caps a rightward drag from 4000")
+    {
+        REQUIRE(Arcane::Settings<Arcane::Editor::SpriteDocSettings>().ppuMax == 4096.0f);
+        UndoFixture fx;
+        SpriteDocument::Services s;
+        s.undo = [&fx] { return &fx.stack; };
+        Arcane::SpriteAssetData d = Fixture();
+        d.ppu = 4000.0f;
+        SpritePageUi h(s, d);
+        DragPpuRight(h);
+        CHECK(h.doc.Data().ppu > 4000.0f);
+        CHECK(h.doc.Data().ppu <= 4096.0f);      // not the seed setting's 10000 (unclamped: 4150)
+    }
 }
 
 // The grouped VecRow bracket (closed by EndAfterRow) is its own path, apart

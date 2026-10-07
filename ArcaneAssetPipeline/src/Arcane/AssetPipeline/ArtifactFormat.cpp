@@ -4,11 +4,13 @@
 #include <bit>
 #include <fstream>
 #include <string>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::AssetPipeline
 {
     namespace
     {
+        ARC_CONSTANT("file format: the cooked-artifact container version")
         constexpr std::uint32_t kArtifactVersion = 1;
         constexpr std::array<std::uint8_t, 4> kMagic{
             static_cast<std::uint8_t>('A'), static_cast<std::uint8_t>('R'),
@@ -17,12 +19,15 @@ namespace Arcane::AssetPipeline
         // On-disk width of one section table entry: tag(u32) + offset(u64) + size(u64). Shared
         // by both artifact kinds -- this is the CONTAINER's own top-level index, not either
         // kind's per-content section table.
+        ARC_CONSTANT("file format: on-disk width of a container section table entry")
         constexpr std::uint64_t kSectionEntrySize = 4 + 8 + 8;
         // On-disk width of one MipTable entry: offset(u64) + size(u64) + width(u32) + height(u32).
+        ARC_CONSTANT("file format: on-disk width of a MipTable entry")
         constexpr std::uint64_t kMipEntrySize = 8 + 8 + 4 + 4;
         // Minimum on-disk width of one MESH SectionTable entry (SectionTag::SectionTable's own
         // body): nameLen(u16) + indexOffset(u32) + indexCount(u32) + slotIndex(u32), i.e. the
         // width with a zero-length name -- a real entry is this wide plus its name's bytes.
+        ARC_CONSTANT("file format: minimum on-disk width of a mesh SectionTable entry")
         constexpr std::uint64_t kMeshSectionEntrySize = 2 + 4 + 4 + 4;
 
         [[nodiscard]] constexpr std::byte ByteOf(std::uint64_t v, int shift) noexcept
@@ -155,6 +160,7 @@ namespace Arcane::AssetPipeline
         // parses, so a future prefix field added to either side does not silently start
         // under-reading -- still minuscule next to a real artifact's payload, which is the
         // whole point: RebuildIndexFromScan must never pay for anything past the header.
+        ARC_CONSTANT("file format: covers every prefix field ReadArtifactPrefix parses, with headroom")
         constexpr std::size_t kPrefixProbeBytes = 256;
 
         // Reads at most `maxBytes` from the START of `path` -- NEVER the whole file. A file

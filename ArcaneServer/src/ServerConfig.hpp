@@ -19,7 +19,11 @@ namespace Arcane::Server
         std::string   projectPath;                  // --project (REQUIRED: a server with nothing to host refuses, like ArcaneRuntime)
         std::string   pluginPath;                    // --plugin override
         std::uint64_t frames         = 0;             // --frames N; 0 = run until terminated (P13)
-        double        fixedDtSeconds = 1.0 / 60.0;    // --fixed-dt
+        // --fixed-dt. Supplied, it overrides server.tickHz; otherwise the
+        // tick is 1/server.tickHz (settings arc S6-8) and ServerApp fills
+        // fixedDtSeconds in once the project's Config rung is applied.
+        double        fixedDtSeconds  = 0.0;
+        bool          fixedDtSupplied = false;
         std::string   reportPath;                     // --report <json>
         bool          printEngineInfo = false;        // --print-engine-info (same probe as the other hosts, Core-side)
         bool          adminConsole    = true;         // --no-admin-console turns off the stdin admin console (settings spec s9)
@@ -35,6 +39,10 @@ namespace Arcane::Server
         // {help} => {nullopt, 0}; a parse/validation refusal => {nullopt, 2};
         // otherwise {config, 0}. See ServerConfig.cpp for the exact refusals.
         [[nodiscard]] static ParseOutcome Parse(int argc, char** argv);
+
+        // The server's tick rate: 1/--fixed-dt when supplied, else the
+        // published server.tickHz.
+        [[nodiscard]] double FixedHz() const;
     };
 
     struct ServerConfig::ParseOutcome { std::optional<ServerConfig> config; int exitCode = 0; };

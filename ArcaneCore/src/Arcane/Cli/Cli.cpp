@@ -55,13 +55,30 @@ namespace Arcane
 
     void Cli::PrintUsage() const
     {
-        std::printf("%s -- %s\n", m_prog.c_str(), m_desc.c_str());
+        const std::string text = Usage();
+        std::fputs(text.c_str(), stdout);
+    }
+
+    std::string Cli::Usage() const
+    {
+        std::string out = m_prog + " -- " + m_desc + "\n";
+        const auto line = [&out](const std::string& name, const std::string& help)
+        {
+            // printf's "  --%-16s %s": the name left-aligned in 16 columns, never truncated.
+            out += "  --" + name;
+            if (name.size() < 16) out.append(16 - name.size(), ' ');
+            out += ' ';
+            out += help;
+        };
         for (const Opt& o : m_opts)
         {
-            if (o.isFlag) std::printf("  --%-16s %s\n", o.name.c_str(), o.help.c_str());
-            else          std::printf("  --%-16s %s (default %s)\n", o.name.c_str(), o.help.c_str(), o.def.c_str());
+            line(o.name, o.help);
+            if (!o.isFlag && !o.def.empty()) out += " (default " + o.def + ")";
+            out += "\n";
         }
-        std::printf("  --%-16s %s\n", "help", "show this help");
+        line("help", "show this help");
+        out += "\n";
+        return out;
     }
 
     namespace

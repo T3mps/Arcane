@@ -208,6 +208,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -284,6 +285,7 @@ namespace Arcane
     // LOCKSTEP with that one; a mismatch left standing would make every artifact THIS
     // engine's own cook produces look "newer than the engine" to itself the moment the
     // pipeline-side constant moves without a matching edit here.
+    ARC_CONSTANT("file format: mirrors the asset pipeline's texture importer version, a cook-key input")
     inline constexpr std::uint32_t kClientTextureImporterVersionMirror = 1;
 
     // Reads and validates ONE .arcart file at `path` against the CURRENT staged source
@@ -327,6 +329,7 @@ namespace Arcane
     // This engine's own copy of AssetPipeline's kMeshImporterVersion -- mirrored BY
     // HAND, never included, exactly like kClientTextureImporterVersionMirror above.
     // Bump IN LOCKSTEP with that one.
+    ARC_CONSTANT("file format: mirrors the asset pipeline's mesh importer version, a cook-key input")
     inline constexpr std::uint32_t kClientMeshImporterVersionMirror = 1;
 
     struct MeshArtifactReadResult

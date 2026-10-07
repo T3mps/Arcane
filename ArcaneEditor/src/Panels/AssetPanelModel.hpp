@@ -38,6 +38,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -74,6 +75,7 @@ namespace Arcane::Editor
         InputActions,
         Other,
     };
+    ARC_CONSTANT("enum and array arity: one per AssetKind")
     inline constexpr int kAssetKindCount = 13;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
@@ -335,6 +337,9 @@ namespace Arcane::Editor
     // pins, plus Model which F2c Plan 2 Task 8 adds -- that value EXTENDS the
     // table rather than quoting it. 0 means "no row": the graph panel falls
     // back to Theme::kGrab (#9a9a9a).
+    // The DEFAULT accents: editor.theme.assetKind.* (settings S6-26) are
+    // written from this table; the asset graph draws through the settings
+    // overload KindAccentRgb(kind, EditorThemeAssetKindSettings).
     [[nodiscard]] inline std::uint32_t KindAccentRgb(AssetKind kind) noexcept
     {
         switch (kind)

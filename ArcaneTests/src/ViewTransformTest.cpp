@@ -1,12 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <cmath>
-using Catch::Approx; using Arcane::ViewTransform;
+using Catch::Approx; using Arcane::ViewTransform; using Arcane::Ortho2DView;
 
 TEST_CASE("Orthographic: +Y up -- a point above the centre lands ABOVE the viewport centre", "[viewtransform]")
 {
-    const auto v = ViewTransform::Orthographic({0,0}, 5.0f, {800,600});
+    const auto v = Ortho2DView({0,0}, 5.0f, {800,600});
     const glm::vec3 p = v.WorldToScreen({0, 1, 0});
     CHECK(p.x == Approx(400.0f));
     CHECK(p.y < 300.0f);                      // screen y is DOWN, world +Y is UP
@@ -19,7 +20,7 @@ TEST_CASE("Orthographic matches the old affine mapping in X for the same centre 
     // The retired mapping: screen = world * zoom + offset with zoom = H/(2*halfH), offset = viewport/2 - center*zoom.
     const glm::vec2 center{2.5f, -1.0f}; const float halfH = 4.0f; const glm::uvec2 vp{1024, 512};
     const float zoom = 512.0f / (2.0f * halfH);
-    const auto v = ViewTransform::Orthographic(center, halfH, vp);
+    const auto v = Ortho2DView(center, halfH, vp);
     const glm::vec3 w{7.0f, 3.0f, 0.0f};
     const glm::vec3 s = v.WorldToScreen(w);
     CHECK(s.x == Approx(w.x * zoom + (512.0f - center.x * zoom)));           // X byte-stable
@@ -43,7 +44,7 @@ TEST_CASE("ScreenToRay inverts WorldToScreen in both projections", "[viewtransfo
     for (int mode = 0; mode < 2; ++mode)
     {
         const ViewTransform v = mode == 0
-            ? ViewTransform::Orthographic({0.5f, 0.25f}, 3.0f, {640, 480})
+            ? Ortho2DView({0.5f, 0.25f}, 3.0f, {640, 480})
             : ViewTransform::Perspective({2,3,8}, {0,0,0}, {0,1,0}, 50.0f, {640,480}, 0.1f, 100.0f);
         const glm::vec3 s = v.WorldToScreen(target);
         const Arcane::Ray r = v.ScreenToRay({s.x, s.y});
@@ -59,7 +60,7 @@ TEST_CASE("ScreenToRay inverts WorldToScreen in both projections", "[viewtransfo
 
 TEST_CASE("AsAffine2D exists only for the orthographic view and carries the Y mirror", "[viewtransform]")
 {
-    const auto o = ViewTransform::Orthographic({1,2}, 5.0f, {800,600});
+    const auto o = Ortho2DView({1,2}, 5.0f, {800,600});
     const auto a = o.AsAffine2D();
     REQUIRE(a.has_value());
     CHECK(a->scale.x == Approx(60.0f)); CHECK(a->scale.y == Approx(-60.0f));

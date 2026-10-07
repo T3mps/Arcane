@@ -1,17 +1,23 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/PreferenceScope.hpp>
 #include <Arcane/Config/Config.hpp>
+#include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Assets/Assets.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Json.hpp>
+
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 
@@ -161,6 +167,130 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
     REQUIRE(rt.OpenProject(dir / "B") == true);
     REQUIRE(rt.CurrentProject()->Manifest().name == "Beta");
 
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime teardown: ~Runtime survives a release that throws: a User cvar holding invalid UTF-8 is logged, not std::terminate", "[project][cvar]")
+{
+    // S4-GATE (S2-H follow-up): ~Runtime runs ReleaseProject, whose archive
+    // write dumps JSON; nlohmann::json::dump throws on an invalid-UTF-8 string,
+    // and an exception out of the implicitly noexcept destructor terminated the
+    // host at exit. The release is now guarded: ERROR logged, teardown goes on.
+    const fs::path dir = MakeTempDir("teardown_throw");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s4gate-teardown-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    const Arcane::CVarHandle bad = cvars.Register(Arcane::CVarDesc{ "s4gatetest.text", Arcane::CVarType::String,
+        Arcane::CVarValue::String("ok"), {}, {}, Arcane::CVarFlags::Archive, "test cvar", "s4gate-teardown-test" });
+    REQUIRE_FALSE(bad.IsStale());
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(bad, Arcane::CVarValue::String(std::string("\xFF\xFE not UTF-8")), Arcane::SetBy::User, "editor")
+                == Arcane::SetResult::Applied);
+        cvars.Publish();
+    }   // ~Runtime: the archive write throws inside ReleaseProject
+    CHECK_FALSE(cvars.RungValue("s4gatetest.text", Arcane::SetBy::User).has_value());   // still released: the User layer left with it
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime teardown: a throwing User archive write still archives the EditorUser rung (one guard per rung)", "[project][cvar]")
+{
+    // S6-GATE (S4-GATE deferral): both archive writes shared one try block,
+    // so a User value that cannot be dumped (invalid UTF-8) skipped the
+    // EditorUser write too and lost the editor-wide edits.
+    const fs::path dir = MakeTempDir("teardown_rungs");
+    const fs::path machine = dir / "Machine";
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s6gate-rungs-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    Arcane::CVarDesc text{ "s6gaterungs.text", Arcane::CVarType::String, Arcane::CVarValue::String("ok"), {}, {},
+                           Arcane::CVarFlags::Archive, "test cvar", "s6gate-rungs-test" };
+    const Arcane::CVarHandle bad = cvars.Register(text);
+    Arcane::CVarDesc flag{ "s6gaterungs.flag", Arcane::CVarType::Bool, Arcane::CVarValue::Bool(true), {}, {},
+                           Arcane::CVarFlags::Archive, "test cvar", "s6gate-rungs-test" };
+    flag.audience = Arcane::Audience::Editor;
+    flag.scope = Arcane::SettingScope::PreferencesMachine;
+    const Arcane::CVarHandle machineFlag = cvars.Register(flag);
+    REQUIRE_FALSE(bad.IsStale());
+    REQUIRE_FALSE(machineFlag.IsStale());
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        rt.SetEditorUserConfigDir(machine);
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(bad, Arcane::CVarValue::String(std::string("\xFF\xFE not UTF-8")), Arcane::SetBy::User, "editor")
+                == Arcane::SetResult::Applied);
+        REQUIRE(cvars.Set(machineFlag, Arcane::CVarValue::Bool(false), Arcane::SetBy::EditorUser, "editor")
+                == Arcane::SetResult::Applied);
+        cvars.Publish();
+        rt.CloseProject();   // the User write throws; the EditorUser write must still run
+        const fs::path machineFile = machine / "s6gaterungs.json";
+        REQUIRE(fs::exists(machineFile));
+        std::ifstream in(machineFile, std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        INFO(doc.dump());
+        CHECK(doc.at("flag") == false);
+        CHECK_FALSE(cvars.RungValue("s6gaterungs.text", Arcane::SetBy::User).has_value());   // the User layer still left
+    }
+    cvars.RevertLayer(Arcane::SetBy::EditorUser);
+    cvars.Publish();
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    bool g_throwOnRelease = false;
+    void ThrowingCallback(Arcane::CVarHandle, void*)
+    {
+        if (g_throwOnRelease) { g_throwOnRelease = false; throw std::runtime_error("test callback threw during Publish"); }
+    }
+}
+
+TEST_CASE("Runtime teardown: ~Runtime survives a cvar callback that throws during the release's Publish, and the next Runtime owns its project", "[project][cvar]")
+{
+    // S6-GATE (S4-GATE deferral): ~Runtime's outer guard. ReleaseProject's
+    // Publish fires callbacks for the User values leaving with the project; a
+    // throwing callback used to skip the ownership drop, so the destroyed
+    // Runtime stayed g_projectOwner and the next Runtime layered nothing.
+    const fs::path dir = MakeTempDir("teardown_callback");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { g_throwOnRelease = false; Arcane::CVarRegistry::Get().UnregisterModule("s6gate-callback-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    const Arcane::CVarHandle value = cvars.Register(Arcane::CVarDesc{ "s6gatecb.value", Arcane::CVarType::Int32,
+        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::None, "test cvar", "s6gate-callback-test" });
+    REQUIRE_FALSE(value.IsStale());
+    {
+        const Arcane::CVarModuleScope scope("s6gate-callback-test");
+        cvars.AddCallback(value, &ThrowingCallback, nullptr);
+    }
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(value, Arcane::CVarValue::Int32(2), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+        cvars.Publish();
+        g_throwOnRelease = true;
+    }   // ~Runtime: the User rung reverts, Publish fires the callback, it throws; logged, not std::terminate
+    CHECK_FALSE(g_throwOnRelease);   // the callback did run (and threw)
+    CHECK_FALSE(cvars.RungValue("s6gatecb.value", Arcane::SetBy::User).has_value());
+
+    // The project's own config reaches the next Runtime: it is the owner again.
+    WriteFile(dir / "A" / "Config" / "s6gatecb.json", R"({ "value": 5 })");
+    {
+        Arcane::Runtime next(Arcane::Test::Process());
+        REQUIRE(next.OpenProject(dir / "A"));
+        CHECK(cvars.Get(value)->AsInt32() == 5);
+    }
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
@@ -330,4 +460,225 @@ TEST_CASE("Runtime: re-opening a project replaces its cvar rungs, and a switch o
     CHECK(projectRecords() == 0);
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime EditorUser rung: machine preferences apply with or without a project, sit between Project and User, and archive to their own folder",
+          "[project][settings]")
+{
+    const fs::path dir = MakeTempDir("editor_user");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    const fs::path machine = dir / "machine" / "Config";
+    WriteFile(machine / "s2eu.json", R"({ "theme": 5 })");
+    WriteFile(dir / "A" / "Config" / "s2eu.json", R"({ "theme": 3, "undo": 30 })");
+    const auto readJson = [](const fs::path& p) {
+        std::ifstream in(p, std::ios::binary);
+        return nlohmann::json::parse(in, nullptr, false);
+    };
+
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Cleanup
+    {
+        ~Cleanup()
+        {
+            Arcane::CVarRegistry& r = Arcane::CVarRegistry::Get();
+            r.RevertLayer(Arcane::SetBy::EditorUser);
+            r.UnregisterModule("s2-editoruser-runtime-test");
+            r.Publish();
+        }
+    } cleanup;
+    const auto declare = [&](const char* name, Arcane::SettingScope scope) {
+        Arcane::CVarDesc d;
+        d.name = name;
+        d.type = Arcane::CVarType::Int32;
+        d.defaultValue = Arcane::CVarValue::Int32(1);
+        d.flags = Arcane::CVarFlags::Archive;
+        d.help = "EditorUser runtime probe.";
+        d.module = "s2-editoruser-runtime-test";
+        d.audience = Arcane::Audience::Editor;
+        d.scope = scope;
+        return cvars.Register(d);
+    };
+    const Arcane::CVarHandle theme = declare("s2eu.theme", Arcane::SettingScope::PreferencesMachine);
+    const Arcane::CVarHandle undo = declare("s2eu.undo", Arcane::SettingScope::PreferencesProject);
+    REQUIRE_FALSE(theme.IsStale());
+    REQUIRE_FALSE(undo.IsStale());
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.SetUserCVarArchiving(true);
+    rt.SetEditorUserConfigDir(machine);                         // no project yet: the start page is themed too
+    CHECK(rt.EditorUserConfigDir() == machine);
+    CHECK(cvars.Get(theme)->AsInt32() == 5);
+    CHECK(cvars.Explain("s2eu.theme")->setBy == Arcane::SetBy::EditorUser);
+
+    // A preference edited on the start page must be archived before the first
+    // OpenProject drops and reloads the EditorUser rung from disk.
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(6)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 5);
+    REQUIRE(rt.OpenProject(dir / "A"));
+    CHECK(cvars.Get(theme)->AsInt32() == 6);                    // EditorUser (35) beats the project's 3 (30)
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 6);
+    CHECK(cvars.Get(undo)->AsInt32() == 30);
+
+    REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::ThisProject) == Arcane::SetResult::Applied);
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(9)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    CHECK(cvars.Get(theme)->AsInt32() == 9);
+    REQUIRE(rt.SaveUserCVars());
+    CHECK(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").at("theme") == 9);   // the override is the project's...
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 6);                           // ...not the machine's
+
+    REQUIRE(Arcane::SetPreferenceTarget(cvars, "s2eu.theme", Arcane::PreferenceTarget::AllProjects) == Arcane::SetResult::Applied);
+    REQUIRE(Arcane::EditPreference(cvars, "s2eu.theme", Arcane::CVarValue::Int32(7)) == Arcane::SetResult::Applied);
+    cvars.Publish();
+    REQUIRE(rt.SaveUserCVars());
+    CHECK(readJson(machine / "s2eu.json").at("theme") == 7);
+    CHECK_FALSE(readJson(dir / "A" / "Saved" / "Config" / "s2eu.json").contains("theme"));
+
+    rt.CloseProject();
+    CHECK(cvars.Get(theme)->AsInt32() == 7);                    // machine-wide: survives the project
+    CHECK(cvars.Get(undo)->AsInt32() == 1);                     // the project rungs left with it
+
+    Arcane::Runtime reader(Arcane::Test::Process());            // a host that never sets the folder
+    CHECK(reader.EditorUserConfigDir().empty());
+    CHECK_FALSE(reader.SaveUserCVars());
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    // S2-H item 2: two cvars a project's rungs set -- one from <project>/Config
+    // (the Project rung) and one archived from <project>/Saved/Config (User).
+    struct OwnershipProbe
+    {
+        Arcane::CVarHandle knob, pref;
+        OwnershipProbe()
+        {
+            Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+            Arcane::CVarDesc d;
+            d.type = Arcane::CVarType::Int32;
+            d.defaultValue = Arcane::CVarValue::Int32(1);
+            d.help = "S2-H project ownership probe.";
+            d.module = "s2h-ownership-test";
+            d.name = "s2hown.knob";
+            knob = cvars.Register(d);
+            d.name = "s2hown.pref";
+            d.flags = Arcane::CVarFlags::Archive;
+            pref = cvars.Register(d);
+        }
+        ~OwnershipProbe()
+        {
+            Arcane::CVarRegistry::Get().UnregisterModule("s2h-ownership-test");
+            Arcane::CVarRegistry::Get().Publish();
+        }
+        OwnershipProbe(const OwnershipProbe&) = delete;
+        OwnershipProbe& operator=(const OwnershipProbe&) = delete;
+        static std::int32_t Value(Arcane::CVarHandle h) { return Arcane::CVarRegistry::Get().Get(h)->AsInt32(); }
+        static std::size_t ProjectOwnedRecords(const char* name)
+        {
+            const auto explained = Arcane::CVarRegistry::Get().Explain(name);
+            return static_cast<std::size_t>(std::count_if(explained->history.begin(), explained->history.end(),
+                [](const Arcane::CVarHistoryRecord& h) {
+                    return h.by == Arcane::SetBy::User || h.by == Arcane::SetBy::Project || h.by == Arcane::SetBy::Plugin;
+                }));
+        }
+    };
+}
+
+// S2-H item 2: the project cvar rungs live on the process-global registry, so
+// they belong to ONE Runtime -- the one that configured Paths for its project.
+// A second Runtime may open (and close, or die with) a project of its own
+// without layering over, or releasing, the owner's rungs.
+TEST_CASE("Runtime: a second Runtime's project neither layers over nor releases the owning Runtime's cvar rungs",
+          "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("s2h_owner");
+    REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
+    REQUIRE(Arcane::Project::Create(dir / "Q", "Queue").has_value());
+    WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
+    WriteFile(dir / "P" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 7 })");
+    WriteFile(dir / "Q" / "Config" / "s2hown.json", R"({ "knob": 9 })");
+    WriteFile(dir / "Q" / "Saved" / "Config" / "s2hown.json", R"({ "pref": 8 })");
+    const OwnershipProbe probe;
+    REQUIRE_FALSE(probe.knob.IsStale());
+    REQUIRE_FALSE(probe.pref.IsStale());
+
+    Arcane::Runtime a(Arcane::Test::Process());
+    REQUIRE(a.OpenProject(dir / "P"));
+    REQUIRE(OwnershipProbe::Value(probe.knob) == 5);
+    REQUIRE(OwnershipProbe::Value(probe.pref) == 7);
+    {
+        Arcane::Runtime b(Arcane::Test::Process());
+        REQUIRE(b.OpenProject(dir / "Q"));
+        CHECK(OwnershipProbe::Value(probe.knob) == 5);              // Q did not layer over P
+        CHECK(OwnershipProbe::Value(probe.pref) == 7);
+        b.CloseProject();
+        CHECK(OwnershipProbe::Value(probe.knob) == 5);              // ...and Q's close released nothing of P's
+        CHECK(OwnershipProbe::Value(probe.pref) == 7);
+    }
+    {
+        Arcane::Runtime c(Arcane::Test::Process());
+        REQUIRE(c.OpenProject(dir / "Q"));
+    }                                                                // destroyed with Q open
+    CHECK(OwnershipProbe::Value(probe.knob) == 5);
+    CHECK(OwnershipProbe::Value(probe.pref) == 7);
+    CHECK(Arcane::Paths::Get(Arcane::Paths::Location::ProjectDir).lexically_normal() ==
+          a.CurrentProject()->Root().lexically_normal());            // Paths still follows the owner
+
+    a.CloseProject();                                                // the owner releases...
+    CHECK(OwnershipProbe::Value(probe.knob) == 1);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.knob") == 0);
+    Arcane::Runtime d(Arcane::Test::Process());                      // ...and the next project's Runtime owns
+    REQUIRE(d.OpenProject(dir / "Q"));
+    CHECK(OwnershipProbe::Value(probe.knob) == 9);
+    CHECK(OwnershipProbe::Value(probe.pref) == 8);
+    d.CloseProject();
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// S2-H item 2: ~Runtime goes through CloseProject's release path -- the User
+// layer archived when this host archives, then the User, Project and Plugin
+// rungs dropped -- so the next Runtime starts from the files alone.
+TEST_CASE("Runtime: a Runtime destroyed with its project open releases the project's cvar rungs as CloseProject does",
+          "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("s2h_dtor");
+    REQUIRE(Arcane::Project::Create(dir / "P", "Pea").has_value());
+    WriteFile(dir / "P" / "Config" / "s2hown.json", R"({ "knob": 5 })");
+    const OwnershipProbe probe;
+    REQUIRE_FALSE(probe.knob.IsStale());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        REQUIRE(rt.OpenProject(dir / "P"));
+        REQUIRE(cvars.Set(probe.pref, Arcane::CVarValue::Int32(3), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+        cvars.Publish();
+        REQUIRE(OwnershipProbe::Value(probe.knob) == 5);
+        REQUIRE(OwnershipProbe::Value(probe.pref) == 3);
+    }                                                                // destroyed with P open
+    CHECK(OwnershipProbe::Value(probe.knob) == 1);
+    CHECK(OwnershipProbe::Value(probe.pref) == 1);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.knob") == 0);
+    CHECK(OwnershipProbe::ProjectOwnedRecords("s2hown.pref") == 0);
+    CHECK(Arcane::Paths::Get(Arcane::Paths::Location::ProjectDir).empty());
+    {
+        std::ifstream in(dir / "P" / "Saved" / "Config" / "s2hown.json", std::ios::binary);
+        const auto doc = nlohmann::json::parse(in, nullptr, false);
+        REQUIRE(doc.is_object());
+        CHECK(doc.value("pref", 0) == 3);                            // archived on the way out
+    }
+
+    Arcane::Runtime next(Arcane::Test::Process());
+    REQUIRE(next.OpenProject(dir / "P"));
+    CHECK(OwnershipProbe::Value(probe.knob) == 5);
+    CHECK(OwnershipProbe::Value(probe.pref) == 3);                   // read back from the archive
+    next.CloseProject();
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }

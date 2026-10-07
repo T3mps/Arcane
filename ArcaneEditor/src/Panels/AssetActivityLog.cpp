@@ -1,26 +1,40 @@
 #include <Panels/AssetActivityLog.hpp>
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.activityLogCapacity (settings S6-38)
 
+#include <Arcane/Config/Settings.hpp>
+
+#include <algorithm>
 #include <utility>
 
 namespace Arcane::Editor
 {
+    AssetActivityLog::AssetActivityLog()
+        : AssetActivityLog(static_cast<std::size_t>(std::max(Arcane::Settings<AssetBrowserSettings>().activityLogCapacity, 1)))
+    {
+    }
+
+    AssetActivityLog::AssetActivityLog(std::size_t capacity)
+        : m_capacity(std::max<std::size_t>(capacity, 1))
+    {
+    }
+
     void AssetActivityLog::Push(AssetActivityEntry e)
     {
         // Below capacity: grow. m_next tracks the size in this regime (it
-        // is only ever assigned size() % kCapacity), which is exactly what
+        // is only ever assigned size() % m_capacity), which is exactly what
         // ForEachNewestFirst's walk-backward-from-m_next-1 needs once the
         // ring later fills -- see that function for why the same formula
         // covers both regimes.
-        if (m_ring.size() < kCapacity)
+        if (m_ring.size() < m_capacity)
         {
             m_ring.push_back(std::move(e));
-            m_next = m_ring.size() % kCapacity;
+            m_next = m_ring.size() % m_capacity;
             return;
         }
 
         // At capacity: overwrite the oldest slot (m_next) and advance.
         m_ring[m_next] = std::move(e);
-        m_next = (m_next + 1) % kCapacity;
+        m_next = (m_next + 1) % m_capacity;
     }
 
     void AssetActivityLog::ForEachNewestFirst(

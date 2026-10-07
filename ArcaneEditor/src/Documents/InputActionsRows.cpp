@@ -3,6 +3,7 @@
 #include "Documents/InputActionsJson.hpp"
 
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Input/InputSettings.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -48,6 +49,7 @@ namespace Arcane::Editor
     std::string InteractionText(const nlohmann::json& interactions)
     {
         if (!interactions.is_array()) return {};
+        const InputSettings& inputSettings = ::Arcane::Settings<InputSettings>();   // the evaluator's own defaults
         std::string out;
         for (const auto& entry : interactions)
         {
@@ -55,7 +57,7 @@ namespace Arcane::Editor
             const std::string token = entry.get<std::string>();
             const std::size_t paren = token.find('(');
             const std::string name = token.substr(0, paren);
-            float seconds = name == "hold" ? kDefaultHoldSeconds : name == "tap" ? kDefaultTapSeconds : 0.0f;   // the evaluator's own defaults (InputActions.hpp)
+            float seconds = name == "hold" ? inputSettings.holdSeconds : name == "tap" ? inputSettings.tapSeconds : 0.0f;
             if (paren != std::string::npos)
                 if (const std::size_t d = token.find("duration=", paren); d != std::string::npos)
                 {

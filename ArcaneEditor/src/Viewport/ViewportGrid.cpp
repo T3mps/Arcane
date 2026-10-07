@@ -3,12 +3,16 @@
 
 #include "Viewport/ViewportGrid.hpp"
 
+#include "Settings/EditorGridSettings.hpp"
+
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -17,7 +21,9 @@ namespace Arcane::Editor
         // The decade range PlanGrid2D searches. Nothing an editor viewport can
         // show falls outside 1e-9 .. 1e12 m; the bounds just keep the scan
         // finite for an absurd ppm (count < 3 only at those extremes).
+        ARC_CONSTANT("math tolerance: the float-precision bounds of the decade LOD")
         constexpr int kMinDecade = -9;
+        ARC_CONSTANT("math tolerance: the float-precision bounds of the decade LOD")
         constexpr int kMaxDecade = 12;
 
         // 10^k as the nearest float, from EXACT integer powers: a positive
@@ -31,16 +37,11 @@ namespace Arcane::Editor
             return k < 0 ? 1.0f / p : p;
         }
 
-        // The crossfade: 0 at kGridFadeInPx, 1 at kGridFadeFullPx, clamped.
-        [[nodiscard]] float Ramp(float screenSpacingPx) noexcept
+        // The crossfade: 0 at fade-in, 1 at full, clamped (both in screen px).
+        [[nodiscard]] float Ramp(float screenSpacingPx, float fadeInPx, float fadeFullPx) noexcept
         {
-            return std::clamp((screenSpacingPx - kGridFadeInPx) / (kGridFadeFullPx - kGridFadeInPx), 0.0f, 1.0f);
+            return std::clamp((screenSpacingPx - fadeInPx) / (fadeFullPx - fadeInPx), 0.0f, 1.0f);
         }
-
-        // Too many lines for one level is a plan the viewport could never have
-        // produced (a level at >= 8 px spacing has at most width / 8 lines):
-        // the cap only guards a hand-built plan against a runaway loop.
-        constexpr std::int64_t kMaxLinesPerAxis = 1 << 14;
 
         // The inclusive index range [i0, i1] of the multiples of `spacing`
         // inside [lo, hi]. A multiple that sits ON the edge counts (the edge
@@ -80,6 +81,13 @@ namespace Arcane::Editor
         if (!(pixelsPerMetre > 0.0f) || !std::isfinite(pixelsPerMetre))
             return plan;   // degenerate: nothing
 
+        const EditorGridSettings& s = Arcane::Settings<EditorGridSettings>();
+        // editor.viewport.grid.fade{In,Full}Px (S6-45): screen px, not UI
+        // chrome, so not Ui::Px. The window is at least 1 px wide, so the
+        // ramp never divides by zero whatever the two settings hold.
+        const float fadeInPx   = s.fadeInPx;
+        const float fadeFullPx = std::max(s.fadeFullPx, s.fadeInPx + 1.0f);
+
         // The finest decade whose screen spacing reaches fade-in, then the two
         // above it. Searching upward from the smallest decade keeps this a
         // straight scan; log10 would do the same in one step but rounds at
@@ -88,7 +96,7 @@ namespace Arcane::Editor
         for (int k = kMinDecade; k <= kMaxDecade; ++k)
         {
             const float spacing = Decade(k);
-            if (spacing * pixelsPerMetre >= kGridFadeInPx)
+            if (spacing * pixelsPerMetre >= fadeInPx)
             {
                 finest = k;
                 break;
@@ -104,7 +112,7 @@ namespace Arcane::Editor
         // 0.55 with the same t. The decade above THAT was already the major
         // before the crossing and stays at 0.55 flat, so no line's strength
         // moves discontinuously when a finer level qualifies.
-        const float tFinest = Ramp(Decade(finest) * pixelsPerMetre);
+        const float tFinest = Ramp(Decade(finest) * pixelsPerMetre, fadeInPx, fadeFullPx);
 
         for (int i = 0; i < 3 && finest + i <= kMaxDecade; ++i)
         {
@@ -112,20 +120,29 @@ namespace Arcane::Editor
             level.spacingMetres = Decade(finest + i);
             switch (i)
             {
-                case 0:  level.alpha = tFinest * kGridMinorAlpha; break;                                       // the minor, fading in
-                case 1:  level.alpha = kGridMinorAlpha + tFinest * (kGridMajorAlpha - kGridMinorAlpha); break;  // the major, promoted
-                default: level.alpha = kGridMajorAlpha; break;                                                 // the decade above the major
+                case 0:  level.alpha = tFinest * s.minorAlpha; break;                                  // the minor, fading in
+                case 1:  level.alpha = s.minorAlpha + tFinest * (s.majorAlpha - s.minorAlpha); break;  // the major, promoted
+                default: level.alpha = s.majorAlpha; break;                                            // the decade above the major
             }
             plan.count = i + 1;
         }
         return plan;
     }
 
-    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan)
+    void DrawGrid2D(Arcane::Batcher2D& b, const Arcane::ViewTransform& view, const Grid2DPlan& plan, const Grid2DAxisColors& axes)
     {
         if (!view.IsOrthographic()) return;   // the 3D grid is Task 10's GridNode
         if (view.viewport.x == 0u || view.viewport.y == 0u) return;
         if (plan.count <= 0) return;
+
+        // Too many lines for one level is a plan the viewport could never have
+        // produced (a level at >= 8 px spacing has at most width / 8 lines):
+        // the cap (editor.viewport.grid.maxLinesPerAxis) only guards a
+        // hand-built plan against a runaway loop.
+        const EditorGridSettings& s = Arcane::Settings<EditorGridSettings>();
+        const glm::vec3 lineRgb(s.lineColor.r, s.lineColor.g, s.lineColor.b);
+        const float lineThicknessPx = s.lineThickness;
+        const std::int64_t maxLinesPerAxis = static_cast<std::int64_t>(s.maxLinesPerAxis);
 
         // The visible world rect: the four viewport corners unprojected onto
         // the near plane (parallel rays, so the near-plane point IS the
@@ -154,7 +171,7 @@ namespace Arcane::Editor
             const glm::vec3 sa = view.WorldToScreen(glm::vec3(a, 0.0f));
             const glm::vec3 sb = view.WorldToScreen(glm::vec3(wb, 0.0f));
             if (!Finite2(sa) || !Finite2(sb)) return;
-            b.Line(glm::vec2(sa), glm::vec2(sb), kGridLineThicknessPx, colour);
+            b.Line(glm::vec2(sa), glm::vec2(sb), lineThicknessPx, colour);
         };
 
         b.SetLayer(0, 0);   // the BOTTOM: sprites paint over the grid
@@ -179,12 +196,12 @@ namespace Arcane::Editor
             // 0.35 -> 0.55, and the dropped decade's lines never move). Once
             // the promotion completes the two strengths coincide.
             const bool hasCoarser    = li + 1 < count;
-            const glm::vec4 colour   = glm::vec4(kGridLineRgb, level.alpha);
-            const glm::vec4 heldMajor = glm::vec4(kGridLineRgb, std::max(level.alpha, kGridMajorAlpha));
+            const glm::vec4 colour   = glm::vec4(lineRgb, level.alpha);
+            const glm::vec4 heldMajor = glm::vec4(lineRgb, std::max(level.alpha, s.majorAlpha));
 
             const IndexRange xs = MultiplesInside(minX, maxX, spacing);
             const IndexRange ys = MultiplesInside(minY, maxY, spacing);
-            if (xs.last - xs.first > kMaxLinesPerAxis || ys.last - ys.first > kMaxLinesPerAxis) continue;
+            if (xs.last - xs.first > maxLinesPerAxis || ys.last - ys.first > maxLinesPerAxis) continue;
 
             for (std::int64_t i = xs.first; i <= xs.last; ++i)
             {
@@ -209,9 +226,9 @@ namespace Arcane::Editor
         // (inclusive, same edge rule as the level lines).
         const float axisEps = 1e-6f * std::max(maxX - minX, maxY - minY);
         if (minY - axisEps <= 0.0f && 0.0f <= maxY + axisEps)
-            line({ minX, 0.0f }, { maxX, 0.0f }, kGridAxisXColor);
+            line({ minX, 0.0f }, { maxX, 0.0f }, axes.x);
         if (minX - axisEps <= 0.0f && 0.0f <= maxX + axisEps)
-            line({ 0.0f, minY }, { 0.0f, maxY }, kGridAxisYColor);
+            line({ 0.0f, minY }, { 0.0f, maxY }, axes.y);
 
         b.SetLayer(0, 0);   // left where Begin() put it, for the submitter after us
     }

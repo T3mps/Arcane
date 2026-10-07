@@ -485,7 +485,7 @@ TEST_CASE("golden: the harvester's own 64px renders of five ReferenceProject sub
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");   // staged beside this exe by the postbuild
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(0.0));
+    REQUIRE(compiler.InitializeWithDebounce(0.0));
     REQUIRE(compiler.IsAvailable());
 
     // ---- THE VEHICLE ----------------------------------------------------

@@ -2,12 +2,13 @@
 #include "Panels/AssetPanelCommon.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/TextureImportSettings.hpp"
+#include "Settings/InspectorSettings.hpp"   // editor.inspector.assetThumb* (settings S6-37)
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
-#include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Project/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
 #include <Arcane/Project/Project.hpp>
 #include <imgui.h>
@@ -20,6 +21,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
@@ -30,29 +33,10 @@ namespace Arcane::Editor
             return key.empty() ? std::nullopt : Arcane::Guid::FromString(key);
         }
 
-        // The page's fixed geometry, carried over from the Asset Browser's
-        // old preview pane (inspector filters s6: the pane and its constants
-        // are gone; these are the only copy). The thumb is at most 140px;
-        // how far it shrinks in a short Inspector is the two cvars below.
-        constexpr float kAssetPageThumbSize = 140.0f;
-
-        ARC_CVAR(cvar_assetThumbMinPx, "editor.inspector.assetThumbMinPx", std::int32_t, 64,
-                 .min = 32, .max = 140, .flags = ::Arcane::CVarFlags::Archive,
-                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Smallest the asset page's thumbnail shrinks to in a short Inspector");
-        ARC_CVAR(cvar_assetThumbHeightFraction, "editor.inspector.assetThumbHeightFraction", float, 0.30f,
-                 .min = 0.1f, .max = 0.6f, .flags = ::Arcane::CVarFlags::Archive,
-                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Share of the Inspector's height the asset page's thumbnail may take");
-
-        float ThumbFloor()
-        {
-            return static_cast<float>(cvar_assetThumbMinPx.Get());
-        }
-        float ThumbHeightFraction()
-        {
-            return cvar_assetThumbHeightFraction.Get();
-        }
+        // The page's thumbnail geometry (carried over from the Asset
+        // Browser's old preview pane, inspector filters s6) is
+        // editor.inspector.assetThumbMaxPx / assetThumbMinPx /
+        // assetThumbHeightFraction (InspectorSettings, settings S6-37).
 
         // Compact side-by-side header (spec s6/s17): thumb left, name/pills/
         // path/guid/cook stacked beside it, instead of thumb-above-metadata.
@@ -63,7 +47,9 @@ namespace Arcane::Editor
         // kPreviewCompactTextColumnMin is the floor the thumb yields to when
         // the page is between this breakpoint and comfortably wide -- the
         // "~110px text column" figure from the same directive.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kPreviewCompactHeaderMinWidth = 250.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kPreviewCompactTextColumnMin  = 110.0f;
 
         // Ruling 5 (2026-09-07): the path row shows the CONTENT-RELATIVE
@@ -118,12 +104,17 @@ namespace Arcane::Editor
     }
 
     float AssetPageThumbSize(bool compact, float availX, float spacing, float innerHeight,
-                             float heightFraction, float floorPx) noexcept
+                             float heightFraction, float floorPx, float maxPx) noexcept
     {
-        const float byHeight = std::clamp(heightFraction * innerHeight, floorPx, kAssetPageThumbSize);
-        const float byWidth = compact ? std::max(0.0f, availX - spacing - kPreviewCompactTextColumnMin)
+        const float byHeight = std::clamp(heightFraction * innerHeight, std::min(floorPx, maxPx), maxPx);
+        const float byWidth = compact ? std::max(0.0f, availX - spacing - Ui::Px(kPreviewCompactTextColumnMin))
                                       : std::max(0.0f, availX);
-        return std::min({ kAssetPageThumbSize, byWidth, byHeight });
+        return std::min({ maxPx, byWidth, byHeight });
+    }
+
+    float AssetPageThumbFloor(std::int32_t minPx, float maxPx) noexcept
+    {
+        return std::min(static_cast<float>(minPx), maxPx);
     }
 
     std::string AssetInspectorSource::SelectionKey() const
@@ -340,14 +331,17 @@ namespace Arcane::Editor
         // Side-by-side header at/above kPreviewCompactHeaderMinWidth, the
         // stacked form (thumb above, metadata below) below it -- measured
         // against the page's own content width. The thumb follows the s5.6
-        // formula (AssetPageThumbSize): never above 140, never wider than the
-        // form allows, and a share of the Inspector's height clamped up to the
-        // cvar floor.
+        // formula (AssetPageThumbSize): never above the maximum (140), never
+        // wider than the form allows, and a share of the Inspector's height
+        // clamped up to the floor.
+        const InspectorSettings& inspector = Arcane::Settings<InspectorSettings>();
+        const float thumbMax = inspector.assetThumbMaxPx;
+        const float thumbFloor = AssetPageThumbFloor(inspector.assetThumbMinPx, thumbMax);
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
         const float avail = ImGui::GetContentRegionAvail().x;
-        const bool compactHeader = avail >= kPreviewCompactHeaderMinWidth;
+        const bool compactHeader = avail >= Ui::Px(kPreviewCompactHeaderMinWidth);
         float thumbSize = AssetPageThumbSize(compactHeader, avail, spacing, innerHeight,
-                                             ThumbHeightFraction(), ThumbFloor());
+                                             inspector.assetThumbHeightFraction, thumbFloor, thumbMax);
         if (compactHeader)
         {
             // The compact header row is never taller than its text column (T3
@@ -360,7 +354,7 @@ namespace Arcane::Editor
             ImGuiStorage* storage = ImGui::GetStateStorage();
             const ImGuiID metaHeightKey = ImGui::GetID("##previewMetaHeight");
             if (const float metaHeight = storage->GetFloat(metaHeightKey, 0.0f); metaHeight > 0.0f)
-                thumbSize = std::min(thumbSize, std::max(ThumbFloor(), metaHeight));
+                thumbSize = std::min(thumbSize, std::max(thumbFloor, metaHeight));
             ImGui::BeginGroup();
             drawThumb(thumbSize);
             ImGui::EndGroup();

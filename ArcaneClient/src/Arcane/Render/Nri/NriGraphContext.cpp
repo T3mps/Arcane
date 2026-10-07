@@ -8,6 +8,7 @@
 // nri::Message::ERROR and <windows.h> (via Arcane/Base/Log.hpp -> spdlog)
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRISwapChain.h>
 
 #include "NriGraphContext.hpp"
@@ -17,12 +18,14 @@
 #include <Arcane/Base/Diagnostics.hpp>              // Heartbeat / GpuHeartbeatRefresh -- the offscreen pacing wait
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>       // RenderDeviceDesc (and GraphicsBackend + ToString behind it)
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderPostSettings -- the device-less post clamp
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // MakeRenderDeviceDesc -- render.debug.*, render.uploadRingBytesPerFrame, the graph formats
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>     // the crash chain, armed by whichever device exists
 #include <Arcane/Render/RenderErrorLatch.hpp>   // the tagged "nri-graph" error seam
 #include <Arcane/Render/PostChainCache.hpp>         // PostChainDesc -- the frame's post-chain shape
 #include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Render/ShaderPaths.hpp>            // ShaderPaths::ResolveFlavorDir
-#include <Arcane/Render/FramePacing.hpp>              // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>              // FramesInFlight(), LatchFramesInFlight()
 
 #include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
 
@@ -39,6 +42,19 @@
 
 namespace Arcane
 {
+    // render.canvasFormat / render.depthFormat, latched on first use (the
+    // header's contract: one format per process, Restart). The latch itself,
+    // and its too-early diagnostic, live in RenderDeviceSettings.cpp.
+    nri::Format GraphCanvasFormat() noexcept
+    {
+        return ToNriFormat(LatchedCanvasFormat());
+    }
+
+    nri::Format GraphDepthFormat() noexcept
+    {
+        return ToNriFormat(LatchedDepthFormat());
+    }
+
     namespace
     {
         // The tagged seam RenderGraphExec.cpp reports through -- the VEHICLE's
@@ -49,15 +65,6 @@ namespace Arcane
         {
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
-
-        // Per-frame-slot upload arena -- the batch node's vertex + index
-        // streams (Task 8), the material/globals constant buffers (Task 9).
-        // Init()'d at Create so a mapping failure is found at boot rather than
-        // inside the first draw. A starting point, not a measurement:
-        // NriUploadRing::HighWater() is the number to size it from, and it is
-        // logged at shutdown. 4 MiB is ~27k quads of batch geometry
-        // (128 B of vertices + 24 B of indices each).
-        constexpr std::uint64_t kUploadRingBytesPerFrame = 4ull * 1024 * 1024;
 
         // Where the offline shader artifacts live, relative to the
         // executable. Resolved through ShaderPaths::ResolveFlavorDir, so a
@@ -94,7 +101,9 @@ namespace Arcane
         // owed: a shared version would have to be called from
         // NriSwapChain.cpp too, which is the host-window present path.
         // ---------------------------------------------------------------
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, matching NriSwapChain.cpp
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kFencePollWindow{ 15 };  // ...and its 15s window
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence,
@@ -119,6 +128,24 @@ namespace Arcane
 
             core.Wait(*fence, value);
         }
+    }
+
+    // FIRST, before any per-frame resource: render.framesInFlight (Restart)
+    // becomes FramesInFlight() for the rest of the process, so the ring,
+    // the command-buffer slots, the node pools and the swapchain all agree.
+    //
+    // render.uploadRingBytesPerFrame (Restart) is this context's per-frame-
+    // slot upload arena -- the batch node's vertex + index streams (Task 8),
+    // the HUD's geometry and the pick pass's ids. Init()'d at Create so a
+    // mapping failure is found at boot rather than inside the first draw. A
+    // starting point, not a measurement: NriUploadRing::HighWater() is the
+    // number to size it from, and it is logged at shutdown. The 4 MiB default
+    // is ~27k quads of batch geometry (128 B of vertices + 24 B of indices
+    // each).
+    NriGraphContext::NriGraphContext()
+        : m_uploadRingBytes(Settings<RenderSettings>().uploadRingBytesPerFrame)
+    {
+        LatchFramesInFlight();
     }
 
     std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config, Window& window)
@@ -150,14 +177,14 @@ namespace Arcane
         }
 
         // -------------------------------------------------------------
-        // The creation half, with validation forced ON in Debug -- every
-        // channel a validation message can arrive through ends at
+        // The creation half, its validation from render.debug.* (settings
+        // arc S6-16; all three on by default in Debug builds, off otherwise)
+        // -- every channel a validation message can arrive through ends at
         // RenderErrorCount, which is what makes this run's exit code mean
         // something (VK core + sync validation -> DeviceCreationVulkan.cpp's
         // VkDebugCallback; the D3D12 debug layer -> DeviceCreationD3D12.cpp's
-        // ID3D12InfoQueue1 callback, which is why enableD3D12DebugLayer is
-        // forced here since it defaults FALSE for the Nahimic-OSD fail-fast
-        // hazard; NRI's own validation layer -> MakeNriCallbacks).
+        // ID3D12InfoQueue1 callback; NRI's own validation layer ->
+        // MakeNriCallbacks).
         //
         // ALL THREE ARE LIVE SINCE TASK 6, and that is the change: this is now
         // the FIRST graphics device the process creates, so
@@ -170,18 +197,10 @@ namespace Arcane
         // implemented by the servicing d3d12SDKLayers.dll is a separate
         // question that same file logs the answer to.
         // -------------------------------------------------------------
-        RenderDeviceDesc dd;
+        // config.backend, not render.backend: the host adopted the setting
+        // at boot, and GpuContext may have fallen Vulkan back to D3D12.
+        RenderDeviceDesc dd = MakeRenderDeviceDesc();
         dd.backend = config.backend;
-#if defined(ARC_BUILD_DEBUG)
-        dd.enableValidation      = true;
-        dd.enableD3D12DebugLayer = true;
-        dd.enableSyncValidation  = true;   // VK-only; see RenderDeviceDesc.hpp
-#else
-        // Release/Dist: leave RenderDeviceDesc's own defaults (validation off)
-        // rather than forcing debug layers into an optimized build. A Release
-        // graph run is a performance/behaviour check; its exit code still
-        // fails on any error the NRI callbacks report.
-#endif
 
         // NO two-VkDevice WARN here any more, and its absence is the point:
         // NriDevice.hpp's "one live Vulkan device per process" rule held only
@@ -259,7 +278,7 @@ namespace Arcane
 
         ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
                  m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
-                 kUploadRingBytesPerFrame / 1024);
+                 m_uploadRingBytes / 1024);
         return true;
     }
 
@@ -335,7 +354,7 @@ namespace Arcane
 
         ARC_INFO("[nri-graph] offscreen ready: {}x{} format={} ring={}KiB/slot, pacing {} frames deep",
                  m_offscreenWidth, m_offscreenHeight, (int)m_format,
-                 kUploadRingBytesPerFrame / 1024, kSwapchainFramesInFlight);
+                 m_uploadRingBytes / 1024, FramesInFlight());
         return true;
     }
 
@@ -392,10 +411,10 @@ namespace Arcane
 
         // The upload ring is [gpu]-only by construction (NONE's MapBuffer
         // returns null), so this is its first real Init in the tree.
-        if (!m_ring.Init(*m_device, kUploadRingBytesPerFrame))
+        if (!m_ring.Init(*m_device, m_uploadRingBytes))
         {
-            ARC_ERROR("[nri-graph] upload-ring init failed ({} bytes x {} slots)",
-                      kUploadRingBytesPerFrame, kSwapchainFramesInFlight);
+            ARC_ERROR("[nri-graph] upload-ring init failed ({} bytes x {} slots; render.uploadRingBytesPerFrame)",
+                      m_uploadRingBytes, FramesInFlight());
             return false;
         }
 
@@ -536,6 +555,11 @@ namespace Arcane
 
         if (m_pickArmed || nodes.pickOutline)
         {
+            // The Restart pair (render.outline.maxThicknessPx / .supersample)
+            // latches HERE, at node creation, for the process: the JFA
+            // schedule and the id target's extent never change under a graph.
+            (void)OutlineMaxThicknessPx();
+            (void)PickSupersample();
             m_pick = PickNode::Create(*this);
             if (!m_pick)
                 return false;   // already logged
@@ -554,9 +578,9 @@ namespace Arcane
                      // be worse than no log line. Thickness-derived and
                      // therefore surface-independent (D3c), which is exactly why
                      // it can be stated once here at boot.
-                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+                     std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                               OutlineNode::kMaxJfaSteps),
-                     kSwapchainFramesInFlight);
+                     FramesInFlight());
         }
         else if (nodes.pickOutline)
         {
@@ -564,9 +588,9 @@ namespace Arcane
                      "carries the entity-id pass, its readback and up to a {}-step JFA outline "
                      "whenever it asks; a readback lands {} rendered frames after the frame that "
                      "armed it",
-                     std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+                     std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                               OutlineNode::kMaxJfaSteps),
-                     kSwapchainFramesInFlight);
+                     FramesInFlight());
         }
 
         return true;
@@ -902,10 +926,10 @@ namespace Arcane
         // remembered; now there is no shared structure for them to sit in.
         graves.Drain();
 
-        // The number to size kUploadRingBytesPerFrame from once a real frame
+        // The number to size render.uploadRingBytesPerFrame from once a real frame
         // has run -- the peak across every slot, not slot 0's.
         std::uint64_t ringPeak = 0;
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
             ringPeak = ringPeak < m_ring.HighWater(slot) ? m_ring.HighWater(slot) : ringPeak;
         // Two lines rather than one composed one, because the host-window
         // wording is what a desk log is read against (D3b) and must not move.
@@ -913,12 +937,12 @@ namespace Arcane
         {
             ARC_INFO("[nri-graph] offscreen graph render half shut down after {} rendered frame(s); "
                      "upload-ring peak {} of {} bytes per slot", m_frameIndex, ringPeak,
-                     kUploadRingBytesPerFrame);
+                     m_uploadRingBytes);
         }
         else
         {
             ARC_INFO("[nri-graph] graph render half shut down after {} presented frame(s); upload-ring "
-                     "peak {} of {} bytes per slot", m_frameIndex, ringPeak, kUploadRingBytesPerFrame);
+                     "peak {} of {} bytes per slot", m_frameIndex, ringPeak, m_uploadRingBytes);
         }
         // NOTHING releases the window here, and nothing may start to: it is the
         // host's (THE BORROWED WINDOW). Every NRI object that named its HWND or
@@ -1279,11 +1303,11 @@ namespace Arcane
         const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {
-            // kGraphCanvasFormat is passed EXPLICITLY because it is the format
+            // GraphCanvasFormat() is passed EXPLICITLY because it is the format
             // AddBatch2DNode minted `handles.canvas` with, a few lines up.
             // AddMeshNode cannot read a handle's format back and must not
             // assume one -- see its header for what a wrong one costs.
-            handles.depth = AddMeshNode(graph, context, handles.canvas, kGraphCanvasFormat,
+            handles.depth = AddMeshNode(graph, context, handles.canvas, GraphCanvasFormat(),
                                          *shape.mesh, shape.canvasWidth, shape.canvasHeight);
         }
 
@@ -1303,7 +1327,7 @@ namespace Arcane
         // CreateTexture("depth") calls. A frame carrying a mesh scene gets its
         // depth target from MeshNode and never reaches here.
         //
-        // kGraphDepthFormat, canvas-sized, so it can pair with `handles.canvas`
+        // GraphDepthFormat(), canvas-sized, so it can pair with `handles.canvas`
         // as a Raster node's colour + depth attachments the moment something
         // wants to. Nothing on THIS branch is that something: no Read(), no
         // Write(), no SetDepthAttachment().
@@ -1331,7 +1355,7 @@ namespace Arcane
                 [&handles, &shape](RenderGraphBuilder& builder)
                 {
                     RgTextureDesc desc;
-                    desc.format       = kGraphDepthFormat;
+                    desc.format       = GraphDepthFormat();
                     desc.width        = shape.canvasWidth;
                     desc.height       = shape.canvasHeight;
                     desc.depthStencil = true;
@@ -1367,7 +1391,7 @@ namespace Arcane
         // ---------------------------------------------------------------
         if (shape.grid)
         {
-            AddGridNode(graph, context, handles.canvas, kGraphCanvasFormat,
+            AddGridNode(graph, context, handles.canvas, GraphCanvasFormat(),
                         wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
                         shape.canvasWidth, shape.canvasHeight);
         }
@@ -1393,14 +1417,15 @@ namespace Arcane
             // returns 0 for a chain it cannot honour -- which this then
             // declares nothing for, rather than declaring passes whose exec fn
             // would leave their targets holding undefined pool contents.
-            // Device-lessly it is the wiring alone, clamped to the same cap.
+            // Device-lessly it is the wiring alone, clamped to the cap a node
+            // would latch (render.post.maxPasses).
             std::uint32_t passCount = (std::uint32_t)std::min<std::size_t>(
-                shape.post->passes.size(), PostChainNode::kMaxPasses);
+                shape.post->passes.size(), Settings<RenderPostSettings>().maxPasses);
             if (context)
             {
                 PostChainNode* node = context->PostChain();
                 passCount = node ? node->PrepareChain(*shape.post, context->CurrentGlobals(),
-                                                       kGraphCanvasFormat)
+                                                       GraphCanvasFormat())
                                  : 0;
             }
             if (passCount > 0)
@@ -1475,7 +1500,7 @@ namespace Arcane
             handles.pickReadback = pick.readback;
             handles.outlineField = AddOutlineNodes(graph, context, pick.ids,
                                                     shape.canvasWidth, shape.canvasHeight);
-            handles.jfaStepCount = std::min(OutlineJfaStepCount(kOutlineMaxThicknessPx),
+            handles.jfaStepCount = std::min(OutlineJfaStepCount(OutlineMaxThicknessPx()),
                                              OutlineNode::kMaxJfaSteps);
             AddOutlineCompositeNode(graph, context, handles.outlineField, handles.backbuffer,
                                      shape.canvasWidth, shape.canvasHeight);
@@ -1770,7 +1795,7 @@ namespace Arcane
         // NriSwapChain's own frame counter -- which is what makes the pacing
         // wait inside AcquireNextTexture the proof that this slot is safe to
         // reset (RgExecuteDesc::frameSlot's caller contract).
-        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % FramesInFlight());
         m_ring.BeginFrame(slot);   // the caller owes this before Execute()
 
         const RgExecuteDesc desc{ *m_device, m_graves, m_swap.get(), m_ring, m_pipelines, slot };
@@ -1854,21 +1879,22 @@ namespace Arcane
         // On the present path NriSwapChain::AcquireNextTexture holds the wait
         // that makes this frame's slot safe to reuse -- and it is not
         // decoration: the frame is about to reset frame slot
-        // `m_frameIndex % kSwapchainFramesInFlight`'s command allocator
+        // `m_frameIndex % FramesInFlight()`'s command allocator
         // (RgExecuteDesc::frameSlot's caller contract), reset that slot's
         // upload-ring arena, and rewrite that slot's descriptor sets in the
         // tonemap, the post chain and the HUD. Every one of those is a write to
-        // memory the GPU may still be reading kSwapchainFramesInFlight frames
+        // memory the GPU may still be reading FramesInFlight() frames
         // back. Nothing acquires here, so the wait has to be ours.
         //
         // Same shape as the swapchain's, deliberately: ONE timeline fence,
         // 1-based signal values, wait for `m_frameIndex - depth + 1`, and no
         // call at all for the first `depth` frames (nothing has been submitted
         // to wait on, and value 0 is what an unsignalled fence already reads).
-        if (m_frameIndex >= kSwapchainFramesInFlight)
+        const std::uint32_t framesInFlight = FramesInFlight();
+        if (m_frameIndex >= framesInFlight)
         {
             PollingWaitForTimelineFence(m_device->Core(), m_offscreenFence,
-                                        m_frameIndex - kSwapchainFramesInFlight + 1);
+                                        m_frameIndex - framesInFlight + 1);
         }
 
         FrameDesc effective = frame;
@@ -1908,7 +1934,7 @@ namespace Arcane
             return FrameOutcome::Failed;
         }
 
-        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+        const std::uint32_t slot = (std::uint32_t)(m_frameIndex % FramesInFlight());
         m_ring.BeginFrame(slot);   // the caller owes this before Execute()
 
         // THE ONE LINE THAT DIFFERS FROM THE PRESENT PATH'S EXECUTE: no
@@ -2026,7 +2052,7 @@ namespace Arcane
     std::optional<std::uint32_t> NriGraphContext::ProbeId() const noexcept
     {
         // No node, an out-of-range coordinate, or no readback landed yet (the
-        // first kSwapchainFramesInFlight frames of a probe run) all report
+        // first FramesInFlight() frames of a probe run) all report
         // NOTHING rather than 0 -- 0 is a real answer (background) and the
         // caller must be able to tell the two apart.
         if (!m_pick || m_probeOutOfRange)

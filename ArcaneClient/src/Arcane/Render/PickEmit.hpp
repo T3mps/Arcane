@@ -123,7 +123,7 @@ namespace Arcane
     // The ENTITY-ONLY twin of PickEntityForId, same contract, for a consumer
     // that RETAINED the id<->entity table rather than the drawables it came
     // from. That is not a convenience: the NRI graph's pick readback lands
-    // kSwapchainFramesInFlight frames after the id pass that produced it, so
+    // FramesInFlight() frames after the id pass that produced it, so
     // the editor's deferred click-pick has to hold the table from the frame
     // that RASTERISED the click -- by which time the live drawables vector has
     // been rebuilt two or more times. Copying entities rather than whole
@@ -171,10 +171,11 @@ namespace Arcane
     // That makes this factor PIXEL-VISIBLE, not a quality knob: at ss=1 every
     // seed sits at its pixel centre, at ss=2 it sits up to a quarter-pixel off
     // it, and the composite's AA ramp is only 1 px wide -- so the two produce
-    // visibly different outline edges. It is a named constant, not a literal
-    // at each site, for exactly that reason: two copies would drift and the
-    // symptom would be a subtly different outline.
-    inline constexpr uint32_t kPickSupersample = 2;
+    // visibly different outline edges. It is ONE read, not a literal at each
+    // site, for exactly that reason: two copies would drift and the symptom
+    // would be a subtly different outline. The factor is the Restart setting
+    // render.outline.supersample (default 2), read through the process latch
+    // Arcane::PickSupersample() in RenderOutlineSettings.hpp (settings S6-21).
 
     // =====================================================================
     // THE ID PASS'S 2D GEOMETRY -- ONE emitter.

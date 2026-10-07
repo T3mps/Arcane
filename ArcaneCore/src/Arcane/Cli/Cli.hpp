@@ -74,6 +74,10 @@ namespace Arcane
 
         [[nodiscard]] Result Parse(int argc, char** argv) const;
         void PrintUsage() const;
+        // The text PrintUsage prints. An option whose default is empty prints
+        // no "(default ...)" suffix (S6-GATE: ArcaneServer's --fixed-dt
+        // printed "(default )").
+        [[nodiscard]] std::string Usage() const;
 
     private:
         struct Opt

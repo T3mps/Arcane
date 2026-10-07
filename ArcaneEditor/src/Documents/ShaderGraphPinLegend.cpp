@@ -1,43 +1,46 @@
 #include "Documents/ShaderGraphPinLegend.hpp"
 
-#include "Documents/ShaderGraphPinTypes.hpp"   // PinPaintFor / PinWidthName / kPinDynamicColor
+#include "Documents/ShaderGraphPinTypes.hpp"   // PinPaintFor / PinWidthName / PinColorForWidth
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
-#include "Widgets/GraphCanvasStyle.hpp"        // kGraphPinOuterRingGap / kGraphPinOuterRingWidth
+#include "Widgets/GraphCanvasStyle.hpp"        // GraphPinOuterRingGap() / GraphPinOuterRingWidth()
 #include "Widgets/GraphLegend.hpp"             // the shared legend box chrome
 #include "Widgets/GraphPinDot.hpp"             // DrawGraphPinDot -- the canvas's own pin painter
+#include "Settings/GraphCanvasSettings.hpp"    // editor.graph.showPinLegend / pinDotRadius
 
-#include <Arcane/Config/CVarDecl.hpp>          // ARC_CVAR (settings spec s4.3)
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <Arcane/Core/Constant.hpp>
+#include "Widgets/UiMetrics.hpp"
 
 namespace Arcane::Editor
 {
     namespace
     {
-        ARC_CVAR(cvar_showPinLegend, "editor.graph.showPinLegend", bool, true,
-                 .flags = ::Arcane::CVarFlags::Archive, .audience = ::Arcane::Audience::Editor,
-                 .scope = ::Arcane::SettingScope::PreferencesMachine,
-                 .help = "Show the shader graph's pin colour legend (false folds it to a ? chip).");
+        constexpr const char* kShowPinLegendCVar = "editor.graph.showPinLegend";   // GraphCanvasSettings
 
-        // The shader canvas's kPinDotRadius at zoom 1: the key shows the dot at
-        // the size the canvas draws it unzoomed.
-        constexpr float kLegendDotRadius = 4.0f;
+        // The shader canvas's pin dot at zoom 1 (editor.graph.pinDotRadius): the
+        // key shows the dot at the size the canvas draws it unzoomed.
+        float LegendDotRadius() { return Settings<GraphCanvasSettings>().pinDotRadius; }
         // One swatch slot, wide enough for a dot WITH its outer ring, so the
         // ringed entry lines up with the plain ones.
-        constexpr float kLegendDotSlot =
-            2.0f * (kLegendDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+        float LegendDotSlot() { return 2.0f * (LegendDotRadius() + GraphPinOuterRingGap() + GraphPinOuterRingWidth()); }
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kLegendDotPairGap = 3.0f;   // the filled/hollow pair's two dots
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kLegendRowGap     = 4.0f;
         constexpr const char* kRingText   = "ring = adapts to its input";
         constexpr const char* kFilledText = "filled = wired, hollow = unwired";
         constexpr const char* kChipText   = "?";
+        ARC_CONSTANT("shader contract: the pin widths the legend keys (float, float2, float4; 0 = dynamic)")
         constexpr int kTypeWidths[] = { 1, 2, 4, 0 };   // float, float2, float4, dynamic
 
         struct LegendFont
         {
-            LegendFont() { ImGui::PushFont(GetEditorFonts().interRegular, kGraphLegendFontPx); }
+            LegendFont() { ImGui::PushFont(GetEditorFonts().interRegular, GraphLegendFontPx()); }
             ~LegendFont() { ImGui::PopFont(); }
             LegendFont(const LegendFont&) = delete;
             LegendFont& operator=(const LegendFont&) = delete;
@@ -48,14 +51,14 @@ namespace Arcane::Editor
         {
             float w = 0.0f;
             for (int i = 0; i < IM_ARRAYSIZE(kTypeWidths); ++i)
-                w += (i > 0 ? kGraphLegendEntryGap : 0.0f) + kLegendDotSlot + kGraphLegendSwatchGap +
+                w += (i > 0 ? GraphLegendEntryGap() : 0.0f) + LegendDotSlot() + GraphLegendSwatchGap() +
                      ImGui::CalcTextSize(PinWidthName(kTypeWidths[i])).x;
             return w;
         }
         float RuleRowWidth()
         {
-            return kLegendDotSlot + kGraphLegendSwatchGap + ImGui::CalcTextSize(kRingText).x +
-                   kGraphLegendEntryGap + kLegendDotSlot * 2.0f + kLegendDotPairGap + kGraphLegendSwatchGap +
+            return LegendDotSlot() + GraphLegendSwatchGap() + ImGui::CalcTextSize(kRingText).x +
+                   GraphLegendEntryGap() + LegendDotSlot() * 2.0f + Ui::Px(kLegendDotPairGap) + GraphLegendSwatchGap() +
                    ImGui::CalcTextSize(kFilledText).x;
         }
         ImVec2 BoxSize(bool expanded)   // the caller holds a LegendFont
@@ -63,32 +66,37 @@ namespace Arcane::Editor
             const float lineH = std::floor(ImGui::GetTextLineHeight());
             if (!expanded)
             {
-                const float side = lineH + kGraphLegendPadY * 2.0f;
+                const float side = lineH + GraphLegendPadY() * 2.0f;
                 return ImVec2(side, side);
             }
             const float contentW = std::max(TypeRowWidth(), RuleRowWidth());
-            return ImVec2(std::floor(contentW) + kGraphLegendPadX * 2.0f,
-                          lineH * 2.0f + kLegendRowGap + kGraphLegendPadY * 2.0f);
+            return ImVec2(std::floor(contentW) + GraphLegendPadX() * 2.0f,
+                          lineH * 2.0f + Ui::Px(kLegendRowGap) + GraphLegendPadY() * 2.0f);
         }
 
         // One dot in the swatch slot whose left edge is `x`, centred on `midY`,
         // through the canvas's painter: the ring is the canvas's ring.
         void SwatchDot(ImDrawList* dl, float x, float midY, const GraphPinPaint& paint, bool filled)
         {
-            const ImVec2 c(std::floor(x + kLegendDotSlot * 0.5f) + 0.5f, std::floor(midY) + 0.5f);
-            DrawGraphPinDot(dl, c, paint.color, Theme::kChrome, kLegendDotRadius, filled,
-                            paint.adapts ? &kPinDynamicColor : nullptr);
+            const ImVec2 c(std::floor(x + LegendDotSlot() * 0.5f) + 0.5f, std::floor(midY) + 0.5f);
+            const ImVec4 ring = PinColorForWidth(0);   // the dynamic grey, as on the canvas
+            DrawGraphPinDot(dl, c, paint.color, Theme::kChrome, LegendDotRadius(), filled,
+                            paint.adapts ? &ring : nullptr);
         }
     }
 
     bool GraphPinLegendShown()
     {
-        return cvar_showPinLegend.Get();
+        return Settings<GraphCanvasSettings>().showPinLegend;
     }
 
     void SetGraphPinLegendShown(bool shown)
     {
-        (void)CVarRegistry::Get().Set(cvar_showPinLegend.Handle(), CVarValue::Bool(shown), SetBy::User, "editor");
+        // A click, not a hot path: one name lookup. The write is unchanged by
+        // the fold into GraphCanvasSettings (S6-34): the User rung, archived at
+        // exit with the rest of the Archive cvars.
+        CVarRegistry& reg = CVarRegistry::Get();
+        (void)reg.Set(reg.Find(kShowPinLegendCVar), CVarValue::Bool(shown), SetBy::User, "editor");
     }
 
     ImVec2 GraphPinLegendBoxSize(bool expanded)
@@ -127,38 +135,38 @@ namespace Arcane::Editor
         if (!shown)
         {
             const ImVec2 t = ImGui::CalcTextSize(kChipText);
-            dl->AddText(ImVec2(std::floor(boxMin.x + (size.x - t.x) * 0.5f), boxMin.y + kGraphLegendPadY),
+            dl->AddText(ImVec2(std::floor(boxMin.x + (size.x - t.x) * 0.5f), boxMin.y + GraphLegendPadY()),
                         textCol, kChipText);
             return;
         }
 
         // Row 1: the four types, each dot painted as a wired pin of that width.
-        float y = boxMin.y + kGraphLegendPadY;
-        float x = boxMin.x + kGraphLegendPadX;
+        float y = boxMin.y + GraphLegendPadY();
+        float x = boxMin.x + GraphLegendPadX();
         for (int i = 0; i < IM_ARRAYSIZE(kTypeWidths); ++i)
         {
             if (i > 0)
-                x += kGraphLegendEntryGap;
+                x += GraphLegendEntryGap();
             x = std::floor(x);
             SwatchDot(dl, x, y + lineH * 0.5f, PinPaintFor(kTypeWidths[i], 0), true);
-            x += kLegendDotSlot + kGraphLegendSwatchGap;
+            x += LegendDotSlot() + GraphLegendSwatchGap();
             const char* word = PinWidthName(kTypeWidths[i]);
             dl->AddText(ImVec2(x, y), textCol, word);
             x += ImGui::CalcTextSize(word).x;
         }
 
         // Row 2: the ring (a dynamic pin resolved to float4), then filled vs hollow.
-        y += lineH + kLegendRowGap;
-        x = boxMin.x + kGraphLegendPadX;
+        y += lineH + Ui::Px(kLegendRowGap);
+        x = boxMin.x + GraphLegendPadX();
         SwatchDot(dl, x, y + lineH * 0.5f, PinPaintFor(0, 4), true);
-        x += kLegendDotSlot + kGraphLegendSwatchGap;
+        x += LegendDotSlot() + GraphLegendSwatchGap();
         dl->AddText(ImVec2(x, y), textCol, kRingText);
-        x = std::floor(x + ImGui::CalcTextSize(kRingText).x + kGraphLegendEntryGap);
+        x = std::floor(x + ImGui::CalcTextSize(kRingText).x + GraphLegendEntryGap());
         const GraphPinPaint plain = PinPaintFor(0, 0);
         SwatchDot(dl, x, y + lineH * 0.5f, plain, true);
-        x += kLegendDotSlot + kLegendDotPairGap;
+        x += LegendDotSlot() + Ui::Px(kLegendDotPairGap);
         SwatchDot(dl, x, y + lineH * 0.5f, plain, false);
-        x += kLegendDotSlot + kGraphLegendSwatchGap;
+        x += LegendDotSlot() + GraphLegendSwatchGap();
         dl->AddText(ImVec2(x, y), textCol, kFilledText);
     }
 }

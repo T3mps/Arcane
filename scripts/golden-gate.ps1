@@ -431,10 +431,11 @@ $script:ReportSchemaMin = 3
 # editor's `inspector` {source, breadcrumb} block; 12 since the
 # inspector-filters arc added `inspector.instances` [{id, excluded, source}];
 # 13 since the node page + editor upgrades phase added `documents` [{guid,
-# kind, name, compile, preview, image}] (VerifyReport::kSchemaVersion).
+# kind, name, compile, preview, image}]; 14 since the settings arc's S6 gate
+# added `cvarSets` [{name, value}] (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 13
+$script:ReportSchemaMax = 14
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.

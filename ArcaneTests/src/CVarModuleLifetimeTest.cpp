@@ -14,6 +14,8 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Project/Project.hpp>
 
+#include <Astra/Serialization/BinaryWriter.hpp>
+
 #include "Helpers/CVarTestDesc.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"
@@ -202,8 +204,10 @@ TEST_CASE("a callback a module adds from a tick entry point leaves with its imag
     {
         LogCapture log;
         BumpHistorySize(reg);
-        // Init's callback AND the tick's: proves the tick-time add landed.
-        CHECK(CountOf(log.text, "HotReloadPlugin: console.historySize changed (step 1)") == 2);
+        // Init and OnFixedUpdate use the same (fn, user, module); AddCallback
+        // dedupes, so the tick-time add is absorbed and the one callback still
+        // fires. The pin is that Unload below drops it.
+        CHECK(CountOf(log.text, "HotReloadPlugin: console.historySize changed (step 1)") == 1);
     }
 
     host.Unload();
@@ -211,6 +215,64 @@ TEST_CASE("a callback a module adds from a tick entry point leaves with its imag
     {
         LogCapture log;
         BumpHistorySize(reg);                                   // neither callback may run
+        CHECK(log.text.find("HotReloadPlugin:") == std::string::npos);
+    }
+    reg.UnregisterModule("lifetime-test");
+    reg.Publish();
+}
+
+TEST_CASE("an AddCallback from a module ECS tick with no CVarModuleScope leaves with its image", "[cvar][hotreload]")
+{
+    RestoreV1();
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    // pluginFixed (scoped) then the ECS scheduler (no scope). ServerOnlyTick
+    // AddCallbacks from the scheduler; the registry attributes it by image.
+    rt.Loop().Advance(1.0 / 60.0,
+                      [&](double dt) { host.FixedUpdateAll(dt); },
+                      [&](double, double) {});
+    {
+        LogCapture log;
+        BumpHistorySize(reg);
+        CHECK(log.text.find("HotReloadPlugin: console.historySize changed (ecs tick)") != std::string::npos);
+    }
+
+    host.Unload();
+    {
+        LogCapture log;
+        BumpHistorySize(reg);
+        CHECK(log.text.find("HotReloadPlugin:") == std::string::npos);
+    }
+    reg.UnregisterModule("lifetime-test");
+    reg.Publish();
+}
+
+TEST_CASE("an AddCallback from SaveStatePrimary leaves with the image", "[cvar][hotreload]")
+{
+    RestoreV1();
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    RegisterFixtureTypes(rt);
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
+    REQUIRE(host.Load());
+    std::vector<std::byte> buf;
+    Astra::BinaryWriter w(buf);
+    REQUIRE(host.SaveStatePrimary(w));
+    {
+        LogCapture log;
+        BumpHistorySize(reg);
+        CHECK(log.text.find("HotReloadPlugin: SaveState callback") != std::string::npos);
+    }
+
+    host.Unload();
+    {
+        LogCapture log;
+        BumpHistorySize(reg);
         CHECK(log.text.find("HotReloadPlugin:") == std::string::npos);
     }
     reg.UnregisterModule("lifetime-test");

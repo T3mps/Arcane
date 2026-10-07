@@ -34,6 +34,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -85,12 +86,14 @@ namespace Arcane
     // params.
     // A pass may read up to this many upstream pass outputs (InputTexture,
     // InputTexture1..3 -- the reserved-name list is sized to match).
+    ARC_CONSTANT("shader contract: the reserved InputTexture0..3 pass inputs")
     inline constexpr std::uint32_t kMaxPassInputs = 4;
 
     // Sentinel `inputs` entry: "the EXTERNAL scene color", not a chain index
     // (the post-processing arc). Only valid when the chain builds in post
     // mode; occupies an InputTexture slot like any other input, and the
     // runner binds the caller's external texture there.
+    ARC_CONSTANT("ID space / sentinel: the scene-colour pass input, outside every texture index")
     inline constexpr std::uint32_t kSceneInput = 0xFFFFFFFFu;
 
     // `chainInputs` (fullscreen pass chains only): additionally declare that

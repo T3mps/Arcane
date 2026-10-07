@@ -13,6 +13,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
 #include <memory>
@@ -43,7 +44,7 @@ namespace
     // measure y endpoints through the same submit).
     Arcane::ViewTransform PixelView()
     {
-        return Arcane::ViewTransform::Orthographic({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
+        return Arcane::Ortho2DView({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
     }
 }
 
@@ -194,8 +195,8 @@ TEST_CASE("DrawPhysicsDebug interpolates the body outline by alpha", "[interp]")
     buf.captured = true;
 
     Arcane::PhysicsDebugDrawOptions opts;
-    opts.drawContacts = opts.drawAabbs = opts.drawVelocities = false;
-    opts.drawComMarkers = opts.drawOrientations = false;   // isolate the outline
+    opts.contacts = opts.aabbs = opts.velocities = false;
+    opts.comMarkers = opts.orientations = false;   // isolate the outline
     opts.interp = &buf;
     opts.alpha  = 0.5f;                                     // halfway 0 -> 10
 
@@ -280,7 +281,7 @@ TEST_CASE("RenderSubmissionSystem submits sprites as WORLD quads with the interp
     RecBatcher rec;
     // A deliberately NON-identity view: the corners must not move with it.
     reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{
-        &rec, Arcane::ViewTransform::Orthographic({123.0f, -45.0f}, 7.0f, {640u, 480u}), 0.25f });
+        &rec, Arcane::Ortho2DView({123.0f, -45.0f}, 7.0f, {640u, 480u}), 0.25f });
     Arcane::RenderSubmissionSystem{}(reg);
 
     REQUIRE(rec.quadCalls == 1);

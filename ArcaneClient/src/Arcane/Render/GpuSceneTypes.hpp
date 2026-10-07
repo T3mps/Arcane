@@ -5,6 +5,7 @@
 // device-free (GpuSceneSync.hpp), and ArcaneTests drives them under ~[gpu].
 // Render/Nri/GpuScene.{hpp,cpp} is the device half.
 #include <Arcane/Guid.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Material/MaterialBlendMode.hpp>
 #include <Arcane/Math/Aabb.hpp>
 #include <Arcane/Scene/Frustum.hpp>
@@ -27,14 +28,20 @@ namespace Arcane
 {
     // Mirrors BindlessTable::kInvalidSlot (0xFFFFFFFF) without pulling <NRI.h>;
     // GpuScene.cpp static_asserts the two agree.
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInvalidMaterialSlot = 0xFFFFFFFFu;
 
     // Row flags: blend and cull are independent pipeline facts. Keep these in
     // lockstep with data/shaders/gpu_scene.hlsli without changing the 240-byte row.
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInstanceFlagTeleported = 1u << 0;
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInstanceFlagBlendShift = 1u;
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInstanceFlagBlendMask  = 0x3u << kGpuInstanceFlagBlendShift;
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInstanceFlagTwoSided   = 1u << 3;
+    ARC_CONSTANT("shader contract: must match data/shaders/gpu_scene.hlsli")
     inline constexpr std::uint32_t kGpuInstanceFlagLive       = 1u << 4;
 
     // ONE ROW PER (entity, mesh section). 240 bytes, std430; data/shaders/

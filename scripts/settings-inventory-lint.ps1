@@ -111,17 +111,29 @@ foreach ($r in $rows) {
     if ($r.Symbol -match 'RECV_CHUNK_SIZE|kInitialResidentSlots|spill copy chunk|writer reserve|read buffer|kChunkFrames|BootStage weights' -and $r.Verdict -ne 'CONSTANT') { Fail $r 'L7' 'R2: capacity hint is CONSTANT' }
 }
 # L9 spec s16.11: an "Editor Dev" px metric is DERIVED (editor.ui.scale x base), not its own cvar.
-# Exempt by name (kept SETTING: owned by S6-xx; read as Ui::Px(setting) per S4-16, except fallbackExtent, a raw
-# render-target extent owned by S6-32): S6-28 / S6-32 / S6-34
-# convert these rows as cvars, so the frozen inventory keeps them SETTING (S5-1 fix round 1).
-$l9KeptSetting = @('editor.viewport.fallbackExtent','editor.graph.grid.minorTargetPx','editor.graph.nodeHeaderGap',
-                   'editor.ui.assetRowThumbPx','editor.ui.assetRefThumbPx')
+# Exempt by name (kept SETTING because the value is not UI chrome; S5-1 fix round 1 and the user's S5-2 review):
+# render-target extents and texel counts (fallbackExtent, previewCheckerCell), px of a LOD/grid fade
+# (grid fade, minorTargetPx), zoom-scaled canvas-space geometry (editor.graph.* node/pin metrics, the shader
+# chain layout, the asset graph node geometry) and the asset row/ref thumbnails (S6-28 / S6-32 / S6-34 convert
+# them as cvars, read as Ui::Px(setting) except the render-target ones). A row is exempt when EVERY name it expands to is listed.
+$l9KeptSetting = @('editor.viewport.fallbackExtentW','editor.viewport.fallbackExtentH','editor.graph.grid.minorTargetPx','editor.graph.nodeHeaderGap',
+                   'editor.ui.assetRowThumbPx','editor.ui.assetRefThumbPx',
+                   'editor.viewport.grid.fadeInPx','editor.viewport.grid.fadeFullPx','editor.shader.previewCheckerCell',
+                   'editor.graph.pinRing.width','editor.graph.pinRing.outerGap','editor.graph.pinRing.outerWidth',
+                   'editor.graph.nodePadding','editor.graph.passNameFieldWidth','editor.graph.paramNameFieldWidth','editor.graph.swizzleFieldWidth','editor.graph.constPinNeutralWidth1','editor.graph.constPinNeutralWidth2','editor.graph.constPinNeutralWidth4','editor.graph.constFloatWidth','editor.graph.constFloat2Width','editor.graph.constFloat4Width','editor.graph.constParamRangeWidth',
+                   'editor.shader.chainLayout.originX','editor.shader.chainLayout.originY','editor.shader.chainLayout.pitchX',
+                   'editor.shader.chainLayout.sceneOffsetX','editor.shader.chainLayout.sceneOffsetY','editor.shader.passThumbPx',
+                   'editor.assetGraph.node.minWidth','editor.assetGraph.node.maxWidth','editor.assetGraph.node.headerHeight',
+                   'editor.assetGraph.node.accentBarWidth','editor.assetGraph.node.padding','editor.assetGraph.pinRadius',
+                   'editor.assetGraph.overflowWireThickness','editor.assetGraph.labelPad')
 foreach ($r in $setting) {
-    if ($r.Part -eq 3 -and $r.Aud -match '^Editor Dev$' -and $r.Value -match '\bpx\b' -and $r.Name -notmatch '^editor\.theme\.' -and $r.Name -notmatch '^editor\.layout\.factory\.' -and $r.Name -notmatch '^editor\.thumbnail\.' -and $r.Name -notin $l9KeptSetting) { Fail $r 'L9' 'px metric must be DERIVED from editor.ui.scale (s16.11)' }
+    $allKept = $true; foreach ($n in (RowNames $r.Name)) { if ($n -notin $l9KeptSetting) { $allKept = $false } }
+    if ($r.Part -eq 3 -and $r.Aud -match '^Editor Dev$' -and $r.Value -match '\bpx\b' -and $r.Name -notmatch '^editor\.theme\.' -and $r.Name -notmatch '^editor\.layout\.factory\.' -and $r.Name -ne 'editor.thumbnail.size' -and -not $allKept) { Fail $r 'L9' 'px metric must be DERIVED from editor.ui.scale (s16.11)' }
     # The splash and reporter layout px are DERIVED too (base x 1, an ARC_CONSTANT base; S5-1 step 2).
     if ($r.Name -match '^app\.splash\.\w*Px\b|^diagnostics\.reporter\.layout\.') { Fail $r 'L9' 'splash/reporter px metric must be DERIVED (s16.11)' }
 }
-
+# L10 (S5-2) every SETTING name is concrete: no wildcard family ('a.b.*', 'a.b.node*'), so settings-frozen-names.txt covers each member.
+foreach ($r in $setting) { if ($r.Name -match '\*') { Fail $r 'L10' 'wildcard name: enumerate every member' } }
 # Write back UTF-8 without a BOM and with LF endings (the inventory is eol=lf; PS 5.1 Set-Content -Encoding UTF8 adds a BOM).
 if ($FixScope) { [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $Inventory).ProviderPath, (($lines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false)) }
 $counts = $rows | Group-Object { ($_.Verdict -split ' ')[0] } | ForEach-Object { "$($_.Name)=$($_.Count)" }
@@ -130,6 +142,8 @@ foreach ($n in 1..3) {   # per part, for the Summary table
     $pc = $rows | Where-Object Part -eq $n | Group-Object { ($_.Verdict -split ' ')[0] } | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Count)" }
     Write-Host ("  Part ${n}: " + ($pc -join ', '))
 }
+if ($errors.Count) { $errors | ForEach-Object { Write-Host $_ }; Write-Host "$($errors.Count) violation(s)"; exit 1 }
+# Emit only when clean: a run with violations must not leave a fresh frozen list behind (S5-2).
 if ($EmitFrozen) {
     $names = foreach ($r in $setting) { foreach ($n in (RowNames $r.Name)) { if ($n -match '^[a-z]\w*(\.\w+)+$') { $n } } }
     $names = $names | Sort-Object -Unique -CaseSensitive   # concrete names only: wildcard families ('a.b.*', 'a.b.node*') are frozen by their row
@@ -138,5 +152,4 @@ if ($EmitFrozen) {
     [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($out), $text + "`n", [System.Text.UTF8Encoding]::new($false))
     Write-Host "wrote $(@($names).Count) names to $EmitFrozen"
 }
-if ($errors.Count) { $errors | ForEach-Object { Write-Host $_ }; Write-Host "$($errors.Count) violation(s)"; exit 1 }
 Write-Host "inventory lint: clean"; exit 0

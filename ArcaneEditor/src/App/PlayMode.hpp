@@ -30,6 +30,7 @@
 //                     this class knows nothing about that process.
 
 #include <Arcane/Base/Runtime.hpp>   // std::optional<Runtime> m_server needs the COMPLETE type
+#include <Arcane/Reflection.hpp>     // PlayLaunchMode is the editor.play.launchMode enum cvar
 
 #include <cstddef>
 #include <optional>
@@ -47,18 +48,19 @@ namespace Arcane::Editor
     // LaunchStandalone intent, whose effect is EditorApp::DoLaunchStandalone
     // -- a fire-and-forget spawn of ArcaneRuntime.exe on the active scene;
     // PlaySession/the toggle are never touched by it (there is nothing for
-    // Stop to restore). Declared here (rather than inline in
-    // EditorApp.hpp, where the persisted m_playMode member lives) so
-    // EditorPanels.hpp's DrawSimTimeToolbar can see it without EditorPanels
+    // Stop to restore). Declared here (rather than inline in EditorApp.hpp)
+    // so EditorPanels.hpp's DrawSimTimeToolbar can see it without EditorPanels
     // depending on EditorApp.hpp (which itself includes EditorPanels.hpp --
     // that would invert the panel/app layering). EditorApp.hpp and
     // EditorPanels.cpp both already include this header.
     //
-    // THE LAST THREE ARE THE Task-7 ROWS, and they are PERSISTED AS AN INT in
-    // the editor's ini ("[EditorPlayMode][State]", EditorApp.cpp) -- so append
-    // new ones at the END and never renumber: an existing desk's saved line
-    // would otherwise silently name a different mode. The ini read's range
-    // check has SeparateServerProcess as its upper bound for the same reason.
+    // THE LAST THREE ARE THE Task-7 ROWS, and they are PERSISTED AS AN
+    // ORDINAL -- the editor.play.launchMode cvar (settings S6-32) and the old
+    // "[EditorPlayMode][State]" ini line it imports once -- so append new
+    // ones at the END and never renumber: an existing desk's saved value
+    // would otherwise silently name a different mode. The old line's range
+    // check (ReadPlayModeIniLine) has SeparateServerProcess as its upper
+    // bound for the same reason.
     // ListenServer/EmbeddedServer stay IN the viewport (they are PlaySession
     // topologies); SeparateServerProcess is the viewport world as a CLIENT
     // plus a spawned ArcaneServer.exe.
@@ -70,6 +72,16 @@ namespace Arcane::Editor
         EmbeddedServer,
         SeparateServerProcess,
     };
+
+    // editor.play.launchMode (settings S6-32) stores the declared ORDINAL, so
+    // the reflected order is the declaration order above (append only).
+    ARC_REFLECT_ENUM(PlayLaunchMode)
+        ARC_REFLECT_ENUM_VALUE(PlayLaunchMode, Viewport)
+        ARC_REFLECT_ENUM_VALUE(PlayLaunchMode, SeparateWindow)
+        ARC_REFLECT_ENUM_VALUE(PlayLaunchMode, ListenServer)
+        ARC_REFLECT_ENUM_VALUE(PlayLaunchMode, EmbeddedServer)
+        ARC_REFLECT_ENUM_VALUE(PlayLaunchMode, SeparateServerProcess)
+    ARC_END_REFLECT_ENUM()
 
     // What Play() is being asked to STAND UP -- distinct from PlayLaunchMode,
     // which is a UI row. SeparateWindow has no topology at all (it never enters

@@ -19,6 +19,10 @@
 
 namespace Arcane
 {
+    class CVarRegistry;
+
+    ARC_CORE_API void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest);
+
     class ARC_CORE_API Project
     {
     public:
@@ -53,11 +57,8 @@ namespace Arcane
         // know WHICH manifest file a path resolves to WITHOUT paying for a
         // full Open() (mounts, plugin discovery, a content scan) can reuse the
         // ambiguity-detection/directory-search logic instead of reimplementing
-        // it -- e.g. ProjectBoot.cpp's RuntimeStages project_open override
-        // peeks ProjectManifest::SplashConfig::showProgress through this before
-        // the real OpenProject call, so the splash's "Scanning content..." text
-        // can be live during the very scan it describes rather than only
-        // knowable after that scan (and the whole Open()) already finished.
+        // it -- e.g. HostBoot's early config pass resolves the Project rung
+        // before Runtime construction and project open.
         // nullopt on the same failure modes as Open(): no .arcproj, or more
         // than one (both logged).
         static std::optional<std::filesystem::path> ResolveManifestFile(
@@ -67,6 +68,12 @@ namespace Arcane
         // (Source/ Content/ Config/ Plugins/), writes <name>.arcproj and .gitignore,
         // then opens it. nullopt if `dir` exists non-empty or on IO error.
         static std::optional<Project> Create(const std::filesystem::path& dir, std::string name);
+
+        // Move legacy physics/splash blocks to Config/*.json and remove them
+        // from .arcproj. The path form is exposed for the migration test and
+        // tools that have not opened a full Project.
+        static bool MigrateLegacySettingsAt(const std::filesystem::path& manifestFile);
+        bool MigrateLegacySettings();
 
         const ProjectManifest&       Manifest() const { return m_manifest; }
         const std::filesystem::path& Root()     const { return m_root; }
