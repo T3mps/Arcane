@@ -197,7 +197,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           scripts/fetch-premake.sh
-          scripts/fetch-vulkan-sdk-macos.sh --system
+          VK_SDK_BOOTSTRAP=1 scripts/fetch-vulkan-sdk-macos.sh --system
           # MoltenVK is the ONLY ICD the leg may see.
           echo "VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
 

@@ -209,12 +209,18 @@ TEST_CASE("report view: copy labels and the button order (Close last, Relaunch b
 
 TEST_CASE("report view: FormatLocalStamp converts an ISO UTC stamp to local minutes", "[reporter]")
 {
+#if !defined(ARCANE_HAS_TZDB)
+    // Apple libc++ has no tzdb: no zone can be named, and a null one is "".
+    CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", nullptr).empty());
+    SKIP("this standard library has no IANA time-zone database (std::chrono::locate_zone)");
+#else
     CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", std::chrono::locate_zone("UTC")) == "2026-09-29 16:57");
     CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", std::chrono::locate_zone("Asia/Tokyo")) == "2026-09-30 01:57");
     CHECK(FormatLocalStamp("2026-13-29T16:57:12Z", std::chrono::locate_zone("UTC")).empty());
     CHECK(FormatLocalStamp("yesterday", std::chrono::locate_zone("UTC")).empty());
     CHECK(FormatLocalStamp("2026-09-29T-1:57:12Z", std::chrono::locate_zone("UTC")).empty());   // a signed field is not a digit field
     CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", nullptr).empty());
+#endif
 }
 
 TEST_CASE("report view: a dbgeng verdict with no threads falls back to the portable stack", "[reporter]")

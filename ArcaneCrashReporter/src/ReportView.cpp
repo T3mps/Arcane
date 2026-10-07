@@ -183,8 +183,12 @@ namespace Arcane::Reporter
         return out;
     }
 
-    std::string FormatLocalStamp(std::string_view s, const std::chrono::time_zone* zone)
+    std::string FormatLocalStamp(std::string_view s, const TimeZone* zone)
     {
+#if !defined(ARCANE_HAS_TZDB)
+        (void)s; (void)zone;
+        return {};
+#else
         // Exactly "YYYY-MM-DDTHH:MM:SSZ" (Diagnostics.cpp's stamp shape).
         if (!zone || s.size() != 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' ||
             s[13] != ':' || s[16] != ':' || s[19] != 'Z')
@@ -205,5 +209,6 @@ namespace Arcane::Reporter
         if (!ymd.ok() || h > 23 || mi > 59 || sec > 60) return {};
         const sys_seconds utc = sys_days{ ymd } + hours{ h } + minutes{ mi } + seconds{ sec };
         return std::format("{:%Y-%m-%d %H:%M}", zone->to_local(utc));
+#endif
     }
 }

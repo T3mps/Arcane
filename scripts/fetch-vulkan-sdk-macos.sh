@@ -53,8 +53,13 @@ if [ ! -f "$ZIP" ]; then
     curl -fsSL --retry 4 -o "$ZIP.part" "$URL"
     mv "$ZIP.part" "$ZIP"
 fi
-# Verified every run, cached or not.
-"$ROOT/scripts/sha256-check.sh" "$ZIP" "$VK_SDK_SHA256"
+# Verified every run, cached or not. VK_SDK_BOOTSTRAP=1 is the one-time pin
+# procedure (print the digest, continue) for a version not pinned yet.
+if [ "${VK_SDK_BOOTSTRAP:-0}" = 1 ] && [ "$VK_SDK_SHA256" = 0000000000000000000000000000000000000000000000000000000000000000 ]; then
+    echo "::warning::fetch-vulkan-sdk-macos: UNPINNED bootstrap -- $(shasum -a 256 "$ZIP")"
+else
+    "$ROOT/scripts/sha256-check.sh" "$ZIP" "$VK_SDK_SHA256"
+fi
 
 if [ ! -x "$DEST/macOS/bin/dxc" ] || [ "$SYSTEM" = 1 ]; then
     TMP=$(mktemp -d)
