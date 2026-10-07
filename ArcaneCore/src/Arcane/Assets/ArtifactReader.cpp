@@ -4,6 +4,7 @@
 
 #include <array>
 #include <bit>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <system_error>
@@ -215,6 +216,16 @@ namespace Arcane
 
         [[nodiscard]] std::optional<std::vector<std::byte>> ReadWholeFile(const std::filesystem::path& path)
         {
+            // Fuzz finding (fuzz/regressions/artifact/gltf-empty-uri-opens-directory,
+            // 2026-10-07): a .gltf buffer with "uri": "" (or ".", "..", any directory)
+            // resolves to the source's own DIRECTORY. libstdc++ opens a directory as
+            // an ifstream, tellg() then reports LLONG_MAX, and the vector below threw
+            // std::length_error/bad_alloc out of this exception-free path -- a
+            // terminate in the editor/runtime from a one-line asset. Only a regular
+            // file is read; an allocation that still fails is a refusal, not a throw.
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
+
             std::ifstream ifs(path, std::ios::binary);
             if (!ifs) return std::nullopt;
 
@@ -223,7 +234,9 @@ namespace Arcane
             if (len < 0) return std::nullopt;
             ifs.seekg(0, std::ios::beg);
 
-            std::vector<std::byte> raw(static_cast<std::size_t>(len));
+            std::vector<std::byte> raw;
+            try { raw.resize(static_cast<std::size_t>(len)); }
+            catch (const std::exception&) { return std::nullopt; }   // bad_alloc / length_error
             if (!raw.empty())
             {
                 ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
