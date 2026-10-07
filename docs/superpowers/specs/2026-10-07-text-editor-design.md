@@ -1,6 +1,6 @@
 # Arcane Text Editor -- design
 
-**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revision 2 folds in an independent review -- see s13; awaiting written-spec review)
+**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revisions 2 and 3 fold in two independent reviews -- see s13 and s14; awaiting written-spec review)
 **Scope:** spec 1 of 2. Spec 2 (editor-wide Command Palette, Goto Anything, Find in Files) follows this one and consumes the hooks defined in s9.
 **Research:** lite-xl (`D:\dev\_reference\lite-xl-master`, MIT), Zed (`D:\dev\_reference\zed-main`, GPL editor crates / Apache `sum_tree`), Zep, ImGuiColorTextEdit (BalazsJako + santaclose + goossens forks), Sublime Text's `.sublime-syntax` model, tree-sitter, Lexilla. Findings are summarised where they drive a decision.
 
@@ -107,11 +107,11 @@ This is what makes every command multi-cursor-correct and atomic, and what lets 
 | Concern | Rule |
 |---|---|
 | Line endings | **Every line keeps its original ending.** The rope stores LF; an `EolMap` records the file's dominant style plus a sparse set of exception rows (CRLF in an LF file, LF in a CRLF file, lone `\r`), shifted by edits like anchors. A lone `\r` (classic Mac) is a line break. New lines take the dominant style. An unedited file saves back **byte-identical**; a one-character edit changes one line in version control. Converting is explicit: the status strip's line-ending menu (and a `text.convertLineEndings` action) rewrites every line in one undo step. Mixed files show a status-strip note but are never silently normalised. |
-| Encodings | UTF-8 (BOM preserved if present) and UTF-16 LE/BE with BOM are decoded and saved back in the same encoding. |
-| Invalid bytes / binary | Invalid UTF-8 or binary content (NUL bytes in the first 8 KB) opens **read-only** with a banner explaining why; saving can never corrupt the file. Pure binary formats with no text editor are refused with a message. |
+| Encodings | UTF-8 (BOM preserved if present) and UTF-16 LE/BE with BOM are decoded and saved back in the same encoding. **Windows-1252** (common in old `.bat`/`.ini` files) is supported through **Reopen with Encoding** (status strip and Inspector): the file is decoded as 1252 and saved back as 1252. The chosen encoding is remembered per file in the view state. |
+| Invalid bytes / binary | Invalid UTF-8 or binary content (NUL bytes in the first 8 KB) opens **read-only** with a banner explaining why and offering **Reopen with Encoding -> Windows-1252** (which makes it editable when it is a legacy text file); saving can never corrupt the file. Pure binary formats with no text editor are refused with a message. |
 | Size thresholds | Above `editor.text.syntaxMaxMB` (default 32), stateful grammars stop highlighting; **line-local grammars keep highlighting at any size** (s4.4), so logs never lose their level colours. Above `editor.text.openMaxMB` (default 512) the file is not opened ("open externally" notice). |
-| Long lines | A line longer than `editor.text.longLineMaxBytes` (default 64 KB; e.g. one-line minified JSON) is tokenized only up to the cap; the rest of that line draws plain, and the **next** line restarts from the grammar's root state (a resync) so nothing after it is held hostage. Drawing such a line clips to the visible horizontal window. |
-| Append-only growth | Detected cheaply: the size grew **and** a hash of a small window (4 KB) just before the old end still matches. Only then is the new tail appended instead of reloading. A **Follow** toggle (status strip) keeps the view at the end, like `tail -f`. A shrink (truncation) or a window mismatch (rotation, rewrite) is a full reload under the s5.3 external-change rules. |
+| Long lines | A line longer than `editor.text.longLineMaxBytes` (default 64 KB; e.g. one-line minified JSON) is tokenized only up to the cap; the rest of that line draws plain, and the **next** line restarts from the grammar's root state so nothing after it is held hostage. This is a **deliberate, named exception** to s4.4's no-heuristic-resync rule, and the tokenizer applies it identically in every mode (incremental, worker, full), so "incremental == full" (s11.2) still holds by construction. Drawing such a line clips to the visible horizontal window. |
+| Append-only growth | Detected cheaply: the size grew **and** a hash of a small window (4 KB) just before the old end still matches. A shrink (truncation) or a window mismatch (rotation, rewrite) is a full reload under the s5.3 external-change rules. **Appending happens only when the document is clean or read-only**; a dirty document whose file grows gets the s5.3 dirty banner instead. An append: <br>- is **not an undo entry** and does not count toward `undoMemoryMB`; <br>- leaves `changeId` and `savedChangeId` both unchanged, so a clean document stays clean (the buffer still equals the file); existing undo history stays valid because the append only adds text after every recorded range; <br>- does bump the buffer `version` (s4.4), so caches and searches see it. <br>A **Follow** toggle (status strip) keeps the view at the end, like `tail -f`. |
 
 ### 3.6 Display map
 
@@ -128,7 +128,7 @@ JSON, in the same style as `.arctheme`. Search path, later entries overriding ea
 2. project `Config/Syntaxes/`
 3. plugin-registered grammars
 
-Saving a grammar reloads it live (and re-highlights open documents using it).
+Saving a grammar reloads it live (and re-highlights open documents using it). Compiled grammars are **immutable, refcounted snapshots** with a `grammarVersion`: a reload publishes a new snapshot, the worker finishes or abandons work on the old one (it holds a reference, so compiled patterns never vanish under it), and cache entries carry the `grammarVersion` they were produced with, so entries from the old grammar are invalid on sight.
 
 ```json
 { "format": "arcsyntax", "version": 1, "name": "JSON", "scope": "source.json",
@@ -155,7 +155,7 @@ Rule kinds:
 - `embed: "<grammar name>"` inside a region: another language for the region's content (Markdown fenced blocks).
 - `foldMarkers: {begin, end}`: explicit fold regions in addition to indentation.
 - `symbols`: patterns that feed the symbol provider (s9).
-- `lineLocal: true`: the grammar has **no rule that spans lines** (no multi-line regions), so a line's tokens never depend on earlier lines. Validated on load (a line-local grammar with a multi-line region is an error). Line-local grammars -- Arcane log, INI/cfg, CSV-like logs, plain key/value files -- are tokenized on demand for visible lines only, at any file size (s4.4).
+- `lineLocal: true`: a line's tokens never depend on earlier lines. The definition is **decidable by construction, not by proof**: in a line-local grammar every line is tokenized from the root state, and any `begin`/`end` region still open at the end of a line is **force-closed there** (its scope ends with the line). So `begin`/`end` stays usable for things like quoted strings inside a log line, and no validation of "can this region span lines" is needed. Line-local grammars -- Arcane log, INI/cfg, CSV-like logs, plain key/value files -- are tokenized on demand for visible lines only, at any file size (s4.4).
 
 Context-dependent scopes use ordinary rules, not special syntax: the JSON key above is a single-line `match` with a lookahead, listed before the generic string region so it wins the tie at the same position.
 
@@ -168,6 +168,7 @@ The format is validated on load; a bad grammar produces a Problems row naming th
 Vendored under `ThirdParty/pcre2` (BSD), built as a static lib via premake with JIT enabled, 8-bit code units. One engine for grammar rules, in-file find/replace, vim `/` `?` `:s` `:g` (vim syntax is translated first, s6.5). `std::regex` is too slow; RE2 would bring abseil.
 
 - **Bounded everywhere.** Every match context sets `pcre2_set_match_limit` and `pcre2_set_depth_limit` (`editor.text.regexMatchLimit`, `editor.text.regexDepthLimit`). A limit hit is not a hang: a grammar rule that hits it is disabled for that line and reported once as a Problems row naming the grammar and rule; a find or `:s` pattern that hits it stops and says so in the find bar / vim message line.
+- **Threading.** Compiled `pcre2_code` (inside a grammar snapshot or a compiled find query) is shared read-only across threads. `pcre2_match_data`, match contexts and JIT stacks are **per thread**: the UI thread and the worker each own their own set; nothing mutable from PCRE2 is shared.
 - **Contiguous input.** PCRE2 needs a contiguous subject, a rope is not. Single-line patterns (the grammar tokenizer always; find/vim when the pattern cannot match `\n`) run line by line, copying each line into a reused scratch buffer -- cheap, and lines past `longLineMaxBytes` are matched in windows. Patterns that can span lines (contain `\n`, `\s` across lines in vim `\_` forms, or `(?s)`) run on the worker against a materialized copy of the snapshot, refused above `editor.text.multilineSearchMaxMB` (default 64) with a message.
 
 ### 4.3 Tokenizer
@@ -181,9 +182,9 @@ Vendored under `ThirdParty/pcre2` (BSD), built as a static lib via premake with 
 
 A line's start state depends on every line before it, so "tokenize on a cache miss" must never mean "tokenize from line 0 on the UI thread".
 
-- **Cache entries are versioned.** Each entry is `{bufferVersion, startState, endState, runs[]}`. The buffer bumps `version` on every edit and shifts/invalidates entries from the edited row on (the edit log maps rows forward).
-- **The worker owns tokenizing.** It runs on a `RopeSnapshot` at version *v* and produces entries tagged *v*. The UI thread **applies a worker result only if its tag equals the current buffer version**; a stale result (the user typed meanwhile) is discarded and the worker restarts from the earliest invalid row on a fresh snapshot. Only the UI thread writes the shared cache; the worker hands results over through a queue. No locks on the cache itself.
-- **Bounded UI-thread catch-up.** On a visible-line miss, the UI thread may tokenize synchronously only if the nearest valid cached line above is within `editor.text.syncCatchUpLines` (default 200) -- typing and nearby scrolling stay instant. Farther misses (Ctrl+End in a 30 MB file, a jump to a mark, a Goto) **draw plain text** (or line-local tokens, below) for those lines and raise the worker's priority to that region; colour appears when the worker gets there. There is no heuristic mid-file resync for stateful grammars -- correctness over guessing.
+- **Cache entries are versioned.** Each entry is `{bufferVersion, grammarVersion, startState, endState, runs[]}`. The buffer bumps `version` on every edit (and every append) and records each edit in an edit log of `{version, firstRow, rowDelta}`; the cache shifts entries by `rowDelta` and invalidates from `firstRow` on.
+- **The worker owns tokenizing; its results are mapped forward, not thrown away.** It runs on a `RopeSnapshot` at version *v* and produces rows tagged *v*. When a result arrives at current version *c* > *v*, the UI thread consults the edit log for (*v*, *c*]: rows **above the earliest edited row** since *v* are still exact and are applied (shifted by nothing, since edits below them do not move them); rows **below** the edited rows are kept, shifted by the log's `rowDelta`, **if** re-tokenizing the edited rows converged (the end state after the edit equals the start state the worker assumed for the next row) -- the common case, since most edits do not open or close a region; otherwise they are discarded and the worker continues from there on a fresh snapshot. The edited rows themselves are always re-tokenized. Steady typing at the bottom of a file, or Follow appending every frame, therefore never starves the rows above -- the worker's progress always lands. Only the UI thread writes the shared cache; the worker hands results over through a queue. No locks on the cache itself.
+- **Bounded UI-thread catch-up.** On a visible-line miss, the UI thread may tokenize synchronously only if the nearest valid cached line above is within `editor.text.syncCatchUpLines` (default 200) **and** only within `editor.text.syncCatchUpBudgetUs` of wall time per frame (dense lines can blow a line count); whatever does not fit draws plain this frame -- typing and nearby scrolling stay instant. Farther misses (Ctrl+End in a 30 MB file, a jump to a mark, a Goto) **draw plain text** (or line-local tokens, below) for those lines and raise the worker's priority to that region; colour appears when the worker gets there. There is no heuristic mid-file resync for stateful grammars -- correctness over guessing (the one named exception is the long-line cap, s3.5).
 - **The worker works outward from the view:** from the earliest invalid row toward the visible end plus a margin, within `editor.text.highlightFrameBudgetMs` of wall time per frame.
 - **Convergence stop:** after an edit, re-tokenizing starts at the edited line and **stops as soon as a recomputed end state equals the cached end state** for the next line. Typing inside a string usually re-tokenizes one line.
 - **Line-local grammars** (`lineLocal: true`) skip all of the above: any visible line is tokenized on demand from the root state, synchronously, at any file size and any scroll position. This is what keeps a 400 MB Arcane log coloured.
@@ -228,7 +229,8 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 - **Scrollbar annotations:** search matches, other cursors, Problems.
 - **Long lines:** horizontal scroll; each visible line's glyph x-prefix is cached so column <-> x is O(log n), not O(line length) (a known lite-xl weak spot).
 - **Unicode:** the cursor moves by grapheme cluster (a UAX #29 subset: combining marks, ZWJ emoji sequences, regional-indicator pairs), so accents and emoji are never split.
-- **IME:** composition position reported through ImGui's platform IME data at the primary caret; the composition string is drawn inline (underlined) until committed.
+- **IME:** composition position reported through ImGui's platform IME data at the primary caret; the composition string is drawn inline (underlined) until committed. With vim on, the IME is **disabled in Normal, Visual and operator-pending modes** and re-enabled in Insert/Replace and the command line, so a Japanese IME never turns `j` into a composition.
+- **Keyboard input and layouts (s5.5).**
 - **Mouse:** click, drag, double-click word, triple-click line, Ctrl+click add/remove cursor, Alt+drag column selection, drag-select auto-scroll.
 - **Split view (D8):** a second `TextEditorView` over the same `TextBuffer`, with its own scroll, `DisplayMap` (so folds are per view) and `SelectionSet`, docked beside the first. Edits in one view shift the other view's anchors through the buffer's edit notifications.
 
@@ -240,19 +242,23 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 
 ### 5.3 `TextDocument`
 
-- An `EditorDocument` (and `InspectorSource`). Identity: the asset GUID when the file is a registered asset; otherwise the **normalized absolute path**. `DocumentHost` gains a path-keyed lookup for GUID-less documents so a second open focuses the existing tab.
+- An `EditorDocument` (and `InspectorSource`). **Identity is the canonical path, always** -- `GetFinalPathNameByHandleW` on an open handle, which resolves case, 8.3 short names, junctions and symlinks. An asset's GUID is only a *lookup into* that path, never a second key, so opening the same file through the Asset Browser, a Console `file:line` link and (spec 2) Find in Files always focuses one tab. `DocumentHost` gains the canonical-path index; an asset move (`NoteMoved`) re-keys the document.
 - **Registration:** `DocumentHost` gets a **fallback factory** used when no extension factory claims a path and the file sniffs as text; C++ extensions stay routed to `IdeLaunch`. Text extensions with no dedicated editor (`.md .ini .log .hlsl .lua .toml .yaml .xml .txt ...`) register this factory explicitly.
 - **Reading:** files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, so a running game (or the editor's own logger) can keep writing, rotating or deleting the log being viewed.
 - **Save** preserves encoding, BOM and per-line endings (s3.5). `editor.text.ensureFinalNewline` and `editor.text.trimTrailingWhitespace`, both off by default.
-  - Atomic on Windows: write a temp file beside the target, flush, then **`ReplaceFileW`** (not a plain rename), which keeps the original's ACLs, attributes, alternate data streams and file identity for other watchers. A file that does not exist yet is created with a plain rename.
-  - **Sharing violation** (the file is open without delete/write sharing, e.g. a log held by a running process): the save fails cleanly with a banner -- *"<file> is in use by another program"* -- offering **Retry** and **Save As...**; the buffer stays dirty and nothing is lost. Read-only attribute or ACL refusals get the same banner with the reason.
+  - **Temp file:** written beside the target as `<name>.arctmp~<pid>-<n>`. The asset registry, project watchers and Content scanning **ignore the `.arctmp~` pattern** (one shared rule, tested), so a save never produces spurious create/delete or import events in Content or Config.
+  - **Atomic replace:** flush the temp, then **`ReplaceFileW`** (not a plain rename), which keeps the original's ACLs, attributes, alternate data streams and file identity for other watchers. A file that does not exist yet is created with `MoveFileExW(MOVEFILE_WRITE_THROUGH)`.
+  - **Fallback:** where `ReplaceFileW` is unsupported (some network shares and non-NTFS volumes return `ERROR_INVALID_FUNCTION`/`ERROR_NOT_SUPPORTED`), `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` is used; it loses ACL preservation, which the save notes once in the status strip.
+  - **Partial-failure recovery:** `ERROR_UNABLE_TO_MOVE_REPLACEMENT` (original intact, temp still present) -> delete the temp, report, buffer stays dirty. `ERROR_UNABLE_TO_MOVE_REPLACEMENT_2` (the original now sits under the backup name) -> **move the backup back** to the original name before reporting; if that also fails, the banner names both files so nothing is lost. The save code handles these states; it does not just surface them.
+  - **Read-only attribute:** the save is **refused** with a banner offering **Remove read-only and save** (clears `FILE_ATTRIBUTE_READONLY`, then saves) and **Save As...**. ACL denials get the same banner without the remove option.
+  - **Sharing violation** (the file is open without delete sharing, e.g. a log held by a running process): the save fails cleanly with a banner -- *"<file> is in use by another program"* -- offering **Retry**, **Save As...**, and, when the holder allows write sharing, **Overwrite in place (not atomic)**, which truncates and rewrites the file through a write-shared handle. The buffer stays dirty until a save succeeds; nothing is lost.
   - **Self-save suppression:** after a save the document records the written size, mtime and a content hash; watcher events matching them are ignored, so saving never triggers a "changed on disk" reload of itself.
 - **External changes** (file watcher, debounced):
   - clean document -> silent reload keeping cursors and scroll (positions mapped by line/col);
   - dirty document -> banner: **Reload** / **Keep mine**;
-  - append-only growth -> append (s3.5); truncation or rotation -> reload under the two rules above;
+  - append-only growth -> append, **only if the document is clean or read-only** (s3.5); a dirty document gets the dirty banner; truncation or rotation -> reload under the two rules above;
   - deleted -> banner; Save recreates the file.
-- **Crash safety:** unsaved text documents join the editor's existing autosave/recovery path (crash-window arc): buffers are snapshotted to the recovery store and offered back after a crash.
+- **Crash safety:** unsaved text documents join the editor's existing autosave/recovery path (crash-window arc). Only **dirty** buffers are snapshotted; the write happens on a worker from a `RopeSnapshot` (never stalling the frame); buffers above `editor.text.recoveryMaxMB` (default 16) are skipped with a one-time note in the status strip; snapshots are offered back after a crash.
 - **Session restore:** cursor, scroll, folds and split state per file, stored in user data (`editor.text.rememberViewState`).
 - **Inspector page** (`TextDocumentInspectorPage`): path, size, encoding, language, line endings, indentation, read-only reason -- editable where meaningful (language, encoding, line endings, indentation). This keeps Arcane's one-Inspector model; the document draws no properties block of its own.
 
@@ -264,6 +270,18 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
   - **has unsaved changes** -> shows its own conflict banner instead of silently losing either side;
   - **is clean** -> reloads, and **its undo history for that asset is cleared**, with a visible note in its toolbar ("History cleared: the file was changed outside this editor"). Commands in a document-scoped stack may hold pointers into the old in-memory objects and must not survive the reload. Entries in the editor's global `CommandStack` that target that asset are pruned the same way (the Inspector arc's prune-on-invalidate rule).
 - The same rule applies to any external change that reloads an asset under a clean dedicated editor, not only Open as Text; the plan audits which dedicated editors already do this.
+
+### 5.5 Keyboard input and layouts
+
+Two input streams, never mixed:
+- **Chords** -- keys plus modifiers, through the action table's `KeyChord` (Labelled = the key that prints that letter on the user's layout, Physical = a position, already in `EditorActions`). Ctrl-letter chords in vim (`Ctrl+V`, `Ctrl+R`, ...) are Labelled too.
+- **Characters** -- ImGui's input character queue (`WM_CHAR`), which is what the OS layout actually produced. Typed text comes from here, and so do **all vim keys that are characters**: `$ % { } " ^ ~ \` ' : / ? * #` and every letter. The vim keymap is keyed on characters plus named keys (`Esc`, `Enter`, `Tab`, arrows) plus Ctrl chords; it never reads `ImGuiKey_4` to mean `$`.
+
+Layout rules:
+- **AltGr.** Windows delivers AltGr as Left Ctrl + Right Alt. A Ctrl+Alt key event that produces a character in the same frame -- or any key with Right Alt held as AltGr on a layout that has AltGr -- is **text, never a chord**: it does not fire `text.*` actions, vim Ctrl handling, or Global actions. So `{` on German (AltGr+7) or `@` on Polish never adds a cursor. Default `TextDocument` bindings use Ctrl+Alt only with non-printing keys (arrows), which keeps the rule simple.
+- **Dead keys.** On US-International, German, French and similar layouts, `^ \` ' " ~` are dead keys: the OS composes them with the next keystroke and delivers a character only then. Vim consumes whatever character arrives; a lone dead key followed by Space delivers the bare symbol, as in every other Windows application. Nothing in vim times out on a pending dead key (the OS holds it, not vim). Users who want a non-dead binding remap it (s6.4).
+- **`Ctrl+[`** is a Labelled chord: on layouts where `[` needs AltGr it may be unreachable. `Esc` always works; vim users on such layouts typically remap (`jk` -> `Esc` is the documented example).
+- **IME** is disabled outside Insert/Replace/command line when vim is on (s5.1).
 
 ---
 
@@ -326,16 +344,27 @@ Vim's regex dialect differs from PCRE2 (`\<` `\>`, `\(` `\)`, `\|`, `\{n,m}`, ma
 | Vim | PCRE2 |
 |---|---|
 | magic (default): `\(` `\)` `\|` `\{n,m}` `\+` `\?` `\=` | `(` `)` `|` `{n,m}` `+` `?` `?` |
+| `\{-}` `\{-n,m}` `\{-n,}` `\{-,m}` (non-greedy) | `*?` `{n,m}?` `{n,}?` `{0,m}?` |
+| `\%(` ... `\)` (non-capturing group) | `(?:` ... `)` |
 | `\v` very magic, `\m` magic, `\M` nomagic, `\V` very nomagic | switch the translation table from that point on |
-| `\<` `\>` | `\b(?=\w)` / `\b(?<=\w)` (word = the grammar's `wordChars`, `iskeyword`) |
+| `\<` `\>` | `(?<![K])(?=[K])` / `(?<=[K])(?![K])`, where `[K]` is a character class **generated from the grammar's `wordChars`** (vim's `iskeyword`), never PCRE's `\w` |
+| `\k` `\K`, `\i` `\I` | `[K]` / `[K]` minus digits (keyword); `\i` uses the same class (identifier) in v1 |
+| `\s` `\S` | `[ \t]` / `[^ \t]` -- **vim's `\s` is space/tab only**, unlike PCRE's |
+| `\d \D \x \X \o \O \w \W \h \H \a \A \l \L \u \U` | `[0-9]` `[^0-9]` `[0-9A-Fa-f]` `[^0-9A-Fa-f]` `[0-7]` `[^0-7]` `[0-9A-Za-z_]` `[^0-9A-Za-z_]` `[A-Za-z_]` `[^A-Za-z_]` `[A-Za-z]` `[^A-Za-z]` `[a-z]` `[^a-z]` `[A-Z]` `[^A-Z]` (ASCII, as vim defines them) |
 | `\zs` `\ze` | `\K` / a lookahead wrapping the remainder |
 | `\c` `\C` anywhere | `(?i)` / `(?-i)` for the whole pattern, overriding `ignorecase`/`smartcase` |
 | `~` (last substitute string) | the escaped literal of the previous `:s` replacement |
-| `\_s` `\_.` `\n` | multi-line classes -> the multi-line search path (s4.2) |
-| `\%^` `\%$` `\%V` `\%23l` | `\A`, `\z`, and position predicates checked after matching |
-| `:s` replacement `\0`-`\9` `&` `\u` `\U` `\l` `\L` `\e` `\r` | expanded by the substitute engine, not by PCRE2 |
+| `\_s` `\_.` `\_x` (any `\_` class), `\n` | multi-line classes -> the multi-line search path (s4.2) |
+| `\%^` `\%$` (start / end of **file**) | the pattern is **always routed to the multi-line path** (whole-snapshot subject), where `\A`/`\z` mean what vim means. The line-by-line path never sees them, so `\A` cannot match at every line. |
+| `^` `$` (start / end of line) | on the line-by-line path the scratch subject *is* the line, so `^`/`$` are exact; on the multi-line path the pattern is compiled with `PCRE2_MULTILINE` |
+| `\%V` `\%23l` `\%23c` `\%23v` | position predicates checked on each candidate match after PCRE2 returns it |
+| `:s` replacement `\0`-`\9` `&` `\u` `\U` `\l` `\L` `\e` `\E` `\r` `\n` `~` | expanded by the substitute engine, not by PCRE2 |
 
-Anything outside the table is a **documented divergence** (listed in the vim help page and in the oracle's divergence notes, s11.3), reported as "E: unsupported pattern item `\%[...]`" rather than silently misbehaving.
+Search-command details that are not translation:
+- `*` and `#` search the word under the cursor wrapped in `\<` `\>` and **ignore `smartcase`** (they honour `ignorecase` only), as vim does; `g*`/`g#` drop the word boundaries.
+- Patterns are compiled once per distinct `(translated text, flags)` and cached per document.
+
+Anything outside the table is a **documented divergence** (listed in the vim help page and in the oracle's divergence notes, s11.3), reported as "E: unsupported pattern item `\%[...]`" rather than silently misbehaving. Known v1 divergences: `\%[...]` optional sequences, `\@<=`-style vim lookbehind spellings beyond the PCRE-expressible subset, `\%d123` code-point items, and equivalence classes `[[=a=]]`.
 
 ### 6.6 Per-mode chord table (vim on, `handleCtrlKeys` on)
 
@@ -381,7 +410,7 @@ The editor already has one action table (`Input/EditorActionTable.hpp`) with con
 
 All under `editor.text.*` (Preferences scope unless noted), registered through the settings arc's reflection (`ARC_REFLECT_TYPE_ATTR(Settings, ...)`) so they appear on the Preferences window, the sweep tests and the inventory:
 
-`font`, `fontSize`, `tabSize`, `insertSpaces`, `detectIndentation`, `lineNumbers`, `rulers`, `renderWhitespace`, `indentGuides`, `caretBlink`, `highlightCurrentLine`, `undoGroupMs`, `undoMemoryMB`, `syntaxMaxMB`, `openMaxMB`, `longLineMaxBytes`, `multilineSearchMaxMB`, `maxCursors`, `tokenizeLineBudgetUs`, `highlightFrameBudgetMs`, `syncCatchUpLines`, `regexMatchLimit`, `regexDepthLimit`, `ensureFinalNewline`, `trimTrailingWhitespace`, `languageByExtension`, `rememberViewState`, `autoClosePairs`, `autoIndent`, and the `vim.*` group from s6.4. Budgets and limits are Dev-flagged (advanced) rows; their defaults are set from the s11.5 measurements, not guessed. Project scope may override indentation and line-ending defaults (`PreferencesProject`).
+`font`, `fontSize`, `tabSize`, `insertSpaces`, `detectIndentation`, `lineNumbers`, `rulers`, `renderWhitespace`, `indentGuides`, `caretBlink`, `highlightCurrentLine`, `undoGroupMs`, `undoMemoryMB`, `syntaxMaxMB`, `openMaxMB`, `longLineMaxBytes`, `multilineSearchMaxMB`, `maxCursors`, `tokenizeLineBudgetUs`, `highlightFrameBudgetMs`, `syncCatchUpLines`, `syncCatchUpBudgetUs`, `recoveryMaxMB`, `regexMatchLimit`, `regexDepthLimit`, `ensureFinalNewline`, `trimTrailingWhitespace`, `languageByExtension`, `rememberViewState`, `autoClosePairs`, `autoIndent`, and the `vim.*` group from s6.4. Budgets and limits are Dev-flagged (advanced) rows; their defaults are set from the s11.5 measurements, not guessed. Project scope may override indentation and line-ending defaults (`PreferencesProject`).
 
 ---
 
@@ -421,28 +450,39 @@ All under `editor.text.*` (Preferences scope unless noted), registered through t
 ### 11.2 Syntax
 - **Grammar scope tests:** each language ships sample files with comment-annotated expectations (`// ^^^^ constant.numeric.json`), run by ArcaneTests. A grammar cannot regress silently.
 - **Incremental == full:** property test that after random edits, the incremental highlight cache equals a full re-tokenize.
-- **Version discipline:** a worker result tagged with an older buffer version is never applied (deterministic test with a held worker + interleaved edits); a far jump draws plain lines and fills in when the worker arrives; UI-thread catch-up never exceeds `syncCatchUpLines`.
-- **Line-local grammars:** a visible line deep in a file above `syntaxMaxMB` is coloured; a line-local grammar declaring a multi-line region is rejected on load.
-- **Long lines:** a 40 MB single-line JSON opens, draws, and the following line highlights from the root state.
+- **Version discipline:** with a held worker and interleaved edits (deterministic): rows above the earliest edit since the result's version are applied; rows below are applied shifted only when the edited rows converged; nothing stale is ever applied. **No-starvation test:** Follow appending every frame and steady typing at the end of a file both still colour every row above within a bounded number of frames. A far jump draws plain lines and fills in when the worker arrives; UI-thread catch-up never exceeds `syncCatchUpLines` or `syncCatchUpBudgetUs`. A grammar reload invalidates entries by `grammarVersion` while the worker holds the old snapshot safely.
+- **Line-local grammars:** a visible line deep in a file above `syntaxMaxMB` is coloured; a `begin`/`end` region left open at end of line is force-closed there.
+- **Long lines:** a 40 MB single-line JSON opens, draws, and the following line highlights from the root state; the incremental == full property test includes over-cap lines (the cap and resync are part of the tokenizer, so both sides apply them).
 - **Regex limits:** a catastrophic pattern (grammar rule and find query) hits the match limit, is reported, and the worker and UI keep running.
 - Grammar validation: malformed grammars produce a Problems row and fall back to Plain Text.
 
 ### 11.3 Vim
 - Table-driven cases `{start text + cursor, keys, expected text + cursor, expected mode/register state}`, hundreds of them, pure C++.
 - **Cursor-model tests** for every rule in s6.1 (inclusive motions, visual's extra character, `$`, `p`/`P`, `i`/`a`, leaving Insert, empty lines).
-- **Pattern translator tests:** every row of the s6.5 table, plus the divergence list producing its error.
+- **Pattern translator tests:** every row of the s6.5 table (including non-greedy `\{-}`, `\%(`, the ASCII classes, vim's space/tab `\s`, `\<` against a grammar `wordChars` with non-`\w` characters, and `\%^`/`\%$` never matching mid-file), `*`/`#` ignoring `smartcase`, plus the divergence list producing its error.
+- **Keyboard tests (s5.5):** AltGr characters never fire chords; vim keys arrive from the character queue on German, French and US-International layouts, including dead-key compositions; the IME is disabled in Normal/Visual/operator-pending and enabled in Insert.
 - **Chord table tests:** each row of s6.6 in each mode, and with `handleCtrlKeys` off.
-- **Neovim oracle (D9, D13):** `scripts/vim-oracle.ps1` runs each case through `nvim --headless --clean`. **Neovim's own defaults are the target**, so the script sets no compatibility options; it records the Neovim version it ran. It writes or verifies the expected columns. Dev-time only; tests never require Neovim. Cases where Arcane deliberately differs carry an explicit `divergence` note.
+- **Neovim oracle (D9, D13):** `scripts/vim-oracle.ps1` runs each case through `nvim --headless --clean` and writes or verifies the expected columns. Dev-time only; tests never require Neovim.
+  - **Pinned version.** The script pins one Neovim release (checked at start; it refuses another). Defaults change between minor versions, so bumping the pin is a deliberate re-bless with a reviewed diff of changed expectations.
+  - **Neovim's defaults are the target**, including the ones beyond D13's list that change outcomes, and Arcane emulates them: `formatoptions` contains `j` (`J` removes comment leaders, using the grammar's `comment` tokens), `autoindent` on, `nojoinspaces`.
+  - **Every case declares a filetype** (`json`, `lua`, `markdown`, ...). The oracle sets `filetype` so `commentstring` (and therefore Neovim 0.10+'s built-in `gc`) matches the Arcane grammar's `comment` for that language; Arcane runs the case with the matching grammar.
+  - **Known divergences up front:** `=` (Neovim without an `indentexpr` behaves nothing like grammar-driven re-indent; Arcane's `=` uses the grammar's `indent` rules), and the s6.5 pattern items. Each divergent case carries a `divergence` note instead of an oracle expectation.
+- **Multi-cursor vim cases are hand-written.** Neovim has no multi-cursor, so the oracle cannot produce them. They live in their own table file, are reviewed as their own task, and are derived from the rule "each cursor behaves as a single-cursor vim would, then selections merge" (s2.1, s6.2).
 
 ### 11.4 View and document
 - **Goldens:** the headless editor opens sample files (JSON, HLSL, Markdown, log; vim normal/visual; find bar open; split view) and screenshots them -- re-blessed through the established golden procedure.
 - **Witness scenarios:**
   - open a log another process holds open for writing (no delete sharing), follow it while it grows, survive a rotation and a truncation;
-  - save into a file locked by another process -> the in-use banner, buffer still dirty, Retry succeeds after release;
-  - a save does not trigger a self-reload; `ReplaceFileW` keeps a read-only file's attributes and ACLs;
+  - save into a file locked by another process -> the in-use banner, buffer still dirty, Retry succeeds after release; with write sharing allowed, Overwrite in place succeeds;
+  - a save does not trigger a self-reload, and the `.arctmp~` temp never reaches the asset registry or project watchers;
+  - `ReplaceFileW` keeps a normal file's ACLs and attributes; a **read-only** file refuses with the banner, and Remove read-only and save succeeds;
+  - injected `ERROR_UNABLE_TO_MOVE_REPLACEMENT` / `_2` leave the original intact (restored from the backup name in the `_2` case) and the buffer dirty; the unsupported-`ReplaceFileW` fallback saves;
+  - one file opened through the Asset Browser, a Console `file:line` link and a different-case / 8.3 path focuses a single tab;
+  - a dirty document whose file grows shows the banner, not an append; an append to a clean document leaves it clean with its undo history intact;
+  - Reopen with Encoding -> Windows-1252 makes a legacy `.bat` editable and saves it back as 1252, byte-identical when unedited;
   - external change with and without unsaved edits;
   - Open as Text read-only -> unlock -> save -> asset reload, with the dedicated editor clean (history cleared, note shown) and dirty (conflict banner);
-  - crash recovery restores an unsaved buffer.
+  - crash recovery restores an unsaved buffer; a dirty buffer above `recoveryMaxMB` is skipped with its note, and snapshotting never stalls a frame.
 
 ### 11.5 Performance budgets (`[perf]`, baselined)
 - Open a 100 MB log (line-local grammar): time to first coloured frame.
@@ -460,8 +500,8 @@ Baselines live with the existing automation baselines; regressions fail the suit
 ### 12.1 Order (each step ends green; the plan breaks them into tasks)
 
 1. **Core:** leaf-size benchmark, `Rope`, `TextBuffer` + undo, `EolMap`, `SelectionSet`, `TextCommands`, `DisplayMap` (folds), encodings. No UI; fully tested.
-2. **First visible editor:** `TextDocument`, basic `TextEditorView` (draw, edit, multi-cursor, mouse, save incl. `ReplaceFileW` + sharing rules, external change), fallback registration in `DocumentHost`, shared-verb actions + `document.closeAlt`. Usable from here.
-3. **Syntax:** PCRE2 vendored (with limits); grammar engine with versioned cache, line-local grammars, long-line cap; v1 grammars; `.arctheme` `syntax` block; grammar tests.
+2. **First visible editor:** `TextDocument` with canonical-path identity, basic `TextEditorView` (draw, edit, multi-cursor, mouse, the s5.5 keyboard/layout input layer, save incl. `ReplaceFileW` + fallback + recovery paths + sharing rules + the registry's `.arctmp~` ignore rule, external change incl. clean-only append), Windows-1252 reopen, fallback registration in `DocumentHost`, shared-verb actions + `document.closeAlt`. Usable from here.
+3. **Syntax:** PCRE2 vendored (with limits, per-thread match data); grammar engine with refcounted grammar snapshots, versioned cache with forward-mapped worker results, line-local grammars, long-line cap; v1 grammars; `.arctheme` `syntax` block; grammar tests.
 4. **Editing features:** find/replace, go to line, folding, brackets, split view, status strip, Inspector page, text-only actions in the table.
 5. **Vim** (behind **Experimental**, D12), four passes: (a) cursor model, modes, motions, operators, text objects, chord table; (b) registers, dot-repeat, macros, marks; (c) ex commands + the pattern translator; (d) options, remaps, persistence, Vim Preferences page. Oracle tables grow with each pass.
 6. **Polish:** log follow, crash recovery, session restore, Open as Text (with the undo-history rule), perf budgets, goldens, witness scenarios.
@@ -498,3 +538,27 @@ An independent review of revision 1 found real gaps; all were accepted. What cha
 | ImGui text-rendering limits unstated | Added to non-goals (s1.2) |
 | `when.followedBy` one-off extension | Removed; lookahead `match` rule ordered before the string region (s4.1) |
 | v1 too big for one release | D12: release gate after step 4 + step-6 essentials; vim Experimental (s12.2) |
+
+---
+
+## 14. Revision 3 (2026-10-07): second independent review folded in
+
+All findings accepted. Items 1-4 changed the shape of the code and were required before planning; 5-8 and the smaller points were cheap enough to settle here rather than carry as plan tasks.
+
+| Finding | Resolution |
+|---|---|
+| Discard-on-version-mismatch starves the worker under steady typing or Follow | Results mapped forward through the edit log: rows above the earliest edit always land; rows below land shifted when the edit converged (s4.4); no-starvation test (s11.2) |
+| Appended tail had no undo/dirty rules; dirty-and-growing ambiguous | Append only when clean or read-only; not an undo entry; `changeId`/`savedChangeId` unchanged; history stays valid (s3.5, s5.3) |
+| Keyboard layouts: AltGr, characters vs keys, dead keys, `Ctrl+[`, IME in Normal | New s5.5: chords vs character queue, AltGr is text, dead-key behaviour, IME off outside Insert (s5.1) |
+| Translator bugs: `\<` used `\w`; `\%^` broken per line; missing `\{-}`, `\%(`, classes; vim `\s`; `*`/`#` smartcase | Table rewritten (s6.5) |
+| Oracle diverges beyond D13; version drift; `gc` needs filetype; `=` | Pinned Neovim, Neovim defaults emulated (`formatoptions+=j`, `autoindent`, `nojoinspaces`), per-case filetype, `=` a declared divergence (s11.3) |
+| Long-line resync contradicts no-resync rule and breaks incremental == full; `lineLocal` undecidable | Named exception applied identically in all modes; `lineLocal` = force-close regions at end of line (s3.5, s4.1, s11.2) |
+| `ReplaceFileW` contradictions and gaps | Read-only refused with Remove-read-only-and-save; `_REPLACEMENT`/`_2` recovery; unsupported-volume fallback; overwrite-in-place option; `.arctmp~` ignored by Arcane's watchers (s5.3) |
+| GUID-or-path identity can split one file into two tabs | Canonical path (`GetFinalPathNameByHandleW`) is the only key; GUID is a lookup (s5.3) |
+| Catch-up bounded only in lines | Also `syncCatchUpBudgetUs` (s4.4) |
+| PCRE2 per-thread state unstated | Match data, contexts and JIT stacks per thread (s4.2) |
+| Grammar hot-reload under the worker | Refcounted grammar snapshots + `grammarVersion` on cache entries (s4.1, s4.4) |
+| Windows-1252 files stuck read-only | Reopen with Encoding -> Windows-1252 in v1 (s3.5) |
+| Crash recovery could stall on big buffers | Dirty-only, worker-written from snapshots, `recoveryMaxMB` cap (s5.3) |
+| Multi-cursor vim expectations can't come from the oracle | Hand-written table file with its own review (s11.3) |
+
