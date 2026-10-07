@@ -634,7 +634,9 @@ TEST_CASE("AssetFileOps: delete -> undo -> redo round-trips bytes, mtime and reg
     r.stack.Undo();
     CHECK(r.w.Snapshot() == before);
     CHECK(r.w.registry.All() == regBefore);                   // the same guid comes back
-    CHECK(fs::last_write_time(r.w.content / "textures" / "uv_marker.png") == mtime);
+    // Parenthesised: libc++'s file_time_type counts in __int128, which Catch2
+    // cannot stringify, so the comparison must not be decomposed.
+    CHECK((fs::last_write_time(r.w.content / "textures" / "uv_marker.png") == mtime));
 
     r.w.WriteRaw("textures/uv_marker.png", "edited after undo");
     r.stack.Redo();                                           // re-captures the edited bytes

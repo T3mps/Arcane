@@ -293,7 +293,7 @@ TEST_CASE("cvar archive T3-D2: a write merges into the file -- foreign keys stay
     const auto older = std::filesystem::last_write_time(user / "editor.json") - std::chrono::hours(1);
     std::filesystem::last_write_time(user / "editor.json", older);
     WriteCVarArchive(reg, user);                          // nothing changed: the file is left alone
-    CHECK(std::filesystem::last_write_time(user / "editor.json") == older);
+    CHECK((std::filesystem::last_write_time(user / "editor.json") == older));   // not decomposed: libc++ file_time_type is __int128-based, which Catch2 cannot print
     std::filesystem::remove_all(user);
 }
 
