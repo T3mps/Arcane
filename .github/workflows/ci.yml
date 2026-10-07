@@ -260,12 +260,12 @@ jobs:
           mkdir -p logs
           config=$(echo "${{ matrix.config }}" | tr '[:upper:]' '[:lower:]')
           bindir=$(scripts/arcane-bin-dir.sh ${{ matrix.config }})
-          make -j"$MAKE_JOBS" config="$config" \
+          make -k -j"$MAKE_JOBS" config="$config" \
             ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient 2>&1 | tee logs/build-engine.log
           "$bindir/arcbuild/arcbuild" build --project ReferenceProject --config ${{ matrix.config }} --sdk "$GITHUB_WORKSPACE" \
             2>&1 | tee logs/build-referencegame.log
           ls -l ReferenceProject/Binaries/
-          make -j"$MAKE_JOBS" config="$config" \
+          make -k -j"$MAKE_JOBS" config="$config" \
             ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests 2>&1 | tee logs/build-tests.log
 
       # ------------------------------------------------------------------

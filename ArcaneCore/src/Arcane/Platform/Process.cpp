@@ -27,6 +27,7 @@
     #include <mach-o/loader.h>
     #include <cstring>
     #include <mach/mach_time.h>
+    #include <sys/proc.h>        // SZOMB
     #include <sys/proc_info.h>
 #endif
 
