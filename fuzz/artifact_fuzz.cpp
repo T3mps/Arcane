@@ -67,28 +67,36 @@ namespace
         out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
     }
 
-    uint64_t ExpectedMipBytes(Arcane::ArtifactPixelFormatValue fmt, uint64_t w, uint64_t h, bool& known)
+    // The bytes a mip's dims imply -- what NriTextureCache::UploadArtifact reads
+    // for it (its slicePitch). Computed exactly in 128 bits: the upload does it
+    // in uint32, so a size that only matches after wrapping is still a lie.
+    unsigned __int128 MipBytes(Arcane::ArtifactPixelFormatValue fmt, uint64_t w, uint64_t h, bool& known)
     {
+        using U = unsigned __int128;
         known = true;
         switch (fmt)
         {
-        case Arcane::ArtifactPixelFormatValue::RGBA8: return w * h * 4;
-        case Arcane::ArtifactPixelFormatValue::BC7:   return ((w + 3) / 4) * ((h + 3) / 4) * 16;
+        case Arcane::ArtifactPixelFormatValue::RGBA8: return U(w) * h * 4;
+        case Arcane::ArtifactPixelFormatValue::BC7:   return U((w + 3) / 4) * ((h + 3) / 4) * 16;
         default: known = false; return 0;   // reserved formats: the upload refuses them
         }
     }
 
     void CheckTexture(const Arcane::LoadedClientArtifact& a)
     {
-        FUZZ_CHECK(a.thumbRgba.size() == uint64_t(a.thumbWidth) * a.thumbHeight * 4);
+        const uint64_t thumbPixels = uint64_t(a.thumbWidth) * a.thumbHeight;
+        FUZZ_CHECK(thumbPixels <= a.thumbRgba.size() / 4 && thumbPixels * 4 == a.thumbRgba.size());
         FUZZ_CHECK(a.mips.size() == a.info.mipCount);
         for (const Arcane::MipView& m : a.mips)
         {
             FUZZ_CHECK(m.offset <= a.payload.size() && m.size <= a.payload.size() - m.offset);
             bool known = false;
-            const uint64_t want = ExpectedMipBytes(a.format, m.width, m.height, known);
+            const unsigned __int128 want = MipBytes(a.format, m.width, m.height, known);
             if (known)
-                FUZZ_CHECK(m.size == want);
+            {
+                FUZZ_CHECK(m.width > 0 && m.height > 0);
+                FUZZ_CHECK(m.size == want);   // the upload reads exactly this many bytes from here
+            }
         }
         // Touch every byte the consumers would, so ASan sees any lie above.
         volatile uint8_t sink = 0;
