@@ -68,3 +68,29 @@ TEST_CASE("Layout page: a refused default write reports the refusal instead of s
     Revert();
     CHECK(cvar_layoutDefault.Get().empty());
 }
+
+// S4-GATE deferral: deleting the default layout while a stronger rung holds it
+// must keep the refused clear visible, not overwrite it with "Deleted".
+TEST_CASE("Layout page: deleting the default layout under a stronger rung keeps the refusal visible", "[settings-ui][editor]")
+{
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    Revert();
+    LayoutPageState st;
+    st.dir = std::filesystem::temp_directory_path() / "s6gate-layout-page";
+    std::filesystem::remove_all(st.dir);
+    REQUIRE(SaveLayoutAs(st, "Wide", "[Window][X]\n"));
+    REQUIRE(reg.Set(cvar_layoutDefault.Handle(), Arcane::CVarValue::String("Wide"),
+                    Arcane::SetBy::CommandLine, "test", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+
+    CHECK(DeleteLayout(st, "Wide"));
+    CHECK_FALSE(LayoutLibrary(st.dir).Exists("Wide"));
+    INFO(st.status);
+    CHECK(st.status.starts_with("Deleted 'Wide', but it is still the default"));
+    CHECK(st.status.find("Default not applied") != std::string::npos);
+    CHECK(cvar_layoutDefault.Get() == "Wide");
+
+    reg.ClearRung(cvar_layoutDefault.Handle(), Arcane::SetBy::CommandLine);
+    Revert();
+    std::filesystem::remove_all(st.dir);
+}

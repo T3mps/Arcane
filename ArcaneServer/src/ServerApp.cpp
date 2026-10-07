@@ -105,8 +105,11 @@ namespace Arcane::Server
         // Settings arc S6-8: with no --fixed-dt the rate is server.tickHz
         // (Restart), read here, AFTER OpenProject applied the project's
         // Config rung, and the wall-clock pacing follows it.
+        // Runtime::SetFixedHz, not Loop().SetFixedHz: the physics step
+        // follows the tick too, so a server.tickHz != sim.fixedHz no longer
+        // runs the simulation at the wrong speed (S6-8 deferral, S6-GATE).
         const double tickHz = m_cfg.FixedHz();
-        m_runtime->Loop().SetFixedHz(tickHz);
+        m_runtime->SetFixedHz(tickHz);
         if (!m_cfg.fixedDtSupplied)
             m_cfg.fixedDtSeconds = 1.0 / tickHz;
         rep.fixedDt = 1.0 / m_runtime->Loop().FixedHz();

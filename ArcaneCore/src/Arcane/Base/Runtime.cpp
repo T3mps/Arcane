@@ -35,6 +35,7 @@
 #include <Astra/Core/WorkScheduler.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
 
+#include <cmath>       // Runtime::SetFixedHz refuses a non-finite rate
 #include <exception>   // ~Runtime / ReleaseProjectCVarLayers guard the release (S4-GATE)
 #include <mutex>      // the process-wide snapshot SaveConfig (S6-45)
 #include <optional>
@@ -418,6 +419,20 @@ namespace Arcane
     Astra::Registry&  Runtime::Registry()   noexcept { return *m_impl->registry; }
     SystemSchedulers& Runtime::Schedulers() noexcept { return *m_impl->schedulers; }
     RunLoop&          Runtime::Loop()       noexcept { return *m_impl->loop; }
+
+    void Runtime::SetFixedHz(double hz)
+    {
+        if (!(hz > 0.0) || !std::isfinite(hz)) return;
+        // loopCfg is what InstallEngineSystems (a ClearSystems reinstall) and
+        // PhysicsEditPass read, so every later step agrees with the loop.
+        m_impl->loopCfg.fixedHz = hz;
+        m_impl->loop->SetFixedHz(hz);
+        // PhysicsSystem captured its dt at AddSystem: re-add it at the new
+        // rate (its Before<TransformPropagationSystem> keeps it ordered).
+        m_impl->schedulers->fixedUpdate.RemoveSystem<PhysicsSystem>();
+        InstallEngineSystems();
+    }
+
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Mosaic::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
     ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
@@ -668,17 +683,29 @@ namespace Arcane
             {
                 // A failed archive write must not leave the layers half released
                 // (S4-GATE): nlohmann::json::dump throws on a string value that is
-                // not UTF-8, and this also runs from ~Runtime.
+                // not UTF-8, and this also runs from ~Runtime. One guard PER
+                // RUNG (S6-GATE): a project User value that cannot be written
+                // must not cost the machine-wide EditorUser edits too.
                 try
                 {
                     WriteCVarArchive(cvars, UserCVarDir(outgoing));
-                    if (!editorUserDir.empty())
-                        WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
                 }
                 catch (const std::exception& e)
                 {
                     ARC_ERROR("cvar: archiving the user settings of '{}' failed ({}) -- unsaved edits are lost; the project still closes",
                               outgoing.Manifest().name, e.what());
+                }
+                if (!editorUserDir.empty())
+                {
+                    try
+                    {
+                        WriteCVarArchive(cvars, editorUserDir, SetBy::EditorUser);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        ARC_ERROR("cvar: archiving the editor-wide settings to '{}' failed ({}) -- unsaved editor edits are lost",
+                                  editorUserDir.string(), e.what());
+                    }
                 }
             }
             cvars.RevertLayer(SetBy::User);
@@ -700,10 +727,21 @@ namespace Arcane
     void Runtime::Impl::ReleaseProject()
     {
         if (!OwnsProject()) return;   // a second Runtime's project: nothing process-wide is its to release
+        // The project's paths and ownership are dropped however the release
+        // exits (S6-GATE): a cvar callback throwing out of Publish must not
+        // leave a destroyed Runtime as g_projectOwner, or the next Runtime
+        // would layer nothing for its own project.
+        struct DropOwnership
+        {
+            Impl& impl;
+            ~DropOwnership()
+            {
+                ForgetProjectPaths(impl.project->Root());
+                g_projectOwner = nullptr;
+            }
+        } drop{ *this };
         ReleaseProjectCVarLayers(*project, archiveUserCVars, editorUserConfigDir);
         CVarRegistry::Get().Publish();
-        ForgetProjectPaths(project->Root());
-        g_projectOwner = nullptr;
     }
 
     LayerSources Runtime::CVarLayerSources() const

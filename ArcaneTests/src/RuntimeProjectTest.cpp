@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 
@@ -169,9 +170,6 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
-// T3-D2: the user cvar archive. A project's User layer (Saved/Config/) leaves
-// with it; a host that archives writes it back on the switch and close, so a
-// value set in project A survives A -> B -> A and never leaks into B.
 TEST_CASE("Runtime teardown: ~Runtime survives a release that throws: a User cvar holding invalid UTF-8 is logged, not std::terminate", "[project][cvar]")
 {
     // S4-GATE (S2-H follow-up): ~Runtime runs ReleaseProject, whose archive
@@ -200,6 +198,105 @@ TEST_CASE("Runtime teardown: ~Runtime survives a release that throws: a User cva
     std::error_code ec; fs::remove_all(dir, ec);
 }
 
+TEST_CASE("Runtime teardown: a throwing User archive write still archives the EditorUser rung (one guard per rung)", "[project][cvar]")
+{
+    // S6-GATE (S4-GATE deferral): both archive writes shared one try block,
+    // so a User value that cannot be dumped (invalid UTF-8) skipped the
+    // EditorUser write too and lost the editor-wide edits.
+    const fs::path dir = MakeTempDir("teardown_rungs");
+    const fs::path machine = dir / "Machine";
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s6gate-rungs-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    Arcane::CVarDesc text{ "s6gaterungs.text", Arcane::CVarType::String, Arcane::CVarValue::String("ok"), {}, {},
+                           Arcane::CVarFlags::Archive, "test cvar", "s6gate-rungs-test" };
+    const Arcane::CVarHandle bad = cvars.Register(text);
+    Arcane::CVarDesc flag{ "s6gaterungs.flag", Arcane::CVarType::Bool, Arcane::CVarValue::Bool(true), {}, {},
+                           Arcane::CVarFlags::Archive, "test cvar", "s6gate-rungs-test" };
+    flag.audience = Arcane::Audience::Editor;
+    flag.scope = Arcane::SettingScope::PreferencesMachine;
+    const Arcane::CVarHandle machineFlag = cvars.Register(flag);
+    REQUIRE_FALSE(bad.IsStale());
+    REQUIRE_FALSE(machineFlag.IsStale());
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        rt.SetUserCVarArchiving(true);
+        rt.SetEditorUserConfigDir(machine);
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(bad, Arcane::CVarValue::String(std::string("\xFF\xFE not UTF-8")), Arcane::SetBy::User, "editor")
+                == Arcane::SetResult::Applied);
+        REQUIRE(cvars.Set(machineFlag, Arcane::CVarValue::Bool(false), Arcane::SetBy::EditorUser, "editor")
+                == Arcane::SetResult::Applied);
+        cvars.Publish();
+        rt.CloseProject();   // the User write throws; the EditorUser write must still run
+        const fs::path machineFile = machine / "s6gaterungs.json";
+        REQUIRE(fs::exists(machineFile));
+        std::ifstream in(machineFile, std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        INFO(doc.dump());
+        CHECK(doc.at("flag") == false);
+        CHECK_FALSE(cvars.RungValue("s6gaterungs.text", Arcane::SetBy::User).has_value());   // the User layer still left
+    }
+    cvars.RevertLayer(Arcane::SetBy::EditorUser);
+    cvars.Publish();
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+namespace
+{
+    bool g_throwOnRelease = false;
+    void ThrowingCallback(Arcane::CVarHandle, void*)
+    {
+        if (g_throwOnRelease) { g_throwOnRelease = false; throw std::runtime_error("test callback threw during Publish"); }
+    }
+}
+
+TEST_CASE("Runtime teardown: ~Runtime survives a cvar callback that throws during the release's Publish, and the next Runtime owns its project", "[project][cvar]")
+{
+    // S6-GATE (S4-GATE deferral): ~Runtime's outer guard. ReleaseProject's
+    // Publish fires callbacks for the User values leaving with the project; a
+    // throwing callback used to skip the ownership drop, so the destroyed
+    // Runtime stayed g_projectOwner and the next Runtime layered nothing.
+    const fs::path dir = MakeTempDir("teardown_callback");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { g_throwOnRelease = false; Arcane::CVarRegistry::Get().UnregisterModule("s6gate-callback-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    const Arcane::CVarHandle value = cvars.Register(Arcane::CVarDesc{ "s6gatecb.value", Arcane::CVarType::Int32,
+        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::None, "test cvar", "s6gate-callback-test" });
+    REQUIRE_FALSE(value.IsStale());
+    {
+        const Arcane::CVarModuleScope scope("s6gate-callback-test");
+        cvars.AddCallback(value, &ThrowingCallback, nullptr);
+    }
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        REQUIRE(rt.OpenProject(dir / "A"));
+        REQUIRE(cvars.Set(value, Arcane::CVarValue::Int32(2), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+        cvars.Publish();
+        g_throwOnRelease = true;
+    }   // ~Runtime: the User rung reverts, Publish fires the callback, it throws; logged, not std::terminate
+    CHECK_FALSE(g_throwOnRelease);   // the callback did run (and threw)
+    CHECK_FALSE(cvars.RungValue("s6gatecb.value", Arcane::SetBy::User).has_value());
+
+    // The project's own config reaches the next Runtime: it is the owner again.
+    WriteFile(dir / "A" / "Config" / "s6gatecb.json", R"({ "value": 5 })");
+    {
+        Arcane::Runtime next(Arcane::Test::Process());
+        REQUIRE(next.OpenProject(dir / "A"));
+        CHECK(cvars.Get(value)->AsInt32() == 5);
+    }
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+// T3-D2: the user cvar archive. A project's User layer (Saved/Config/) leaves
+// with it; a host that archives writes it back on the switch and close, so a
+// value set in project A survives A -> B -> A and never leaks into B.
 TEST_CASE("Runtime user cvar archive: a project switch writes the OLD project's file, drops its User layer, and a reopen reads it back",
           "[project][cvar]")
 {

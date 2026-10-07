@@ -1,14 +1,22 @@
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsSweep.hpp"
 #include "Helpers/TestTypeContext.hpp"
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarFormat.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
+#include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Project/AppSplashSettings.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 using namespace Arcane;
 
@@ -70,6 +78,12 @@ TEST_CASE("sweep: a formatVersion 1 gravity is negated on migration (the v1 rule
 
 TEST_CASE("sweep: an unmigrated read-only legacy block overrides an older Config value in memory", "[sweep][project][runtime]")
 {
+#if !defined(_WIN32)
+    // The held ifstream below blocks the atomic replace only on Windows; a
+    // POSIX rename succeeds over an open file, so the fallback would go
+    // unexercised and the case would pass vacuously (S6-7 deferral).
+    SKIP("a held destination models a read-only store only on Windows");
+#endif
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "arcane-sweep-readonly-legacy";
     fs::remove_all(root);
@@ -94,6 +108,12 @@ TEST_CASE("sweep: an unmigrated read-only legacy block overrides an older Config
 
 TEST_CASE("sweep: Project::Open on an unmigratable legacy project leaves the global registry untouched", "[sweep][project]")
 {
+#if !defined(_WIN32)
+    // The held ifstream below blocks the atomic replace only on Windows; a
+    // POSIX rename succeeds over an open file, so the fallback would go
+    // unexercised and the case would pass vacuously (S6-7 deferral).
+    SKIP("a held destination models a read-only store only on Windows");
+#endif
     // The editor's project-switch validation probe calls Project::Open and may
     // then abort the switch (dirty documents). Open must therefore apply
     // nothing to the global CVarRegistry: the in-memory legacy fallback is the
@@ -132,5 +152,34 @@ TEST_CASE("sweep: Project::Open on an unmigratable legacy project leaves the glo
         CHECK(after->history[i].module == before->history[i].module);
     }
     held.close();
+    fs::remove_all(root);
+}
+
+namespace
+{
+    void RecordKeys(std::string_view key, std::span<const Diagnostic>, void* user)
+    {
+        static_cast<std::vector<std::string>*>(user)->emplace_back(key);
+    }
+}
+
+TEST_CASE("sweep: the early config rungs read a malformed manifest silently -- Project::Open publishes it once", "[sweep][project]")
+{
+    // S6-7 deferral: ApplyEarlyConfigRungs called ProjectManifest::LoadFile
+    // without an outDiag, so a malformed manifest published under "project"
+    // before Diagnostics::Install and again from Project::Open.
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "arcane-sweep-early-malformed";
+    fs::remove_all(root);
+    fs::create_directories(root / "Content");
+    std::ofstream(root / "M.arcproj") << R"({ "formatVersion": 2, "name": )";   // truncated JSON
+
+    std::vector<std::string> published;
+    Diagnostics::SetSink(&RecordKeys, &published);
+    HostConfig cfg{};
+    cfg.projectPath = (root / "M.arcproj").string();
+    HostBoot::ApplyEarlyConfigRungs(cfg, CVarContext::Editor, /*editor*/ false);
+    CHECK(std::find(published.begin(), published.end(), "project") == published.end());
+    (void)Diagnostics::ClearSinkIfCurrent(&RecordKeys, &published);
     fs::remove_all(root);
 }

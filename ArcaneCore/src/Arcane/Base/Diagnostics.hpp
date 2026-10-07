@@ -312,7 +312,9 @@ namespace Arcane::Diagnostics
     // The tail the NEXT reporter spawn appends (S6-4 carried gap): Install's
     // snapshot, re-formatted when diagnostics.logTailLines or
     // ui.copyFlashSeconds (both Live) publish a change. A test seam; it
-    // allocates, so never the crash path. Empty before the first Install.
+    // allocates, so never the crash path. Empty until the first Install,
+    // RetargetDumpDir or watched Live publish fills it: RetargetDumpDir
+    // attaches the Live watch and snapshots even before any Install.
     [[nodiscard]] ARC_CORE_API std::wstring CurrentReporterSettingsArgs();
 
     // How the Live reporter-settings watch attaches (S6-5 carried follow-up):

@@ -5,6 +5,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include "Helpers/SettingsSweep.hpp"
+#include "Helpers/TestTypeContext.hpp"
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Config/Bindings/JobsBinding.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Host/HostConfig.hpp>
@@ -16,6 +22,7 @@
 
 #include "ServerConfig.hpp"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -147,4 +154,55 @@ TEST_CASE("sweep: jobs.externalThreads / jobs.shaderCompileThreads defaults are 
         CHECK(e->apply == ApplyMode::Restart);
         CHECK(HasFlag(e->flags, CVarFlags::Dev));
     }
+}
+
+namespace
+{
+    // One free-falling dynamic box, stepped exactly once at `hz`; returns its
+    // vertical velocity after that step (gravity * the step physics took).
+    float FallVelocityAfterOneStep(double hz, bool rerate)
+    {
+        Runtime rt(Test::Process());
+        if (rerate) rt.SetFixedHz(hz);
+        auto& reg = rt.Registry();
+        RegisterSceneComponents(reg);
+        const Astra::Entity box = reg.CreateEntity();
+        reg.AddComponent<Transform>(box, Transform{ .position = { 0.0f, 10.0f, 0.0f } });
+        RigidBody2D body; body.type = Phys::BodyType::Dynamic; body.fixedRotation = true;
+        reg.AddComponent<RigidBody2D>(box, body);
+        Fixture fx; fx.kind = Phys::ShapeKind::Aabb; fx.halfW = 0.5f; fx.halfH = 0.5f;
+        Collider2D col; col.fixtures.push_back(fx);
+        reg.AddComponent<Collider2D>(box, col);
+        rt.EnsurePhysics();
+        REQUIRE(rt.Loop().FixedHz() == hz);
+        rt.Loop().Advance(1.0 / hz);   // exactly one fixed step
+        RigidBody2D& rb = *reg.GetComponent<RigidBody2D>(box);
+        const BodyMotion2D m = reg.GetResource<Physics2D>()->Motion(box, rb);
+        REQUIRE(m.bodyReady);
+        return m.velocityY;
+    }
+}
+
+TEST_CASE("sweep: Runtime::SetFixedHz re-rates the physics step with the loop (server.tickHz != sim.fixedHz)", "[sweep][sim][server]")
+{
+    // S6-8 deferral, owned by S6-GATE: ArcaneServer re-rated only the RunLoop,
+    // so with server.tickHz = 30 each tick still stepped physics by
+    // 1/sim.fixedHz and the simulation ran at half speed.
+    const float g = Runtime(Test::Process()).ResolvedGravity().y;
+    REQUIRE(g < 0.0f);
+    const float at60 = FallVelocityAfterOneStep(60.0, false);
+    const float at30 = FallVelocityAfterOneStep(30.0, true);
+    INFO("g " << g << ", one step at 60 Hz " << at60 << ", at 30 Hz " << at30);
+    CHECK(std::abs(at60 - g / 60.0f) < 1e-4f);
+    CHECK(std::abs(at30 - g / 30.0f) < 1e-4f);   // the step the loop ran, not 1/sim.fixedHz
+
+    // A ClearSystems reinstall (module unload) keeps the re-rated step.
+    Runtime rt(Test::Process());
+    rt.SetFixedHz(30.0);
+    rt.ClearSystems();
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<PhysicsSystem>());
+    CHECK(rt.Loop().FixedHz() == 30.0);
+    rt.SetFixedHz(0.0);                       // refused
+    rt.SetFixedHz(std::nan(""));              // refused
+    CHECK(rt.Loop().FixedHz() == 30.0);
 }

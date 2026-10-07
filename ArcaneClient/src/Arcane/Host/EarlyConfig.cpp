@@ -1,5 +1,6 @@
 #include <Arcane/Host/EarlyConfig.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>   // the local Diagnostic that keeps the early manifest read silent
 #include <Arcane/Base/Runtime.hpp>   // ApplyEngineConfigRung
 #include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -31,7 +32,10 @@ namespace Arcane::HostBoot
                 const Paths::Config projectPaths = Paths::ForProject(root);
                 ApplyCVarDirectory(cvars, Paths::Resolve(Paths::Location::ProjectConfig, projectPaths),
                                    SetBy::Project, "project");
-                if (const auto projectManifest = ProjectManifest::LoadFile(*manifest))
+                // A local Diagnostic keeps this early read silent: a malformed
+                // manifest is published once, by Project::Open (S6-7 deferral).
+                Diagnostic manifestDiag;
+                if (const auto projectManifest = ProjectManifest::LoadFile(*manifest, &manifestDiag))
                     ApplyLegacyManifestSettings(cvars, *projectManifest);
                 if (editor)
                 {

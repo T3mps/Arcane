@@ -1075,6 +1075,14 @@ namespace Arcane
     {
         if (m->publishing) return;
         m->publishing = true;
+        // Cleared however Publish exits (S6-GATE): a callback that throws
+        // propagates to the caller, but must not leave `publishing` latched,
+        // or every later Publish would be a silent no-op for the process.
+        struct PublishingReset
+        {
+            bool& flag;
+            ~PublishingReset() { flag = false; }
+        } publishingReset{ m->publishing };
         const bool cheatsWere = CheatsEnabled();
         std::vector<std::uint32_t> dirty;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
@@ -1112,7 +1120,6 @@ namespace Arcane
             }
             m->Dispatch(reverted);
         }
-        m->publishing = false;
     }
 
     std::shared_ptr<const CVarSnapshot> CVarRegistry::Snapshot() const

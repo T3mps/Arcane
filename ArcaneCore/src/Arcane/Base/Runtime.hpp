@@ -135,6 +135,13 @@ namespace Arcane
         ::Arcane::Registry&       Registry()      noexcept;
         SystemSchedulers&         Schedulers()    noexcept;
         RunLoop&                  Loop()          noexcept;
+        // Re-rate this Runtime's fixed step (a dedicated server's tick, settings
+        // arc S6-GATE): the loop, the installed PhysicsSystem's step and the
+        // rate a ClearSystems reinstall uses all follow `hz`, so physics
+        // advances by the step the loop actually runs. Call before a game
+        // module loads (the PhysicsSystem is re-added). Ignores hz <= 0 or
+        // non-finite.
+        void                      SetFixedHz(double hz);
         ::Arcane::TypeContext*    TypeContext()   noexcept;
         ::Arcane::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*            TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face

@@ -166,7 +166,7 @@ namespace Arcane::Editor
         const Arcane::CVarHandle h = actions.HandleOf(id);
         if (winner <= Arcane::SetBy::EditorUser || h.IsStale()) return false;
         Arcane::CVarRegistry& reg = actions.Registry();
-        (void)reg.ClearRung(h, winner);
+        if (!reg.ClearRung(h, winner)) return false;   // the registry held no record there: nothing cleared, nothing to archive
         reg.Publish();
         actions.RefreshBindings();
         if (sink) sink(winner, CVarNameOf(id));
@@ -259,7 +259,14 @@ namespace Arcane::Editor
                 ImGui::TextColored(Theme::kAmber, ICON_LC_LAYERS);
                 ImGui::SetItemTooltip("Overridden by %s: this binding wins over the one saved for all projects", RungLabel(row.overriddenBy));
                 ImGui::SameLine();
-                if (ImGui::SmallButton(ICON_LC_ERASER "##clearoverride")) (void)ClearShortcutOverride(actions, row.id, archive);
+                if (ImGui::SmallButton(ICON_LC_ERASER "##clearoverride"))
+                {
+                    if (ClearShortcutOverride(actions, row.id, archive))
+                        st.refusal.clear();
+                    else
+                        st.refusal = std::string("The ") + RungLabel(row.overriddenBy) + " binding of '" + row.action
+                                   + "' was not cleared: the registry no longer holds it there.";
+                }
                 ImGui::SetItemTooltip("Clear override: remove the %s binding; the row shows what is left underneath", RungLabel(row.overriddenBy));
             }
             ImGui::TableNextColumn(); ImGui::TextUnformatted(row.context.c_str());

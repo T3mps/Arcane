@@ -67,9 +67,15 @@ namespace Arcane::Editor
     bool DeleteLayout(LayoutPageState& st, std::string_view name)
     {
         if (!Library(st).Delete(name)) { st.status = "Could not delete '" + std::string(name) + "'"; return false; }
-        if (cvar_layoutDefault.Get() == name) (void)SetDefaultLayout(st, "");
-        st.status = "Deleted '" + std::string(name) + "'";
         st.listDirty = true;
+        // A stronger rung (--set, say) can refuse the clear: keep that refusal
+        // visible beside the delete instead of overwriting it (S4-GATE deferral).
+        if (cvar_layoutDefault.Get() == name && !SetDefaultLayout(st, ""))
+        {
+            st.status = "Deleted '" + std::string(name) + "', but it is still the default: " + st.status;
+            return true;
+        }
+        st.status = "Deleted '" + std::string(name) + "'";
         return true;
     }
 

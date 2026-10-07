@@ -8,6 +8,7 @@
 
 #include "Helpers/CVarTestDesc.hpp"
 
+#include <stdexcept>
 #include <string>
 
 using namespace Arcane;
@@ -64,4 +65,31 @@ TEST_CASE("callback dispatch works on a copy: a callback added during dispatch f
     reg.Publish();
     CHECK(s.first == 2);
     CHECK(s.second == 1);
+}
+
+TEST_CASE("a callback that throws out of Publish propagates, and the next Publish still promotes and dispatches", "[cvar]")
+{
+    // S6-GATE (S4-GATE deferral, ~Runtime's guard): Publish latched its
+    // re-entrancy flag before dispatch and cleared it only on the normal
+    // exit, so one throwing callback turned every later Publish in the
+    // process into a silent no-op.
+    CVarRegistry reg;
+    const CVarHandle h = reg.Register(Test::Desc("test.throwing", CVarValue::Int32(0), Audience::Game));
+    REQUIRE_FALSE(h.IsStale());
+    struct Probe { int fires = 0; bool throwNext = true; } probe;
+    reg.AddCallback(h, [](CVarHandle, void* u)
+    {
+        auto* p = static_cast<Probe*>(u);
+        ++p->fires;
+        if (p->throwNext) { p->throwNext = false; throw std::runtime_error("callback threw during Publish"); }
+    }, &probe);
+
+    REQUIRE(reg.Set(h, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+    CHECK_THROWS_AS(reg.Publish(), std::runtime_error);
+    CHECK(reg.Get(h)->AsInt32() == 1);   // promoted before the dispatch threw
+
+    REQUIRE(reg.Set(h, CVarValue::Int32(2), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    CHECK(reg.Get(h)->AsInt32() == 2);   // not latched: this Publish promoted
+    CHECK(probe.fires == 2);             // ...and dispatched
 }
