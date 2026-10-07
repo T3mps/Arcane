@@ -4,6 +4,8 @@
 #   scripts/run-fuzz.sh <target|all> [seconds]        build + fuzz (default 60s each)
 #   scripts/run-fuzz.sh build <target|all>            build only
 #   scripts/run-fuzz.sh regress <target|all>          replay fuzz/regressions + corpus, no fuzzing
+#   scripts/run-fuzz.sh coverage <target> [dir...]    line coverage of the engine sources the
+#                                                     target reaches, over its corpus (+ dirs)
 #
 # Targets: protocol artifact scene sprite cli
 #
@@ -12,6 +14,7 @@
 #   FUZZ_JOBS    parallel workers per target (default 1)
 #   FUZZ_FLAGS   extra libFuzzer flags (e.g. "-dict=... -only_ascii=1")
 #   FUZZ_OUT     build/work dir (default fuzz/build, gitignored)
+#   LLVM_COV / LLVM_PROFDATA   coverage tools matching $CXX (default llvm-cov-19 / llvm-profdata-19)
 #
 # Each harness compiles standalone against the ArcaneCore headers plus only the
 # .cpp files it needs -- no premake, no engine build -- so this works from
@@ -122,11 +125,33 @@ regress() {
     echo "[run-fuzz] $t: ${#inputs[@]} inputs OK" >&2
 }
 
+# Source-based coverage (no sanitizers) of the ArcaneCore files a target
+# exercises, from replaying a corpus once. Reported per engine file.
+coverage() {
+    local t="$1"; shift
+    local srcs; srcs="$(sources_for "$t")"
+    local abs=()
+    for s in $srcs; do abs+=("$ROOT/$s"); done
+    mkdir -p "$OUT/cov"
+    "$CXX" -std=c++23 -g -O0 -fsanitize=fuzzer -fprofile-instr-generate -fcoverage-mapping \
+        -DARCANE_FUZZING=1 -w "${INCLUDES[@]}" "$ROOT/fuzz/${t}_fuzz.cpp" "${abs[@]}" -o "$OUT/cov/${t}_cov"
+    local dirs=("$ROOT/fuzz/corpus/$t" "$@")
+    [[ -d "$OUT/corpus/$t" ]] && dirs+=("$OUT/corpus/$t")
+    [[ -d "$ROOT/fuzz/regressions/$t" ]] && dirs+=("$ROOT/fuzz/regressions/$t")
+    rm -f "$OUT/cov/$t".*.profraw
+    # -runs=0 executes every corpus input once and exits.
+    (cd "$OUT/cov" && LLVM_PROFILE_FILE="$OUT/cov/$t.%p.profraw" ./"${t}_cov" -runs=0 "${dirs[@]}" >/dev/null 2>&1) || true
+    "${LLVM_PROFDATA:-llvm-profdata-19}" merge -sparse "$OUT/cov/$t".*.profraw -o "$OUT/cov/$t.profdata"
+    "${LLVM_COV:-llvm-cov-19}" report "$OUT/cov/${t}_cov" -instr-profile="$OUT/cov/$t.profdata" \
+        "$ROOT/ArcaneCore/src/Arcane" "$ROOT/ArcaneServer/src"
+}
+
 targets_of() { if [[ "$1" == all ]]; then echo "${ALL_TARGETS[@]}"; else echo "$1"; fi; }
 
 case "${1:-}" in
     ""|-h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     build)   for t in $(targets_of "${2:?target}"); do build "$t"; done ;;
+    coverage) t="${2:?target}"; shift 2; coverage "$t" "$@" ;;
     regress) rc=0; for t in $(targets_of "${2:?target}"); do regress "$t" || rc=1; done; exit $rc ;;
     *)       for t in $(targets_of "$1"); do run "$t" "${2:-60}"; done ;;
 esac
