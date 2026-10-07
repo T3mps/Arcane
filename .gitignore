@@ -136,6 +136,7 @@ ThirdParty/premake5/premake5
 /Arcane*/Makefile
 /arcbuild/Makefile
 /arccook/Makefile
+/ArcaneTests/death-fixture/Makefile
 /ThirdParty/*/ide-md/Makefile
 *.make
 *.ninja

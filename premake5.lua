@@ -121,6 +121,14 @@ workspace "Arcane"
     filter "system:not windows"
         pic "On"
         buildoptions { "-ffp-contract=off", "-fno-fast-math" }
+        -- The crash path walks a FOREIGN thread's stack (a faulting thread
+        -- parked in its signal handler, a hung main thread) by its frame-
+        -- pointer chain (Base/PortableStack.cpp): ELF has no PE-style
+        -- RtlVirtualUnwind over an arbitrary context, and a DWARF unwinder
+        -- for one is a libunwind-sized dependency. Kept in every config, as
+        -- Ubuntu 24.04 and Fedora now do distro-wide; the cost is one
+        -- register, low single-digit percent at worst.
+        buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
         -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
         -- beside the exe) must win, exactly as the PE loader searches the exe
         -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy
@@ -286,6 +294,9 @@ project "ArcaneCore"
         -- user32/gdi32: Platform/NativeWindow.cpp (crash window plan 2) --
         -- explicit rather than inherited from the VS default list.
         links { "dbghelp", "user32", "gdi32" }
+        -- The POSIX backend of Diagnostics (signals, the snapshot signal, the
+        -- Breakpad-format minidump) never builds into a PE image.
+        removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
 
     -- ELF: dlopen/dladdr (Module, ForeignModules) and threads; -z defs makes
     -- an unresolved symbol a link error HERE, not at the first exe link.
@@ -613,12 +624,11 @@ end   -- arcbuild-process-fixture: Windows target only (Task 6)
 -- own include root plus the two vendored header-only deps those headers
 -- pull in transitively (spdlog via Log.hpp, Mosaic via Assert.hpp/Log.hpp).
 --
--- Windows target only, same gate as arcbuild-process-fixture above (R7):
--- Diagnostics is Windows-only today (Base/Diagnostics.hpp's own header
--- comment says every entry point no-ops elsewhere), so a Linux generation
--- would build a fixture that could never prove anything.
+-- Every target since the Diagnostics POSIX port (2026-10-05): the fixture
+-- proves the signal-based crash path exactly as it proves the SEH one. Only
+-- its `--reporter`/`--monitor` hand-off stays Windows-only (below), because
+-- ArcaneCrashReporter does.
 -- ============================================================================
-if os.target() == "windows" then
 project "death-fixture"
     location "ArcaneTests/death-fixture"
     kind "ConsoleApp"
@@ -678,8 +688,11 @@ project "death-fixture"
 
     -- Crash window plan 2 (spec §12 item 2): the fixture's `--reporter` mode
     -- hands off to the STAGED reporter beside it, exactly as a host does, so
-    -- the hand-off is proven end to end as two real processes.
-    dependson { "ArcaneCrashReporter" }
+    -- the hand-off is proven end to end as two real processes. The reporter
+    -- is a Windows-target project (its own gate below).
+    if os.target() == "windows" then
+        dependson { "ArcaneCrashReporter" }
+    end
 
     -- The fixture loads ArcaneCore.dll from its own directory, same as every
     -- other consumer (mirrors ArcaneTests' matching postbuild line).
@@ -688,7 +701,6 @@ project "death-fixture"
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
         arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
     })
-end   -- death-fixture: Windows target only (task 6, mirrors arcbuild-process-fixture's gate)
 
 -- ============================================================================
 -- ArcaneCrashReporter (crash window plan 2; spec §6): the out-of-process crash
@@ -1898,19 +1910,21 @@ project "ArcaneTests"
     -- name a target that was never emitted. The POSIX process cases in
     -- BuildDriverTest.cpp spawn /bin/sh instead and need no build dependency.
     --
-    -- death-fixture (crash window plan 1, task 6): same reasoning -- it is
-    -- also Windows-only (its own gate above), and CrashPathTest.cpp's
-    -- "death fixture: ..." cases locate it the same "../<project>/
-    -- <project>.exe" way BuildDriverTest.cpp locates arcbuild-process-
-    -- fixture.exe, so it must exist before this project's tests can run.
+    -- death-fixture (crash window plan 1, task 6): CrashPathTest.cpp's
+    -- "death fixture: ..." cases locate it as "../death-fixture/<exe>" the
+    -- way BuildDriverTest.cpp locates arcbuild-process-fixture.exe, so it
+    -- must exist before this project's tests can run -- on every target
+    -- since the Diagnostics POSIX port, unlike the two below.
     --
     -- ArcaneCrashReporter (crash window plan 2, task 4): same reasoning again --
     -- Windows-only by its own gate. CrashPathTest.cpp's `--reporter` case
     -- requires the exe STAGED beside the death fixture (death-fixture's own
     -- dependson + postbuild do that), and the later `reporter:` cases run
     -- "../ArcaneCrashReporter/ArcaneCrashReporter.exe" directly (Task 5).
+    -- death-fixture builds for every target since the Diagnostics POSIX port.
+    dependson { "death-fixture" }
     if os.target() == "windows" then
-        dependson { "arcbuild-process-fixture", "death-fixture", "ArcaneCrashReporter" }
+        dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
 
     -- The test exe loads ArcaneClient.dll from its own directory.

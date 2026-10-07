@@ -91,6 +91,14 @@ postbuild stages `ReferenceProject/` (`Binaries/` included) beside them.
 Off-Windows, a module is `Name.so` (an authored `Name.dll` resolves to it),
 and engine libraries are `libArcaneCore.so`/`libArcaneClient.so`.
 
+Crash and hang reports work on Linux too (`Base/Posix/`): fatal signals on a
+sigaltstack hand off to the same crash thread, stacks are walked by frame
+pointer (every ELF target builds with `-fno-omit-frame-pointer`), and the
+`.dmp` beside each `.txt`/`.arcdiag` is a Breakpad-format minidump --
+`minidump-stackwalk` (rust-minidump) reads it, and `minidump-2-core` turns it
+into a core for gdb. There is no Linux `ArcaneCrashReporter` or crash monitor
+yet, so the reporter hand-off reports "failed" and `launchMonitor` is ignored.
+
 ## Automation
 
 Two layers, both owned by the engine and both in `scripts/`, plus the agent-facing layer on top of

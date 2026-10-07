@@ -12,6 +12,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Platform.hpp>   // module/exe spellings per platform (Diagnostics POSIX port)
 
 #include "Helpers/HostWitness.hpp"
 
@@ -142,7 +143,7 @@ TEST_CASE("crash path: a manual report runs on the crash thread, writes envelope
     const std::string txt = Slurp(stem + ".txt");
     // Portable frames name modules, and nothing on this path symbolizes any
     // more -- no DbgHelp, so no "module!function" line can appear.
-    CHECK(txt.find("ArcaneCore.dll + 0x") != std::string::npos);
+    CHECK(txt.find(Arcane::Platform::SharedLibraryFileName("ArcaneCore") + " + 0x") != std::string::npos);
     CHECK(txt.find("!") == std::string::npos);
     CHECK(Slurp(stem + ".log.txt").find("a line the backlog must carry") != std::string::npos);
 }
@@ -279,7 +280,7 @@ namespace
     struct FixtureRun { Arcane::Test::WitnessRun run; std::filesystem::path stem; std::filesystem::path dir; };
     FixtureRun RunFixture(const char* mode, std::vector<std::string> extra = {})
     {
-        const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+        const auto exe = std::filesystem::absolute("../death-fixture/" + Arcane::Platform::ExecutableFileName("death-fixture"));
         REQUIRE(std::filesystem::exists(exe));
         std::string tag = mode;
         for (const auto& e : extra) if (e.rfind("--", 0) == 0) tag += "-" + e.substr(2);
@@ -413,8 +414,14 @@ TEST_CASE("death fixture: an access violation yields a crash report and exit cod
     // "[<ts>] [Arcane] [<level>] "; FatalEcho's WriteFile does not. An echo
     // that regressed to ARC_ERROR fails both of these -- the line would no
     // longer start at a newline, and an [error]-prefixed copy would appear.
+#if ARCANE_PLATFORM_WINDOWS
     CHECK(logText.find("\nDiagnostics: crash (unhandled exception) -- report written")
           != std::string::npos);
+#else
+    // POSIX names the signal (Base/Posix/DiagnosticsPosix.cpp's OnFatalSignal).
+    CHECK(logText.find("\nDiagnostics: crash (fatal signal SIGSEGV) -- report written")
+          != std::string::npos);
+#endif
     CHECK(logText.find("[error] Diagnostics: crash") == std::string::npos);
     CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "crash");
     CHECK(r.run.wallMs < 15000);
@@ -438,9 +445,19 @@ TEST_CASE("death fixture: assert, terminate, abort, invalid parameter, pure call
           "and OOM all yield a report with the right kind and exit 10, bounded", "[diag]")
 {
     struct Row { const char* mode; const char* kind; };
+#if ARCANE_PLATFORM_WINDOWS
     const Row rows[] = { {"assert","assert"}, {"terminate","terminate"}, {"abort","terminate"},
                          {"invalid-parameter","crash"}, {"purecall","crash"},
                          {"stack-overflow","crash"}, {"oom","out-of-memory"} };
+#else
+    // POSIX has no CRT invalid-parameter or purecall hook: glibc reports a
+    // fortify violation by abort() and the Itanium C++ ABI a pure virtual
+    // call by std::terminate(), so both arrive as `terminate` -- what the
+    // process actually died of on this platform, not a weaker assertion.
+    const Row rows[] = { {"assert","assert"}, {"terminate","terminate"}, {"abort","terminate"},
+                         {"invalid-parameter","terminate"}, {"purecall","terminate"},
+                         {"stack-overflow","crash"}, {"oom","out-of-memory"} };
+#endif
     for (const Row& row : rows)
     {
         INFO("mode " << row.mode);
@@ -614,7 +631,7 @@ TEST_CASE("death fixture --monitor: a crash the host reported itself leaves the 
 TEST_CASE("death fixture --monitor: an external kill leaves the session record behind and the monitor reports it", "[diag]")
 {
     SkipIfBuildMachine();
-    const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+    const auto exe = std::filesystem::absolute("../death-fixture/" + Arcane::Platform::ExecutableFileName("death-fixture"));
     const auto dir = std::filesystem::temp_directory_path() / "arcane-death-killed-monitor";
     std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
     Arcane::Test::WitnessInvocation inv;
@@ -641,7 +658,7 @@ TEST_CASE("death fixture --monitor: an external kill leaves the session record b
 TEST_CASE("death fixture --monitor: a hang report written earlier does not silence the monitor when the host is later killed", "[diag]")
 {
     SkipIfBuildMachine();
-    const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+    const auto exe = std::filesystem::absolute("../death-fixture/" + Arcane::Platform::ExecutableFileName("death-fixture"));
     const auto dir = std::filesystem::temp_directory_path() / "arcane-death-hang-then-killed-monitor";
     std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
     Arcane::Test::WitnessInvocation inv;
