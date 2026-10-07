@@ -1,6 +1,6 @@
 # Arcane Text Editor -- design
 
-**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revisions 2-4 fold in three independent reviews -- see s13-s15; awaiting written-spec review)
+**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revisions 2-4 fold in three independent reviews -- see s13-s15; revision 5 adds user-chosen openers (D15, s5.6); awaiting written-spec review)
 **Scope:** spec 1 of 2. Spec 2 (editor-wide Command Palette, Goto Anything, Find in Files) follows this one and consumes the hooks defined in s9.
 **Research:** lite-xl (`D:\dev\_reference\lite-xl-master`, MIT), Zed (`D:\dev\_reference\zed-main`, GPL editor crates / Apache `sum_tree`), Zep, ImGuiColorTextEdit (BalazsJako + santaclose + goossens forks), Sublime Text's `.sublime-syntax` model, tree-sitter, Lexilla. Findings are summarised where they drive a decision.
 
@@ -10,7 +10,7 @@
 
 A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ordinary document: its own tab that docks, undocks and drags like every other Arcane document.
 
-- **It edits all text except C++.** C++ stays in the external IDE permanently -- the debugger integration matters more, and Arcane never intends to replace that. `.cpp`/`.hpp`/`.h` keep opening through `IdeLaunch`.
+- **It edits any text, and the user chooses who opens what (D15).** Arcane never forces tooling: every file type opens with the opener the user picks -- the Arcane Text Editor, Visual Studio, the system default, or any other program. Defaults are sensible, not mandatory: C/C++ opens in Visual Studio (its debugger integration is why), everything else that is text opens in the Arcane Text Editor. Arcane does not try to replace an IDE's language services for C++ (no IntelliSense, debugging or compiler diagnostics in-editor), but editing C++ in Arcane is a supported choice.
 - **It is the fallback viewer.** Any text file with no dedicated Arcane document editor opens here, instead of "no editor registered".
 - **It is fast on large files** (logs, diagnostics) and correct on every file it saves.
 - **Power-user features in v1:** Sublime's multi-cursor model and an opt-in, near-full vim emulation.
@@ -19,7 +19,7 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 
 | # | Decision |
 |---|---|
-| D1 | Full document tab, all non-C++ text, fallback viewer for anything without a dedicated editor. Bar: Sublime Text 4. |
+| D1 | Full document tab for text, fallback viewer for anything without a dedicated editor. Bar: Sublime Text 4. (Amended by D15: C++ is no longer excluded; who opens what is the user's choice.) |
 | D2 | v1 features: baseline (highlighting, undo/redo, line numbers, brackets, folding, save/dirty) + **vim mode** + **multi-cursor**. |
 | D3 | Command Palette, Goto Anything and Find in Files are **editor-wide**, not text-editor features: a separate spec 2, written after this one. |
 | D4 | Highlighting = **data-driven pattern grammars** (lite-xl's model, made Arcane-native). Tree-sitter may be added later for structure, behind the same scope interface. |
@@ -33,10 +33,11 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 | D12 | **Release gate after step 4** plus the step-6 essentials (s12). Vim ships behind an **Experimental** label that widens with each vim pass and drops when the last pass and the oracle suite are green. |
 | D13 | Vim flavour: **Neovim defaults** (`Y` = `y$`, `hlsearch`/`incsearch` on, `startofline` off, `&` remapped, `nrformats` without octal). Classic-Vim behaviour stays reachable through options. |
 | D14 | **Read-only files are treated as VCS-locked until proven otherwise.** The save banner names the likely VCS (git/Git LFS lockable, Perforce, Lore, Unity VCS) and puts "Remove read-only and save" behind a confirmation. Source-control integration is a separate future spec: git first, Lore eventually. |
+| D15 | **User-chosen openers, never forced tooling** (user, 2026-10-07): per file type, the user picks the Arcane Text Editor, Visual Studio, the system default application, or a custom program. Defaults: C/C++ -> Visual Studio; other text -> Arcane Text Editor; assets with a dedicated Arcane editor -> that editor. A one-off **Open With** menu exists everywhere a file can be opened. Every open route honours the choice (s5.6). |
 
 ### 1.2 Non-goals
 
-- C++ editing, debugging, IntelliSense/LSP, build-error squiggles from the compiler.
+- C++ **language services**: IntelliSense/LSP, debugging, build-error squiggles from the compiler. (Editing C++ text in Arcane is supported by choice, D15; it gets syntax highlighting, not language services.)
 - Vimscript, vim plugins, `:!` shell filters, `:terminal`, digraphs, spell check. (Digraphs and an opt-in `:!` that confirms before running are cheap later additions if wanted.)
 - Loading other editors' grammar/theme/config files (D5).
 - A hex/binary viewer. Binary files are refused with a message.
@@ -215,7 +216,7 @@ Resolution is longest dotted prefix (`string.quoted.double.json` -> `string.quot
 
 ### 4.7 v1 languages
 
-JSON and the Arcane JSON assets (`.arcmat .arcproj .arcscene .arctheme .arcsyntax .meta` ...), HLSL, Lua (covers premake), Markdown (with embedded fenced code), INI/cfg, TOML, YAML, XML, **Arcane log** (timestamps, `[info]`/`[warn]`/`[error]` level colours matching the Console), batch, PowerShell, shell, Plain Text (fallback).
+JSON and the Arcane JSON assets (`.arcmat .arcproj .arcscene .arctheme .arcsyntax .meta` ...), HLSL, Lua (covers premake), Markdown (with embedded fenced code), INI/cfg, TOML, YAML, XML, **Arcane log** (timestamps, `[info]`/`[warn]`/`[error]` level colours matching the Console), batch, PowerShell, shell, **C and C++** (for users who choose Arcane for source files, D15; ported from lite-xl's `language_c` / `language_cpp`, MIT), Plain Text (fallback).
 
 Lua and Markdown start from lite-xl's `language_*.lua` content, translated into `.arcsyntax` with the MIT notice in the file header and `ThirdParty/NOTICES` (lite-xl ships no JSON/HLSL/INI/TOML/YAML grammars; those are written fresh). No GPL Zed query file is used.
 
@@ -292,6 +293,34 @@ Layout rules:
 - **IME** is disabled outside Insert/Replace/command line when vim is on (s5.1).
 
 ---
+
+### 5.6 Openers: who opens what (D15)
+
+Arcane never forces a tool. One `FileOpener` service decides how a file opens, and **every** route uses it: Asset Browser double-click and Enter, Console and Problems `file:line` links, `DocumentHost::OpenAt`, Open as Text, the IDE bridge's source rows, and spec 2's Goto Anything and Find in Files.
+
+**Openers**
+
+| Opener | How it opens | Line/column |
+|---|---|---|
+| **Arcane Text Editor** | a `TextDocument` tab | yes (`OpenAt`) |
+| **Visual Studio** | the existing `IdeLaunch` path (late-bound DTE; solution-aware; opens in the instance that has the project's `.slnx`) | yes (DTE `ExecuteCommand("Edit.GoTo")` after open) |
+| **System default** | `ShellExecuteW(nullptr, L"open", path, ...)` -- whatever Windows associates with the extension (the existing `OsShell` helper) | no |
+| **Custom program** | a user-defined entry `{name, exe, args}` launched with `CreateProcessW`; `args` is a template with `{file}`, `{line}`, `{col}`, `{project}`, `{solution}`, each quoted correctly | when the template uses them |
+
+**Presets.** Custom entries can be added by hand or from detected presets: Visual Studio Code (`-g "{file}:{line}:{col}"`), Sublime Text (`"{file}:{line}:{col}"`), Notepad++ (`-n{line} -c{col} "{file}"`), JetBrains Rider (`--line {line} --column {col} "{file}"`), CLion (same), and Neovim in Windows Terminal (`wt nvim +{line} "{file}"`). Detection reads the registry's `App Paths`, the uninstall keys and `PATH`; a preset that is not installed is not offered. Arcane never installs or changes system file associations.
+
+**Choosing**
+- `editor.files.openWith` -- a map from extension (or the special keys `text`, `source`, `asset`) to an opener id. Scope `PreferencesProject`: a project may suggest defaults (e.g. a team that edits Lua in Arcane), the user's Preferences override it. Defaults: `.c .cc .cpp .cxx .h .hh .hpp .hxx .inl` -> `visualStudio`; other text -> `arcaneText`; assets with a dedicated editor -> their dedicated editor (not overridable to "nothing": Open as Text stays available).
+- `editor.files.customEditors` -- the list of custom programs `{id, name, exe, args}`.
+- A **Preferences > Files > Open With** page edits both: one row per extension group with an opener dropdown, a "Detect installed editors" button, and a custom-program editor with a live preview of the command line for a sample file.
+- **Open With** submenu on every file context menu (Asset Browser, Inspector, Console/Problems rows, document tab): each opener, plus **Choose...**, plus an **Always use this for `.ext`** checkbox that writes `editor.files.openWith`.
+
+**Rules**
+- A file already open in an Arcane `TextDocument` is focused there regardless of the opener setting (no second copy in another tool behind the user's back).
+- An external opener that fails to launch (missing exe, Visual Studio not installed, `ShellExecuteW` error, no association) produces a Problems row naming the opener and the error, and offers **Open in Arcane Text Editor instead** for text files. It never fails silently.
+- The C++ module rebuild flow is unchanged by the choice: saving a `.cpp` in Arcane is the same as saving it in any other editor (Tools -> Rebuild Game Module or the hot-reload watcher picks it up).
+- Settings follow the user rule: every row above is a reflected setting, covered by the sweep tests and listed in the frozen names.
+
 
 ## 6. Vim layer
 
@@ -587,4 +616,10 @@ The reviewer recommended stopping spec revisions after this round and moving to 
 | Invalid UTF-8 not defined end to end | Raw bytes kept, hex-box drawing, one cluster per invalid byte, `PCRE2_MATCH_INVALID_UTF` (s3.5, s5.1) |
 | Read-only usually means VCS-locked (Perforce) | D14: VCS-aware banner over git/Git LFS, Perforce, Lore, Unity VCS; integration is a future spec, git first then Lore (s5.3, s1.2) |
 | Nits: AltGr by timing, control characters, `\ze` in groups, `\K` in lookarounds, hard links | Layout-queried AltGr; 0x00-0x1F dropped (except Tab/Enter); `\zs`/`\ze` top level only; hard links a known limitation (s5.5, s6.5, s5.3) |
+
+---
+
+## 16. Revision 5 (2026-10-07): user-chosen openers (D15)
+
+The user asked that Arcane never force tooling: people choose whether `.cpp`/`.hpp` open in the Arcane Text Editor or Visual Studio, and likewise whether any text opens in Arcane, the system default, or another program. D1's C++ exclusion is lifted (C++ language services remain a non-goal). New s5.6 defines the `FileOpener` service, the four opener kinds, detected presets, the `editor.files.openWith` / `editor.files.customEditors` settings and Preferences page, the Open With menu, and failure handling; s4.7 adds C and C++ grammars.
 
