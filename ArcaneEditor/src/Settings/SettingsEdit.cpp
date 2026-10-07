@@ -115,8 +115,11 @@ namespace Arcane::Editor
             const bool user = registry.RungValue(desc.name, SetBy::User).has_value();
             const bool machine = registry.RungValue(desc.name, SetBy::EditorUser).has_value();
             f.projectOverride = user;
-            f.mode = user    ? PrefMode::ThisProject
-                   : machine ? PrefMode::AllProjects
+            // A program path is the machine's (S7-SEC): the User rung refuses it.
+            f.machineOnly = HasFlag(desc.flags, CVarFlags::LaunchesProgram);
+            f.mode = f.machineOnly ? PrefMode::AllProjects
+                   : user          ? PrefMode::ThisProject
+                   : machine       ? PrefMode::AllProjects
                    : desc.scope == SettingScope::PreferencesProject ? PrefMode::ThisProject : PrefMode::AllProjects;
             f.target = f.mode == PrefMode::ThisProject ? SetBy::User : SetBy::EditorUser;
         }
@@ -236,7 +239,7 @@ namespace Arcane::Editor
         PrefMode to, const SettingsEditSink& sink)
     {
         const RowFacts f = ComputeRowFacts(registry, desc, SettingsWindowKind::Preferences);
-        if (f.overridden || f.mode == to) return nullptr;
+        if (f.overridden || f.mode == to || (f.machineOnly && to == PrefMode::ThisProject)) return nullptr;
         SettingsEditBuilder b(registry, sink);
         const std::optional<CVarValue> shown = ValueAtOrBelow(registry, desc.name, SetBy::User);
         if (to == PrefMode::ThisProject)

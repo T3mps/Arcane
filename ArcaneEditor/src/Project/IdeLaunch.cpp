@@ -5,6 +5,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Build/BuildToolSettings.hpp>  // build.ideExecutable (DevenvCache's key)
 #include <Arcane/Build/Toolchain.hpp>  // ResolveDevenv (the one vswhere probe, shared with arcbuild)
+#include <Arcane/Platform/LaunchPath.hpp>  // CheckLaunchPath (settings S7-SEC)
 
 #include <cwctype>
 #include <optional>
@@ -385,10 +386,11 @@ namespace Arcane::Editor::IdeLaunch
         bool Launch(const std::filesystem::path& devenv, const std::vector<std::wstring>& args,
                     const std::filesystem::path& workDir)
         {
-            std::error_code ec;
-            if (!std::filesystem::is_regular_file(devenv, ec))
+            // A launchable file (S7-SEC): it exists, is no directory, holds no
+            // quote or line break; an app-execution alias counts.
+            if (const LaunchPathStatus status = CheckLaunchPath(devenv); status != LaunchPathStatus::Ok)
             {
-                ARC_ERROR("IdeLaunch: '{}' does not exist", devenv.string());
+                ARC_ERROR("IdeLaunch: '{}' {}", devenv.string(), LaunchPathStatusText(status));
                 return false;
             }
             std::wstring cmdLine = RuntimeLaunch::QuoteArg(devenv.wstring());

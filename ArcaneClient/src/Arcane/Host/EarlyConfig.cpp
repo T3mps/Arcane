@@ -30,8 +30,11 @@ namespace Arcane::HostBoot
                 // Same directories and source strings as Runtime::OpenProject
                 // (ProjectCVarDir / UserCVarDir / EditorUser).
                 Paths::Config projectPaths = Paths::ForProject(root);
+                // Project territory (settings S7-SEC): no rung folder inside it
+                // names a program; Runtime::OpenProject reports what was refused.
+                const std::filesystem::path roots[] = { root };
                 ApplyCVarDirectory(cvars, Paths::Resolve(Paths::Location::ProjectConfig, projectPaths),
-                                   SetBy::Project, "project");
+                                   SetBy::Project, "project", {}, roots);
                 // A local Diagnostic keeps this early read silent: a malformed
                 // manifest is published once, by Project::Open (S6-7 deferral).
                 Diagnostic manifestDiag;
@@ -47,10 +50,10 @@ namespace Arcane::HostBoot
                 {
                     const std::filesystem::path editorUser = Paths::Get(Paths::Location::EditorUserDir);
                     if (!editorUser.empty())
-                        ApplyCVarDirectory(cvars, editorUser / "Config", SetBy::EditorUser, "editor-user");
+                        ApplyCVarDirectory(cvars, editorUser / "Config", SetBy::EditorUser, "editor-user", {}, roots);
                 }
                 ApplyCVarDirectory(cvars, Paths::Join(Paths::Location::GameUserDir, projectPaths, "Config"),
-                                   SetBy::User, "user");
+                                   SetBy::User, "user", {}, roots);
             }
         }
         // --perf is diagnostics.perfLog on the CommandLine rung (settings arc

@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Build/BuildToolSettings.hpp>
+#include <Arcane/Platform/LaunchPath.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -147,18 +148,30 @@ namespace Arcane::Toolchain
             return value ? std::string(value) : std::string();
         }
 
-        // A build.* tool-path preference (BuildToolSettings): a runnable file
-        // (the same test a PATH hit passes) wins over discovery, made absolute
-        // + normalised like every other answer here. Empty when unset, or when
-        // the path is not one (which warns, and the caller discovers instead).
+        // A build.* tool-path preference (BuildToolSettings): a launchable file
+        // (CheckLaunchPath, settings S7-SEC: it exists, is no directory, and
+        // holds no quote or line break; an app-execution alias counts) wins
+        // over discovery, made absolute + normalised like every other answer
+        // here. POSIX also wants an executable bit (IsRunnableCandidate).
+        // Empty when unset, or when the path is not one (which warns, and the
+        // caller discovers instead).
         std::filesystem::path ToolOverride(std::string_view cvar, const std::string& configured)
         {
             if (configured.empty())
                 return {};
-            if (IsRunnableCandidate(configured))
-                if (const std::filesystem::path found = AbsoluteNormal(configured); !found.empty())
+            const std::filesystem::path path(configured);
+            const LaunchPathStatus status = CheckLaunchPath(path);
+#ifndef _WIN32
+            if (status == LaunchPathStatus::Ok && !IsRunnableCandidate(path))
+            {
+                ARC_WARN("{} '{}' is not executable; discovering the tool instead", cvar, configured);
+                return {};
+            }
+#endif
+            if (status == LaunchPathStatus::Ok)
+                if (const std::filesystem::path found = AbsoluteNormal(path); !found.empty())
                     return found;
-            ARC_WARN("{} '{}' is not a runnable file; discovering the tool instead", cvar, configured);
+            ARC_WARN("{} '{}' {}; discovering the tool instead", cvar, configured, LaunchPathStatusText(status));
             return {};
         }
     }

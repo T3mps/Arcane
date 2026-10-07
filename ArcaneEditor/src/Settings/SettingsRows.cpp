@@ -252,11 +252,13 @@ namespace Arcane::Editor
                 gap();
                 const bool thisProject = f.mode == PrefMode::ThisProject;
                 // S3-4: SwitchPrefMode refuses an overridden row -- disable the switch.
-                ImGui::BeginDisabled(!ctx.projectOpen || f.overridden);
+                // S7-SEC: a program path is machine-wide only -- no "This project".
+                ImGui::BeginDisabled(!ctx.projectOpen || f.overridden || f.machineOnly);
                 if (ImGui::SmallButton(thisProject ? ICON_LC_FOLDER "##scope" : ICON_LC_GLOBE "##scope"))
                     Push(ctx, SwitchPrefMode(ctx.registry, d, thisProject ? PrefMode::AllProjects : PrefMode::ThisProject, ctx.sink));
                 ImGui::EndDisabled();
-                ImGui::SetItemTooltip("%s", !ctx.projectOpen ? "Open a project to choose where this value lives"
+                ImGui::SetItemTooltip("%s", f.machineOnly ? "All projects only -- this setting names a program, so a project never chooses it"
+                                          : !ctx.projectOpen ? "Open a project to choose where this value lives"
                                           : thisProject ? "This project only -- click to use the value shared by all projects"
                                                         : "All projects -- click to override it for this project only");
                 ctx.grid.ProbeItem((label + "#scope").c_str());
@@ -326,7 +328,7 @@ namespace Arcane::Editor
                     Push(ctx, ClearOverride(ctx.registry, d, ctx.window, ctx.sink));
                 if (ctx.window == SettingsWindowKind::Preferences &&
                     ImGui::MenuItem(f.mode == PrefMode::ThisProject ? "Use for all projects" : "Override for this project",
-                                    nullptr, false, ctx.projectOpen && !f.overridden))
+                                    nullptr, false, ctx.projectOpen && !f.overridden && !f.machineOnly))
                     Push(ctx, SwitchPrefMode(ctx.registry, d, f.mode == PrefMode::ThisProject ? PrefMode::AllProjects
                                                                                           : PrefMode::ThisProject, ctx.sink));
                 ImGui::Separator();

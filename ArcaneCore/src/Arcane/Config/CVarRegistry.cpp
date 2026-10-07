@@ -840,6 +840,16 @@ namespace Arcane
         if (HasFlag(m->slots[handle.index].flags, CVarFlags::CommandLineOnly)
             && by != SetBy::Default && by != SetBy::CommandLine && by != SetBy::Code)
             return SetResult::Denied;
+        // Settings S7-SEC: a rung that lives in a project never names a
+        // program nor sets a machine-wide preference; and a program is never
+        // chosen from a console outside the editor (a remote admin, a player).
+        // The config walk reports the refusal; this is the backstop for every
+        // other caller.
+        if (RungRefusal(m->slots[handle.index].flags, m->slots[handle.index].scope, by) != CVarRungRefusal::None)
+            return SetResult::Denied;
+        if (HasFlag(m->slots[handle.index].flags, CVarFlags::LaunchesProgram) && by == SetBy::Console
+            && ctx != CVarContext::Editor)
+            return SetResult::Denied;
 
         const Impl::Decision decision = m->Decide(*this, m->slots[handle.index], ctx, caller, true, &value);
         // The policy is game code. It may register a cvar and move the slot
@@ -1300,6 +1310,7 @@ namespace Arcane
         if (slot.type == CVarType::Enum &&
             (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
             return false;
+        if (RungRefusal(slot.flags, slot.scope, by) != CVarRungRefusal::None) return false;   // as Set (S7-SEC)
         value = Clamp(std::move(value), slot.min, slot.max);
         std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
         // History is in rung order (Set refuses a weaker rung, S1 replaces in place):

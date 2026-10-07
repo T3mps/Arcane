@@ -3,8 +3,10 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Platform/Paths.hpp>
 
 #include <algorithm>
+#include <cwctype>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -253,7 +255,19 @@ namespace Arcane
         {
             std::string_view onlyModule;
             bool             apply = true;
+            bool             insideProject = false;   // the folder lies in a project or plugin root (S7-SEC)
         };
+
+        // Why this walk may not set a cvar: the rung's own refusal, else a
+        // program named from a folder inside a project, whatever its rung.
+        CVarRungRefusal RefusalFor(const CVarMetadata& meta, SetBy by, const WalkOptions& opts)
+        {
+            const CVarRungRefusal why = RungRefusal(meta.flags, meta.scope, by);
+            if (why != CVarRungRefusal::None) return why;
+            if (opts.insideProject && HasFlag(meta.flags, CVarFlags::LaunchesProgram))
+                return CVarRungRefusal::LaunchesProgram;
+            return CVarRungRefusal::None;
+        }
 
         void Walk(CVarRegistry& registry, const std::string& prefix, const nlohmann::json& node,
                   SetBy by, std::string_view sourceModule, const WalkOptions& opts, CVarApplyReport& report)
@@ -278,13 +292,18 @@ namespace Arcane
                 }
                 if (!opts.onlyModule.empty() && registry.ModuleOf(handle) != opts.onlyModule)
                     continue;
-                const auto current = registry.Get(handle);
-                if (!current) continue;
-                std::vector<std::string> enumNames;
-                if (current->type == CVarType::Enum)
-                    if (const auto meta = registry.Metadata(handle)) enumNames = meta->enumNames;
+                const auto meta = registry.Metadata(handle);
+                if (!meta) continue;
+                // Settings S7-SEC: refused before its value is even read, so a
+                // program path in project config is reported as refused, never
+                // as a type mismatch, and never applied.
+                if (const CVarRungRefusal why = RefusalFor(*meta, by, opts); why != CVarRungRefusal::None)
+                {
+                    report.refused.push_back(CVarRefusedKey{ name, why });
+                    continue;
+                }
                 std::optional<std::int32_t> numericEnum;
-                std::optional<CVarValue> value = ValueFromJson(*it, current->type, enumNames, numericEnum);
+                std::optional<CVarValue> value = ValueFromJson(*it, meta->type, meta->enumNames, numericEnum);
                 if (!value)
                 {
                     report.typeMismatches.push_back(name);   // the wrong shape for its type: refused, reported
@@ -292,7 +311,7 @@ namespace Arcane
                 }
                 if (numericEnum && opts.apply)   // the validating pass stays quiet: the applying one already said it
                     ARC_WARN("cvar: '{}' gives an Enum as the number {}; write \"{}\" -- the next archive write saves the name",
-                             name, *numericEnum, enumNames[static_cast<std::size_t>(*numericEnum)]);
+                             name, *numericEnum, meta->enumNames[static_cast<std::size_t>(*numericEnum)]);
                 if (opts.apply) registry.Set(handle, std::move(*value), by, sourceModule, CVarContext::Editor);
             }
         }
@@ -314,12 +333,65 @@ namespace Arcane
         return ApplyCategory(registry, category, doc, by, documentShaped, sourceModule, WalkOptions{});
     }
 
+    bool CVarDirInsideAny(const std::filesystem::path& dir, std::span<const std::filesystem::path> roots)
+    {
+        if (dir.empty()) return false;
+        // Links resolved where the path exists, so a junction or symlink into
+        // a project is inside it; the rest is made absolute and normal.
+        const auto resolve = [](const std::filesystem::path& p) {
+            std::error_code ec;
+            std::filesystem::path out = std::filesystem::weakly_canonical(p, ec);
+            if (ec) out = std::filesystem::absolute(p, ec).lexically_normal();
+            return out;
+        };
+        const auto sameName = [](const std::filesystem::path& a, const std::filesystem::path& b) {
+#ifdef _WIN32
+            const std::wstring& x = a.native();
+            const std::wstring& y = b.native();
+            return x.size() == y.size() && std::equal(x.begin(), x.end(), y.begin(), [](wchar_t l, wchar_t r) {
+                return std::towlower(l) == std::towlower(r);
+            });
+#else
+            return a == b;
+#endif
+        };
+        const std::filesystem::path child = resolve(dir);
+        for (const std::filesystem::path& root : roots)
+        {
+            if (root.empty()) continue;
+            const std::filesystem::path parent = resolve(root);
+            auto c = child.begin();
+            auto p = parent.begin();
+            for (; p != parent.end() && c != child.end(); ++p, ++c)
+                if (!p->empty() && !sameName(*p, *c)) break;
+            // Every component of the root matched (a trailing empty one is a separator).
+            if (p == parent.end() || (std::next(p) == parent.end() && p->empty()))
+                return true;
+        }
+        return false;
+    }
+
+    namespace
+    {
+        // Whether a rung folder lies in project territory (S7-SEC): one of the
+        // given roots, or the project Paths is configured for (an EditorUser
+        // reapply after OpenProject knows no layer list).
+        bool InsideProject(const std::filesystem::path& dir, std::span<const std::filesystem::path> projectRoots)
+        {
+            if (CVarDirInsideAny(dir, projectRoots)) return true;
+            const std::optional<std::filesystem::path> current = Paths::Current().projectDir;
+            return current && !current->empty() && CVarDirInsideAny(dir, std::span(&*current, 1));
+        }
+    }
+
     CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
-                                       SetBy by, std::string_view sourceModule, std::string_view onlyModule)
+                                       SetBy by, std::string_view sourceModule, std::string_view onlyModule,
+                                       std::span<const std::filesystem::path> projectRoots)
     {
         CVarApplyReport report;
         std::error_code ec;
         if (!std::filesystem::is_directory(dir, ec)) return report;
+        const bool inside = InsideProject(dir, projectRoots);
         for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
         {
             if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
@@ -329,9 +401,10 @@ namespace Arcane
             if (doc.is_discarded()) continue;
             const std::string stem = entry.path().stem().string();
             const CVarApplyReport part = ApplyCategory(registry, stem, doc, by, IsDocumentCategory(stem), sourceModule,
-                                                       WalkOptions{ onlyModule });
+                                                       WalkOptions{ onlyModule, true, inside });
             report.unknownKeys.insert(report.unknownKeys.end(), part.unknownKeys.begin(), part.unknownKeys.end());
             report.typeMismatches.insert(report.typeMismatches.end(), part.typeMismatches.begin(), part.typeMismatches.end());
+            report.refused.insert(report.refused.end(), part.refused.begin(), part.refused.end());
         }
         return report;
     }
@@ -343,6 +416,7 @@ namespace Arcane
         {
             std::error_code ec;
             if (!std::filesystem::is_directory(layer.dir, ec)) continue;
+            const bool inside = InsideProject(layer.dir, layers.projectRoots);
             std::vector<std::filesystem::path> files;
             for (const auto& entry : std::filesystem::directory_iterator(layer.dir, ec))
                 if (entry.is_regular_file() && entry.path().extension() == ".json") files.push_back(entry.path());
@@ -356,11 +430,14 @@ namespace Arcane
                 const auto doc = nlohmann::json::parse(*text, nullptr, false);
                 if (doc.is_discarded() || !doc.is_object()) continue;   // the archive's .bad path owns broken files
                 const CVarApplyReport report = ApplyCategory(registry, stem, doc, layer.by, false, layer.sourceModule,
-                                                             WalkOptions{ {}, false });
+                                                             WalkOptions{ {}, false, inside });
                 for (const std::string& key : report.unknownKeys)
                     issues.push_back(CVarConfigIssue{ CVarConfigIssue::Kind::UnknownKey, file, key, LineOfKey(*text, key, stem) });
                 for (const std::string& key : report.typeMismatches)
                     issues.push_back(CVarConfigIssue{ CVarConfigIssue::Kind::TypeMismatch, file, key, LineOfKey(*text, key, stem) });
+                for (const CVarRefusedKey& refused : report.refused)
+                    issues.push_back(CVarConfigIssue{ CVarConfigIssue::Kind::Refused, file, refused.key,
+                                                      LineOfKey(*text, refused.key, stem), refused.why });
             }
         }
         return issues;
@@ -399,6 +476,16 @@ namespace Arcane
                 d.message  = "Unknown setting '" + issue.key + "' in " + fileName + ".";
                 d.detail   = "No loaded module declares it, so it was not applied. Check the spelling, or load the module that declares it.";
             }
+            else if (issue.kind == CVarConfigIssue::Kind::Refused)
+            {
+                // Settings S7-SEC: project config may not name a program, nor
+                // set a machine-wide preference.
+                d.severity = DiagSeverity::Warning;
+                d.code     = "config.cvar.refused";
+                d.message  = "Setting '" + issue.key + "' in " + fileName + " was not applied: it "
+                           + std::string(RungRefusalReason(issue.refusal)) + ".";
+                d.detail   = "This config file may not choose it: only Preferences or --set may. The setting keeps the value of the other rungs.";
+            }
             else
             {
                 d.severity = DiagSeverity::Error;
@@ -411,7 +498,13 @@ namespace Arcane
             {
                 LoggedKey id{ issue.kind, path, issue.key };
                 if (!logged.contains(id))
-                    ARC_WARN("cvar config: {} '{}' at {}:{}", d.code, issue.key, path, issue.line);
+                {
+                    if (issue.kind == CVarConfigIssue::Kind::Refused)
+                        ARC_WARN("cvar config: {} '{}' at {}:{} -- {}", d.code, issue.key, path, issue.line,
+                                 RungRefusalReason(issue.refusal));
+                    else
+                        ARC_WARN("cvar config: {} '{}' at {}:{}", d.code, issue.key, path, issue.line);
+                }
                 loggedNow.insert(std::move(id));
             }
             rows.push_back(std::move(d));
@@ -427,7 +520,7 @@ namespace Arcane
     {
         if (module.empty()) return;
         for (const CVarLayerDir& layer : layers.dirs)
-            (void)ApplyCVarDirectory(*this, layer.dir, layer.by, layer.sourceModule, module);
+            (void)ApplyCVarDirectory(*this, layer.dir, layer.by, layer.sourceModule, module, layers.projectRoots);
         for (const std::string& item : layers.commandLine)
         {
             const auto eq = item.find('=');

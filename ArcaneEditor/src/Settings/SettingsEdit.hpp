@@ -37,6 +37,7 @@ namespace Arcane::Editor
         bool overridden = false;                  // winner above target: read-only, Clear override
         bool modified = false;                    // effective != default
         bool projectOverride = false;             // Preferences: the User rung holds a value
+        bool machineOnly = false;                 // Preferences: LaunchesProgram -- All projects only, no "This project" (S7-SEC)
         CVarValue effective = CVarValue::Bool(false);
         CVarValue defaultValue = CVarValue::Bool(false);
     };

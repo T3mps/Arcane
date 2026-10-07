@@ -298,6 +298,15 @@ namespace Arcane::Diagnostics
     // in the log category, not in `s`.
     [[nodiscard]] ARC_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
 
+    // The crash reporter Install arms (settings S7-SEC): `configured`
+    // (diagnostics.reporterPath, Config::reporterPath) when it is a launchable
+    // file (CheckLaunchPath), else the bundled <exeDir>/ArcaneCrashReporter.exe.
+    // A configured path that is refused fills `refusal` with why (the caller
+    // warns); an empty one is the default, not a refusal.
+    [[nodiscard]] ARC_CORE_API std::filesystem::path ReporterExeFor(std::string_view configured,
+                                                                    const std::filesystem::path& exeDir,
+                                                                    std::string* refusal = nullptr);
+
     // The crash reporter's settings as the tail of its command line (settings
     // arc S6-4): " --deadline <s> --max-frames-thread <n> ... --copy-flash <s>",
     // every flag ReporterArgs parses back, the double printed round-trip

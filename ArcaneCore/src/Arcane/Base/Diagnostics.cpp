@@ -12,6 +12,7 @@
 #include <Arcane/Base/ReporterSettings.hpp>        // diagnostics.reporter.* (S6-4) -- likewise
 #include <Arcane/Config/Bindings/LogBinding.hpp>   // log.dir (ConfigFromSettings) -- never read on the crash path
 #include <Arcane/Config/UiSettings.hpp>            // ui.copyFlashSeconds (S6-4) -- likewise
+#include <Arcane/Platform/LaunchPath.hpp>          // CheckLaunchPath -- the configured reporter, at Install (S7-SEC)
 
 #include <Json.hpp>                        // the session record (plan 2, task 9) -- written OFF the crash path only
 
@@ -1121,7 +1122,9 @@ namespace
         STARTUPINFOW        si{};
         PROCESS_INFORMATION pi{};
         si.cb = sizeof(si);
-        if (!CreateProcessW(nullptr, g_spawnCmd, nullptr, nullptr, FALSE,
+        // lpApplicationName pins the exact binary Install checked
+        // (ReporterExeFor, S7-SEC): never re-parsed from the line, never searched.
+        if (!CreateProcessW(g_reporterExe, g_spawnCmd, nullptr, nullptr, FALSE,
                             CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
             return false;
         CloseHandle(pi.hThread);
@@ -2336,20 +2339,17 @@ namespace
         }
     }
 
+    // Why Install refused a configured reporter (S7-SEC), warned once the
+    // log sink is attached. Install's thread only.
+    std::string g_reporterRefusal;
+
     void ResolveReporterPath()
     {
-        std::filesystem::path exe;
-        if (!g_cfg.reporterPath.empty())
-        {
-            exe = std::filesystem::path(g_cfg.reporterPath);
-        }
-        else
-        {
-            const std::string self = ExecutablePathUtf8();
-            exe = (self.empty() ? std::filesystem::path(".")
-                                : std::filesystem::path(self).parent_path())
-                / "ArcaneCrashReporter.exe";
-        }
+        const std::string self = ExecutablePathUtf8();
+        const std::filesystem::path exeDir = self.empty() ? std::filesystem::path(".")
+                                                          : std::filesystem::path(self).parent_path();
+        g_reporterRefusal.clear();
+        const std::filesystem::path exe = ReporterExeFor(g_cfg.reporterPath, exeDir, &g_reporterRefusal);
 
         const std::wstring w = exe.wstring();
         const std::size_t n = w.size() < kPathMax - 1 ? w.size() : kPathMax - 1;
@@ -2530,7 +2530,7 @@ namespace
                 si.StartupInfo.cb      = sizeof(si);
                 si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;   // all three null: see above
                 si.lpAttributeList     = attrs;
-                launched = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, /*bInheritHandles*/TRUE,
+                launched = CreateProcessW(g_reporterExe, cmd.data(), nullptr, nullptr, /*bInheritHandles*/TRUE,
                                           EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | DETACHED_PROCESS,
                                           nullptr, nullptr, &si.StartupInfo, &pi) != FALSE;
             }
@@ -2643,6 +2643,21 @@ Config ConfigFromSettings(const DiagnosticsSettings& s)
     return c;
 }
 
+std::filesystem::path ReporterExeFor(std::string_view configured, const std::filesystem::path& exeDir, std::string* refusal)
+{
+    const std::filesystem::path bundled = exeDir / "ArcaneCrashReporter.exe";
+    if (configured.empty())
+        return bundled;
+    const std::filesystem::path exe(configured);
+    const LaunchPathStatus status = CheckLaunchPath(exe);
+    if (status == LaunchPathStatus::Ok)
+        return exe;
+    if (refusal)
+        *refusal = "diagnostics.reporterPath '" + std::string(configured) + "' " + std::string(LaunchPathStatusText(status))
+                 + "; the bundled reporter '" + bundled.string() + "' is used instead";
+    return bundled;
+}
+
 std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s, std::uint32_t logTailLines, double copyFlashSeconds)
 {
     // One flag per ReporterArgs field, in the struct's order. 512 holds the
@@ -2753,6 +2768,12 @@ void Install(const Config& cfg)
     }
     SnapshotReportDir();
     ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
+    // The product name comes from the project's manifest and rides the
+    // reporter's command line as "--product \"<name>\"" (S7-SEC): a quote, a
+    // backslash (it would escape the closing quote) or a line break could add
+    // arguments of its own, so each becomes '_'. The reporter only shows it.
+    for (wchar_t& c : g_productWide)
+        if (c == L'"' || c == L'\\' || c == L'\r' || c == L'\n') c = L'_';
     ResolveReporterPath();
     SnapshotReporterSettingsArgs();   // before ArmMonitor: the monitor's line carries them too
     WatchLiveReporterSettings();      // ...and a Live change re-formats it for later spawns
@@ -2776,6 +2797,8 @@ void Install(const Config& cfg)
 
     // The engine log file sink, before anything that might want to warn.
     AttachLogSink();
+    if (!g_reporterRefusal.empty())
+        ARC_WARN("Diagnostics: {}", g_reporterRefusal);
 
     // The module table the portable stack resolves against. Unfrozen first:
     // a report interrupted in a previous arming could otherwise have left it

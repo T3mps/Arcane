@@ -45,6 +45,8 @@ namespace Arcane
     {
         const auto e = registry.Explain(name);
         if (!e || e->scope == SettingScope::Project) return PreferenceTarget::AllProjects;
+        // A program path is the machine's (S7-SEC): the User rung refuses it.
+        if (HasFlag(e->flags, CVarFlags::LaunchesProgram)) return PreferenceTarget::AllProjects;
         if (HoldsRung(*e, SetBy::User)) return PreferenceTarget::ThisProject;
         if (HoldsRung(*e, SetBy::EditorUser)) return PreferenceTarget::AllProjects;
         return e->scope == SettingScope::PreferencesProject
@@ -58,6 +60,8 @@ namespace Arcane
         const auto e = registry.Explain(name);
         if (handle.IsStale() || !e) return SetResult::Stale;
         if (e->scope == SettingScope::Project) return SetResult::Denied;
+        if (target == PreferenceTarget::ThisProject && HasFlag(e->flags, CVarFlags::LaunchesProgram))
+            return SetResult::Denied;   // no per-project program path (S7-SEC)
         if (target == PreferenceTarget::AllProjects)
         {
             // Pref-P home is ThisProject: promote pending onto EditorUser first

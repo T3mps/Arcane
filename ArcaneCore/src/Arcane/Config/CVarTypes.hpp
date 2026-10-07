@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace Arcane
@@ -53,6 +54,7 @@ namespace Arcane
         ReloadMaterials     = 1u << 12,
         Deterministic       = 1u << 13,
         CommandLineOnly     = 1u << 14,  // only the Default, CommandLine and Code rungs may set it (inventory R2: evidence-capture switches)
+        LaunchesProgram     = 1u << 15,  // its value names a program Arcane runs: no rung inside a project may set it (RungRefusal; settings S7-SEC)
     };
 
     constexpr CVarFlags operator|(CVarFlags a, CVarFlags b) noexcept
@@ -126,6 +128,44 @@ namespace Arcane
         NextWorld,   // read when a world, registry or physics world is created
         Restart,     // read once at boot
     };
+
+    // Why a rung may not set a cvar at all (settings S7-SEC, amending spec
+    // s3.3/s11.1). Project config is shared and committed: a cloned repository
+    // must never choose a program Arcane runs, nor the user's machine-wide
+    // preferences.
+    //   - LaunchesProgram: honoured only from the default, the machine-wide
+    //     EditorUser rung, --set, code and an Editor-context console. The
+    //     EngineConfig, Plugin, Project and User rungs refuse it. A config
+    //     folder inside a project or plugin root refuses it whatever its rung
+    //     (CVarConfig's walk checks the folder).
+    //   - MachinePreference: a PreferencesMachine setting is the user's; the
+    //     Plugin and Project rungs refuse it. Its per-project override is the
+    //     User rung ("This project", s3.3), which keeps it.
+    // PreferencesProject keeps "the project may suggest": a project default,
+    // overridden by the user's rungs.
+    enum class CVarRungRefusal : std::uint8_t { None, LaunchesProgram, MachinePreference };
+
+    constexpr CVarRungRefusal RungRefusal(CVarFlags flags, SettingScope scope, SetBy by) noexcept
+    {
+        const bool projectFile = by == SetBy::Plugin || by == SetBy::Project;
+        if (HasFlag(flags, CVarFlags::LaunchesProgram) && (projectFile || by == SetBy::EngineConfig || by == SetBy::User))
+            return CVarRungRefusal::LaunchesProgram;
+        if (scope == SettingScope::PreferencesMachine && projectFile)
+            return CVarRungRefusal::MachinePreference;
+        return CVarRungRefusal::None;
+    }
+
+    // The reason a refusal warning gives, after the file and the key.
+    constexpr std::string_view RungRefusalReason(CVarRungRefusal why) noexcept
+    {
+        switch (why)
+        {
+        case CVarRungRefusal::LaunchesProgram:   return "names a program; set it in Preferences (machine) or with --set";
+        case CVarRungRefusal::MachinePreference: return "is a machine-wide preference; set it in Preferences, not in project config";
+        case CVarRungRefusal::None:              break;
+        }
+        return {};
+    }
 
     // The thirteen value types. Enum shares Int32's storage; the type tag
     // keeps them apart, so an Enum never equals an Int32.

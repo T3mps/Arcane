@@ -1115,6 +1115,12 @@ namespace Arcane
     //     SnapshotSaveConfig, imgui's SetColorMarkerColors/
     //     GetColorMarkerColors; S2-H's ApplyEngineConfigRung and
     //     WarnUnlistedSettingsEnumValue.
+    //   - S7-SEC, folded into 54 (unreleased: the settings arc is not on main
+    //     yet): CVarFlags::LaunchesProgram; CVarApplyReport (refused),
+    //     CVarConfigIssue (Kind::Refused, refusal) and LayerSources
+    //     (projectRoots) grew; ApplyCVarDirectory took projectRoots; new
+    //     exports CVarDirInsideAny, CheckLaunchPath/LaunchPathStatusText/
+    //     HasCommandLineBreaker/QuoteWindowsArg and Diagnostics::ReporterExeFor.
     //   A v53 module was compiled against the old layouts; reject the pairing.
     //   ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")

@@ -1,5 +1,9 @@
 #include "Project/ModuleBuild.hpp"
 
+#include <Arcane/Platform/LaunchPath.hpp>   // CheckLaunchPath, HasCommandLineBreaker (settings S7-SEC)
+
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <utility>
 
@@ -65,15 +69,27 @@ namespace Arcane::Editor::ModuleBuild
 
     std::filesystem::path ResolveDriver(const std::filesystem::path& editorExeDir)
     {
-        std::error_code ec;
         for (const std::filesystem::path& candidate : DriverCandidates(editorExeDir))
-            if (std::filesystem::is_regular_file(candidate, ec))
+            if (CheckLaunchPath(candidate) == LaunchPathStatus::Ok)
                 return candidate;
         return {};
     }
 
     std::string ComposeDriverCommand(const DriverInputs& in)
     {
+        // cmd.exe runs this line (S7-SEC): a quote or a line break in a path
+        // would end its quoted token and start a command of its own, and the
+        // two bare tokens must stay single words. Refused, never escaped.
+        for (const std::filesystem::path* p : { &in.driverExe, &in.projectRoot, &in.sdkRoot })
+            if (HasCommandLineBreaker(p->string()))
+                return {};
+        const auto word = [](const std::string& s) {
+            return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) {
+                return std::isalnum(c) || c == '_' || c == '-';
+            });
+        };
+        if (!word(in.command) || !word(in.configuration))
+            return {};
         std::string cmd = "( ";
         Quote(cmd, in.driverExe);
         cmd += ' ';

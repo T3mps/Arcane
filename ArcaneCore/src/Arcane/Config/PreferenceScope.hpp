@@ -25,9 +25,10 @@ namespace Arcane
 
     ARC_CORE_API SetBy PreferenceRung(SettingScope scope, PreferenceTarget target) noexcept;
 
-    // ThisProject when the User rung holds a value; else AllProjects when
-    // EditorUser holds one; else the home-scope default (PreferencesProject
-    // -> ThisProject, PreferencesMachine -> AllProjects).
+    // AllProjects for a LaunchesProgram cvar (a program path is the machine's,
+    // settings S7-SEC). Otherwise ThisProject when the User rung holds a value;
+    // else AllProjects when EditorUser holds one; else the home-scope default
+    // (PreferencesProject -> ThisProject, PreferencesMachine -> AllProjects).
     ARC_CORE_API PreferenceTarget PreferenceTargetOf(const CVarRegistry& registry, std::string_view name);
 
     // Flip the switch on a Preferences row.
@@ -37,8 +38,8 @@ namespace Arcane
     //   pending onto EditorUser first so the switch stays AllProjects (its
     //   home default is ThisProject). PreferencesMachine never promotes: a
     //   project override is cleared, not made machine-wide.
-    // Returns Stale for an unknown name, and Denied for a Project-scope cvar.
-    // Does not publish.
+    // Returns Stale for an unknown name, and Denied for a Project-scope cvar
+    // and for ThisProject on a LaunchesProgram cvar (S7-SEC). Does not publish.
     ARC_CORE_API SetResult SetPreferenceTarget(CVarRegistry& registry, std::string_view name, PreferenceTarget target);
 
     // Write `value` on the rung this row's edits belong to:

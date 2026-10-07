@@ -784,6 +784,13 @@ namespace Arcane
             layers.dirs.push_back(CVarLayerDir{ SetBy::User, UserCVarDir(*m_impl->project), "user" });
         layers.commandLine = m_impl->cvarCommandLine;
         layers.commandLineContext = m_impl->cvarCommandLineContext;
+        // Project territory (settings S7-SEC): no rung folder in here names a program.
+        if (m_impl->project)
+        {
+            layers.projectRoots.push_back(m_impl->project->Root());
+            for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
+                layers.projectRoots.push_back(pluginRoot);
+        }
         return layers;
     }
 
@@ -875,7 +882,7 @@ namespace Arcane
         const LayerSources layers = CVarLayerSources();
         for (const CVarLayerDir& layer : layers.dirs)
         {
-            ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule);
+            ApplyCVarDirectory(cvars, layer.dir, layer.by, layer.sourceModule, {}, layers.projectRoots);
             // A shipped/read-only legacy manifest could not be rewritten.
             // Its named values retain migration's merge-patch precedence over
             // an older Config key, then EditorUser/User/--set may still win.

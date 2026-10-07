@@ -307,6 +307,10 @@ namespace Arcane
         std::vector<CVarLayerDir> dirs;
         std::vector<std::string>  commandLine;                      // "name=value", SetBy::CommandLine
         CVarContext               commandLineContext = CVarContext::Editor;
+        // The open project's root and its active plugins' roots (settings
+        // S7-SEC): a rung folder inside one never names a program, whatever
+        // its rung (a LaunchesProgram key there is refused and reported).
+        std::vector<std::filesystem::path> projectRoots;
     };
 
     // RAII. While one is alive on this thread, cvar and command registrations

@@ -18,21 +18,35 @@
 
 namespace Arcane
 {
+    // A key this rung may not set (RungRefusal, settings S7-SEC): not applied.
+    struct CVarRefusedKey
+    {
+        std::string     key;
+        CVarRungRefusal why = CVarRungRefusal::None;
+    };
+
     struct CVarApplyReport
     {
-        std::vector<std::string> unknownKeys;      // no cvar declares it (a Dev cvar a Dist build compiled out is not reported)
-        std::vector<std::string> typeMismatches;   // declared, but the JSON value has the wrong type: refused
+        std::vector<std::string>    unknownKeys;      // no cvar declares it (a Dev cvar a Dist build compiled out is not reported)
+        std::vector<std::string>    typeMismatches;   // declared, but the JSON value has the wrong type: refused
+        std::vector<CVarRefusedKey> refused;          // declared, but this rung (or this folder) may not set it
     };
 
     // One config problem, for the Problems panel (settings spec s4.8, s12).
     struct CVarConfigIssue
     {
-        enum class Kind : std::uint8_t { UnknownKey, TypeMismatch };
+        enum class Kind : std::uint8_t { UnknownKey, TypeMismatch, Refused };
         Kind                  kind = Kind::UnknownKey;
         std::filesystem::path file;
         std::string           key;      // the full cvar name, "<category>.<key>"
         int                   line = 0; // 1-based line of the key's first mention; 0 = not found
+        CVarRungRefusal       refusal = CVarRungRefusal::None;   // Refused: why
     };
+
+    // Whether `dir` is one of `roots` or lies below one, after resolving links
+    // where the path exists (a junction into a project counts as inside).
+    // Case-insensitive on Windows.
+    ARC_CORE_API bool CVarDirInsideAny(const std::filesystem::path& dir, std::span<const std::filesystem::path> roots);
 
     // Read every rung's files WITHOUT applying them, and report each key no cvar
     // declares and each value of the wrong JSON type. Rows are ordered by rung,
@@ -58,7 +72,8 @@ namespace Arcane
 
     // `category` is the file stem. Keys in `doc` become `<category>.<key>`.
     // Nested objects join with further dots. Document-shaped categories record
-    // nothing and set nothing.
+    // nothing and set nothing. A key `by` may not set (RungRefusal) is refused
+    // and reported in `refused`; the caller warns (it knows the source).
     ARC_CORE_API CVarApplyReport ApplyCVarCategory(CVarRegistry& registry, std::string_view category,
                                                       const nlohmann::json& doc, SetBy by, bool documentShaped,
                                                       std::string_view sourceModule);
@@ -66,9 +81,15 @@ namespace Arcane
     // Every *.json in dir. "input" is document-shaped; the rest are cvars.
     // `onlyModule` non-empty: apply only that module's cvars, and report no
     // unknown keys (ApplyLayersFor; settings spec s4.4).
+    // A key the rung may not set (RungRefusal) is refused and reported in
+    // `refused`, never applied. A LaunchesProgram key is also refused when
+    // `dir` lies inside one of `projectRoots`, or inside the project Paths is
+    // configured for, whatever the rung (settings S7-SEC). Nothing here logs:
+    // the warning is ValidateCVarLayers' + PublishCVarConfigDiagnostics' (once per key).
     ARC_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
                                                        SetBy by, std::string_view sourceModule,
-                                                       std::string_view onlyModule = {});
+                                                       std::string_view onlyModule = {},
+                                                       std::span<const std::filesystem::path> projectRoots = {});
 
     // The user layer's write half (T3-D2): one <category>.json per category
     // with something to archive, in the shape ApplyCVarDirectory(..., SetBy::User)

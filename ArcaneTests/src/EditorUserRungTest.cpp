@@ -56,7 +56,9 @@ TEST_CASE("SetBy::EditorUser sits between Project and User; ClearRung peels one 
 {
     static_assert(SetBy::Project < SetBy::EditorUser && SetBy::EditorUser < SetBy::User);
     CVarRegistry reg;
-    const CVarHandle h = RegisterPref(reg, "eu.value", SettingScope::PreferencesMachine, 1);
+    // PreferencesProject: the Project rung may suggest it. A PreferencesMachine
+    // cvar refuses the Project rung (settings S7-SEC; LaunchesProgramTest).
+    const CVarHandle h = RegisterPref(reg, "eu.value", SettingScope::PreferencesProject, 1);
     REQUIRE_FALSE(h.IsStale());
     ApplyCVarCategory(reg, "eu", nlohmann::json{ { "value", 2 } }, SetBy::Project, false, "project");
     ApplyCVarCategory(reg, "eu", nlohmann::json{ { "value", 3 } }, SetBy::EditorUser, false, "editor-user");

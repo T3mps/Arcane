@@ -13,9 +13,11 @@
 // Tool-path preferences (BuildToolSettings, settings arc S6): ResolvePremake,
 // ResolveMsBuild, ResolveMake, ResolveNinja and ResolveDevenv first return the
 // matching build.* cvar (premakePath, msbuildPath, makePath, ninjaPath,
-// ideExecutable) when it names a runnable file (FindOnPath's test), absolute +
-// normalised; an empty value discovers as described below, and any other value
-// warns and discovers. The cvar is read on every call (Live).
+// ideExecutable) when it names a launchable file (CheckLaunchPath; on POSIX
+// also an executable bit), absolute + normalised; an empty value discovers as
+// described below, and any other value warns and discovers. The cvar is read
+// on every call (Live). The cvars are LaunchesProgram (settings S7-SEC): only
+// --set and the machine-wide EditorUser rung set them, never project config.
 //
 // DiscoverSolution, FindOnPath and the concrete Resolve* lookups (Premake,
 // MsBuild, Make, Ninja, XcodeBuild) are pure enough to unit-test against a

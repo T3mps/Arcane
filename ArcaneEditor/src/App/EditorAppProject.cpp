@@ -2933,8 +2933,14 @@ namespace Arcane::Editor
         in.command       = "build";
         in.configuration = ModuleBuild::Configuration();
 
-        m_moduleBuildRoot = proj->Root();
         const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
+        if (cmd.empty())
+        {
+            ARC_ERROR("Build: refused -- a path holds a quote or a line break, which the build shell would run: "
+                      "project '{}', SDK '{}', driver '{}'", in.projectRoot.string(), sdkRoot.string(), driver.string());
+            return;
+        }
+        m_moduleBuildRoot = proj->Root();
         ARC_INFO("Build: rebuilding {} ({}) against SDK {}",
                  proj->Manifest().gameModule, in.configuration, sdkRoot.generic_string());
         ARC_INFO("Build: {}", cmd);
@@ -3046,6 +3052,12 @@ namespace Arcane::Editor
         in.command       = "generate";
         in.configuration = ModuleBuild::Configuration();
         const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
+        if (cmd.empty())
+        {
+            ARC_ERROR("Build: refused -- a path holds a quote or a line break, which the build shell would run: "
+                      "project '{}', SDK '{}', driver '{}'", in.projectRoot.string(), in.sdkRoot.string(), driver.string());
+            return false;
+        }
         ARC_INFO("Build: {}", cmd);
         const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
         for (const std::string& line : gen.lines)

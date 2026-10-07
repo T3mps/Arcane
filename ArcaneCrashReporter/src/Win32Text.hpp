@@ -52,9 +52,15 @@ namespace Arcane::Reporter
     // is a real SE_ERR_*/ERROR_* code. There is no console to report to here
     // (D3, WindowedApp) and a MessageBox from a process reporting someone
     // ELSE's crash is not this button's job -- OnButton logs instead.
+    // Only a DIRECTORY is opened (settings S7-SEC): "open" on a file runs it,
+    // and the folder derives from diagnostics.dumpDir, which a project may
+    // suggest. Anything else returns ERROR_PATH_NOT_FOUND without the call.
     inline INT_PTR OpenFolder(const std::wstring& folder)
     {
         if (folder.empty()) return 0;
+        const DWORD attributes = GetFileAttributesW(folder.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+            return ERROR_PATH_NOT_FOUND;
         return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     }
 

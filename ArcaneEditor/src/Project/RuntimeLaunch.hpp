@@ -25,8 +25,9 @@ namespace Arcane::Editor::RuntimeLaunch
     // quoting; otherwise wrapped in quotes with every backslash run that
     // precedes a literal quote (or the closing wrapper) doubled. Pure --
     // RuntimeLaunchTest pins the rules. Shared by SpawnDetached below and
-    // IdeLaunch's devenv launch (the two CreateProcessW callers), so there is
-    // exactly one place that has to get Windows' escaping right.
+    // IdeLaunch's devenv launch; it forwards to Arcane::QuoteWindowsArg
+    // (ArcaneCore's LaunchPath.hpp, settings S7-SEC), so there is exactly one
+    // place that has to get Windows' escaping right.
     [[nodiscard]] std::wstring QuoteArg(const std::wstring& arg);
 
     // Where ArcaneRuntime.exe might live relative to the EDITOR exe's own

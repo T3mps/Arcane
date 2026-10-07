@@ -16,6 +16,11 @@
 // perfLogIntervalFrames are Live (FramePerf reads them every frame) and NOT
 // Dev: --perf stays usable in Dist, where the frame-time floor is measured
 // (user decision 2026-10-06).
+//
+// reporterPath names the program the crash path launches, so it is
+// LaunchesProgram (settings S7-SEC): only --set and the machine-wide
+// EditorUser rung set it, never a project's Config/ or Saved/Config, and
+// Install falls back to the bundled reporter when it is not a launchable file.
 
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>
 #include <Arcane/Config/Settings.hpp>
@@ -50,8 +55,9 @@ namespace Arcane
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::CommandLineOnly)
             ARC_REFLECT_ATTR(Tooltip, "Start the hang watchdog. --set only (debugger sessions); always on in Dist.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, reporterPath)
-            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Widget, "path:file")
-            ARC_REFLECT_ATTR(Tooltip, "The crash reporter executable. Empty = <exe dir>/ArcaneCrashReporter.exe.")
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::LaunchesProgram) ARC_REFLECT_ATTR(Widget, "path:file")
+            ARC_REFLECT_ATTR(Tooltip, "The crash reporter executable. Empty = <exe dir>/ArcaneCrashReporter.exe. "
+                                      "Machine-wide only: project config never sets it.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, spawnReporter)
             ARC_REFLECT_ATTR(Tooltip, "Open the crash reporter window after a crash or hang report. The report is written either way.")
         ARC_REFLECT_FIELD(DiagnosticsSettings, exitSeconds)
