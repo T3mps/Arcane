@@ -330,7 +330,7 @@ TEST_CASE("arcbuild default action is host-specific", "[build]")
 {
     CHECK(DefaultActionFor(HostPlatform::Windows) == "vs2026");
     CHECK(DefaultActionFor(HostPlatform::Linux) == "gmake");
-    CHECK(DefaultActionFor(HostPlatform::MacOS) == "xcode4");
+    CHECK(DefaultActionFor(HostPlatform::MacOS) == "gmake");
 }
 
 TEST_CASE("arcbuild::MakeCli + RequestFromCli carry every flag of spec s3", "[build]")

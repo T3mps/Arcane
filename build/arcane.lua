@@ -40,6 +40,27 @@ end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
 local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
 
+-- macOS port (2026-10-07): a Mac target builds for the host architecture
+-- (arm64 on Apple Silicon), overridable with ARCANE_MAC_ARCH=arm64|x86_64 --
+-- the SAME rule as the engine's premake5.lua (arcane_mac_architecture), so a
+-- game module always links the engine flavor ARCANE_BIN below names. A
+-- consumer workspace keeps its `architecture "x64"`; arcane_game_module and
+-- arcane_core_consumer override it per project on a Mac target only.
+function arcane_sdk_mac_architecture()
+    local want = os.getenv("ARCANE_MAC_ARCH")
+    if not want or want == "" then
+        if os.host() == "macosx" then
+            want = os.outputof("uname -m") or "arm64"
+        else
+            want = "arm64"
+        end
+    end
+    want = want:lower()
+    if want == "arm64" or want == "aarch64" then return "ARM64" end
+    if want == "x86_64" or want == "x64" then return "x86_64" end
+    error("ARCANE_MAC_ARCH must be arm64 or x86_64, got '" .. want .. "'")
+end
+
 -- The engine's per-config bin flavor. Must byte-match the engine's own outputdir
 -- literal in the SDK root premake5.lua ("-md" = the dynamic-CRT flavor; /MD everywhere so
 -- one heap crosses the ArcaneClient.dll/Game.dll boundary).
@@ -127,8 +148,11 @@ function arcane_game_module(name)
         filter {}
 
         targetname(name)
-        -- A LOADED module is Name.so off-Windows, never libName.so: the host
-        -- names it by stem + the platform extension (Arcane/Platform/Platform.hpp).
+        filter "system:macosx"
+            architecture(arcane_sdk_mac_architecture())
+        filter {}
+        -- A LOADED module is Name.so / Name.dylib off-Windows, never libName.*:
+        -- the host names it by stem + the platform extension (Arcane/Platform/Platform.hpp).
         filter "system:not windows"
             targetprefix ""
             -- A game module's frames are on the crash path's walk too: the
@@ -330,6 +354,9 @@ end
 -- ============================================================================
 function arcane_core_consumer()
     staticruntime "off"
+    filter "system:macosx"
+        architecture(arcane_sdk_mac_architecture())
+    filter {}
 
     -- C4251 ("needs to have dll-interface"): disabled for every consumer, the
     -- same ruling the engine workspace makes for itself (premake5.lua, the
