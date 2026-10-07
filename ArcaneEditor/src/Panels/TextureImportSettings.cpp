@@ -73,8 +73,12 @@ namespace Arcane::Editor
             ReadTextureMetaSettingsDisplay(metaPath, Arcane::Settings<TextureMetaSettings>(), &set);
         TextureMetaSettings::FieldsSet write = set;
         bool changed = false;
+        // The reset slot exists only while the .meta sets the field: an empty
+        // slot still narrows the value widget, and a .meta that sets nothing
+        // must draw exactly the pre-sweep rows (the editor-asset-page golden;
+        // S6-GATE fix forward of S6-6).
         const auto decorate = [&grid](bool isSet) {
-            grid.SetNextRowDecor(RowDecor{ .reset = true, .resetActive = isSet });
+            grid.SetNextRowDecor(RowDecor{ .reset = isSet, .resetActive = isSet });
         };
         // After the row: an edit pins the field, a reset unpins it, and an absent
         // field's value widget says where its value comes from.
