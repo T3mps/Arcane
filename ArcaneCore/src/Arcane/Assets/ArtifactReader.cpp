@@ -302,6 +302,58 @@ namespace Arcane
             std::vector<std::byte> thumbRgba;
         };
 
+        // Fuzz finding (fuzz/regressions/artifact, 2026-10-07): the header's dims and the
+        // section bodies were never cross-checked, and the consumers trust the dims:
+        // Assets::PixelsFor publishes thumbWidth x thumbHeight next to thumbRgba and the
+        // texture cache uploads width*height*4 bytes from rgba.data(); UploadArtifact
+        // checks each mip against the payload but then uploads slicePitch bytes computed
+        // from the mip's OWN width/height. A file declaring a 64x64 thumbnail over a
+        // 4-byte section, or a 256x256 RGBA8 mip over 16 bytes, was a heap over-read in
+        // the upload. The reader is the one place that sees the file, so it refuses here
+        // (Missing, like any other corrupt artifact) rather than every consumer
+        // re-deriving the rule. The importer writes exactly these sizes
+        // (TextureImporter.cpp), so a cooked artifact always passes.
+        [[nodiscard]] bool SizesAgree(const FullyParsed& f) noexcept
+        {
+            // Thumbnail: uncompressed RGBA8, exactly thumbWidth x thumbHeight. u32*u32
+            // fits u64; the *4 is checked against overflow before it is taken.
+            const std::uint64_t thumbPixels = static_cast<std::uint64_t>(f.header.thumbWidth) * f.header.thumbHeight;
+            if (thumbPixels > f.thumbRgba.size() / 4 || thumbPixels * 4 != f.thumbRgba.size())
+                return false;
+
+            // One MipTable entry per declared mip.
+            if (f.mips.size() != f.header.mipCount)
+                return false;
+
+            for (const MipView& mip : f.mips)
+            {
+                // Inside the payload section (u64 arithmetic, no overflow: subtract first).
+                if (mip.offset > f.payload.size() || mip.size > f.payload.size() - mip.offset)
+                    return false;
+
+                // Exactly the bytes this mip's dims imply, for every format the runtime
+                // can upload. A reserved format byte (BC5/BC6H) is refused by the upload
+                // itself, and its size rule is not written yet -- left to that arc.
+                // Units/unit-bytes per format; units = pixels (RGBA8) or 4x4 blocks (BC7).
+                // A zero dim is never written. u32*u32 fits u64, and the units are
+                // bounded by the payload BEFORE the multiply by the unit size, so a
+                // crafted 2^31 x 2^31 mip cannot wrap its expected size to 0.
+                const std::uint64_t w = mip.width, h = mip.height;
+                if (w == 0 || h == 0)
+                    return false;
+                std::uint64_t units = 0, unitBytes = 0;
+                switch (static_cast<ArtifactPixelFormatValue>(f.header.format))
+                {
+                case ArtifactPixelFormatValue::RGBA8: units = w * h;                       unitBytes = 4;  break;
+                case ArtifactPixelFormatValue::BC7:   units = ((w + 3) / 4) * ((h + 3) / 4); unitBytes = 16; break;
+                default: continue;
+                }
+                if (units > f.payload.size() / unitBytes || units * unitBytes != mip.size)
+                    return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] std::optional<FullyParsed> ReadArtifactFile(const std::filesystem::path& path)
         {
             const std::optional<std::vector<std::byte>> raw = ReadWholeFile(path);
@@ -377,6 +429,9 @@ namespace Arcane
                     break;
                 }
             }
+
+            if (!SizesAgree(out))
+                return std::nullopt;   // header dims disagree with the bytes actually present
 
             return out;
         }
