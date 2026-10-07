@@ -1040,7 +1040,18 @@ namespace Arcane
     //     and time fields. A v50 module was compiled against the old layouts and
     //     exports; reject the pairing. ReferenceProject.arcproj and
     //     Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 51;
+    // v52 (2026-10-05, the Linux GPU lane -- adapter-keyed golden references):
+    //     `NriDeviceCaps` (held by value inside the exported `NriDevice`) gained
+    //     `adapterName` (std::string) and `softwareAdapter` -- layout.
+    //     `ReferenceLevel` gained `Adapter`; `ReferenceAdapterSet`, a four-
+    //     argument `ResolveReference` and `ResolveReferenceIn` are new
+    //     ARCANE_API exports (additive; `ReferenceResolution`'s layout did not
+    //     move). Consumed by the two hosts and ArcaneTests only -- no game
+    //     module names NriDevice or ReferenceImages -- but a v51 module was
+    //     compiled against the old NriDevice layout; reject the pairing.
+    //     ReferenceProject.arcproj restamped (Aphelyon.arcproj restamps with
+    //     its next engine sync).
+    inline constexpr uint32_t kGamePluginABIVersion = 52;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

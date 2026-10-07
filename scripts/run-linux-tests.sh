@@ -4,8 +4,13 @@
 # (SDL_VIDEODRIVER=offscreen), with "~[gpu]" plus every case listed in
 # scripts/linux-test-exclusions.txt excluded.
 #
-#   scripts/run-linux-tests.sh <config> [extra Catch2 args...]
+#   scripts/run-linux-tests.sh [--gpu] <config> [extra Catch2 args...]
 #     config: Debug | Release | Dist   (bin/<config>-linux-x86_64-md/ArcaneTests)
+#     --gpu:  run "[gpu]" instead of "~[gpu]" (same exclusions). Needs a Vulkan
+#             ICD -- CI uses Mesa lavapipe -- and, for the windowed cases, a
+#             display (xvfb-run + SDL_VIDEODRIVER=x11). Software adapters compare
+#             against their own golden set, ReferenceProject/Verify/References/
+#             vulkan-lavapipe/ (ReferenceImages.hpp, ReferenceAdapterSet).
 #
 # Exclusion file format: one case per line, "<exact test case name> | <reason>".
 # Blank lines and lines starting with '#' are ignored. The reason is
@@ -19,6 +24,11 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+GPU_SPEC="~[gpu]"
+if [ "${1:-}" = "--gpu" ]; then
+    GPU_SPEC="[gpu]"
+    shift
+fi
 CONFIG="${1:-Debug}"
 shift || true
 EXE_DIR="$ROOT/bin/$CONFIG-linux-x86_64-md/ArcaneTests"
@@ -29,7 +39,7 @@ if [ ! -x "$EXE_DIR/ArcaneTests" ]; then
     exit 2
 fi
 
-specs=("~[gpu]")
+specs=("$GPU_SPEC")
 if [ -f "$EXCLUSIONS" ]; then
     lineno=0
     while IFS= read -r line || [ -n "$line" ]; do
@@ -49,7 +59,7 @@ if [ -f "$EXCLUSIONS" ]; then
     done < "$EXCLUSIONS"
 fi
 
-echo "run-linux-tests: $CONFIG, ${#specs[@]} spec(s) (~[gpu] + $(( ${#specs[@]} - 1 )) exclusion(s))"
+echo "run-linux-tests: $CONFIG, ${#specs[@]} spec(s) ($GPU_SPEC + $(( ${#specs[@]} - 1 )) exclusion(s))"
 cd "$EXE_DIR"
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-offscreen}"
 exec ./ArcaneTests "${specs[@]}" "$@"

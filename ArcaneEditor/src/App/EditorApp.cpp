@@ -3324,6 +3324,7 @@ namespace Arcane::Editor
                     {
                         case Arcane::ReferenceLevel::Shared:  return "shared";
                         case Arcane::ReferenceLevel::Backend: return "backend";
+                        case Arcane::ReferenceLevel::Adapter: return "adapter";
                         default:                               return "none";
                     }
                 };
@@ -3379,7 +3380,7 @@ namespace Arcane::Editor
                     // the reference actually ended up.
                     const Arcane::ReferenceResolution after =
                         Arcane::ResolveReference(projectRoot, m_config.compareReference,
-                                                  backendName);
+                                                  backendName, m_compareAdapterSet);
                     resolvedLevel = levelName(after.level);
                     referencePath = after.path.string();
                     triedPaths    = stringifyTriedPaths(after.triedPaths);

@@ -453,6 +453,9 @@ namespace Arcane
                 deviceDesc.descriptorSet.updateAfterSet.textureMaxNum;
             wrapped->m_caps.maxPerStageUpdateAfterSetTextures =
                 deviceDesc.shaderStage.updateAfterSet.descriptorTextureMaxNum;
+            wrapped->m_caps.adapterName     = deviceDesc.adapterDesc.name;
+            wrapped->m_caps.softwareAdapter =
+                deviceDesc.adapterDesc.architecture == nri::Architecture::SOFTWARE;
         }
 
         // Contract item 14, post-wrap assert 3: say what we ended up with.
