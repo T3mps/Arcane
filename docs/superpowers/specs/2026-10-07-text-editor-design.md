@@ -1,6 +1,6 @@
 # Arcane Text Editor -- design
 
-**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; awaiting written-spec review)
+**Status:** Proposed (brainstorm 2026-10-07; sections 1-6 approved in conversation; revision 2 folds in an independent review -- see s13; awaiting written-spec review)
 **Scope:** spec 1 of 2. Spec 2 (editor-wide Command Palette, Goto Anything, Find in Files) follows this one and consumes the hooks defined in s9.
 **Research:** lite-xl (`D:\dev\_reference\lite-xl-master`, MIT), Zed (`D:\dev\_reference\zed-main`, GPL editor crates / Apache `sum_tree`), Zep, ImGuiColorTextEdit (BalazsJako + santaclose + goossens forks), Sublime Text's `.sublime-syntax` model, tree-sitter, Lexilla. Findings are summarised where they drive a decision.
 
@@ -29,7 +29,9 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 | D8 | Split view of one buffer moves **into v1** (vim's `:sp`/`:vs` need it). |
 | D9 | A dev-only **headless Neovim oracle** generates/verifies the vim behaviour tables (s11). |
 | D10 | "Open as Text" on an asset that has a dedicated editor opens **read-only with an Enable editing unlock** (s5.4). |
-| D11 | Regex engine: **PCRE2 with JIT**, vendored; the one regex flavour for grammars, find/replace and vim. |
+| D11 | Regex engine: **PCRE2 with JIT**, vendored; the one regex *engine* for grammars, find/replace and vim. Vim patterns reach it through a vim-to-PCRE2 translator (s6.5). |
+| D12 | **Release gate after step 4** plus the step-6 essentials (s12). Vim ships behind an **Experimental** label that widens with each vim pass and drops when the last pass and the oracle suite are green. |
+| D13 | Vim flavour: **Neovim defaults** (`Y` = `y$`, `hlsearch`/`incsearch` on, `startofline` off, `&` remapped, `nrformats` without octal). Classic-Vim behaviour stays reachable through options. |
 
 ### 1.2 Non-goals
 
@@ -37,8 +39,9 @@ A Sublime-Text-4-class text editor that lives inside the Arcane Editor as an ord
 - Vimscript, vim plugins, `:!` shell filters, `:terminal`, digraphs, spell check. (Digraphs and an opt-in `:!` that confirms before running are cheap later additions if wanted.)
 - Loading other editors' grammar/theme/config files (D5).
 - A hex/binary viewer. Binary files are refused with a message.
-- Minimap, soft wrap, word completion, diff view: later steps, not v1 (s12.2).
+- Minimap, soft wrap, word completion, diff view: later steps, not v1 (s12.3).
 - Collaborative editing. (Zed's CRDT machinery -- Lamport clocks, fragment/locator anchors, version vectors -- is deliberately not reproduced.)
+- **Text-rendering limits (inherited from ImGui):** no complex-script shaping (Arabic, Devanagari render wrong), no bidi, no automatic font fallback (CJK needs a fallback font merged into the atlas; not shipped in v1), no colour emoji. Grapheme-correct cursor movement (s5.1) does not fix rendering; these are display limits, stated so nobody mistakes them for bugs.
 
 ---
 
@@ -48,7 +51,7 @@ All code lives under `ArcaneEditor/src/TextEditor/`. Four layers; each depends o
 
 | Layer | Units | Depends on |
 |---|---|---|
-| **Core** (pure C++, no ImGui) | `Rope`, `TextBuffer`, `SelectionSet`, `TextCommands`, `FoldModel`, `TextSearch` | nothing (PCRE2 for `TextSearch`) |
+| **Core** (pure C++, no ImGui) | `Rope`, `TextBuffer`, `EolMap`, `SelectionSet`, `TextCommands`, `FoldModel`, `DisplayMap`, `TextSearch` | nothing (PCRE2 for `TextSearch`) |
 | **Syntax** | `Grammar`, `GrammarRegistry`, `Tokenizer`, `HighlightCache`, `ScopeMap` | Core, PCRE2 |
 | **Vim** | `VimState`, `VimKeymap`, `VimMotions`, `VimOperators`, `VimTextObjects`, `VimRegisters`, `VimEx` | Core (+ Syntax for comment tokens and `iskeyword`) |
 | **View + Document** | `TextEditorView`, `TextDocument`, `TextDocumentInspectorPage`, `TextStatusStrip`, `FindBar` | all above, ImGui, DocumentHost |
@@ -73,14 +76,17 @@ This is what makes every command multi-cursor-correct and atomic, and what lets 
 
 ### 3.1 Rope
 
-- A balanced B+ tree of UTF-8 leaves of **64-128 bytes**, ported from Zed's `sum_tree` (Apache-2.0; NOTICE + attribution kept, changes marked). Zed's `rope`/`text` crates are GPL and are **not** ported -- design reference only.
-- Each node caches a summary: `{bytes, newlines, lastLineBytes, longestLineBytes}` (plus `chars` if a consumer needs it). Byte offset <-> `Point{row, byteCol}` is O(log n) by seeking on one dimension while accumulating the other; no line-start table is rebuilt per edit.
-- **Persistent:** an edit copies only the touched path (refcounted nodes). A `RopeSnapshot` is O(1) to take and immutable, so the highlighter worker and large-file search read a consistent snapshot while the user types.
+- A balanced B+ tree of UTF-8 leaves. A **concrete rope written for Arcane, informed by Zed's `sum_tree`** (Apache-2.0; attribution kept in `ThirdParty/NOTICES` as a courtesy). It is not a port of `sum_tree`'s generic `Summary`/`Dimension` machinery -- translating Rust generics is a rewrite either way, and one concrete summary is simpler. Zed's `rope`/`text` crates are GPL and are design reference only.
+- **Leaf size is measured, not assumed.** Step 1 benchmarks leaf targets from 128 B to 1 KB on the s11.5 workloads (100 MB log open, random edits, row seeks, snapshot cost across threads) and fixes the constant from the results. Zed's 64-128 B suits Zed's file sizes; Arcane's large-log target may favour Ropey-style ~1 KB leaves (a 512 MB file at 1 KB is ~0.5 M leaves, not ~5 M). Node refcounts are atomic because snapshots cross threads, which is part of what the benchmark measures.
+- Each node caches a summary: `{bytes, newlines, lastLineBytes, longestLineBytes}`. Byte offset <-> `Point{row, byteCol}` is O(log n) by seeking on one dimension while accumulating the other; no line-start table is rebuilt per edit.
+- **Persistent:** an edit copies only the touched path. A `RopeSnapshot` is O(1) to take and immutable, so the highlighter worker and large-file search read a consistent snapshot while the user types. Every snapshot carries the buffer `version` it was taken at (s4.4).
 
 ### 3.2 Positions and anchors
 
 - Internal positions are byte offsets, or `Point{row, byteCol}`. Display columns (tab width, wide glyphs) are computed only by the view.
-- Anything that must survive edits -- selections, vim marks, folds, search matches, bookmarks -- is an **anchor**: `{offset, bias}`, shifted by every edit (left bias stays before an insertion at its offset; right bias moves after). Anchors live in sorted vectors per owner; shifting is O(anchors) per edit, which is fine at editor scale.
+- Anything that must survive edits -- selections, vim marks, folds, bookmarks -- is an **anchor**: `{offset, bias}`, shifted by every edit (left bias stays before an insertion at its offset; right bias moves after). Anchors live in sorted vectors per owner; shifting is O(anchors) per edit, which is fine because anchor counts stay small.
+- **Search matches are never anchors.** A big log under `hlsearch` can hold hundreds of thousands of matches; shifting them per edit would be the dominant cost. Matches are recomputed per snapshot for the visible range (plus a background total count) and discarded on the next version.
+- Turning all matches into cursors (Alt+Enter, vim `gb` repeated) creates real selections; above `editor.text.maxCursors` (default 10 000) it asks first.
 
 ### 3.3 Edits, transactions, undo
 
@@ -100,11 +106,16 @@ This is what makes every command multi-cursor-correct and atomic, and what lets 
 
 | Concern | Rule |
 |---|---|
-| Line endings | Detected on load (LF / CRLF / mixed); stored internally as LF; saved in the file's dominant style. Mixed files show a status-strip note and are normalised on save. |
+| Line endings | **Every line keeps its original ending.** The rope stores LF; an `EolMap` records the file's dominant style plus a sparse set of exception rows (CRLF in an LF file, LF in a CRLF file, lone `\r`), shifted by edits like anchors. A lone `\r` (classic Mac) is a line break. New lines take the dominant style. An unedited file saves back **byte-identical**; a one-character edit changes one line in version control. Converting is explicit: the status strip's line-ending menu (and a `text.convertLineEndings` action) rewrites every line in one undo step. Mixed files show a status-strip note but are never silently normalised. |
 | Encodings | UTF-8 (BOM preserved if present) and UTF-16 LE/BE with BOM are decoded and saved back in the same encoding. |
 | Invalid bytes / binary | Invalid UTF-8 or binary content (NUL bytes in the first 8 KB) opens **read-only** with a banner explaining why; saving can never corrupt the file. Pure binary formats with no text editor are refused with a message. |
-| Size thresholds | Above `editor.text.syntaxMaxMB` (default 32) highlighting is off. Above `editor.text.openMaxMB` (default 512) the file is not opened ("open externally" notice). |
-| Append-only growth | If an open file on disk only grew (prefix unchanged), the new tail is appended instead of reloading. A **Follow** toggle (status strip) keeps the view at the end, like `tail -f`. |
+| Size thresholds | Above `editor.text.syntaxMaxMB` (default 32), stateful grammars stop highlighting; **line-local grammars keep highlighting at any size** (s4.4), so logs never lose their level colours. Above `editor.text.openMaxMB` (default 512) the file is not opened ("open externally" notice). |
+| Long lines | A line longer than `editor.text.longLineMaxBytes` (default 64 KB; e.g. one-line minified JSON) is tokenized only up to the cap; the rest of that line draws plain, and the **next** line restarts from the grammar's root state (a resync) so nothing after it is held hostage. Drawing such a line clips to the visible horizontal window. |
+| Append-only growth | Detected cheaply: the size grew **and** a hash of a small window (4 KB) just before the old end still matches. Only then is the new tail appended instead of reloading. A **Follow** toggle (status strip) keeps the view at the end, like `tail -f`. A shrink (truncation) or a window mismatch (rotation, rewrite) is a full reload under the s5.3 external-change rules. |
+
+### 3.6 Display map
+
+One `DisplayMap` sits between the buffer and the view and owns the buffer-row <-> display-row mapping. In v1 it has a single layer, **folds**: a sorted list of folded row ranges, with display row = buffer row minus hidden rows above (prefix sums). Everything row-visual goes through it -- drawing, scrolling, vim `j`/`k` vs `gj`/`gk`, `H M L`, `scrolloff`, `zj`/`zk`. Soft wrap (the first post-v1 follow-up) becomes a second layer under the same interface instead of a retrofit through every caller. Tab expansion stays a draw-time computation per visible line.
 
 ---
 
@@ -129,9 +140,10 @@ Saving a grammar reloads it live (and re-highlights open documents using it).
   "indent": { "increase": "[\\[{]\\s*$", "decrease": "^\\s*[\\]}]" },
   "wordChars": "A-Za-z0-9_",
   "symbols": [ { "match": "\"([^\"]+)\"\\s*:", "name": 1, "kind": "key" } ],
+  "lineLocal": false,
   "patterns": [
-    { "begin": "\"", "end": "\"", "escape": "\\\\.", "scope": "string.quoted.double.json",
-      "when": { "followedBy": "\\s*:", "scope": "entity.name.key.json" } },
+    { "match": "\"(?:[^\"\\\\]|\\\\.)*\"(?=\\s*:)", "scope": "entity.name.key.json" },
+    { "begin": "\"", "end": "\"", "escape": "\\\\.", "scope": "string.quoted.double.json" },
     { "match": "-?\\d+(\\.\\d+)?([eE][+-]?\\d+)?", "scope": "constant.numeric.json" },
     { "match": "\\b(true|false|null)\\b", "scope": "constant.language.json" } ] }
 ```
@@ -143,6 +155,9 @@ Rule kinds:
 - `embed: "<grammar name>"` inside a region: another language for the region's content (Markdown fenced blocks).
 - `foldMarkers: {begin, end}`: explicit fold regions in addition to indentation.
 - `symbols`: patterns that feed the symbol provider (s9).
+- `lineLocal: true`: the grammar has **no rule that spans lines** (no multi-line regions), so a line's tokens never depend on earlier lines. Validated on load (a line-local grammar with a multi-line region is an error). Line-local grammars -- Arcane log, INI/cfg, CSV-like logs, plain key/value files -- are tokenized on demand for visible lines only, at any file size (s4.4).
+
+Context-dependent scopes use ordinary rules, not special syntax: the JSON key above is a single-line `match` with a lookahead, listed before the generic string region so it wins the tie at the same position.
 
 Detection order: file extension (`files`) -> `firstLine` regex -> the user's choice in the status-strip language picker, remembered per extension in `editor.text.languageByExtension`.
 
@@ -150,21 +165,29 @@ The format is validated on load; a bad grammar produces a Problems row naming th
 
 ### 4.2 Regex engine: PCRE2 + JIT
 
-Vendored under `ThirdParty/pcre2` (BSD), built as a static lib via premake with JIT enabled, 8-bit code units. One engine for grammar rules, in-file find/replace, vim `/` `?` `:s` `:g`. `std::regex` is too slow; RE2 would bring abseil.
+Vendored under `ThirdParty/pcre2` (BSD), built as a static lib via premake with JIT enabled, 8-bit code units. One engine for grammar rules, in-file find/replace, vim `/` `?` `:s` `:g` (vim syntax is translated first, s6.5). `std::regex` is too slow; RE2 would bring abseil.
+
+- **Bounded everywhere.** Every match context sets `pcre2_set_match_limit` and `pcre2_set_depth_limit` (`editor.text.regexMatchLimit`, `editor.text.regexDepthLimit`). A limit hit is not a hang: a grammar rule that hits it is disabled for that line and reported once as a Problems row naming the grammar and rule; a find or `:s` pattern that hits it stops and says so in the find bar / vim message line.
+- **Contiguous input.** PCRE2 needs a contiguous subject, a rope is not. Single-line patterns (the grammar tokenizer always; find/vim when the pattern cannot match `\n`) run line by line, copying each line into a reused scratch buffer -- cheap, and lines past `longLineMaxBytes` are matched in windows. Patterns that can span lines (contain `\n`, `\s` across lines in vim `\_` forms, or `(?s)`) run on the worker against a materialized copy of the snapshot, refused above `editor.text.multilineSearchMaxMB` (default 64) with a message.
 
 ### 4.3 Tokenizer
 
 - **TextMate matching:** at the current position, among the active rule list, the **earliest** match wins; ties go to the first rule listed. Each rule's next match on the current line is cached, so a line is scanned about once rather than once per rule.
 - **State:** the stack of open regions at a line boundary, interned to a small `StateId` (equal stacks share an id; equality is an integer compare).
 - **Per-line cache:** `{startState, endState, runs[]}`, where a run is `{byteStart, scopeId}` (run-length, never per glyph -- ImGuiColorTextEdit's ~12 bytes/char model is what rules it out for large logs). Scopes are interned dotted strings.
-- **A per-line time budget** (`editor.text.tokenizeLineBudgetUs`) yields a partial line that resumes next frame, so a pathological line never stalls the UI.
+- **A per-line time budget** (`editor.text.tokenizeLineBudgetUs`) yields a partial line that resumes later, so a pathological line never stalls the UI; long lines are additionally capped (s3.5).
 
-### 4.4 Scheduling
+### 4.4 Scheduling and cache ownership
 
-- Visible lines are tokenized synchronously when drawn (cache miss).
-- A worker thread advances on a `RopeSnapshot`, ahead of the view up to the visible end plus a margin, within `editor.text.highlightFrameBudgetMs`.
-- After an edit, invalidation starts at the edited line and **stops as soon as a line's recomputed end state equals its cached end state** (convergence). Typing inside a string usually re-tokenizes one line.
-- Files above the syntax threshold are not tokenized; files below it are tokenized lazily only as far as the user has scrolled.
+A line's start state depends on every line before it, so "tokenize on a cache miss" must never mean "tokenize from line 0 on the UI thread".
+
+- **Cache entries are versioned.** Each entry is `{bufferVersion, startState, endState, runs[]}`. The buffer bumps `version` on every edit and shifts/invalidates entries from the edited row on (the edit log maps rows forward).
+- **The worker owns tokenizing.** It runs on a `RopeSnapshot` at version *v* and produces entries tagged *v*. The UI thread **applies a worker result only if its tag equals the current buffer version**; a stale result (the user typed meanwhile) is discarded and the worker restarts from the earliest invalid row on a fresh snapshot. Only the UI thread writes the shared cache; the worker hands results over through a queue. No locks on the cache itself.
+- **Bounded UI-thread catch-up.** On a visible-line miss, the UI thread may tokenize synchronously only if the nearest valid cached line above is within `editor.text.syncCatchUpLines` (default 200) -- typing and nearby scrolling stay instant. Farther misses (Ctrl+End in a 30 MB file, a jump to a mark, a Goto) **draw plain text** (or line-local tokens, below) for those lines and raise the worker's priority to that region; colour appears when the worker gets there. There is no heuristic mid-file resync for stateful grammars -- correctness over guessing.
+- **The worker works outward from the view:** from the earliest invalid row toward the visible end plus a margin, within `editor.text.highlightFrameBudgetMs` of wall time per frame.
+- **Convergence stop:** after an edit, re-tokenizing starts at the edited line and **stops as soon as a recomputed end state equals the cached end state** for the next line. Typing inside a string usually re-tokenizes one line.
+- **Line-local grammars** (`lineLocal: true`) skip all of the above: any visible line is tokenized on demand from the root state, synchronously, at any file size and any scroll position. This is what keeps a 400 MB Arcane log coloured.
+- Stateful grammars above `syntaxMaxMB` are not tokenized; below it, only as far as the view has been.
 
 ### 4.5 Colours
 
@@ -207,7 +230,7 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 - **Unicode:** the cursor moves by grapheme cluster (a UAX #29 subset: combining marks, ZWJ emoji sequences, regional-indicator pairs), so accents and emoji are never split.
 - **IME:** composition position reported through ImGui's platform IME data at the primary caret; the composition string is drawn inline (underlined) until committed.
 - **Mouse:** click, drag, double-click word, triple-click line, Ctrl+click add/remove cursor, Alt+drag column selection, drag-select auto-scroll.
-- **Split view (D8):** a second `TextEditorView` over the same `TextBuffer`, with its own scroll, folds-visible state and `SelectionSet`, docked beside the first. Edits in one view shift the other view's anchors through the buffer's edit notifications.
+- **Split view (D8):** a second `TextEditorView` over the same `TextBuffer`, with its own scroll, `DisplayMap` (so folds are per view) and `SelectionSet`, docked beside the first. Edits in one view shift the other view's anchors through the buffer's edit notifications.
 
 ### 5.2 Built-in controls
 
@@ -219,11 +242,15 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 
 - An `EditorDocument` (and `InspectorSource`). Identity: the asset GUID when the file is a registered asset; otherwise the **normalized absolute path**. `DocumentHost` gains a path-keyed lookup for GUID-less documents so a second open focuses the existing tab.
 - **Registration:** `DocumentHost` gets a **fallback factory** used when no extension factory claims a path and the file sniffs as text; C++ extensions stay routed to `IdeLaunch`. Text extensions with no dedicated editor (`.md .ini .log .hlsl .lua .toml .yaml .xml .txt ...`) register this factory explicitly.
-- **Save:** atomic (write temp beside the file, flush, rename over), preserving encoding, BOM and line endings. `editor.text.ensureFinalNewline` and `editor.text.trimTrailingWhitespace`, both off by default.
+- **Reading:** files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, so a running game (or the editor's own logger) can keep writing, rotating or deleting the log being viewed.
+- **Save** preserves encoding, BOM and per-line endings (s3.5). `editor.text.ensureFinalNewline` and `editor.text.trimTrailingWhitespace`, both off by default.
+  - Atomic on Windows: write a temp file beside the target, flush, then **`ReplaceFileW`** (not a plain rename), which keeps the original's ACLs, attributes, alternate data streams and file identity for other watchers. A file that does not exist yet is created with a plain rename.
+  - **Sharing violation** (the file is open without delete/write sharing, e.g. a log held by a running process): the save fails cleanly with a banner -- *"<file> is in use by another program"* -- offering **Retry** and **Save As...**; the buffer stays dirty and nothing is lost. Read-only attribute or ACL refusals get the same banner with the reason.
+  - **Self-save suppression:** after a save the document records the written size, mtime and a content hash; watcher events matching them are ignored, so saving never triggers a "changed on disk" reload of itself.
 - **External changes** (file watcher, debounced):
   - clean document -> silent reload keeping cursors and scroll (positions mapped by line/col);
   - dirty document -> banner: **Reload** / **Keep mine**;
-  - append-only growth -> append (s3.5);
+  - append-only growth -> append (s3.5); truncation or rotation -> reload under the two rules above;
   - deleted -> banner; Save recreates the file.
 - **Crash safety:** unsaved text documents join the editor's existing autosave/recovery path (crash-window arc): buffers are snapshotted to the recovery store and offered back after a crash.
 - **Session restore:** cursor, scroll, folds and split state per file, stored in user data (`editor.text.rememberViewState`).
@@ -233,7 +260,10 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 
 - Asset context menu and Inspector gain **Open as Text** for any text-backed asset.
 - If the asset has a dedicated editor, the text document opens **read-only** with a banner and an **Enable editing** button.
-- After unlocking, Save writes the file and triggers the registry's reload of that asset; an open dedicated editor for the same asset refreshes, or -- if it has unsaved changes -- shows its own conflict banner instead of silently losing either side.
+- After unlocking, Save writes the file and triggers the registry's reload of that asset. An open dedicated editor for the same asset then:
+  - **has unsaved changes** -> shows its own conflict banner instead of silently losing either side;
+  - **is clean** -> reloads, and **its undo history for that asset is cleared**, with a visible note in its toolbar ("History cleared: the file was changed outside this editor"). Commands in a document-scoped stack may hold pointers into the old in-memory objects and must not survive the reload. Entries in the editor's global `CommandStack` that target that asset are pruned the same way (the Inspector arc's prune-on-invalidate rule).
+- The same rule applies to any external change that reloads an asset under a clean dedicated editor, not only Open as Text; the plan audits which dedicated editors already do this.
 
 ---
 
@@ -248,6 +278,13 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
   - `SetInputEnabled(bool)` (whether typed characters insert)
   - `SetClipAtLineEnds(bool)` (normal-mode cursor never past the last char)
   - events: `InputHandled`, `TransactionBegun`, `TransactionUndone`, `SelectionsChanged`
+- **The cursor model, in one place.** The editor's cursors sit *between* characters; vim's sit *on* a character. `VimCursorModel` is the only code that converts, and every vim feature goes through it:
+  - Normal/Visual: a vim cursor on character *c* at offset *o* is the editor caret at *o* with `SetClipAtLineEnds(true)` keeping *o* < line end (an empty line is the one exception: *o* = line start).
+  - Inclusive motions (`e`, `$`, `f`, `t`, `%`) extend the editor range to *o* + length(*c*) before the operator runs; exclusive motions do not; linewise motions expand to whole lines including the line break.
+  - Visual mode's selection always includes the character under the vim cursor: editor range = [min, max + length(char at max)).
+  - `p` inserts after the vim cursor (editor offset *o* + length(*c*)), `P` at *o*; linewise registers insert below / above the line.
+  - Entering Insert with `i` keeps *o*, with `a` moves to *o* + length(*c*); leaving Insert moves back one character (unless at line start), as vim does.
+  These rules are tested directly (s11.3) because they are where vim layers historically break.
 - The editor knows nothing else about vim. (This is the shape of Zed's `vim` crate -- an addon over the editor -- reimplemented clean-room; Zed's vim code and `vim.json` are GPL and are not copied. Vim's key behaviour itself is not copyrightable.)
 
 ### 6.2 Modes and grammar
@@ -270,16 +307,61 @@ Lua and Markdown start from lite-xl's `language_*.lua` content, translated into 
 | Marks / jumps | `a-z` per file; `A-Z` global (opening the file through `DocumentHost`); special marks `` ` ' . ^ [ ] < > ``; jump list `Ctrl+O` / `Ctrl+I`; change list `g;` / `g,` |
 | Undo | `u`, `Ctrl+R`; one insert session = one undo step |
 | Folds | `zc zo za zR zM zf zd zj zk` over `FoldModel` |
-| Insert mode | `Ctrl+W Ctrl+U Ctrl+R{reg} Ctrl+O Ctrl+T Ctrl+D`, `Esc` / `Ctrl+[` |
+| Insert mode | `Ctrl+W Ctrl+U Ctrl+R{reg} Ctrl+O Ctrl+T Ctrl+D`, `Esc` / `Ctrl+[` (per-mode chord table, s6.6) |
 | Ex | ranges `% . $ N 'a /pat/ ?pat? +n -n '<,'>`; `:w :q :wq :x :q! :e :sav :r`, `:s` with `g i c` (`c` prompts per match) and `&`, `:g` / `:v`, `:normal`, `:d :y :m :t :co :> :< :j :sort` (with `n u i r` options), `:noh`, `:set`, `:map` family (`nmap vmap imap omap` + `noremap` forms), `:sp :vs :bn :bp :ls`, `:marks :reg :jumps` (popup listings) |
 
 ### 6.4 Options, remaps, persistence
 
-- Options are Arcane settings under `editor.text.vim.*`: `ignorecase`, `smartcase`, `hlsearch`, `incsearch`, `wrapscan`, `gdefault`, `timeoutlen`, `scrolloff`, `startofline`, `leader`, `handleCtrlKeys` (default on while vim is on), `useSystemClipboard`.
+- **Flavour (D13): Neovim defaults.** `Y` = `y$`, `hlsearch` and `incsearch` on, `startofline` off, `&` = `:&&`, `nrformats` = `bin,hex` (no octal), `scrolloff` 0, `wrapscan` on. Classic-Vim behaviour is one option away for each.
+- Options are Arcane settings under `editor.text.vim.*`: `ignorecase`, `smartcase`, `hlsearch`, `incsearch`, `wrapscan`, `gdefault`, `timeoutlen`, `scrolloff`, `startofline`, `nrformats`, `yankToEol` (the `Y` choice), `leader`, `handleCtrlKeys` (default on while vim is on), `useSystemClipboard`.
 - Tab width, spaces/tabs, shift width and relative numbers are **editor-wide** text settings (`editor.text.*`), not vim-only.
 - `:set` changes a value for the **session only**; the Preferences page changes it permanently.
 - Remaps: a table on a **Vim** Preferences page (`editor.text.vim.remaps`: `{mode, from, to, recursive}`); `:map` adds a session-only remap. Remaps resolve through a key trie with `timeoutlen` for ambiguous prefixes.
 - Marks (`A-Z` and per-file), registers, and search/command history persist in user data across sessions (`editor.text.vim.persistState`).
+
+### 6.5 Vim patterns -> PCRE2
+
+Vim's regex dialect differs from PCRE2 (`\<` `\>`, `\(` `\)`, `\|`, `\{n,m}`, magic levels, `\zs`/`\ze`, `~`). `VimPattern::Translate(vimPattern, options) -> PCRE2 pattern | error` is a pure function used by `/`, `?`, `*`, `#`, `:s`, `:g`, `:v` and `:sort /pat/`.
+
+| Vim | PCRE2 |
+|---|---|
+| magic (default): `\(` `\)` `\|` `\{n,m}` `\+` `\?` `\=` | `(` `)` `|` `{n,m}` `+` `?` `?` |
+| `\v` very magic, `\m` magic, `\M` nomagic, `\V` very nomagic | switch the translation table from that point on |
+| `\<` `\>` | `\b(?=\w)` / `\b(?<=\w)` (word = the grammar's `wordChars`, `iskeyword`) |
+| `\zs` `\ze` | `\K` / a lookahead wrapping the remainder |
+| `\c` `\C` anywhere | `(?i)` / `(?-i)` for the whole pattern, overriding `ignorecase`/`smartcase` |
+| `~` (last substitute string) | the escaped literal of the previous `:s` replacement |
+| `\_s` `\_.` `\n` | multi-line classes -> the multi-line search path (s4.2) |
+| `\%^` `\%$` `\%V` `\%23l` | `\A`, `\z`, and position predicates checked after matching |
+| `:s` replacement `\0`-`\9` `&` `\u` `\U` `\l` `\L` `\e` `\r` | expanded by the substitute engine, not by PCRE2 |
+
+Anything outside the table is a **documented divergence** (listed in the vim help page and in the oracle's divergence notes, s11.3), reported as "E: unsupported pattern item `\%[...]`" rather than silently misbehaving.
+
+### 6.6 Per-mode chord table (vim on, `handleCtrlKeys` on)
+
+Rule of thumb: **Normal and Visual follow vim; Insert keeps the Windows editing chords** (it is the typing mode, and that is where a stray vim chord surprises Windows users most), plus vim's insert-mode deletion/register chords. With `handleCtrlKeys` off, every Ctrl chord in every mode falls through to the action table (s7) and vim keeps only plain keys, `Esc` and `Ctrl+[`.
+
+| Chord | Normal | Visual | Insert | Vim off |
+|---|---|---|---|---|
+| `Esc`, `Ctrl+[` | cancel pending | -> Normal | -> Normal | `Esc` = ui.cancel; `Ctrl+[` = outdent |
+| `Ctrl+Z` / `Ctrl+Y` | undo / scroll up 1 | undo / scroll up 1 | undo / redo | undo / redo |
+| `Ctrl+R` | redo | redo | insert register `{reg}` | (unbound) |
+| `Ctrl+C` | cancel pending | copy, -> Normal | copy | copy |
+| `Ctrl+X` / `Ctrl+A` | decrement / increment number | decrement / increment | cut / select all (-> Visual) | cut / select all |
+| `Ctrl+V` | Visual Block | toggle Visual Block | **paste** | paste |
+| `Ctrl+W` | window prefix (`Ctrl+W v/s/h/j/k/l/c`) over split views | window prefix | delete word back | **close document** |
+| `Ctrl+D` / `Ctrl+U` | half page down / up | half page down / up | outdent line / delete to line start | add next match / (unbound) |
+| `Ctrl+F` / `Ctrl+B` | page down / up | page down / up | find / (unbound) | find / (unbound) |
+| `Ctrl+E` | scroll down 1 | scroll down 1 | (unbound) | (unbound) |
+| `Ctrl+O` / `Ctrl+I` | jump back / forward | -- | one Normal command | open scene / (unbound) |
+| `Ctrl+T` | -- | -- | indent line | (unbound) |
+| `Ctrl+S` | save | save | save | save |
+| `Ctrl+H` | `h` | `h` | backspace | replace |
+
+- With vim on, **`Ctrl+W` never closes a document** (it is delete-word in Insert and the window prefix elsewhere). Closing is `:q`, the tab's close button, middle-click, or the new `document.closeAlt` action (`Ctrl+F4`), which works in every mode.
+- `Ctrl+[` is `Esc` whenever vim is on; outdent then lives on `Shift+Tab` / `<<` only.
+- Multi-cursor stays reachable in Normal mode through `gb` (add next match), since `Ctrl+D` is half-page.
+- This table is data (`VimKeymap` defaults); remaps (s6.4) can change any row, and the Shortcuts page shows the vim-mode meaning beside each action that vim shadows.
 
 ---
 
@@ -290,7 +372,8 @@ The editor already has one action table (`Input/EditorActionTable.hpp`) with con
 1. **Shared verbs reuse existing action ids.** `edit.undo`, `edit.redo`, `edit.redoAlt`, `edit.cut`, `edit.copy`, `edit.paste`, `document.save`, `document.close` are answered by the focused text document via `PressedInWindow` (the Settings window's local-undo precedent). Rebinding Undo rebinds it everywhere. Each text document owns its history: Ctrl+Z in a text file never touches the scene's `CommandStack`.
 2. **Text-only commands are new rows** in the same table under a new `ActionContext::TextDocument` (specificity above Document, alongside panels). Initial set (ids `text.*`): word left/right (+select), line start/end, document start/end, page up/down, add next match (Ctrl+D), select all matches (Alt+F3), split selection into lines (Ctrl+Shift+L), add cursor above/below (Ctrl+Alt+Up/Down), column select by keyboard, select line (Ctrl+L), expand selection to brackets, duplicate line (Ctrl+Shift+D), delete line (Ctrl+Shift+K), move line up/down (Alt+Up/Down), indent/outdent (Tab / Shift+Tab, Ctrl+] / Ctrl+[), toggle line comment (Ctrl+/), toggle block comment (Ctrl+Shift+/), join lines (Ctrl+J), find (Ctrl+F), replace (Ctrl+H), find next/previous (F3 / Shift+F3), go to line (Ctrl+G), fold / unfold (Ctrl+Shift+[ / ]), go to matching bracket (Ctrl+M), toggle bookmark (Ctrl+F2), next/previous bookmark (F2 / Shift+F2), zoom in/out/reset, toggle follow. They appear on the Shortcuts page, are rebindable, get conflict detection, and are listed by spec 2's palette for free.
 3. **Ctrl+D** in a text document is add-next-match (Sublime); the Global `edit.duplicate` is shadowed there by context specificity, exactly as `graph.duplicate` shadows it in the graph today. Duplicate line is Ctrl+Shift+D.
-4. **Vim keys are not chords** and live in vim's own sequence keymap (s6.4); vim's commands still call `TextCommands`, so `u` and Ctrl+Z share one history. With `handleCtrlKeys` on, vim claims Ctrl+V (visual block), Ctrl+R (redo), Ctrl+D/U/F/B/E/Y/O/I/A/X/W in their vim meanings; with it off, those chords keep their action-table meanings.
+4. **Vim keys are not chords** and live in vim's own sequence keymap (s6.4); vim's commands still call `TextCommands`, so `u` and Ctrl+Z share one history. Which Ctrl chords vim claims, per mode, is the s6.6 table; with `handleCtrlKeys` off, every Ctrl chord keeps its action-table meaning.
+5. **New global row:** `document.closeAlt` (Ctrl+F4), so closing a document never depends on Ctrl+W, which vim repurposes.
 
 ---
 
@@ -298,7 +381,7 @@ The editor already has one action table (`Input/EditorActionTable.hpp`) with con
 
 All under `editor.text.*` (Preferences scope unless noted), registered through the settings arc's reflection (`ARC_REFLECT_TYPE_ATTR(Settings, ...)`) so they appear on the Preferences window, the sweep tests and the inventory:
 
-`font`, `fontSize`, `tabSize`, `insertSpaces`, `detectIndentation`, `lineNumbers`, `rulers`, `renderWhitespace`, `indentGuides`, `caretBlink`, `highlightCurrentLine`, `undoGroupMs`, `undoMemoryMB`, `syntaxMaxMB`, `openMaxMB`, `tokenizeLineBudgetUs`, `highlightFrameBudgetMs`, `ensureFinalNewline`, `trimTrailingWhitespace`, `languageByExtension`, `rememberViewState`, `autoClosePairs`, `autoIndent`, and the `vim.*` group from s6.4. Project scope may override indentation and line-ending defaults (`PreferencesProject`).
+`font`, `fontSize`, `tabSize`, `insertSpaces`, `detectIndentation`, `lineNumbers`, `rulers`, `renderWhitespace`, `indentGuides`, `caretBlink`, `highlightCurrentLine`, `undoGroupMs`, `undoMemoryMB`, `syntaxMaxMB`, `openMaxMB`, `longLineMaxBytes`, `multilineSearchMaxMB`, `maxCursors`, `tokenizeLineBudgetUs`, `highlightFrameBudgetMs`, `syncCatchUpLines`, `regexMatchLimit`, `regexDepthLimit`, `ensureFinalNewline`, `trimTrailingWhitespace`, `languageByExtension`, `rememberViewState`, `autoClosePairs`, `autoIndent`, and the `vim.*` group from s6.4. Budgets and limits are Dev-flagged (advanced) rows; their defaults are set from the s11.5 measurements, not guessed. Project scope may override indentation and line-ending defaults (`PreferencesProject`).
 
 ---
 
@@ -315,7 +398,7 @@ All under `editor.text.*` (Preferences scope unless noted), registered through t
 
 | Source | Licence | Use |
 |---|---|---|
-| Zed `sum_tree` | Apache-2.0 | Ported into `Rope` (NOTICE + attribution, changes marked) |
+| Zed `sum_tree` | Apache-2.0 | Informs the concrete `Rope` (design + attribution in NOTICES; no generic machinery ported) |
 | Zed `rope`, `text`, `editor`, `vim`, `language`, grammars, themes | GPL-3.0+ | **Design reference only.** No code, query or keymap file copied or translated. |
 | lite-xl | MIT | Lua + Markdown grammar content translated to `.arcsyntax`, notice kept |
 | PCRE2 | BSD | Vendored `ThirdParty/pcre2`, static, JIT |
@@ -329,25 +412,41 @@ All under `editor.text.*` (Preferences scope unless noted), registered through t
 
 ### 11.1 Core
 - **Property tests** (rapidcheck): random edit/undo/redo sequences against a `std::string` model -- text equality, rope invariants (leaf sizes, summaries equal recomputed), undo-to-start equals original, redo-to-end equals final, dirty flag correctness.
-- **Selections:** merge rules, anchor bias on edits at boundaries.
+- **Selections:** merge rules, anchor bias on edits at boundaries; `maxCursors` confirmation.
 - **`TextCommands` tables:** every command with one and several cursors: `{start text with cursor markers, command, expected text with cursor markers}`.
-- Encoding/line-ending round trips: every supported encoding and EOL style loads and saves byte-identical when unedited.
+- **Byte-identical round trips:** every supported encoding, BOM and line-ending style -- including mixed files and lone `\r` -- loads and saves byte-identical when unedited; a one-character edit to a mixed file changes exactly one line's bytes (`EolMap` property test under random edits).
+- **DisplayMap:** buffer row <-> display row under random fold/unfold/edit sequences equals a brute-force model.
+- **Leaf-size benchmark** (step 1, s3.1): the chosen constant and its measurements are recorded in the step's report.
 
 ### 11.2 Syntax
 - **Grammar scope tests:** each language ships sample files with comment-annotated expectations (`// ^^^^ constant.numeric.json`), run by ArcaneTests. A grammar cannot regress silently.
 - **Incremental == full:** property test that after random edits, the incremental highlight cache equals a full re-tokenize.
+- **Version discipline:** a worker result tagged with an older buffer version is never applied (deterministic test with a held worker + interleaved edits); a far jump draws plain lines and fills in when the worker arrives; UI-thread catch-up never exceeds `syncCatchUpLines`.
+- **Line-local grammars:** a visible line deep in a file above `syntaxMaxMB` is coloured; a line-local grammar declaring a multi-line region is rejected on load.
+- **Long lines:** a 40 MB single-line JSON opens, draws, and the following line highlights from the root state.
+- **Regex limits:** a catastrophic pattern (grammar rule and find query) hits the match limit, is reported, and the worker and UI keep running.
 - Grammar validation: malformed grammars produce a Problems row and fall back to Plain Text.
 
 ### 11.3 Vim
 - Table-driven cases `{start text + cursor, keys, expected text + cursor, expected mode/register state}`, hundreds of them, pure C++.
-- **Neovim oracle (D9):** `scripts/vim-oracle.ps1` runs each case through `nvim --headless --clean` and writes or verifies the expected columns. Dev-time only; tests never require Neovim. Cases where Arcane deliberately differs carry an explicit `divergence` note.
+- **Cursor-model tests** for every rule in s6.1 (inclusive motions, visual's extra character, `$`, `p`/`P`, `i`/`a`, leaving Insert, empty lines).
+- **Pattern translator tests:** every row of the s6.5 table, plus the divergence list producing its error.
+- **Chord table tests:** each row of s6.6 in each mode, and with `handleCtrlKeys` off.
+- **Neovim oracle (D9, D13):** `scripts/vim-oracle.ps1` runs each case through `nvim --headless --clean`. **Neovim's own defaults are the target**, so the script sets no compatibility options; it records the Neovim version it ran. It writes or verifies the expected columns. Dev-time only; tests never require Neovim. Cases where Arcane deliberately differs carry an explicit `divergence` note.
 
 ### 11.4 View and document
 - **Goldens:** the headless editor opens sample files (JSON, HLSL, Markdown, log; vim normal/visual; find bar open; split view) and screenshots them -- re-blessed through the established golden procedure.
-- **Witness scenarios:** open a log and follow it while it grows; external change with and without unsaved edits; Open as Text read-only -> unlock -> save -> asset reload; crash recovery restores an unsaved buffer.
+- **Witness scenarios:**
+  - open a log another process holds open for writing (no delete sharing), follow it while it grows, survive a rotation and a truncation;
+  - save into a file locked by another process -> the in-use banner, buffer still dirty, Retry succeeds after release;
+  - a save does not trigger a self-reload; `ReplaceFileW` keeps a read-only file's attributes and ACLs;
+  - external change with and without unsaved edits;
+  - Open as Text read-only -> unlock -> save -> asset reload, with the dedicated editor clean (history cleared, note shown) and dirty (conflict banner);
+  - crash recovery restores an unsaved buffer.
 
 ### 11.5 Performance budgets (`[perf]`, baselined)
-- Open a 100 MB log (no syntax): time to first frame.
+- Open a 100 MB log (line-local grammar): time to first coloured frame.
+- Ctrl+End in a 30 MB stateful-grammar file: frame time stays within budget (plain lines first, colour later).
 - Keystroke: edit + retokenize + layout under 1 ms on a 10k-line JSON file.
 - Scroll: frame cost at 60 lines/frame on a large file.
 - Highlight-on-open of a 5 MB file to the visible range.
@@ -360,14 +459,42 @@ Baselines live with the existing automation baselines; regressions fail the suit
 
 ### 12.1 Order (each step ends green; the plan breaks them into tasks)
 
-1. **Core:** `Rope`, `TextBuffer` + undo, `SelectionSet`, `TextCommands`, encodings/EOL. No UI; fully tested.
-2. **First visible editor:** `TextDocument`, basic `TextEditorView` (draw, edit, multi-cursor, mouse, save, external change), fallback registration in `DocumentHost`, shared-verb actions. Usable from here.
-3. **Syntax:** PCRE2 vendored; grammar engine; v1 grammars; `.arctheme` `syntax` block; grammar tests.
+1. **Core:** leaf-size benchmark, `Rope`, `TextBuffer` + undo, `EolMap`, `SelectionSet`, `TextCommands`, `DisplayMap` (folds), encodings. No UI; fully tested.
+2. **First visible editor:** `TextDocument`, basic `TextEditorView` (draw, edit, multi-cursor, mouse, save incl. `ReplaceFileW` + sharing rules, external change), fallback registration in `DocumentHost`, shared-verb actions + `document.closeAlt`. Usable from here.
+3. **Syntax:** PCRE2 vendored (with limits); grammar engine with versioned cache, line-local grammars, long-line cap; v1 grammars; `.arctheme` `syntax` block; grammar tests.
 4. **Editing features:** find/replace, go to line, folding, brackets, split view, status strip, Inspector page, text-only actions in the table.
-5. **Vim**, four passes: (a) modes, motions, operators, text objects; (b) registers, dot-repeat, macros, marks; (c) ex commands; (d) options, remaps, persistence, Vim Preferences page. Oracle tables grow with each pass.
-6. **Polish + gate:** log follow, crash recovery, session restore, Open as Text, perf budgets, goldens, witness scenarios; gate.
+5. **Vim** (behind **Experimental**, D12), four passes: (a) cursor model, modes, motions, operators, text objects, chord table; (b) registers, dot-repeat, macros, marks; (c) ex commands + the pattern translator; (d) options, remaps, persistence, Vim Preferences page. Oracle tables grow with each pass.
+6. **Polish:** log follow, crash recovery, session restore, Open as Text (with the undo-history rule), perf budgets, goldens, witness scenarios.
 
-Then spec 2 (palette, Goto Anything, Find in Files).
+### 12.2 Release gate (D12)
 
-### 12.2 After v1 (not in this spec)
-Minimap; soft wrap (likely first, for Markdown and logs); word completion; diff view; tree-sitter for structural folding/outline/syntax-aware text objects behind the scope interface; shader editor snippet fields and crash log tail adopting the core; digraphs; opt-in confirmed `:!`.
+- **The text editor is released** when steps 1-4 and the step-6 essentials -- log follow, crash recovery, Open as Text, the perf budgets, goldens and witness scenarios -- are green, through a gate task like the settings arc's. Session restore may trail.
+- **Vim ships behind an "Experimental" label** (a badge on the Vim Preferences page and in the status strip while vim is on). Each pass widens what Experimental covers; the label drops when pass (d) and the full oracle suite are green, through a second, vim-only gate.
+- Spec 2 (palette, Goto Anything, Find in Files) can start after the first gate; it does not wait for vim.
+
+### 12.3 After v1 (not in this spec)
+Minimap; soft wrap (likely first, for Markdown and logs -- a second `DisplayMap` layer); word completion; diff view; tree-sitter for structural folding/outline/syntax-aware text objects behind the scope interface; shader editor snippet fields and crash log tail adopting the core; CJK fallback font; digraphs; opt-in confirmed `:!`.
+
+---
+
+## 13. Revision 2 (2026-10-07): independent review folded in
+
+An independent review of revision 1 found real gaps; all were accepted. What changed and where:
+
+| Finding | Resolution |
+|---|---|
+| Jump-to-end would tokenize a whole file synchronously; cache ownership between UI thread and worker undefined | Versioned cache entries, worker-owned tokenizing, stale results discarded, bounded UI catch-up, plain-until-ready (s4.4) |
+| Highlighting switched off for large logs; no long-line policy | `lineLocal` grammars highlight at any size; `longLineMaxBytes` cap with next-line resync (s3.5, s4.1, s4.4) |
+| Mixed line endings normalised on save (whole-file VCS diffs) | Per-line endings preserved via `EolMap`; byte-identical unedited saves; explicit convert (s3.5) |
+| Vim regex vs PCRE2 flavour clash; contiguous input; catastrophic backtracking | `VimPattern::Translate` (s6.5); line-by-line scratch + materialized multi-line path; match/depth limits everywhere (s4.2) |
+| Neovim oracle vs Vim semantics undefined | D13: Neovim defaults are the target (s6.4, s11.3) |
+| Ctrl+[ / Ctrl+W / Ctrl+V collisions | Per-mode chord table (s6.6); `document.closeAlt` (s7) |
+| Windows save/watch details | `ReplaceFileW`, sharing modes, sharing-violation banner, self-save suppression, cheap append detection, rotation/truncation (s5.3, s3.5) |
+| Open as Text could leave a dedicated editor's undo history pointing at stale objects | History cleared on reload under a clean editor; global stack pruned (s5.4) |
+| Folds, wrap and vim rows need one mapping | `DisplayMap` in v1, folds only (s3.6) |
+| Leaf size and generic port assumed | Benchmark-chosen leaf size; concrete rope informed by `sum_tree` (s3.1, s10) |
+| Search matches as anchors would scale badly | Matches recomputed per snapshot; `maxCursors` confirmation (s3.2) |
+| Vim cursor-on vs caret-between mismatch | `VimCursorModel` rules in one place, tested (s6.1, s11.3) |
+| ImGui text-rendering limits unstated | Added to non-goals (s1.2) |
+| `when.followedBy` one-off extension | Removed; lookahead `match` rule ordered before the string region (s4.1) |
+| v1 too big for one release | D12: release gate after step 4 + step-6 essentials; vim Experimental (s12.2) |
