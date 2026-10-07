@@ -18,6 +18,11 @@
 #define PSAPI_VERSION 2
 #include <windows.h>
 #include <psapi.h>
+#elif defined(__APPLE__)
+#include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8: the exe directory, an owned root
+#include <Arcane/Platform/Process.hpp>   // MachImageExtent
+#include <filesystem>
+#include <mach-o/dyld.h>                 // _dyld_image_count & co: the Mach-O loader's image list
 #else
 #include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8: the exe directory, an owned root
 #include <filesystem>
@@ -269,6 +274,13 @@ namespace Arcane::ForeignModules
         }
         if (IsUnder(canonical, Canonical(systemRoot)))
             return Origin::System;
+#if defined(__APPLE__)
+        // macOS keeps the OS in TWO trees: /usr (SystemRoot) and /System
+        // (every framework -- Metal, AppKit, IOKit -- and their drivers).
+        // Both are SIP-protected and live in the dyld shared cache.
+        if (IsUnder(canonical, "/system"))
+            return Origin::System;
+#endif
         return Origin::Foreign;
     }
 
@@ -346,7 +358,8 @@ namespace Arcane::ForeignModules
         WideCharToMultiByte(CP_UTF8, 0, wide, static_cast<int>(len), narrow.data(), bytes, nullptr, nullptr);
         return narrow;
 #else
-        // Linux port (2026-10-05): the distribution's tree. /lib, /lib64 and
+        // Linux port (2026-10-05) and macOS (2026-10-07; OriginOf adds
+        // /System there): the distribution's tree. /lib, /lib64 and
         // /bin are symlinks into /usr on every merged-/usr distro, and
         // EnumerateProcessModules reports CANONICAL paths, so the loader,
         // libc, the Vulkan loader/ICDs and a system SDL3 all resolve under it.
@@ -406,6 +419,34 @@ namespace Arcane::ForeignModules
                 m.base = reinterpret_cast<std::uint64_t>(mi.lpBaseOfDll);
                 m.size = mi.SizeOfImage;
             }
+            modules.push_back(std::move(m));
+        }
+#elif defined(__APPLE__)
+        // Mach-O: dyld's image list (the main executable first, then every
+        // dylib, including the shared-cache system libraries). base/size are
+        // the slid LC_SEGMENT_64 union, the same extent Module::Image reports.
+        const std::uint32_t count = ::_dyld_image_count();
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            const char* raw = ::_dyld_get_image_name(i);
+            if (!raw || !*raw)
+                continue;
+            std::string path = raw;
+            std::error_code ec;
+            const std::filesystem::path real = std::filesystem::canonical(path, ec);
+            if (!ec)
+                path = real.generic_string();
+
+            LoadedModule m;
+            m.path = path;
+            const std::size_t slash = m.path.find_last_of('/');
+            m.name = slash == std::string::npos ? m.path : m.path.substr(slash + 1);
+            if (m.name.empty())
+                continue;
+            const Platform::ImageExtent extent =
+                Platform::MachImageExtent(::_dyld_get_image_header(i), ::_dyld_get_image_vmaddr_slide(i));
+            m.base = extent.base;
+            m.size = extent.size;
             modules.push_back(std::move(m));
         }
 #else

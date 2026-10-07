@@ -20,6 +20,10 @@
     #define NOMINMAX
     #endif
     #include <windows.h>
+#elif defined(__APPLE__)
+    #include <dlfcn.h>
+    #include <mach-o/dyld.h>     // the dyld image list: the loaded image's header + slide
+    #include <Arcane/Platform/Process.hpp>   // MachImageExtent: its LC_SEGMENT_64 extent
 #else
     #include <dlfcn.h>
     #include <link.h>   // dlinfo(RTLD_DI_LINKMAP), dl_iterate_phdr: the loaded image's extent
@@ -141,6 +145,21 @@ namespace Arcane
             const std::string err = raw ? raw : "dlopen failed";
             t_lastLoadError = err;
 
+#if defined(__APPLE__)
+            // dyld: "dlopen(<module>, 0x0002): Library not loaded:
+            // @rpath/<dependency>\n  Referenced from: ...". A Mach-O module
+            // names its engine dylibs by install name (@rpath/libX.dylib);
+            // the leaf is what sits beside the exe.
+            constexpr std::string_view kNotLoaded = "Library not loaded: ";
+            const std::size_t at = err.find(kNotLoaded);
+            if (at == std::string::npos)
+                break;
+            std::string dependency = err.substr(at + kNotLoaded.size());
+            dependency = dependency.substr(0, dependency.find_first_of("\r\n"));
+            if (const std::size_t slash = dependency.rfind('/'); slash != std::string::npos &&
+                dependency.rfind("@rpath/", 0) == 0)
+                dependency = dependency.substr(slash + 1);
+#else
             // glibc: "<dependency>: cannot open shared object file: ..."
             constexpr std::string_view kMissing = ": cannot open shared object file";
             const std::size_t tail = err.find(kMissing);
@@ -150,6 +169,7 @@ namespace Arcane
             const std::string dependency =
                 err.substr(head == std::string::npos ? 0 : head + 2,
                            tail - (head == std::string::npos ? 0 : head + 2));
+#endif
             const std::string self = ExecutablePathUtf8();
             if (dependency.empty() || dependency.find('/') != std::string::npos || self.empty())
                 break;   // the module itself is missing, or the name is a path: not this rule
@@ -212,6 +232,34 @@ namespace Arcane
         if (nt->Signature != IMAGE_NT_SIGNATURE)
             return {};
         return ImageSpan{m_handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
+#elif defined(__APPLE__)
+        // Mach-O (macOS port, 2026-10-07): dyld has no handle -> image query,
+        // but a handle for an already-loaded image is exactly what dlopen
+        // returns for that image's own path with RTLD_NOLOAD (refcounted, so
+        // closed again). The matching image's LC_SEGMENT_64 commands, slid,
+        // span the mapped image (Platform::MachImageExtent) -- the Mach-O
+        // reading of PE's [base, base + SizeOfImage). No match is "unknown".
+        const std::uint32_t count = ::_dyld_image_count();
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            const char* name = ::_dyld_get_image_name(i);
+            if (!name)
+                continue;
+            void* probe = ::dlopen(name, RTLD_LAZY | RTLD_NOLOAD);
+            if (!probe)
+                continue;
+            const bool match = probe == m_handle;
+            ::dlclose(probe);
+            if (!match)
+                continue;
+
+            const Arcane::Platform::ImageExtent extent =
+                Arcane::Platform::MachImageExtent(::_dyld_get_image_header(i), ::_dyld_get_image_vmaddr_slide(i));
+            if (extent.size == 0)
+                return {};
+            return ImageSpan{ reinterpret_cast<const void*>(extent.base), static_cast<std::size_t>(extent.size) };
+        }
+        return {};
 #else
         // ELF (Linux port, 2026-10-05): the object's link_map names its load
         // bias (l_addr); dl_iterate_phdr then yields that same object's
