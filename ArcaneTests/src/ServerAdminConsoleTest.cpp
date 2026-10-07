@@ -79,6 +79,26 @@ TEST_CASE("AdminConsole: OK/ERR replies over RemoteCVarService, help, and silenc
     CHECK(list.find("test.console.tick = 30") != std::string::npos);
 }
 
+// S7-GATE desk check: Windows PowerShell's pipe and a UTF-8 file saved by
+// Notepad both start stdin with a byte-order mark. It is not part of the
+// operator's first command.
+TEST_CASE("AdminConsole: a UTF-8 byte-order mark ahead of a line is not part of the command", "[remote-cvar][server]")
+{
+    constexpr std::string_view kBom = "\xEF\xBB\xBF";
+    auto r = ParseAdminLine(std::string(kBom) + "get server.tickHz", "stdin");
+    REQUIRE(r);
+    CHECK(r->op == "get");
+    CHECK(r->name == "server.tickHz");
+    CHECK_FALSE(ParseAdminLine(kBom, "stdin"));
+
+    CVarRegistry reg;
+    Knob(reg, "test.console.tick", CVarValue::Int32(60), Audience::Server);
+    RemoteCVarService service(reg);
+    AdminConsole console(service, "stdin");
+    CHECK(console.Submit(std::string(kBom) + "help").starts_with("OK get <name>"));
+    CHECK(console.Submit(std::string(kBom) + "test.console.tick") == "OK test.console.tick = 60");
+}
+
 TEST_CASE("ApplyDedicatedServerDefaults: a dedicated host turns server.cheatsAllowed off unless the project or operator decided", "[remote-cvar][server]")
 {
     CVarRegistry reg;

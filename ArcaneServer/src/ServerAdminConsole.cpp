@@ -10,8 +10,13 @@ namespace Arcane::Server
 {
     namespace
     {
+        // A UTF-8 byte-order mark is not part of a command: Windows
+        // PowerShell's pipe and a file saved by Notepad start stdin with one.
+        constexpr std::string_view kUtf8Bom = "\xEF\xBB\xBF";
+
         std::string_view Trim(std::string_view s)
         {
+            if (s.starts_with(kUtf8Bom)) s.remove_prefix(kUtf8Bom.size());
             while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
             while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n'))
                 s.remove_suffix(1);
