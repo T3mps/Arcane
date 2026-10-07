@@ -3367,6 +3367,11 @@ namespace Arcane::Editor
             // the census -- a clean desk reports `[]`.
             report.SetForeignModules(foreignModules);
 
+            // THE --set ECHO (schemaVersion 14, settings S6-GATE): each --set
+            // name with the value the registry PUBLISHED, so a witness proves
+            // its --set landed on a declared cvar.
+            report.SetCVarSets(Arcane::VerifyReport::EchoCVarSets(m_config.cvarSets));
+
             // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
             // process is no longer a world: --play-as embedded-server runs the
             // editor's world as a Client beside a DedicatedServer one, and from

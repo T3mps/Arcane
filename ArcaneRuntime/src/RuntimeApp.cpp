@@ -1383,6 +1383,11 @@ void RuntimeApp::ShutdownGraphPath()
         // overlay is attributable from this file alone.
         report.SetForeignModules(foreignModules);
 
+        // THE --set ECHO (schemaVersion 14, settings S6-GATE): each --set name
+        // with the value the registry PUBLISHED, so a witness proves its --set
+        // landed on a declared cvar.
+        report.SetCVarSets(Arcane::VerifyReport::EchoCVarSets(m_config.cvarSets));
+
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually
         // present -- a run with none leaves this unset, and Evaluate's Pick

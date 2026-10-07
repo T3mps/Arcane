@@ -704,7 +704,13 @@ TEST_CASE("E12: a saved shortcut and a --set editor.keys.* reach a declared cvar
             if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
             _wputenv_s(L"LOCALAPPDATA", value.wstring().c_str());
         }
-        ~ScopedLocalAppData() { _wputenv_s(L"LOCALAPPDATA", had ? saved.c_str() : L""); }
+        ~ScopedLocalAppData()
+        {
+            if (had)
+                _wputenv_s(L"LOCALAPPDATA", saved.c_str());
+            else   // originally unset: REMOVE it. An empty value is the CRT's removal form
+                _wputenv_s(L"LOCALAPPDATA", L"");   // (_putenv_s docs): it drops the name from the CRT and the OS environment
+        }
     } scopedLad(lad);
 
     WitnessInvocation inv;
@@ -722,4 +728,11 @@ TEST_CASE("E12: a saved shortcut and a --set editor.keys.* reach a declared cvar
     const std::string out = ReadAllBytes(run.stdoutPath) + ReadAllBytes(run.stderrPath);
     CHECK(out.find("unknown 'editor.keys.") == std::string::npos);    // the --set landed on a declared cvar
     CHECK(out.find("unknown-key 'keys.") == std::string::npos);       // so did the saved editor.json key
+    // The positive marker (S6-GATE): the report echoes the --set with the
+    // value the registry PUBLISHED, so a reworded warning cannot turn this
+    // test vacuous.
+    REQUIRE(run.report.contains("cvarSets"));
+    REQUIRE(run.report["cvarSets"].size() == 1);
+    CHECK(run.report["cvarSets"][0].at("name") == "editor.keys.edit.cut");
+    CHECK(run.report["cvarSets"][0].at("value") == "Ctrl+Shift+X");
 }
