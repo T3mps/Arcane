@@ -87,7 +87,7 @@ namespace Arcane
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
 
-        void* NativeHandle() const;                       // HWND on Windows; wl_surface* or the X11 Window id (as a pointer-sized value) on Linux
+        void* NativeHandle() const;                       // HWND on Windows; wl_surface* or the X11 Window id (as a pointer-sized value) on Linux; CAMetalLayer* on macOS
         // Linux port: the native DISPLAY a swapchain needs alongside the handle --
         // X11 Display* or wl_display*; nullptr on Windows and on display-less
         // video drivers (SDL's "offscreen"). IsWaylandWindow says which pair it is.
@@ -121,6 +121,9 @@ namespace Arcane
 
     private:
         SDL_Window*    m_window  = nullptr;
+        // macOS: the SDL_MetalView whose CAMetalLayer NativeHandle() returns
+        // (created on first ask; void* is SDL_MetalView's own spelling).
+        mutable void*  m_metalView = nullptr;
         NativeEventTap m_tap     = nullptr;
         void*          m_tapUser = nullptr;
     };

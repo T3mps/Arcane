@@ -154,8 +154,13 @@ project "NRI"
         removedefines { "NRI_ENABLE_D3D12_SUPPORT=1", "NRI_ENABLE_AGILITY_SDK_SUPPORT=1" }
     -- Upstream scopes these to its NRI_VK target only: Xlib.h's global
     -- `Window` typedef collides with nri::Window in the Shared TUs.
-    filter { "system:not windows", "files:Source/VK/**.cpp" }
+    filter { "system:linux", "files:Source/VK/**.cpp" }
         defines { "VK_USE_PLATFORM_XLIB_KHR", "VK_USE_PLATFORM_WAYLAND_KHR" }
+    -- macOS port (2026-10-07): upstream's APPLE branch -- the Vulkan backend
+    -- runs on MoltenVK and presents to a CAMetalLayer (VK_EXT_metal_surface).
+    -- SharedVK.h pulls vulkan_beta.h on __APPLE__ for VK_KHR_portability_subset.
+    filter { "system:macosx", "files:Source/VK/**.cpp" }
+        defines { "VK_USE_PLATFORM_METAL_EXT", "VK_ENABLE_BETA_EXTENSIONS" }
     filter {}
 
     filter "configurations:Debug"

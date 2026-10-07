@@ -21,6 +21,7 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>
 
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_beta.h>   // VkPhysicalDevicePortabilitySubsetFeaturesKHR (MoltenVK; a provisional extension)
 
 #include <algorithm>
 #include <atomic>
@@ -72,8 +73,23 @@ namespace Arcane
             "VK_KHR_xlib_surface",
             "VK_KHR_xcb_surface",
             "VK_KHR_wayland_surface",
+            // macOS port: MoltenVK's CAMetalLayer surface (NRI's SwapChainVK
+            // is built with VK_USE_PLATFORM_METAL_EXT on a Mac target).
+            "VK_EXT_metal_surface",
         };
 #endif
+        // macOS port (2026-10-07): MoltenVK is a Vulkan PORTABILITY
+        // implementation -- the loader (1.3.216+) hides it from
+        // vkEnumeratePhysicalDevices unless the instance enables
+        // VK_KHR_portability_enumeration AND sets
+        // VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR. Taken wherever the
+        // instance offers it (a no-op for a conformant driver, which is still
+        // enumerated), so no platform #if gates the device list.
+        constexpr const char* kPortabilityEnumeration = "VK_KHR_portability_enumeration";
+        // ...and a portability DEVICE must enable VK_KHR_portability_subset
+        // (VUID-VkDeviceCreateInfo-pProperties-04451); its feature struct is
+        // queried and passed back verbatim like every other (contract item 4).
+        constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
         // F-5a: the REQUIRED device extensions. The optional GPU-crash
         // diagnostics extensions are appended to a copy of this list only when
         // the physical device actually enumerates them -- see F-5c's sweep in
@@ -259,6 +275,10 @@ namespace Arcane
         }
 #endif
 
+        const bool portabilityEnumeration = instanceExtensionAvailable(kPortabilityEnumeration);
+        if (portabilityEnumeration)
+            instanceExtensions.push_back(kPortabilityEnumeration);
+
         bool debugUtils = false;
         if (desc.enableValidation &&
             instanceExtensionAvailable(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
@@ -366,6 +386,8 @@ namespace Arcane
                 .setPpEnabledLayerNames(layers.data())
                 .setEnabledExtensionCount((uint32_t)instanceExtensions.size())
                 .setPpEnabledExtensionNames(instanceExtensions.data());
+            if (portabilityEnumeration)
+                instanceInfo.setFlags(vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR);
             // Set only when the opt-in above actually took: an untouched
             // pNext is what every pre-existing caller produces.
             if (syncValidation)
@@ -479,6 +501,7 @@ namespace Arcane
         // Contract items 2 + 3 ride the SAME enumeration -- one pass, and
         // the diagnostics branches below are untouched.
         bool havePushDescriptor = false;
+        bool havePortabilitySubset = false;
         bool haveOptional[kOptionalDeviceExtensionCount] = {};
         bool deviceExtensionsEnumerated = true;
         try
@@ -500,6 +523,8 @@ namespace Arcane
                 // the failure is named or an opaque createDevice error.
                 if (name == VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)
                     havePushDescriptor = true;
+                if (name == kPortabilitySubset)
+                    havePortabilitySubset = true;
                 // NRI capability contract item 3: quality extensions, taken
                 // only where advertised (see kOptionalDeviceExtensions).
                 for (int i = 0; i < kOptionalDeviceExtensionCount; ++i)
@@ -666,6 +691,24 @@ namespace Arcane
             chainAppend(maintenance5Features);
         if (haveOptional[kOptMaintenance6])
             chainAppend(maintenance6Features);
+
+        // A portability device (MoltenVK): the extension is mandatory once
+        // enumerated, and its subset features (triangle fans, image-view
+        // swizzles, separate stencil refs, ...) are queried and enabled
+        // verbatim -- what the device reports VK_FALSE stays a gap NRI and the
+        // engine must not use (docs/research/2026-10-07-macos-moltenvk-port.md
+        // lists them). The raw struct, not vk::: VK_KHR_portability_subset is
+        // a provisional (beta) extension the C++ bindings only expose with
+        // VK_ENABLE_BETA_EXTENSIONS.
+        VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilityFeatures{};
+        portabilityFeatures.sType = static_cast<VkStructureType>(1000163000);   // VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR
+        if (havePortabilitySubset)
+        {
+            deviceExtensions.push_back(kPortabilitySubset);
+            portabilityFeatures.pNext = nullptr;
+            *chainTail = &portabilityFeatures;
+            chainTail = &portabilityFeatures.pNext;
+        }
 
         out.physicalDevice.getFeatures2(&enabledFeatures2);
 
