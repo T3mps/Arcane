@@ -763,7 +763,14 @@ namespace
 
     // ---- the fatal-signal family (spec S5.1 items 1-4, S5.3) ------------------
 
+#if ARCANE_PLATFORM_MACOS
+    // Apple silicon traps with brk (EXC_BREAKPOINT -> SIGTRAP): __builtin_trap,
+    // libc's fortify (__chk_fail) and Swift/ObjC runtime traps all die by it.
+    // A debugger takes EXC_BREAKPOINT as a Mach exception before any signal.
+    constexpr int kFatalSignals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT, SIGTRAP };
+#else
     constexpr int kFatalSignals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT };
+#endif
     struct sigaction        g_prevFatal[std::size(kFatalSignals)]{};
     bool                    g_fatalInstalled = false;
     std::terminate_handler  g_prevTerminate  = nullptr;

@@ -132,7 +132,8 @@ int main(int argc, char** argv)
     // contract check: exactly what _FORTIFY_SOURCE compiles strcpy into,
     // spelled out so it fires at -O0 too. glibc reports the overflow and
     // abort()s -- which the crash path files as `terminate`, the honest kind
-    // on this platform (CrashPathTest.cpp's family table says so).
+    // on this platform (CrashPathTest.cpp's family table says so). macOS libc
+    // traps instead (SIGTRAP on Apple silicon), filed as `crash`.
     else if (die == "invalid-parameter")
     {
         char buf[4];

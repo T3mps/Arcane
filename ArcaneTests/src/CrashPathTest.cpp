@@ -454,8 +454,15 @@ TEST_CASE("death fixture: assert, terminate, abort, invalid parameter, pure call
     // fortify violation by abort() and the Itanium C++ ABI a pure virtual
     // call by std::terminate(), so both arrive as `terminate` -- what the
     // process actually died of on this platform, not a weaker assertion.
+    // macOS libc's fortify check traps instead (brk -> SIGTRAP on Apple
+    // silicon), which the crash path files as `crash`.
+#if ARCANE_PLATFORM_MACOS
+    constexpr const char* kFortifyKind = "crash";
+#else
+    constexpr const char* kFortifyKind = "terminate";
+#endif
     const Row rows[] = { {"assert","assert"}, {"terminate","terminate"}, {"abort","terminate"},
-                         {"invalid-parameter","terminate"}, {"purecall","terminate"},
+                         {"invalid-parameter",kFortifyKind}, {"purecall","terminate"},
                          {"stack-overflow","crash"}, {"oom","out-of-memory"} };
 #endif
     for (const Row& row : rows)
