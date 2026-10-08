@@ -113,7 +113,10 @@ TEST_CASE("Toolchain::ResolvePremake returns the SDK's bundled premake, else a c
         REQUIRE_FALSE(found.empty());
         CHECK(found.is_absolute());
         CHECK(found == found.lexically_normal());
-        CHECK(found == (sdk.path / "ThirdParty" / "premake5" / Arcane::Platform::ExecutableFileName("premake5")).lexically_normal());
+        // equivalent(), not ==: the relative root resolves against the cwd,
+        // which the OS reports through any symlink (macOS's /var ->
+        // /private/var), so the spelling may differ while the file is the same.
+        CHECK(fs::equivalent(found, sdk.path / "ThirdParty" / "premake5" / Arcane::Platform::ExecutableFileName("premake5")));
     }
     SECTION("bundled copy absent -> the concrete PATH hit, never a bare 'premake5'")
     {

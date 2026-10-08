@@ -272,8 +272,11 @@ TEST_CASE("DocumentHost routes .arcdiag to CrashReportDocument and focuses inste
 #if !ARCANE_PLATFORM_WINDOWS
     // A case-SENSITIVE filesystem: on Windows the uppercase spelling names the
     // SAME file; here it is another name, so give it the same bytes (the same
-    // guid) -- the routing + focus behaviour under test is unchanged.
-    std::filesystem::copy_file(path, upperExtPath, std::filesystem::copy_options::overwrite_existing);
+    // guid) -- the routing + focus behaviour under test is unchanged. macOS's
+    // default APFS is case-INSENSITIVE like Windows: the name already exists
+    // (it is the same file) and copying a file onto itself is an error.
+    if (!std::filesystem::exists(upperExtPath))
+        std::filesystem::copy_file(path, upperExtPath, std::filesystem::copy_options::overwrite_existing);
 #endif
     EditorDocument* again = host.OpenPath(upperExtPath);
     CHECK(again == first);
