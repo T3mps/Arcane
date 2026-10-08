@@ -298,6 +298,11 @@ jobs:
             if ! eval "$wrap scripts/run-tests.sh ${{ matrix.config }} --rng-seed $seed" > "logs/tests-seed$seed.log" 2>&1; then
               echo "::error::seed $seed failed"
               failed=1
+              # Every failing case's block, so the job log alone diagnoses
+              # it (the artifacts are not always reachable).
+              echo "::group::failures, seed $seed"
+              grep -B10 -A20 -E "FAILED:|due to unexpected exception|due to a fatal error" "logs/tests-seed$seed.log" | head -n 4000 || true
+              echo "::endgroup::"
             fi
             tail -n 60 "logs/tests-seed$seed.log"
           done
