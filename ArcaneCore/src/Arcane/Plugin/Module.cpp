@@ -239,17 +239,28 @@ namespace Arcane
         // closed again). The matching image's LC_SEGMENT_64 commands, slid,
         // span the mapped image (Platform::MachImageExtent) -- the Mach-O
         // reading of PE's [base, base + SizeOfImage). No match is "unknown".
+        // The handle probe alone misses on the macos-15 runner (every plugin
+        // copied under /var/folders reported "no image range"; dyld names it
+        // /private/var/...), so the image may also match by file identity:
+        // equivalent() compares device + inode, which no symlink spelling of
+        // the path can defeat.
         const std::uint32_t count = ::_dyld_image_count();
         for (std::uint32_t i = 0; i < count; ++i)
         {
             const char* name = ::_dyld_get_image_name(i);
             if (!name)
                 continue;
-            void* probe = ::dlopen(name, RTLD_LAZY | RTLD_NOLOAD);
-            if (!probe)
-                continue;
-            const bool match = probe == m_handle;
-            ::dlclose(probe);
+            bool match = false;
+            if (void* probe = ::dlopen(name, RTLD_LAZY | RTLD_NOLOAD))
+            {
+                match = probe == m_handle;
+                ::dlclose(probe);
+            }
+            if (!match && !m_path.empty())
+            {
+                std::error_code ec;
+                match = std::filesystem::equivalent(std::filesystem::path(name), m_path, ec) && !ec;
+            }
             if (!match)
                 continue;
 
