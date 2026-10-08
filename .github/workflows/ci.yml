@@ -283,7 +283,8 @@ jobs:
           exit $failed
 
       # Linux: under Xvfb with SDL's x11 driver, so windows are real native
-      # windows; macOS: SDL's offscreen driver (run-tests.sh's default).
+      # windows; macOS: SDL's cocoa driver in the runner's Aqua session, so
+      # windows are real NSWindows with a CAMetalLayer (offscreen has none).
       - name: Test (Linux/macOS, two seeds)
         if: runner.os != 'Windows'
         run: |
@@ -292,6 +293,8 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             export SDL_VIDEODRIVER=x11
             wrap='xvfb-run -a -s "-screen 0 1920x1080x24"'
+          else
+            export SDL_VIDEODRIVER=cocoa
           fi
           failed=0
           for seed in "$SEED_A" "$SEED_B"; do
@@ -329,6 +332,8 @@ jobs:
 
       - name: Test [gpu] (macOS, MoltenVK)
         if: env.MACOS_GPU_LANE == 'true'
+        env:
+          SDL_VIDEODRIVER: cocoa
         run: |
           set -o pipefail
           scripts/run-tests.sh --gpu ${{ matrix.config }} --rng-seed "$SEED_A" 2>&1 | tee logs/tests-gpu.log
