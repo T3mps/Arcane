@@ -92,4 +92,10 @@ namespace Arcane::Reporter
     // "2026-09-29T16:57:12Z" -> "2026-09-29 11:57" in `zone`; "" when the
     // stamp does not parse or `zone` is null.
     [[nodiscard]] std::string FormatLocalStamp(std::string_view isoUtc, const TimeZone* zone);
+
+    // The same stamp in the PROCESS's local zone (the C library's TZ rules,
+    // localtime_r/localtime_s), for a standard library with no tzdb, so a
+    // title keeps its "<headline> -- <local stamp>" shape there. "" when the
+    // stamp does not parse.
+    [[nodiscard]] std::string FormatSystemLocalStamp(std::string_view isoUtc);
 }

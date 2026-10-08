@@ -223,6 +223,21 @@ TEST_CASE("report view: FormatLocalStamp converts an ISO UTC stamp to local minu
 #endif
 }
 
+TEST_CASE("report view: FormatSystemLocalStamp renders local minutes from the C library's zone", "[reporter]")
+{
+    // The zone is the process's, so only the shape and the date neighbourhood
+    // are fixed: "YYYY-MM-DD HH:MM", within a day of the UTC date.
+    const std::string local = FormatSystemLocalStamp("2026-09-29T16:57:12Z");
+    REQUIRE(local.size() == 16);
+    CHECK(local[4] == '-');
+    CHECK(local[7] == '-');
+    CHECK(local[10] == ' ');
+    CHECK(local[13] == ':');
+    CHECK((local.rfind("2026-09-28", 0) == 0 || local.rfind("2026-09-29", 0) == 0 || local.rfind("2026-09-30", 0) == 0));
+    CHECK(FormatSystemLocalStamp("2026-13-29T16:57:12Z").empty());
+    CHECK(FormatSystemLocalStamp("yesterday").empty());
+}
+
 TEST_CASE("report view: a dbgeng verdict with no threads falls back to the portable stack", "[reporter]")
 {
     Symbolized s;
