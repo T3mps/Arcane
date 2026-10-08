@@ -89,7 +89,7 @@ TEST_CASE("GpuBreadcrumbs ring eviction keeps derivation correct past capacity",
 {
     GpuBreadcrumbs bc;
 
-    constexpr int kTotal = static_cast<int>(GpuBreadcrumbs::kRingCapacity) + 44; // push well past capacity
+    const int kTotal = static_cast<int>(bc.Capacity()) + 44; // push well past capacity
     constexpr int kOpenTail = 10; // last kOpenTail scopes: end marker never confirmed
 
     for (int i = 0; i < kTotal; ++i)
@@ -145,7 +145,7 @@ TEST_CASE("GpuBreadcrumbs Snapshot with zero markers reports empty strings and n
 
 TEST_CASE("GpuBreadcrumbs ring capacity is 256 scopes per queue", "[diag]")
 {
-    CHECK(GpuBreadcrumbs::kRingCapacity == 256);
+    CHECK(GpuBreadcrumbs{}.Capacity() == 256);
 }
 
 TEST_CASE("GpuBreadcrumbs freeze pins the crash-time timeline against post-removal frames", "[diag]")
@@ -176,7 +176,7 @@ TEST_CASE("GpuBreadcrumbs freeze pins the crash-time timeline against post-remov
 
     SECTION("even a ring-capacity flood of post-freeze frames evicts nothing")
     {
-        for (std::size_t i = 0; i < GpuBreadcrumbs::kRingCapacity * 2; ++i)
+        for (std::size_t i = 0; i < bc.Capacity() * 2; ++i)
         {
             const std::uint32_t id = bc.BeginScope("pass:post-removal");
             bc.EndScope(id);

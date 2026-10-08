@@ -17,6 +17,7 @@
 // GraphPinDot.hpp / GraphCanvasStyle.hpp, on the one-named-concern rule.
 
 #include "Widgets/EditorTheme.hpp"   // kChrome / kBorder / kTextDim
+#include "Widgets/UiMetrics.hpp"
 
 #include <imgui.h>
 
@@ -24,22 +25,25 @@
 
 namespace Arcane::Editor
 {
-    inline constexpr float kGraphLegendInset     = 12.0f;
-    inline constexpr float kGraphLegendPadX      = 10.0f;
-    inline constexpr float kGraphLegendPadY      = 5.0f;
-    inline constexpr float kGraphLegendEntryGap  = 14.0f;
-    inline constexpr float kGraphLegendSwatchGap = 6.0f;
-    inline constexpr float kGraphLegendFontPx    = 13.0f;
+    // The CSS pixels above at UI scale 1.0 / font 16; they scale with
+    // editor.ui.scale and editor.ui.fontSize (settings S4, UiMetrics.hpp).
+    [[nodiscard]] inline float GraphLegendInset() noexcept     { return Ui::Px(12.0f); }
+    [[nodiscard]] inline float GraphLegendPadX() noexcept      { return Ui::Px(10.0f); }
+    [[nodiscard]] inline float GraphLegendPadY() noexcept      { return Ui::Px(5.0f); }
+    [[nodiscard]] inline float GraphLegendEntryGap() noexcept  { return Ui::Px(14.0f); }
+    [[nodiscard]] inline float GraphLegendSwatchGap() noexcept { return Ui::Px(6.0f); }
+    [[nodiscard]] inline float GraphLegendFontPx() noexcept    { return Ui::FontPx(13.0f); }
 
-    // The box's min corner for a box `boxH` tall, pinned kGraphLegendInset in
+    // The box's min corner for a box `boxH` tall, pinned GraphLegendInset() in
     // from the canvas's bottom-left corner. SNAPPED TO WHOLE PIXELS: a 1px
     // border (and any 2px rule inside) is what a half-pixel origin visibly
     // softens. Safe to snap, unlike anything inside the canvas: the legend is
     // chrome in SCREEN space, with no zoom to make the rounding lie.
     [[nodiscard]] inline ImVec2 GraphLegendBoxMin(const ImVec2& canvasMin, const ImVec2& canvasSize, float boxH)
     {
-        return ImVec2(std::floor(canvasMin.x + kGraphLegendInset),
-                      std::floor(canvasMin.y + canvasSize.y - kGraphLegendInset - boxH));
+        const float inset = GraphLegendInset();
+        return ImVec2(std::floor(canvasMin.x + inset),
+                      std::floor(canvasMin.y + canvasSize.y - inset - boxH));
     }
 
     // The box itself: kChrome fill, a 1px kBorder edge (`border` overrides

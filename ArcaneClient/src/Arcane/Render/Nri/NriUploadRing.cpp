@@ -99,7 +99,7 @@ namespace Arcane
 
         m_device      = &device;
         m_currentSlot = 0;
-        m_slots.resize(kSwapchainFramesInFlight);
+        m_slots.resize(FramesInFlight());
 
         const nri::CoreInterface& core = device.Core();
 
@@ -150,7 +150,7 @@ namespace Arcane
     {
         ARC_ASSERT(frameSlot < m_slots.size(),
                     "NriUploadRing::BeginFrame: frameSlot out of range -- Init() was not "
-                    "called, or frameSlot >= kSwapchainFramesInFlight");
+                    "called, or frameSlot >= FramesInFlight()");
         if (frameSlot >= m_slots.size())
             return;   // release: no-op rather than an OOB slot access
 

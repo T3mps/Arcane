@@ -50,7 +50,10 @@ namespace Arcane::Editor
         using SubmitFn = std::function<void(std::function<void()>)>;
         using CompletionFn = std::function<void(const Arcane::AssetPipeline::CookResult&)>;
 
-        CookQueue(std::filesystem::path projectDir, SubmitFn submit);
+        // `textureDefaults` seeds SetTextureDefaults' value (S6-6) without scheduling a
+        // pass, so the project's first cook already resolves against its own values.
+        CookQueue(std::filesystem::path projectDir, SubmitFn submit,
+                  const Arcane::AssetPipeline::TextureMetaSettings& textureDefaults = {});
 
         // BLOCKS until any in-flight background pass finishes. RunOnePass
         // captures `this` and may still be executing on a JobSystem worker
@@ -96,6 +99,14 @@ namespace Arcane::Editor
         // class at all).
         [[nodiscard]] bool CookPending() const;
 
+        // Settings arc S6-6: the project's assets.import.texture.* values, the defaults
+        // every texture .meta field it leaves out resolves to. Main thread, every frame
+        // (EditorApp passes Settings<TextureMetaSettings>()): a CHANGE is stored and
+        // re-cooks the project (NoteChanged), so exactly the textures whose resolved
+        // settings moved get new artifacts; an unchanged value is a no-op. The pass
+        // copies it under m_mutex before CookProject, so a worker never reads it torn.
+        void SetTextureDefaults(const Arcane::AssetPipeline::TextureMetaSettings& defaults);
+
         // Delivers every CookResult a finished background pass produced
         // since the last Pump() call, on the CALLING thread, via the
         // installed completion callback (SetOnCookComplete) -- the only
@@ -121,6 +132,7 @@ namespace Arcane::Editor
         mutable std::mutex m_mutex;
         bool m_running = false;   // guarded by m_mutex -- exactly one RunOnePass in flight at a time
         bool m_dirty = false;     // guarded by m_mutex -- "run one more pass before going idle"
+        Arcane::AssetPipeline::TextureMetaSettings m_textureDefaults{};   // guarded by m_mutex (S6-6)
         std::vector<Arcane::AssetPipeline::CookResult> m_results;   // guarded by m_mutex
     };
 }

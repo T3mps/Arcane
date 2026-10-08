@@ -98,7 +98,7 @@ namespace Arcane
                          "breadcrumbs will carry no PIX marker strings (F-2d)");
             }
 
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
             // F-2c (the lightweight tier) is SUSPENDED. Its markers-only
             // auto-breadcrumbs are only worth anything if pass scopes also
             // emit GPU markers (F-2c-bis, GpuInstrumentation.hpp), and

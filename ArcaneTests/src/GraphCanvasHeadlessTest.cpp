@@ -645,7 +645,7 @@ TEST_CASE("Canvas pin paint: a Mul fed by a float4 Param resolves to 4 -- its pi
     CHECK(same(outColor.color, PinColorForWidth(4)));
     CHECK_FALSE(outColor.adapts);
     const GraphPinPaint addA = h.doc->CanvasPinPaint(4, 0, true);         // unresolved: plain grey
-    CHECK(same(addA.color, kPinDynamicColor));
+    CHECK(same(addA.color, PinColorForWidth(0)));
     CHECK_FALSE(addA.adapts);
 
     // The resolution is re-taken every frame: unwire the Param and the Mul goes grey.
@@ -654,7 +654,7 @@ TEST_CASE("Canvas pin paint: a Mul fed by a float4 Param resolves to 4 -- its pi
     h.doc->ApplyGraphState(0, unwired);
     h.Frame(2);
     const GraphPinPaint after = h.doc->CanvasPinPaint(3, 0, true);
-    CHECK(same(after.color, kPinDynamicColor));
+    CHECK(same(after.color, PinColorForWidth(0)));
     CHECK_FALSE(after.adapts);
 }
 

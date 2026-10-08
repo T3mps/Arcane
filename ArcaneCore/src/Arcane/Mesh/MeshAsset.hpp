@@ -146,14 +146,14 @@ namespace Arcane
     // rings silently reverts to its default. Writing every field is what
     // lets the editor round-trip a source switch without discarding the
     // other source's topology. False on IO failure.
-    ARCANE_CORE_API bool SaveMeshAsset(const std::filesystem::path& path, const MeshAssetData& data);
+    ARC_CORE_API bool SaveMeshAsset(const std::filesystem::path& path, const MeshAssetData& data);
 
     // Parse a .arcmesh. nullopt on IO/parse failure or when the file is not a
     // mesh asset (the "type":"mesh" tag IS the discriminator, exactly as
     // .arcsprite works -- no structurally-unique key distinguishes one).
     // Malformed INDIVIDUAL fields fall back to their MeshAssetData default
     // rather than failing the whole load.
-    ARCANE_CORE_API std::optional<MeshAssetData> LoadMeshAsset(const std::filesystem::path& path);
+    ARC_CORE_API std::optional<MeshAssetData> LoadMeshAsset(const std::filesystem::path& path);
 
     // nullopt == valid. Otherwise the human-readable reason, NAMING THE FIELD
     // -- it is what a user reads in the Problems pane, and a reason that does
@@ -172,7 +172,7 @@ namespace Arcane
     // forever. MeshDocument's param panel also bounds every one of these at the
     // WIDGET (bounded DragInt/DragFloat, the idiom SpriteDocument already
     // uses), so in practice refusal only ever fires on a hand-edited file.
-    [[nodiscard]] ARCANE_CORE_API std::optional<std::string> ValidateMeshAsset(const MeshAssetData& data);
+    [[nodiscard]] ARC_CORE_API std::optional<std::string> ValidateMeshAsset(const MeshAssetData& data);
 
     // Generate the geometry. nullopt exactly when ValidateMeshAsset returns a
     // reason -- an INVALID mesh is an error and emits nothing, where a NIL mesh
@@ -181,7 +181,7 @@ namespace Arcane
     //
     // DETERMINISTIC: same input, same bytes. F2c inherits this builder into a
     // cook step whose artifacts must be reproducible.
-    [[nodiscard]] ARCANE_CORE_API std::optional<MeshData> BuildMeshData(const MeshAssetData& data);
+    [[nodiscard]] ARC_CORE_API std::optional<MeshData> BuildMeshData(const MeshAssetData& data);
 
     // ---- F2c Task 11: CPU resolution of an Imported mesh -----------------
 
@@ -220,7 +220,7 @@ namespace Arcane
     // QUIETLY (a placeholder cube would FABRICATE a shape, which is worse than an
     // empty space); MISSING or REFUSED -> draw nothing LOUDLY, with a diagnostic.
     // Never render an unknown as a cube.
-    [[nodiscard]] ARCANE_CORE_API MeshResolveResult ResolveMeshData(
+    [[nodiscard]] ARC_CORE_API MeshResolveResult ResolveMeshData(
         const MeshAssetData& data,
         const MeshArtifactSupplyFn& supply,
         const CookPendingFn& cookPending);

@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace arcbuild
 {
@@ -33,6 +34,7 @@ namespace arcbuild
         std::string                          action = std::string(DefaultActionFor(CurrentHostPlatform()));
         bool                                 forceRebuild = false;
         bool                                 quiet = false;
+        std::vector<std::string>             cvarSets;   // --set name=value, in order (the CommandLine rung)
     };
 
     [[nodiscard]] Arcane::Cli MakeCli(

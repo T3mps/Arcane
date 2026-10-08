@@ -19,7 +19,14 @@
 
 namespace Arcane
 {
-    class ARCANE_CORE_API Project
+    class CVarRegistry;
+
+    // `manifestFile` is the .arcproj the block was read from: each refusal's
+    // warning names it, with the key and the reason (settings S7-SEC).
+    ARC_CORE_API void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest,
+                                                  const std::filesystem::path& manifestFile);
+
+    class ARC_CORE_API Project
     {
     public:
         // Open a project folder (finds the single *.arcproj inside) or a direct
@@ -53,11 +60,8 @@ namespace Arcane
         // know WHICH manifest file a path resolves to WITHOUT paying for a
         // full Open() (mounts, plugin discovery, a content scan) can reuse the
         // ambiguity-detection/directory-search logic instead of reimplementing
-        // it -- e.g. ProjectBoot.cpp's RuntimeStages project_open override
-        // peeks ProjectManifest::SplashConfig::showProgress through this before
-        // the real OpenProject call, so the splash's "Scanning content..." text
-        // can be live during the very scan it describes rather than only
-        // knowable after that scan (and the whole Open()) already finished.
+        // it -- e.g. HostBoot's early config pass resolves the Project rung
+        // before Runtime construction and project open.
         // nullopt on the same failure modes as Open(): no .arcproj, or more
         // than one (both logged).
         static std::optional<std::filesystem::path> ResolveManifestFile(
@@ -68,8 +72,15 @@ namespace Arcane
         // then opens it. nullopt if `dir` exists non-empty or on IO error.
         static std::optional<Project> Create(const std::filesystem::path& dir, std::string name);
 
+        // Move legacy physics/splash blocks to Config/*.json and remove them
+        // from .arcproj. The path form is exposed for the migration test and
+        // tools that have not opened a full Project.
+        static bool MigrateLegacySettingsAt(const std::filesystem::path& manifestFile);
+        bool MigrateLegacySettings();
+
         const ProjectManifest&       Manifest() const { return m_manifest; }
         const std::filesystem::path& Root()     const { return m_root; }
+        const std::filesystem::path& ManifestFile() const { return m_manifestFile; }
         const MountTable&            Mounts()   const { return m_mounts; }
         const AssetRegistry&         Registry() const { return m_registry; }
 
@@ -165,38 +176,38 @@ namespace Arcane
             uint64_t start = 0;   // process creation FILETIME as u64 (0 on non-Windows)
         };
 
-        ARCANE_CORE_API std::filesystem::path FileFor(const std::filesystem::path& projectRoot);
+        ARC_CORE_API std::filesystem::path FileFor(const std::filesystem::path& projectRoot);
 
         // Pure halves, exported so the format is pinned by tests.
-        ARCANE_CORE_API std::string ToJson(const Info& info);
-        ARCANE_CORE_API std::optional<Info> Parse(const std::string& text);
+        ARC_CORE_API std::string ToJson(const Info& info);
+        ARC_CORE_API std::optional<Info> Parse(const std::string& text);
 
         // THIS process's identity. start is 0 where the platform query fails.
-        ARCANE_CORE_API Info Self();
+        ARC_CORE_API Info Self();
 
         // Write/clear the lock for a project root. Best-effort: a lock that
         // cannot be written must not fail a project open (WARN only).
-        ARCANE_CORE_API void Write(const std::filesystem::path& projectRoot);
-        ARCANE_CORE_API void Clear(const std::filesystem::path& projectRoot);
+        ARC_CORE_API void Write(const std::filesystem::path& projectRoot);
+        ARC_CORE_API void Clear(const std::filesystem::path& projectRoot);
 
         // Read + validate: Some(pid) only when the named process is STILL the
         // process the lock described AND is still running (pid opens, creation
         // time matches, and its exit time is zero -- a handle held elsewhere
         // keeps a dead pid reserved, so "opens" alone proves nothing).
-        ARCANE_CORE_API std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot);
+        ARC_CORE_API std::optional<uint32_t> ReadLive(const std::filesystem::path& projectRoot);
 
         // ReadLive minus ourselves: the pid of ANOTHER live editor holding this
         // project, or nullopt. The direct-launch guard rides this -- the editor
         // refuses to double-open a rival's project (main.cpp boot gate, exit 3;
         // SwitchProject refusal) -- and the self-exemption is what lets a
         // same-project re-open proceed over our own lock.
-        ARCANE_CORE_API std::optional<uint32_t> RivalPid(const std::filesystem::path& projectRoot);
+        ARC_CORE_API std::optional<uint32_t> RivalPid(const std::filesystem::path& projectRoot);
 
         // Bring the first visible top-level window of `pid` to the foreground.
         // MIRROR of the Hub's spawn.rs focus_process_window: the honest answer
         // to "already open" is to surface the editor that has it. False when
         // the process has no visible window yet (mid-boot) -- callers still
         // refuse; the user gets the message instead of the window.
-        ARCANE_CORE_API bool FocusWindowOfProcess(uint32_t pid);
+        ARC_CORE_API bool FocusWindowOfProcess(uint32_t pid);
     }
 }

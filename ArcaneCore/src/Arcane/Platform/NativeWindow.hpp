@@ -35,7 +35,7 @@ namespace Arcane
 
     // Called on the WINDOW THREAD only. Every default is a no-op so a presenter
     // implements exactly what it draws.
-    class ARCANE_CORE_API INativeWindowPresenter
+    class ARC_CORE_API INativeWindowPresenter
     {
     public:
         virtual ~INativeWindowPresenter() = default;
@@ -55,7 +55,7 @@ namespace Arcane
     // hardening). Windows-only; a no-op elsewhere. NEVER fails the caller: a
     // failed creation leaves IsOpen()/WasEverOpen() false and everything else
     // a silent no-op.
-    class ARCANE_CORE_API NativeWindow
+    class ARC_CORE_API NativeWindow
     {
     public:
         NativeWindow() noexcept;

@@ -34,6 +34,7 @@
 // <windows.h>, dragged in transitively by Arcane/Base/Log.hpp -> spdlog,
 // #defines ERROR via wingdi.h).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 
@@ -46,9 +47,10 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API BindlessTable
+    class ARC_API BindlessTable
     {
     public:
+        ARC_CONSTANT("sentinel: invalid bindless slot")
         static constexpr std::uint32_t kInvalidSlot = 0xFFFFFFFFu;
 
         // Borrows `device` (which must outlive this object, same contract as

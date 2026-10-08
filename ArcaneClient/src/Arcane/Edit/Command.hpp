@@ -2,7 +2,7 @@
 
 // Arcane/Edit: editor command foundation. ICommand is the undo/redo unit --
 // the forward edit already happened (live), so a command only reverses/replays.
-// ARCANE_API generic capability; Arcane Editor consumes it (no editor state here).
+// ARC_API generic capability; Arcane Editor consumes it (no editor state here).
 
 #include <Arcane/Base/Api.hpp>
 
@@ -10,7 +10,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API ICommand
+    class ARC_API ICommand
     {
     public:
         virtual ~ICommand() = default;

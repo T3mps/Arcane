@@ -23,9 +23,15 @@
 
 #include "App/EditorApp.hpp"
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
+#include "Settings/SettingsHost.hpp"
+#include "Settings/EditorRestart.hpp"
+#include "Settings/LayoutSettings.hpp"   // editor.layout.default / openPanelsAtStart (S4-18)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Input/EditorActions.hpp"
+#include <Arcane/Input/KeyLayout.hpp>
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
+#include "Panels/LayoutLibrary.hpp"     // the session layout dir + its seed (S4-18)
 #include "Panels/PanelRegistry.hpp"
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/MeshDocument.hpp"
@@ -46,6 +52,12 @@
 #include <Panels/ConsoleModel.hpp>   // ConsoleEntry / CategoryForMessage (ConsoleDiagnostics::Install)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
+#include <Arcane/Config/Settings.hpp>   // Settings<EditorUiStyleSettings>: the boot style metrics (settings S6-28)
+#include "Settings/AssetBrowserSettings.hpp"     // EditorOpenOptions: editor.assets.mountDiagnostics (settings S6-38)
+#include "Settings/EditorPlaySettings.hpp"       // ReadPlayModeIniLine: the old [EditorPlayMode] section (settings S6-32)
+#include "Settings/EditorViewportSettings.hpp"   // EditorGizmoSettings: the session's starting gizmo tool (settings S6-31)
+#include "Settings/GraphCanvasSettings.hpp"        // CaptureGraphNodePaddingAtBoot: editor.graph.nodePadding (Restart; S6-44)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/, Diagnostics and the layouts dir resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
 #include "App/PluginLoadFailure.hpp"   // DescribePluginLoadFailure (StagePluginLoad's failure banner)
@@ -78,7 +90,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>   // _wgetenv (RetargetLayoutIni)
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -91,16 +102,18 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
-        // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
-        // right after ImGui's context exists and before the first NewFrame
-        // reads the ini.
+        // The OLD persistence of the Play launch mode: an ImGuiSettingsHandler
+        // section "[EditorPlayMode][State]", one "Mode=%d" line. Now the
+        // editor.play.launchMode cvar (settings S6-32); the handler is still
+        // registered in Init (right after ImGui's context exists and before the
+        // first NewFrame reads the ini) so an old section is read and imported
+        // once -- it is never written again.
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
     }
 
     EditorApp::EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash)
-        : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+        : m_config(std::move(cfg)), m_splash(splash),
           m_splashPresenter(m_splash) {}
 
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
@@ -114,37 +127,27 @@ namespace Arcane::Editor
     void EditorApp::PlayModeSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
                                              void* entry, const char* line)
     {
+        // Malformed or out-of-range: refused (ReadPlayModeIniLine), so nothing
+        // is imported. A valid line waits in m_legacyPlayMode for the next
+        // frame's ImportLegacyPlayMode.
         auto* self = static_cast<EditorApp*>(entry);
-        int mode = -1;
-        // Malformed or out-of-range: m_playMode keeps its Viewport default --
-        // never trust an ini line a hand edit (or a future enumerator's
-        // rollback) could have left in a bogus state. Viewport is also the
-        // safe fallback: it is today's behavior, unchanged.
-        if (std::sscanf(line, "Mode=%d", &mode) == 1 && mode >= 0 &&
-            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateServerProcess))
-        {
-            self->m_playMode = static_cast<Arcane::Editor::PlayLaunchMode>(mode);
-        }
+        (void)Arcane::Editor::ReadPlayModeIniLine(line, self->m_legacyPlayMode);
     }
 
-    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
-                                             ImGuiTextBuffer* buf)
+    void EditorApp::PlayModeSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*)
     {
-        auto* self = static_cast<EditorApp*>(handler->UserData);
-        buf->reserve(buf->size() + 48);
-        buf->appendf("[%s][%s]\n", handler->TypeName, kPlayModeIniName);
-        buf->appendf("Mode=%d\n", static_cast<int>(self->m_playMode));
-        buf->append("\n");
+        // Writes nothing: the mode is a cvar now (settings S6-32), so the old
+        // section drops out of the ini on its next save. ImGui calls every
+        // handler's WriteAllFn unconditionally, so this stays registered.
     }
 
     // ImGui::ClearIniSettings -- a WINDOWED project switch (RetargetLayoutIni)
-    // before it reads the incoming file: back to the value a fresh EditorApp
-    // holds, so a file without this section never inherits the outgoing
-    // project's mode.
+    // before it reads the incoming file: an outgoing file's unimported mode
+    // must not be imported into the incoming project.
     void EditorApp::PlayModeSettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+        self->m_legacyPlayMode.reset();
     }
 
     void EditorApp::RegisterPlayModeSettings()
@@ -157,7 +160,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = kPlayModeIniType;
         handler.TypeHash   = ImHashStr(kPlayModeIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
         handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
@@ -190,7 +193,7 @@ namespace Arcane::Editor
         // windowed project switch). The committed verify-layout.ini
         // carries no [EditorViewport] block, so gate/witness runs still frame.
         const bool accepted =
-            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_legacyViewport);
         if (accepted && (std::strncmp(line, "Ortho=", 6) == 0 || std::strncmp(line, "Orbit=", 6) == 0))
         {
             self->m_cameraRestoredFromIni = true;
@@ -217,11 +220,12 @@ namespace Arcane::Editor
         auto* self = static_cast<EditorApp*>(handler->UserData);
         // WriteIni appends the "[Type][Name]" header itself from the same
         // constants handler.TypeName was registered from.
-        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera, self->m_viewSettings);
+        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera);
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // the camera and the viewport preferences go back to a fresh EditorApp's,
+    // the camera and any not-yet-imported legacy preferences go back to a
+    // fresh EditorApp's (the preferences themselves are cvars, untouched),
     // and the camera counts as NOT restored. The SceneOpen framing request is
     // deliberately left alone: the reload's ReadLine cancels it when the
     // incoming file carries a camera, exactly as at boot. The --view-mode seed
@@ -232,9 +236,33 @@ namespace Arcane::Editor
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
         self->m_camera                = decltype(self->m_camera){};
-        self->m_viewSettings          = decltype(self->m_viewSettings){};
+        Arcane::Editor::ApplyFreshPose(self->m_camera);   // editor.camera.default* (NextWorld)
+        self->m_legacyViewport        = {};
         self->m_cameraRestoredFromIni = false;
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
+        // editor.gizmo.default* (NextWorld, Pref-P): the incoming project's
+        // starting tool / mode / space, then --tool on top as at boot.
+        // RetargetLayoutIni runs after OnProjectOpened, so the snapshot
+        // already carries the incoming project's User rung.
+        self->ApplyGizmoSessionDefaults();
+        self->ApplyGizmoToolSeed();
+    }
+
+    void EditorApp::ApplyGizmoSessionDefaults()
+    {
+        Arcane::Editor::GizmoSessionState state;
+        Arcane::Editor::ApplyGizmoSessionDefaults(state);
+        m_gizmoMode    = state.mode;
+        m_gizmoSpace   = state.space;
+        m_gizmoEnabled = state.enabled;
+    }
+
+    void EditorApp::ApplyGizmoToolSeed()
+    {
+        Arcane::Editor::GizmoSessionState state{ m_gizmoMode, m_gizmoSpace, m_gizmoEnabled };
+        Arcane::Editor::ApplyGizmoToolSeed(m_config.tool, state);
+        m_gizmoMode    = state.mode;
+        m_gizmoEnabled = state.enabled;
     }
 
     void EditorApp::RegisterViewportSettings()
@@ -246,7 +274,7 @@ namespace Arcane::Editor
         ImGuiSettingsHandler handler;
         handler.TypeName   = Arcane::Editor::ViewportSettings::kIniType;
         handler.TypeHash   = ImHashStr(Arcane::Editor::ViewportSettings::kIniType);
-        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.UserData   = this;   // one EditorApp per process (see m_legacyPlayMode's decl)
         handler.ReadOpenFn = &EditorApp::ViewportSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::ViewportSettingsReadLine;
         handler.WriteAllFn = &EditorApp::ViewportSettingsWriteAll;
@@ -290,11 +318,12 @@ namespace Arcane::Editor
     }
 
     // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
-    // every panel back to a fresh EditorApp's visibility.
+    // every panel back to a fresh EditorApp's visibility -- the configured
+    // editor.layout.openPanelsAtStart ("*" = all, today's default).
     void EditorApp::PanelVisibilitySettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
     {
         auto* self = static_cast<EditorApp*>(handler->UserData);
-        self->m_panelVis = decltype(self->m_panelVis){};
+        self->m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
     }
 
     void EditorApp::RegisterPanelVisibilitySettings()
@@ -365,7 +394,13 @@ namespace Arcane::Editor
         // legend's fold, the undo budgets, ...) back to its Saved/Config/ on a
         // project switch and at exit. A scripted --frames or --headless run
         // reads them but never writes: a verify run must not rewrite them.
-        m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
+        const bool interactive = m_config.maxFrames == 0 && !m_config.headless;
+        m_runtime->Core().SetUserCVarArchiving(interactive);
+        // The EditorUser rung (settings arc S2): machine-wide preferences (theme,
+        // fonts, shortcuts, layouts) for an INTERACTIVE session only. A scripted
+        // or golden run must not depend on, or write, this machine's preferences.
+        if (interactive)
+            m_runtime->Core().SetEditorUserConfigDir(Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir) / "Config");
         // THIS EXE asks about ITS OWN caches (2026-09-16). VerifySharedTypeContext
         // is inline, so it only ever answers for the module holding the call --
         // ProjectBoot.cpp's type_context_install stage compiles into
@@ -437,6 +472,7 @@ namespace Arcane::Editor
         // Create -> ImGuiLayer::Create), before the first frame and before the
         // game ImGui context is created in StageRenderBridge. Zero engine change.
         Arcane::Editor::InstallEditorFonts();
+        Arcane::Editor::SetActiveKeyLayout(&Arcane::SystemKeyLayout());
         return true;
     }
 
@@ -514,19 +550,58 @@ namespace Arcane::Editor
         // Before this call the editor ran on ImGui's stock dark style, whose whole
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
-        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
+        // The style metrics are the published editor.ui block (settings S6-28):
+        // the early config rungs have run, so a saved value lands at boot.
+        const Arcane::Editor::EditorUiStyleSettings& uiStyle = Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>();
+        Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle(), uiStyle);
+        m_appearance.Init(ImGui::GetStyle(), uiStyle);   // the boot look IS the defaults: the first per-frame update applies nothing
+        // editor.graph.nodePadding is Restart: the shader canvas reads THIS
+        // capture (the same early-rung point as the style above) until the
+        // next restart, never the live snapshot.
+        Arcane::Editor::CaptureGraphNodePaddingAtBoot();
         // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later
         // would never see the saved entry.
         RegisterPlayModeSettings();
+        // A fresh layout shows editor.layout.openPanelsAtStart; a saved ini's
+        // [ArcaneEditor][Panels] entry then overrides it ("*" = today's all-visible).
+        m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
         // Inspector filters s6: the Asset Browser's selection is a PERMANENT
         // source -- registered once, never closed, and kept across a project
         // switch's ReleaseAll (its history entries and pins still drop).
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
+        // editor.camera.default* (NextWorld): the boot camera's pose, before
+        // the handler below lets a saved [EditorViewport] block restore one.
+        Arcane::Editor::ApplyFreshPose(m_camera);
+        // editor.gizmo.default* (NextWorld): the tool, mode and space this
+        // session starts in. Session state from here on (W/E/R, the toolbar)
+        // until a windowed project switch re-applies them (ViewportSettingsClearAll).
+        ApplyGizmoSessionDefaults();
         RegisterViewportSettings();
+        // Settings arc S4: Preferences > Appearance > Theme.
+        m_themePage.requestImport = [this]
+        {
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeImport, m_dialogs.themeImport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        m_themePage.requestExport = [this]
+        {
+            m_gpu->Win().ShowSaveFileDialog(&PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.themeExport, m_dialogs.themeExport.Arm() }, "Arcane Theme", "arctheme");
+        };
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Appearance/Theme", "Theme",
+                                             &Arcane::Editor::DrawThemePage, &m_themePage);
+        // Settings arc S4: Preferences > Keyboard (the editor.keys.* cvars live on this node).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Keyboard", "Keyboard Shortcuts",
+                                             &Arcane::Editor::DrawShortcutsPage, &m_shortcutsPage);
+        // Settings arc S4: Preferences > Appearance > Fonts and Scale (the editor.ui.* cvars live on this node).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, std::string(Arcane::Editor::kFontsPageCategory),
+                                             "Fonts and Scale", &Arcane::Editor::DrawFontsPage, &m_fontsPage);
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::PreferencesMachine, "Layout", "Layouts",
+                                             &Arcane::Editor::DrawLayoutPage, &m_layoutPage);
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
@@ -686,7 +761,7 @@ namespace Arcane::Editor
         // compile service to settle spins until its own timeout. A caller that
         // pins the clock must zero the debounce too.
         m_shaderCompiler = std::make_unique<Arcane::ShaderCompiler>();
-        if (!m_shaderCompiler->Initialize(/*debounceSeconds=*/0.2))
+        if (!m_shaderCompiler->Initialize())
         {
             ARC_WARN("Arcane Editor: dxcompiler.dll unavailable -- material editing disabled");
         }
@@ -1014,7 +1089,8 @@ namespace Arcane::Editor
             hs.thumbnailDir = [this]() -> std::filesystem::path
             {
                 const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
-                return p ? (p->Root() / "Saved" / "Thumbnails") : std::filesystem::path{};
+                return p ? Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(p->Root()), "Thumbnails")
+                         : std::filesystem::path{};
             };
             // Task 12a fix (RCA H1): mirror SceneRenderResolver.cpp's
             // MeshCache::Services wiring (meshArtifactFor/cookPending) verbatim,
@@ -1298,18 +1374,7 @@ namespace Arcane::Editor
             else
                 m_assetModel.Select(*guid);           // the asset edge routes it next frame, like a click
         }
-        if (!m_config.tool.empty())
-        {
-            if (m_config.tool == "select")
-                m_gizmoEnabled = false;
-            else
-            {
-                m_gizmoEnabled = true;
-                m_gizmoMode = m_config.tool == "rotate" ? Arcane::GizmoMode::Rotate
-                            : m_config.tool == "scale"  ? Arcane::GizmoMode::Scale
-                                                        : Arcane::GizmoMode::Translate;
-            }
-        }
+        ApplyGizmoToolSeed();   // the flag beats editor.gizmo.default* (StageEditorShell)
         // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
         // hang report from THIS boot must land under THIS project's own
         // Saved/Diagnostics, not the exe-relative default a project-less
@@ -1354,11 +1419,17 @@ namespace Arcane::Editor
     {
         RetargetUndoCache(m_runtime->CurrentProject());
 
+        // Settings arc S3-12: Project Settings' identity page (idempotent: same path, replaced).
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::Project, "Project", "Project",
+                                             &EditorApp::ProjectPageThunk, this);
+        ConfigureSettings();
+
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
-        // once per process, here, rather than spawning vswhere from the menu
-        // path. See OpenInIde (EditorAppProject.cpp).
-        ResolveDevenvOnce();
+        // here, rather than spawning vswhere from the first menu draw. The
+        // frame re-checks build.ideExecutable before each menu draw (Live).
+        // See OpenInIde (EditorAppProject.cpp).
+        RefreshDevenv();
 
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
@@ -1398,7 +1469,8 @@ namespace Arcane::Editor
             m_cookQueueSettling = true;
 
             m_cookQueue.emplace(proj->Root(),
-                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); });
+                [this](std::function<void()> job) { m_runtime->Jobs().Submit(std::move(job)); },
+                Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6: the project's import defaults
             m_cookQueue->SetOnCookComplete(
                 [this](const Arcane::AssetPipeline::CookResult& r) { OnCookCompleted(r); });
 
@@ -1440,7 +1512,7 @@ namespace Arcane::Editor
             // in this branch at all are ones ResolveArtifact already found
             // Missing, and the highest-frequency one, NriTextureCache's own
             // PendingCook re-poll, already throttles ITS OWN calls into this
-            // facade via kPendingCookRepollInterval, so this exists() rides
+            // facade via assets.cook.pendingRepollInterval, so this exists() rides
             // an already-throttled ask, not a hot per-frame one). A deleted/
             // renamed source answers false here even while the queue is mid-
             // pass, which is exactly the fix: that guid refuses LOUDLY again,
@@ -1583,6 +1655,40 @@ namespace Arcane::Editor
             m_recents.NoteProjectOpened(m_runtime->CurrentProject());
     }
 
+    void EditorApp::ConfigureSettings()
+    {
+        Arcane::Editor::SettingsHostConfig config;
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+        {
+            config.roles = Arcane::Editor::RolesForManifest(proj->Manifest());
+            config.projectOpen = true;
+        }
+        config.assetRefs = &m_assetRefServices;
+        config.browsePath = [this](const std::string& cvar, bool folder) { BrowseSettingsPath(cvar, folder); };
+        config.restartEditor = [this] { m_restartRequested = true; };
+        config.restartBlockedReason = [this]() -> std::string
+        {
+            if (InPlayMode()) return "Stop Play first";
+            if (m_undo && m_scene.IsDirty(*m_undo)) return "Save the scene first (File > Save Scene)";
+            if (m_documents.AnyDirty()) return "Save or close the open documents first";
+            return {};
+        };
+        Arcane::Editor::ConfigureSettingsHost(std::move(config));
+    }
+
+    void EditorApp::BrowseSettingsPath(const std::string& cvar, bool folder)
+    {
+        Arcane::Editor::LaunchSettingsPathBrowse(
+            m_settingsPathCvar, m_dialogs.settingsPath, cvar, folder,
+            [this](bool folderDialog, PathDialogRequest* req)
+            {
+                if (folderDialog)
+                    m_gpu->Win().ShowOpenFolderDialog(&PathPickedThunk, req);
+                else
+                    m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk, req, nullptr, nullptr);
+            });
+    }
+
     void EditorApp::RetargetLayoutIni()
     {
         // ===== PINNED UNDER --headless, AHEAD OF EVERYTHING ELSE =============
@@ -1624,7 +1730,8 @@ namespace Arcane::Editor
             if (!pinProj)
                 return;                             // project-less: defaults, and no seed to find
 
-            const std::filesystem::path seed = pinProj->Root() / "Saved" / "verify-layout.ini";
+            const std::filesystem::path seed = Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved,
+                                                                   Arcane::Paths::ForProject(pinProj->Root()), "verify-layout.ini");
             std::error_code seedEc;
             if (std::filesystem::exists(seed, seedEc))
             {
@@ -1646,14 +1753,13 @@ namespace Arcane::Editor
         if (m_editorImguiContext)
             ImGui::SetCurrentContext(m_editorImguiContext);
 
-        // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
-        // for a project-less session) -- the editor's slot under the same
-        // family root the Hub already uses (%LOCALAPPDATA%\Arcane\hub,
-        // RecentProjects.cpp). With LOCALAPPDATA unset or unwritable, ImGui's
-        // exe-dir imgui.ini default stands -- degraded, never broken.
-        std::filesystem::path dir;
-        if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
-            dir = std::filesystem::path(localAppData) / L"Arcane" / L"editor" / L"layouts";
+        // <EditorUserDir>\Layouts\Session\<project-guid>.ini ("default" for a
+        // project-less session), resolved through Arcane::Paths (settings spec
+        // s11.0). Settings S4 (spec s7.4): session layouts live in
+        // Layouts/Session; named layouts own Layouts/. Degraded, never broken:
+        // with LOCALAPPDATA unset or the folder unwritable, ImGui's exe-dir
+        // imgui.ini default stands.
+        const std::filesystem::path dir = Arcane::Editor::SessionLayoutDir();
         if (dir.empty())
             return;
         std::error_code ec;
@@ -1683,12 +1789,26 @@ namespace Arcane::Editor
         if (!m_layoutIniPath.empty() && io.IniFilename && *io.IniFilename)
             ImGui::SaveIniSettingsToDisk(io.IniFilename);
 
-        // One-time migration: seed a project's first appdata layout from the
-        // legacy exe-dir imgui.ini so a hand-tuned layout survives the move.
-        // The legacy file is left in place (bin/ is untracked scratch).
+        // One-time migration: seed a project's first session layout -- from its
+        // pre-S4 file (<EditorUserDir>\layouts\<key>.ini), else the named
+        // layout editor.layout.default, else the legacy exe-dir imgui.ini, so a
+        // hand-tuned layout survives the move. Every source is COPIED and left
+        // in place (bin/ is untracked scratch; the pre-S4 file stays for a
+        // rollback).
         if (!std::filesystem::exists(target, ec))
-            if (std::filesystem::exists("imgui.ini", ec))
-                std::filesystem::copy_file("imgui.ini", target, ec);
+        {
+            const std::filesystem::path preS4 = Arcane::Paths::Join(Arcane::Paths::Location::EditorUserDir,
+                                                                    Arcane::Paths::Current(), "layouts")
+                                                / (key + ".ini");
+            const Arcane::Editor::LayoutSeed seed = Arcane::Editor::SeedSessionLayout(
+                target, preS4, Arcane::Editor::LayoutLibrary(Arcane::Editor::NamedLayoutDir()),
+                Arcane::Editor::cvar_layoutDefault.Get(), "imgui.ini");
+            ARC_INFO("layout: session layout {} seeded from {}", target.string(),
+                     seed == Arcane::Editor::LayoutSeed::PreS4File      ? "the pre-S4 file"
+                   : seed == Arcane::Editor::LayoutSeed::NamedDefault   ? "the default named layout"
+                   : seed == Arcane::Editor::LayoutSeed::LegacyExeIni   ? "the exe-dir imgui.ini"
+                                                                         : "nothing (factory layout)");
+        }
 
         const bool switching = !m_layoutIniPath.empty();   // boot: ImGui's first NewFrame autoloads; a switch must reload by hand
         // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the
@@ -1715,9 +1835,9 @@ namespace Arcane::Editor
 
     void EditorApp::RetargetDumpDir()
     {
-        // <project>/Saved/Diagnostics: same "Saved/ is per-project, untracked
-        // scratch" precedent WriteAutoScreenshot already uses (proj->Root() /
-        // "Saved" / "AutoScreenshot.png", below) -- a crash/hang report keeps
+        // <project>/Saved/Diagnostics (Paths::DiagnosticsDir): same "Saved/ is
+        // per-project, untracked scratch" precedent WriteAutoScreenshot already
+        // uses (Saved/AutoScreenshot.png, below) -- a crash/hang report keeps
         // company with the project it came from. project-less (boot with no
         // --project, or a failed switch's fallback -- see every call site of
         // this function) converges on an EMPTY path, which
@@ -1726,8 +1846,9 @@ namespace Arcane::Editor
         // "<exe dir>/diagnostics" (Diagnostics.hpp's Config comment), so this
         // never re-derives that fallback itself.
         const Arcane::Project* proj = m_runtime ? m_runtime->CurrentProject() : nullptr;
-        Arcane::Diagnostics::RetargetDumpDir(proj ? proj->Root() / "Saved" / "Diagnostics"
-                                                   : std::filesystem::path{});
+        Arcane::Diagnostics::RetargetDumpDir(
+            proj ? Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(proj->Root()))
+                 : std::filesystem::path{});
     }
 
     bool EditorApp::StageSplashReady(Arcane::HostBoot::BootContext&)
@@ -1885,7 +2006,9 @@ namespace Arcane::Editor
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj) return;
 
-        const std::filesystem::path file = proj->Root() / "Saved" / "AutoScreenshot.png";
+        const std::filesystem::path file = Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved,
+                                                               Arcane::Paths::ForProject(proj->Root()), "AutoScreenshot.png");
+        if (file.empty()) return;   // no Saved/ for this project (Dist): nothing to write a cover to
 
         // ===== THE COVER CAPTURE =============================================
         // The vehicle's own capture path, FrameDesc::capture + ReadCapture,
@@ -2062,9 +2185,9 @@ namespace Arcane::Editor
         // machine's own crash history -- the 24-pixel scrollbar-thumb diff
         // that demoted editor-ui to advisory. Same shared rule the runtime
         // host uses (HostBoot::OpenOptionsFor), never a second copy.
-        m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        m_bootCtx.openOptions = Arcane::Editor::EditorOpenOptions(Arcane::HostBoot::OpenOptionsFor(m_config));
         m_bootCtx.hostConfig = &m_config;
-        m_bootCtx.cvarPermission = Arcane::Permission::Editor;
+        m_bootCtx.cvarContext = Arcane::CVarContext::Editor;
 
         // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
         // opened project's manifest (project_open's shared CoreStages body
@@ -2432,8 +2555,10 @@ namespace Arcane::Editor
         // picture and nothing else.
         if (width == 0 || height == 0)
         {
-            width  = 1280;
-            height = 720;
+            // editor.viewport.fallbackExtentW/H (settings S6-32; 1280x720).
+            const auto& prefs = Arcane::Settings<Arcane::Editor::EditorViewportSettings>();
+            width  = prefs.fallbackExtentW;
+            height = prefs.fallbackExtentH;
         }
 
 
@@ -3242,6 +3367,11 @@ namespace Arcane::Editor
             // the census -- a clean desk reports `[]`.
             report.SetForeignModules(foreignModules);
 
+            // THE --set ECHO (schemaVersion 14, settings S6-GATE): each --set
+            // name with the value the registry PUBLISHED, so a witness proves
+            // its --set landed on a declared cvar.
+            report.SetCVarSets(Arcane::VerifyReport::EchoCVarSets(m_config.cvarSets));
+
             // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
             // process is no longer a world: --play-as embedded-server runs the
             // editor's world as a Client beside a DedicatedServer one, and from
@@ -3488,6 +3618,12 @@ namespace Arcane::Editor
             ARC_INFO("--dump-layout: wrote the live ImGui layout to {}", m_config.dumpLayoutPath);
         }
 
+        // Settings arc S3-13: the settings windows' pending edits go to disk
+        // now (spec s6.3), while the project's folders are still known; then
+        // the Project page stops pointing at this EditorApp.
+        Arcane::Editor::FlushSettingsArchives();
+        Arcane::Editor::RegisterSettingsPage(Arcane::SettingScope::Project, "Project", "Project", nullptr, nullptr);
+
         // The user cvar archive (T3-D2): written while the game module -- and
         // every Archive cvar it declared -- is still loaded. A no-op unless
         // this session archives (StageRuntimeCreate sets SetUserCVarArchiving).
@@ -3501,6 +3637,16 @@ namespace Arcane::Editor
             {
                 Arcane::EditorLock::Clear(proj->Root());
             }
+        }
+
+        // Relaunch only after the old editor has released the project lock.
+        if (!m_relaunchRoot.empty())
+        {
+            namespace R = Arcane::Editor::EditorRestart;
+            const std::filesystem::path exe = R::CurrentExe();
+            if (exe.empty() || !R::Spawn(exe, R::Args(m_relaunchRoot)))
+                ARC_ERROR("Restart editor: could not start a new editor for '{}' -- open it again by hand",
+                          m_relaunchRoot.generic_string());
         }
 
         // Asset-manager Plan 3 Task 3: the Asset Graph panel's canvas

@@ -24,7 +24,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::function/vector/string members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API ComponentEditCommand final : public ICommand
+    class ARC_API ComponentEditCommand final : public ICommand
     {
     public:
         // `resolve` returns the CURRENT live registry each call -- the registry

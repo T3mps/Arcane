@@ -33,6 +33,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -42,6 +43,7 @@ namespace Arcane
     // kSpriteDepthEpsilon"). X/Y stay the exact SpriteWorldQuad extents: the
     // editor's framing reads this box, and a uniform Widened() moved the
     // boot-framed camera sub-pixel and broke both editor golden lanes (R-E).
+    ARC_CONSTANT("math identity / tolerance: a sprite box's Z thickness against a degenerate frustum; the editor goldens depend on it")
     inline constexpr float kSpriteDepthEpsilon = 0.001f;
 
     // The last-run tick, a registry resource like TransformOrder (both hosts'

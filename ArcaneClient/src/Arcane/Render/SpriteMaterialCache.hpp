@@ -39,7 +39,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD
 #endif
-    class ARCANE_API SpriteMaterialCache
+    class ARC_API SpriteMaterialCache
     {
     public:
         using ResolveAssetFn =

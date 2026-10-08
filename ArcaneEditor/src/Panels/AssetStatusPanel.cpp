@@ -2,11 +2,14 @@
 
 #include "Panels/AssetActivityLog.hpp"   // AssetActivityEntry/Kind -- the activity feed's rows
 #include "Panels/AssetPanelModel.hpp"    // AssetPanelModel/AssetPanelEntry/HealthCounts/CookState/KindIcon/KindLabel
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assetStatus.rightColumnMaxFraction (settings S6-38)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::FontPx / Ui::Px -- the cards' text and pixel metrics follow editor.ui.*
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>
@@ -20,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 // AssetStatusPanel (panel-split arc): the "Asset Status" window. Task 4 moved
 // the dashboard BODY here as pure motion out of AssetsPanel.cpp's
@@ -62,12 +66,17 @@ namespace Arcane::Editor
         // one section's last item and the next section's label -- the board's
         // ~13px). The pill line height this file needs, to vertically centre a
         // pill it positions BY HAND rather than by SameLine, is the widget
-        // layer's own exported kPillLineHeight (EditorWidgets.hpp) -- it used
+        // layer's own exported PillLineHeight() (EditorWidgets.hpp) -- it used
         // to be restated here as a second 16px constant nothing kept in step.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusTileHeight      = 64.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusTileMinWidth    = 72.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusSectionGap      = 6.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusProgressHeight  = 4.0f;   // queued card's strip
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusSelectionBorder = 2.0f;   // spec s10's node rule, applied to cards
 
         // Plan 2 Task 8 additions to the same fixed-geometry block above.
@@ -85,7 +94,9 @@ namespace Arcane::Editor
         // queued card's progress strip and its new "N of M cooked" caption
         // (Task 7 review ruling B) -- the same 2px register as
         // TimelineFeed's own kLineGap and MeterBar's own kSegmentGap.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusRightColumnWidth    = 300.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kStatusProgressCaptionGap  = 2.0f;
 
         // ---- Plan 2 Task 7: one needs-attention card (spec s9.2) -----------
@@ -131,7 +142,7 @@ namespace Arcane::Editor
             // The card's inner padding, DERIVED rather than duplicated:
             // BeginCardFrame seats the cursor exactly one padding in from the
             // frame's top-left corner, so this difference IS
-            // EditorWidgets.cpp's kCardFramePadding without a second copy of
+            // EditorWidgets.cpp's CardFramePadding() without a second copy of
             // that constant living here to drift from it.
             const ImVec2 innerMin = ImGui::GetCursorScreenPos();
             const float  pad      = innerMin.x - cardMin.x;
@@ -141,7 +152,7 @@ namespace Arcane::Editor
             // card); the queued card keeps the same pitch so the two card
             // shapes line up in a mixed list.
             const float rowH  = ImGui::GetFrameHeight();
-            const float line2 = refused ? ImGui::GetTextLineHeight() : kStatusProgressHeight;
+            const float line2 = refused ? ImGui::GetTextLineHeight() : Ui::Px(kStatusProgressHeight);
             // Task 7 review ruling B: the queued card grows a THIRD line --
             // the "N of M cooked" caption beneath the progress strip --
             // measured at StatTile's own 13px label size. A brief
@@ -150,12 +161,12 @@ namespace Arcane::Editor
             float line3 = 0.0f;
             if (!refused)
             {
-                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(13.0f));
                 line3 = ImGui::GetTextLineHeight();
                 ImGui::PopFont();
             }
             const float bodyH = rowH + style.ItemSpacing.y + line2
-                              + (refused ? 0.0f : (kStatusProgressCaptionGap + line3));
+                              + (refused ? 0.0f : (Ui::Px(kStatusProgressCaptionGap) + line3));
 
             // ONE body hit target, submitted FIRST and covering the whole card
             // body, with SetNextItemAllowOverlap so the two buttons submitted
@@ -208,27 +219,27 @@ namespace Arcane::Editor
             // technique RowWithThumb uses, so none of it competes with the hit
             // target above for ImGui's "last item".
             float x = innerMin.x;
-            const float thumbY = innerMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+            const float thumbY = innerMin.y + (rowH - AssetRowThumbSize()) * 0.5f;
             const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             if (thumb != 0)
             {
                 dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(x, thumbY),
-                            ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                            ImVec2(x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
             }
             else
             {
                 // The same well-plus-centred-kind-icon fallback the preview
                 // pane's own thumb uses, at the row's 18px size.
                 dl->AddRectFilled(ImVec2(x, thumbY),
-                                  ImVec2(x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                  ImVec2(x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()),
                                   ImGui::GetColorU32(Theme::kWell));
                 const char* kindIcon = KindIcon(e.kind);
                 const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
-                dl->AddText(ImVec2(x + (kAssetRowThumbSize - ks.x) * 0.5f,
-                                   thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                dl->AddText(ImVec2(x + (AssetRowThumbSize() - ks.x) * 0.5f,
+                                   thumbY + (AssetRowThumbSize() - ks.y) * 0.5f),
                            ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
             }
-            x += kAssetRowThumbSize + style.ItemInnerSpacing.x;
+            x += AssetRowThumbSize() + style.ItemInnerSpacing.x;
 
             // State glyph: amber triangle for refused, dim clock for queued.
             // Amber never carries the meaning ALONE -- the glyph shape, the
@@ -263,7 +274,7 @@ namespace Arcane::Editor
 
             if (refused)
             {
-                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - kPillLineHeight) * 0.5f));
+                ImGui::SetCursorScreenPos(ImVec2(x, innerMin.y + (rowH - PillLineHeight()) * 0.5f));
                 AssetPill(kindText);
             }
             else
@@ -322,11 +333,11 @@ namespace Arcane::Editor
                 // Ruling 12's derived strip: kGrab fill over a kWell track.
                 const float frac = std::clamp(queuedProgress, 0.0f, 1.0f);
                 dl->AddRectFilled(ImVec2(innerMin.x, line2Y),
-                                  ImVec2(innerMin.x + innerW, line2Y + kStatusProgressHeight),
+                                  ImVec2(innerMin.x + innerW, line2Y + Ui::Px(kStatusProgressHeight)),
                                   ImGui::GetColorU32(Theme::kWell));
                 if (frac > 0.0f)
                     dl->AddRectFilled(ImVec2(innerMin.x, line2Y),
-                                      ImVec2(innerMin.x + innerW * frac, line2Y + kStatusProgressHeight),
+                                      ImVec2(innerMin.x + innerW * frac, line2Y + Ui::Px(kStatusProgressHeight)),
                                       ImGui::GetColorU32(Theme::kGrab));
 
                 // Task 7 review ruling B: the strip alone never said WHAT
@@ -335,8 +346,8 @@ namespace Arcane::Editor
                 char caption[32];
                 std::snprintf(caption, sizeof(caption), "%d of %d cooked",
                              queuedCooked, queuedCookedAndQueued);
-                ImGui::PushFont(GetEditorFonts().interRegular, 13.0f);
-                dl->AddText(ImVec2(innerMin.x, line2Y + kStatusProgressHeight + kStatusProgressCaptionGap),
+                ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(13.0f));
+                dl->AddText(ImVec2(innerMin.x, line2Y + Ui::Px(kStatusProgressHeight) + Ui::Px(kStatusProgressCaptionGap)),
                            ImGui::GetColorU32(Theme::kTextDim), caption);
                 ImGui::PopFont();
             }
@@ -352,7 +363,7 @@ namespace Arcane::Editor
             {
                 ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
                                                     ImGui::GetColorU32(Theme::kSelection),
-                                                    0.0f, 0, kStatusSelectionBorder);
+                                                    0.0f, 0, Ui::Px(kStatusSelectionBorder));
             }
         }
 
@@ -444,7 +455,7 @@ namespace Arcane::Editor
                 // card's inner content edge instead of its outer border.
                 const float  pad       = wellMin.x - cardMin.x;
                 const float  wellWidth = std::max(1.0f, cardWidth - pad * 2.0f);
-                const float  rowH      = kTableRowHeight;
+                const float  rowH      = TableRowHeight();
                 dl->AddRectFilled(wellMin,
                                   ImVec2(wellMin.x + wellWidth, wellMin.y + rowH * static_cast<float>(unused.size())),
                                   ImGui::GetColorU32(Theme::kWell));
@@ -461,22 +472,22 @@ namespace Arcane::Editor
 
                     // Thumb: same 18px well-plus-kind-icon fallback
                     // DrawAttentionCard's own line 1 uses.
-                    const float thumbY = rowMin.y + (rowH - kAssetRowThumbSize) * 0.5f;
+                    const float thumbY = rowMin.y + (rowH - AssetRowThumbSize()) * 0.5f;
                     const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(guid) : 0;
                     if (thumb != 0)
                     {
                         dl->AddImage(static_cast<ImTextureID>(thumb), ImVec2(rowMin.x, thumbY),
-                                    ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                                    ImVec2(rowMin.x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
                     }
                     else
                     {
                         dl->AddRectFilled(ImVec2(rowMin.x, thumbY),
-                                          ImVec2(rowMin.x + kAssetRowThumbSize, thumbY + kAssetRowThumbSize),
+                                          ImVec2(rowMin.x + AssetRowThumbSize(), thumbY + AssetRowThumbSize()),
                                           ImGui::GetColorU32(Theme::kWell));
                         const char* kindIcon = KindIcon(e->kind);
                         const ImVec2 ks = ImGui::CalcTextSize(kindIcon);
-                        dl->AddText(ImVec2(rowMin.x + (kAssetRowThumbSize - ks.x) * 0.5f,
-                                           thumbY + (kAssetRowThumbSize - ks.y) * 0.5f),
+                        dl->AddText(ImVec2(rowMin.x + (AssetRowThumbSize() - ks.x) * 0.5f,
+                                           thumbY + (AssetRowThumbSize() - ks.y) * 0.5f),
                                    ImGui::GetColorU32(ImGuiCol_Text), kindIcon);
                     }
 
@@ -486,9 +497,9 @@ namespace Arcane::Editor
 
                     // Name, chip-style -- AssetPill, vertically centered the
                     // same way DrawAttentionCard positions its own trailing
-                    // pill (rowH - kPillLineHeight, halved).
-                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + kAssetRowThumbSize + style.ItemInnerSpacing.x,
-                                                     rowMin.y + (rowH - kPillLineHeight) * 0.5f));
+                    // pill (rowH - PillLineHeight(), halved).
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x + AssetRowThumbSize() + style.ItemInnerSpacing.x,
+                                                     rowMin.y + (rowH - PillLineHeight()) * 0.5f));
                     AssetPill(e->fileName.c_str());
 
                     ImGui::SetCursorScreenPos(ImVec2(revealX, rowMin.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));
@@ -654,9 +665,9 @@ namespace Arcane::Editor
         // the icon is amber only while refused > 0 and Text-coloured at zero
         // (node page phase s6.7).
         {
-            const float tileW = std::max(kStatusTileMinWidth,
+            const float tileW = std::max(Ui::Px(kStatusTileMinWidth),
                 (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x * 3.0f) * 0.25f);
-            const ImVec2 tileSize(tileW, kStatusTileHeight);
+            const ImVec2 tileSize(tileW, Ui::Px(kStatusTileHeight));
             char num[16];
             // ImDrawList::AddText rasterizes at the call, so one scratch
             // buffer serves all four tiles.
@@ -679,7 +690,7 @@ namespace Arcane::Editor
         // ---- cook pipeline meter. Grays plus amber, and the icon/label
         // pair carries the meaning in every case -- colour alone never
         // does (MeterBar draws a swatch AND the label AND the count).
-        ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(kStatusSectionGap)));
         ImGui::TextDisabled("Cook pipeline");
         const MeterSegment segments[] = {
             { "cooked",  health.cooked,  ImGui::GetColorU32(Theme::kGrab)    },
@@ -693,7 +704,7 @@ namespace Arcane::Editor
         // RIGHT (Activity -> Scenes) -- the board's own side-by-side
         // placement (OptionE-Status-FINAL.png: "Needs attention" and
         // "Activity" sit at the same Y).
-        ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(kStatusSectionGap)));
         // Review fix (Important 3): kStatusRightColumnWidth is an
         // implementer tuning value, not a floor -- unclamped, a narrow
         // dock could let the fixed column crush (or exceed) the whole
@@ -702,9 +713,12 @@ namespace Arcane::Editor
         // (ImGui::InvisibleButton asserts on exactly zero). Same
         // "sane-range clamp" discipline (the Asset Browser's retired preview
         // pane used the same one) -- capped to a fraction of what is
-        // actually available THIS frame, floored so it is never <= 0.
+        // actually available THIS frame (editor.assetStatus.
+        // rightColumnMaxFraction, 0.45; settings S6-38), floored so it is
+        // never <= 0.
         const float rightColumnWidth = std::max(1.0f,
-            std::min(kStatusRightColumnWidth, ImGui::GetContentRegionAvail().x * 0.45f));
+            std::min(Ui::Px(kStatusRightColumnWidth),
+                     ImGui::GetContentRegionAvail().x * Arcane::Settings<AssetStatusSettings>().rightColumnMaxFraction));
         if (ImGui::BeginTable("##statuscolumns", 2, ImGuiTableFlags_NoSavedSettings))
         {
             ImGui::TableSetupColumn("##left",  ImGuiTableColumnFlags_WidthStretch);
@@ -757,7 +771,7 @@ namespace Arcane::Editor
                                       health.cooked, cookedAndQueued);
             }
 
-            ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(kStatusSectionGap)));
             ImGui::TextDisabled("Unreferenced");
             DrawUnreferencedCard(model, services, actions);
 
@@ -805,7 +819,7 @@ namespace Arcane::Editor
                     model.Select(rows[static_cast<std::size_t>(feedResult.clickedIndex)].guid);
             }
 
-            ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(kStatusSectionGap)));
             ImGui::TextDisabled("Scenes");
 
             // bootGuid: the SAME helper DrawAssetBrowserBody reads for
@@ -851,7 +865,7 @@ namespace Arcane::Editor
         // `##statusbody` child, AlwaysUseWindowPadding) -- the same nesting
         // this dashboard has always drawn under, when the outer child was
         // the shared shell's `##assetsbody`.
-        if (ImGui::BeginChild("##assetstatusbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        if (ImGui::BeginChild("##assetstatusbody", ImVec2(0.0f, -Ui::Px(kAssetPanelBottomBarHeight))))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();

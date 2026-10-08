@@ -16,6 +16,7 @@
 #include <Arcane/Render/Nri/Graveyard.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderMeshSettings -- the budget Create latches
 
 #undef ERROR
 
@@ -28,6 +29,7 @@ namespace Arcane
     {
         std::unique_ptr<NriMeshBufferCache> cache(new NriMeshBufferCache());
         cache->m_device = &device;
+        cache->m_budget = Settings<RenderMeshSettings>().residencyBudgetBytes;
 
         if (!ARC_NRI_CHECK(nriGetInterface(device.Device(), NRI_INTERFACE(nri::HelperInterface),
                                             &cache->m_helper)))

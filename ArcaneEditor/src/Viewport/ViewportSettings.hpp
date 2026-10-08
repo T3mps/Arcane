@@ -13,9 +13,12 @@
 // bare ImGuiTextBuffer and no ImGui context.
 //
 // The section is ONE block, "[EditorViewport][Camera]", carrying the camera
-// (mode, both persisted transforms, the speed scalar) AND the view settings
-// (grid, gizmo size): they are one preference set the viewport's settings
-// popup (Task 8) edits together, and the grids (Tasks 9/10) read here.
+// POSE only (mode and both persisted transforms) -- layout state. The view
+// PREFERENCES (grid, plane, fov, speed, gizmo size) are Pref-P cvars since
+// settings S6-29 (Settings/EditorViewportSettings.hpp): an old block's
+// Speed= / Grid= / GizmoSize= lines and the seventh Orbit= value (fov) are
+// still read and validated, but CAPTURED into LegacyViewportPrefs for a
+// one-time import, never applied and never written again.
 //
 // Every line is validated on read and REFUSED WHOLE on any fault -- a hand
 // edit, a NaN, a value past the camera's clamps -- leaving the defaults
@@ -29,43 +32,27 @@
 // carries NO [EditorViewport] block on purpose: goldens run at these defaults
 // (2D) unless --view-mode says otherwise.
 
+#include "Settings/EditorViewportSettings.hpp"   // GridPlane, LegacyViewportPrefs
 #include "Viewport/EditorCamera.hpp"
 
 #include <cstdint>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 struct ImGuiTextBuffer;
 
 namespace Arcane::Editor
 {
-    // Which world plane the reference grid lies on. Persisted as int; append
-    // only. XZ is the 3D "ground" (+Y up, spec s2); XY is the 2D authoring
-    // plane the Ortho2D view looks down -Z at.
-    enum class GridPlane : std::uint8_t
-    {
-        XZ = 0,
-        XY = 1,
-    };
-
     struct ViewportSettings
     {
-        bool      showGrid  = true;
-        GridPlane gridPlane = GridPlane::XZ;
-        float     gizmoSize = 1.0f;
-
-        // Accepted range of the persisted gizmo scale (Task 8's slider spans
-        // 0.5..3; the clamp is wider so a future slider range needs no ini
-        // migration, but a zero or negative scale is still refused).
-        static constexpr float kMinGizmoSize = 0.1f;
-        static constexpr float kMaxGizmoSize = 10.0f;
         // Accepted vertical field of view, degrees: the open interval (0, 180)
         // held away from both ends so the projection stays finite.
+        ARC_CONSTANT("math identity: the projection is finite only inside (0, 180) degrees")
         static constexpr float kMinFovYDeg = 1.0f;
+        ARC_CONSTANT("math identity: the projection is finite only inside (0, 180) degrees")
         static constexpr float kMaxFovYDeg = 179.0f;
-        // The speed scalar's clamp, as EditorCamera::AdjustSpeed holds it.
-        static constexpr float kMinSpeedScalar = 0.01f;
-        static constexpr float kMaxSpeedScalar = 100.0f;
         // Strictly inside the +-90 pitch lock EditorCamera::Look/Orbit apply.
+        ARC_CONSTANT("math identity: Right()/Up() are NaN at +-90 degrees of pitch")
         static constexpr float kMaxPitchDeg = 90.0f - 1e-3f;
 
         // The ini section: "[EditorViewport][Camera]".
@@ -75,18 +62,18 @@ namespace Arcane::Editor
         // Appends the section header and every line:
         //   Mode=%d                      ViewMode
         //   Ortho=%f %f %f               center.x center.y halfHeight
-        //   Orbit=%f %f %f %f %f %f %f   pivot.xyz yaw pitch distance fovY
-        //   Speed=%f                     speedScalar
-        //   Grid=%d %d                   showGrid gridPlane
-        //   GizmoSize=%f
+        //   Orbit=%f %f %f %f %f %f      pivot.xyz yaw pitch distance
         // followed by the blank line ImGui's own handlers end a section with.
-        static void WriteIni(ImGuiTextBuffer& buf, const EditorCamera& cam, const ViewportSettings& s);
+        // No preference lines (they are cvars).
+        static void WriteIni(ImGuiTextBuffer& buf, const EditorCamera& cam);
 
         // Applies ONE line. Returns true only when the line parsed completely
         // and every value is finite and within range, in which case the
         // corresponding state is written; otherwise nothing is touched and
         // false comes back (the unknown-line and malformed-line cases alike).
-        static bool ReadIniLine(const char* line, EditorCamera& cam, ViewportSettings& s);
+        // Orbit= takes six values, or the legacy seven whose last (fov) goes
+        // to `legacy.fovYDeg`; Speed= / Grid= / GizmoSize= fill `legacy`.
+        static bool ReadIniLine(const char* line, EditorCamera& cam, LegacyViewportPrefs& legacy);
     };
 
     // --view-mode: "2d" | "perspective" set the camera's mode; anything else

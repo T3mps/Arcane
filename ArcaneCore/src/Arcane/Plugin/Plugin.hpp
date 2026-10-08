@@ -6,6 +6,7 @@
 // plugin kind, so this class owns the GamePlugin_* ABI. If editor/tool plugins
 // appear later, split this into GamePlugin.
 
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace Arcane
 {
@@ -38,7 +40,7 @@ namespace Arcane
         bool hostDebugCrt   = false;       // Kind::CrtFlavorMismatch: this host's CRT family
     };
 
-    class ARCANE_CORE_API Plugin
+    class ARC_CORE_API Plugin
     {
     public:
         Plugin(Plugin&&) noexcept = default;
@@ -57,11 +59,58 @@ namespace Arcane
         [[nodiscard]] bool IsLoaded() const noexcept { return m_module.IsLoaded(); }
         [[nodiscard]] const Module& LoadedModule() const noexcept { return m_module; }
         [[nodiscard]] const PluginVTable& VTable() const noexcept { return m_vtable; }
+        // The cvar module this image's registrations belong to (settings spec
+        // s4.4): the CVarModuleScope open when it loaded (PluginHost names the
+        // SOURCE dll's stem), else this file's stem. The Plugin OWNS them:
+        // destroying it unregisters them, before the image unmaps.
+        [[nodiscard]] const std::string& CVarModule() const noexcept { return m_cvars.module; }
 
     private:
-        Plugin(Module module, PluginVTable vtable) noexcept;
+        // Move-only. Inline, so a Plugin destroyed in any module unregisters
+        // through ArcaneCore's exported registry.
+        struct CVarOwner
+        {
+            std::string module;
+            const void* imageBase = nullptr;
+            std::size_t imageSize = 0;
+            CVarOwner() = default;
+            CVarOwner(std::string m, const void* base, std::size_t size) noexcept
+                : module(std::move(m)), imageBase(base), imageSize(size) {}
+            CVarOwner(CVarOwner&& o) noexcept
+                : module(std::exchange(o.module, {})), imageBase(std::exchange(o.imageBase, nullptr)),
+                  imageSize(std::exchange(o.imageSize, 0)) {}
+            CVarOwner& operator=(CVarOwner&& o) noexcept
+            {
+                if (this != &o)
+                {
+                    Release();
+                    module = std::exchange(o.module, {});
+                    imageBase = std::exchange(o.imageBase, nullptr);
+                    imageSize = std::exchange(o.imageSize, 0);
+                }
+                return *this;
+            }
+            CVarOwner(const CVarOwner&) = delete;
+            CVarOwner& operator=(const CVarOwner&) = delete;
+            ~CVarOwner() { Release(); }
+            void Release() noexcept
+            {
+                if (imageBase && imageSize != 0)
+                    CVarRegistry::Get().UnregisterModuleRange(imageBase, imageSize);
+                else if (!module.empty())
+                    CVarRegistry::Get().UnregisterModule(module);
+                module.clear();
+                imageBase = nullptr;
+                imageSize = 0;
+            }
+        };
+
+        Plugin(Module module, PluginVTable vtable, std::string cvarModule) noexcept;
 
         Module m_module;
         PluginVTable m_vtable{};
+        // Declared AFTER m_module: members destroy in reverse, so the module's
+        // cvars, commands and callbacks go BEFORE the FreeLibrary.
+        CVarOwner m_cvars;
     };
 }

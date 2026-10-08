@@ -65,7 +65,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API MeshMaterialCache
+    class ARC_API MeshMaterialCache
     {
     public:
         // Guid-shaped, matching every other cache's resolver -- see

@@ -1,9 +1,11 @@
 #include "Panels/InspectorWindows.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 #include "Widgets/EditorWidgets.hpp"   // EllipsisToWidth, BeginPopupBelow, LastItemAnchor
+#include "Widgets/UiMetrics.hpp"       // Ui::Px -- the crumb-width floor follows editor.ui.scale
 
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance); ImGuiSettingsHandler
@@ -344,7 +346,7 @@ namespace Arcane::Editor
         const float sp = m.spacing;
         // Row 1 reserves the trail's natural width (s4.3): a 145 px trail that
         // only got 120 px stayed on row 1 and lost its head.
-        const float crumbs = m.crumbsNatural > 0.0f ? m.crumbsNatural : kInspectorHeaderMinCrumbWidth;
+        const float crumbs = m.crumbsNatural > 0.0f ? m.crumbsNatural : Ui::Px(kInspectorHeaderMinCrumbWidth);
         l.crumbsOwnRow = m.avail < m.arrows + sp + m.comboFull + sp + crumbs + sp + m.pin;
         // The icon face gives way before the pin does: on a wrapped header it
         // takes what row 1 leaves beside the arrows and the pin (DrawHeader
@@ -396,7 +398,7 @@ namespace Arcane::Editor
                                                 bool* primaryOpen)
     {
         InspectorWindowsResult result;
-        host.PruneStale();   // once per frame, <= kHistoryDepth pure lookups: the arrows below are truthful (spec s6 rule 3)
+        host.PruneStale();   // once per frame, <= historyDepth pure lookups: the arrows below are truthful (spec s6 rule 3)
         // Snapshot the instances: the header actions applied after each End() mutate host state.
         const std::vector<InspectorHost::Instance> instances = host.Instances();
         for (const InspectorHost::Instance& inst : instances)
@@ -424,11 +426,13 @@ namespace Arcane::Editor
             // RowWithThumb already guard it.
             (void)ImGui::Begin(title.c_str(), inst.id == 0 ? primaryOpen : &open);
             InspectorSource* src = host.SourceFor(inst.id);
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) result.focusedSource = src;
-            // Shortcut(), not IsKeyChordPressed(): RouteFocused means only the
-            // focused instance fires, and an active InputText does not swallow
-            // Ctrl+S (SpriteDocument.cpp:178-183 relies on the same fact).
-            if (src && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S)) result.saveRequested.push_back(src);
+            const bool instFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+            if (instFocused)
+            {
+                result.focusedSource = src;
+                EditorActions::Get().MarkContextActive(ActionContext::Inspector);
+            }
+            if (src && instFocused && EditorActions::Get().Pressed("document.save")) result.saveRequested.push_back(src);
             InspectorPage* page = nullptr;
             if (inst.pinned) page = src ? src->PageFor(inst.pinnedKey) : nullptr;
             else page = src ? src->Page() : nullptr;

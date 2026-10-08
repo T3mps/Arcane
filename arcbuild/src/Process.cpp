@@ -19,6 +19,8 @@
 #endif
 
 #include <windows.h>
+
+#include <Arcane/Platform/LaunchPath.hpp>   // CheckLaunchPath (settings S7-SEC)
 #else
 // POSIX process launch (Task 6). Deliberately the ONLY place these headers
 // appear, and wholly outside the _WIN32 branch above: a stray unguarded
@@ -523,6 +525,18 @@ namespace arcbuild
         std::string_view   prefix) const
     {
 #ifdef _WIN32
+        // The tool a build.* setting (or discovery) named must be a
+        // launchable file before anything runs it (settings S7-SEC): it
+        // exists, is no directory, and holds no quote or line break; an
+        // app-execution alias counts. (POSIX keeps execv's own ENOENT record.)
+        if (const Arcane::LaunchPathStatus status = Arcane::CheckLaunchPath(spec.executable);
+            status != Arcane::LaunchPathStatus::Ok)
+        {
+            return std::unexpected(ProcessError{
+                "refusing to launch '" + Narrow(spec.executable.wstring()) + "': it " +
+                std::string(Arcane::LaunchPathStatusText(status)) });
+        }
+
         const std::expected<std::wstring, ProcessError> commandLine =
             Widen(BuildWindowsCommandLine(spec));
 

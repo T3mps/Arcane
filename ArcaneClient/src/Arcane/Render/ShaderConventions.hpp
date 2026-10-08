@@ -24,6 +24,7 @@
 // 0), but is stated explicitly here rather than relied on by coincidence.
 
 #include <cstddef>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -58,5 +59,6 @@ namespace Arcane
         // mesh_cull.hlsl: its two UAVs are in space1 alongside its SRVs.
         "-fvk-u-shift", "384", "1",
     };
+    ARC_CONSTANT("shader contract: the SPIR-V compile argument count")
     inline constexpr std::size_t kSpirvArgCount = sizeof(kSpirvArgs) / sizeof(kSpirvArgs[0]);
 }

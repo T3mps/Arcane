@@ -9,6 +9,7 @@
 
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Config/CVarConfig.hpp>  // CommandLineCVarContext (integration ruling I3)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
@@ -19,6 +20,7 @@
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Scan / Tier1Names -- the injected-overlay facts (report + the RenderErrorCount line)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths::Resolve(DiagnosticsDir) -- the "finalize" dump-dir retarget (settings spec s11.0)
 #include <Arcane/Project/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
@@ -71,7 +73,7 @@ namespace
 }
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
-    : m_config(std::move(cfg)), m_perf(m_config.perf), m_splash(splash),
+    : m_config(std::move(cfg)), m_splash(splash),
       m_splashPresenter(m_splash) {}
 
 // ---- Boot stages (Task 8: RuntimeApp::Init folded into RuntimeStages) ----
@@ -101,6 +103,11 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
     // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
     m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+    // The player's settings persist (settings spec s8.2): an INTERACTIVE run writes
+    // the User rung's Archive values back to the per-user directory (Paths
+    // GameUserDir/Config) at exit, exactly as the editor does. A scripted --frames
+    // or --headless run reads them but never writes: a verify run must not.
+    m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
     // THIS EXE asks about ITS OWN caches (2026-09-16), for the same reason the
     // editor now does: VerifySharedTypeContext is inline, so ProjectBoot.cpp's
     // type_context_install stage answers for ArcaneClient.dll and no other module.
@@ -306,9 +313,9 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
     // a warn: sprites still resolve (no compile step), materials and the post
     // chain simply stay unbound.
     //
-    // Debounce is a HOT-RELOAD nicety: a 0.2 s quiet window keeps a designer
-    // holding Ctrl+S from firing a compile per keystroke.
-    if (!m_shaderCompiler.Initialize(/*debounceSeconds=*/0.2))
+    // Debounce is a HOT-RELOAD nicety: the configured quiet window keeps a
+    // designer holding Ctrl+S from firing a compile per keystroke.
+    if (!m_shaderCompiler.Initialize())
     {
         // Degrades to a warning rather than refusing the boot: the missing
         // material is on screen and recoverable.
@@ -386,7 +393,8 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     // project, or none, never a partial one.
     Arcane::Diagnostics::RetargetDumpDir(
         m_runtime && m_runtime->CurrentProject()
-            ? m_runtime->CurrentProject()->Root() / "Saved" / "Diagnostics"
+            ? Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir,
+                                     Arcane::Paths::ForProject(m_runtime->CurrentProject()->Root()))
             : std::filesystem::path{});
     return true;
 }
@@ -770,7 +778,7 @@ void RuntimeApp::MainLoop()
         .compareOptions        = compareOptions,
         .compareResult         = m_compareResult,
         .compareEvaluated      = m_compareEvaluated,
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
         .hangMainFired   = m_hangMainFired,
 #endif
@@ -889,7 +897,7 @@ void RuntimeApp::ShutdownGraphPath()
     if (!graph)
         return;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --pick-probe's ANSWER, read while the vehicle is still alive (the reset
     // below takes the readback buffer with it) and reported as an exit code so
     // a desk battery item is one scriptable line.
@@ -931,7 +939,7 @@ void RuntimeApp::ShutdownGraphPath()
 
     // ---- pick@x,y readback (Task 9), read BEFORE the vehicle resets -----
     // (same reason the --pick-probe block above reads early: ProbeId() reads
-    // state that dies with the vehicle). NOT ARCANE_DIST-gated, unlike that
+    // state that dies with the vehicle). NOT ARC_BUILD_DIST-gated, unlike that
     // block: this is the report's pick channel, not a dev-only exit-code
     // check, so it exists in every build configuration. Uses the SAME
     // Arcane::FirstPickProbe lookup RuntimeFrame.cpp's RenderGraph used to
@@ -1380,6 +1388,11 @@ void RuntimeApp::ShutdownGraphPath()
         // overlay is attributable from this file alone.
         report.SetForeignModules(foreignModules);
 
+        // THE --set ECHO (schemaVersion 14, settings S6-GATE): each --set name
+        // with the value the registry PUBLISHED, so a witness proves its --set
+        // landed on a declared cvar.
+        report.SetCVarSets(Arcane::VerifyReport::EchoCVarSets(m_config.cvarSets));
+
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually
         // present -- a run with none leaves this unset, and Evaluate's Pick
@@ -1534,6 +1547,11 @@ void RuntimeApp::Shutdown()
     // returned.
     ARC_INFO("ArcaneRuntime exiting after {} frames", m_frameCount);
 
+    // Written while the game module -- and every Archive cvar it declared -- is
+    // still loaded (the member destructors below unload it). A no-op unless this
+    // run archives (StageRuntimeCreate).
+    if (m_runtime) (void)m_runtime->Core().SaveUserCVars();
+
     // The member destructors then run (after Run returns + ~RuntimeApp), in reverse
     // declaration order -- the load-bearing TEARDOWN CONTRACT:
     //   m_resolver -> ~SceneRenderResolver: un-publishes the registry's sprite
@@ -1565,7 +1583,9 @@ int RuntimeApp::Run()
     // cannot drift on when a verify run declines the diag:// mount.
     ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
     ctx.hostConfig = &m_config;
-    ctx.cvarPermission = Arcane::Permission::Player;
+    // The command-line rung is Editor in Debug/Release for developer Game settings,
+    // and LocalHost in Dist. The console overlay uses the live session role.
+    ctx.cvarContext = Arcane::CommandLineCVarContext();
 
     // Spec sec 6 default: the runtime host shows no boot progress until an
     // opened project's own manifest opts in (project_open's ProjectBoot.cpp

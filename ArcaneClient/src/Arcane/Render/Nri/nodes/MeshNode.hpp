@@ -125,6 +125,7 @@
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
 // <windows.h> #defines ERROR via wingdi.h).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>   // explicitly: GpuSceneTypes.hpp below reaches <windows.h> (GpuScene.hpp explains)
 
 #include <Arcane/Base/Api.hpp>
@@ -137,7 +138,8 @@
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
+#include <Arcane/Render/RenderLookSettings.hpp>   // RenderMeshDefaultLightSettings -- MeshSceneDesc's light defaults
 
 #include <glm/glm.hpp>
 
@@ -164,11 +166,12 @@ namespace Arcane
     // THE AD-HOC INSTANCE (F3 plan 1 T7): a REGISTRY-LESS caller's row --
     // MeshDocument's preview, the thumbnail harvester, a [gpu] test. Drawn
     // DIRECT (one CmdDrawIndexed each, root flags & kMeshRootDirect),
-    // UNCULLED, in submission order, from the GpuScene::kScratchRows scratch
-    // rows this frame slot owns in the instance buffer: MeshNode::Prepare
+    // UNCULLED, in submission order, from the GpuScene::ScratchRows() scratch
+    // rows this frame slot owns in the instance buffer
+    // (render.gpuScene.scratchRowsPerFrame): MeshNode::Prepare
     // converts each one into a GpuInstance (AdHocRows()), AddMeshNode hands
     // that span to GpuSceneSyncNode, which copies it into the slot's scratch
-    // region ahead of the pass. Beyond kScratchRows per frame the rest are
+    // region ahead of the pass. Beyond ScratchRows() per frame the rest are
     // DROPPED -- by Prepare, which is also what WARNS, once per node (the
     // sync node only ever sees the capped span, so GpuScene::Reserve's own
     // overflow guard cannot fire on this path).
@@ -252,10 +255,23 @@ namespace Arcane
         std::uint32_t indexCount  = 0;   // 0 == "the whole mesh", the F2a shape
     };
 
+    namespace Detail
+    {
+        // render.mesh.defaultLight.* as the glm values MeshSceneDesc holds:
+        // a light is its colour x its intensity (the colour's alpha is
+        // unused). x * 1.0f is x exactly, so intensity 1 is the colour bit
+        // for bit.
+        [[nodiscard]] constexpr glm::vec3 ToGlm(const CVarVec3& v) noexcept { return { v.x, v.y, v.z }; }
+        [[nodiscard]] constexpr glm::vec3 ToGlmRgb(const CVarColor& c, float intensity) noexcept
+        {
+            return { c.r * intensity, c.g * intensity, c.b * intensity };
+        }
+    }
+
     struct MeshSceneDesc
     {
         // THE AD-HOC ROWS (see MeshInstance's header): drawn direct, unculled,
-        // in order, at most GpuScene::kScratchRows of them per frame.
+        // in order, at most GpuScene::ScratchRows() of them per frame.
         // BORROWED SPAN for the duration of the RenderFrame call, exactly like
         // FrameDesc::pickables: the declaration copies the SPAN into the
         // node's exec fn, never the elements, and the exec fn runs inside the
@@ -294,9 +310,15 @@ namespace Arcane
         //
         // `ambient` is a flat term added to every lit surface -- the whole of
         // the indirect lighting model here, deliberately.
-        glm::vec3 lightDirection{0.0f, 0.0f, 1.0f};
-        glm::vec3 lightColor{1.0f, 1.0f, 1.0f};
-        glm::vec3 ambient{0.05f, 0.05f, 0.05f};
+        //
+        // The defaults are render.mesh.defaultLight.*'s (settings arc S6-19);
+        // a scene-view host overwrites them every frame from the published
+        // setting with ApplyDefaultLight (Live).
+        glm::vec3 lightDirection = Detail::ToGlm(RenderMeshDefaultLightSettings{}.direction);
+        glm::vec3 lightColor     = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.color,
+                                                    RenderMeshDefaultLightSettings{}.intensity);
+        glm::vec3 ambient        = Detail::ToGlmRgb(RenderMeshDefaultLightSettings{}.ambient,
+                                                    RenderMeshDefaultLightSettings{}.ambientIntensity);
 
         // THE REGISTRY-BACKED SCENE (F3 plan 1 T6): what GpuSceneSync +
         // BuildGpuSceneFrame produced for this frame -- the staged rows,
@@ -332,6 +354,18 @@ namespace Arcane
         }
     };
 
+    // The scene's light from render.mesh.defaultLight.* -- the one
+    // directional light and the ambient term every scene view gets until a
+    // light component exists, each its colour x its intensity (the colours'
+    // alpha is unused). A host passes
+    // Settings<RenderMeshDefaultLightSettings>() once per frame (Live).
+    inline void ApplyDefaultLight(MeshSceneDesc& scene, const RenderMeshDefaultLightSettings& light) noexcept
+    {
+        scene.lightDirection = Detail::ToGlm(light.direction);
+        scene.lightColor     = Detail::ToGlmRgb(light.color, light.intensity);
+        scene.ambient        = Detail::ToGlmRgb(light.ambient, light.ambientIntensity);
+    }
+
     // THE 8-BYTE ROOT BLOCK (F3): `firstOutput` is the batch's start in the
     // visible-index buffer for an indirect draw, or THE ROW ITSELF when
     // `flags & kMeshRootDirect`. mesh.hlsl's MeshRoot. Public for the
@@ -343,6 +377,7 @@ namespace Arcane
         std::uint32_t firstOutput = 0;
         std::uint32_t flags       = 0;
     };
+    ARC_CONSTANT("layout: root-layout index")
     inline constexpr std::uint32_t kMeshRootDirect = 1u;
     static_assert(sizeof(MeshRootConstants) == 8, "mesh.hlsl's MeshRoot is two uints");
 
@@ -378,7 +413,7 @@ namespace Arcane
         nri::CullMode                            cullMode   = nri::CullMode::BACK;
     };
 
-    class ARCANE_API MeshNode
+    class ARC_API MeshNode
     {
     public:
         // Loads mesh_vs/mesh_ps through the vehicle, creates the bindless
@@ -465,7 +500,7 @@ namespace Arcane
         // "missing pipeline" warning that named the wrong cause.
         //
         // SINCE F3 PLAN 1 T7 this ALSO builds AdHocRows(): every ad-hoc
-        // instance (`scene.instances`, capped at GpuScene::kScratchRows --
+        // instance (`scene.instances`, capped at GpuScene::ScratchRows() --
         // the overflow is dropped and WARNED once, here, naming the count) is
         // converted to a GpuInstance -- model, NormalMatrixFor(model)'s
         // columns, baseColor, materialSlot -- and its draw range remembered,
@@ -544,6 +579,7 @@ namespace Arcane
         // The b1 block's region size BEFORE alignment. mesh.hlsl's MeshFrameCB
         // is 112 bytes; 256 is also D3D12's constant-buffer placement
         // alignment, so on that backend this is exactly one region.
+        ARC_CONSTANT("layout: constant-buffer placement size; the frame struct must fit")
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
         // THE BINDLESS MATERIAL TABLE'S CAPACITY (Task 8/10). PUBLIC (unlike
@@ -562,6 +598,7 @@ namespace Arcane
         // with the matching literal -- HLSL cannot include this header, so
         // that one comparison has no compiler behind it; this comment (and
         // its mirror in mesh.hlsl) is the whole of that contract.
+        ARC_CONSTANT("shader contract: must equal kMeshBindlessCapacity in data/shaders/mesh.hlsl")
         static constexpr std::uint32_t kBindlessCapacity = 256;
 
         // The arena's region stride on a device whose
@@ -596,7 +633,7 @@ namespace Arcane
         // capacity that does not cover what the node allocates is not a
         // compile error and not a wrong pixel -- it is an
         // AllocateDescriptorSets failure part-way through Create at the
-        // desk. TWO dimensions now (Task 8/10): kSwapchainFramesInFlight
+        // desk. TWO dimensions now (Task 8/10): FramesInFlight()
         // frame sets (one CONSTANT_BUFFER descriptor each, plus -- F3 plan 1
         // T7 -- two STRUCTURED_BUFFER descriptors each: the instance rows
         // and the slot's visible indices) plus ONE bindless set
@@ -642,6 +679,7 @@ namespace Arcane
         // once and draws twenty times; a RESERVED MEMBER rather than a local, so
         // the steady state allocates nothing inside the declaration window. Past
         // this many distinct meshes the vector grows once per high-water mark.
+        ARC_CONSTANT("capacity hint: resident-slot reserve; no observable preference")
         static constexpr std::size_t kInitialResidentSlots = 16;
 
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot) const
@@ -686,11 +724,11 @@ namespace Arcane
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
 
         // The per-frame-slot b1 arena: ONE HOST_UPLOAD buffer, persistently
-        // mapped, carved into kSwapchainFramesInFlight regions.
+        // mapped, carved into FramesInFlight() regions.
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_frameCbView[kMaxFramesInFlight]{};
 
         // THE PER-FRAME descriptor sets, one per frame slot. Each binds that
         // slot's b1 region (written ONCE at Create -- Task 8/10 moved the
@@ -699,7 +737,7 @@ namespace Arcane
         // GPU scene's t0 instance view + t1 the slot's visible-index view,
         // rewritten by Record when either moved. One dimension only (the
         // frame slot), because the slot is the only thing a set differs by.
-        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
+        nri::DescriptorSet* m_sets[kMaxFramesInFlight]{};
 
         // WHAT EACH SLOT'S SET CURRENTLY NAMES at t0/t1 (F3 plan 1 T7), so
         // Record rewrites the two ranges only when the GPU scene's buffers
@@ -709,8 +747,8 @@ namespace Arcane
         // creates the slot's buffer -- there is NO generation counter for
         // those, so the pointer itself is the identity). Zero / null until
         // the slot's first Record, which therefore always writes.
-        std::uint64_t          m_setInstanceGen[kSwapchainFramesInFlight] = {};
-        const nri::Descriptor* m_setVisibleView[kSwapchainFramesInFlight] = {};
+        std::uint64_t          m_setInstanceGen[kMaxFramesInFlight] = {};
+        const nri::Descriptor* m_setVisibleView[kMaxFramesInFlight] = {};
 
         // MEMBERS, not locals, and that is load-bearing:
         // nri::GraphicsPipelineDesc::vertexInput is a POINTER into caller
@@ -737,7 +775,7 @@ namespace Arcane
         std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>> m_residents;
 
         // THE AD-HOC ROWS (F3 plan 1 T7), built by Prepare from
-        // scene.instances (at most GpuScene::kScratchRows) and read twice:
+        // scene.instances (at most GpuScene::ScratchRows()) and read twice:
         // by AddMeshNode, which hands AdHocRows() to the sync node (copied
         // into this slot's scratch region), and by Record, which draws
         // m_adHocDraws[i] direct from scratch row i. Parallel vectors: row i
@@ -758,7 +796,10 @@ namespace Arcane
         // degradations a reader must be able to see.
         bool m_warnedNoPipeline      = false;
         bool m_warnedBadCamera       = false;
-        bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past kScratchRows dropped
+        bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past m_scratchRows dropped
+        // The context's GpuScene::ScratchRows(), latched by Init: the cap
+        // Prepare applies, so the span it stages always fits the scratch region.
+        std::uint32_t m_scratchRows = 0;
     };
 
     // Declares the mesh node -- opaque, masked and ordered transparent, the
@@ -781,7 +822,7 @@ namespace Arcane
     // undefined on both backends -- and RenderGraph exposes no way to read a
     // handle's format back, so this function cannot derive it. It must be the
     // format `canvas` was CREATED with; the caller that minted the handle is
-    // the one that knows. (It was hardcoded to kGraphCanvasFormat until Task
+    // the one that knows. (It was hardcoded to the graph canvas format until Task
     // 7's first fix round, which made a differently-formatted canvas a silent
     // mismatch with no diagnostic.)
     //
@@ -803,7 +844,7 @@ namespace Arcane
     // ad-hoc rows Prepare built (MeshNode::AdHocRows) for its scratch
     // region, and Record draws both halves -- the batches indirect, the
     // ad-hoc rows direct -- with the context's GpuScene passed in.
-    ARCANE_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
                                       RgTexture canvas, nri::Format canvasFormat,
                                       const MeshSceneDesc& scene,
                                       std::uint32_t width, std::uint32_t height);

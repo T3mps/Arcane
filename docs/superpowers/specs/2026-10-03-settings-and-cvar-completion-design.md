@@ -1,6 +1,6 @@
 # Settings and cvar completion -- design
 
-**Status:** Draft, 2026-10-03, written from the brainstorm with the user. Awaiting the user's review.
+**Status:** Implemented 2026-10-07 on branch `feat/settings-s7` (close-verification commit `79c3f14a`, the branch head when this record was written; the record itself is the next commit; the branch contains `feat/settings` through merge `f5b40c29`; S1-S7 gates green, plugin ABI 54). Written 2026-10-03 from the brainstorm with the user; decisions in s16. What shipped: s14.5.
 **Supersedes for scope:**
 - the cvar plan's "Hygiene pass 2026-09-28: what the review found owed" list (`docs/plans/2026-09-24-cvar-system-plan.md`);
 - the never-built v1 items of `docs/specs/2026-09-02-cvar-system-design.md` (the server surface, `ARC_CVAR_ALIAS`);
@@ -594,6 +594,135 @@ S1 -> S2 -> (S3 || S5) -> S4 -> S6 -> S7. The audit (S5) needs only S1-S2's voca
 ### 14.4 Never
 Push; `git add -A`; touch the user's untracked files; SendInput or focus stealing during desk checks; re-bless a golden during the sweep.
 
+### 14.5 What shipped (S7-CLOSE, 2026-10-07)
+Every fact below was read from git, the gate commits and the gate reports. Nothing is pushed. The branch is `feat/settings-s7` (worktree `Arcane-settings-c`). It forked from `feat/settings` at the S1 gate (`79b1e1b4`) and merged `feat/settings` back at `f5b40c29`. `feat/settings` was cut from main `8926eecb`. At `512c9adc`, before the two closeout commits, the branch held 242 commits not on main (231 not counting merges); the closeout adds `79c3f14a` and this record (244 / 233 at the record commit). Main has 10 commits the branch lacks, all docs.
+
+**Plugin ABI 54.** There were three bumps, as ruling I1 set out:
+- 51 -> 52 at `e2b476b8` (S1 gate);
+- 52 -> 53 at `f17bcfe7` (S2-13);
+- 53 -> 54 at `93d14080` (S7-9: `ProjectManifest` gains `company`).
+
+S7-SEC folded its exported-layout changes into the unreleased 54 instead of bumping again: `CVarApplyReport`, `CVarConfigIssue` and `LayerSources` grew, and new exports were added. At the close, ReferenceProject and Aphelyon were both rebuilt (`arcbuild rebuild`) against the final headers in Release, Dist and Debug. ArcaneServer loads each one with `engineAbi` 54 and no mismatch.
+
+Every gate ran its suites from the exe directory, with a JSON report and the seed recorded. "Goldens 14/14" means `golden-gate.ps1` passed every lane at diffCount 0.
+
+- **S0, the prelude.**
+  - `4c71f05c`: one `ARC_` macro prefix.
+  - `edfa164b`: drops the rename script.
+  - Aphelyon `f155236`.
+- **S1, the core.**
+  - Commits: `83c3f7c7`..`7f654da0` on `feat/settings`. The Paths lane (`feat/settings-paths`) was cherry-picked as `3b845be9`..`95e53615`. The gate is `e2b476b8`..`79b1e1b4`.
+  - ABI 52.
+  - Seeds: Debug `~[gpu]` 355381039 (witness 185712660); Release 1817843884 (witness 1727486448). 2793 cases, 77763 assertions.
+  - Goldens 14/14 in both configs, with no re-bless.
+  - Aphelyon `3ca3bcc` (ABI 52).
+- **S2, settings structs and bindings.**
+  - Commits:
+    - `bf606f25`..`4469f2b4`: `ARC_SETTINGS`, the typed snapshot blocks, the EditorUser rung and the All projects / This project API;
+    - `4998f81b`..`ded67192`: the astra, physics, sim, jobs and log bindings, and `ApplyEarlyConfigRungs` (`c84be557`, ruling I2);
+    - the gate, `ba06152a`, `dbcce566` and `56c04105`;
+    - S2-H, `9eca053a`..`8b0ecdd8`: one engine-config folder and one project owner.
+  - ABI 53.
+  - Seeds: Release 3758890402, Debug 307039439; after the fix round, Release 1406201 and Debug 1406202 (2901 cases, 78950 assertions).
+  - Goldens 14/14 in both configs.
+  - Aphelyon `c9fa80d` (ABI 53).
+- **S3, the windows.**
+  - Commits: `40683350`..`80531aea`, plus the side lanes `s3q`, `s3r` and `s3s`, merged. The gate is `aab220d0` and `7e811c2f`.
+  - Seeds: Release 1854519789, Debug 4249257802 (2876 cases, 78708 assertions).
+  - Witness E11 added.
+  - Goldens 14/14 in both configs.
+  - The one re-bless in the whole arc is here: `304e4e57`. It re-blessed five editor goldens for main's WindowPadding 8 -> 4, which came in with the main merge `ff04b00f`. It is not a settings pixel change.
+- **S4, the rich pages.**
+  - Commits: the lane `3e6fb70e`..`0c4c7d7e`, merged at `04b5f442`. The gate is `c1afa75f`, `c29dc902`, `9781ab36` and `a7a79f41`.
+  - Seeds: Debug 3951359785, Release 2423765022 (2994 cases, 80868 assertions). Witnesses: Debug 3317819103, Release 3369414156.
+  - Witness E12 added. The S6 gate strengthened it with the verify report schema 14 `cvarSets` (`8f9b5173`).
+  - Goldens 14/14 in both configs, with no re-bless.
+- **S5, the audit.**
+  - S5-1: `7335a4c8` and `3bab7620`.
+  - S5-2: `d99a5db0`, frozen after the user's review, and `f1261acf`, 531 frozen names.
+  - The S6 sweep's names bring `scripts/settings-frozen-names.txt` to 573 at the tip.
+- **S6, the sweep.**
+  - Commits: the lanes `s6` (`d99a5db0`..`34ff9ff0`), `s6b` (`dc354ce7`..`0db67819`) and `s6c` (`1accaeed`..`bad65fca`), merged at `30914dce`, `e81e8742` and `7129c062`. The follow-ups are `27741384`..`63499750`. The gate is `3c4a49bc`..`19716cf2`.
+  - Seeds: Release 3173736889, Debug 2799223410 (3204 cases, 84602 assertions). `[trajectory]` is unchanged and `[sweep]` passed 196/196.
+  - `fe34c93f` fixed a 186 px editor-asset-page diff in code, not by re-blessing.
+  - The GPU half of this gate ran at the S7 gate.
+- **S7, players and server.** Lane C ran these commits:
+  - `73adf9d2`..`254aefde`, the S7 tasks;
+  - the merge `f5b40c29`;
+  - `93d14080`, ABI 54;
+  - `d5911806` and `a9191c72`, the Dist path fixes;
+  - `53fdb674`, the stdin BOM fix;
+  - the gate, `ac8b222d` and `8dc46e12`;
+  - S7-DIST, `2cb7f71f` and `f2914d95`;
+  - S7-SEC, `40eaf8f5` and `512c9adc`;
+  - the close verification, `79c3f14a`.
+
+  Gate results:
+  - Seeds: Release `~[gpu]` 3600637913 (witness 2563675766); Debug 215659823 (witness 745888366). 3240 cases, 85066 assertions.
+  - The GPU half: Release `[gpu]` 1796971354 (witness 2796278738) and Debug 40181528 (witness 3524994855), each 71 cases and 65933 assertions. Each witness pass is 25 cases with 1 desk-only skip (G1). Goldens 14/14 in both configs.
+  - The S6-19 R11G11B10F/D24S8 runs passed on dx12 and Vulkan.
+  - The S6-8 server fixedDt census passed.
+
+  Dist and later runs:
+  - Full Dist `~[gpu]` was made green and hermetic by S7-DIST: seeds 3084954678 and 4276287535.
+  - S7-SEC: Debug 914769167 (fix round 4097496357), Release 3269652200, Dist 2693378780.
+  - The close verification at `512c9adc`:
+    - Release 3794975143: 3261 cases + 4 skips, 85636 assertions;
+    - Dist 2599648587: 3219 cases + 36 skips, 84400 assertions;
+    - Debug 1754483335: 3261 cases + 4 skips, 85636 assertions.
+    - `%LOCALAPPDATA%` was identical before and after each run.
+
+  Witnesses added: PS-W1 (`PlayerSettingsWitnessTest`) and server S4 (`ServerWitnessTest`, the stdin admin console).
+- **S7 details the text above does not name:**
+  - `PlayerSettings` follows `EngineContext::netMode` through `PluginHost::RefreshContext`, using the primary world's mode. A dedicated server's `Set` is Denied.
+  - `CVarListEntryEx` / `CVarRegistry::ListEx` give the whole descriptor per listed cvar.
+  - `.arcproj` gained an optional identity field, `company`.
+  - `Paths::ResolveGameUserDir` / `SanitizePathSegment` put the Dist user dir at `%LOCALAPPDATA%/<company>/<game>`, or the XDG equivalent.
+  - `RemoteCVarService` audits every set and command attempt through its own sink. Protected cvars are unreadable on every transport.
+  - ArcaneServer's stdin admin console:
+    - `--no-admin-console` turns it off;
+    - the registry publishes once per tick;
+    - a dedicated host sets `server.cheatsAllowed=false` at the Project rung;
+    - a leading UTF-8 BOM is ignored.
+  - ReferenceGame's mods policy: `game.mods.enabled` (PlayerSafe) lets the local host change non-cheat Game and Server settings. The policy is cleared at module unload.
+  - Aphelyon's `CVarRpc` serves Auth, Account and Combat with an operator caller allow-list. `audit_log.account_id` is nullable, for system rows.
+  - S7-SEC's honoured sources are a deliberate deviation from its brief. A `LaunchesProgram` value is honoured from the Default, EditorUser, CommandLine and Code rungs, and from a Console in the Editor context. Consoles in every other context are Denied (s18). **The invariant that must hold:** no data-driven path may ever call `Set` or `Execute` at `SetBy::Code`, or at `SetBy::Console` in the Editor context. That covers project files, scripts, graphs and replication.
+- **Aphelyon (`main`, not pushed).** These commits, oldest first:
+  - `f155236` refactor(game): ARC_ macro prefix;
+  - `3ca3bcc` chore(game): engine.abi 52;
+  - `16de714` feat(services): expose audited CVar RPC on signed endpoint;
+  - `f2100af` fix(services): authorize trimmed CVar set operations;
+  - `f1ab400` feat(account): audit_log accepts system rows;
+  - `59f0d06` feat(services): expose admin CVar RPC and audit Account changes;
+  - `e0c3271` fix(services): document CVar gate caller configuration;
+  - `c9fa80d` chore(project): restamp Aphelyon to engine ABI 53;
+  - `1744466` fix(services): build against the settings-arc SDK (net.* caps);
+  - `f953ad1` docs(services): the PBKDF2 round count is `crypto.pbkdf2Iterations`;
+  - `01b873a` chore(game): engine.abi 54;
+  - `13bf247` test(services): the hidden `[live-cvar-rpc]` case starts Winsock itself.
+
+  Aphelyon's main builds only against this branch's SDK until the branch merges. Results at the S7 gate:
+  - Services: CommonTests, AuthTests and CombatTests passed in both configs.
+  - AccountTests passed in full on the ephemeral CI DB, `-p aphelyon_ci`: 197 cases, seed 479914898.
+  - The `[live-cvar-rpc]` live smoke passed (seed 1784810102), and it wrote two `rpc:s7-gate` audit rows with `account_id` NULL.
+  - The S7-A3 "hang" was a long, silent rapidcheck property, not a hang.
+- **The dev-DB `ALTER`** (`audit_log.account_id DROP NOT NULL`) was applied on 2026-10-05 (S7-A2), on the user's "Yes, run it". It is non-destructive, and the 21 accounts are intact.
+- **Owed.** These are copied from the gate reports and the controller's close notes:
+  - **Dev test root.** Dev-build test runs still use the real `%LOCALAPPDATA%\Arcane` (EditorUserDir, UserRoot). The hermetic root is Dist-only.
+  - **arcbuild configs.** arcbuild cannot tell Release from Dist, because they share a CRT. Flip between them with `rebuild`.
+  - **Dist `--compare`.** It writes no diff artifact: DiffArtifactPath is refused, because Dist has no ProjectSaved. Where it should write is undecided.
+  - **Crypto fallback.** `Crypto.hpp`'s Windows branch falls back to `std::random_device` when `BCryptGenRandom` fails. Make it fail-closed, like the POSIX branch, and find the cause. The close runs log it in the case "crypto: GenerateRandomBytes returns the requested count with variation", probably from its count-0 draw.
+  - **Per-service credentials.** Aphelyon needs per-service HMAC keys, or a key-to-identity map, before any non-loopback deployment. Today the CVar RPC caller name is attribution, not authentication.
+  - **Unknown-key noise.** A non-editor host reports the editor's Pref-P keys from `Saved/Config/editor.json` as `config.cvar.unknown-key`. The possible fix is for a non-editor host to skip that file.
+  - **Desk checks.** The S6 gate's desk checks 1-5 (headless HUD, clearColor, a Project-rung window size, the viewport-ini import, the legacy `.arcproj` migration) are not recorded as run in any gate report. S4's runtime font-reinstall pixel check is still open.
+  - **Descriptor consolidation.** `CVarListEntryEx`, `CVarDescInfo` and `CVarMetadata` share one descriptor tail and should be consolidated.
+  - **Astra settings pass.** This includes `astra.snapshot.compression`, which is Dev and behind Show advanced; making it user-facing is the user's call.
+  - **Two controller items:** `IMGUI_USE_WCHAR32`, and `console.enabled` for Dist builds.
+  - **Linux.** `Module::MappedModules` / `PinMapped` are Windows-only.
+  - **Known GPU-log noise.** The Vulkan "vertex attribute at location 1 not consumed" warning and the D3D12 debug-layer and refcount lines are pre-existing.
+  - **PowerShell capture noise.** PowerShell-captured logs carry NativeCommandError wrappers.
+  - **Deferred minors.** The 136 `minor (deferred` lines in the arc's ledger.
+
 ---
 
 ## 15. Risks
@@ -624,3 +753,9 @@ Push; `git add -A`; touch the user's untracked files; SendInput or focus stealin
 - Scalability groups and device profiles. These are a later layer: named bundles of `PlayerSafe` render settings, built on this system, with no new store.
 - Per-platform overrides. The rung ladder makes them a later insertion, not a redesign.
 - A settings asset referenced from content, the spec's GUID revisit trigger. It is not triggered here: windows bind by name.
+
+## 18. Amendments
+
+| Date | Task | Amends | Change |
+|---|---|---|---|
+| 2026-10-07 | S7-SEC (controller, security) | s3.3, s4.8, s11.1, s12 | **Project config never chooses a program to run.** New flag `CVarFlags::LaunchesProgram` for a setting whose value names a program or command line Arcane executes (`build.premakePath`, `build.msbuildPath`, `build.makePath`, `build.ninjaPath`, `build.ideExecutable`, `diagnostics.reporterPath`). Its value is honoured only from the default, the machine-wide EditorUser rung, `--set`, code, and a console in the Editor context. The EngineConfig, Plugin, Project and User rungs refuse it, and so does any rung folder inside the project or a plugin root, whatever its rung. A `PreferencesMachine` setting is refused from the Project and Plugin rungs (it is the user's; its per-project override stays the User rung). `PreferencesProject` is unchanged: the project may suggest it. A refused key is not applied and is reported once per key per load as the Problems row and log warning `config.cvar.refused`, naming the file, the key and the reason ("names a program; set it in Preferences (machine) or with --set"). The registry's `Set` and `SetRung` refuse the same rungs as a backstop. The Preferences window writes a `LaunchesProgram` row to EditorUser only and does not offer "This project" (`SetPreferenceTarget` returns Denied). Every launch site checks the program it is handed (`CheckLaunchPath`: it exists, is not a directory, and holds no quote or line break; an app-execution alias counts); each `CreateProcessW` site passes it as `lpApplicationName` and quotes arguments with the one Windows quoting helper (`QuoteWindowsArg`; arcbuild keeps its own equivalent), and the editor's module-build `cmd.exe` line (`_wpopen`) refuses a path holding a quote or a line break, and a command or configuration token that is not one word. A sweep test fails on any path setting not classified by the launch-site audit. Fix round 1: the legacy `.arcproj` block's warning names the manifest file; arccook's project Config read warns once per refused key, naming the folder; the crash monitor's line quotes the exe and the session path with `QuoteWindowsArg`, and because the crash thread may not allocate, a `diagnostics.dumpDir` holding a quote or a line break is refused for the default report dir at Install/`RetargetDumpDir` (with a warning) and the crash thread skips the reporter spawn for a report stem holding one. |

@@ -74,6 +74,7 @@
 
 #include "Arcane/AssetPipeline/MeshImporter.hpp"
 #include "Arcane/AssetPipeline/TextureImporter.hpp"
+#include "Arcane/AssetPipeline/TextureMetaSettings.hpp"
 #include "Arcane/Guid.hpp"
 
 namespace Arcane::AssetPipeline
@@ -224,7 +225,17 @@ namespace Arcane::AssetPipeline
         [[nodiscard]] std::optional<std::filesystem::path> ResolveCurrentArtifactPath(
             const std::filesystem::path& projectDir, const Guid& guid) const;
 
+        // Settings arc S6-6: the values a texture's .meta "texture" block does NOT set
+        // resolve to (TextureMetaSettings::FromMetaJson's defaults) -- the project's
+        // assets.import.texture.*, Settings<TextureMetaSettings>(). Every session that
+        // cooks or answers "is it current" for one project must carry the SAME defaults,
+        // or the cook keys disagree. Not thread-safe against a concurrent CookProject:
+        // set it on the thread that drives this session (CookQueue does so inside its pass).
+        void SetTextureDefaults(const TextureMetaSettings& defaults) { m_textureDefaults = defaults; }
+        [[nodiscard]] const TextureMetaSettings& TextureDefaults() const { return m_textureDefaults; }
+
     private:
+        TextureMetaSettings m_textureDefaults{};
         ProgressFn m_progress;
         ImporterFn m_textureImporter;
         MeshImporterFn m_meshImporter;

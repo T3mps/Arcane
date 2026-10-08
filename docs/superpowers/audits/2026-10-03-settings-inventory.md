@@ -1,6 +1,6 @@
 # Settings inventory (read-only audit, 2026-10-03)
 
-**Status:** first pass, for the user's review (spec `docs/superpowers/specs/2026-10-03-settings-and-cvar-completion-design.md`, s10 and s16.3). Nothing was changed in code. Three read-only audits ran in parallel, one per part below.
+**FROZEN 2026-10-05 (S5-2): names, audiences, scopes and apply modes below are binding for S6. A change after this line is a new review, not an edit.** First pass 2026-10-03 (read-only); reconciled (S5-1); corrected by the user (S5-2, see "User review"). Spec: `docs/superpowers/specs/2026-10-03-settings-and-cvar-completion-design.md`, s10 and s16.3. Nothing was changed in code. Three read-only audits ran in parallel, one per part below.
 
 **How to review:**
 - Skim the SETTING rows. Correct any verdict, name, audience (Editor/Game/PlayerSafe/Server, +Dev), scope (Pref-M machine-wide / Pref-P per-project / Project) or apply mode (Live/NextWorld/Restart) you disagree with.
@@ -11,12 +11,14 @@
 
 | Part | SETTING | CONSTANT | DERIVED | OTHER-STORE |
 |---|---|---|---|---|
-| Part 1: ArcaneCore and the vendored library configs | 84 | 99 | 27 | 1 |
-| Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 127 | 102 | 28 | 0 |
-| Part 3: ArcaneEditor and ArcaneHub | 236 | 38 | 56 | 14 |
-| **Total** | **447** | **239** | **111** | **15** |
+| Part 1: ArcaneCore and the vendored library configs | 88 | 101 | 28 | 1 |
+| Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 148 | 104 | 32 | 0 |
+| Part 3: ArcaneEditor and ArcaneHub | 221 | 40 | 100 | 14 |
+| **Total** | **457** | **245** | **160** | **15** |
 
-These counts are after the reconciliation below (first pass: 481 / 233 / 111). They are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
+(SETTING rows were 82 / 126 / 207 = 415 at the freeze; the post-freeze amendments below split rows and add the names the sweeps registered.)
+
+These counts are after S5-1 (R1-R4 + s16.11 applied) and the user's S5-2 review: the Reconciliation below is applied to every part-table row, the scope vocabulary is Pref-M / Pref-P / Project, each category has exactly one settings struct (and each struct one category, since `ARC_SETTINGS` registers `<category>.<field>`), every SETTING name is concrete (wildcard families are enumerated member by member), and the Part 3 "Editor Dev" px metrics that ARE UI chrome are DERIVED from `editor.ui.scale`. The px rows that are NOT UI chrome stay SETTING (the user's S5-2 ruling): render-target extents and texel counts, the grid LOD fade, zoom-scaled canvas-space geometry (graph node/pin metrics, the shader chain layout, the asset graph node geometry), and the asset row/ref thumbnails; the lint exempts them by name. `scripts/settings-inventory-lint.ps1` checks all of it (rules L1-L10; exit 0 = reconciled) and prints these counts. Earlier counts: first pass 481 / 233 / 111; after the reconciliation was written but before S5-1 applied it, 447 / 239 / 111 (the lint counts that file as 455 / 240 / 111 / 15). They are rows by verdict, so a grouped row (e.g. "keepalive idle / interval / probes") counts once. Part 3 also has a separate shortcut table, which is not in the counts.
 
 ## Should anything NOT be exposed? (spec s16.8)
 
@@ -49,7 +51,7 @@ The three parts were audited in parallel, so some values were inventoried twice 
 | Gizmo snap steps and size | `editor.viewport.snap.*` / `editor.viewport.gizmo.*` (Part 2) vs `editor.gizmo.snap.*` / `editor.gizmo.size` (Part 3) | `editor.gizmo.snap.translate`, `.rotateDegrees`, `.scale`, `editor.gizmo.size` (EditorGizmoSettings, Pref-P) | Part 3 is right: `gizmoSize` lives in the layout ini (ViewportSettings), not a cvar. It migrates. |
 | Splash | `splash.*` (Part 1) vs `app.splash.*` (Part 2) | `app.splash.enabled`, `.image`, `.backgroundColor`, `.showProgress`, `.minDurationSeconds` (SplashSettings, Game, Project, Restart) | (0.05,0.05,0.06) and 0x0D0D0F are one colour: ONE default. Moves out of `.arcproj` (R3). |
 | Viewport grid | GridNode `editor.viewport.grid.majorEvery` SETTING (Part 2) vs ViewportGrid "major every 10" CONSTANT (Part 3); two structs | ONE `EditorGridSettings`: `editor.viewport.grid.majorEvery`, `.lineColor`, `.minorAlpha`, `.majorAlpha` | Same concept, two renderers: the 3D GridNode (depth-tested) and the 2D ViewportGrid (ortho lines). One family, read by both. Mode-only differences get `grid3D.*` / `grid2D.*` sub-keys. |
-| Axis colours (4 spellings) | `editor.viewport.axisColor.*`, `editor.viewport.grid.axis{X,Y}Color`, `editor.theme.axisX/Y/Z`, gizmo `kColorX/Y/Z` | `editor.theme.axisX/Y/Z` (theme tokens) | Grid, gizmo and inspector bars become DERIVED from the tokens. |
+| Axis colours (4 spellings) | `editor.viewport.axisColor.*`, `editor.viewport.grid.axis{X,Y}Color`, `editor.theme.axisX/Y/Z`, gizmo `kColorX/Y/Z` | `editor.theme.axisX/Y/Z` (theme tokens) | Only the inspector bars become DERIVED from the tokens (S5-2 review, decision 1 option A: the grid and gizmo axis colours stay values marked `ARC_CONSTANT("pending axis unification re-bless")`, and a post-sweep task unifies them with one deliberate re-bless; this supersedes ruling I4 for those two consumers). |
 | Selection outline colours | separate `render.outline.*Color` settings | DERIVED from `editor.theme.amber` (select) and `editor.theme.graphNodeHoverBorder` (hover) | Exact matches: (1,0.65,0.10) = kAmber; (0.25,0.70,1) = kGraphNodeHovBorderColor. Outline WIDTHS stay settings. |
 | Fixed step vs server tick | `sim.fixedHz` with two metadata sets | `sim.fixedHz` (SimSettings, Game, Project, **NextWorld**, [10,480], det Y) **and** `server.tickHz` (ServerSettings, Server, Project, Restart, [1,240]) | A client and a server can differ. |
 | Frame-delta clamp | `sim.maxFrameDeltaSeconds` (Part 2) vs `editor.play.maxSimDtSeconds` (Part 3) | ONE `sim.maxFrameDeltaSeconds` (det Y), read by the runtime AND editor Play | Two values would let Play-in-editor diverge from shipped behaviour. |
@@ -89,6 +91,55 @@ The three parts were audited in parallel, so some values were inventoried twice 
 - **`Message::ToString` password exposure: latent, not live.** It would include the first 100 payload characters, enough for a Login password. But a 2026-10-03 search found **no caller** in Arcane, Aphelyon (including the live services, `Source/Services`) or the Gacha archaeology copy, and the services never log payloads. So no existing log holds credentials, and no purge is needed. The fix stays: redact auth-message payloads in `ToString`, so the trap can't be sprung later. It is a small Core fix, separate from the settings tranches.
 - **Debug HUD in Dist:** a per-configuration default (on in Debug/Release, off in Dist), the same pattern as the validation cvars. Goldens are captured from Debug/Release, so they keep it on.
 
+### User review (S5-2, 2026-10-05)
+
+The user's corrections, applied after the Reconciliation. Each line: the row, what changed, the user's words. The user answered the controller's question on 2026-10-05 16:27; the table lists the changes in the order the answers gave them. Row numbers are rows of this file after the review.
+
+| row (file:line) | field | was | now | user |
+|---|---|---|---|---|
+| ViewportGrid.hpp:62-63 (grid fade px) | verdict | DERIVED (editor.ui.scale x base) | SETTING `editor.viewport.grid.fade{In,Full}Px`, Editor Dev / Pref-M / Live, `>0` | "Settle as recommended" (carry item 1: rows that are NOT UI chrome go back to SETTING) |
+| ShaderEditorDocument.cpp:1687 (checker kCell) | verdict | DERIVED | SETTING `editor.shader.previewCheckerCell`, Editor Dev / Pref-M / Live, `4..128` | same |
+| GraphCanvasStyle.hpp:57, :62-63 (pin ring) | verdict | DERIVED | SETTING `editor.graph.pinRing.{width,outerGap,outerWidth}` (GraphPinRingSettings), Editor Dev / Pref-M / Live | same (graph-canvas px, zoom-scaled) |
+| ShaderEditorDocument.cpp:391-392 (kNodePadX/Y) | verdict | DERIVED | SETTING `editor.graph.nodePadding`, Editor Dev / Pref-M / Restart, `0..24` | same |
+| ShaderEditorDocument.cpp:3401-3416 (pass-chain layout) | verdict | DERIVED | SETTING `editor.shader.chainLayout.{originX,originY,pitchX,sceneOffsetX,sceneOffsetY}` (ShaderChainLayoutSettings) | same |
+| ShaderEditorDocument.cpp:3534, :6064, :6199 (pass-name field) | verdict | DERIVED | SETTING `editor.graph.passNameFieldWidth`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:3534, :6064, :6199 (param-name field) | verdict | DERIVED | SETTING `editor.graph.paramNameFieldWidth`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:3534, :6064, :6199 (swizzle-mask field) | verdict | DERIVED | SETTING `editor.graph.swizzleFieldWidth`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:3583 (pass thumb) | verdict | DERIVED | SETTING `editor.shader.passThumbPx`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (neutral-pin field, 1 lane) | verdict | DERIVED | SETTING `editor.graph.constPinNeutralWidth1`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (neutral-pin field, 2 lanes) | verdict | DERIVED | SETTING `editor.graph.constPinNeutralWidth2`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (neutral-pin field, 3-4 lanes) | verdict | DERIVED | SETTING `editor.graph.constPinNeutralWidth4`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (Float / param default, 1 lane) | verdict | DERIVED | SETTING `editor.graph.constFloatWidth`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (Float2 / param default, 2 lanes) | verdict | DERIVED | SETTING `editor.graph.constFloat2Width`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (Float4 / Color / param default, 3-4 lanes) | verdict | DERIVED | SETTING `editor.graph.constFloat4Width`, Editor Dev / Pref-M / Live | same |
+| ShaderEditorDocument.cpp:5925 ... :6137 (param range field) | verdict | DERIVED | SETTING `editor.graph.constParamRangeWidth`, Editor Dev / Pref-M / Live | same |
+| AssetGraphPanel.cpp:358-361, :365, :395-398, :479, :1807 (node geometry, pin radius, node pads, overflow wire, label pad) | verdict | DERIVED | SETTING `editor.assetGraph.node.{minWidth,maxWidth,headerHeight,accentBarWidth,padding}` (AssetGraphNodeSettings), `editor.assetGraph.{pinRadius,overflowWireThickness,labelPad}` (AssetGraphSettings), Editor Dev / Pref-M / Live | same (canvas-space, zoom-scaled). Dash, legend swatch, strip and combo widths stay DERIVED (screen-space chrome) |
+| CrashReportDocument.cpp:168 (window first size) | verdict | DERIVED | SETTING `editor.crash.initialSize`, Editor / Pref-M / Live | "Settle as recommended" (carry item 1: split the mixed `editor.crash.*` row so the window size is SETTING) |
+| CrashReportDocument.cpp:262, :387 (field width, text rows) | split | one DERIVED row | field width 320 px stays DERIVED; the 16-line text-row COUNT is a new SETTING `editor.crash.textRows`, Editor / Pref-M / Live, `4..200` | same (a count is not px chrome; S6-40 owns it beside `editor.crash.maxRows`) |
+| GridNode.hpp:124-126, Gizmo.cpp:58-60, ViewportGrid.hpp:72-73 (grid and gizmo axis colours) | verdict | DERIVED from `editor.theme.axis{X,Y,Z}` | CONSTANT, `ARC_CONSTANT("pending axis unification re-bless")` | "All as drafted (Recommended)" (decision 1, option A). Only the inspector bars (EditorWidgets.cpp:243-247) bind to the axis tokens |
+| Reconciliation R1, axis colours | note | grid, gizmo and inspector bars derive from the tokens | only the inspector bars derive | same |
+| `editor.gizmo.color.*`, `debug.physics.{draw,color,style}.*`, `editor.theme.inputPill.*`, `editor.theme.graph.{node*,group*,pin*,category.*}`, `editor.theme.assetGraph.legend*`, `editor.theme.assetKind.*`, `editor.graph.lod.*`, `editor.shader.previewChecker*`, `editor.mesh.primitiveRanges.*` | name | wildcard families | every member named (the lint now refuses a wildcard, rule L10; the member lists were read off the sources, ranges `capsuleLengthRatioStep` dropped as a drag speed) | "Settle as recommended" (carry item 3; also `editor.camera.distanceScaledSpeed (+ .refDistance, .floor)`, whose parenthesised shorthand the emitter dropped, is now `editor.camera.{distanceScaledSpeed,refDistance,floor,speedCap}`, the row's unnamed 1000 cap getting the name `speedCap`) |
+| RuntimeApp.cpp:311 vs EditorApp.cpp:689 (`render.shader.compileDebounceSeconds`) | range | `0..2` vs `0..5` | `0..2` on both | "Settle as recommended" (carry item 5: take RuntimeApp.cpp's 0..2) |
+| AssetReferenceField.cpp:22 and the other kept-SETTING px rows | why text | mixed separators | one form: "kept SETTING: owned by S6-xx" | same |
+| DERIVED / CONSTANT / OTHER-STORE rows (156 rows) | placeholder cells | `-` and `—` mixed; det `-`; stray audience, scope, apply, struct cells on DERIVED rows (e.g. Gizmo.cpp:28-39, HostConfig.hpp:387, GpuContext.cpp:25) | `—` everywhere; det `N` (or `Y`); the governing setting is named in the name cell in parentheses | same |
+| `scripts/settings-inventory-lint.ps1` | L9 exemption | `^editor\.thumbnail\.` | only `editor.thumbnail.size`; the restored px rows are exempt by expanded name | same |
+| `scripts/settings-inventory-lint.ps1` | `-EmitFrozen` | wrote the names file before the violation check | emits only after the check passes | same |
+| ServerApp.cpp:102-103, :164, :170 (pacing) | why text | "Follows sim.fixedHz" | already "Follows server.tickHz" (S5-1 fix round 1); no change needed | same |
+
+Drafting decisions 1-5 (the S5-2 message): "All as drafted (Recommended)".
+1. (A) S6 binds only the inspector bars to `editor.theme.axisX/Y/Z`. The grid and gizmo axis colours stay values marked `ARC_CONSTANT("pending axis unification re-bless")`, and a post-sweep task unifies them with one deliberate re-bless. This supersedes integration ruling I4 for those two consumers; S6-21 and S6-31 therefore DO hold the grid and gizmo axis colours under `ARC_CONSTANT`.
+2. Outline widths are named `render.outline.*`.
+3. Nested categories get their own struct (`log.file.*` -> LogFileSettings, ...).
+4. The 2D grid's "major every 10" stays CONSTANT.
+5. `ui.copyFlashSeconds` goes in a new `ui` category (UiSettings).
+
+The S5-1 carry items 1-5 (the controller's agenda for the review): "Settle as recommended".
+1. Rows that are not UI chrome go back from DERIVED to SETTING: previewCheckerCell, the grid fade px rows and the graph-canvas px rows (zoom-scaled). True UI-chrome px rows stay DERIVED from `editor.ui.scale`. The mixed `editor.crash.*` row is split.
+2. The mismatched struct names are kept (e.g. `render.vulkan.*` -> RenderDeviceSettings).
+3. Every wildcard family is enumerated member by member.
+4. The implementer's calls are accepted: Mosaic `g_logLevel` is DERIVED from `log.level`; `diagnostics.logTailLines` is Game Dev / Pref-P / Live; `editor.console.*` -> EditorConsoleSettings.
+5. Every listed row defect is fixed (see the table), and the lint's `-EmitFrozen` ordering is fixed.
+
 ## Findings that need the user's eyes
 
 **Spec corrections:**
@@ -125,6 +176,34 @@ The three parts were audited in parallel, so some values were inventoried twice 
 
 ---
 
+## Post-freeze amendments (S6, recorded at S6-45; for the user at S6-GATE)
+
+The freeze binds names, audiences, scopes and apply modes. These rows changed after it, each by a controller ruling during the S6 sweeps or by S6-45's coverage check, so `scripts/settings-frozen-names.txt` (regenerated by `settings-inventory-lint.ps1 -RequireFrozen -EmitFrozen`, never by hand) matches what the engine registers. Most are the same fix: a frozen row held two or more values under one name, which breaks one name per value (spec s14.1 step 5.1; precedent: the S5-2 constFieldWidths split). Each amended row says "(S6-45 amendment)".
+
+| Frozen row (was) | Now | Why | Authority |
+|---|---|---|---|
+| `debug.physics.islandPalette` (rgba[8]), `debug.physics.narrowphaseColors` (7 RGBA) | `debug.physics.color.island0`..`island7`, `debug.physics.color.narrowphase0`..`narrowphase6` | no array CVarType (spec s3); one name per value | ruling S6-10 |
+| `debug.physics.trace.lineThickness` row carried the emphasis value too | + `debug.physics.trace.emphasis` (1.0, 0..1) | one name per value | ruling S6-10 |
+| `editor.layout.factory.assetsInspectorShare` (1144 / 392) | `editor.layout.factory.browserRefPx`, `editor.layout.factory.assetsInspectorRefPx` | two values under one name | ruling S6-32 |
+| `diagnostics.reporter.windowSize` (1000 x 640) | `diagnostics.reporter.windowWidth` (320..7680), `diagnostics.reporter.windowHeight` (240..4320) | the `--window WxH` flag; the ranges are S6-4's, recorded here; scope stays Pref-P (confirmed) | ruling S6-4, controller 06:04 |
+| `diagnostics.logTailLines` on two rows with ranges 0..10000 and 20..5000 | both 0..10000 | one value, one range; the code declares 0..10000 (0 = no excerpt) | controller 06:04 |
+| `console.windowSize` (640 x 280) | `console.windowWidth`, `console.windowHeight` (64..8192) | two values under one name (S6-24 registered the pair) | S6-45 |
+| `log.server.pattern` row held the console AND file patterns | + `log.server.filePattern` | one name per value (S6-3 registered both) | controller 05:09 |
+| `runtime.hud.show` Game Dev | Game | a Dist player can turn the HUD on | ruling R4, controller 09:39 (S6-25) |
+| `editor.input.liveHighlight` (0.12 + 0.2·v) | `editor.input.liveHighlightBase`, `editor.input.liveHighlightGain` | two values under one name | S6-45 |
+| `editor.sprite.ppuRange` (0.5, 1..4096) | `editor.sprite.ppuDragSpeed`, `editor.sprite.ppuMin`, `editor.sprite.ppuMax` | three values under one name | S6-45 |
+| `editor.theme.channelMarkers` (Color x4, Editor Dev) | `editor.theme.channelR` / `G` / `B` / `W` (Editor) | four values under one name; Editor, not Editor Dev, like every other theme token (they travel in the .arctheme presets) | S6-45 |
+| `editor.viewport.fallbackExtent` (1280 x 720) | `editor.viewport.fallbackExtentW`, `editor.viewport.fallbackExtentH` | the row already named the split (S6-32); the lint's L9 exemption follows the names | S6-45 |
+| `editor.preview.sphereSegments` row held 24 x 32 | + `editor.preview.sphereRings` | two values under one name (S6-35 registered both) | S6-45 |
+| `render.debug.pendingCookChecker` (a colour pair) | + `render.debug.pendingCookCheckerAlt` | two values under one name | controller 05:03 (S6-16) |
+| `render.mesh.defaultLight.*` | + `render.mesh.defaultLight.intensity`, `.ambientIntensity` (0..16) | colour x intensity split | controller 07:05 (S6-19) |
+| (none) | `editor.mesh.capsuleRatioDragSpeed` (0.02) | the primitive-ranges row dropped the drag speed from its family; S6-35 registered it | S6-45 |
+| (none) | `net.defaultPort`, `net.tokenLength`, `net.sessionLifetimeSeconds`, `net.idleTimeoutSeconds`, `net.heartbeatIntervalSeconds` | protocol.json's `settings` keys, layered over net.* (S6-12) | S6-45 |
+| (none) | `server.cheats`, `server.cheatsAllowed`, `server.allowClientSetServer` | the spec's engine knobs (s3.2, s9), registered by the registry since S1 | S6-45 |
+| (none) | `editor.settings.saveDebounceMs`, `.openAtBoot`, `.openCategory`, `.keysConflictsOnly` | the settings windows' own cvars (S3, S4-14) | S6-45 |
+
+Frozen names S6-45 registered in code (no inventory change): `editor.camera.floor` (S6-30 spelled it `speedFloor`), `editor.preview.light.colour` (was `.color`), `editor.shader.previewCheckerLight` / `previewCheckerSpriteScale` (were `editor.preview.checkerLight` / `checkerExtent`), `editor.graph.nodePreviewMinPx` / `dragSpeed` / `rangeDragSpeed` (were under `editor.shader.*`), `editor.mesh.primitiveRanges.*` (were `editor.mesh.subdivMax` ...; the minima are now settings too, each floored at ValidateMeshAsset's rule), and the rows no sweep had converted: `astra.snapshot.compression`, `editor.gizmo.color.*`, `editor.graph.const*Width` / `paramNameFieldWidth` / `passNameFieldWidth` / `swizzleFieldWidth`, `editor.shader.chainLayout.*`, `editor.shader.passThumbPx`, `editor.crash.initialSize` (a Vec2) / `textRows`, `editor.ui.toolbar.logoScale` / `brandScale`, `editor.viewport.grid.fadeInPx` / `fadeFullPx`.
+
 ## Part 1: ArcaneCore and the vendored library configs
 
 ## Settings inventory: ArcaneCore + vendored library configs (read-only audit, 2026-10-03)
@@ -135,134 +214,136 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Config/CVarRegistry.cpp:123-125 | `console.historySize` | 64 (lines) | SETTING | console.historySize (exists) | ConsoleSettings | Game | Preferences | Live | [1,1024] | N | already a cvar; needs audience/scope metadata |
-| Core/Config/ConsoleModel.cpp:10 | `cap` fallback | 64 (lines) | DERIVED | - | - | - | - | - | - | - | shadow copy of the console.historySize default; delete in the sweep |
-| Core/Config/CVarTypes.hpp:36-46 | CVarFlags bits | 1<<3..1<<13 | CONSTANT | - | - | - | - | - | - | - | flag ABI |
-| Core/Config/CVarTypes.hpp:67-73 | SetBy rung ordinals | 10..70 | CONSTANT | - | - | - | - | - | - | - | layer-precedence contract |
-| Core/Base/Log.cpp:261 | `log.level` default | Init(level), info by default (Log.hpp:25) | SETTING | log.level (exists) | LogSettings | Game | Preferences | Live | [0,6] | N | already a cvar |
-| Core/Base/Log.cpp:262-263 | `log.level` min/max | 0..6 | CONSTANT | - | - | - | - | - | - | - | spdlog level enum |
+| Core/Config/CVarRegistry.cpp:123-125 | `console.historySize` | 64 (lines) | SETTING | console.historySize | ConsoleSettings | Game | Pref-P | Live | [1,1024] | N | already a cvar; needs audience/scope metadata (R1: Game, Pref-P; registered in Core, it serves both consoles) |
+| Core/Config/ConsoleModel.cpp:10 | `cap` fallback | 64 (lines) | DERIVED | — | — | — | — | — | — | N | shadow copy of the console.historySize default; delete in the sweep |
+| Core/Config/ConsoleModel.hpp:45 | `m_lines` | unbounded (lines) | SETTING | console.maxLines | ConsoleSettings | Game | Pref-P | Live | [0=unbounded,1e6] | N | new row (R1): the Core console model grows without bound; 0 keeps today's behaviour (reconciled R1) |
+| Core/Config/CVarTypes.hpp:36-46 | CVarFlags bits | 1<<3..1<<13 | CONSTANT | — | — | — | — | — | — | N | flag ABI |
+| Core/Config/CVarTypes.hpp:67-73 | SetBy rung ordinals | 10..70 | CONSTANT | — | — | — | — | — | — | N | layer-precedence contract |
+| Core/Base/Log.cpp:258-263 | `log.level` default | Init(level), info by default (Log.hpp:25) | SETTING | log.level | LogSettings | Game | Pref-P | Live | [0,6] | N | already a cvar (R1: the ARC_CVAR spans Log.cpp:258-263) |
+| Core/Base/Log.cpp:262-263 | `log.level` min/max | 0..6 | CONSTANT | — | — | — | — | — | — | N | spdlog level enum |
 
 ### Base / Diagnostics / Log
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Base/Diagnostics.hpp:68 | `Config::appName` | "Arcane" | DERIVED | - | - | - | - | - | - | - | host identity, set per host |
-| Core/Base/Diagnostics.hpp:73 | `Config::dumpDir` | "" -> `<exe>/diagnostics` | SETTING | diagnostics.dumpDir | DiagnosticsSettings | Game Dev | Preferences | Restart | path | N | where reports land |
-| Core/Base/Diagnostics.cpp:383 | default subfolder | "diagnostics" | CONSTANT | - | - | - | - | - | - | - | path convention that docs/tests/Hub look in |
-| Core/Base/Diagnostics.hpp:78 | `hangSeconds` | 12 (s) | SETTING | diagnostics.hangSeconds | DiagnosticsSettings | Game | Preferences | Restart | [1,600] | N | slow machines and cold shader compiles |
-| Core/Base/Diagnostics.hpp:107 | `gpuStallSeconds` | 8 (s) | SETTING | diagnostics.gpuStallSeconds | DiagnosticsSettings | Game | Preferences | Restart | [1, hangSeconds) | N | must stay below hangSeconds (comment at :93-99) |
-| Core/Base/Diagnostics.hpp:113 | `installCrashHandler` | true | SETTING | diagnostics.installCrashHandler | DiagnosticsSettings | Game Dev | Preferences | Restart | bool | N | debugger and third-party handler conflicts |
-| Core/Base/Diagnostics.hpp:114 | `startHangWatchdog` | true | SETTING | diagnostics.hangWatchdog | DiagnosticsSettings | Game Dev | Preferences | Restart | bool | N | toggle |
-| Core/Base/Diagnostics.hpp:119 | `productName` | "" -> appName | DERIVED | - | - | - | - | - | - | - | falls back to appName |
-| Core/Base/Diagnostics.hpp:124 | `reporterPath` | "" -> `<exe>/ArcaneCrashReporter.exe` | SETTING | diagnostics.reporterPath | DiagnosticsSettings | Game Dev | Preferences | Restart | path | N | path choice |
-| Core/Base/Diagnostics.cpp:2317 | reporter exe name | "ArcaneCrashReporter.exe" | CONSTANT | - | - | - | - | - | - | - | shipped binary name |
-| Core/Base/Diagnostics.hpp:128 | `unattended` | false | DERIVED | - | - | - | - | - | - | - | from --headless |
-| Core/Base/Diagnostics.hpp:133 | `spawnReporter` | true | SETTING | diagnostics.spawnReporter | DiagnosticsSettings | Game | Preferences | Restart | bool | N | user may not want a reporter window |
-| Core/Base/Diagnostics.hpp:151 | `launchMonitor` | false | DERIVED | - | - | - | - | - | - | - | host sets it to !headless |
-| Core/Base/Diagnostics.hpp:156 | `commandLine` | "" | DERIVED | - | - | - | - | - | - | - | host-sanitised argv |
-| Core/Base/Diagnostics.hpp:160 | `logDir` | "" -> `<report dir>/../Logs` | SETTING | log.dir | LogSettings | Game Dev | Preferences | Restart | path | N | path choice |
-| Core/Base/Diagnostics.cpp:2286 | default log subdir | "Logs" | CONSTANT | - | - | - | - | - | - | - | path convention |
-| Core/Base/Diagnostics.cpp:2288 | log file name | appName + ".log" | DERIVED | - | - | - | - | - | - | - | from appName |
-| Core/Base/Diagnostics.hpp:164 | `exitSeconds` | 30 (s) | SETTING | diagnostics.exitSeconds | DiagnosticsSettings | Game Dev | Preferences | Restart | [0=off,600] | N | `<=0` disables (Diagnostics.cpp:1995) |
-| Core/Base/Diagnostics.hpp:168 | `crashHandlingTimeoutSeconds` | 60 (s) | SETTING | diagnostics.crashHandlingTimeoutSeconds | DiagnosticsSettings | Game Dev | Preferences | Restart | [5,600] | N | timeout |
-| Core/Base/Diagnostics.cpp:3031-3032 | 0 -> `60u*1000u` | 60000 (ms) | DERIVED | - | - | - | - | - | - | - | shadow copy of the default above |
-| Core/Base/Diagnostics.cpp:95,104 | `kGpuBeatFreshnessCapSeconds`, `*0.5` | 2.0 (s) | DERIVED | - | - | - | - | - | - | - | min(2, gpuStallSeconds/2) by construction |
-| Core/Base/Diagnostics.cpp:948-949 | minidump `MINIDUMP_TYPE` | ThreadInfo, HandleData, UnloadedModules, IndirectlyReferencedMemory | SETTING | diagnostics.minidumpKind | DiagnosticsSettings | Game Dev | Preferences | Restart | enum{Small,Default,Full} | N | full dumps for deep debugging |
-| Core/Base/Diagnostics.cpp:1329 | `FlushFileSinkBounded(2000)` | 2000 (ms) | SETTING | diagnostics.logFlushTimeoutMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [100,10000] | N | crash-path budget; snapshot at Install |
-| Core/Base/Diagnostics.cpp:2020 | watchdog poll | 250 (ms) | SETTING | diagnostics.watchdogPollMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [10,1000] | N | detection resolution |
-| Core/Base/Diagnostics.cpp:2132 | watchdog join wait | 5000 (ms) | SETTING | diagnostics.watchdogJoinTimeoutMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [100,30000] | N | when in doubt |
-| Core/Base/Diagnostics.cpp:3052 | `kMinFatalWaitMs` | 5000 (ms) | SETTING | diagnostics.minFatalWaitMs | DiagnosticsSettings | Game Dev | Preferences | Restart | [1000,60000] | N | when in doubt |
-| Core/Base/Diagnostics.cpp:2610 | env `ARCANE_BUILD_MACHINE` / `CI` / `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE` | env toggles | OTHER-STORE | (fold into diagnostics.spawnReporter as a CommandLine/env rung) | — | — | — | — | — | — | an environment rung, not a new cvar (reconciled). toggle that bypasses the cvar store |
-| Core/Base/Diagnostics.cpp:225-231 | `kPathMax`, `kReasonMax`, `kMaxFrames`, `kSectionRsv`, `kHeaderRsv`, `kEnvRsv`, `kEnvLeanRsv` | 1024, 1024, 96, 32 KiB, 8 KiB, 64 KiB, 8 KiB | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity; the crash path cannot allocate or read cvars |
-| Core/Base/Diagnostics.cpp:275-307 | snapshot buffers | 128, 4096, 256, 2048, 64, 8192 (chars) | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity |
-| Core/Base/Diagnostics.cpp:284 | `kInjectedMax` | 32 | CONSTANT | - | - | - | - | - | - | - | static crash-path capacity |
-| Core/Base/Diagnostics.cpp:1693 | catchable-type scan bound | 16 | CONSTANT | - | - | - | - | - | - | - | MSVC EH ABI parse bound |
-| Core/Base/Diagnostics.cpp:1810, :3152 | stack guarantee | 64 KiB | CONSTANT | - | - | - | - | - | - | - | must cover the SEH filter (OS/hardware) |
-| Core/Base/Diagnostics.cpp:2103, :2671 | watchdog / crash thread stacks | 128 KiB / 256 KiB | CONSTANT | - | - | - | - | - | - | - | crash-path stack sizing |
-| Core/Base/Diagnostics.cpp:2228-2229 | console-close wait | 160 x 25 ms = 4 s | CONSTANT | - | - | - | - | - | - | - | OS cap: Windows kills about 5 s after CTRL_CLOSE |
-| Core/Base/Diagnostics.cpp:2855 | session-record retry | 50 (ms) | CONSTANT | - | - | - | - | - | - | - | one-shot retry pause, not a preference |
-| Core/Base/Diagnostics.cpp:2501 | `"%s\\%s-pid%lu.session"` | name pattern | CONSTANT | - | - | - | - | - | - | - | monitor contract |
-| Core/Base/Diagnostics.cpp:422 | `kReportKinds` | strings | CONSTANT | - | - | - | - | - | - | - | envelope vocabulary |
-| Core/Base/Diagnostics.hpp:175-178 | ExitCode | 10..13 | CONSTANT | - | - | - | - | - | - | - | monitor/CI/reporter contract |
-| Core/Base/DiagEnvelope.hpp:34 | `kFormatVersion` | 1 | CONSTANT | - | - | - | - | - | - | - | file format |
-| Core/Base/CrashArena.hpp:46 | `kCapacity` | 256 KiB | CONSTANT | - | - | - | - | - | - | - | static crash arena |
-| Core/Base/CrashArena.cpp:87,95 | printf slot | 512 (B) | CONSTANT | - | - | - | - | - | - | - | crash-path buffer |
-| Core/Base/ModuleTable.hpp:62,71 | `name[64]`, `kMax` | 64, 512 | CONSTANT | - | - | - | - | - | - | - | static crash-path module table |
-| Core/Base/ForeignModules.cpp:34-79 / .hpp:66-68 | catalogue strings, `kTable`, tiers | data | CONSTANT | - | - | - | - | - | - | - | catalogue data, not tunables |
-| Core/Base/Engine.cpp:63 | wide-buffer cap | 65536 (wchar) | CONSTANT | - | - | - | - | - | - | - | Win32 path API sanity bound |
-| Core/Base/Log.hpp:77-78 | `kBacklogLines`, `kBacklogLineBytes` | 512, 512 | CONSTANT | - | - | - | - | - | - | - | static lock-free crash-path ring (could become Restart only if heap-sized at Init) |
-| Core/Base/Log.cpp:230 | engine sink on stderr | stderr | CONSTANT | - | - | - | - | - | - | - | stdout is the Hub's data channel |
-| Core/Base/Log.cpp:232 | console pattern | `%^[%H:%M:%S.%e] [%n] [%l]%$ %v` | SETTING | log.pattern | LogSettings | Game Dev | Preferences | Live | string | N | format preference (check no parser relies on it) |
-| Core/Base/Log.cpp:329 | rotation `keep` | 5 (files) | SETTING | log.file.keepCount | LogSettings | Game Dev | Preferences | Restart | [0,100] | N | retention |
-| Core/Base/Log.cpp:357 | `truncate` = true | bool | DERIVED | - | - | - | - | - | - | - | paired with the rename rotation |
-| Core/Base/Log.cpp:368 | `flush_on(warn)` | warn | SETTING | log.file.flushLevel | LogSettings | Game Dev | Preferences | Live | [0,6] | N | I/O versus durability |
-| Core/Util/Logger.hpp:19 | `SPDLOG_ACTIVE_LEVEL` | TRACE | CONSTANT | - | - | - | - | - | - | - | compile-time strip level; the runtime knob is the level cvar |
+| Core/Base/Diagnostics.hpp:68 | `Config::appName` | "Arcane" | DERIVED | — | — | — | — | — | — | N | host identity, set per host |
+| Core/Base/Diagnostics.hpp:73 | `Config::dumpDir` | "" -> `<exe>/diagnostics` | SETTING | diagnostics.dumpDir | DiagnosticsSettings | Game Dev | Pref-P | Restart | path | N | where reports land |
+| Core/Base/Diagnostics.cpp:383 | default subfolder | "diagnostics" | CONSTANT | — | — | — | — | — | — | N | path convention that docs/tests/Hub look in |
+| Core/Base/Diagnostics.hpp:78 | `hangSeconds` | 12 (s) | SETTING | diagnostics.hangSeconds | DiagnosticsSettings | Game | Pref-P | Restart | [1,600] | N | slow machines and cold shader compiles |
+| Core/Base/Diagnostics.hpp:107 | `gpuStallSeconds` | 8 (s) | SETTING | diagnostics.gpuStallSeconds | DiagnosticsSettings | Game | Pref-P | Restart | [1, hangSeconds) | N | must stay below hangSeconds (comment at :93-99) |
+| Core/Base/Diagnostics.hpp:113 | `installCrashHandler` | true | SETTING | diagnostics.installCrashHandler | DiagnosticsSettings | Game Dev | Pref-P | Restart | bool | N | debugger and third-party handler conflicts; Dev, never archived, command-line only (R2) |
+| Core/Base/Diagnostics.hpp:114 | `startHangWatchdog` | true | SETTING | diagnostics.hangWatchdog | DiagnosticsSettings | Game Dev | Pref-P | Restart | bool | N | toggle; Dev, never archived, command-line only (R2) |
+| Core/Base/Diagnostics.hpp:119 | `productName` | "" -> appName | DERIVED | — | — | — | — | — | — | N | falls back to appName |
+| Core/Base/Diagnostics.hpp:124 | `reporterPath` | "" -> `<exe>/ArcaneCrashReporter.exe` | SETTING | diagnostics.reporterPath | DiagnosticsSettings | Game Dev | Pref-P | Restart | path | N | path choice |
+| Core/Base/Diagnostics.cpp:2317 | reporter exe name | "ArcaneCrashReporter.exe" | CONSTANT | — | — | — | — | — | — | N | shipped binary name |
+| Core/Base/Diagnostics.hpp:128 | `unattended` | false | DERIVED | — | — | — | — | — | — | N | from --headless |
+| Core/Base/Diagnostics.hpp:133 | `spawnReporter` | true | SETTING | diagnostics.spawnReporter | DiagnosticsSettings | Game | Pref-P | Restart | bool | N | user may not want a reporter window |
+| Core/Base/Diagnostics.hpp:151 | `launchMonitor` | false | DERIVED | — | — | — | — | — | — | N | host sets it to !headless |
+| Core/Base/Diagnostics.hpp:156 | `commandLine` | "" | DERIVED | — | — | — | — | — | — | N | host-sanitised argv |
+| Core/Base/Diagnostics.hpp:160 | `logDir` | "" -> `<report dir>/../Logs` | SETTING | log.dir | LogSettings | Game Dev | Pref-P | Restart | path | N | path choice |
+| Core/Base/Diagnostics.cpp:2286 | default log subdir | "Logs" | CONSTANT | — | — | — | — | — | — | N | path convention |
+| Core/Base/Diagnostics.cpp:2288 | log file name | appName + ".log" | DERIVED | — | — | — | — | — | — | N | from appName |
+| Core/Base/Diagnostics.hpp:164 | `exitSeconds` | 30 (s) | SETTING | diagnostics.exitSeconds | DiagnosticsSettings | Game Dev | Pref-P | Restart | [0=off,600] | N | `<=0` disables (Diagnostics.cpp:1995) |
+| Core/Base/Diagnostics.hpp:168 | `crashHandlingTimeoutSeconds` | 60 (s) | SETTING | diagnostics.crashHandlingTimeoutSeconds | DiagnosticsSettings | Game Dev | Pref-P | Restart | [5,600] | N | timeout |
+| Core/Base/Diagnostics.cpp:3031-3032 | 0 -> `60u*1000u` | 60000 (ms) | DERIVED | — | — | — | — | — | — | N | shadow copy of the default above |
+| Core/Base/Diagnostics.cpp:95,104 | `kGpuBeatFreshnessCapSeconds`, `*0.5` | 2.0 (s) | DERIVED | — | — | — | — | — | — | N | min(2, gpuStallSeconds/2) by construction |
+| Core/Base/Diagnostics.cpp:948-949 | minidump `MINIDUMP_TYPE` | ThreadInfo, HandleData, UnloadedModules, IndirectlyReferencedMemory | SETTING | diagnostics.minidumpKind | DiagnosticsSettings | Game Dev | Pref-P | Restart | enum{Small,Default,Full} | N | full dumps for deep debugging |
+| Core/Base/Diagnostics.cpp:1329 | `FlushFileSinkBounded(2000)` | 2000 (ms) | SETTING | diagnostics.logFlushTimeoutMs | DiagnosticsSettings | Game Dev | Pref-P | Restart | [100,10000] | N | crash-path budget; snapshot at Install |
+| Core/Base/Diagnostics.cpp:2020 | watchdog poll | 250 (ms) | SETTING | diagnostics.watchdogPollMs | DiagnosticsSettings | Game Dev | Pref-P | Restart | [10,1000] | N | detection resolution |
+| Core/Base/Diagnostics.cpp:2132 | watchdog join wait | 5000 (ms) | SETTING | diagnostics.watchdogJoinTimeoutMs | DiagnosticsSettings | Game Dev | Pref-P | Restart | [100,30000] | N | when in doubt |
+| Core/Base/Diagnostics.cpp:3052 | `kMinFatalWaitMs` | 5000 (ms) | SETTING | diagnostics.minFatalWaitMs | DiagnosticsSettings | Game Dev | Pref-P | Restart | [1000,60000] | N | when in doubt |
+| Core/Base/Diagnostics.cpp:2610 | env `ARCANE_BUILD_MACHINE` / `CI` / `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE` | env toggles | OTHER-STORE | (fold into diagnostics.spawnReporter as a CommandLine/env rung) | — | — | — | — | — | N | an environment rung, not a new cvar (reconciled). toggle that bypasses the cvar store |
+| Core/Base/Diagnostics.cpp:225-231 | `kPathMax`, `kReasonMax`, `kMaxFrames`, `kSectionRsv`, `kHeaderRsv`, `kEnvRsv`, `kEnvLeanRsv` | 1024, 1024, 96, 32 KiB, 8 KiB, 64 KiB, 8 KiB | CONSTANT | — | — | — | — | — | — | N | static crash-path capacity; the crash path cannot allocate or read cvars |
+| Core/Base/Diagnostics.cpp:275-307 | snapshot buffers | 128, 4096, 256, 2048, 64, 8192 (chars) | CONSTANT | — | — | — | — | — | — | N | static crash-path capacity |
+| Core/Base/Diagnostics.cpp:284 | `kInjectedMax` | 32 | CONSTANT | — | — | — | — | — | — | N | static crash-path capacity |
+| Core/Base/Diagnostics.cpp:1693 | catchable-type scan bound | 16 | CONSTANT | — | — | — | — | — | — | N | MSVC EH ABI parse bound |
+| Core/Base/Diagnostics.cpp:1810, :3152 | stack guarantee | 64 KiB | CONSTANT | — | — | — | — | — | — | N | must cover the SEH filter (OS/hardware) |
+| Core/Base/Diagnostics.cpp:2103, :2671 | watchdog / crash thread stacks | 128 KiB / 256 KiB | CONSTANT | — | — | — | — | — | — | N | crash-path stack sizing |
+| Core/Base/Diagnostics.cpp:2228-2229 | console-close wait | 160 x 25 ms = 4 s | CONSTANT | — | — | — | — | — | — | N | OS cap: Windows kills about 5 s after CTRL_CLOSE |
+| Core/Base/Diagnostics.cpp:2855 | session-record retry | 50 (ms) | CONSTANT | — | — | — | — | — | — | N | one-shot retry pause, not a preference |
+| Core/Base/Diagnostics.cpp:2501 | `"%s\\%s-pid%lu.session"` | name pattern | CONSTANT | — | — | — | — | — | — | N | monitor contract |
+| Core/Base/Diagnostics.cpp:422 | `kReportKinds` | strings | CONSTANT | — | — | — | — | — | — | N | envelope vocabulary |
+| Core/Base/Diagnostics.hpp:175-178 | ExitCode | 10..13 | CONSTANT | — | — | — | — | — | — | N | monitor/CI/reporter contract |
+| Core/Base/DiagEnvelope.hpp:34 | `kFormatVersion` | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
+| Core/Base/CrashArena.hpp:46 | `kCapacity` | 256 KiB | CONSTANT | — | — | — | — | — | — | N | static crash arena |
+| Core/Base/CrashArena.cpp:87,95 | printf slot | 512 (B) | CONSTANT | — | — | — | — | — | — | N | crash-path buffer |
+| Core/Base/ModuleTable.hpp:62,71 | `name[64]`, `kMax` | 64, 512 | CONSTANT | — | — | — | — | — | — | N | static crash-path module table |
+| Core/Base/ForeignModules.cpp:34-79 / .hpp:66-68 | catalogue strings, `kTable`, tiers | data | CONSTANT | — | — | — | — | — | — | N | catalogue data, not tunables |
+| Core/Base/Engine.cpp:63 | wide-buffer cap | 65536 (wchar) | CONSTANT | — | — | — | — | — | — | N | Win32 path API sanity bound |
+| Core/Base/Log.hpp:77-78 | `kBacklogLines`, `kBacklogLineBytes` | 512, 512 | CONSTANT | — | — | — | — | — | — | N | static lock-free crash-path ring (could become Restart only if heap-sized at Init) |
+| Core/Base/Log.cpp:230 | engine sink on stderr | stderr | CONSTANT | — | — | — | — | — | — | N | stdout is the Hub's data channel |
+| Core/Base/Log.cpp:232 | console pattern | `%^[%H:%M:%S.%e] [%n] [%l]%$ %v` | CONSTANT | — | — | — | — | — | — | N | the editor Console parses the prefix: Panels/ConsoleModel.cpp:18, :48 (R2) |
+| Core/Base/Log.cpp:329 | rotation `keep` | 5 (files) | SETTING | log.file.keepCount | LogFileSettings | Game Dev | Pref-P | Restart | [0,100] | N | retention |
+| Core/Base/Log.cpp:357 | `truncate` = true | bool | DERIVED | — | — | — | — | — | — | N | paired with the rename rotation |
+| Core/Base/Log.cpp:368 | `flush_on(warn)` | warn | SETTING | log.file.flushLevel | LogFileSettings | Game Dev | Pref-P | Live | [0,6] | N | I/O versus durability |
+| Core/Util/Logger.hpp:19 | `SPDLOG_ACTIVE_LEVEL` | TRACE | CONSTANT | — | — | — | — | — | — | N | compile-time strip level; the runtime knob is the level cvar |
 | Core/Util/Logger.hpp:56 | `Init(consoleLevel=Info, fileLevel=Trace)` | Info / Trace | SETTING | log.server.consoleLevel / log.server.fileLevel | ServerLogSettings | Server | Project | Live | [0,6] | N | server ops |
-| Core/Util/Logger.hpp:205, :244 | console / file patterns | strings | SETTING | log.server.pattern | ServerLogSettings | Server Dev | Project | Live | string | N | format preference |
+| Core/Util/Logger.hpp:205 | console-sink pattern | string | SETTING | log.server.pattern | ServerLogSettings | Server Dev | Project | Live | string | N | format preference (S6-45 amendment): the console sink's pattern; split from the file pattern, one name per value |
+| Core/Util/Logger.hpp:244 | file-sink pattern | string | SETTING | log.server.filePattern | ServerLogSettings | Server Dev | Project | Live | string | N | format preference (S6-45 amendment): registered by S6-3; split from log.server.pattern |
 | Core/Util/Logger.hpp:221 | `flush_on(info)` | info | SETTING | log.server.flushLevel | ServerLogSettings | Server | Project | Live | [0,6] | N | I/O versus durability |
-| Core/Util/Logger.hpp:241-242 | rotating sink | 5 MiB, 3 files | SETTING | log.server.file.maxBytes / log.server.file.maxFiles | ServerLogSettings | Server | Project | Restart | [64 KiB,1 GiB] / [1,100] | N | retention |
+| Core/Util/Logger.hpp:241-242 | rotating sink | 5 MiB, 3 files | SETTING | log.server.file.maxBytes / log.server.file.maxFiles | LogServerFileSettings | Server | Project | Restart | [64 KiB,1 GiB] / [1,100] | N | retention |
 
 ### Assets
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Assets/Assets.hpp:71 | `AssetsDesc::byteBudget` | 256 MiB | SETTING | assets.cache.byteBudget | AssetsSettings | Game | Project | Restart | [0=unbounded, 16 GiB] | N | memory budget; bound at Runtime.cpp:220 `Assets::Create()` |
+| Core/Assets/Assets.hpp:71 | `AssetsDesc::byteBudget` | 256 MiB | SETTING | assets.cache.byteBudget | AssetsCacheSettings | Game | Project | Restart | [0=unbounded, 16 GiB] | N | memory budget; bound at Runtime.cpp:220 `Assets::Create()` |
 | Core/Assets/Assets.cpp:1015 | material parent-chain depth | 8 | SETTING | assets.material.maxParentDepth | AssetsSettings | Editor Dev | Project | Live | [1,64] | N | cycle-guard bound; when in doubt |
-| Core/Assets/Assets.hpp:503, :532 | `LoadDisplayPixels maxSize`, `WriteThumbnailPngRgba maxWidth=0` | params | DERIVED | - | - | - | - | - | - | - | caller supplies; the thumbnail size lives at the editor caller (golden-bound) |
-| Core/Assets/Assets.cpp:1078-1096 | `kLeaf`, `kOpaque`, `kSource` extension lists | strings | CONSTANT | - | - | - | - | - | - | - | decoder capability; mirrored at AssetRegistry.cpp:36/185 |
-| Core/Assets/Assets.cpp:112-116, :1196 | GUID string shape 36; manifest `version >= 4` | 36, 4 | CONSTANT | - | - | - | - | - | - | - | format |
-| Core/Assets/Assets.cpp:1513, :1634, :1573 | stbi forced 4 channels; alpha 255 | 4, 255 | CONSTANT | - | - | - | - | - | - | - | pixel contract |
-| Core/Assets/ArtifactReader.cpp:15-37, 243, 480, 614, 871-874 | artifact magic/version/entry sizes, `kHeaderProbeBytes`, vertex stride, FNV prime, GLB constants | various | CONSTANT | - | - | - | - | - | - | - | file format |
-| Core/Assets/ArtifactReader.hpp:287, :330 | importer version mirrors | 1, 1 | CONSTANT | - | - | - | - | - | - | - | cook/format version |
-| Core/Assets/ImageCompare.cpp:39-40, 88-92, 264-266, 278-280, 292, 359 | dE94/SSIM/Lab constants, 31x31 window, 0.99, 10x10 grid | various | CONSTANT | - | - | - | - | - | - | - | ported Playwright algorithm; golden oracle |
-| Core/Assets/ImageCompare.hpp:96-97, :168, :215 | padding colours, `maxColorDeltaE94` | 1.0 | CONSTANT | - | - | - | - | - | - | - | JND, "DERIVED, not tuned" (comment); test oracle |
+| Core/Assets/Assets.hpp:503, :532 | `LoadDisplayPixels maxSize`, `WriteThumbnailPngRgba maxWidth=0` | params | DERIVED | — | — | — | — | — | — | N | caller supplies; the thumbnail size lives at the editor caller (golden-bound) |
+| Core/Assets/Assets.cpp:1078-1096 | `kLeaf`, `kOpaque`, `kSource` extension lists | strings | CONSTANT | — | — | — | — | — | — | N | decoder capability; mirrored at AssetRegistry.cpp:36/185 |
+| Core/Assets/Assets.cpp:112-116, :1196 | GUID string shape 36; manifest `version >= 4` | 36, 4 | CONSTANT | — | — | — | — | — | — | N | format |
+| Core/Assets/Assets.cpp:1513, :1634, :1573 | stbi forced 4 channels; alpha 255 | 4, 255 | CONSTANT | — | — | — | — | — | — | N | pixel contract |
+| Core/Assets/ArtifactReader.cpp:15-37, 243, 480, 614, 871-874 | artifact magic/version/entry sizes, `kHeaderProbeBytes`, vertex stride, FNV prime, GLB constants | various | CONSTANT | — | — | — | — | — | — | N | file format |
+| Core/Assets/ArtifactReader.hpp:287, :330 | importer version mirrors | 1, 1 | CONSTANT | — | — | — | — | — | — | N | cook/format version |
+| Core/Assets/ImageCompare.cpp:39-40, 88-92, 264-266, 278-280, 292, 359 | dE94/SSIM/Lab constants, 31x31 window, 0.99, 10x10 grid | various | CONSTANT | — | — | — | — | — | — | N | ported Playwright algorithm; golden oracle |
+| Core/Assets/ImageCompare.hpp:96-97, :168, :215 | padding colours, `maxColorDeltaE94` | 1.0 | CONSTANT | — | — | — | — | — | — | N | JND, "DERIVED, not tuned" (comment); test oracle |
 
 ### Project
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Project/ProjectManifest.hpp:69 | `kFormatVersion` | 2 | CONSTANT | - | - | - | - | - | - | - | file format |
-| Core/Project/ProjectManifest.hpp:38 | `SplashConfig::enabled` | true | SETTING | splash.enabled | SplashSettings | Game | Project | Restart | bool | N | already .arcproj data (second store) |
-| Core/Project/ProjectManifest.hpp:39 | `SplashConfig::image` | "" -> engine branding | SETTING | splash.image | SplashSettings | Game | Project | Restart | asset path | N | branding choice |
-| Core/Project/ProjectManifest.hpp:40 | `backgroundColor` | (0.05,0.05,0.06) | SETTING | splash.backgroundColor | SplashSettings | Game | Project | Restart | colour | N | colour |
-| Core/Project/ProjectManifest.hpp:48 | `showProgress` | false | SETTING | splash.showProgress | SplashSettings | Game | Project | Restart | bool | N | toggle |
-| Core/Project/ProjectManifest.hpp:49 | `minDurationSeconds` | 0 (s) | SETTING | splash.minDurationSeconds | SplashSettings | Game | Project | Restart | [0,10] | N | timing |
-| Core/Project/ProjectManifest.hpp:58 | `PhysicsConfig::gravity` | (0,-9.81) m/s^2 | SETTING | physics.gravity | Physics2DWorldSettings | Game | Project | Live (world rebuild) | each axis [-1000,1000] | Y | already .arcproj data; per-scene override exists |
-| Core/Project/Project.cpp:428 | stamped `{0.0,-9.81}` | m/s^2 | DERIVED | - | - | - | - | - | - | - | shadow copy of the PhysicsConfig default |
-| Core/Project/Project.cpp:408, :443-457 | folder set, `.gitignore` template | strings | CONSTANT | - | - | - | - | - | - | - | project layout contract |
-| Core/Project/Project.cpp:279, :494, :624; Core/Base/Runtime.cpp:224, :482 | Saved/Diagnostics, Saved/editor.lock, data/EngineConfig, Saved/Config | paths | CONSTANT | - | - | - | - | - | - | - | rung/layout locations (spec s11.1) |
-| Core/Project/ProjectOpenOptions.hpp:51 | `mountDiagnostics` | true | SETTING | editor.assets.mountDiagnostics | EditorAssetSettings | Editor Dev | Preferences | NextWorld (next project open) | bool | N | per-call toggle (and an ABI-sensitive struct, see :20-37) |
-| Core/Project/AssetRegistry.cpp:36 | `kBinaryExts` | strings | CONSTANT | - | - | - | - | - | - | - | importer capability (duplicates Assets.cpp:1078 kLeaf) |
-| Core/Project/AssetRegistry.cpp:185 | `kSourceExts` | strings | CONSTANT | - | - | - | - | - | - | - | duplicated verbatim at Assets.cpp:1095 |
-| Core/Project/AssetRegistry.cpp:197 | `kSourceIdNamespace` | GUID | CONSTANT | - | - | - | - | - | - | - | stable identity namespace |
-| Core/Project/AssetRegistry.cpp:162 | sidecar `version` | 1 | CONSTANT | - | - | - | - | - | - | - | file format |
+| Core/Project/ProjectManifest.hpp:69 | `kFormatVersion` | 2 | CONSTANT | — | — | — | — | — | — | N | file format |
+| Core/Project/ProjectManifest.hpp:38 | `SplashConfig::enabled` | true | SETTING | app.splash.enabled | AppSplashSettings | Game | Project | Restart | bool | N | already .arcproj data (second store) (reconciled R1) |
+| Core/Project/ProjectManifest.hpp:39 | `SplashConfig::image` | "" -> engine branding | SETTING | app.splash.image | AppSplashSettings | Game | Project | Restart | asset path | N | branding choice (reconciled R1) |
+| Core/Project/ProjectManifest.hpp:40 | `backgroundColor` | (0.05,0.05,0.06) | SETTING | app.splash.backgroundColor | AppSplashSettings | Game | Project | Restart | colour | N | colour (reconciled R1) |
+| Core/Project/ProjectManifest.hpp:48 | `showProgress` | false | SETTING | app.splash.showProgress | AppSplashSettings | Game | Project | Restart | bool | N | toggle (reconciled R1) |
+| Core/Project/ProjectManifest.hpp:49 | `minDurationSeconds` | 0 (s) | SETTING | app.splash.minDurationSeconds | AppSplashSettings | Game | Project | Restart | [0,10] | N | timing (reconciled R1) |
+| Core/Project/ProjectManifest.hpp:58 | `PhysicsConfig::gravity` | (0,-9.81) m/s^2 | SETTING | physics.gravity | Physics2DWorldSettings | Game | Project | NextWorld | each axis [-1000,1000] | Y | already .arcproj data; per-scene override exists (R2: "Live via world rebuild" is NextWorld until Manifold2D gains a setter) |
+| Core/Project/Project.cpp:428 | stamped `{0.0,-9.81}` | m/s^2 | DERIVED | — | — | — | — | — | — | N | shadow copy of the PhysicsConfig default |
+| Core/Project/Project.cpp:408, :443-457 | folder set, `.gitignore` template | strings | CONSTANT | — | — | — | — | — | — | N | project layout contract |
+| Core/Project/Project.cpp:279, :494, :624; Core/Base/Runtime.cpp:224, :482 | Saved/Diagnostics, Saved/editor.lock, data/EngineConfig, Saved/Config | paths | CONSTANT | — | — | — | — | — | — | N | rung/layout locations (spec s11.1) |
+| Core/Project/ProjectOpenOptions.hpp:51 | `mountDiagnostics` | true | SETTING | editor.assets.mountDiagnostics | EditorAssetsSettings | Editor Dev | Pref-P | NextWorld (next project open) | bool | N | per-call toggle (and an ABI-sensitive struct, see :20-37) |
+| Core/Project/AssetRegistry.cpp:36 | `kBinaryExts` | strings | CONSTANT | — | — | — | — | — | — | N | importer capability (duplicates Assets.cpp:1078 kLeaf) |
+| Core/Project/AssetRegistry.cpp:185 | `kSourceExts` | strings | CONSTANT | — | — | — | — | — | — | N | duplicated verbatim at Assets.cpp:1095 |
+| Core/Project/AssetRegistry.cpp:197 | `kSourceIdNamespace` | GUID | CONSTANT | — | — | — | — | — | — | N | stable identity namespace |
+| Core/Project/AssetRegistry.cpp:162 | sidecar `version` | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
 
 ### Scene / Physics
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Scene/Components.hpp:213 | `PhysicsSettings::gravity` (component) | (0,-9.81) | DERIVED | - | - | - | - | - | - | - | per-scene override; should seed from physics.gravity when added |
-| Core/Base/Runtime.cpp:429 | `ProjectManifest::PhysicsConfig{}.gravity` fallback | (0,-9.81) | DERIVED | - | - | - | - | - | - | - | no-project fallback = physics.gravity default |
-| Core/Scene/Physics2D.cpp:19, :22, :46 | floor-normal threshold | 0.5 (normal.y, about 60 deg slope) | SETTING | physics.ground.minNormalY | Physics2DQuerySettings | Game | Project | Live | [0,1] | Y | game feel (walkable slope) |
-| Core/Scene/Physics2D.cpp:44 | ground probe reach | 0.05 (m) | SETTING | physics.ground.probeDistance | Physics2DQuerySettings | Game | Project | Live | [0,1] | Y | game feel (coyote reach) |
-| Core/Scene/PhysicsSystem.hpp:207-208 | `kAuthorPosEps`, `kAuthorRotEps` | 1e-5 m / rad | CONSTANT | - | - | - | - | - | - | - | numeric round-trip noise tolerance |
-| Core/Scene/PhysicsSystem.hpp:213-214; SceneResources.hpp:52-53 | `kPi`, `kTau` | pi, 2pi | CONSTANT | - | - | - | - | - | - | - | math identity |
-| Core/Scene/PhysicsSystem.hpp:696; Runtime.cpp:418, :461 | `m_fixedDt` = 1/fixedHz | s | DERIVED | - | - | - | - | - | - | - | from sim.fixedHz, captured at AddSystem |
-| Core/Scene/PhysicsComponents.hpp:73-78 | RigidBody2D defaults (Kinematic, mass 0, damping 0, fixedRotation/bullet false) | - | CONSTANT | - | - | - | - | - | - | - | authored-data default; an absent JSON key resolves to it (SceneSerializer.hpp:384) |
-| Core/Scene/PhysicsComponents.hpp:103-115 | Fixture defaults radius 0.5, halfW/H 0.5, density 1, friction 0.3, restitution 0 | m, kg/m^2 | CONSTANT | - | - | - | - | - | - | - | authored-data default (absent-key meaning); a "default physics material" is new work |
-| Core/Scene/Components.hpp:264-269 | Camera defaults ortho 5, fov 60, near 0.1, far 1000 | m, deg | CONSTANT | - | - | - | - | - | - | - | pre-field scenes rely on them (comment :250-257) |
-| Core/Scene/SceneCamera.hpp:210-212 | local fov/near/far initialisers | 60 / 0.1 / 1000 | DERIVED | - | - | - | - | - | - | - | dead mirror of the Camera defaults (overwritten or nullopt) |
-| Core/Scene/Components.hpp:383, :386 | sortingLayer / orderInLayer Range | 0..65535 | CONSTANT | - | - | - | - | - | - | - | uint16 storage |
-| Core/Scene/Components.hpp:436, :444, :448, :452 | Camera Ranges ortho [0.01,1e4], fov [1,179], near [0.001,1e4], far [0.01,1e6] | m, deg | CONSTANT | - | - | - | - | - | - | - | schema/inspector validation; fov bound is math |
+| Core/Scene/Components.hpp:213 | `PhysicsSettings::gravity` (component) | (0,-9.81) | DERIVED | — | — | — | — | — | — | N | per-scene override; should seed from physics.gravity when added |
+| Core/Base/Runtime.cpp:429 | `ProjectManifest::PhysicsConfig{}.gravity` fallback | (0,-9.81) | DERIVED | — | — | — | — | — | — | N | no-project fallback = physics.gravity default |
+| Core/Scene/Physics2D.cpp:19, :22, :46 | floor-normal threshold | 0.5 (normal.y, about 60 deg slope) | SETTING | physics.ground.minNormalY | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (walkable slope) |
+| Core/Scene/Physics2D.cpp:44 | ground probe reach | 0.05 (m) | SETTING | physics.ground.probeDistance | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (coyote reach) |
+| Core/Scene/PhysicsSystem.hpp:207-208 | `kAuthorPosEps`, `kAuthorRotEps` | 1e-5 m / rad | CONSTANT | — | — | — | — | — | — | N | numeric round-trip noise tolerance |
+| Core/Scene/PhysicsSystem.hpp:213-214; SceneResources.hpp:52-53 | `kPi`, `kTau` | pi, 2pi | CONSTANT | — | — | — | — | — | — | N | math identity |
+| Core/Scene/PhysicsSystem.hpp:696; Runtime.cpp:418, :461 | `m_fixedDt` = 1/fixedHz | s | DERIVED | — | — | — | — | — | — | N | from sim.fixedHz, captured at AddSystem |
+| Core/Scene/PhysicsComponents.hpp:73-78 | RigidBody2D defaults (Kinematic, mass 0, damping 0, fixedRotation/bullet false) | - | CONSTANT | — | — | — | — | — | — | N | authored-data default; an absent JSON key resolves to it (SceneSerializer.hpp:384) |
+| Core/Scene/PhysicsComponents.hpp:103-115 | Fixture defaults radius 0.5, halfW/H 0.5, density 1, friction 0.3, restitution 0 | m, kg/m^2 | CONSTANT | — | — | — | — | — | — | N | authored-data default (absent-key meaning); a "default physics material" is new work |
+| Core/Scene/Components.hpp:264-269 | Camera defaults ortho 5, fov 60, near 0.1, far 1000 | m, deg | CONSTANT | — | — | — | — | — | — | N | pre-field scenes rely on them (comment :250-257) |
+| Core/Scene/SceneCamera.hpp:210-212 | local fov/near/far initialisers | 60 / 0.1 / 1000 | DERIVED | — | — | — | — | — | — | N | dead mirror of the Camera defaults (overwritten or nullopt) |
+| Core/Scene/Components.hpp:383, :386 | sortingLayer / orderInLayer Range | 0..65535 | CONSTANT | — | — | — | — | — | — | N | uint16 storage |
+| Core/Scene/Components.hpp:436, :444, :448, :452 | Camera Ranges ortho [0.01,1e4], fov [1,179], near [0.001,1e4], far [0.01,1e6] | m, deg | CONSTANT | — | — | — | — | — | — | N | schema/inspector validation; fov bound is math |
 | Core/Scene/ViewTransform.hpp:130 | `Orthographic(nearZ=-1000, farZ=1000)` | +/-1000 (m) | SETTING | render.ortho2D.depthRange | RenderViewSettings | Game Dev | Project | Live | [1,1e6] | N | sprites beyond +/-1 km Z clip (call at SceneCamera.hpp:109) |
-| Core/Scene/ViewTransform.hpp:70, :120; SceneCamera.hpp:251 | epsilons | 1e-12, 1e-6 | CONSTANT | - | - | - | - | - | - | - | float tolerance |
-| Core/Scene/BoundsSystem.hpp:45 | `kSpriteDepthEpsilon` | 0.001 (m) | CONSTANT | - | - | - | - | - | - | - | degenerate-frustum guard; editor goldens depend on it |
-| Core/Scene/SceneResources.hpp:128-131 | resolved sprite uv/size/pivot | 0..1, 1 m, 0.5 | DERIVED | - | - | - | - | - | - | - | resolution outputs |
-| Core/Scene/SceneResources.hpp:227-230 | rings 16 / segments 32 / subdiv 1 / capsule 2 | - | DERIVED | - | - | - | - | - | - | - | mirror of MeshAssetData for cache identity |
-| Core/Scene/SceneResources.hpp:288-291 | ResolvedMeshMaterial baseColor 1, alphaCutoff 0.5, twoSided false | - | CONSTANT | - | - | - | - | - | - | - | resolution of an .arcmat with absent keys |
-| Core/Scene/TransformSystems.hpp:79 | `kNoParent` | 0xFFFFFFFF | CONSTANT | - | - | - | - | - | - | - | sentinel |
-| Core/Scene/TransformSystems.hpp:265 | `visited.Reserve(64)` | 64 | CONSTANT | - | - | - | - | - | - | - | allocation hint, no observable effect |
-| Core/Scene/Frustum.hpp:39-53 | 6 planes, normalisation | - | CONSTANT | - | - | - | - | - | - | - | math |
+| Core/Scene/ViewTransform.hpp:70, :120; SceneCamera.hpp:251 | epsilons | 1e-12, 1e-6 | CONSTANT | — | — | — | — | — | — | N | float tolerance |
+| Core/Scene/BoundsSystem.hpp:45 | `kSpriteDepthEpsilon` | 0.001 (m) | CONSTANT | — | — | — | — | — | — | N | degenerate-frustum guard; editor goldens depend on it |
+| Core/Scene/SceneResources.hpp:128-131 | resolved sprite uv/size/pivot | 0..1, 1 m, 0.5 | DERIVED | — | — | — | — | — | — | N | resolution outputs |
+| Core/Scene/SceneResources.hpp:227-230 | rings 16 / segments 32 / subdiv 1 / capsule 2 | - | DERIVED | — | — | — | — | — | — | N | mirror of MeshAssetData for cache identity |
+| Core/Scene/SceneResources.hpp:288-291 | ResolvedMeshMaterial baseColor 1, alphaCutoff 0.5, twoSided false | - | CONSTANT | — | — | — | — | — | — | N | resolution of an .arcmat with absent keys |
+| Core/Scene/TransformSystems.hpp:79 | `kNoParent` | 0xFFFFFFFF | CONSTANT | — | — | — | — | — | — | N | sentinel |
+| Core/Scene/TransformSystems.hpp:265 | `visited.Reserve(64)` | 64 | CONSTANT | — | — | — | — | — | — | N | allocation hint, no observable effect |
+| Core/Scene/Frustum.hpp:39-53 | 6 planes, normalisation | - | CONSTANT | — | — | — | — | — | — | N | math |
 
 ### Sim
 
@@ -270,16 +351,16 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Core/Sim/RunLoop.hpp:39 | `Config::fixedHz` | 60 (Hz) | SETTING | sim.fixedHz | SimSettings | Game | Project | NextWorld | [10,480] | Y | fixed step; see Notes on the SetFixedHz desync |
 | Core/Sim/RunLoop.hpp:40 | `maxStepsPerFrame` | 5 (steps) | SETTING | sim.maxStepsPerFrame | SimSettings | Game | Project | Live | [1,64] | Y | spiral-of-death clamp; changes the steps per hitch |
-| Core/Sim/RunLoop.hpp:255; Time.hpp:34 | `m_timeScale` / `timeScale` | 1.0 | CONSTANT | - | - | - | - | - | - | - | identity default of a runtime control (SetTimeScale), not stored |
+| Core/Sim/RunLoop.hpp:255; Time.hpp:34 | `m_timeScale` / `timeScale` | 1.0 | CONSTANT | — | — | — | — | — | — | N | identity default of a runtime control (SetTimeScale), not stored |
 
 ### Jobs
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Jobs/JobSystem.hpp:29 (constructed default at Runtime.cpp:97, :126) | `JobSystem(threads = 0)` | 0 = hardware threads | SETTING | jobs.workerThreads | JobsSettings | Game | Preferences | Restart | [0=auto,256] | N | per machine; thread-count invariance is tested |
-| Core/Jobs/JobSystem.cpp:104 | `threads - 1` | - | DERIVED | - | - | - | - | - | - | - | enki total-versus-workers |
-| Core/Jobs/JobSystem.cpp:43 | `m_MinRange = minBatch or 1` | - | DERIVED | - | - | - | - | - | - | - | call-site batch |
-| Core/Jobs/JobSystem.cpp:105-106 | `threadStart` stack guarantee | hook | CONSTANT | - | - | - | - | - | - | - | crash-path contract |
+| Core/Jobs/JobSystem.hpp:29 (constructed default at Runtime.cpp:97, :126) | `JobSystem(threads = 0)` | 0 = hardware threads | SETTING | jobs.workerThreads | JobsSettings | Game | Pref-P | Restart | [0=auto,256] | N | per machine; thread-count invariance is tested |
+| Core/Jobs/JobSystem.cpp:104 | `threads - 1` | - | DERIVED | — | — | — | — | — | — | N | enki total-versus-workers |
+| Core/Jobs/JobSystem.cpp:43 | `m_MinRange = minBatch or 1` | - | DERIVED | — | — | — | — | — | — | N | call-site batch |
+| Core/Jobs/JobSystem.cpp:105-106 | `threadStart` stack guarantee | hook | CONSTANT | — | — | — | — | — | — | N | crash-path contract |
 
 ### Net (Server)
 
@@ -287,99 +368,104 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Core/Net/TcpSocket.hpp:48 | `MAX_PAYLOAD_SIZE` | 8192 (B) | SETTING | net.maxPayloadBytes | NetServerSettings | Server | Project | Restart | [1 KiB,1 MiB] | N | overlaps protocol.json `max_message_size` |
 | Core/Net/TcpSocket.hpp:49 (and :432 default arg) | `MAX_RECEIVE_BUFFER_SIZE` | 65536 (B) | SETTING | net.maxReceiveBufferBytes | NetServerSettings | Server | Project | Restart | [4 KiB,16 MiB] | N | DoS budget |
-| Core/Net/TcpSocket.hpp:50 | `RECV_CHUNK_SIZE` | 4096 (B) | SETTING | net.recvChunkBytes | NetServerSettings | Server Dev | Project | Restart | [512,65536] | N | throughput tuning |
+| Core/Net/TcpSocket.hpp:50 | `RECV_CHUNK_SIZE` | 4096 (B) | CONSTANT | — | — | — | — | — | — | N | capacity hint (R2): a stack-array bound in the Aphelyon services (ServiceClient.hpp:229); ARC_CONSTANT marker |
 | Core/Net/TcpSocket.hpp:51 | `RECV_TIMEOUT_MS` | 100 (ms) | SETTING | net.recvTimeoutMs | NetServerSettings | Server | Project | Restart | [1,10000] | N | timeout |
 | Core/Net/TcpSocket.hpp:80 | `MAX_CONNECTIONS_TOTAL` | 2048 | SETTING | net.maxConnectionsTotal | NetServerSettings | Server | Project | Restart | [1,1e6] | N | fallback for protocol.json key (Protocol.hpp:184) |
 | Core/Net/TcpSocket.hpp:81 | `MAX_CONNECTIONS_PER_IP` | 16 | SETTING | net.maxConnectionsPerIp | NetServerSettings | Server | Project | Restart | [1,10000] | N | topology-dependent (comment :66-77) |
-| Core/Net/TcpSocket.hpp:115-117 | keepalive idle / interval / probes | 120 s / 30 s / 8 | SETTING | net.keepalive.idleSeconds / .intervalSeconds / .probeCount | NetServerSettings | Server | Project | Restart | [1,7200] / [1,600] / [1,32] | N | network-environment tuning |
+| Core/Net/TcpSocket.hpp:115-117 | keepalive idle / interval / probes | 120 s / 30 s / 8 | SETTING | net.keepalive.idleSeconds / .intervalSeconds / .probeCount | NetKeepaliveSettings | Server | Project | Restart | [1,7200] / [1,600] / [1,32] | N | network-environment tuning |
 | Core/Net/TcpSocket.hpp:234 | `listen(sock, 10)` backlog | 10 | SETTING | net.listenBacklog | NetServerSettings | Server Dev | Project | Restart | [1,SOMAXCONN] | N | burst-accept tuning |
-| Core/Net/TcpSocket.hpp:440 | `buffer.size() <= 10` | 10 (digits) | CONSTANT | - | - | - | - | - | - | - | wire framing: max length-prefix width |
-| Core/Net/RateLimiter.hpp:47 | `MAX_RECORDS` | 10000 | SETTING | net.rateLimit.maxRecords | RateLimitSettings | Server | Project | Restart | [100,1e7] | N | memory/LRU cap |
-| Core/Net/RateLimiter.hpp:51-53 | `Config` maxAttempts / window / cooldown | 5 / 60 s / 30 s | SETTING | net.rateLimit.maxAttempts / .windowSeconds / .cooldownSeconds | RateLimitSettings | Server | Project | Live | [1,1000] / [1,86400] / [0,86400] | N | per-call struct; bind at the server call sites |
-| Core/Net/RateLimiter.hpp:162 | cleanup every N calls | 100 | SETTING | net.rateLimit.cleanupEvery | RateLimitSettings | Server Dev | Project | Live | [1,1e6] | N | when in doubt |
-| Core/Net/RateLimiter.hpp:166 | idle expiry | 10 (min) | SETTING | net.rateLimit.idleExpiryMinutes | RateLimitSettings | Server | Project | Live | [1,1440] | N | retention |
+| Core/Net/TcpSocket.hpp:440 | `buffer.size() <= 10` | 10 (digits) | CONSTANT | — | — | — | — | — | — | N | wire framing: max length-prefix width |
+| Core/Net/RateLimiter.hpp:47 | `MAX_RECORDS` | 10000 | SETTING | net.rateLimit.maxRecords | NetRateLimitSettings | Server | Project | Restart | [100,1e7] | N | memory/LRU cap |
+| Core/Net/RateLimiter.hpp:51-53 | `Config` maxAttempts / window / cooldown | 5 / 60 s / 30 s | SETTING | net.rateLimit.maxAttempts / .windowSeconds / .cooldownSeconds | NetRateLimitSettings | Server | Project | Live | [1,1000] / [1,86400] / [0,86400] | N | per-call struct; bind at the server call sites |
+| Core/Net/RateLimiter.hpp:162 | cleanup every N calls | 100 | SETTING | net.rateLimit.cleanupEvery | NetRateLimitSettings | Server Dev | Project | Live | [1,1e6] | N | when in doubt |
+| Core/Net/RateLimiter.hpp:166 | idle expiry | 10 (min) | SETTING | net.rateLimit.idleExpiryMinutes | NetRateLimitSettings | Server | Project | Live | [1,1440] | N | retention |
 | Core/Net/Protocol.hpp:116 | `Load(path = "data/protocol.json")` | path | SETTING | net.protocolPath | NetServerSettings | Server Dev | Project | Restart | path | N | path choice |
-| Core/Net/Protocol.hpp:23 | `kInvalidMsgId` | 0 | CONSTANT | - | - | - | - | - | - | - | wire sentinel |
-| Core/Net/Protocol.hpp:213 | id range | 1..65535 | CONSTANT | - | - | - | - | - | - | - | uint16 wire id |
-| Core/Net/Protocol.hpp:410-411 | token log preview 8 + 4 chars | chars | CONSTANT | - | - | - | - | - | - | - | widening leaks session tokens into logs |
-| Core/Net/Protocol.hpp:413 | payload log preview | 100 (chars) | CONSTANT | - | - | - | - | - | - | - | security: Login payloads carry passwords (see Notes) |
-| Core/Net/Protocol.hpp:418 | `token.length() >= 64` | 64 | CONSTANT | - | - | - | - | - | - | - | wire contract (duplicates protocol.json token_length) |
-| Core/Net/Protocol.hpp:426-427 | request < 100 <= response | 100 | CONSTANT | - | - | - | - | - | - | - | wire id partition |
+| Core/Net/Protocol.hpp (protocol.json settings) | default_port | 0 | SETTING | net.defaultPort | NetServerSettings | Server | Project | Restart | 0..65535 | N | (S6-45 amendment): a service's public TCP port when -p is absent (S6-12) |
+| Core/Net/Protocol.hpp (protocol.json settings) | token_length | 64 | SETTING | net.tokenLength | NetServerSettings | Server | Project | Restart | 1..1024 | N | (S6-45 amendment): the session token length; Message::HasToken's minimum (S6-12) |
+| Core/Net/Protocol.hpp (protocol.json settings) | session_lifetime | 0 (s) | SETTING | net.sessionLifetimeSeconds | NetServerSettings | Server | Project | Restart | 0..31536000 | N | (S6-45 amendment) (S6-12) |
+| Core/Net/Protocol.hpp (protocol.json settings) | idle_timeout | 0 (s) | SETTING | net.idleTimeoutSeconds | NetServerSettings | Server | Project | Restart | 0..31536000 | N | (S6-45 amendment) (S6-12) |
+| Core/Net/Protocol.hpp (protocol.json settings) | heartbeat_interval | 0 (s) | SETTING | net.heartbeatIntervalSeconds | NetServerSettings | Server | Project | Restart | 0..86400 | N | (S6-45 amendment) (S6-12) |
+| Core/Net/Protocol.hpp:23 | `kInvalidMsgId` | 0 | CONSTANT | — | — | — | — | — | — | N | wire sentinel |
+| Core/Net/Protocol.hpp:213 | id range | 1..65535 | CONSTANT | — | — | — | — | — | — | N | uint16 wire id |
+| Core/Net/Protocol.hpp:410-411 | token log preview 8 + 4 chars | chars | CONSTANT | — | — | — | — | — | — | N | widening leaks session tokens into logs |
+| Core/Net/Protocol.hpp:413 | payload log preview | 100 (chars) | CONSTANT | — | — | — | — | — | — | N | security: Login payloads carry passwords (see Notes) |
+| Core/Net/Protocol.hpp:418 | `token.length() >= 64` | 64 | CONSTANT | — | — | — | — | — | — | N | wire contract (duplicates protocol.json token_length) |
+| Core/Net/Protocol.hpp:426-427 | request < 100 <= response | 100 | CONSTANT | — | — | — | — | — | — | N | wire id partition |
 
 ### Crypto
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Core/Crypto/Crypto.hpp:52 | `DEFAULT_ITERATIONS` | 200000 (PBKDF2 rounds) | SETTING | crypto.pbkdf2Iterations | CryptoSettings | Server | Project | Live | [200000 floor, 5000000] | N | raise-only; the floor stops it weakening; lazy rehash rolls it out (comment :45-50 says bump before release) |
-| Core/Crypto/Crypto.hpp:53 | `SALT_LENGTH` | 16 (B) | CONSTANT | - | - | - | - | - | - | - | security parameter |
-| Core/Crypto/Crypto.hpp:54 | `HASH_LENGTH` | 32 (B) | CONSTANT | - | - | - | - | - | - | - | SHA-256 output size |
-| Core/Crypto/Crypto.hpp:178 | `ENTROPY_SAMPLE_BYTES` | 32 (B) | CONSTANT | - | - | - | - | - | - | - | RNG self-test parameter |
-| Core/Crypto/Crypto.hpp:384 | `BLOCK_SIZE` | 64 (B) | CONSTANT | - | - | - | - | - | - | - | SHA-256 block |
-| Core/Guid.cpp:41-42, :100, :119; Guid.hpp:58 | version/variant bits, v4/v5, hash mix | - | CONSTANT | - | - | - | - | - | - | - | RFC 4122 / math |
+| Core/Crypto/Crypto.hpp:53 | `SALT_LENGTH` | 16 (B) | CONSTANT | — | — | — | — | — | — | N | security parameter |
+| Core/Crypto/Crypto.hpp:54 | `HASH_LENGTH` | 32 (B) | CONSTANT | — | — | — | — | — | — | N | SHA-256 output size |
+| Core/Crypto/Crypto.hpp:178 | `ENTROPY_SAMPLE_BYTES` | 32 (B) | CONSTANT | — | — | — | — | — | — | N | RNG self-test parameter |
+| Core/Crypto/Crypto.hpp:384 | `BLOCK_SIZE` | 64 (B) | CONSTANT | — | — | — | — | — | — | N | SHA-256 block |
+| Core/Guid.cpp:41-42, :100, :119; Guid.hpp:58 | version/variant bits, v4/v5, hash mix | - | CONSTANT | — | — | — | — | — | — | N | RFC 4122 / math |
 
 ### Plugin
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Plugin/PluginHost.cpp:1003 | reload settle window | 250 (ms) | SETTING | plugin.hotReload.settleMs | PluginSettings | Editor Dev | Preferences | Live | [0,5000] | N | debounce for slow linkers/AV scanners |
-| Core/Plugin/PluginHost.cpp:865, :869 | copy retries | 5 x 50 ms | SETTING | plugin.hotReload.copyRetries / .copyRetryMs | PluginSettings | Editor Dev | Preferences | Live | [1,50] / [1,1000] | N | file-lock contention |
-| Core/Plugin/PluginHost.cpp:293, :304 | `<stem>_<gen>.dll/.pdb` | name | CONSTANT | - | - | - | - | - | - | - | versioned-image naming |
-| Core/Plugin/PluginABI.hpp:1043 | `kGamePluginABIVersion` | 51 | CONSTANT | - | - | - | - | - | - | - | ABI |
-| Core/Plugin/PluginABI.hpp:1084-1094 | entry-point names | strings | CONSTANT | - | - | - | - | - | - | - | ABI |
-| Core/Plugin/Plugin.cpp:98-100 | `hostDebugCrt` | build flag | CONSTANT | - | - | - | - | - | - | - | build configuration |
-| Core/Plugin/Module.cpp:51-56, :102, :243, :258 | CRT import names, buf 512, PE scan 4096/256 | - | CONSTANT | - | - | - | - | - | - | - | PE format bounds |
+| Core/Plugin/PluginHost.cpp:1003 | reload settle window | 250 (ms) | SETTING | plugin.hotReload.settleMs | PluginHotReloadSettings | Editor Dev | Pref-P | Live | [0,5000] | N | debounce for slow linkers/AV scanners |
+| Core/Plugin/PluginHost.cpp:865, :869 | copy retries | 5 x 50 ms | SETTING | plugin.hotReload.copyRetries / .copyRetryMs | PluginHotReloadSettings | Editor Dev | Pref-P | Live | [1,50] / [1,1000] | N | file-lock contention |
+| Core/Plugin/PluginHost.cpp:293, :304 | `<stem>_<gen>.dll/.pdb` | name | CONSTANT | — | — | — | — | — | — | N | versioned-image naming |
+| Core/Plugin/PluginABI.hpp:1043 | `kGamePluginABIVersion` | 51 | CONSTANT | — | — | — | — | — | — | N | ABI |
+| Core/Plugin/PluginABI.hpp:1084-1094 | entry-point names | strings | CONSTANT | — | — | — | — | — | — | N | ABI |
+| Core/Plugin/Plugin.cpp:98-100 | `hostDebugCrt` | build flag | CONSTANT | — | — | — | — | — | — | N | build configuration |
+| Core/Plugin/Module.cpp:51-56, :102, :243, :258 | CRT import names, buf 512, PE scan 4096/256 | - | CONSTANT | — | — | — | — | — | — | N | PE format bounds |
 
 ### Build / Platform / Misc
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Build/Toolchain.cpp:214-217, :229 | premake5 lookup (SDK ThirdParty, then PATH) | path | SETTING | build.premakePath | BuildToolSettings | Editor Dev | Preferences | Live | path (empty = discover) | N | override for non-standard installs |
-| Core/Build/Toolchain.cpp:242, :276, :281 | vswhere `-latest -requires ...MSBuild` | query | SETTING | build.msbuildPath | BuildToolSettings | Editor | Preferences | Live | path (empty = discover) | N | "-latest" picks the newest VS; pinning is a preference |
-| Core/Build/Toolchain.cpp:292-296 | prefer `mingw32-make` over `make` | choice | SETTING | build.makePath | BuildToolSettings | Editor Dev | Preferences | Live | path | N | tool choice |
-| Core/Build/Toolchain.cpp:303-316, :327 | ninja / xcodebuild `/usr/bin` / devenv query | paths | SETTING | build.ninjaPath / build.ideExecutable | BuildToolSettings | Editor Dev | Preferences | Live | path | N | tool choice |
-| Core/Build/Toolchain.cpp:54-56 | `kPathListSep` | ';' / ':' | CONSTANT | - | - | - | - | - | - | - | OS |
-| Core/Platform/NativeWindow.hpp:11-21 | NativeWindowDesc defaults 480x270, popup, colour 0x0D0D0F | - | DERIVED | - | - | - | - | - | - | - | per-call desc; the splash/reporter callers (ArcaneClient) own the values |
-| Core/Platform/NativeWindow.cpp:33-34, :195, :236, :279 | WM_APP ids, Sleep(2), 96 DPI | - | CONSTANT | - | - | - | - | - | - | - | Win32 / OS baseline DPI |
-| Core/Cli/Cli.cpp:161; Project/MountTable.cpp:22 | "--" / "://" parsing | - | CONSTANT | - | - | - | - | - | - | - | syntax |
-| Core/Version.hpp:8-11 | version 0.1 "M5" | - | CONSTANT | - | - | - | - | - | - | - | identity |
+| Core/Build/Toolchain.cpp:214-217, :229 | premake5 lookup (SDK ThirdParty, then PATH) | path | SETTING | build.premakePath | BuildToolSettings | Editor Dev | Pref-P | Live | path (empty = discover) | N | override for non-standard installs |
+| Core/Build/Toolchain.cpp:242, :276, :281 | vswhere `-latest -requires ...MSBuild` | query | SETTING | build.msbuildPath | BuildToolSettings | Editor | Pref-P | Live | path (empty = discover) | N | "-latest" picks the newest VS; pinning is a preference |
+| Core/Build/Toolchain.cpp:292-296 | prefer `mingw32-make` over `make` | choice | SETTING | build.makePath | BuildToolSettings | Editor Dev | Pref-P | Live | path | N | tool choice |
+| Core/Build/Toolchain.cpp:303-316, :327 | ninja / xcodebuild `/usr/bin` / devenv query | paths | SETTING | build.ninjaPath / build.ideExecutable | BuildToolSettings | Editor Dev | Pref-P | Live | path | N | tool choice |
+| Core/Build/Toolchain.cpp:54-56 | `kPathListSep` | ';' / ':' | CONSTANT | — | — | — | — | — | — | N | OS |
+| Core/Platform/NativeWindow.hpp:11-21 | NativeWindowDesc defaults 480x270, popup, colour 0x0D0D0F | - | DERIVED | — | — | — | — | — | — | N | per-call desc; the splash/reporter callers (ArcaneClient) own the values |
+| Core/Platform/NativeWindow.cpp:33-34, :195, :236, :279 | WM_APP ids, Sleep(2), 96 DPI | - | CONSTANT | — | — | — | — | — | — | N | Win32 / OS baseline DPI |
+| Core/Cli/Cli.cpp:161; Project/MountTable.cpp:22 | "--" / "://" parsing | - | CONSTANT | — | — | — | — | — | — | N | syntax |
+| Core/Version.hpp:8-11 | version 0.1 "M5" | - | CONSTANT | — | — | — | — | — | — | N | identity |
 
 ### Serialization
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Serialization/SceneSerializer.hpp:97, :111 | `kSceneJsonVersion`, `kSceneJsonVersionMin` | 6, 3 | CONSTANT | - | - | - | - | - | - | - | file format |
-| Core/Serialization/SceneAsset.hpp:42 | `kSceneExt` | ".arcscene" | CONSTANT | - | - | - | - | - | - | - | file format |
-| Core/Serialization/RegistrySnapshot.hpp:37-41 | magic / version / header size | 0x53535241, 1, 10 | CONSTANT | - | - | - | - | - | - | - | blob format |
-| Core/Serialization/ReflectionJson.hpp:251 | `kQuatNormTolerance2` | 0.05 | CONSTANT | - | - | - | - | - | - | - | file acceptance must not vary per machine |
-| Core/Serialization/ReflectionJson.hpp:164-209, :319 | vec/mat element counts, 8-byte enum memcpy | - | CONSTANT | - | - | - | - | - | - | - | type layout |
+| Core/Serialization/SceneSerializer.hpp:97, :111 | `kSceneJsonVersion`, `kSceneJsonVersionMin` | 6, 3 | CONSTANT | — | — | — | — | — | — | N | file format |
+| Core/Serialization/SceneAsset.hpp:42 | `kSceneExt` | ".arcscene" | CONSTANT | — | — | — | — | — | — | N | file format |
+| Core/Serialization/RegistrySnapshot.hpp:37-41 | magic / version / header size | 0x53535241, 1, 10 | CONSTANT | — | — | — | — | — | — | N | blob format |
+| Core/Serialization/ReflectionJson.hpp:251 | `kQuatNormTolerance2` | 0.05 | CONSTANT | — | — | — | — | — | — | N | file acceptance must not vary per machine |
+| Core/Serialization/ReflectionJson.hpp:164-209, :319 | vec/mat element counts, 8-byte enum memcpy | - | CONSTANT | — | — | — | — | — | — | N | type layout |
 
 ### Math
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Math/Aabb.hpp:26, :46-66; NormalMatrix.hpp:63-66 | inf, 0.5, 8 corners, identity | - | CONSTANT | - | - | - | - | - | - | - | math identity |
+| Core/Math/Aabb.hpp:26, :46-66; NormalMatrix.hpp:63-66 | inf, 0.5, 8 corners, identity | - | CONSTANT | — | — | — | — | — | — | N | math identity |
 
 ### Mesh / Material / Sprite
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Core/Mesh/MeshAsset.hpp:96-98, :105 | rings 16, segments 32, subdivisions 1, capsuleLengthRatio 2 | count, ratio | CONSTANT | - | - | - | - | - | - | - | absent-key default (MeshAsset.cpp:167-172); the per-asset value is the tunable |
-| Core/Mesh/MeshAsset.cpp:233-257 | rings/segments >= 3, ratio >= 1 | - | CONSTANT | - | - | - | - | - | - | - | geometric minimum |
-| Core/Mesh/MeshAsset.cpp:287-288; MeshBuilder.cpp:46-53, :310-311 | unit cube 1.0, sphere/cylinder radius 0.5, half-height 0.5 | m | CONSTANT | - | - | - | - | - | - | - | unit-primitive contract (scale via Transform); thumbnail goldens |
-| Core/Mesh/MeshAsset.cpp:373-379 | vertex stride 8 floats | - | CONSTANT | - | - | - | - | - | - | - | artifact format |
-| Core/Sprite/SpriteAsset.hpp:35 | `ppu` | 100 (px/m) | SETTING | assets.sprite.defaultPixelsPerUnit | AssetImportSettings | Editor | Project | Live | [1,10000] | N | seeds new sprites (Unity's default PPU); keep the struct default as the absent-key fallback |
-| Core/Sprite/SpriteAsset.cpp:108 | `ppu > 0 ? ppu : 100` | 100 | DERIVED | - | - | - | - | - | - | - | shadow copy of the struct default |
-| Core/Sprite/SpriteAsset.hpp:36-37, :45 | sourcePos/Size 0, pivot 0.5 | - | CONSTANT | - | - | - | - | - | - | - | sparse write (SpriteAsset.cpp:24-29): absent key = this default |
-| Core/Material/GlobalParams.hpp:16-25 | cbuffer/texture slots | b0/b1/b2, t1 | CONSTANT | - | - | - | - | - | - | - | shader contract |
-| Core/Material/MaterialSource.hpp:88 | `kMaxPassInputs` | 4 | CONSTANT | - | - | - | - | - | - | - | shader contract (reserved InputTexture..3) |
-| Core/Material/MaterialSource.hpp:94; MaterialTypes.hpp:147 | `kSceneInput`, `kNoSlot` | 0xFFFFFFFF | CONSTANT | - | - | - | - | - | - | - | sentinels |
-| Core/Material/MaterialSource.cpp:14, :20, :29 | `//@param`, reserved names, vertex passthrough | text | CONSTANT | - | - | - | - | - | - | - | source format / shader template |
-| Core/Material/MaterialSource.cpp:126, :476, :542; MaterialTypes.hpp:54, :58 | FNV-1a constants | - | CONSTANT | - | - | - | - | - | - | - | hash identity (cache keys) |
-| Core/Material/MaterialTemplate.cpp:13 | `kRegister` | 16 (B) | CONSTANT | - | - | - | - | - | - | - | HLSL cbuffer packing |
-| Core/Material/MaterialTypes.hpp:137-138 | `sliderMin/Max` | 0 / 1 | CONSTANT | - | - | - | - | - | - | - | absent-@range default |
-| Core/Material/MaterialAsset.cpp:336 | alphaCutoff in [0,1] | - | CONSTANT | - | - | - | - | - | - | - | validation |
-| Core/Material/MaterialGraph.cpp:23-47, :306, :1466-1497 | pin tables, reserved names, neutral values (Noise scale 10 at :1483) | - | CONSTANT | - | - | - | - | - | - | - | graph semantics: saved graphs with unwired pins depend on them |
-| Core/Material/MaterialGraph.hpp:268 | `customOutWidth` | 4 | CONSTANT | - | - | - | - | - | - | - | graph format default |
+| Core/Mesh/MeshAsset.hpp:96-98, :105 | rings 16, segments 32, subdivisions 1, capsuleLengthRatio 2 | count, ratio | CONSTANT | — | — | — | — | — | — | N | absent-key default (MeshAsset.cpp:167-172); the per-asset value is the tunable |
+| Core/Mesh/MeshAsset.cpp:233-257 | rings/segments >= 3, ratio >= 1 | - | CONSTANT | — | — | — | — | — | — | N | geometric minimum |
+| Core/Mesh/MeshAsset.cpp:287-288; MeshBuilder.cpp:46-53, :310-311 | unit cube 1.0, sphere/cylinder radius 0.5, half-height 0.5 | m | CONSTANT | — | — | — | — | — | — | N | unit-primitive contract (scale via Transform); thumbnail goldens |
+| Core/Mesh/MeshAsset.cpp:373-379 | vertex stride 8 floats | - | CONSTANT | — | — | — | — | — | — | N | artifact format |
+| Core/Sprite/SpriteAsset.hpp:35 | `ppu` | 100 (px/m) | SETTING | assets.sprite.defaultPixelsPerUnit | AssetsSpriteSettings | Editor | Project | Live | [1,10000] | N | seeds new sprites (Unity's default PPU); keep the struct default as the absent-key fallback |
+| Core/Sprite/SpriteAsset.cpp:108 | `ppu > 0 ? ppu : 100` | 100 | DERIVED | — | — | — | — | — | — | N | shadow copy of the struct default |
+| Core/Sprite/SpriteAsset.hpp:36-37, :45 | sourcePos/Size 0, pivot 0.5 | - | CONSTANT | — | — | — | — | — | — | N | sparse write (SpriteAsset.cpp:24-29): absent key = this default |
+| Core/Material/GlobalParams.hpp:16-25 | cbuffer/texture slots | b0/b1/b2, t1 | CONSTANT | — | — | — | — | — | — | N | shader contract |
+| Core/Material/MaterialSource.hpp:88 | `kMaxPassInputs` | 4 | CONSTANT | — | — | — | — | — | — | N | shader contract (reserved InputTexture..3) |
+| Core/Material/MaterialSource.hpp:94; MaterialTypes.hpp:147 | `kSceneInput`, `kNoSlot` | 0xFFFFFFFF | CONSTANT | — | — | — | — | — | — | N | sentinels |
+| Core/Material/MaterialSource.cpp:14, :20, :29 | `//@param`, reserved names, vertex passthrough | text | CONSTANT | — | — | — | — | — | — | N | source format / shader template |
+| Core/Material/MaterialSource.cpp:126, :476, :542; MaterialTypes.hpp:54, :58 | FNV-1a constants | - | CONSTANT | — | — | — | — | — | — | N | hash identity (cache keys) |
+| Core/Material/MaterialTemplate.cpp:13 | `kRegister` | 16 (B) | CONSTANT | — | — | — | — | — | — | N | HLSL cbuffer packing |
+| Core/Material/MaterialTypes.hpp:137-138 | `sliderMin/Max` | 0 / 1 | CONSTANT | — | — | — | — | — | — | N | absent-@range default |
+| Core/Material/MaterialAsset.cpp:336 | alphaCutoff in [0,1] | - | CONSTANT | — | — | — | — | — | — | N | validation |
+| Core/Material/MaterialGraph.cpp:23-47, :306, :1466-1497 | pin tables, reserved names, neutral values (Noise scale 10 at :1483) | - | CONSTANT | — | — | — | — | — | — | N | graph semantics: saved graphs with unwired pins depend on them |
+| Core/Material/MaterialGraph.hpp:268 | `customOutWidth` | 4 | CONSTANT | — | — | — | — | — | — | N | graph format default |
 
 ### Library configs (where Arcane creates the object; the fields it leaves at the library default)
 
@@ -403,12 +489,12 @@ Creation sites:
 | EntityTable.hpp:36-38 | `autoRelease` / `maxEmptySegments` / `maxPooledSegments` | true / 2 / 4 | SETTING | astra.memory.entityAutoRelease / .maxEmptySegments / .maxPooledSegments | AstraMemorySettings | Game Dev | Project | NextWorld | bool / [0,64] / [0,64] | N | left at default |
 | EntityTable.hpp:39 | `useHugePages` | true | SETTING | astra.memory.entityHugePages | AstraMemorySettings | Game Dev | Project | NextWorld | bool | N | left at default |
 | TP/Astra/include/Astra/Component/ResourceStorage.hpp:51 | `initialResourceCapacity` | 32 | SETTING | astra.memory.initialResourceCapacity | AstraMemorySettings | Game Dev | Project | NextWorld | [0,4096] | N | when in doubt; left at default |
-| TP/Astra/include/Astra/Registry/Registry.hpp:49 | `workScheduler` | null -> JobSystem adapter | DERIVED | - | - | - | - | - | - | - | set from JobSystem::WorkScheduler() |
-| TP/Astra/include/Astra/Registry/Registry.hpp:1716-1718 | `SaveConfig` LZ4 / Fast / 1024 B | - | SETTING | astra.snapshot.compression | AstraMemorySettings | Editor Dev | Preferences | Live | enum{None,LZ4} | N | hot-reload snapshot speed versus size; left at default |
+| TP/Astra/include/Astra/Registry/Registry.hpp:49 | `workScheduler` | null -> JobSystem adapter | DERIVED | — | — | — | — | — | — | N | set from JobSystem::WorkScheduler() |
+| TP/Astra/include/Astra/Registry/Registry.hpp:1716-1718 | `SaveConfig` LZ4 / Fast / 1024 B | - | SETTING | astra.snapshot.compression | AstraSnapshotSettings | Editor Dev | Pref-P | Live | enum{None,LZ4} | N | hot-reload snapshot speed versus size; left at default |
 | TP/Manifold2D/include/Manifold2D/Physics/PhysicsWorld.hpp:175 | `broadphase` | Tree | SETTING | physics.broadphase | Physics2DWorldSettings | Game | Project | NextWorld | enum{Tree,Grid...} | Y | left at default |
 | PhysicsWorld.hpp:176 | `hashCellSize` | 1 (m) | SETTING | physics.hashCellSize | Physics2DWorldSettings | Game Dev | Project | NextWorld | [0.05,100] | Y | grid broadphase only; left at default |
-| PhysicsWorld.hpp:177-179 | `passability`, `tileCellSize` 1, `tileOrigin` 0 | - | DERIVED | - | - | - | - | - | - | - | game-supplied tile seam; meaningful only with passability |
-| PhysicsWorld.hpp:188-189 | `gravityX/Y` | lib (0,+10) y-down; Arcane sets them | DERIVED | - | - | - | - | - | - | - | from physics.gravity (Runtime.cpp:453-454) |
+| PhysicsWorld.hpp:177-179 | `passability`, `tileCellSize` 1, `tileOrigin` 0 | - | DERIVED | — | — | — | — | — | — | N | game-supplied tile seam; meaningful only with passability |
+| PhysicsWorld.hpp:188-189 | `gravityX/Y` | lib (0,+10) y-down; Arcane sets them | DERIVED | — | — | — | — | — | — | N | from physics.gravity (Runtime.cpp:453-454) |
 | PhysicsWorld.hpp:208 | `substepCount` | 4 | SETTING | physics.substepCount | Physics2DWorldSettings | Game | Project | NextWorld | [1,16] | Y | solver quality; left at default |
 | PhysicsWorld.hpp:209 | `contactHertz` | 30 (Hz) | SETTING | physics.contactHertz | Physics2DWorldSettings | Game | Project | NextWorld | [1,240] | Y | left at default |
 | PhysicsWorld.hpp:210 | `contactDampingRatio` | 10 | SETTING | physics.contactDampingRatio | Physics2DWorldSettings | Game | Project | NextWorld | [0,100] | Y | left at default |
@@ -417,12 +503,12 @@ Creation sites:
 | PhysicsWorld.hpp:220 | `maxLinearVelocity` | 400 (m/s) | SETTING | physics.maxLinearVelocity | Physics2DWorldSettings | Game | Project | NextWorld | [1,1e5] | Y | left at default |
 | PhysicsWorld.hpp:229 | `sleepThreshold` | 0.05 (m/s) | SETTING | physics.sleepThreshold | Physics2DWorldSettings | Game | Project | NextWorld | [0,10] | Y | left at default |
 | PhysicsWorld.hpp:549 | `SetExecutor` (never called) | null -> serial | SETTING | physics.parallelSolver | Physics2DWorldSettings | Game Dev | Project | NextWorld | bool | N | MT-invariance tested; binding missing (Notes) |
-| PhysicsWorld.hpp:116, :136 (BodyDef; PhysicsSystem.hpp:428-466 never sets them) | `eventsEnabled` true, per-body `sleepThreshold` -1 (inherit) | - | DERIVED | - | - | - | - | - | - | - | per-body inherits the world value |
-| TP/Manifold2D/include/Manifold2D/Physics/PhysicsTypes.hpp:146, :150 | `kLinearSlop`, `kMaxRotation` | 0.005 m, pi/4 | CONSTANT | - | - | - | - | - | - | - | compile-time library constants (changing them forks the vendored library) |
-| TP/enkiTS/src/TaskScheduler.h:275 | `numTaskThreadsToCreate` | hw-1 when threads == 0 | DERIVED | - | - | - | - | - | - | - | from jobs.workerThreads |
-| TaskScheduler.h:282 | `numExternalTaskThreads` | 0 | SETTING | jobs.externalThreads | JobsSettings | Game Dev | Preferences | Restart | [0,64] | N | needed if non-enki threads submit tasks; left at default |
-| TaskScheduler.h:284-286 | other `profilerCallbacks`, `customAllocator` | defaults | CONSTANT | - | - | - | - | - | - | - | wiring for a future Tracy/allocator seam, not a preference |
-| TP/Mosaic/include/Mosaic/Log.hpp:100 | `g_logLevel` | Info (never set by Arcane) | SETTING | log.level (bind) or log.mosaicLevel | LogSettings | Game | Preferences | Live | [0,6] | N | `log.level` does not reach Astra/Manifold2D logs (Notes) |
+| PhysicsWorld.hpp:116, :136 (BodyDef; PhysicsSystem.hpp:428-466 never sets them) | `eventsEnabled` true, per-body `sleepThreshold` -1 (inherit) | - | DERIVED | — | — | — | — | — | — | N | per-body inherits the world value |
+| TP/Manifold2D/include/Manifold2D/Physics/PhysicsTypes.hpp:146, :150 | `kLinearSlop`, `kMaxRotation` | 0.005 m, pi/4 | CONSTANT | — | — | — | — | — | — | N | compile-time library constants (changing them forks the vendored library) |
+| TP/enkiTS/src/TaskScheduler.h:275 | `numTaskThreadsToCreate` | hw-1 when threads == 0 | DERIVED | — | — | — | — | — | — | N | from jobs.workerThreads |
+| TaskScheduler.h:282 | `numExternalTaskThreads` | 0 | SETTING | jobs.externalThreads | JobsSettings | Game Dev | Pref-P | Restart | [0,64] | N | needed if non-enki threads submit tasks; left at default |
+| TaskScheduler.h:284-286 | other `profilerCallbacks`, `customAllocator` | defaults | CONSTANT | — | — | — | — | — | — | N | wiring for a future Tracy/allocator seam, not a preference |
+| TP/Mosaic/include/Mosaic/Log.hpp:100 | `g_logLevel` | Info (never set by Arcane) | DERIVED | — | — | — | — | — | — | N | `log.level` does not reach Astra/Manifold2D logs (Notes) (reconciled R1: one log.level; S2 ApplyLogSettings sets Mosaic::SetLogLevel in every module from it, so no log.mosaicLevel) |
 
 ### Should NOT be exposed
 
@@ -487,10 +573,10 @@ Creation sites:
 ### Host command line (HostConfig)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Host/HostConfig.cpp:85, HostConfig.hpp:16 | backend (`--backend`) | dx12 (enum) | SETTING | render.backend | RenderDeviceSettings | PlayerSafe | Project | Restart | dx12 \| vulkan | N | BOTH: keep the flag (scripts, the Hub's saved arguments), add the cvar for a graphics menu |
+| ArcaneClient/src/Arcane/Host/HostConfig.cpp:85, HostConfig.hpp:16 | backend (`--backend`) | dx12 (enum) | SETTING | render.backend | RenderSettings | PlayerSafe | Project | Restart | dx12 \| vulkan | N | BOTH: keep the flag (scripts, the Hub's saved arguments), add the cvar for a graphics menu |
 | HostConfig.cpp:86, HostConfig.hpp:17 | maxFrames (`--frames`) | 0 (frames, 0 = unbounded) | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: automation run budget; a saved value would make every launch quit |
-| HostConfig.cpp:87, HostConfig.hpp:18 | vsync (`--no-vsync`) | true (bool) | SETTING | render.vsync | RenderDeviceSettings | PlayerSafe | Project | Restart (Live once a swapchain recreate reads it) | bool | N | BOTH: a standard graphics-menu option |
-| HostConfig.cpp:88, HostConfig.hpp:19 | perf (`--perf`) | false (bool) | SETTING | diagnostics.perfLog | DiagnosticsSettings | Game Dev | Preferences | Live | bool | N | BOTH: the console should be able to toggle it mid-session |
+| HostConfig.cpp:87, HostConfig.hpp:18 | vsync (`--no-vsync`) | true (bool) | SETTING | render.vsync | RenderSettings | PlayerSafe | Project | Restart (Live once a swapchain recreate reads it) | bool | N | BOTH: a standard graphics-menu option |
+| HostConfig.cpp:88, HostConfig.hpp:19 | perf (`--perf`) | false (bool) | SETTING | diagnostics.perfLog | DiagnosticsSettings | Game | Pref-P | Live | bool | N | BOTH: the console should be able to toggle it mid-session; user 2026-10-06: --perf stays usable in Dist |
 | HostConfig.cpp:89, HostConfig.hpp:22 | pluginPath (`--plugin`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: overrides the manifest's gameModule, which is where the persisted value lives |
 | HostConfig.cpp:90, HostConfig.hpp:23 | projectPath (`--project`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: chooses what to open; the settings layers depend on it |
 | HostConfig.cpp:91, HostConfig.hpp:26 | sceneOverride (`--scene`) | "" | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: the manifest's bootScene is the persisted home |
@@ -510,8 +596,8 @@ Creation sites:
 | HostConfig.cpp:174, HostConfig.hpp:334 | crashGpuFrame | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: dev fault trigger (compiled out of Dist) |
 | HostConfig.cpp:176, HostConfig.hpp:342 | hangMainFrame | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: dev hang trigger |
 | HostConfig.cpp:180, HostConfig.hpp:365-367 | pickProbe / X / Y | false / 0 / 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: dev desk check |
-| HostConfig.hpp:387 | kHangMainSeconds | 15 (s) | DERIVED | (diagnostics.hangSeconds + 3) | — | Game Dev | — | — | — | N | Defined as Core's hangSeconds (12) plus 3; should be computed from it |
-| ArcaneClient/src/Arcane/Host/FramePerf.hpp:34 | `--perf` report interval | 60 (frames) | SETTING | diagnostics.perfLogIntervalFrames | DiagnosticsSettings | Game Dev | Preferences | Live | 1..10000 | N | Averaging window; the help text at HostConfig.cpp:88 repeats "60" |
+| HostConfig.hpp:387 | kHangMainSeconds | 15 (s) | DERIVED | (diagnostics.hangSeconds + 3) | — | — | — | — | — | N | Defined as Core's hangSeconds (12) plus 3; should be computed from it |
+| ArcaneClient/src/Arcane/Host/FramePerf.hpp:34 | `--perf` report interval | 60 (frames) | SETTING | diagnostics.perfLogIntervalFrames | DiagnosticsSettings | Game | Pref-P | Live | 1..10000 | N | Averaging window; the help text at HostConfig.cpp:88 repeats "60"; user 2026-10-06: --perf stays usable in Dist |
 
 ### Host boot, window and splash
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
@@ -519,17 +605,17 @@ Creation sites:
 | ArcaneClient/src/Arcane/Platform/Window.hpp:19-20 | WindowDesc width / height | 1280 x 720 (px) | SETTING | render.window.width / render.window.height | RenderWindowSettings | PlayerSafe | Project | Restart | 64..8192 | N | Player-facing; every golden is captured at this size, so the default must not change |
 | Window.hpp:21 | resizable | true | SETTING | render.window.resizable | RenderWindowSettings | Game | Project | Restart | bool | N | A per-project choice |
 | Window.hpp:18 | title | "Arcane" | CONSTANT | — | — | — | — | — | — | N | Struct default for tests and tools; hosts override it |
-| ArcaneClient/src/Arcane/Host/GpuContext.cpp:25 | host window title | "Arcane Runtime" | DERIVED | (project manifest name) | — | Game | Project | Restart | string | N | Every shipped game gets this title; should come from the project, as ProductNameFor does (ArcaneRuntime/src/main.cpp:36) |
-| GpuContext.cpp:66 | forced Vulkan to D3D12 fallback when a foreign module is injected | on | SETTING | render.vulkan.foreignModuleFallback | RenderDeviceSettings | Game Dev | Preferences | Restart | bool | N | A developer may want to force Vulkan anyway to reproduce the crash |
-| ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp:373-374 | splash width / height | 480 x 270 (px) | SETTING | app.splash.width / height | SplashSettings | Game | Project | Restart | 64..4096 | N | Per-project branding |
-| BootSplashWindow.cpp:390 | backgroundRgb | 0x0D0D0F | SETTING | app.splash.background | SplashSettings | Game | Project | Restart | rgb | N | Branding colour |
-| BootSplashWindow.cpp:332 | status text colour | RGB(160,160,160) | SETTING | app.splash.textColor | SplashSettings | Game | Project | Restart | rgb | N | Branding colour |
-| BootSplashWindow.cpp:50, :285, :327-328 | kTextRowHeightPx / kMarginPx / text inset | 24 / 12 / 12 (px) | SETTING | app.splash.textRowPx / marginPx | SplashSettings | Game Dev | Project | Restart | 0..256 | N | Splash layout metrics |
+| ArcaneClient/src/Arcane/Host/GpuContext.cpp:25 | host window title | "Arcane Runtime" | DERIVED | (project manifest name) | — | — | — | — | — | N | Every shipped game gets this title; should come from the project, as ProductNameFor does (ArcaneRuntime/src/main.cpp:36) |
+| GpuContext.cpp:66 | forced Vulkan to D3D12 fallback when a foreign module is injected | on | SETTING | render.vulkan.foreignModuleFallback | RenderDeviceSettings | Game Dev | Pref-P | Restart | bool | N | A developer may want to force Vulkan anyway to reproduce the crash |
+| ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp:373-374 | splash width / height | 480 x 270 (px) | SETTING | app.splash.width / app.splash.height | AppSplashSettings | Game | Project | Restart | 64..4096 | N | Per-project branding (reconciled R1) |
+| BootSplashWindow.cpp:390 | backgroundRgb | 0x0D0D0F | SETTING | app.splash.backgroundColor | AppSplashSettings | Game | Project | Restart | rgb | N | Branding colour (reconciled R1: the same setting as ProjectManifest.hpp:40; (0.05,0.05,0.06) and 0x0D0D0F are one colour, one default 0x0D0D0F) |
+| BootSplashWindow.cpp:332 | status text colour | RGB(160,160,160) | SETTING | app.splash.textColor | AppSplashSettings | Game | Project | Restart | rgb | N | Branding colour (reconciled R1) |
+| BootSplashWindow.cpp:50, :285, :327-328 | kTextRowHeightPx / kMarginPx / text inset | 24 / 12 / 12 (px) | DERIVED | — | — | — | — | — | — | N | Splash layout metrics; base px x 1 with an ARC_CONSTANT base (s16.11 applied to the splash, which has no UI scale; was app.splash.textRowPx / marginPx) (reconciled R1) |
 | BootSplashWindow.cpp:42-43 | kUserSetProgress / kUserLoadImage | 1 / 2 | CONSTANT | — | — | — | — | — | — | N | Window-message IDs (in-process protocol) |
-| ArcaneRuntime/src/main.cpp:212 | splash image | "data/images/arcane_logo.png" | SETTING | app.splash.image | SplashSettings | Game | Project | Restart | asset path | N | Every game boots on the engine logo |
-| ArcaneClient/src/Arcane/Host/ProjectBoot.cpp:168,183,184,215,224,255,256,283,284,292,509,510,537,596 | BootStage weights | 5,1,1,25,45,3,2,2,9,1,5,3,1,2 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Progress-bar share estimates; low value as cvars |
-| ProjectBoot.cpp:134 | kStride (scan progress throttle) | 32 (files) | SETTING | boot.scanProgressStride | BootSettings | Game Dev | Preferences | Live | 1..4096 | N | Status-line throttle; hand-copied in EditorAppProject.cpp (lockstep) |
-| ArcaneClient/src/Arcane/Host/BootSequence.cpp:279 | splash pump wait | 8 (ms) | SETTING | boot.splashPumpMs | BootSettings | Game Dev | Preferences | Restart | 1..100 | N | Repaint cadence during boot |
+| ArcaneRuntime/src/main.cpp:212 | splash image | "data/images/arcane_logo.png" | SETTING | app.splash.image | AppSplashSettings | Game | Project | Restart | asset path | N | Every game boots on the engine logo (reconciled R1) |
+| ArcaneClient/src/Arcane/Host/ProjectBoot.cpp:168,183,184,215,224,255,256,283,284,292,509,510,537,596 | BootStage weights | 5,1,1,25,45,3,2,2,9,1,5,3,1,2 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Progress-bar share estimates; low value as cvars |
+| ProjectBoot.cpp:134 | kStride (scan progress throttle) | 32 (files) | SETTING | boot.scanProgressStride | BootSettings | Game Dev | Pref-P | Live | 1..4096 | N | Status-line throttle; hand-copied in EditorAppProject.cpp (lockstep) |
+| ArcaneClient/src/Arcane/Host/BootSequence.cpp:279 | splash pump wait | 8 (ms) | SETTING | boot.splashPumpMs | BootSettings | Game Dev | Pref-P | Restart | 1..100 | N | Repaint cadence during boot |
 | ArcaneClient/src/Arcane/Host/ProjectBoot.hpp:120 | SetBaseContext("demo") | "demo" (string) | SETTING | input.baseContext | InputSettings | Game | Project | NextWorld | context name | N | Every project's base input context is named "demo" |
 | ProjectBoot.hpp:207 | BootContext::cvarPermission | Permission::Player | CONSTANT | — | — | — | — | — | — | N | Security: default-deny for the runtime's settings permission |
 
@@ -537,12 +623,13 @@ Creation sites:
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ArcaneRuntime/src/RuntimeFrame.cpp:288 | wall-clock simDt clamp | 0.25 (s) | SETTING | sim.maxFrameDeltaSeconds | SimSettings | Game | Project | Live | 0.01..1.0 | Y | Spiral-of-death guard; changes how many fixed steps run after a hitch (`--fixed-dt` runs bypass it) |
-| RuntimeFrame.cpp:182 | sleep while minimized | 1 (ms) | SETTING | render.window.minimizedSleepMs | RenderWindowSettings | Game Dev | Preferences | Live | 0..100 | N | Background throttle (UE has a similar idle option) |
+| RuntimeFrame.cpp:182 | sleep while minimized | 1 (ms) | SETTING | app.window.minimizedSleepMs | AppWindowSettings | Game Dev | Pref-P | Live | 0..100 | N | Background throttle (UE has a similar idle option) (reconciled R1) |
 | RuntimeFrame.cpp:756 | back-off after a skipped acquire | 1 (ms) | CONSTANT | — | — | — | — | — | — | N | OS scheduler floor; anything smaller is a busy spin |
-| RuntimeFrame.cpp:302-310 (called at RuntimeApp.cpp:810) | "ArcaneRuntime" debug HUD | always drawn | SETTING | runtime.hud.show | RuntimeSettings | Game Dev | Preferences | Live | bool | N | Shown in every build including Dist; the default must stay on (goldens include it) |
-| RuntimeFrame.cpp:354 | console window first-use size | 640 x 280 (px) | SETTING | console.windowSize | ConsoleSettings | Game Dev | Preferences | Live | px | N | Only used on first open (ImGui ini takes over after) |
+| RuntimeFrame.cpp:302-310 (called at RuntimeApp.cpp:810) | "ArcaneRuntime" debug HUD | always drawn | SETTING | runtime.hud.show | RuntimeSettings | Game | Pref-P | Live | bool | N | Shown in every build including Dist; the default must stay on (goldens include it). (S6-45 amendment) Game, not Game Dev: ruling R4 lets a Dist player turn the HUD on (S6-25) |
+| RuntimeFrame.cpp:354 | console window first-use width | 640 (px) | SETTING | console.windowWidth | ConsoleSettings | Game Dev | Pref-P | Live | 64..8192 | N | Only used on first open (ImGui ini takes over after) (S6-45 amendment): split from console.windowSize (S6-24), one name per value |
+| RuntimeFrame.cpp:354 | console window first-use height | 280 (px) | SETTING | console.windowHeight | ConsoleSettings | Game Dev | Pref-P | Live | 64..8192 | N | as console.windowWidth (S6-45 amendment) |
 | RuntimeFrame.cpp:252,256-258 | action names console_toggle / quit / reload_plugin / reload_plugin_fresh | strings | CONSTANT | — | — | — | — | — | — | N | Action-name contract with EngineConfig/input.json; the key bindings are the setting |
-| ArcaneRuntime/src/RuntimeApp.cpp:311 | shader compile debounce | 0.2 (s) | SETTING | render.shader.compileDebounceSeconds | ShaderCompileSettings | Game Dev | Preferences | Restart | 0..2 | N | Hot-reload latency; also sets the 12-frame settle boundary in goldens |
+| ArcaneRuntime/src/RuntimeApp.cpp:311 | shader compile debounce | 0.2 (s) | SETTING | render.shader.compileDebounceSeconds | RenderShaderSettings | Game Dev | Pref-P | Restart | 0..2 | N | Hot-reload latency; also sets the 12-frame settle boundary in goldens (reconciled R1) |
 | RuntimeApp.cpp:103 | enableAudioDevice = (maxFrames == 0) | derived | DERIVED | — | — | — | — | — | — | N | Comes from `--frames` |
 | RuntimeApp.cpp:532 | offscreenNodes.hostHud | true | CONSTANT | — | — | — | — | — | — | N | Host topology: a host context always presents its chrome |
 | RuntimeApp.cpp:1568, RuntimeFrame.cpp:360 | cvar permission for the runtime console | Permission::Player | CONSTANT | — | — | — | — | — | — | N | Security: raising it would let players set non-player-safe values |
@@ -554,39 +641,39 @@ Creation sites:
 ### Renderer device creation (D3D12, Vulkan, NRI)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/RenderDeviceDesc.hpp:19 | backend | D3D12 | DERIVED | (render.backend) | RenderDeviceSettings | — | — | Restart | — | N | Filled from render.backend |
-| RenderDeviceDesc.hpp:21,23 | enableValidation | Debug true, otherwise false | SETTING | render.debug.validation | RenderDeviceSettings | Game Dev | Preferences | Restart | bool | N | Today a Release build cannot turn validation on without recompiling |
-| RenderDeviceDesc.hpp:31 | enableD3D12DebugLayer | false | SETTING | render.debug.d3d12DebugLayer | RenderDeviceSettings | Game Dev | Preferences | Restart | bool | N | Opt-in; breaks on desks with injected window hooks |
-| RenderDeviceDesc.hpp:54 | enableSyncValidation | false | SETTING | render.debug.vkSyncValidation | RenderDeviceSettings | Game Dev | Preferences | Restart | bool | N | Expensive opt-in |
+| ArcaneClient/src/Arcane/Render/RenderDeviceDesc.hpp:19 | backend | D3D12 | DERIVED | (render.backend) | — | — | — | — | — | N | Filled from render.backend |
+| RenderDeviceDesc.hpp:21,23 | enableValidation | Debug true, otherwise false | SETTING | render.debug.validation | RenderDebugSettings | Game Dev | Pref-P | Restart | bool | N | Today a Release build cannot turn validation on without recompiling |
+| RenderDeviceDesc.hpp:31 | enableD3D12DebugLayer | false | SETTING | render.debug.d3d12DebugLayer | RenderDebugSettings | Game Dev | Pref-P | Restart | bool | N | Opt-in; breaks on desks with injected window hooks |
+| RenderDeviceDesc.hpp:54 | enableSyncValidation | false | SETTING | render.debug.vkSyncValidation | RenderDebugSettings | Game Dev | Pref-P | Restart | bool | N | Expensive opt-in |
 | ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp:176-178, ArcaneClient/src/Arcane/Host/OffscreenVehicle.cpp:48-50 | Debug forces all three on | true | DERIVED | — | — | — | — | — | — | N | These become the per-configuration defaults of the three cvars |
 | ArcaneClient/src/Arcane/Render/Nri/NriDevice.cpp:261,319 | enableNRIValidation | = enableValidation | DERIVED | — | — | — | — | — | — | N | Follows render.debug.validation |
 | NriDevice.cpp:266,320 | enableMemoryZeroInitialization | false | CONSTANT | — | — | — | — | — | — | N | Must stay false while VK_EXT_zero_initialize_device_memory is absent; turning it on is a bug |
 | NriDevice.cpp:235,239,303,306 | queueNum / queueFamilyNum | 1 | CONSTANT | — | — | — | — | — | — | N | Must equal the queues created; NRI would fetch queues that do not exist |
 | NriDevice.cpp:316 | d3dShaderExtRegister | 0 (NRI default) | CONSTANT | — | — | — | — | — | — | N | Shader contract for the vendor-extension register (NVAPI/AGS are not vendored) |
-| NriDevice.cpp:317 | d3dZeroBufferSize | 0 (= NRI's 4 MB) | SETTING | render.d3d12.zeroBufferBytes | RenderDeviceSettings | Game Dev | Project | Restart | 0..64 MiB | N | An NRI internal budget |
-| NriDevice.cpp:326 | disableD3D12EnhancedBarriers | false | SETTING | render.d3d12.enhancedBarriers | RenderDeviceSettings | Game Dev | Preferences | Restart | bool | N | Debugging fallback for driver bugs |
+| NriDevice.cpp:317 | d3dZeroBufferSize | 0 (= NRI's 4 MB) | SETTING | render.d3d12.zeroBufferBytes | RenderD3d12Settings | Game Dev | Project | Restart | 0..64 MiB | N | An NRI internal budget |
+| NriDevice.cpp:326 | disableD3D12EnhancedBarriers | false | SETTING | render.d3d12.enhancedBarriers | RenderD3d12Settings | Game Dev | Pref-P | Restart | bool | N | Debugging fallback for driver bugs |
 | NriDevice.cpp:331 | disableNVAPIInitialization | false | CONSTANT | — | — | — | — | — | — | N | NVAPI is not vendored, so this flag reaches no code |
 | NriDevice.cpp:72-86 | kVulkanBindingOffsets | 0 / 128 / 256 / 384 | CONSTANT | — | — | — | — | — | — | N | Shader contract (static_asserted against ShaderConventions) |
-| ArcaneClient/src/Arcane/Render/DeviceCreationD3D12.cpp:401-402 | adapter choice | index 0, HIGH_PERFORMANCE | SETTING | render.adapter | RenderDeviceSettings | PlayerSafe | Preferences | Restart | auto \| index | N | Multi-GPU laptops |
-| ArcaneClient/src/Arcane/Render/DeviceCreationVulkan.cpp:391-399 | physical device choice | first discrete, else [0] | SETTING | render.adapter (same cvar) | RenderDeviceSettings | PlayerSafe | Preferences | Restart | auto \| index | N | The Vulkan half of the same choice |
+| ArcaneClient/src/Arcane/Render/DeviceCreationD3D12.cpp:401-402 | adapter choice | index 0, HIGH_PERFORMANCE | SETTING | render.adapter | RenderSettings | PlayerSafe | Pref-P | Restart | auto \| index | N | Multi-GPU laptops |
+| ArcaneClient/src/Arcane/Render/DeviceCreationVulkan.cpp:391-399 | physical device choice | first discrete, else [0] | SETTING | render.adapter (same cvar) | RenderSettings | PlayerSafe | Pref-P | Restart | auto \| index | N | The Vulkan half of the same choice |
 | DeviceCreationD3D12.cpp:443 | D3D_FEATURE_LEVEL_12_0 | 12_0 | CONSTANT | — | — | — | — | — | — | N | Minimum hardware |
 | DeviceCreationVulkan.cpp:45-46 | kApiVersion | VK 1.3 | CONSTANT | — | — | — | — | — | — | N | Minimum API (Vulkan 1.3 features are chained) |
 | DeviceCreationD3D12.cpp:428 | EnableD3D12Dred() | always on | CONSTANT | — | — | — | — | — | — | N | Crash-evidence policy: diagnostics must not be configurable off (ProjectBoot.hpp:128-132) |
-| DeviceCreationD3D12.cpp:171-173, :487-489 | SetBreakOnSeverity | FALSE for corruption, error and warning | SETTING | render.debug.breakOnSeverity | RenderDeviceSettings | Game Dev | Preferences | Restart | none \| corruption \| error \| warning | N | Debugger workflow |
-| DeviceCreationD3D12.cpp:499-503 | info-queue deny list | INFO, MESSAGE | SETTING | render.debug.minSeverity | RenderDeviceSettings | Game Dev | Preferences | Restart | info..error | N | Validation verbosity |
-| DeviceCreationVulkan.cpp:367 | messenger severity | error \| warning | SETTING | render.debug.minSeverity (same cvar) | RenderDeviceSettings | Game Dev | Preferences | Restart | info..error | N | Vulkan half of the same verbosity |
+| DeviceCreationD3D12.cpp:171-173, :487-489 | SetBreakOnSeverity | FALSE for corruption, error and warning | SETTING | render.debug.breakOnSeverity | RenderDebugSettings | Game Dev | Pref-P | Restart | none \| corruption \| error \| warning | N | Debugger workflow |
+| DeviceCreationD3D12.cpp:499-503 | info-queue deny list | INFO, MESSAGE | SETTING | render.debug.minSeverity | RenderDebugSettings | Game Dev | Pref-P | Restart | info..error | N | Validation verbosity |
+| DeviceCreationVulkan.cpp:367 | messenger severity | error \| warning | SETTING | render.debug.minSeverity (same cvar) | RenderDebugSettings | Game Dev | Pref-P | Restart | info..error | N | Vulkan half of the same verbosity |
 | DeviceCreationVulkan.cpp:100 | kValidationLayer | "VK_LAYER_KHRONOS_validation" | CONSTANT | — | — | — | — | — | — | N | Fixed name in the Vulkan API |
 | DeviceCreationVulkan.cpp:576 | queue priority | 1.0 | CONSTANT | — | — | — | — | — | — | N | Only one queue, so the priority means nothing |
-| DeviceCreationD3D12.cpp:728 | kDeviceArmorRefs | 65536 (refs) | SETTING | render.d3d12.deviceArmorRefs | RenderDeviceSettings | Game Dev | Preferences | Restart | 0..2^24 | N | Size of the workaround for foreign over-release |
+| DeviceCreationD3D12.cpp:728 | kDeviceArmorRefs | 65536 (refs) | SETTING | render.d3d12.deviceArmorRefs | RenderD3d12Settings | Game Dev | Pref-P | Restart | 0..2^24 | N | Size of the workaround for foreign over-release |
 
 ### Swapchain and frame pacing
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/FramePacing.hpp:16 | kSwapchainFramesInFlight | 2 (frames) | SETTING | render.framesInFlight | RenderDeviceSettings | Game | Project | Restart | 2..3 | N | Latency against throughput; needs a kMaxFramesInFlight storage constant (see Notes) |
+| ArcaneClient/src/Arcane/Render/FramePacing.hpp:16 | kSwapchainFramesInFlight | 2 (frames) | SETTING | render.framesInFlight | RenderSettings | Game | Project | Restart | 2..3 | N | Latency against throughput; needs a kMaxFramesInFlight storage constant (see Notes) |
 | ArcaneClient/src/Arcane/Render/Nri/NriSwapChain.cpp:132 | textureNum | framesInFlight + 1 | DERIVED | — | — | — | — | — | — | N | NRI's recommended shape |
 | NriSwapChain.cpp:150 | queuedFrameNum | = framesInFlight | DERIVED | — | — | — | — | — | — | N | Kept aligned with the fence pacing |
 | NriSwapChain.cpp:138 | SwapChainFormat | BT709_G22_8BIT | CONSTANT | — | — | — | — | — | — | N | Tonemap output contract (SDR, display-referred); HDR output is future work |
-| NriSwapChain.cpp:145 | ALLOW_TEARING never set | off | SETTING | render.allowTearing | RenderDeviceSettings | PlayerSafe | Project | Restart | bool | N | Only matters with vsync off (variable-refresh displays) |
+| NriSwapChain.cpp:145 | ALLOW_TEARING never set | off | SETTING | render.allowTearing | RenderSettings | PlayerSafe | Project | Restart | bool | N | Only matters with vsync off (variable-refresh displays) |
 | NriSwapChain.hpp:220, NriGraphContext.hpp:1573 | m_vsync | true | DERIVED | (render.vsync) | — | — | — | — | — | N | Follows render.vsync |
 | NriSwapChain.cpp:39, NriGraphContext.cpp:97, ArcaneClient/src/Arcane/Render/GpuInstrumentation.cpp:38 | fence poll sleep | 1 (ms) | CONSTANT | — | — | — | — | — | — | N | OS timer floor; smaller is a spin |
 | NriSwapChain.cpp:40, NriGraphContext.cpp:98, GpuInstrumentation.cpp:47 | fence poll window | 15 (s) | DERIVED | (diagnostics.gpuStallSeconds + margin) | — | — | — | — | — | N | Hidden coupling to Core's gpuStallSeconds (8 s) |
@@ -594,9 +681,9 @@ Creation sites:
 ### Render graph context and budgets
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| NriGraphContext.cpp:60 | kUploadRingBytesPerFrame | 4 MiB | SETTING | render.uploadRingBytesPerFrame | RenderBudgetSettings | Game Dev | Project | Restart | 1..256 MiB | N | Per-frame upload budget; it already counts overflows |
-| NriGraphContext.hpp:276 | kGraphCanvasFormat | RGBA16_SFLOAT | SETTING | render.canvasFormat | RenderDeviceSettings | Game Dev | Project | Restart | rgba16f \| r11g11b10f | N | Precision against bandwidth; affects goldens |
-| NriGraphContext.hpp:286 | kGraphDepthFormat | D32_SFLOAT | SETTING | render.depthFormat | RenderDeviceSettings | Game Dev | Project | Restart | d32 \| d24s8 | N | Depth precision |
+| NriGraphContext.cpp:60 | kUploadRingBytesPerFrame | 4 MiB | SETTING | render.uploadRingBytesPerFrame | RenderSettings | Game Dev | Project | Restart | 1..256 MiB | N | Per-frame upload budget; it already counts overflows |
+| NriGraphContext.hpp:276 | kGraphCanvasFormat | RGBA16_SFLOAT | SETTING | render.canvasFormat | RenderSettings | Game Dev | Project | Restart | rgba16f \| r11g11b10f | N | Precision against bandwidth; affects goldens |
+| NriGraphContext.hpp:286 | kGraphDepthFormat | D32_SFLOAT | SETTING | render.depthFormat | RenderSettings | Game Dev | Project | Restart | d32 \| d24s8 | N | Depth precision |
 | NriGraphContext.hpp:297 | kGraphOffscreenFormat | BGRA8_UNORM | CONSTANT | — | — | — | — | — | — | N | Capture, readback and PNG contract, plus byte-equal references |
 | NriGraphContext.cpp:66 | kShaderDir | "data/shaders" | CONSTANT | — | — | — | — | — | — | N | Install layout |
 | NriGraphContext.cpp:256 | chromeNodes.hostHud | true | CONSTANT | — | — | — | — | — | — | N | Host topology |
@@ -610,13 +697,13 @@ Creation sites:
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp:45 | kCanvasClear | {0.02, 0.02, 0.04, 1} (linear RGBA) | SETTING | render.clearColor | RenderSettings | Game | Project | Live | rgba | N | Background colour; affects every golden, so the default must stay |
-| Batch2DNode.cpp:284-286 | sprite sampler filter | LINEAR | SETTING | render.sprite.filter | RenderSettings | Game | Project | Restart | linear \| point | N | Pixel-art projects need point filtering |
+| Batch2DNode.cpp:284-286 | sprite sampler filter | LINEAR | SETTING | render.sprite.filter | RenderSpriteSettings | Game | Project | Restart | linear \| point | N | Pixel-art projects need point filtering |
 | Batch2DNode.cpp:287-288 | sprite address mode | CLAMP_TO_EDGE | CONSTANT | — | — | — | — | — | — | N | Stops atlas edge bleed; changing it is a bug |
 | Batch2DNode.cpp:289; FullscreenNodes.cpp:282,1134; MeshNode.cpp:392; ArcaneClient/src/Arcane/ImGui/ImGuiNri.cpp:224 | mipMax | 16.0 | CONSTANT | — | — | — | — | — | — | N | Means "all mips" for any size up to 64K; no clamp |
-| Batch2DNode.hpp:249 | kMaxMaterialSlots | 8 | SETTING | render.batch2d.maxMaterialSlots | RenderBudgetSettings | Game Dev | Project | Restart | 1..64 | N | Pool cap; above it materials fall back with one ERROR |
-| Batch2DNode.hpp:250 | kMaxMaterialTextures | 8 | SETTING | render.batch2d.maxMaterialTextures | RenderBudgetSettings | Game Dev | Project | Restart | 1..16 | N | Pool cap (check the material-template codegen ceiling) |
-| Batch2DNode.hpp:271 | kMaxSpriteTextures | 64 | SETTING | render.batch2d.maxSpriteTextures | RenderBudgetSettings | Game | Project | Restart | 8..512 | N | Overflow is silent and still exits 0 (header comment); content-dependent |
-| Batch2DNode.hpp:276 | kMaterialCbMaxBytes | 256 (bytes) | SETTING | render.batch2d.materialCbBytes | RenderBudgetSettings | Game Dev | Project | Restart | multiple of 256 | N | Ceiling on material parameter size |
+| Batch2DNode.hpp:249 | kMaxMaterialSlots | 8 | SETTING | render.batch2d.maxMaterialSlots | RenderBatch2dSettings | Game Dev | Project | Restart | 1..64 | N | Pool cap; above it materials fall back with one ERROR |
+| Batch2DNode.hpp:250 | kMaxMaterialTextures | 8 | SETTING | render.batch2d.maxMaterialTextures | RenderBatch2dSettings | Game Dev | Project | Restart | 1..16 | N | Pool cap (check the material-template codegen ceiling) |
+| Batch2DNode.hpp:271 | kMaxSpriteTextures | 64 | SETTING | render.batch2d.maxSpriteTextures | RenderBatch2dSettings | Game | Project | Restart | 8..512 | N | Overflow is silent and still exits 0 (header comment); content-dependent |
+| Batch2DNode.hpp:276 | kMaterialCbMaxBytes | 256 (bytes) | SETTING | render.batch2d.materialCbBytes | RenderBatch2dSettings | Game Dev | Project | Restart | multiple of 256 | N | Ceiling on material parameter size |
 | Batch2DNode.hpp:279; Batch2DNode.cpp:261-262 | kCbRegionsPerFrame / kBuiltInSets / kMaterialSets | computed | DERIVED | — | — | — | — | — | — | N | Computed from the caps |
 | Batch2DNode.cpp:85,103-104,93-94; Batch2DNode.hpp:155,443,450; Batch2DNode.cpp:217 | vertex alignment 16, FNV constants, shader names, kNoRange, kBuiltInCount, kShaderPairBase, white texel | — | CONSTANT | — | — | — | — | — | — | N | Alignment, math, shader names, IDs, identity texel |
 | ArcaneClient/src/Arcane/Render/Batcher2D.cpp:24; Batcher2D.hpp:207-210; Batcher2D.cpp:426-428 | built-in material IDs; sort-key bit layout | 0..2, 0xFFFF; shifts 48/32/16 | CONSTANT | — | — | — | — | — | — | N | ID scheme and key encoding |
@@ -624,53 +711,56 @@ Creation sites:
 ### Mesh pass, cull, GPU scene, visibility
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp:297-299 | MeshSceneDesc default light (direction, colour, ambient) | (0,0,1), (1,1,1), (0.05,0.05,0.05) | SETTING | render.mesh.defaultLight.direction / .color / .ambient | MeshLightSettings | Game | Project | Live | dir vec3; colour 0..16 | N | The only scene light until a light component exists (RuntimeFrame.cpp:658-664); affects runtime mesh goldens |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp:297-299 | MeshSceneDesc default light (direction, colour, ambient) | (0,0,1), (1,1,1), (0.05,0.05,0.05) | SETTING | render.mesh.defaultLight.direction / .color / .ambient | RenderMeshDefaultLightSettings | Game | Project | Live | dir vec3; colour 0..16 | N | The only scene light until a light component exists (RuntimeFrame.cpp:658-664); affects runtime mesh goldens |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp:298 | default light intensity | 1.0 | SETTING | render.mesh.defaultLight.intensity | RenderMeshDefaultLightSettings | Game | Project | Live | 0..16 | N | (S6-45 amendment): the colour x intensity split (S6-19, controller ruling) |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.hpp:299 | default ambient intensity | 1.0 | SETTING | render.mesh.defaultLight.ambientIntensity | RenderMeshDefaultLightSettings | Game | Project | Live | 0..16 | N | as render.mesh.defaultLight.intensity (S6-45 amendment) |
 | MeshNode.cpp:101-103 | frame CB light defaults | (0,0,1), 1, 0 | DERIVED | — | — | — | — | — | — | N | Overwritten every frame from MeshSceneDesc |
 | MeshNode.cpp:391 | root sampler anisotropy | 16 | SETTING | render.textureAnisotropy | RenderSettings | PlayerSafe | Project | Restart | 1..16 (16 is the hardware maximum) | N | Standard quality option; baked into the pipeline layout |
 | MeshNode.cpp:389-390 | mesh address mode | REPEAT | CONSTANT | — | — | — | — | — | — | N | Mesh-material UV tiling contract (belongs to the material, not a global) |
 | MeshNode.cpp:79 | kDepthClear | 1.0 | CONSTANT | — | — | — | — | — | — | N | Standard-Z depth with a LESS compare; changing it is a bug |
 | MeshNode.hpp:565 | kBindlessCapacity | 256 | CONSTANT | — | — | — | — | — | — | N | Must equal kMeshBindlessCapacity in data/shaders/mesh.hlsl:155 |
-| MeshNode.hpp:645 | kInitialResidentSlots | 16 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint only |
+| MeshNode.hpp:645 | kInitialResidentSlots | 16 | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint only |
 | MeshNode.hpp:547; GridNode.hpp:175 | kFrameCbMaxBytes | 256 | CONSTANT | — | — | — | — | — | — | N | Constant-buffer placement alignment; the struct must fit |
 | MeshNode.hpp:346, :216 | kMeshRootDirect; default baseColor white | 1; (1,1,1,1) | CONSTANT | — | — | — | — | — | — | N | Root layout index; identity colour |
 | MeshCullNode.hpp:26 (cvar at MeshCullNode.cpp:21) | kMeshCullEnabled / render.meshCull | true | SETTING (already a cvar) | render.meshCull | RenderSettings | Game Dev | Project | Live | bool | N | Exists; only needs audience, scope and apply metadata |
 | MeshCullNode.hpp:29 | kMeshCullThreads | 64 | CONSTANT | — | — | — | — | — | — | N | Must match numthreads(64) in data/shaders/mesh_cull.hlsl:60 |
-| ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp:63 | kInitialRows | 256 (rows) | SETTING | render.gpuScene.initialRows | RenderBudgetSettings | Game Dev | Project | Restart | 16..65536 | N | Initial capacity (grows) |
-| GpuScene.hpp:64 | kScratchRows | 64 (rows per frame) | SETTING | render.gpuScene.scratchRowsPerFrame | RenderBudgetSettings | Game Dev | Project | Restart | 16..4096 | N | Hard cap; ad-hoc instances past it are dropped with a WARN |
+| ArcaneClient/src/Arcane/Render/Nri/GpuScene.hpp:63 | kInitialRows | 256 (rows) | SETTING | render.gpuScene.initialRows | RenderGpuSceneSettings | Game Dev | Project | Restart | 16..65536 | N | Initial capacity (grows) |
+| GpuScene.hpp:64 | kScratchRows | 64 (rows per frame) | SETTING | render.gpuScene.scratchRowsPerFrame | RenderGpuSceneSettings | Game Dev | Project | Restart | 16..4096 | N | Hard cap; ad-hoc instances past it are dropped with a WARN |
 | GpuScene.cpp:31,36 | kRingAlign / kVisibilityRegionAlign | 16 / 256 | CONSTANT | — | — | — | — | — | — | N | Hardware alignment |
 | ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp:30-38 | instance flag bits, invalid material slot | bit layout | CONSTANT | — | — | — | — | — | — | N | Shader contract (gpu_scene.hlsli) |
 | ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp:73; GpuSceneTypes.hpp:124 | alphaCutoff default | 0.5 | CONSTANT | — | — | — | — | — | — | N | glTF 2.0's default alphaCutoff (format) |
-| ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp:39 | kVisibilitySlack | 0.25 (m) | SETTING | render.cull.frustumSlackMeters | RenderSettings | Game Dev | Project | Live | 0..10 | N | Conservativeness of CPU coarse culling |
-| ArcaneClient/src/Arcane/Render/Nri/MeshResidencyBudget.hpp:61 (default argument at NriMeshBufferCache.hpp:139) | kMeshResidencyBudgetBytes | 512 MiB | SETTING | render.mesh.residencyBudgetBytes | RenderBudgetSettings | Game | Project | Restart | 64 MiB..16 GiB | N | Memory budget; eviction threshold |
+| ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp:39 | kVisibilitySlack | 0.25 (m) | SETTING | render.cull.frustumSlackMeters | RenderCullSettings | Game Dev | Project | Live | 0..10 | N | Conservativeness of CPU coarse culling |
+| ArcaneClient/src/Arcane/Render/Nri/MeshResidencyBudget.hpp:61 (default argument at NriMeshBufferCache.hpp:139) | kMeshResidencyBudgetBytes | 512 MiB | SETTING | render.mesh.residencyBudgetBytes | RenderMeshSettings | Game | Project | Restart | 64 MiB..16 GiB | N | Memory budget; eviction threshold |
 
 ### Post chain, tonemap and grid
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp:254 | PostChainNode::kMaxPasses | 8 | SETTING | render.post.maxPasses | RenderBudgetSettings | Game Dev | Project | Restart | 1..32 | N | Pool cap; longer chains fall back with an ERROR |
-| FullscreenNodes.hpp:255 | kMaxTextures | 8 | SETTING | render.post.maxTextures | RenderBudgetSettings | Game Dev | Project | Restart | 1..16 | N | Pool cap |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/FullscreenNodes.hpp:254 | PostChainNode::kMaxPasses | 8 | SETTING | render.post.maxPasses | RenderPostSettings | Game Dev | Project | Restart | 1..32 | N | Pool cap; longer chains fall back with an ERROR |
+| FullscreenNodes.hpp:255 | kMaxTextures | 8 | SETTING | render.post.maxTextures | RenderPostSettings | Game Dev | Project | Restart | 1..16 | N | Pool cap |
 | FullscreenNodes.hpp:258 | kMaxInputs | 4 | CONSTANT | — | — | — | — | — | — | N | static_assert equal to kMaxPassInputs (FullscreenNodes.cpp:158), the post asset format's ceiling |
-| FullscreenNodes.hpp:259 | kCbMaxBytes | 256 | SETTING | render.post.materialCbBytes | RenderBudgetSettings | Game Dev | Project | Restart | multiple of 256 | N | Ceiling on material parameter size |
+| FullscreenNodes.hpp:259 | kCbMaxBytes | 256 | SETTING | render.post.materialCbBytes | RenderPostSettings | Game Dev | Project | Restart | multiple of 256 | N | Ceiling on material parameter size |
 | FullscreenNodes.hpp:262-264,136,356,475; FullscreenNodes.cpp:43-44 | region indices, sentinels, pair IDs, FNV | — | CONSTANT | — | — | — | — | — | — | N | Layout, IDs, math |
-| ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp:106 | minorSpacing | 1.0 (m) | SETTING | editor.viewport.grid.minorSpacing | GridSettings | Editor | Preferences | Live | 0.01..100 | N | Grid preference |
-| GridNode.hpp:107 | majorEvery | 10.0 (m) | SETTING | editor.viewport.grid.majorEvery | GridSettings | Editor | Preferences | Live | 1..1000 | N | Grid preference |
-| GridNode.hpp:108 | fadeDistance | 200 (m) | SETTING | editor.viewport.grid.fadeDistance | GridSettings | Editor | Preferences | Live | 1..10000 | N | Grid preference |
-| GridNode.hpp:112-113 | minorColor / majorColor | (0.5,0.5,0.5,0.35) / (0.6,0.6,0.6,0.6) | SETTING | editor.viewport.grid.minorColor / majorColor | GridSettings | Editor | Preferences | Live | rgba | N | Theme colour; affects editor goldens |
-| GridNode.hpp:124-126 | kAxisX/Y/ZColor | red / green / blue | SETTING | editor.viewport.axisColor.x / .y / .z | GridSettings | Editor | Preferences | Live | rgba | N | Theme colours; should be shared with the gizmo axis colours |
-| GridNode.cpp:45 | kMinHalfExtent | 2000 (m) | SETTING | editor.viewport.grid.minHalfExtent | GridSettings | Editor Dev | Preferences | Live | 10..1e6 | N | Grid quad size |
-| GridNode.cpp:46 | kHalfExtentPerMetre | 100 | SETTING | editor.viewport.grid.extentPerAltitude | GridSettings | Editor Dev | Preferences | Live | 1..1000 | N | How the grid grows with camera altitude |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/GridNode.hpp:106 | minorSpacing | 1.0 (m) | SETTING | editor.viewport.grid3D.minorSpacing | EditorGrid3DSettings | Editor | Pref-M | Live | 0.01..100 | N | Grid preference (reconciled R1) |
+| GridNode.hpp:107 | majorEvery | 10.0 (m) | SETTING | editor.viewport.grid.majorEvery | EditorGridSettings | Editor | Pref-M | Live | 1..1000 | N | Grid preference (reconciled R1: one grid family; the 2D grid's decade base stays CONSTANT) |
+| GridNode.hpp:108 | fadeDistance | 200 (m) | SETTING | editor.viewport.grid3D.fadeDistance | EditorGrid3DSettings | Editor | Pref-M | Live | 1..10000 | N | Grid preference (reconciled R1) |
+| GridNode.hpp:112 | minorColor | (0.5,0.5,0.5,0.35) | SETTING | editor.viewport.grid.lineColor / editor.viewport.grid.minorAlpha | EditorGridSettings | Editor | Pref-M | Live | rgb / 0..1 | N | minorColor = lineColor (0.5,0.5,0.5) at minorAlpha 0.35; one family with ViewportGrid; affects editor goldens (reconciled R1) |
+| GridNode.hpp:113 | majorColor | (0.6,0.6,0.6,0.6) | SETTING | editor.viewport.grid3D.majorColor | EditorGrid3DSettings | Editor | Pref-M | Live | rgba | N | 3D-only major line colour; affects editor goldens (reconciled R1) |
+| GridNode.hpp:124-126 | kAxisX/Y/ZColor | red / green / blue | CONSTANT | — | — | — | — | — | — | N | ARC_CONSTANT("pending axis unification re-bless"): the 3D grid axis colours stay values until a post-sweep task unifies them with the gizmo and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4) |
+| GridNode.cpp:45 | kMinHalfExtent | 2000 (m) | SETTING | editor.viewport.grid3D.minHalfExtent | EditorGrid3DSettings | Editor Dev | Pref-M | Live | 10..1e6 | N | Grid quad size (reconciled R1) |
+| GridNode.cpp:46 | kHalfExtentPerMetre | 100 | SETTING | editor.viewport.grid3D.extentPerAltitude | EditorGrid3DSettings | Editor Dev | Pref-M | Live | 1..1000 | N | How the grid grows with camera altitude (reconciled R1) |
 | GridNode.cpp:59 | params CB default {1,10,200,2000} | — | DERIVED | — | — | — | — | — | — | N | Copy of the struct defaults; overwritten every frame |
 | GridNode.cpp:37-38; GridNode.hpp:220 | shader names / pair ID | — | CONSTANT | — | — | — | — | — | — | N | IDs |
 
 ### Pick and selection outline
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp:100 | kSelectColor | (1, 0.65, 0.10, 1) | SETTING | editor.selection.outlineColor | OutlineSettings | Editor | Preferences | Live | rgba | N | Theme colour; affects outline goldens |
-| PickOutlineNodes.cpp:101 | kHoverColor | (0.25, 0.70, 1, 1) | SETTING | editor.selection.hoverColor | OutlineSettings | Editor | Preferences | Live | rgba | N | Theme colour |
-| PickOutlineNodes.cpp:102 | kSelectThickPx | 3 (px) | SETTING | editor.selection.outlineWidthPx | OutlineSettings | Editor | Preferences | Live | 1..kOutlineMaxThicknessPx | N | The spec names outline width explicitly |
-| PickOutlineNodes.cpp:103 | kHoverThickPx | 3 (px) | SETTING | editor.selection.hoverWidthPx | OutlineSettings | Editor | Preferences | Live | 1..32 | N | Preference |
-| PickOutlineNodes.cpp:104 | kEdgeSoftPx | 1 (px) | SETTING | editor.selection.edgeSoftnessPx | OutlineSettings | Editor Dev | Preferences | Live | 0..4 | N | Anti-aliasing ramp width |
-| PickOutlineNodes.hpp:151 | kOutlineMaxThicknessPx | 32 (px) | SETTING | render.outline.maxThicknessPx | OutlineSettings | Editor Dev | Preferences | Restart | 1..256 | N | Drives the jump-flood step count; must stay at or above the width settings |
-| ArcaneClient/src/Arcane/Render/PickEmit.hpp:177 | kPickSupersample | 2 | SETTING | render.outline.supersample | OutlineSettings | Editor Dev | Preferences | Restart | 1..4 | N | Visible in pixels; changing it re-blesses the outline goldens |
+| ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp:100 | kSelectColor | (1, 0.65, 0.10, 1) | DERIVED | (editor.theme.amber) | — | — | — | — | — | N | Theme colour; affects outline goldens (reconciled R1: (1,0.65,0.10) = kAmber exactly) |
+| PickOutlineNodes.cpp:101 | kHoverColor | (0.25, 0.70, 1, 1) | DERIVED | (editor.theme.graph.hoverBorder) | — | — | — | — | — | N | Theme colour (reconciled R1: (0.25,0.70,1) = kGraphNodeHovBorderColor exactly) |
+| PickOutlineNodes.cpp:102 | kSelectThickPx | 3 (px) | SETTING | render.outline.selectWidthPx | RenderOutlineSettings | Game Dev | Pref-P | Live | 1..kOutlineMaxThicknessPx | N | The spec names outline width explicitly (reconciled R1: ArcaneClient's OutlineNode cannot declare an Editor-audience cvar) |
+| PickOutlineNodes.cpp:103 | kHoverThickPx | 3 (px) | SETTING | render.outline.hoverWidthPx | RenderOutlineSettings | Game Dev | Pref-P | Live | 1..32 | N | Preference (reconciled R1: ArcaneClient's OutlineNode cannot declare an Editor-audience cvar) |
+| PickOutlineNodes.cpp:104 | kEdgeSoftPx | 1 (px) | SETTING | render.outline.edgeSoftnessPx | RenderOutlineSettings | Game Dev | Pref-P | Live | 0..4 | N | Anti-aliasing ramp width (reconciled R1: ArcaneClient's OutlineNode cannot declare an Editor-audience cvar) |
+| PickOutlineNodes.hpp:151 | kOutlineMaxThicknessPx | 32 (px) | SETTING | render.outline.maxThicknessPx | RenderOutlineSettings | Game Dev | Pref-P | Restart | 1..256 | N | Drives the jump-flood step count; must stay at or above the width settings (reconciled R1: ArcaneClient's OutlineNode cannot declare an Editor-audience cvar) |
+| ArcaneClient/src/Arcane/Render/PickEmit.hpp:177 | kPickSupersample | 2 | SETTING | render.outline.supersample | RenderOutlineSettings | Game Dev | Pref-P | Restart | 1..4 | N | Visible in pixels; changing it re-blesses the outline goldens (reconciled R1: ArcaneClient's OutlineNode cannot declare an Editor-audience cvar) |
 | PickOutlineNodes.hpp:485 | kMaxJfaSteps | 16 | CONSTANT | — | — | — | — | — | — | N | Constant-buffer region layout; log2 ceiling of the schedule |
 | PickOutlineNodes.hpp:489; PickOutlineNodes.cpp:66 | kMaxSelectedIds / selectedIds[64] | 64 | CONSTANT | — | — | — | — | — | — | N | static_assert to a 256-byte cbuffer array the outline shader reads (PickOutlineNodes.cpp:74) |
 | PickOutlineNodes.hpp:492,496-498,334-335,564-566,138,144 | kCbMaxBytes 288, region indices, pair IDs, R32_UINT, RGBA16_SNORM | — | CONSTANT | — | — | — | — | — | — | N | Layout, IDs, shader encoding |
@@ -680,99 +770,115 @@ Creation sites:
 ### Texture and mesh caches
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.hpp:302 | kPendingCookRepollInterval | 32 (resolves) | SETTING | assets.cook.pendingRepollInterval | AssetCookSettings | Game Dev | Project | Live | 1..1024 | N | Repoll cadence for textures still being cooked |
-| NriTextureCache.cpp:386-397 | pending-cook placeholder | 8x8 checker, magenta / (16,16,16) | SETTING | render.debug.pendingCookChecker | RenderSettings | Game Dev | Preferences | Restart | rgba pair | N | Debug convention; must never look like the "refused" white texel |
+| ArcaneClient/src/Arcane/Render/Nri/NriTextureCache.hpp:302 | kPendingCookRepollInterval | 32 (resolves) | SETTING | assets.cook.pendingRepollInterval | AssetsCookSettings | Game Dev | Project | Live | 1..1024 | N | Repoll cadence for textures still being cooked |
+| NriTextureCache.cpp:386-397 | pending-cook placeholder, checker colour | magenta | SETTING | render.debug.pendingCookChecker | RenderDebugSettings | Game Dev | Pref-P | Restart | rgba | N | Debug convention; must never look like the "refused" white texel (S6-45 amendment): the pair split, one name per value |
+| NriTextureCache.cpp:386-397 | pending-cook placeholder, alternate colour | (16,16,16) | SETTING | render.debug.pendingCookCheckerAlt | RenderDebugSettings | Game Dev | Pref-P | Restart | rgba | N | as render.debug.pendingCookChecker (S6-45 amendment) (S6-16) |
 | NriTextureCache.hpp:278 | BC block-row math | (w+3)/4*16 | CONSTANT | — | — | — | — | — | — | N | BC format math |
 
 ### Shader compiler
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp:405; ShaderCompiler.hpp:111 | debounce | 0.2 (s) | DERIVED | (render.shader.compileDebounceSeconds) | ShaderCompileSettings | — | — | — | — | N | Third copy of the value set at RuntimeApp.cpp:311 |
-| ShaderCompiler.cpp:420 | compile worker count | 1 thread | SETTING | jobs.shaderCompileThreads | JobSettings | Game Dev | Preferences | Restart | 1..hardware threads | N | Compile throughput |
-| ShaderCompiler.cpp:270-288 | DXC arguments: no -O or -Zi | DXC default (-O3, no debug info) | SETTING | render.shader.debugInfo / render.shader.optimization | ShaderCompileSettings | Game Dev | Preferences | Restart | bool / O0..O3 | N | Source-level shader debugging (PIX/RenderDoc) is impossible today; part of the cache key |
+| ArcaneClient/src/Arcane/Render/ShaderCompiler.cpp:405; ShaderCompiler.hpp:111 | debounce | 0.2 (s) | DERIVED | (render.shader.compileDebounceSeconds) | — | — | — | — | — | N | Third copy of the value set at RuntimeApp.cpp:311 (reconciled R1) |
+| ShaderCompiler.cpp:420 | compile worker count | 1 thread | SETTING | jobs.shaderCompileThreads | JobsSettings | Game Dev | Pref-P | Restart | 1..hardware threads | N | Compile throughput (reconciled R1: JobsSettings) |
+| ShaderCompiler.cpp:270-288 | DXC arguments: no -O or -Zi | DXC default (-O3, no debug info) | SETTING | render.shader.debugInfo / render.shader.optimization | RenderShaderSettings | Game Dev | Pref-P | Restart | bool / O0..O3 | N | Source-level shader debugging (PIX/RenderDoc) is impossible today; part of the cache key |
 | ArcaneClient/src/Arcane/Render/ShaderConventions.hpp:36-38; ShaderCompiler.hpp:59 | profiles vs/ps/cs_6_5 | SM 6.5 | CONSTANT | — | — | — | — | — | — | N | Minimum shader model contract |
 | ShaderConventions.hpp:33-35, :44 | entry names; kSpirvArgs | — | CONSTANT | — | — | — | — | — | — | N | Shader contract (SPIR-V shifts match kVulkanBindingOffsets) |
 | ShaderCompiler.cpp:204-205 | FNV | — | CONSTANT | — | — | — | — | — | — | N | Math |
-| ShaderCompiler.cpp:244 | read buffer | 64 KiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O buffer size hint |
+| ShaderCompiler.cpp:244 | read buffer | 64 KiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O buffer size hint |
 
 ### ImGui NRI backend and console
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp:325 | kFirstPoolSets | 64 | SETTING | render.imgui.firstPoolSets | ImGuiRenderSettings | Game Dev | Project | Restart | 1..1024 | N | Size of the first link in the pool chain |
-| ImGuiNri.hpp:326 | kMaxPoolSets | 1024 | SETTING | render.imgui.maxPoolSetsPerLink | ImGuiRenderSettings | Game Dev | Project | Restart | 64..2048 | N | A choice under the D3D12 2048-sampler heap limit, which is the constant ceiling |
+| ArcaneClient/src/Arcane/ImGui/ImGuiNri.hpp:325 | kFirstPoolSets | 64 | SETTING | render.imgui.firstPoolSets | RenderImguiSettings | Game Dev | Project | Restart | 1..1024 | N | Size of the first link in the pool chain |
+| ImGuiNri.hpp:326 | kMaxPoolSets | 1024 | SETTING | render.imgui.maxPoolSetsPerLink | RenderImguiSettings | Game Dev | Project | Restart | 64..2048 | N | A choice under the D3D12 2048-sampler heap limit, which is the constant ceiling |
 | ImGuiNri.cpp:218-223 | ImGui sampler | LINEAR, clamp | CONSTANT | — | — | — | — | — | — | N | ImGui backend contract (font-atlas sampling) |
 | ImGuiNri.cpp:79,50,58; ImGuiNri.hpp:445 | vertex alignment 16, static_asserts, pair ID 0x5000 | — | CONSTANT | — | — | — | — | — | — | N | Layout, IDs |
 | ArcaneClient/src/Arcane/ImGui/OffscreenImGuiLayer.hpp:58; OffscreenImGuiLayer.cpp:60 | deltaTime fallback | 1/60 (s) | DERIVED | (sim.fixedHz) | — | — | — | — | — | N | Another copy of 1/60 |
-| ArcaneClient/src/Arcane/ImGui/ConsoleInputLine.cpp:38 | input buffer | 512 (chars) | SETTING | console.maxLineChars | ConsoleSettings | Game Dev | Preferences | Restart | 64..65536 | N | Line-length cap (fixed-size stack buffer) |
+| ArcaneClient/src/Arcane/ImGui/ConsoleInputLine.cpp:38 | input buffer | 512 (chars) | SETTING | console.maxLineChars | ConsoleSettings | Game Dev | Pref-P | Restart | 64..65536 | N | Line-length cap (fixed-size stack buffer) |
 
 ### GPU diagnostics (breadcrumbs, crash dump, fault injector)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/GpuBreadcrumbs.hpp:36 | kRingCapacity | 256 (markers) | SETTING | diagnostics.gpu.breadcrumbSlots | DiagnosticsSettings | Game Dev | Project | Restart | 16..4096 | N | Crash-trail depth; sizes the marker buffer |
+| ArcaneClient/src/Arcane/Render/GpuBreadcrumbs.hpp:36 | kRingCapacity | 256 (markers) | SETTING | diagnostics.gpu.breadcrumbSlots | DiagnosticsGpuSettings | Game Dev | Project | Restart | 16..4096 | N | Crash-trail depth; sizes the marker buffer |
 | ArcaneClient/src/Arcane/Render/GpuCrashReport.hpp:53-54 | kGpuMarkerSlots | = kRingCapacity | DERIVED | — | — | — | — | — | — | N | Follows the ring size |
 | GpuCrashReport.hpp:55,61 | values per slot 2; unwritten 0 | — | CONSTANT | — | — | — | — | — | — | N | Marker record layout |
 | ArcaneClient/src/Arcane/Render/IGpuCrashBackend.hpp:58-61 | kGpuDumpVersion / tag / header / entry bytes | 1 / 16 / 12 / 32 | CONSTANT | — | — | — | — | — | — | N | Dump file format |
 | ArcaneClient/src/Arcane/Render/Nri/NriDiagnostics.cpp:371-379 | fault CB / sink / groups / iterations / out-of-bounds element | 256, 256, 256, 0xFFFFFFFF, 1<<30 | CONSTANT | — | — | — | — | — | — | N | Test-only: values chosen to guarantee a TDR or out-of-bounds fault |
 | NriDiagnostics.cpp:384-385,628-631 | fault shader stem / dir; one-off pool | — | CONSTANT | — | — | — | — | — | — | N | Layout; test-only |
-| NriDiagnostics.cpp:836 | kRemovalBudget | 45 (s) | SETTING | diagnostics.gpuFault.removalBudgetSeconds | DiagnosticsSettings | Game Dev | Preferences | Live | 5..300 | N | TdrDelay is configurable per machine |
-| NriDiagnostics.cpp:837 | kRemovalPoll | 50 (ms) | SETTING | diagnostics.gpuFault.removalPollMs | DiagnosticsSettings | Game Dev | Preferences | Live | 1..1000 | N | Poll cadence |
+| NriDiagnostics.cpp:836 | kRemovalBudget | 45 (s) | SETTING | diagnostics.gpuFault.removalBudgetSeconds | DiagnosticsGpuFaultSettings | Game Dev | Pref-P | Live | 5..300 | N | TdrDelay is configurable per machine |
+| NriDiagnostics.cpp:837 | kRemovalPoll | 50 (ms) | SETTING | diagnostics.gpuFault.removalPollMs | DiagnosticsGpuFaultSettings | Game Dev | Pref-P | Live | 1..1000 | N | Poll cadence |
 | GpuInstrumentation.cpp:27 | diagnostics.drawMarkers | false | SETTING (already a cvar) | diagnostics.drawMarkers | DiagnosticsSettings | Game Dev | Project | Live | bool | N | Exists; needs metadata |
 
 ### Gizmo (Edit)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:95 | GizmoSnap::translate | 0.5 (m) | SETTING | editor.viewport.snap.translate | GizmoSettings | Editor | Preferences | Live | 0.001..100 | N | The editor sets only `enabled` (ArcaneEditor/src/App/EditorAppFrame.cpp:1303-1304), so nobody can change this today |
-| Gizmo.hpp:96 | rotationDeg | 15 (deg) | SETTING | editor.viewport.snap.rotationDeg | GizmoSettings | Editor | Preferences | Live | 0.1..90 | N | Same |
-| Gizmo.hpp:97 | scale | 0.1 (ratio) | SETTING | editor.viewport.snap.scale | GizmoSettings | Editor | Preferences | Live | 0.001..10 | N | Same |
-| Gizmo.cpp:28-39,41-45,285-286,627,726 | handle geometry (kAxisLenPx 70 ... kScreenRingWidthPx 3; bevel 0.25/0.3/0.35; centre 0.42; tip 10) | px (UE-matched) | DERIVED | (editor.viewport.gizmoSize, which already exists) | — | Editor | — | — | — | N | Base proportions multiplied by gizmoSize; the size is the setting |
-| Gizmo.cpp:46 | kHitThreshPx | 8 (px) | SETTING | editor.viewport.gizmo.pickRadiusPx | GizmoSettings | Editor | Preferences | Live | 1..32 | N | Pick tolerance |
-| Gizmo.cpp:47 | kRingHitSlackPx | 4 (px) | SETTING | editor.viewport.gizmo.ringPickSlackPx | GizmoSettings | Editor | Preferences | Live | 0..32 | N | Pick tolerance |
-| Gizmo.cpp:48 | kMinQuadAreaPx2 | 4 (px²) | SETTING | editor.viewport.gizmo.minPlaneAreaPx2 | GizmoSettings | Editor Dev | Preferences | Live | 0..100 | N | Hides edge-on plane handles |
-| Gizmo.cpp:40 | kPlaneEdgeOnCos | 0.2 | SETTING | editor.viewport.gizmo.planeEdgeOnCos | GizmoSettings | Editor Dev | Preferences | Live | 0..1 | N | Same family |
-| Gizmo.cpp:605 | min drawn length | 2 (px) | SETTING | editor.viewport.gizmo.minAxisLenPx | GizmoSettings | Editor Dev | Preferences | Live | 0..32 | N | Degenerate-axis cutoff |
-| Gizmo.cpp:49 | kRingSegments | 48 | SETTING | editor.viewport.gizmo.ringSegments | GizmoSettings | Editor Dev | Preferences | Live | 8..256 | N | Tessellation |
-| Gizmo.cpp:19 | kMinScale | 0.01 | SETTING | editor.viewport.gizmo.minScale | GizmoSettings | Editor Dev | Preferences | Live | 1e-6..1 | N | Floor on scale drags |
-| Gizmo.cpp:58-64 | kColorX/Y/Z/Hot/Screen/ScreenArc/Centre | RGBA set | SETTING | editor.viewport.gizmo.color.* | GizmoSettings | Editor | Preferences | Live | rgba | N | Theme colours |
-| Gizmo.cpp:248,253 | Brighten 1.4 / Darken 0.55 | factors | SETTING | editor.viewport.gizmo.shade.* | GizmoSettings | Editor Dev | Preferences | Live | 0..4 | N | Shading look |
-| Gizmo.cpp:536,556,581 | hot fill alpha | 0.3 | SETTING | editor.viewport.gizmo.hotFillAlpha | GizmoSettings | Editor Dev | Preferences | Live | 0..1 | N | Look |
+| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:95 | GizmoSnap::translate | 0.5 (m) | SETTING | editor.gizmo.snap.translate | EditorGizmoSnapSettings | Editor | Pref-P | Live | 0.001..100 | N | The editor sets only `enabled` (ArcaneEditor/src/App/EditorAppFrame.cpp:1303-1304), so nobody can change this today (reconciled R1) |
+| Gizmo.hpp:96 | rotationDeg | 15 (deg) | SETTING | editor.gizmo.snap.rotateDegrees | EditorGizmoSnapSettings | Editor | Pref-P | Live | 0.1..90 | N | Same (reconciled R1) |
+| Gizmo.hpp:97 | scale | 0.1 (ratio) | SETTING | editor.gizmo.snap.scale | EditorGizmoSnapSettings | Editor | Pref-P | Live | 0.001..10 | N | Same (reconciled R1) |
+| Gizmo.cpp:28-39,41-45,285-286,627,726 | handle geometry (kAxisLenPx 70 ... kScreenRingWidthPx 3; bevel 0.25/0.3/0.35; centre 0.42; tip 10) | px (UE-matched) | DERIVED | (editor.gizmo.size) | — | — | — | — | — | N | Base proportions multiplied by gizmoSize; the size is the setting (reconciled R1: gizmoSize lives in the layout ini today, not a cvar; it migrates to editor.gizmo.size) |
+| Gizmo.cpp:46 | kHitThreshPx | 8 (px) | SETTING | editor.gizmo.pickRadiusPx | EditorGizmoSettings | Editor | Pref-P | Live | 1..32 | N | Pick tolerance (reconciled R1) |
+| Gizmo.cpp:47 | kRingHitSlackPx | 4 (px) | SETTING | editor.gizmo.ringPickSlackPx | EditorGizmoSettings | Editor | Pref-P | Live | 0..32 | N | Pick tolerance (reconciled R1) |
+| Gizmo.cpp:48 | kMinQuadAreaPx2 | 4 (px²) | SETTING | editor.gizmo.minPlaneAreaPx2 | EditorGizmoSettings | Editor Dev | Pref-P | Live | 0..100 | N | Hides edge-on plane handles (reconciled R1) |
+| Gizmo.cpp:40 | kPlaneEdgeOnCos | 0.2 | SETTING | editor.gizmo.planeEdgeOnCos | EditorGizmoSettings | Editor Dev | Pref-P | Live | 0..1 | N | Same family (reconciled R1) |
+| Gizmo.cpp:605 | min drawn length | 2 (px) | SETTING | editor.gizmo.minAxisLenPx | EditorGizmoSettings | Editor Dev | Pref-P | Live | 0..32 | N | Degenerate-axis cutoff (reconciled R1) |
+| Gizmo.cpp:49 | kRingSegments | 48 | SETTING | editor.gizmo.ringSegments | EditorGizmoSettings | Editor Dev | Pref-P | Live | 8..256 | N | Tessellation (reconciled R1) |
+| Gizmo.cpp:19 | kMinScale | 0.01 | SETTING | editor.gizmo.minScale | EditorGizmoSettings | Editor Dev | Pref-P | Live | 1e-6..1 | N | Floor on scale drags (reconciled R1) |
+| Gizmo.cpp:58-60 | kColorX/Y/Z | RGBA set | CONSTANT | — | — | — | — | — | — | N | ARC_CONSTANT("pending axis unification re-bless"): the gizmo axis colours stay values until a post-sweep task unifies them with the grid and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y,Z}, ruling I4) |
+| Gizmo.cpp:61-64 | kColorHot/Screen/ScreenArc/Centre | RGBA set | SETTING | editor.gizmo.color.{hot,screen,screenArc,centre} | EditorGizmoColorSettings | Editor | Pref-P | Live | rgba | N | Theme colours (reconciled R1) |
+| Gizmo.cpp:248,253 | Brighten 1.4 / Darken 0.55 | factors | SETTING | editor.gizmo.brighten / editor.gizmo.darken | EditorGizmoSettings | Editor Dev | Pref-P | Live | 0..4 | N | Shading look (reconciled R1) |
+| Gizmo.cpp:536,556,581 | hot fill alpha | 0.3 | SETTING | editor.gizmo.hotFillAlpha | EditorGizmoSettings | Editor Dev | Pref-P | Live | 0..1 | N | Look (reconciled R1) |
 | Gizmo.cpp:18,20-21 | kEps / kPi / kTau | — | CONSTANT | — | — | — | — | — | — | N | Math |
 
 ### Undo (CommandStack)
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Edit/CommandStack.hpp:39-41 | UndoLimits maxSteps / byteBudget / spillThreshold | 100 / 512 MiB / 256 KiB | DERIVED | (editor.undo.*, which already exist) | — | Editor | — | — | — | N | The editor pushes these in through SetLimits; these are fallback copies of the cvar defaults |
-| CommandStack.cpp:111 | spill copy chunk | 1 MiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O chunk hint |
-| ArcaneClient/src/Arcane/Edit/ComponentEditCommand.cpp:34 | writer reserve | 256 (bytes) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint |
+| ArcaneClient/src/Arcane/Edit/CommandStack.hpp:39-41 | UndoLimits maxSteps / byteBudget / spillThreshold | 100 / 512 MiB / 256 KiB | DERIVED | (editor.undo.*, which already exist) | — | — | — | — | — | N | The editor pushes these in through SetLimits; these are fallback copies of the cvar defaults |
+| CommandStack.cpp:111 | spill copy chunk | 1 MiB | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). I/O chunk hint |
+| ArcaneClient/src/Arcane/Edit/ComponentEditCommand.cpp:34 | writer reserve | 256 (bytes) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Reserve hint |
 
 ### Physics debug draw
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.hpp:64 | lineThickness | 1.0 (px) | SETTING | debug.physics.lineThickness | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.5..8 | N | Overlay look |
-| PhysicsDebugDraw.hpp:70,77,91,104,111 | drawContacts / drawAabbs / drawVelocities / drawComMarkers / drawOrientations | true / false / true / true / true | SETTING | debug.physics.draw.* | PhysicsDebugSettings | Game Dev | Preferences | Live | bool | N | Overlay toggles (the editor hard-overrides several at EditorAppFrame.cpp:1907) |
-| PhysicsDebugDraw.hpp:73 | contactMarkerSize | 0.03 (m) | SETTING | debug.physics.contactMarkerSize | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.001..1 | N | Look; the comment still cites pixelsPerMeter=100 |
-| PhysicsDebugDraw.hpp:94 | velocityScale | 0.15 (s look-ahead) | SETTING | debug.physics.velocityScale | PhysicsDebugSettings | Game Dev | Preferences | Live | 0..5 | N | Look |
-| PhysicsDebugDraw.hpp:100 | velocityRayMinSpeed | 0.05 (m/s) | SETTING | debug.physics.velocityMinSpeed | PhysicsDebugSettings | Game Dev | Preferences | Live | 0..10 | N | Look |
-| PhysicsDebugDraw.hpp:106 | comMarkerSize | 0.05 (m) | SETTING | debug.physics.comMarkerSize | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.001..1 | N | Look |
-| PhysicsDebugDraw.hpp:112 | orientationTickLen | 0.18 (m) | SETTING | debug.physics.orientationTickLen | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.01..5 | N | Look |
-| PhysicsDebugDraw.hpp:216-217 | narrowphase overlay lineThickness / emphasis | 1.5 / 1.0 | SETTING | debug.physics.trace.lineThickness | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.5..8 | N | Default parameters |
-| PhysicsDebugDraw.cpp:49-53,119-121,127-134,196-197,670 | kCol* (kinematic, static, sensor, contact, AABB, velocity, COM, orient, tree, pair, grids, trace, subject) | RGBA set | SETTING | debug.physics.color.* | PhysicsDebugSettings | Game Dev | Preferences | Live | rgba | N | Debug palette |
-| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[8] | 8 RGBA | SETTING | debug.physics.islandPalette | PhysicsDebugSettings | Game Dev | Preferences | Live | rgba[8] | N | Palette (count 8 is derived from the array) |
-| PhysicsDebugDraw.cpp:149-156 | narrowphase-kind palette | 7 RGBA | SETTING | debug.physics.narrowphaseColors | PhysicsDebugSettings | Game Dev | Preferences | Live | rgba | N | Palette |
-| PhysicsDebugDraw.cpp:138 | kManifoldNormalLen | 20 ("world units", so 20 m) | SETTING | debug.physics.manifoldNormalLength | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.01..100 | N | Look; probably left over from before the switch to metres (see Notes) |
-| PhysicsDebugDraw.cpp:139 | kManifoldPointPx | 3 (px) | SETTING | debug.physics.manifoldPointPx | PhysicsDebugSettings | Game Dev | Preferences | Live | 1..16 | N | Look |
-| PhysicsDebugDraw.cpp:747 | kNormalLen | 28 ("world units") | SETTING | debug.physics.trace.normalLength | PhysicsDebugSettings | Game Dev | Preferences | Live | 0.01..100 | N | Same unit suspicion |
-| PhysicsDebugDraw.cpp:183,390,660,672,703,725,739,749,758 | arrow head 12/6/0.6; kDim 0.35; emphasis floor 0.15; thickness ×1.3/×1.8/×1.4; kAxisHalfLenPx 60; disc radii 4/3 px | various | SETTING | debug.physics.style.* | PhysicsDebugSettings | Game Dev | Preferences | Live | — | N | Overlay styling |
+| ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.hpp:64 | lineThickness | 1.0 (px) | SETTING | debug.physics.lineThickness | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0.5..8 | N | Overlay look |
+| PhysicsDebugDraw.hpp:70,77,91,104,111 | drawContacts / drawAabbs / drawVelocities / drawComMarkers / drawOrientations | true / false / true / true / true | SETTING | debug.physics.draw.{contacts,aabbs,velocities,comMarkers,orientations} | DebugPhysicsDrawSettings | Game Dev | Pref-P | Live | bool | N | Overlay toggles (the editor hard-overrides several at EditorAppFrame.cpp:1907) |
+| PhysicsDebugDraw.hpp:73 | contactMarkerSize | 0.03 (m) | SETTING | debug.physics.contactMarkerSize | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0.001..1 | N | Look; the comment still cites pixelsPerMeter=100 |
+| PhysicsDebugDraw.hpp:94 | velocityScale | 0.15 (s look-ahead) | SETTING | debug.physics.velocityScale | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0..5 | N | Look |
+| PhysicsDebugDraw.hpp:100 | velocityRayMinSpeed | 0.05 (m/s) | SETTING | debug.physics.velocityMinSpeed | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0..10 | N | Look |
+| PhysicsDebugDraw.hpp:106 | comMarkerSize | 0.05 (m) | SETTING | debug.physics.comMarkerSize | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0.001..1 | N | Look |
+| PhysicsDebugDraw.hpp:112 | orientationTickLen | 0.18 (m) | SETTING | debug.physics.orientationTickLen | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0.01..5 | N | Look |
+| PhysicsDebugDraw.hpp:216-217 | narrowphase overlay lineThickness / emphasis | 1.5 / 1.0 | SETTING | debug.physics.trace.lineThickness | DebugPhysicsTraceSettings | Game Dev | Pref-P | Live | 0.5..8 | N | Default parameters |
+| PhysicsDebugDraw.hpp:217 | narrowphase overlay emphasis | 1.0 | SETTING | debug.physics.trace.emphasis | DebugPhysicsTraceSettings | Game Dev | Pref-P | Live | 0..1 | N | Default parameter (S6-45 amendment): split from the lineThickness row, one name per value (ruling S6-10) |
+| PhysicsDebugDraw.cpp:49-53,119-121,127-134,196-197,670 | kCol* (kinematic, static, sensor, contact, AABB, velocity, COM, orient, tree, pair, grids, trace, subject) | RGBA set | SETTING | debug.physics.color.{kinematic,static,sensor,contact,aabb,velocity,com,orient,treeTight,treeFat,treePair,staticGrid,residencyGrid,traceShapeB,traceAxis,traceAxisHi,traceNormal,tracePoint,subject} | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Debug palette |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[0] | RGBA | SETTING | debug.physics.color.island0 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[1] | RGBA | SETTING | debug.physics.color.island1 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[2] | RGBA | SETTING | debug.physics.color.island2 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[3] | RGBA | SETTING | debug.physics.color.island3 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[4] | RGBA | SETTING | debug.physics.color.island4 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[5] | RGBA | SETTING | debug.physics.color.island5 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[6] | RGBA | SETTING | debug.physics.color.island6 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:59-68 | kIslandPalette[7] | RGBA | SETTING | debug.physics.color.island7 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (S6-45 amendment): replaces debug.physics.islandPalette (no array CVarType; ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 0 | RGBA | SETTING | debug.physics.color.narrowphase0 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 0) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 1 | RGBA | SETTING | debug.physics.color.narrowphase1 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 1) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 2 | RGBA | SETTING | debug.physics.color.narrowphase2 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 2) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 3 | RGBA | SETTING | debug.physics.color.narrowphase3 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 3) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 4 | RGBA | SETTING | debug.physics.color.narrowphase4 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 4) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 5 | RGBA | SETTING | debug.physics.color.narrowphase5 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 5) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:149-156 | narrowphase palette, NarrowphaseKind 6 | RGBA | SETTING | debug.physics.color.narrowphase6 | DebugPhysicsColorSettings | Game Dev | Pref-P | Live | rgba | N | Palette entry (NarrowphaseKind ordinal 6) (S6-45 amendment): replaces debug.physics.narrowphaseColors (ruling S6-10) |
+| PhysicsDebugDraw.cpp:138 | kManifoldNormalLen | 20 ("world units", so 20 m) | SETTING | debug.physics.manifoldNormalLength | PhysicsDebugSettings | Game Dev | Pref-P | Live | 0.01..100 | N | Look; probably left over from before the switch to metres (see Notes) |
+| PhysicsDebugDraw.cpp:139 | kManifoldPointPx | 3 (px) | SETTING | debug.physics.manifoldPointPx | PhysicsDebugSettings | Game Dev | Pref-P | Live | 1..16 | N | Look |
+| PhysicsDebugDraw.cpp:747 | kNormalLen | 28 ("world units") | SETTING | debug.physics.trace.normalLength | DebugPhysicsTraceSettings | Game Dev | Pref-P | Live | 0.01..100 | N | Same unit suspicion |
+| PhysicsDebugDraw.cpp:183,390,660,672,703,725,739,749,758 | arrow head 12/6/0.6; kDim 0.35; emphasis floor 0.15; thickness ×1.3/×1.8/×1.4; kAxisHalfLenPx 60; disc radii 4/3 px | various | SETTING | debug.physics.style.{arrowShortLen,arrowHeadLen,arrowHeadSpread,sleepingDim,emphasisFloor,subjectThicknessScale,axisHiThicknessScale,normalThicknessScale,axisHalfLenPx,anchorDiscRadius,contactDiscRadius} | DebugPhysicsStyleSettings | Game Dev | Pref-P | Live | — | N | Overlay styling |
 
 ### Input
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneClient/src/Arcane/Input/InputActions.cpp:370 | kBtnThreshold | 0.5 | SETTING | input.pressThreshold | InputSettings | Game | Project | Live | 0.05..1 | N | Analog-as-button and chord threshold |
-| InputActions.cpp:390-391 | deadzone processor defaults min / max | 0.125 / 0.925 | SETTING | input.deadzone.defaultMin / defaultMax | InputSettings | PlayerSafe | Project | Live | 0..1 | N | Standard player option; per-binding parameters still override |
+| ArcaneClient/src/Arcane/Input/InputActions.cpp:370 | kBtnThreshold | 0.5 | SETTING | input.pressThreshold | InputSettings | Game | Project | Live | 0.05..1 | Y | Analog-as-button and chord threshold (R2: input thresholds decide which actions fire; recorded raw input replays differently) |
+| InputActions.cpp:390-391 | deadzone processor defaults min / max | 0.125 / 0.925 | SETTING | input.deadzone.defaultMin / defaultMax | InputDeadzoneSettings | PlayerSafe | Project | Live | 0..1 | Y | Standard player option; per-binding parameters still override (R2: input thresholds decide which actions fire; recorded raw input replays differently) |
 | InputActions.cpp:392 | factor | 1.0 | CONSTANT | — | — | — | — | — | — | N | Identity scale |
-| ArcaneClient/src/Arcane/Input/InputActions.hpp:109 | kDefaultHoldSeconds | 0.4 (s) | SETTING | input.holdSeconds | InputSettings | Game | Project | Live | 0.05..5 | N | Interaction timing (the editor's readable text uses it too) |
-| InputActions.hpp:110 | kDefaultTapSeconds | 0.2 (s) | SETTING | input.tapSeconds | InputSettings | Game | Project | Live | 0.05..2 | N | Interaction timing |
+| ArcaneClient/src/Arcane/Input/InputActions.hpp:109 | kDefaultHoldSeconds | 0.4 (s) | SETTING | input.holdSeconds | InputSettings | Game | Project | Live | 0.05..5 | Y | Interaction timing (the editor's readable text uses it too) (R2: input thresholds decide which actions fire; recorded raw input replays differently) |
+| InputActions.hpp:110 | kDefaultTapSeconds | 0.2 (s) | SETTING | input.tapSeconds | InputSettings | Game | Project | Live | 0.05..2 | Y | Interaction timing (R2: input thresholds decide which actions fire; recorded raw input replays differently) |
 | InputActions.cpp:1265 | kMaxTransitions | 256 | SETTING | input.maxQueuedTransitions | InputSettings | Game Dev | Project | Restart | 16..4096 | N | Queue cap (overflow is reported once) |
-| ArcaneClient/src/Arcane/Input/InputRebindOperation.cpp:155-156 | rebind axis threshold | 0.5 | SETTING | input.rebind.axisThreshold | InputSettings | Game Dev | Project | Live | 0.1..1 | N | Rebind sensitivity |
+| ArcaneClient/src/Arcane/Input/InputRebindOperation.cpp:155-156 | rebind axis threshold | 0.5 | SETTING | input.rebind.axisThreshold | InputRebindSettings | Game Dev | Project | Live | 0.1..1 | N | Rebind sensitivity |
 | InputActions.cpp:192,134,1795 | kMouseButtonCount 5; kNoGamepadToken -1; F1..F12 | — | CONSTANT | — | — | — | — | — | — | N | SDL vocabulary; sentinel |
 | ArcaneClient/src/Arcane/Input/InputSnapshot.hpp:16-17,53,57 | kScancodeWords 8 (512 scancodes); kMaxKeycodesDown 16 | — | CONSTANT | — | — | — | — | — | — | N | SDL_SCANCODE_COUNT; fixed arrays in InputSnapshot, which crosses the plugin ABI |
 | ArcaneClient/src/Arcane/Input/InputDevices.cpp:58,205,226,233; InputRebindOperation.cpp:107 | 15 buttons; /32767; scancode < 512 | — | CONSTANT | — | — | — | — | — | — | N | SDL ranges |
@@ -782,12 +888,12 @@ Creation sites:
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ArcaneClient/src/Arcane/Audio/AudioTypes.hpp:68 | sampleRate | 48000 (Hz) | SETTING | audio.sampleRate | AudioSettings | Game Dev | Project | Restart | 22050..192000 | N | Device format |
-| AudioTypes.hpp:69 | channels | 2 | SETTING | audio.channels | AudioSettings | PlayerSafe | Preferences | Restart | 1..8 | N | Speaker setup |
+| AudioTypes.hpp:69 | channels | 2 | SETTING | audio.channels | AudioSettings | PlayerSafe | Pref-P | Restart | 1..8 | N | Speaker setup |
 | AudioTypes.hpp:80 | enableDevice | false | DERIVED | — | — | — | — | — | — | N | Comes from the ClientRuntime constructor (RuntimeApp.cpp:103) |
 | AudioTypes.hpp:85 | SoundLoadDesc::mode | DecodeToMemory | SETTING | audio.defaultLoadMode | AudioSettings | Game | Project | NextWorld | decode \| stream | N | Memory against streaming |
 | AudioTypes.hpp:96-101 | PlayDesc bus / volume / pitch / pan / loop / startPaused | master / 1 / 1 / 0 / false / false | CONSTANT | — | — | — | — | — | — | N | Identity per-call defaults |
 | ArcaneClient/src/Arcane/Audio/AudioDevice.cpp:654 | MA_SOUND_FLAG_NO_SPATIALIZATION | always | SETTING | audio.spatialization | AudioSettings | Game | Project | NextWorld | bool | N | Spatial audio is hard-wired off |
-| AudioDevice.cpp:361 | kChunkFrames (null-backend pump) | 512 (frames) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | — | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Scratch-chunk size hint |
+| AudioDevice.cpp:361 | kChunkFrames (null-backend pump) | 512 (frames) | CONSTANT | — (allow-list candidate) | — | — | — | — | — | N | capacity hint, no observable preference; ARC_CONSTANT marker (reconciled). Scratch-chunk size hint |
 
 ### Verify and settle harness
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
@@ -801,9 +907,12 @@ Creation sites:
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ArcaneServer/src/ServerConfig.hpp:22; ServerConfig.cpp:56 | fixedDtSeconds (`--fixed-dt`) | 1/60 (s); string "0.016666666666666666" | SETTING | server.tickHz | ServerSettings | Server | Project | Restart | 1..240 Hz | Y | reconciled: a server tick distinct from the client sim.fixedHz. BOTH: keep the flag and add the cvar; it sets RunLoop fixedHz (ServerApp.cpp:102) |
+| Core/Config/CVarRegistry.cpp:525 | the cheats gate | false | SETTING | server.cheats | ServerSettings | Server | Project | Live | bool | N | (S6-45 amendment): spec s3.2 (S1); alias `cheats`; registered by the registry, not a ServerSettings field |
+| Core/Config/CVarRegistry.cpp:525-527 | cheats permitted on this host | true | SETTING | server.cheatsAllowed | ServerSettings | Server | Project | Live | bool | N | (S6-45 amendment): spec s3.2 (S1); a dedicated host sets the Project default false |
+| Core/Config/CVarRegistry.cpp:527 | a client may set Server settings | false | SETTING | server.allowClientSetServer | ServerSettings | Server | Project | Live | bool | N | (S6-45 amendment): spec s3.2 / s9 (S1) |
 | ServerConfig.cpp:55 | frames | 0 | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY: run budget |
 | ServerConfig.cpp:53-54,61,63 | project / plugin / report / print-engine-info | "" / false | CONSTANT | — | — | — | — | — | — | N | FLAG ONLY |
-| ArcaneServer/src/ServerApp.cpp:102-103,170 | SetFixedHz / sleep_until pacing | from fixedDt | DERIVED | — | — | — | — | — | — | Y | Follows sim.fixedHz |
+| ArcaneServer/src/ServerApp.cpp:102-103, :164, :170 | SetFixedHz / Loop().Advance step / sleep_until pacing | from fixedDt | DERIVED | — | — | — | — | — | — | Y | Follows server.tickHz (R1 split; --fixed-dt overrides) |
 | ArcaneServer/src/main.cpp:125 | diag.unattended | true | CONSTANT | — | — | — | — | — | — | N | A dedicated server has no desktop session; changing it is a bug |
 | main.cpp:50; ArcaneServer/src/ServerReport.hpp:24 | relaunch strip list; kSchemaVersion 1 | — | CONSTANT | — | — | — | — | — | — | N | Relaunch-line rule; report format |
 
@@ -815,15 +924,16 @@ Creation sites:
 | Symbolizer.hpp:45 | maxFramesFaultingThread | 8192 | SETTING | diagnostics.reporter.maxFramesFaultingThread | ReporterSettings | Game Dev | Project | Restart | 64..65536 | N | Matches UE's MaxFrames |
 | Symbolizer.hpp:46 | maxThreads | 64 | SETTING | diagnostics.reporter.maxThreads | ReporterSettings | Game Dev | Project | Restart | 1..1024 | N | Report breadth |
 | Symbolizer.hpp:47 | waitForEventMs | 30000 (ms) | SETTING | diagnostics.reporter.dbgengWaitMs | ReporterSettings | Game Dev | Project | Restart | 1000..300000 | N | dbgeng wait |
-| ArcaneCrashReporter/src/ReporterMain.cpp:413 | log tail (crash) | 200 (lines) | SETTING | diagnostics.reporter.logTailLines | ReporterSettings | Game Dev | Project | Restart | 0..10000 | N | Size of the log excerpt |
+| ArcaneCrashReporter/src/ReporterMain.cpp:413 | log tail (crash) | 200 (lines) | SETTING | diagnostics.logTailLines | DiagnosticsSettings | Game Dev | Pref-P | Live | 0..10000 | N | Size of the log excerpt (reconciled R1: one value for the reporter and the editor crash document; the host passes it on the reporter command line) |
 | ArcaneCrashReporter/src/Monitor.cpp:237 | log tail read (hang) | 512 (lines) | SETTING | diagnostics.reporter.hangLogTailLines | ReporterSettings | Game Dev | Project | Restart | 0..10000 | N | Size of the log excerpt |
-| Monitor.cpp:316 | finished-view tail | 200 (lines) | DERIVED | (diagnostics.reporter.logTailLines) | — | — | — | — | — | N | Same value as the crash tail |
+| Monitor.cpp:316 | finished-view tail | 200 (lines) | DERIVED | (diagnostics.logTailLines) | — | — | — | — | — | N | Same value as the crash tail (reconciled R1) |
 | ReporterMain.cpp:548 | FlushFileSinkBounded | 1000 (ms) | SETTING | diagnostics.reporter.flushTimeoutMs | ReporterSettings | Game Dev | Project | Restart | 0..10000 | N | Bounded flush |
 | ReporterMain.cpp:582 | UI wait slice | 250 (ms) | SETTING | diagnostics.reporter.uiPollMs | ReporterSettings | Game Dev | Project | Restart | 10..1000 | N | Poll cadence |
-| ArcaneCrashReporter/src/ReporterWindow.cpp:124 | window size | 1000 x 640 (px) | SETTING | diagnostics.reporter.windowSize | ReporterSettings | Game | Preferences | Restart | px | N | Preference |
+| ArcaneCrashReporter/src/ReporterWindow.cpp:124 | window width | 1000 (px) | SETTING | diagnostics.reporter.windowWidth | ReporterSettings | Game | Pref-P | Restart | 320..7680 | N | Preference (S6-45 amendment): split from diagnostics.reporter.windowSize for the --window WxH flag (S6-4); scope Pref-P confirmed (ruling S6-4); range recorded from the code |
+| ArcaneCrashReporter/src/ReporterWindow.cpp:124 | window height | 640 (px) | SETTING | diagnostics.reporter.windowHeight | ReporterSettings | Game | Pref-P | Restart | 240..4320 | N | as diagnostics.reporter.windowWidth (S6-45 amendment) |
 | ReporterWindow.cpp:130 | WaitUntilReady | 5000 (ms) | SETTING | diagnostics.reporter.windowReadyMs | ReporterSettings | Game Dev | Project | Restart | 100..60000 | N | Timeout |
-| ReporterWindow.cpp:717 | copy-confirmation flash | 0.75 (s) | SETTING | diagnostics.reporter.copyFlashSeconds | ReporterSettings | Game Dev | Preferences | Live | 0..5 | N | UI feedback |
-| ReporterWindow.cpp:350,355,370-371,611 | layout metrics 12/20/28/8, 320/200, 150/72, 320 | DIP px | SETTING | diagnostics.reporter.layout.* | ReporterSettings | Game Dev | Preferences | Restart | px | N | Layout |
+| ReporterWindow.cpp:717 | copy-confirmation flash | 0.75 (s) | SETTING | ui.copyFlashSeconds | UiSettings | Game Dev | Pref-M | Live | 0..5 | N | UI feedback (reconciled R1: shared with the editor; the reporter receives it on its command line) |
+| ReporterWindow.cpp:350,355,370-371,611 | layout metrics 12/20/28/8, 320/200, 150/72, 320 | DIP px | DERIVED | — | — | — | — | — | — | N | Layout; base px x 1 with an ARC_CONSTANT base (s16.11 applied to the reporter, which has no UI scale; was diagnostics.reporter.layout.*) (reconciled R1) |
 | ReporterWindow.cpp:33,541,563,566,596,635 | font sizes 10pt / 16 / 16 / 15 / 18 / 15 | pt / px | DERIVED | (editor.appearance.font*) | — | — | — | — | — | N | The "editor-styled" reporter should follow the editor's font settings |
 | ArcaneCrashReporter/src/WarpImGui.cpp:169 | panel colour | 30/255 grey | DERIVED | (editor theme token) | — | — | — | — | — | N | Should follow the theme |
 | ReporterWindow.cpp:349,402,480 | 96 DPI baseline; 72 points per inch | — | CONSTANT | — | — | — | — | — | — | N | Windows DPI and point math |
@@ -992,26 +1102,29 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Widgets/EditorTheme.hpp:277 | DragDropTarget | amber×0.90 | DERIVED | — | — | — | — | — | — | N | token × alpha |
 | Widgets/EditorTheme.hpp:282 | NavWindowingHighlight | text×0.70 | DERIVED | — | — | — | — | — | — | N | token × alpha |
 | Widgets/EditorTheme.hpp:285-286 | NavWindowingDimBg / ModalWindowDimBg | (0.02,0.02,0.02,0.55) | SETTING | editor.theme.modalDim | EditorThemeSettings | Editor | Pref-M | Live | Color | N | a light theme needs another value |
-| Widgets/EditorWidgets.cpp:243-247 | kAxisBarColors | X #c44036, Y #60a63a, Z #3a7ac4 | SETTING | editor.theme.axisX/Y/Z | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour; colour-blind users |
+| Widgets/EditorWidgets.cpp:243-247 | kAxisBarColors | X #c44036, Y #60a63a, Z #3a7ac4 | SETTING | editor.theme.axis{X,Y,Z} | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour; colour-blind users (reconciled R1: the canonical axis tokens; S5-2 review decision 1 option A: only the inspector bars derive from them, the grid and gizmo axis colours stay values marked ARC_CONSTANT("pending axis unification re-bless")) |
 | Widgets/EditorWidgets.cpp:266-268 | kHeaderBand* | (48,48,52)/(58,58,64)/(66,66,73) | SETTING | editor.theme.headerBand{,Hovered,Active} | EditorThemeSettings | Editor | Pref-M | Live | Color | N | Inspector category bands |
 | Widgets/EditorWidgets.cpp:315 | kPillAmberBorder | #7a5a20 | SETTING | editor.theme.actingOnFrame | EditorThemeSettings | Editor | Pref-M | Live | Color | N | comment: promote on third use |
-| Widgets/EditorWidgets.cpp:319-322 | kPillScheme{Blue,Violet}{Border,Text} | #3a4a5c/#9fb3c8/#4a3a5c/#b8a3c8 | SETTING | editor.theme.inputPill.* | EditorThemeSettings | Editor Dev | Pref-M | Live | Color | N | spec-pinned hexes |
-| Widgets/ColorPickerPopup.cpp:46 | kMarkers | R/G/B/W channel markers | SETTING | editor.theme.channelMarkers | EditorThemeSettings | Editor Dev | Pref-M | Live | Color×4 | N | domain colour |
+| Widgets/EditorWidgets.cpp:319-322 | kPillScheme{Blue,Violet}{Border,Text} | #3a4a5c/#9fb3c8/#4a3a5c/#b8a3c8 | SETTING | editor.theme.inputPill.{blueBorder,blueText,violetBorder,violetText} | EditorThemeInputPillSettings | Editor Dev | Pref-M | Live | Color | N | spec-pinned hexes |
+| Widgets/ColorPickerPopup.cpp:46 | kMarkers[0] (R) | channel marker | SETTING | editor.theme.channelR | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour (S6-45 amendment): replaces editor.theme.channelMarkers (Color x4), one name per value; Editor, not Editor Dev: a theme token like every other editor.theme.* colour (it travels in the .arctheme presets) |
+| Widgets/ColorPickerPopup.cpp:46 | kMarkers[1] (G) | channel marker | SETTING | editor.theme.channelG | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour (S6-45 amendment): replaces editor.theme.channelMarkers (Color x4), one name per value; Editor, not Editor Dev: a theme token like every other editor.theme.* colour (it travels in the .arctheme presets) |
+| Widgets/ColorPickerPopup.cpp:46 | kMarkers[2] (B) | channel marker | SETTING | editor.theme.channelB | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour (S6-45 amendment): replaces editor.theme.channelMarkers (Color x4), one name per value; Editor, not Editor Dev: a theme token like every other editor.theme.* colour (it travels in the .arctheme presets) |
+| Widgets/ColorPickerPopup.cpp:46 | kMarkers[3] (W) | channel marker | SETTING | editor.theme.channelW | EditorThemeSettings | Editor | Pref-M | Live | Color | N | domain colour (S6-45 amendment): replaces editor.theme.channelMarkers (Color x4), one name per value; Editor, not Editor Dev: a theme token like every other editor.theme.* colour (it travels in the .arctheme presets) |
 | Documents/ShaderEditorDocument.cpp:346 | kCanvasColor | = Theme::kPanel | DERIVED | — | — | — | — | — | — | N | token |
-| Documents/ShaderEditorDocument.cpp:351-355 | kNodeBody/Title/Border/TitleText/BadgeText | #2d2d30, #232326, … | SETTING | editor.theme.graph.node* | GraphThemeSettings | Editor | Pref-M | Restart | Color | N | latched by ApplyGraphCanvasStyle at canvas creation |
-| Documents/ShaderEditorDocument.cpp:360-361 | kGroupBg/BorderColor | α 0.25 / 0.60 | SETTING | editor.theme.graph.group* | GraphThemeSettings | Editor | Pref-M | Restart | Color | N | — |
+| Documents/ShaderEditorDocument.cpp:351-355 | kNodeBody/Title/Border/TitleText/BadgeText | #2d2d30, #232326, … | SETTING | editor.theme.graph.{nodeBody,nodeTitle,nodeBorder,nodeTitleText,nodeBadgeText} | GraphThemeSettings | Editor | Pref-M | Restart | Color | N | latched by ApplyGraphCanvasStyle at canvas creation |
+| Documents/ShaderEditorDocument.cpp:360-361 | kGroupBg/BorderColor | α 0.25 / 0.60 | SETTING | editor.theme.graph.{groupBg,groupBorder} | GraphThemeSettings | Editor | Pref-M | Restart | Color | N | — |
 | Documents/ShaderEditorDocument.cpp:380 | kPinTextureColor | red-orange | SETTING | editor.theme.graph.pinTexture | GraphThemeSettings | Editor | Pref-M | Live | Color | N | — |
-| Documents/ShaderGraphPinTypes.hpp:31-34 | kPin{Scalar,Vec2,Vec4,Dynamic}Color | azure/green/magenta/gray | SETTING | editor.theme.graph.pin* | GraphThemeSettings | Editor | Pref-M | Live | Color | N | legend shows the same values |
-| Documents/ShaderGraphCategoryColors.hpp:22-29 | category header colours | 7 hexes | SETTING | editor.theme.graph.category.* | GraphThemeSettings | Editor | Pref-M | Live | Color | N | contrast test s5.1.11 pins them |
+| Documents/ShaderGraphPinTypes.hpp:31-34 | kPin{Scalar,Vec2,Vec4,Dynamic}Color | azure/green/magenta/gray | SETTING | editor.theme.graph.{pinScalar,pinVec2,pinVec4,pinDynamic} | GraphThemeSettings | Editor | Pref-M | Live | Color | N | legend shows the same values |
+| Documents/ShaderGraphCategoryColors.hpp:22-29 | category header colours | 7 hexes | SETTING | editor.theme.graph.category.{input,math,vector,procedural,output,utility,uncategorized} | GraphCategoryThemeSettings | Editor | Pref-M | Live | Color | N | contrast test s5.1.11 pins them |
 | Widgets/GraphCanvasStyle.hpp:74-75 | kGraphGrid{Minor,Major}Color | α 0.55 / 0.90 | SETTING | editor.theme.graph.grid{Minor,Major} | GraphThemeSettings | Editor | Pref-M | Live | Color | N | — |
 | Widgets/GraphCanvasStyle.hpp:87 | kGraphNodeSelBorderColor | = kAmber | DERIVED | — | — | — | — | — | — | N | token |
 | Widgets/GraphCanvasStyle.hpp:88 | kGraphNodeHovBorderColor | (0.25,0.70,1) | SETTING | editor.theme.graph.hoverBorder | GraphThemeSettings | Editor | Pref-M | Restart | Color | N | — |
 | Panels/AssetGraphPanel.cpp:462-465 | kGraph{Canvas,NodeBody,NodeTitle,NodeBorder} | = kWell/kPanel/kChrome/kBorder | DERIVED | — | — | — | — | — | — | N | tokens |
-| Panels/AssetGraphPanel.cpp:1168-1169 | kGraphLegend{Edge,UsedBy}Color | #5c5c5c / #4a4a4a | SETTING | editor.theme.assetGraph.legend* | GraphThemeSettings | Editor Dev | Pref-M | Live | Color | N | — |
-| Panels/AssetPanelModel.hpp:338-351 | KindAccentRgb | 7 kind hexes | SETTING | editor.theme.assetKind.* | EditorThemeSettings | Editor | Pref-M | Live | Color | N | data colour |
+| Panels/AssetGraphPanel.cpp:1168-1169 | kGraphLegend{Edge,UsedBy}Color | #5c5c5c / #4a4a4a | SETTING | editor.theme.assetGraph.{legendEdge,legendUsedBy} | EditorThemeAssetGraphSettings | Editor Dev | Pref-M | Live | Color | N | — |
+| Panels/AssetPanelModel.hpp:338-351 | KindAccentRgb | 7 kind hexes | SETTING | editor.theme.assetKind.{texture,material,mesh,sprite,scene,inputActions,model} | EditorThemeAssetKindSettings | Editor | Pref-M | Live | Color | N | data colour |
 | Viewport/ViewportGrid.hpp:71 | kGridLineRgb | 0.5 gray | SETTING | editor.viewport.grid.lineColor | EditorGridSettings | Editor | Pref-M | Live | Color | N | — |
-| Viewport/ViewportGrid.hpp:72-73 | kGridAxis{X,Y}Color | red / green @0.9 | SETTING | editor.viewport.grid.axis{X,Y}Color | EditorGridSettings | Editor | Pref-M | Live | Color | N | — |
-| App/EditorAppFrame.cpp:1959 | scene-camera frame colour | (0.45,0.62,0.78,0.75) | SETTING | editor.theme.viewport.cameraFrame | EditorThemeSettings | Editor | Pref-M | Live | Color | N | — |
+| Viewport/ViewportGrid.hpp:72-73 | kGridAxis{X,Y}Color | red / green @0.9 | CONSTANT | — | — | — | — | — | — | N | ARC_CONSTANT("pending axis unification re-bless"): the 2D grid axis colours stay values until a post-sweep task unifies them with the gizmo and inspector axis tokens in one deliberate re-bless (S5-2 review, decision 1 option A; was DERIVED from editor.theme.axis{X,Y}, ruling I4) |
+| App/EditorAppFrame.cpp:1959 | scene-camera frame colour | (0.45,0.62,0.78,0.75) | SETTING | editor.theme.viewport.cameraFrame | EditorThemeViewportSettings | Editor | Pref-M | Live | Color | N | — |
 | Panels/EditorPanels.cpp:1243 | console info text | gray 0.80 | DERIVED | — | — | — | — | — | — | N | should be Theme::kText (drift: 0.80 ≠ 0.878) |
 | Panels/EditorPanels.cpp:1348 | cvar reply error colour | (1.0,0.45,0.45) | DERIVED | — | — | — | — | — | — | N | should be Theme::kError (drift: ≠ #e65959) |
 
@@ -1043,18 +1156,18 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Widgets/EditorWidgets.cpp:927 | stat number font | 24 px | DERIVED | — | — | — | — | — | — | N | same |
 | Widgets/EditorWidgets.cpp:943 | stat caption font | 13 px | DERIVED | — | — | — | — | — | — | N | same |
 | Documents/CrashReportDocument.cpp:182 | heading scale | FontSizeBase×1.35 | DERIVED | — | — | — | — | — | — | N | already relative |
-| Panels/EditorPanels.cpp:768 | toolbar logo height | btnH×1.35 | SETTING | editor.ui.toolbar.logoScale | EditorUiSettings | Editor Dev | Pref-M | Live | 1..2 | N | — |
-| Panels/EditorPanels.cpp:794 | brand wordmark size | logoH×0.80 | SETTING | editor.ui.toolbar.brandScale | EditorUiSettings | Editor Dev | Pref-M | Live | 0.5..1 | N | — |
-| Panels/EditorPanels.cpp:781, :788, :828, :1018, :770 | toolbar pads / gaps | 8, 8, 12, 12, 3 px | SETTING | editor.ui.toolbar.* | EditorUiSettings | Editor Dev | Pref-M | Live | 0..32 | N | should scale with editor.ui.scale |
-| Panels/EditorPanels.cpp:816-817 | kTransportGap, kCaretPadX | 2, 2 px | SETTING | editor.ui.toolbar.transportGap | EditorUiSettings | Editor Dev | Pref-M | Live | 0..8 | N | — |
+| Panels/EditorPanels.cpp:768 | toolbar logo height | btnH×1.35 | SETTING | editor.ui.toolbar.logoScale | EditorUiToolbarSettings | Editor Dev | Pref-M | Live | 1..2 | N | — |
+| Panels/EditorPanels.cpp:794 | brand wordmark size | logoH×0.80 | SETTING | editor.ui.toolbar.brandScale | EditorUiToolbarSettings | Editor Dev | Pref-M | Live | 0.5..1 | N | — |
+| Panels/EditorPanels.cpp:781, :788, :828, :1018, :770 | toolbar pads / gaps | 8, 8, 12, 12, 3 px | DERIVED | — | — | — | — | — | — | N | should scale with editor.ui.scale; base px x editor.ui.scale (s16.11; was editor.ui.toolbar.*) |
+| Panels/EditorPanels.cpp:816-817 | kTransportGap, kCaretPadX | 2, 2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.ui.toolbar.transportGap) |
 | Widgets/EditorWidgets.hpp:240 | kPillLineHeight | 16 px | DERIVED | — | — | — | — | — | — | N | should derive from fontSize |
 | Widgets/EditorWidgets.hpp:309 | default rowHeight | 24 px | DERIVED | — | — | — | — | — | — | N | = kTableRowHeight; should derive from fontSize |
-| Widgets/EditorWidgets.cpp:372, :911 | kCardFramePadding, kPad | 8 px | SETTING | editor.ui.cardPadding | EditorUiSettings | Editor Dev | Pref-M | Live | 0..24 | N | — |
-| Widgets/EditorWidgets.cpp:971-975 | distribution bar: height, segment gap, swatch, legend gaps | 12, 2, 8, 6, 14 px | SETTING | editor.ui.distBar.* | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | spec §11.2 pinned |
-| Widgets/EditorWidgets.cpp:1144-1148 | activity-feed dot / gaps | 7, 8, 6, 2 px | SETTING | editor.ui.feed.* | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | spec §11.2 pinned |
+| Widgets/EditorWidgets.cpp:372, :911 | kCardFramePadding, kPad | 8 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.ui.cardPadding) |
+| Widgets/EditorWidgets.cpp:971-975 | distribution bar: height, segment gap, swatch, legend gaps | 12, 2, 8, 6, 14 px | DERIVED | — | — | — | — | — | — | N | spec §11.2 pinned; base px x editor.ui.scale (s16.11; was editor.ui.distBar.*) |
+| Widgets/EditorWidgets.cpp:1144-1148 | activity-feed dot / gaps | 7, 8, 6, 2 px | DERIVED | — | — | — | — | — | — | N | spec §11.2 pinned; base px x editor.ui.scale (s16.11; was editor.ui.feed.*) |
 | Widgets/EditorWidgets.cpp:1324 | link underline offset | Descent×0.20 | DERIVED | — | — | — | — | — | — | N | font metric |
 | App/EditorAppFrame.cpp:3442 | modal wrap width | FontSize×30 | DERIVED | — | — | — | — | — | — | N | relative |
-| App/EditorAppFrame.cpp:3446, :3536, :3580, :3587 | modal button widths | 120, 140/90, 90, 90 px | SETTING | editor.ui.modalButtonWidth | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | should scale |
+| App/EditorAppFrame.cpp:3446, :3536, :3580, :3587 | modal button widths | 120, 140/90, 90, 90 px | DERIVED | — | — | — | — | — | — | N | should scale; base px x editor.ui.scale (s16.11; was editor.ui.modalButtonWidth) |
 
 ### Viewport/Camera/Gizmo
 
@@ -1079,22 +1192,22 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Viewport/EditorCamera.hpp:122 | kFrameFill | 0.9 | SETTING | editor.camera.frameFill | EditorCameraSettings | Editor | Pref-P | Live | 0.5..1 | N | F/Home padding |
 | Viewport/EditorCamera.hpp:126-127 | kMin/MaxDistance | 0.05 / 1e5 m | SETTING | editor.camera.{min,max}OrbitDistance | EditorCameraSettings | Editor Dev | Pref-P | Live | >0 | N | — |
 | Viewport/EditorCamera.hpp:128 | kNearZ | 0.05 m | SETTING | editor.camera.nearClip | EditorCameraSettings | Editor | Pref-P | Live | 0.001..10 | N | UE exposes near clip |
-| Viewport/EditorCamera.hpp:129 | kFarZ | 5000 m | SETTING | editor.camera.farClip | EditorCameraSettings | Editor | Pref-P | Live | 10..1e6 | N | large worlds |
+| Viewport/EditorCamera.hpp:129 | kFarZ | 5000 m | SETTING | editor.camera.farClip | EditorCameraSettings | Editor | Pref-P | Live | 20..1e6 | N | large worlds; min 20, not 10 (S6-30): above nearClip's max of 10, so near < far and the frustum never degenerates |
 | Viewport/EditorCamera.hpp:133 | kBaseFlySpeed | 5 m/s | SETTING | editor.camera.baseFlySpeed | EditorCameraSettings | Editor | Pref-P | Live | 0.1..100 | N | — |
-| Viewport/EditorCamera.cpp:37 | DistanceScale ref / floor / cap | /10 m, 0.1, 1000 | SETTING | editor.camera.distanceScaledSpeed (+ .refDistance, .floor) | EditorCameraSettings | Editor Dev | Pref-P | Live | bool / >0 | N | UE has this as a toggle |
+| Viewport/EditorCamera.cpp:37 | DistanceScale ref / floor / cap | /10 m, 0.1, 1000 | SETTING | editor.camera.{distanceScaledSpeed,refDistance,floor,speedCap} | EditorCameraSettings | Editor Dev | Pref-P | Live | bool / >0 | N | UE has this as a toggle |
 | Viewport/EditorCamera.cpp:72, :81 | look / orbit sensitivity | 0.2 deg/px | SETTING | editor.camera.{look,orbit}Sensitivity | EditorCameraSettings | Editor | Pref-P | Live | 0.01..2 | N | no invert-Y exists today either |
 | Viewport/EditorCamera.cpp:73, :82 | pitch clamp | ±(90−1e-3) | CONSTANT | — | — | — | — | — | — | N | NaN guard (same as kMaxPitchDeg) |
 | Viewport/EditorCamera.cpp:87 | fly boost | ×2 | SETTING | editor.camera.boostMultiplier | EditorCameraSettings | Editor | Pref-P | Live | 1..10 | N | — |
 | Viewport/EditorCamera.cpp:114 | AdjustSpeed step + clamp | ×1.1/tick, 0.01..100 | SETTING | editor.camera.speedWheelStep | EditorCameraSettings | Editor Dev | Pref-P | Live | 1.01..2 | N | the clamp duplicates ViewportSettings |
 | Viewport/EditorCamera.cpp:131 | framing radius floor | 0.05 m | CONSTANT | — | — | — | — | — | — | N | zero-extent guard; 0 is a bug |
-| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:95 | GizmoSnap::translate | 0.5 m | SETTING | editor.gizmo.snap.translate | EditorGizmoSettings | Editor | Pref-P | Live | >0 | N | consumed by EditorAppFrame.cpp:1303 |
-| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:96 | GizmoSnap::rotationDeg | 15 deg | SETTING | editor.gizmo.snap.rotationDeg | EditorGizmoSettings | Editor | Pref-P | Live | 0.1..90 | N | — |
-| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:97 | GizmoSnap::scale | 0.1 | SETTING | editor.gizmo.snap.scale | EditorGizmoSettings | Editor | Pref-P | Live | >0 | N | — |
+| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:95 | GizmoSnap::translate | 0.5 m | SETTING | editor.gizmo.snap.translate | EditorGizmoSnapSettings | Editor | Pref-P | Live | >0 | N | consumed by EditorAppFrame.cpp:1303 (reconciled R1) |
+| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:96 | GizmoSnap::rotationDeg | 15 deg | SETTING | editor.gizmo.snap.rotateDegrees | EditorGizmoSnapSettings | Editor | Pref-P | Live | 0.1..90 | N | (reconciled R1) |
+| ArcaneClient/src/Arcane/Edit/Gizmo.hpp:97 | GizmoSnap::scale | 0.1 | SETTING | editor.gizmo.snap.scale | EditorGizmoSnapSettings | Editor | Pref-P | Live | >0 | N | (reconciled R1) |
 | App/EditorApp.hpp:1165-1167 | gizmo mode / space / enabled defaults | Translate, World, false (Select tool) | SETTING | editor.gizmo.default{Mode,Space,Tool} | EditorGizmoSettings | Editor | Pref-P | NextWorld | enum | N | session-only today |
 | App/EditorApp.hpp:1218 | m_physicsOverlay default | false | SETTING | editor.viewport.physicsOverlay | EditorViewportSettings | Editor Dev | Pref-P | Live | bool | N | session-only by ruling R5; keep session or persist |
-| Panels/EditorPanels.cpp:1418 | Play frame thickness | 2 px | SETTING | editor.viewport.playFrameThickness | EditorViewportSettings | Editor Dev | Pref-M | Live | 0..6 | N | — |
-| Panels/EditorPanels.cpp:1460 | tool overlay inset | 8 px | SETTING | editor.viewport.overlayInset | EditorViewportSettings | Editor Dev | Pref-M | Live | 0..32 | N | — |
-| Viewport/ViewportGrid.hpp:62-63 | kGridFadeInPx / FullPx | 8 / 24 px | SETTING | editor.viewport.grid.fade{In,Full}Px | EditorGridSettings | Editor Dev | Pref-M | Live | >0 | N | — |
+| Panels/EditorPanels.cpp:1418 | Play frame thickness | 2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.viewport.playFrameThickness) |
+| Panels/EditorPanels.cpp:1460 | tool overlay inset | 8 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.viewport.overlayInset) |
+| Viewport/ViewportGrid.hpp:62-63 | kGridFadeInPx / FullPx | 8 / 24 px | SETTING | editor.viewport.grid.fade{In,Full}Px | EditorGridSettings | Editor Dev | Pref-M | Live | >0 | N | not UI chrome: the fade band of the grid LOD, in screen px of line spacing (S5-2 review: restored from DERIVED) |
 | Viewport/ViewportGrid.hpp:66-67 | kGridMinor/MajorAlpha | 0.35 / 0.55 | SETTING | editor.viewport.grid.{minor,major}Alpha | EditorGridSettings | Editor | Pref-M | Live | 0..1 | N | — |
 | Viewport/ViewportGrid.hpp:75 | kGridLineThicknessPx | 1 px | SETTING | editor.viewport.grid.lineThickness | EditorGridSettings | Editor | Pref-M | Live | 0.5..4 | N | — |
 | Viewport/ViewportGrid.cpp:20-21 | kMin/MaxDecade | 1e-9 .. 1e12 | CONSTANT | — | — | — | — | — | — | N | float-precision bounds of the decade LOD |
@@ -1102,72 +1215,82 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Viewport/ViewportGrid.cpp:109 / .hpp:87 | 3 simultaneous levels | 3 | CONSTANT | — | — | — | — | — | — | N | fixed array arity |
 | Viewport/ViewportGrid.cpp:192, :200 | major every 10 | 10 | CONSTANT | — | — | — | — | — | — | N | decimal-decade identity |
 | Viewport/DeferredPick.hpp:205 | kMaxFramesInFlight | 64 frames | SETTING | editor.viewport.pickMaxFramesInFlight | EditorViewportSettings | Editor Dev | Pref-M | Live | 4..1024 | N | abandon budget |
-| App/EditorAppFrame.cpp:1391 | windowed Play simDt clamp | 0.25 s | SETTING | editor.play.maxSimDtSeconds | EditorPlaySettings | Editor Dev | Project | Live | 0.05..1 | Y | spiral-of-death clamp; changes outcome after a stall |
-| App/EditorApp.cpp:2435-2436 | first-frame viewport fallback | 1280×720 px | SETTING | editor.viewport.fallbackExtent | EditorViewportSettings | Editor Dev | Pref-M | Restart | — | N | one frame only; low value |
-| App/EditorAppFrame.cpp:538, :4034 | minimized / skipped-frame sleep | 1 ms | SETTING | editor.perf.idleSleepMs | EditorPerfSettings | Editor Dev | Pref-M | Live | 0..50 | N | no background or unfocused throttle exists (see Notes) |
+| App/EditorAppFrame.cpp:1391 | windowed Play simDt clamp | 0.25 s | DERIVED | (sim.maxFrameDeltaSeconds) | — | — | — | — | — | Y | spiral-of-death clamp; changes outcome after a stall (reconciled R1: read through sim.maxFrameDeltaSeconds, one clamp for the runtime and editor Play; was editor.play.maxSimDtSeconds) |
+| App/EditorApp.cpp:2435 | first-frame viewport fallback width | 1280 px | SETTING | editor.viewport.fallbackExtentW | EditorViewportSettings | Editor Dev | Pref-M | Restart | 64..16384 | N | one frame only; a render-target extent, not UI chrome (S6-45 amendment): split from editor.viewport.fallbackExtent (S6-32) |
+| App/EditorApp.cpp:2436 | first-frame viewport fallback height | 720 px | SETTING | editor.viewport.fallbackExtentH | EditorViewportSettings | Editor Dev | Pref-M | Restart | 64..16384 | N | as editor.viewport.fallbackExtentW (S6-45 amendment) |
+| App/EditorAppFrame.cpp:538, :4034 | minimized / skipped-frame sleep | 1 ms | SETTING | app.window.minimizedSleepMs | AppWindowSettings | Game Dev | Pref-P | Live | 0..100 | N | no background or unfocused throttle exists (see Notes) (reconciled R1: the same minimized sleep as the runtime; the background throttle is the new editor.perf.backgroundFps) |
+| — (new) | background / unfocused frame throttle | 0 (fps; 0 = no throttle) | SETTING | editor.perf.backgroundFps | EditorPerfSettings | Editor | Pref-M | Live | 0=off, 1..240 | N | new row (R1): 0 keeps today's behaviour (no throttle); kept apart from app.window.minimizedSleepMs on purpose (reconciled R1) |
 
 ### Graph/Node editor
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Widgets/GraphZoomLevels.hpp:60-65 | kZoomLevels | 20 stops, 0.1..2.0 | SETTING | editor.graph.zoomLevels | GraphCanvasSettings | Editor Dev | Pref-M | Restart (canvas recreate) | sorted list | N | LOD tiers are defined against these stops |
+| Widgets/GraphZoomLevels.hpp:60-65 | kZoomLevels | 20 stops, 0.1..2.0 | SETTING | editor.graph.zoomLevels | EditorGraphSettings | Editor Dev | Pref-M | Restart (canvas recreate) | sorted list | N | LOD tiers are defined against these stops |
 | Widgets/GraphFit.cpp:44 | kNavigationZoomMargin | 0.1 | CONSTANT | — | — | — | — | — | — | N | mirrors the library's file-static value |
-| Widgets/GraphNodeLod.hpp:53-56 | kLod{Lowest,Low,Medium,Default}Max | 0.200 / 0.250 / 0.675 / 1.375 | SETTING | editor.graph.lod.* | GraphCanvasSettings | Editor Dev | Pref-M | Live | ascending, inside the zoom table | N | readability thresholds |
+| Widgets/GraphNodeLod.hpp:53-56 | kLod{Lowest,Low,Medium,Default}Max | 0.200 / 0.250 / 0.675 / 1.375 | SETTING | editor.graph.lod.{lowestMax,lowMax,mediumMax,defaultMax} | GraphLodSettings | Editor Dev | Pref-M | Live | ascending, inside the zoom table | N | readability thresholds |
 | Widgets/GraphNodeLod.hpp:79 | kEps | 1e-4 | CONSTANT | — | — | — | — | — | — | N | float-compare epsilon |
-| Widgets/GraphGridPhase.hpp:82 | kZoomExponent | 0.7 | SETTING | editor.graph.grid.zoomExponent | GraphCanvasSettings | Editor Dev | Pref-M | Live | 0.1..1 | N | — |
-| Widgets/GraphGridPhase.hpp:84 | kBaseSpacingPx | 20 | SETTING | editor.graph.grid.baseSpacing | GraphCanvasSettings | Editor Dev | Pref-M | Live | 4..128 | N | — |
-| Widgets/GraphGridPhase.hpp:87 | kMinorTargetPx | 22 px | SETTING | editor.graph.grid.minorTargetPx | GraphCanvasSettings | Editor Dev | Pref-M | Live | 4..128 | N | — |
-| Widgets/GraphGridPhase.hpp:91 | kMajorEvery | 8 | SETTING | editor.graph.grid.majorEvery | GraphCanvasSettings | Editor Dev | Pref-M | Live | {2,4,8,16} | N | must be a power of two |
+| Widgets/GraphGridPhase.hpp:82 | kZoomExponent | 0.7 | SETTING | editor.graph.grid.zoomExponent | GraphGridSettings | Editor Dev | Pref-M | Live | 0.1..1 | N | — |
+| Widgets/GraphGridPhase.hpp:84 | kBaseSpacingPx | 20 | SETTING | editor.graph.grid.baseSpacing | GraphGridSettings | Editor Dev | Pref-M | Live | 4..128 | N | — |
+| Widgets/GraphGridPhase.hpp:87 | kMinorTargetPx | 22 px | SETTING | editor.graph.grid.minorTargetPx | GraphGridSettings | Editor Dev | Pref-M | Live | 4..128 | N | kept SETTING: owned by S6-34; read as Ui::Px(setting) per S4-16 |
+| Widgets/GraphGridPhase.hpp:91 | kMajorEvery | 8 | SETTING | editor.graph.grid.majorEvery | GraphGridSettings | Editor Dev | Pref-M | Live | {2,4,8,16} | N | must be a power of two |
 | Widgets/GraphGridPhase.hpp:97 | kScaleEpsilon | 1e-4 | CONSTANT | — | — | — | — | — | — | N | divide-by-zero guard |
-| Widgets/GraphCanvasStyle.hpp:42 | kGraphNodeRounding | 4 px | SETTING | editor.graph.nodeRounding | GraphCanvasSettings | Editor | Pref-M | Restart | 0..16 | N | latched at CreateEditor |
-| Widgets/GraphCanvasStyle.hpp:43-45 | node border widths (normal / hover / selected) | 1 / 1.5 / 2 px | SETTING | editor.graph.nodeBorder{,Hover,Selected}Width | GraphCanvasSettings | Editor | Pref-M | Restart | 0..6 | N | — |
-| Widgets/GraphCanvasStyle.hpp:51 | kGraphWireThickness | 2 px | SETTING | editor.graph.wireThickness | GraphCanvasSettings | Editor | Pref-M | Live | 0.5..6 | N | — |
-| Widgets/GraphCanvasStyle.hpp:56 | kGraphPinSegments | 12 | SETTING | editor.graph.pinSegments | GraphCanvasSettings | Editor Dev | Pref-M | Live | 6..48 | N | tessellation |
-| Widgets/GraphCanvasStyle.hpp:57, :62-63 | pin ring width, outer gap, outer width | 1.6 / 2.2 / 1.0 px | SETTING | editor.graph.pinRing.* | GraphCanvasSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Widgets/GraphCanvasStyle.hpp:42 | kGraphNodeRounding | 4 px | SETTING | editor.graph.nodeRounding | EditorGraphSettings | Editor | Pref-M | Restart | 0..16 | N | latched at CreateEditor |
+| Widgets/GraphCanvasStyle.hpp:43-45 | node border widths (normal / hover / selected) | 1 / 1.5 / 2 px | SETTING | editor.graph.nodeBorder{,Hover,Selected}Width | EditorGraphSettings | Editor | Pref-M | Restart | 0..6 | N | — |
+| Widgets/GraphCanvasStyle.hpp:51 | kGraphWireThickness | 2 px | SETTING | editor.graph.wireThickness | EditorGraphSettings | Editor | Pref-M | Live | 0.5..6 | N | — |
+| Widgets/GraphCanvasStyle.hpp:56 | kGraphPinSegments | 12 | SETTING | editor.graph.pinSegments | EditorGraphSettings | Editor Dev | Pref-M | Live | 6..48 | N | tessellation |
+| Widgets/GraphCanvasStyle.hpp:57, :62-63 | pin ring width, outer gap, outer width | 1.6 / 2.2 / 1.0 px | SETTING | editor.graph.pinRing.{width,outerGap,outerWidth} | GraphPinRingSettings | Editor Dev | Pref-M | Live | — | N | canvas-space geometry, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
 | Widgets/GraphWire.hpp:72 | kGraphLinkChannel | 7 | CONSTANT | — | — | — | — | — | — | N | the library's draw-channel index |
-| Widgets/GraphWire.hpp:107 | brighten lerp | 0.25 | SETTING | editor.graph.wireHighlight | GraphCanvasSettings | Editor Dev | Pref-M | Live | 0..1 | N | — |
-| Widgets/GraphWire.hpp:196 | wire segments | 12..64, len/6 | SETTING | editor.graph.wireSegments{Min,Max,PxPer} | GraphCanvasSettings | Editor Dev | Pref-M | Live | — | N | vertex budget |
-| Widgets/GraphLegend.hpp:27-31 | legend inset / pads / gaps | 12, 10, 5, 14, 6 px | SETTING | editor.graph.legend.* | GraphCanvasSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Widgets/GraphWire.hpp:107 | brighten lerp | 0.25 | SETTING | editor.graph.wireHighlight | EditorGraphSettings | Editor Dev | Pref-M | Live | 0..1 | N | — |
+| Widgets/GraphWire.hpp:196 | wire segments | 12..64, len/6 | SETTING | editor.graph.wireSegments{Min,Max,PxPer} | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | vertex budget |
+| Widgets/GraphLegend.hpp:27-31 | legend inset / pads / gaps | 12, 10, 5, 14, 6 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.legend.*) |
 | Documents/ShaderGraphPinLegend.cpp:26 | kLegendDotRadius | 4 px | DERIVED | — | — | — | — | — | — | N | = kPinDotRadius (comment says it mirrors it) |
-| Documents/ShaderGraphPinLegend.cpp:31-32 | legend pair / row gaps | 3 / 4 px | SETTING | editor.graph.legend.dotGap | GraphCanvasSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/ShaderEditorDocument.cpp:391-392 | kNodePadX/Y | 10 / 6 px | SETTING | editor.graph.nodePadding | GraphCanvasSettings | Editor Dev | Pref-M | Restart | 0..24 | N | — |
-| Documents/ShaderEditorDocument.cpp:404 | kNodeHeaderGap | 5 px | SETTING | editor.graph.nodeHeaderGap | GraphCanvasSettings | Editor Dev | Pref-M | Live | 0..16 | N | — |
-| Documents/ShaderEditorDocument.cpp:413 | kCullGuardBand | 0.25 | SETTING | editor.graph.cullGuardBand | GraphCanvasSettings | Editor Dev | Pref-M | Live | 0..1 | N | UE GuardBandArea |
-| Documents/ShaderEditorDocument.cpp:417 | kPinDotRadius | 4 px | SETTING | editor.graph.pinDotRadius | GraphCanvasSettings | Editor | Pref-M | Live | 2..10 | N | — |
+| Documents/ShaderGraphPinLegend.cpp:31-32 | legend pair / row gaps | 3 / 4 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.graph.legend.dotGap) |
+| Documents/ShaderEditorDocument.cpp:391-392 | kNodePadX/Y | 10 / 6 px | SETTING | editor.graph.nodePadding | EditorGraphSettings | Editor Dev | Pref-M | Restart | 0..24 | N | canvas units at zoom 1, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:404 | kNodeHeaderGap | 5 px | SETTING | editor.graph.nodeHeaderGap | EditorGraphSettings | Editor Dev | Pref-M | Live | 0..16 | N | kept SETTING: owned by S6-34; read as Ui::Px(setting) per S4-16 |
+| Documents/ShaderEditorDocument.cpp:413 | kCullGuardBand | 0.25 | SETTING | editor.graph.cullGuardBand | EditorGraphSettings | Editor Dev | Pref-M | Live | 0..1 | N | UE GuardBandArea |
+| Documents/ShaderEditorDocument.cpp:417 | kPinDotRadius | 4 px | SETTING | editor.graph.pinDotRadius | EditorGraphSettings | Editor | Pref-M | Live | 2..10 | N | — |
 | Documents/ShaderEditorDocument.cpp:709 | kPinChipSlot | 2×(dot+gap+ring) | DERIVED | — | — | — | — | — | — | N | formula |
-| Documents/ShaderEditorDocument.cpp:3363, :4829 | cfg.ShiftAddsToSelection | true | SETTING | editor.graph.shiftAddsToSelection | GraphCanvasSettings | Editor | Pref-M | Restart | bool | N | UE modifier semantics |
-| Documents/ShaderEditorDocument.cpp:1687 | checker kCell | 32 px @512 | SETTING | editor.shader.previewCheckerCell | ShaderEditorSettings | Editor Dev | Pref-M | Live | 4..128 | N | — |
-| Documents/ShaderEditorDocument.cpp:1689, :1697 | checker light colour / extent | (0.16,0.16,0.19), 0.8 | SETTING | editor.shader.previewChecker* | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/ShaderEditorDocument.cpp:4795 | kThumbMin | 96 px | SETTING | editor.graph.nodePreviewMinPx | ShaderEditorSettings | Editor | Pref-M | Live | 32..512 | N | — |
+| Documents/ShaderEditorDocument.cpp:3363, :4829 | cfg.ShiftAddsToSelection | true | SETTING | editor.graph.shiftAddsToSelection | EditorGraphSettings | Editor | Pref-M | Restart | bool | N | UE modifier semantics |
+| Documents/ShaderEditorDocument.cpp:1687 | checker kCell | 32 px @512 | SETTING | editor.shader.previewCheckerCell | ShaderEditorSettings | Editor Dev | Pref-M | Live | 4..128 | N | render-target texels (512 / 16 cells), not UI chrome and not scaled by editor.ui.scale (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:1689, :1697 | checker light colour / extent | (0.16,0.16,0.19), 0.8 | SETTING | editor.shader.{previewCheckerLight,previewCheckerSpriteScale} | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/ShaderEditorDocument.cpp:4795 | kThumbMin | 96 px | SETTING | editor.graph.nodePreviewMinPx | EditorGraphSettings | Editor | Pref-M | Live | 32..512 | N | — |
 | Documents/ShaderEditorDocument.hpp:985 | kNavHistoryMax | 32 | SETTING | editor.shader.navHistoryMax | ShaderEditorSettings | Editor Dev | Pref-M | Live | 1..256 | N | — |
 | Documents/ShaderEditorDocument.hpp:1011 | kGraphPreviewSize | 512 px | SETTING | editor.shader.previewResolution | ShaderEditorSettings | Editor | Pref-M | Restart (reopen) | 128..2048 | N | GPU budget |
-| Documents/ShaderEditorDocument.cpp:2094 | doc first-use size | 980×640 px | SETTING | editor.documents.shaderInitialSize | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | FirstUseEver |
-| Documents/ShaderEditorDocument.cpp:3401-3416 | pass-chain auto-layout | 40, 190, 170, 90 px | SETTING | editor.shader.chainLayout.* | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | written into new .arcmat files |
-| Documents/ShaderEditorDocument.cpp:3999-4011 | new pass-graph node positions | (360,120), (100,120) | OTHER-STORE | (template data) | — | — | — | — | — | — | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset (Notes) |
-| App/EditorAppProject.cpp:1708-1716 | new-material template nodes + colour | (420,200), (160,200), (0.2,0.8,1,1) | OTHER-STORE | (template data) | — | — | — | — | — | — | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset |
-| Documents/ShaderEditorDocument.cpp:3534, :6064, :6199 | inline field widths | 120, 110, 70 px | SETTING | editor.graph.inlineFieldWidth | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | should scale with editor.ui.scale |
-| Documents/ShaderEditorDocument.cpp:3583 | pass thumb | 72 px | SETTING | editor.shader.passThumbPx | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/ShaderEditorDocument.cpp:5925, :5981, :5993, :6006, :6111, :6137 | const-node widths | 64/106/190, 90, 140, 220, 120 px | SETTING | editor.graph.constFieldWidths | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | should scale |
-| Documents/ShaderEditorDocument.cpp:5930-5932, :5996, :6009, :6118-6120 | canvas drag speed | 0.01 /px | SETTING | editor.graph.dragSpeed | ShaderEditorSettings | Editor | Pref-M | Live | 0.0001..1 | N | — |
-| Documents/ShaderEditorDocument.cpp:6140 | range drag speed | 0.05 | SETTING | editor.graph.rangeDragSpeed | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/ShaderEditorDocument.cpp:5400, :5406 | rename dialog size / footer | 560×380, 34 px | SETTING | editor.shader.renameDialogSize | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/ShaderEditorDocument.cpp:2094 | doc first-use size | 980×640 px | DERIVED | — | — | — | — | — | — | N | FirstUseEver; base px x editor.ui.scale (s16.11; was editor.documents.shaderInitialSize) |
+| Documents/ShaderEditorDocument.cpp:3401-3416 | pass-chain auto-layout | 40, 190, 170, 90 px | SETTING | editor.shader.chainLayout.{originX,originY,pitchX,sceneOffsetX,sceneOffsetY} | ShaderChainLayoutSettings | Editor Dev | Pref-M | Live | — | N | canvas coordinates written into new .arcmat files: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:3999-4011 | new pass-graph node positions | (360,120), (100,120) | OTHER-STORE | (template data) | — | — | — | — | — | N | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset (Notes) |
+| App/EditorAppProject.cpp:1708-1716 | new-material template nodes + colour | (420,200), (160,200), (0.2,0.8,1,1) | OTHER-STORE | (template data) | — | — | — | — | — | N | belongs in a shipped template asset, not a cvar (reconciled). belongs in a template asset |
+| Documents/ShaderEditorDocument.cpp:3530 | pass-name field | 120 px | SETTING | editor.graph.passNameFieldWidth | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:6060 | param-name field | 110 px | SETTING | editor.graph.paramNameFieldWidth | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:6195 | swizzle-mask field | 70 px | SETTING | editor.graph.swizzleFieldWidth | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:3583 | pass thumb | 72 px | SETTING | editor.shader.passThumbPx | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | thumbnail inside a canvas node, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5921 | neutral-pin field, 1 lane | 64 px | SETTING | editor.graph.constPinNeutralWidth1 | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5921 | neutral-pin field, 2 lanes | 106 px | SETTING | editor.graph.constPinNeutralWidth2 | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5921 | neutral-pin field, 3-4 lanes | 190 px | SETTING | editor.graph.constPinNeutralWidth4 | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5977, :6107 | Float / param default, 1 lane | 90 px | SETTING | editor.graph.constFloatWidth | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5989, :6107 | Float2 / param default, 2 lanes | 140 px | SETTING | editor.graph.constFloat2Width | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:6002, :6107 | Float4 / Color / param default, 3-4 lanes | 220 px | SETTING | editor.graph.constFloat4Width | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:6133 | param range field | 120 px | SETTING | editor.graph.constParamRangeWidth | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | widgets inside canvas nodes scale with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Documents/ShaderEditorDocument.cpp:5930-5932, :5996, :6009, :6118-6120 | canvas drag speed | 0.01 /px | SETTING | editor.graph.dragSpeed | EditorGraphSettings | Editor | Pref-M | Live | 0.0001..1 | N | — |
+| Documents/ShaderEditorDocument.cpp:6140 | range drag speed | 0.05 | SETTING | editor.graph.rangeDragSpeed | EditorGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/ShaderEditorDocument.cpp:5400, :5406 | rename dialog size / footer | 560×380, 34 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.shader.renameDialogSize) |
 | Documents/ShaderEditorDocument.cpp:5445-5448 | rename targets listed | 8 | SETTING | editor.shader.renameListMax | ShaderEditorSettings | Editor Dev | Pref-M | Live | 1..64 | N | — |
 | Documents/ShaderEditorDocument.cpp:6235-6250 | custom-node body preview | 8 lines × 48 chars | SETTING | editor.shader.bodyPreview{Lines,Chars} | ShaderEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Documents/ShaderEditorDocument.cpp:6816, :6905, :6908, :2696, :2748 | page drag speed | 0.01 | DERIVED | — | — | — | — | — | — | N | = PropertyGrid default speed |
-| Panels/AssetGraphPanel.cpp:108 | kGraphFocusComboWidth | 280 px | SETTING | editor.assetGraph.focusComboWidth | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetGraphPanel.cpp:108 | kGraphFocusComboWidth | 280 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetGraph.focusComboWidth) |
 | Panels/AssetGraphPanel.cpp:109 | kGraphFocusHitCap | 12 | SETTING | editor.assetGraph.focusHitCap | AssetGraphSettings | Editor | Pref-M | Live | 1..100 | N | — |
-| Panels/AssetGraphPanel.cpp:358-361 | node min/max width, header height, accent bar | 180/220/24/3 px | SETTING | editor.assetGraph.node.* | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetGraphPanel.cpp:365 | kGraphPinRadius | 4.5 px | SETTING | editor.assetGraph.pinRadius | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetGraphPanel.cpp:358-361 | node min/max width, header height, accent bar | 180/220/24/3 px | SETTING | editor.assetGraph.node.{minWidth,maxWidth,headerHeight,accentBarWidth} | AssetGraphNodeSettings | Editor Dev | Pref-M | Live | — | N | canvas-space node geometry, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Panels/AssetGraphPanel.cpp:365 | kGraphPinRadius | 4.5 px | SETTING | editor.assetGraph.pinRadius | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | canvas-space pin geometry, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
 | Panels/AssetGraphPanel.cpp:388-389 | column / row pitch | 300 / 90 px | SETTING | editor.assetGraph.layout{Column,Row}Pitch | AssetGraphSettings | Editor | Pref-M | Live | 100..1000 | N | layout density |
-| Panels/AssetGraphPanel.cpp:395-398 | node pads / icon gap | 3+8, 8, 6, 6 px | SETTING | editor.assetGraph.node.padding | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | :395 is DERIVED from the accent bar |
-| Panels/AssetGraphPanel.cpp:479 | overflow wire thickness | 1.5 px | SETTING | editor.assetGraph.overflowWireThickness | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetGraphPanel.cpp:395-398 | node pads / icon gap | 3+8, 8, 6, 6 px | SETTING | editor.assetGraph.node.padding | AssetGraphNodeSettings | Editor Dev | Pref-M | Live | — | N | :395 is DERIVED from the accent bar; canvas-space node geometry, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Panels/AssetGraphPanel.cpp:479 | overflow wire thickness | 1.5 px | SETTING | editor.assetGraph.overflowWireThickness | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | canvas-space wire, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
 | Panels/AssetGraphPanel.cpp:484-485, :489 | wire dims, ghost wash | 0.62 / 0.78 / 0.55 | SETTING | editor.assetGraph.{wireDim,overflowDim,ghostWash} | AssetGraphSettings | Editor Dev | Pref-M | Live | 0..1 | N | — |
-| Panels/AssetGraphPanel.cpp:496-497, :502 | dash on/off, end dot | 6 / 5 / 4 px | SETTING | editor.assetGraph.dash.* | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetGraphPanel.cpp:496-497, :502 | dash on/off, end dot | 6 / 5 / 4 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetGraph.dash.*) |
 | Panels/AssetGraphPanel.cpp:510 | kGraphDashMaxCells | 256 | SETTING | editor.assetGraph.dashMaxCells | AssetGraphSettings | Editor Dev | Pref-M | Live | 16..4096 | N | budget |
-| Panels/AssetGraphPanel.cpp:1166-1167 | legend swatch | 18×2 px | SETTING | editor.assetGraph.legendSwatch | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetGraphPanel.cpp:1807 | label pill pad | 3 px | SETTING | editor.assetGraph.labelPad | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetGraphPanel.cpp:2592 | selection-strip thumb | 36 px | SETTING | editor.assetGraph.stripThumbPx | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetGraphPanel.hpp:44 | kAssetGraphSelectionStripH | 48 px | SETTING | editor.assetGraph.stripHeight | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetGraphPanel.cpp:1166-1167 | legend swatch | 18×2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetGraph.legendSwatch) |
+| Panels/AssetGraphPanel.cpp:1807 | label pill pad | 3 px | SETTING | editor.assetGraph.labelPad | AssetGraphSettings | Editor Dev | Pref-M | Live | — | N | canvas-space label pill, scales with the graph zoom: not UI chrome (S5-2 review: restored from DERIVED) |
+| Panels/AssetGraphPanel.cpp:2592 | selection-strip thumb | 36 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetGraph.stripThumbPx) |
+| Panels/AssetGraphPanel.hpp:44 | kAssetGraphSelectionStripH | 48 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetGraph.stripHeight) |
 | Panels/AssetGraphViewModel.hpp:115 | depthLimit | 2 | SETTING | editor.assetGraph.defaultDepth | AssetGraphSettings | Editor | Pref-P | Live | 1..16 | N | — |
 | Panels/AssetGraphViewModel.hpp:116 | breadthCap | 20 | SETTING | editor.assetGraph.breadthCap | AssetGraphSettings | Editor | Pref-P | Live | 1..500 | N | — |
 | Panels/AssetGraphPanel.cpp:2394 | hover delay | style.HoverStationaryDelay | DERIVED | — | — | — | — | — | — | N | ImGui style value |
@@ -1181,70 +1304,73 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Widgets/EditorWidgets.cpp:85 | kLabelColumnFraction | 0.4 | SETTING | editor.inspector.labelColumnFraction | InspectorSettings | Editor | Pref-M | Live | 0.2..0.7 | N | UE exposes the splitter |
 | Widgets/EditorWidgets.cpp:95 | kLabelSeedMinAvailEm | 8 em | SETTING | editor.inspector.labelSeedMinEm | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
 | Widgets/EditorWidgets.cpp:252 | kAxisBarWidth | 3 px | DERIVED | — | — | — | — | — | — | N | matches ImGuiStyle::ColorMarkerSize |
-| Widgets/EditorWidgets.hpp:256 | kAssetRowThumbSize | 18 px | SETTING | editor.ui.assetRowThumbPx | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Widgets/EditorWidgets.hpp:256 | kAssetRowThumbSize | 18 px | SETTING | editor.ui.assetRowThumbPx | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | kept SETTING: owned by S6-28; read as Ui::Px(setting) per S4-16 |
 | Panels/AssetInspectorSource.cpp:37 | kAssetPageThumbSize | 140 px | SETTING | editor.inspector.assetThumbMaxPx | InspectorSettings | Editor | Pref-M | Live | 64..512 | N | it is also assetThumbMinPx's max (:40), so DERIVED there |
-| Panels/AssetInspectorSource.cpp:68-69 | compact header min / text column min | 250 / 110 px | SETTING | editor.inspector.previewCompact* | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetInspectorSource.cpp:68-69 | compact header min / text column min | 250 / 110 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.inspector.previewCompact*) |
 | Panels/AssetInspectorSource.cpp:50, :56 | fallback 64 / 0.30 | dup of cvar defaults | DERIVED | — | — | — | — | — | — | N | shadow copy; delete (s10.2) |
 | Documents/ShaderEditorDocument.cpp:94, :704 | fallback 0.45 / 16 | dup | DERIVED | — | — | — | — | — | — | N | shadow copies |
 | Panels/InspectorHost.hpp:50 | kHistoryDepth | 32 | SETTING | editor.inspector.historyDepth | InspectorSettings | Editor | Pref-M | Live | 1..256 | N | — |
 | Panels/InspectorHost.hpp:54 | kMaxInstances | 8 | SETTING | editor.inspector.maxInstances | InspectorSettings | Editor Dev | Pref-M | Restart | 2..32 | N | lowering it drops persisted Ids= |
 | Panels/InspectorHost.hpp:56 | kAssetsInstanceId | 1 | CONSTANT | — | — | — | — | — | — | N | window-id contract ("###inspector_1") |
-| Panels/InspectorWindows.hpp:45 | kInspectorHeaderMinCrumbWidth | 120 px | SETTING | editor.inspector.minCrumbWidth | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/InspectorWindows.hpp:45 | kInspectorHeaderMinCrumbWidth | 120 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.inspector.minCrumbWidth) |
 | Panels/InspectorWindows.cpp:118 | header width formula | FramePadding.x×4 + spacing | DERIVED | — | — | — | — | — | — | N | style-relative |
 | Panels/InspectorFields.cpp:390 | kTolerance | 1e-5 | CONSTANT | — | — | — | — | — | — | N | float-equality epsilon for mixed values |
 | Panels/InspectorView.cpp:714, :742, :767, :852 | drag speed | 0.1 /px | SETTING | editor.inspector.dragSpeed | InspectorSettings | Editor | Pref-M | Live | 0.001..10 | N | — |
 | Panels/InspectorView.cpp:956-957 | rotation drag speed | 0.5 deg/px (0.01 rad) | SETTING | editor.inspector.rotationDragSpeedDeg | InspectorSettings | Editor | Pref-M | Live | 0.01..10 | N | — |
-| Widgets/PropertyGrid.hpp:205, :212 | FloatRow / VecRow default speed | 0.01 | SETTING | editor.ui.propertyDragSpeed | PropertyGridSettings | Editor | Pref-M | Live | 0.0001..1 | N | — |
-| Widgets/PropertyGrid.cpp:358 | IntRow step / stepFast | 1 / 100 | SETTING | editor.ui.intStep{,Fast} | PropertyGridSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Widgets/PropertyGrid.hpp:205, :212 | FloatRow / VecRow default speed | 0.01 | SETTING | editor.ui.propertyDragSpeed | EditorUiSettings | Editor | Pref-M | Live | 0.0001..1 | N | (reconciled R1: one struct per prefix, editor.ui.* -> EditorUiSettings) |
+| Widgets/PropertyGrid.cpp:358 | IntRow step / stepFast | 1 / 100 | SETTING | editor.ui.intStep{,Fast} | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | (reconciled R1: one struct per prefix, editor.ui.* -> EditorUiSettings) |
 | Widgets/PropertyGrid.cpp:96 | refused-draft hold | 3 frames | CONSTANT | — | — | — | — | — | — | N | frame-protocol timing; another value is a focus bug |
-| Panels/EditorPanels.cpp:1783, :1796 | Add Component popup | 260 px, 260×260 | SETTING | editor.inspector.addComponentPopupSize | InspectorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/SpriteDocument.cpp:381 | PPU drag / range | 0.5, 1..4096 | SETTING | editor.sprite.ppuRange | SpriteDocSettings | Editor Dev | Pref-M | Live | — | N | authoring range |
+| Panels/EditorPanels.cpp:1783, :1796 | Add Component popup | 260 px, 260×260 | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.inspector.addComponentPopupSize) |
+| Documents/SpriteDocument.cpp:381 | PPU drag speed | 0.5 | SETTING | editor.sprite.ppuDragSpeed | SpriteDocSettings | Editor Dev | Pref-M | Live | 0.001..100 | N | authoring (S6-45 amendment): split from editor.sprite.ppuRange (S6-35), one name per value |
+| Documents/SpriteDocument.cpp:381 | PPU minimum | 1 | SETTING | editor.sprite.ppuMin | SpriteDocSettings | Editor Dev | Pref-M | Live | 0.001..65536 | N | authoring range (S6-45 amendment) |
+| Documents/SpriteDocument.cpp:381 | PPU maximum | 4096 | SETTING | editor.sprite.ppuMax | SpriteDocSettings | Editor Dev | Pref-M | Live | 1..65536 | N | authoring range (S6-45 amendment) (S6-42 widens it only to a sprite's current value) |
 | Documents/SpriteDocument.cpp:415 | pivot drag speed | 0.005 | SETTING | editor.sprite.pivotDragSpeed | SpriteDocSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/MeshDocument.cpp:699-716 | primitive ranges | subdiv 1..64, rings 2/3..64/128, seg 3..128, ratio 1..20 @0.02 | SETTING | editor.mesh.primitiveRanges.* | MeshDocSettings | Editor Dev | Pref-M | Live | — | N | authoring caps |
+| Documents/MeshDocument.cpp:699-716 | primitive ranges | subdiv 1..64, rings 2/3..64/128, seg 3..128, ratio 1..20 @0.02 | SETTING | editor.mesh.primitiveRanges.{planeSubdivisionsMin,planeSubdivisionsMax,sphereRingsMin,sphereRingsMax,segmentsMin,segmentsMax,capsuleRingsMin,capsuleRingsMax,capsuleLengthRatioMin,capsuleLengthRatioMax} | EditorMeshPrimitiveRangesSettings | Editor Dev | Pref-M | Live | — | N | authoring caps |
+| Documents/MeshDocument.cpp:723 | capsule length ratio drag speed | 0.02 | SETTING | editor.mesh.capsuleRatioDragSpeed | MeshDocSettings | Editor Dev | Pref-M | Live | 0.0001..1 | N | (S6-45 amendment): the "@0.02" of the primitive-ranges row, dropped from that family as a drag speed; S6-35 registered it |
 | Panels/TextureImportSettings.cpp:74 | Max Size range | 0..16384 | CONSTANT | — | — | — | — | — | — | N | D3D12 max texture dimension (hardware) |
 
 ### Asset Browser
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Panels/AssetBrowserPanel.cpp:57 | kRailWidth | 180 px | SETTING | editor.assets.railWidth | AssetBrowserSettings | Editor | Pref-M | Live | 80..600 | N | — |
-| Panels/AssetBrowserPanel.cpp:58 | kRailRowHeight | 26 px | SETTING | editor.assets.railRowHeight | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetBrowserPanel.cpp:59, :65 | kChildIndent / kGroupIndent | 20 px | SETTING | editor.assets.indent | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetBrowserPanel.cpp:466 | kGroupCountGap | 6 px | SETTING | editor.assets.groupCountGap | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetBrowserPanel.cpp:709 | kBadgeMargin | 3 px | SETTING | editor.assets.badgeMargin | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetBrowserPanel.cpp:560, :1154 | rename / search minimum widths | 60 / 80 px | SETTING | editor.assets.minFieldWidth | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetPanelCommon.hpp:395 | kAssetPanelToolbarFramePadY | 4 px | SETTING | editor.assets.toolbarPadY | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetPanelCommon.hpp:396 | kAssetPanelBottomBarHeight | 24 px | SETTING | editor.assets.bottomBarHeight | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetPanelCommon.hpp:406 | kAssetPanelToolbarBodyGapPx | 7 px | SETTING | editor.assets.toolbarGap | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetPanelCommon.hpp:414 | kTableRowHeight | 24 px | SETTING | editor.ui.tableRowHeight | AssetBrowserSettings | Editor | Pref-M | Live | 16..48 | N | density |
-| Panels/AssetPanelCommon.cpp:415-416 | tooltip width / thumb | 210 / 64 px | SETTING | editor.assets.tooltip{Width,Thumb} | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetPanelCommon.cpp:452 | kNamedTargets | 3 | SETTING | editor.assets.namedTargets | AssetBrowserSettings | Editor Dev | Pref-M | Live | 1..20 | N | — |
-| Panels/AssetReferenceField.cpp:22 | kAssetRefThumbSize | 20 px | SETTING | editor.ui.assetRefThumbPx | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | its comment says "not a tunable"; candidate for the allow-list |
+| Panels/AssetBrowserPanel.cpp:57 | kRailWidth | 180 px | SETTING | editor.assets.railWidth | EditorAssetsSettings | Editor | Pref-M | Live | 80..600 | N | — |
+| Panels/AssetBrowserPanel.cpp:58 | kRailRowHeight | 26 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.railRowHeight) |
+| Panels/AssetBrowserPanel.cpp:59, :65 | kChildIndent / kGroupIndent | 20 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.indent) |
+| Panels/AssetBrowserPanel.cpp:466 | kGroupCountGap | 6 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.groupCountGap) |
+| Panels/AssetBrowserPanel.cpp:709 | kBadgeMargin | 3 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.badgeMargin) |
+| Panels/AssetBrowserPanel.cpp:560, :1154 | rename / search minimum widths | 60 / 80 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.minFieldWidth) |
+| Panels/AssetPanelCommon.hpp:395 | kAssetPanelToolbarFramePadY | 4 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.toolbarPadY) |
+| Panels/AssetPanelCommon.hpp:396 | kAssetPanelBottomBarHeight | 24 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.bottomBarHeight) |
+| Panels/AssetPanelCommon.hpp:406 | kAssetPanelToolbarBodyGapPx | 7 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.toolbarGap) |
+| Panels/AssetPanelCommon.hpp:414 | kTableRowHeight | 24 px | SETTING | editor.ui.tableRowHeight | EditorUiSettings | Editor | Pref-M | Live | 16..48 | N | density (reconciled R1: one struct per prefix, editor.ui.* -> EditorUiSettings) |
+| Panels/AssetPanelCommon.cpp:415-416 | tooltip width / thumb | 210 / 64 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.tooltip{Width,Thumb}) |
+| Panels/AssetPanelCommon.cpp:452 | kNamedTargets | 3 | SETTING | editor.assets.namedTargets | EditorAssetsSettings | Editor Dev | Pref-M | Live | 1..20 | N | — |
+| Panels/AssetReferenceField.cpp:22 | kAssetRefThumbSize | 20 px | SETTING | editor.ui.assetRefThumbPx | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | its comment says "not a tunable"; kept SETTING: owned by S6-28; read as Ui::Px(setting) per S4-16 (S5-2 review settled) |
 | Panels/AssetReferenceField.cpp:90, :234 | row offset / min name width | 24 / 16 px | DERIVED | — | — | — | — | — | — | N | = row height / a floor |
-| Panels/AssetStatusPanel.cpp:67-71 | tile height / min width, section gap, progress height, selection border | 64/72/6/4/2 px | SETTING | editor.assetStatus.* | AssetStatusSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetStatusPanel.cpp:88-89 | right column width, caption gap | 300 / 2 px | SETTING | editor.assetStatus.rightColumnWidth | AssetStatusSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetStatusPanel.cpp:67-71 | tile height / min width, section gap, progress height, selection border | 64/72/6/4/2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetStatus.*) |
+| Panels/AssetStatusPanel.cpp:88-89 | right column width, caption gap | 300 / 2 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assetStatus.rightColumnWidth) |
 | Panels/AssetStatusPanel.cpp:707 | right column max share | 0.45 | SETTING | editor.assetStatus.rightColumnMaxFraction | AssetStatusSettings | Editor Dev | Pref-M | Live | 0.2..0.8 | N | — |
 | Panels/AssetStatusPanel.cpp:367-376 | "ago" buckets | 60 s / 60 min | CONSTANT | — | — | — | — | — | — | N | calendar arithmetic |
-| Panels/AssetActivityLog.hpp:69 | kCapacity | 100 entries | SETTING | editor.assets.activityLogCapacity | AssetBrowserSettings | Editor | Pref-M | Restart | 10..10000 | N | — |
-| Panels/CreateAssetDialog.cpp:31, :35, :39, :41 | dialog width, picker row height, visible rows, footer button | 380 px, 24 px, 6, 92 px | SETTING | editor.assets.createDialog.* | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/CreateAssetDialog.hpp:276 | kMaterialSurfaceDefaultIndex | 2 (post) | SETTING | editor.assets.newMaterialDefaultSurface | AssetBrowserSettings | Editor | Pref-P | Live | {sprite, mesh, post} | N | a reasonable default to change |
+| Panels/AssetActivityLog.hpp:69 | kCapacity | 100 entries | SETTING | editor.assets.activityLogCapacity | EditorAssetsSettings | Editor | Pref-M | Restart | 10..10000 | N | — |
+| Panels/CreateAssetDialog.cpp:31, :35, :39, :41 | dialog width, picker row height, visible rows, footer button | 380 px, 24 px, 6, 92 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.createDialog.*) |
+| Panels/CreateAssetDialog.hpp:276 | kMaterialSurfaceDefaultIndex | 2 (post) | SETTING | editor.assets.newMaterialDefaultSurface | EditorAssetsSettings | Editor | Pref-P | Live | {sprite, mesh, post} | N | a reasonable default to change |
 | Panels/CreateAssetDialog.hpp:332 | kCreateNameMaxPathChars | 240 | CONSTANT | — | — | — | — | — | — | N | Windows MAX_PATH margin |
 | Panels/CreateAssetDialog.hpp:351 | kDenied | `\/:*?"<>\|` | CONSTANT | — | — | — | — | — | — | N | OS filename rules |
-| Panels/AssetFileOpDialogs.cpp:17, :37 | modal widths | 380 / 440 px | SETTING | editor.assets.fileOpDialogWidth | AssetBrowserSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/AssetFileOpDialogs.cpp:25-103 | button widths | 92 px | SETTING | editor.ui.dialogButtonWidth | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Panels/AssetFileOpDialogs.cpp:17, :37 | modal widths | 380 / 440 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.assets.fileOpDialogWidth) |
+| Panels/AssetFileOpDialogs.cpp:25-103 | button widths | 92 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.ui.dialogButtonWidth) |
 | Project/AssetFileOps.cpp:266 | unique-name probe cap | 100000 | CONSTANT | — | — | — | — | — | — | N | loop safety bound |
-| App/EditorAppProject.cpp:430 | asset-watch poll | 1.0 s | SETTING | editor.assets.watchPollSeconds | AssetBrowserSettings | Editor | Pref-M | Live | 0.1..30 | N | hot-reload latency vs I/O |
-| App/EditorAppProject.cpp:481 | content-discovery poll | 2.0 s | SETTING | editor.assets.discoveryPollSeconds | AssetBrowserSettings | Editor | Pref-M | Live | 0.5..60 | N | — |
-| App/EditorApp.cpp:689 | shader-compile debounce | 0.2 s | SETTING | editor.shader.compileDebounceSeconds | ShaderEditorSettings | Editor | Pref-M | Restart | 0..5 | N | passed to Initialize once |
-| Project/MaterialPreviewHarvester.cpp:44 | kThumbSize | 64 px | SETTING | editor.assets.thumbnailSize | AssetBrowserSettings | Editor Dev | Pref-P | Restart | 32..256 | N | also the on-disk PNG size; a change invalidates Saved/Thumbnails |
+| App/EditorAppProject.cpp:430 | asset-watch poll | 1.0 s | SETTING | editor.assets.watchPollSeconds | EditorAssetsSettings | Editor | Pref-M | Live | 0.1..30 | N | hot-reload latency vs I/O |
+| App/EditorAppProject.cpp:481 | content-discovery poll | 2.0 s | SETTING | editor.assets.discoveryPollSeconds | EditorAssetsSettings | Editor | Pref-M | Live | 0.5..60 | N | — |
+| App/EditorApp.cpp:689 | shader-compile debounce | 0.2 s | SETTING | render.shader.compileDebounceSeconds | RenderShaderSettings | Game Dev | Pref-P | Restart | 0..2 | N | passed to Initialize once (reconciled R1; range reconciled with RuntimeApp.cpp:311 at the S5-2 review) |
+| Project/MaterialPreviewHarvester.cpp:44 | kThumbSize | 64 px | SETTING | editor.thumbnail.size | EditorThumbnailSettings | Editor Dev | Project | Restart | 32..256 | N | also the on-disk PNG size; a change invalidates Saved/Thumbnails (reconciled R1: Project scope, thumbnails are a shared cache and goldens depend on them) |
 | Project/MaterialPreviewHarvester.cpp:48 | kCheckerCell | 16 px | DERIVED | — | — | — | — | — | — | N | 32@512 scaled to 64 |
-| Project/MaterialPreviewHarvester.cpp:55 | kThumbTime | 0.35 s | SETTING | editor.assets.thumbnailTime | AssetBrowserSettings | Editor Dev | Pref-P | Restart | 0..10 | N | a change invalidates cached PNGs |
-| Project/MaterialPreviewHarvester.cpp:393 | kMaxVehicleDrops | 3 | SETTING | editor.assets.thumbnailMaxRetries | AssetBrowserSettings | Editor Dev | Pref-M | Restart | 1..20 | N | — |
-| Project/MaterialPreviewHarvester.cpp:1237 | kMeshThumbFovDegrees | 35 deg | SETTING | editor.assets.meshThumbFov | AssetBrowserSettings | Editor Dev | Pref-P | Restart | 10..90 | N | thumbnail framing |
+| Project/MaterialPreviewHarvester.cpp:55 | kThumbTime | 0.35 s | SETTING | editor.thumbnail.time | EditorThumbnailSettings | Editor Dev | Project | Restart | 0..10 | N | a change invalidates cached PNGs (reconciled R1: Project scope, thumbnails are a shared cache and goldens depend on them) |
+| Project/MaterialPreviewHarvester.cpp:393 | kMaxVehicleDrops | 3 | SETTING | editor.thumbnail.maxRetries | EditorThumbnailSettings | Editor Dev | Project | Restart | 1..20 | N | (reconciled R1: Project scope, thumbnails are a shared cache and goldens depend on them) |
+| Project/MaterialPreviewHarvester.cpp:1237 | kMeshThumbFovDegrees | 35 deg | SETTING | editor.thumbnail.meshFovDegrees | EditorThumbnailSettings | Editor Dev | Project | Restart | 10..90 | N | thumbnail framing (reconciled R1: Project scope, thumbnails are a shared cache and goldens depend on them) |
 | Project/MaterialPreviewHarvester.cpp:1176, :1186 | checker light, extent | (0.16,0.16,0.19), 0.8 | DERIVED | — | — | — | — | — | — | N | duplicates ShaderEditorDocument.cpp:1689/1697 |
 | Project/MaterialPreviewHarvester.cpp:1257-1259 | light dir / ambient | (0.45,0.7,0.8), 0.12 | DERIVED | — | — | — | — | — | — | N | = editor.preview.light* (one shared value) |
 | Project/MeshImportWave.cpp:361 | kMinRadius | 0.5 m | DERIVED | — | — | — | — | — | — | N | mirrors the BuildUvSphere(0.5) guard |
-| Project/MeshImportWave.cpp:366 | kMargin | 0.15 | SETTING | editor.assets.thumbnailFramingMargin | AssetBrowserSettings | Editor Dev | Pref-P | Restart | 0..1 | N | — |
+| Project/MeshImportWave.cpp:366 | kMargin | 0.15 | SETTING | editor.thumbnail.framingMargin | EditorThumbnailSettings | Editor Dev | Project | Restart | 0..1 | N | (reconciled R1: Project scope, thumbnails are a shared cache and goldens depend on them) |
 | Project/MeshImportWave.cpp:385-386 | near/far fit | radius×1.5 | DERIVED | — | — | — | — | — | — | N | framing formula |
 | App/EditorApp.cpp:1962 | Hub cover width | 512 px | CONSTANT | — | — | — | — | — | — | N | the Hub cover contract (shared WriteThumbnailPngRgba; Hub caps 2 MiB) |
 | App/EditorApp.cpp:2346 | toolbar logo texture | 64 px | DERIVED | — | — | — | — | — | — | N | 2× the on-screen mark |
@@ -1256,27 +1382,35 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Documents/InputActionsDocument.cpp:145, :171 | rebind capture timeout | 10 s | SETTING | editor.input.rebindTimeoutSeconds | InputEditorSettings | Editor | Pref-M | Live | 1..60 | N | — |
 | Documents/InputActionsDocument.cpp:231 | DeltaTime fallback | 1/60 s | CONSTANT | — | — | — | — | — | — | N | zero-dt guard |
 | Documents/InputActionsDocumentWidgets.hpp:83 | preview evaluator tick | 1/60 s | DERIVED | — | — | — | — | — | — | N | should be the project's fixed step |
-| Documents/InputActionsDocumentWidgets.cpp:19 | kMapsColumnWidth | 180 px | SETTING | editor.input.mapsColumnWidth | InputEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/InputActionsDocumentWidgets.cpp:20 | kIndent | 16 px | SETTING | editor.input.indent | InputEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/InputActionsDocumentWidgets.cpp:19 | kMapsColumnWidth | 180 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.input.mapsColumnWidth) |
+| Documents/InputActionsDocumentWidgets.cpp:20 | kIndent | 16 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.input.indent) |
 | Documents/InputActionsDocumentWidgets.cpp:147, :149, :575, :640 | row height 24 | 24 px | DERIVED | — | — | — | — | — | — | N | = kTableRowHeight, repeated |
-| Documents/InputActionsDocumentWidgets.cpp:249, :252, :662, :664 | field widths | 200/160/120/120 px | SETTING | editor.input.fieldWidths | InputEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/InputActionsDocumentWidgets.cpp:475 | live-value highlight | 0.12 + 0.2·v alpha | SETTING | editor.input.liveHighlight | InputEditorSettings | Editor Dev | Pref-M | Live | 0..1 | N | — |
+| Documents/InputActionsDocumentWidgets.cpp:249, :252, :662, :664 | field widths | 200/160/120/120 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.input.fieldWidths) |
+| Documents/InputActionsDocumentWidgets.cpp:475 | live-value highlight base | 0.12 alpha | SETTING | editor.input.liveHighlightBase | InputEditorSettings | Editor Dev | Pref-M | Live | 0..1 | N | (S6-45 amendment): split from editor.input.liveHighlight (base + gain x v), one name per value |
+| Documents/InputActionsDocumentWidgets.cpp:475 | live-value highlight gain | 0.2 alpha | SETTING | editor.input.liveHighlightGain | InputEditorSettings | Editor Dev | Pref-M | Live | 0..1 | N | as editor.input.liveHighlightBase (S6-45 amendment) |
 | Documents/InputActionsInspectorPage.cpp:257, :360 | hold-seconds / scale drag speed | 0.01 | DERIVED | — | — | — | — | — | — | N | = PropertyGrid speed |
-| Documents/InputActionsInspectorPage.cpp:392, :420, :433 | picker widths | 260, 300×260, 200 px | SETTING | editor.input.pickerSize | InputEditorSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/CrashReportDocument.cpp:79 | log tail | 200 lines | SETTING | editor.crash.logTailLines | CrashViewerSettings | Editor | Pref-M | Live | 20..5000 | N | — |
-| Documents/CrashReportDocument.cpp:168 | window first size | 760×760 px | SETTING | editor.crash.initialSize | CrashViewerSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/CrashReportDocument.cpp:202; Panels/EditorPanels.cpp:1217 | "Copied" flash | 0.75 s | SETTING | editor.ui.copyFlashSeconds | EditorUiSettings | Editor Dev | Pref-M | Live | 0..5 | N | two copies |
-| Documents/CrashReportDocument.cpp:262, :283, :387 | field width, max rows, text rows | 320 px, 24, 16 lines | SETTING | editor.crash.* | CrashViewerSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/InputActionsInspectorPage.cpp:392, :420, :433 | picker widths | 260, 300×260, 200 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.input.pickerSize) |
+| Documents/CrashReportDocument.cpp:79 | log tail | 200 lines | SETTING | diagnostics.logTailLines | DiagnosticsSettings | Game Dev | Pref-P | Live | 0..10000 | N | (reconciled R1) (S6-45 amendment): one range for the one value, the reporter row's 0..10000 the code declares (was 20..5000 here) |
+| Documents/CrashReportDocument.cpp:168 | window first size | 760×760 px | SETTING | editor.crash.initialSize | CrashViewerSettings | Editor | Pref-M | Live | — | N | the crash document's first-use window size, a window dimension and not UI chrome (S5-2 review: restored from DERIVED; owned by S6-40) |
+| Documents/CrashReportDocument.cpp:202; Panels/EditorPanels.cpp:1217 | "Copied" flash | 0.75 s | SETTING | ui.copyFlashSeconds | UiSettings | Game Dev | Pref-M | Live | 0..5 | N | two copies (reconciled R1) |
+| Documents/CrashReportDocument.cpp:262 | field width | 320 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.crash.*; the text-row count is split out below) |
+| Documents/CrashReportDocument.cpp:387 | text rows | 16 lines | SETTING | editor.crash.textRows | CrashViewerSettings | Editor | Pref-M | Live | 4..200 | N | a row count, not a px value (S5-2 review: split from the :262 px row; owned by S6-40, which declares it Editor / Pref-M / Live beside editor.crash.maxRows) |
+| Settings/SettingsApply.cpp:9 | archive save debounce | 500 ms | SETTING | editor.settings.saveDebounceMs | SettingsWindowCVars | Editor | Pref-M | Live | 0..10000 | N | (S6-45 amendment): how long the settings windows wait after an edit before writing the archive (S3) |
+| Settings/SettingsHost.cpp:18 | open at boot | "" | SETTING | editor.settings.openAtBoot | SettingsWindowCVars | Editor Dev | Pref-M | Live | string | N | (S6-45 amendment): Hidden; automation opens a settings window at boot (S3) |
+| Settings/SettingsHost.cpp:23 | open category | "" | SETTING | editor.settings.openCategory | SettingsWindowCVars | Editor Dev | Pref-M | Live | string | N | (S6-45 amendment): Hidden; the category the window opens on (S3) |
+| Settings/ShortcutsPage.cpp:20 | conflicts-only filter | false | SETTING | editor.settings.keysConflictsOnly | SettingsWindowCVars | Editor Dev | Pref-M | Live | bool | N | (S6-45 amendment): Hidden; the Shortcuts page's filter state (S4-14) |
+| Documents/CrashReportDocument.cpp:283 | max rows | 24 | SETTING | editor.crash.maxRows | CrashViewerSettings | Editor | Pref-M | Live | — | N | a row count, not a px value (split from the :262/:387 row; owned by S6-40, which declares it Editor / Pref-M / Live) |
 | Documents/MeshDocument.hpp:448 | kPreviewSize | 512 px | SETTING | editor.mesh.previewResolution | MeshDocSettings | Editor | Pref-M | Restart (reopen) | 128..2048 | N | GPU budget |
 | Documents/MeshDocument.cpp:395-396 | kFovYDegrees / kMargin | 45 deg / 1.5 | SETTING | editor.mesh.preview{Fov,Margin} | MeshDocSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/MeshDocument.cpp:402, :422-423, :431 | view dir, near/far, light dir, ambient | (1,0.75,1), 0.05/4d+1, (0.4,1,0.3), 0.12 | SETTING | editor.preview.light{Direction,Ambient} | PreviewSettings | Editor Dev | Pref-M | Live | — | N | a different light dir from the material previews (inconsistent) |
-| Documents/MeshDocument.cpp:516, :549 | window size, info child | 420×640, 220 px | SETTING | editor.mesh.initialSize | MeshDocSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/MaterialSpherePreview.hpp:34 | sphere tessellation | 24 × 32 | SETTING | editor.preview.sphereSegments | PreviewSettings | Editor Dev | Pref-M | Restart | — | N | — |
+| Documents/MeshDocument.cpp:402, :422-423, :431 | view dir, near/far, light dir, ambient | (1,0.75,1), 0.05/4d+1, (0.4,1,0.3), 0.12 | SETTING | editor.preview.light.direction / .ambient | EditorPreviewLightSettings | Editor | Pref-M | Live | — | N | a different light dir from the material previews (inconsistent) (reconciled R1: the default moves to the shared value (0.45,0.7,0.8); no golden captures the mesh document) |
+| Documents/MeshDocument.cpp:516, :549 | window size, info child | 420×640, 220 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.mesh.initialSize) |
+| Documents/MaterialSpherePreview.hpp:34 | sphere rings | 24 | SETTING | editor.preview.sphereRings | PreviewSettings | Editor Dev | Pref-M | Restart | 3..128 | N | (S6-45 amendment): split from the 24 x 32 row, one name per value (S6-35 registered both) |
+| Documents/MaterialSpherePreview.hpp:34 | sphere segments | 32 | SETTING | editor.preview.sphereSegments | PreviewSettings | Editor Dev | Pref-M | Restart | 3..128 | N | — |
 | Documents/MaterialSpherePreview.hpp:57 | preview projection | 35 deg, 0.05..10 | SETTING | editor.preview.sphereFov | PreviewSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Documents/MaterialSpherePreview.hpp:58, :60 | light dir / ambient | (0.45,0.7,0.8), 0.12 | SETTING | editor.preview.light{Direction,Ambient} | PreviewSettings | Editor | Pref-M | Live | — | N | canonical copy |
-| Documents/SpriteDocument.cpp:190, :250 | window size, min preview side | 420×560, 16 px | SETTING | editor.sprite.initialSize | SpriteDocSettings | Editor Dev | Pref-M | Live | — | N | — |
+| Documents/MaterialSpherePreview.hpp:58, :60 | light dir / ambient | (0.45,0.7,0.8), 0.12 | SETTING | editor.preview.light.direction / .ambient / .colour | EditorPreviewLightSettings | Editor | Pref-M | Live | — | N | canonical copy (reconciled R1: one shared preview light, colour (1,1,1)) |
+| Documents/SpriteDocument.cpp:190, :250 | window size, min preview side | 420×560, 16 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.sprite.initialSize) |
 | App/EditorApp.cpp:1272 | m_scriptedOpenFocusFrames | 3 | CONSTANT | — | — | — | — | — | — | N | automation-only frame protocol |
-| App/EditorAppFrame.cpp:2922, :2926, :2932 | start page column / spacers | 640, 24, 16 px | SETTING | editor.startPage.columnWidth | EditorUiSettings | Editor Dev | Pref-M | Live | — | N | — |
+| App/EditorAppFrame.cpp:2922, :2926, :2932 | start page column / spacers | 640, 24, 16 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.startPage.columnWidth) |
 
 ### Undo
 
@@ -1292,16 +1426,16 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| App/EditorApp.hpp:848 | ConsoleBuffer capacity | 512 lines | SETTING | editor.console.bufferLines | ConsoleSettings | Editor | Pref-M | Restart | 64..100000 | N | ring size |
-| Panels/EditorPanels.hpp:281 | lineCap | 512 | SETTING | editor.console.displayLineCap | ConsoleSettings | Editor | Pref-M | Live | 64..100000 | N | — |
-| Panels/EditorPanels.hpp:276-278 | collapse / autoScroll / wrap defaults | false / true / true | SETTING | editor.console.{collapse,autoScroll,wrap} | ConsoleSettings | Editor | Pref-M | Live | bool | N | session-only today |
-| Panels/EditorPanels.cpp:1155 | cvar reply lines reserved | 6 | SETTING | editor.console.replyLines | ConsoleSettings | Editor Dev | Pref-M | Live | 0..32 | N | — |
-| Panels/EditorPanels.cpp:1123 | category combo width | 140 px | SETTING | editor.console.categoryComboWidth | ConsoleSettings | Editor Dev | Pref-M | Live | — | N | — |
-| ArcaneCore/src/Arcane/Config/CVarRegistry.cpp:123 | console.historySize | 64 | SETTING (exists) | console.historySize | ConsoleSettings | Editor | Pref-M | Live | 1..1024 | N | registered with module "engine" |
-| ArcaneCore/src/Arcane/Base/Log.cpp:258 | log.level | Init arg | SETTING (exists) | log.level | — | Game Dev | Pref-P | Live | 0..6 | N | already Archive and Dev |
+| App/EditorApp.hpp:848 | ConsoleBuffer capacity | 512 lines | SETTING | editor.console.ringLines | EditorConsoleSettings | Editor | Pref-M | Restart | 64..100000 | N | ring size (reconciled R1: the editor Panels/ConsoleModel is already a 512-line ring) |
+| Panels/EditorPanels.hpp:281 | lineCap | 512 | SETTING | editor.console.displayLineCap | EditorConsoleSettings | Editor | Pref-M | Live | 64..100000 | N | — |
+| Panels/EditorPanels.hpp:276-278 | collapse / autoScroll / wrap defaults | false / true / true | SETTING | editor.console.{collapse,autoScroll,wrap} | EditorConsoleSettings | Editor | Pref-M | Live | bool | N | session-only today |
+| Panels/EditorPanels.cpp:1155 | cvar reply lines reserved | 6 | SETTING | editor.console.replyLines | EditorConsoleSettings | Editor Dev | Pref-M | Live | 0..32 | N | — |
+| Panels/EditorPanels.cpp:1123 | category combo width | 140 px | DERIVED | — | — | — | — | — | — | N | base px x editor.ui.scale (s16.11; was editor.console.categoryComboWidth) |
+| ArcaneCore/src/Arcane/Config/CVarRegistry.cpp:123 | console.historySize | 64 | SETTING (exists) | console.historySize | ConsoleSettings | Game | Pref-P | Live | 1..1024 | N | registered with module "engine" (reconciled R1: Game, Pref-P; it serves both consoles) |
+| ArcaneCore/src/Arcane/Base/Log.cpp:258-263 | log.level | Init arg | SETTING (exists) | log.level | LogSettings | Game | Pref-P | Live | 0..6 | N | already Archive and Dev (reconciled R1) |
 | Panels/ConsoleModel.cpp:18 | kPrefixRules | table | CONSTANT | — | — | — | — | — | — | N | log-format mapping |
 | Panels/ConsoleModel.cpp:48, :52 | prefix length ≤24 | 24 chars | CONSTANT | — | — | — | — | — | — | N | log-format parse rule |
-| Panels/ConsoleModel.cpp:114 | category column pad | 8 chars | SETTING | editor.console.categoryWidth | ConsoleSettings | Editor Dev | Pref-M | Live | 0..32 | N | display width |
+| Panels/ConsoleModel.cpp:114 | category column pad | 8 chars | SETTING | editor.console.categoryWidth | EditorConsoleSettings | Editor Dev | Pref-M | Live | 0..32 | N | display width |
 | Panels/DiagnosticStore.hpp:23 | SeverityMask | bit values | CONSTANT | — | — | — | — | — | — | N | bitmask encoding |
 
 ### Hub/Recents
@@ -1313,30 +1447,31 @@ The 31 tokens in `Widgets/EditorTheme.hpp`, then the theme's literal alphas, the
 | Project/RecentProjects.cpp:30, :32 | kFormatVersion 1, ".arcproj" | — | CONSTANT | — | — | — | — | — | — | N | Hub file format |
 | Project/SceneRecents.hpp:32 | kFormatVersion | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
 | Project/StartPageModel.cpp:11-18 | relative-time buckets | 60 s / 1 h / 1 d / 30 d | CONSTANT | — | — | — | — | — | — | N | calendar arithmetic |
-| ArcaneHub/src-tauri/src/settings.rs:78 | default_project_dir | "" | OTHER-STORE | (Hub settings.archub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). the Hub is Rust; it cannot join the cvar registry |
-| ArcaneHub/src-tauri/src/settings.rs:97 | launch_behavior | "tray" | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/settings.rs:109 | project_view | "grid" | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/settings.rs:117, :123 | project_sort / sort_desc | "opened" / true | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/settings.rs:135 | confirm_delete | true | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/launch.rs:67 | BOOT_WATCHDOG | 2 s | OTHER-STORE | (Hub) hub.bootWatchdogSeconds | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). slow disks |
-| ArcaneHub/src-tauri/src/spawn.rs:93-94 | PROBE_TIMEOUT / PROBE_POLL | 10 s / 25 ms | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/tray.rs:25 | QUICK_LAUNCH | 5 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
-| ArcaneHub/src-tauri/src/watch.rs:24 | disk watch poll | 2 s | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:78 | default_project_dir | "" | OTHER-STORE | (Hub settings.archub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). the Hub is Rust; it cannot join the cvar registry |
+| ArcaneHub/src-tauri/src/settings.rs:97 | launch_behavior | "tray" | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:109 | project_view | "grid" | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:117, :123 | project_sort / sort_desc | "opened" / true | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/settings.rs:135 | confirm_delete | true | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/launch.rs:67 | BOOT_WATCHDOG | 2 s | OTHER-STORE | (Hub) hub.bootWatchdogSeconds | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). slow disks |
+| ArcaneHub/src-tauri/src/spawn.rs:93-94 | PROBE_TIMEOUT / PROBE_POLL | 10 s / 25 ms | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/tray.rs:25 | QUICK_LAUNCH | 5 | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
+| ArcaneHub/src-tauri/src/watch.rs:24 | disk watch poll | 2 s | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). — |
 | ArcaneHub/src-tauri/src/resolve.rs:109 | COVER_MAX_BYTES | 2 MiB | CONSTANT | — | — | — | — | — | — | N | cover contract with the editor's 512 px PNG |
-| ArcaneHub/src-tauri/src/resolve.rs:150 | SCAN_VISIT_BUDGET | 100000 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). budget |
-| ArcaneHub/src-tauri/src/project.rs:198 | MAX_NAME_LEN | 64 | OTHER-STORE | (Hub) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). check parity with engine Project validation (not verified) |
+| ArcaneHub/src-tauri/src/resolve.rs:150 | SCAN_VISIT_BUDGET | 100000 | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). budget |
+| ArcaneHub/src-tauri/src/project.rs:198 | MAX_NAME_LEN | 64 | OTHER-STORE | (Hub) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). check parity with engine Project validation (not verified) |
 | ArcaneHub/src-tauri/src/store.rs:34; project.rs:13 | format versions | 1 | CONSTANT | — | — | — | — | — | — | N | file format |
-| ArcaneHub/src/lib/theme.css:45-99 | Hub theme tokens (25 vars: surfaces, text, accent #A24349, radii, durations) | — | OTHER-STORE | (Hub-local) | — | — | — | — | — | — | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). a separate palette from EditorTheme; unify or keep |
+| ArcaneHub/src/lib/theme.css:45-99 | Hub theme tokens (25 vars: surfaces, text, accent #A24349, radii, durations) | — | OTHER-STORE | (Hub-local) | — | — | — | — | — | N | Hub-owned store (Rust/Tauri, separate process); JSON bridge later (reconciled). a separate palette from EditorTheme; unify or keep |
 
 ### Layout
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Panels/DefaultLayout.hpp:41 | kDefaultInspectorWidthPx | 380 px | SETTING | editor.layout.factory.inspectorWidth | LayoutSettings | Editor Dev | Pref-M | Live (on Reset Layout) | — | N | factory layout |
-| Panels/DefaultLayout.hpp:42 | kDefaultOutlinerWidthPx | 270 px | SETTING | editor.layout.factory.outlinerWidth | LayoutSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/DefaultLayout.hpp:43 | kDefaultBottomBandPx | 350 px | SETTING | editor.layout.factory.bottomBand | LayoutSettings | Editor Dev | Pref-M | Live | — | N | — |
-| Panels/DefaultLayout.hpp:44 | kDefaultCentralMinFraction | 0.40 | SETTING | editor.layout.factory.centralMinFraction | LayoutSettings | Editor Dev | Pref-M | Live | 0.1..0.9 | N | — |
-| Panels/DefaultLayout.hpp:46-47 | browser / Inspector-2 reference px | 1144 / 392 | SETTING | editor.layout.factory.assetsInspectorShare | LayoutSettings | Editor Dev | Pref-M | Live | — | N | measured from the user's layout |
+| Panels/DefaultLayout.hpp:41 | kDefaultInspectorWidthPx | 380 px (layout) | SETTING | editor.layout.factory.inspectorWidth | LayoutFactorySettings | Editor Dev | Pref-M | Live (on Reset Layout) | — | N | factory layout (s16.11: a factory layout size, not px-metric chrome) |
+| Panels/DefaultLayout.hpp:42 | kDefaultOutlinerWidthPx | 270 px (layout) | SETTING | editor.layout.factory.outlinerWidth | LayoutFactorySettings | Editor Dev | Pref-M | Live | — | N | (s16.11: a factory layout size, not px-metric chrome) |
+| Panels/DefaultLayout.hpp:43 | kDefaultBottomBandPx | 350 px (layout) | SETTING | editor.layout.factory.bottomBand | LayoutFactorySettings | Editor Dev | Pref-M | Live | — | N | (s16.11: a factory layout size, not px-metric chrome) |
+| Panels/DefaultLayout.hpp:44 | kDefaultCentralMinFraction | 0.40 | SETTING | editor.layout.factory.centralMinFraction | LayoutFactorySettings | Editor Dev | Pref-M | Live | 0.1..0.9 | N | — |
+| Panels/DefaultLayout.hpp:46 | browser reference px | 1144 | SETTING | editor.layout.factory.browserRefPx | LayoutFactorySettings | Editor Dev | Pref-M | Live (on Reset Layout) | 1..16384 | N | measured from the user's layout (S6-45 amendment): replaces editor.layout.factory.assetsInspectorShare, one name per value (ruling S6-32) |
+| Panels/DefaultLayout.hpp:47 | Inspector-2 reference px | 392 | SETTING | editor.layout.factory.assetsInspectorRefPx | LayoutFactorySettings | Editor Dev | Pref-M | Live (on Reset Layout) | 1..16384 | N | as editor.layout.factory.browserRefPx (S6-45 amendment) |
 | Panels/DefaultLayout.hpp:50 | kDefaultAssetsInspectorBandFraction | ratio | DERIVED | — | — | — | — | — | — | N | formula |
 | Panels/EditorPanels.cpp:533 | split ratio clamp | 0.05..0.95 | CONSTANT | — | — | — | — | — | — | N | DockBuilder guard |
 | Panels/EditorPanels.cpp:154-156 | dockspace host style | 0 rounding / border / padding | CONSTANT | — | — | — | — | — | — | N | invisible host window |
@@ -1430,7 +1565,7 @@ Related shortcut timing tunable:
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Panels/EditorPanels.cpp:2254 | slow-click rename window | 1.2 s | SETTING | editor.outliner.slowClickMaxSeconds | InspectorSettings | Editor | Pref-M | Live | 0.4..3 | N | UE/Explorer feel |
+| Panels/EditorPanels.cpp:2254 | slow-click rename window | 1.2 s | SETTING | editor.outliner.slowClickMaxSeconds | OutlinerSettings | Editor | Pref-M | Live | 0.4..3 | N | UE/Explorer feel (reconciled R1: one struct per prefix) |
 | App/EditorAppFrame.cpp:95-137 | SDL scancode values | 4..230 | CONSTANT | — | — | — | — | — | — | N | SDL's table; the bindings become `editor.keys.*` cvars, the codes do not |
 
 ### Persistence stores
@@ -1461,10 +1596,10 @@ Tunables inside the stores that are not already listed under the viewport and la
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | aud | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ArcaneAssetPipeline/src/Arcane/AssetPipeline/TextureMetaSettings.hpp:29 | format default | Auto (=Bc7) | SETTING | assets.import.texture.format | TextureImportDefaults | Editor (pipeline-declared; arccook reads it too) | Project | Live (next cook) | {Auto, Bc7, Rgba8} | N | changes cooked bytes, so goldens move |
-| …TextureMetaSettings.hpp:37 | srgb default | true | SETTING | assets.import.texture.srgb | TextureImportDefaults | Editor | Project | Live | bool | N | — |
-| …TextureMetaSettings.hpp:38 | generateMips default | true | SETTING | assets.import.texture.generateMips | TextureImportDefaults | Editor | Project | Live | bool | N | — |
-| …TextureMetaSettings.hpp:39 | maxSize default | 0 (unlimited) | SETTING | assets.import.texture.maxSize | TextureImportDefaults | Editor | Project | Live | 0..16384 | N | — |
+| ArcaneAssetPipeline/src/Arcane/AssetPipeline/TextureMetaSettings.hpp:29 | format default | Auto (=Bc7) | SETTING | assets.import.texture.format | TextureMetaSettings | Editor (pipeline-declared; arccook reads it too) | Project | Live (next cook) | {Auto, Bc7, Rgba8} | N | changes cooked bytes, so goldens move |
+| …TextureMetaSettings.hpp:37 | srgb default | true | SETTING | assets.import.texture.srgb | TextureMetaSettings | Editor | Project | Live | bool | N | — |
+| …TextureMetaSettings.hpp:38 | generateMips default | true | SETTING | assets.import.texture.generateMips | TextureMetaSettings | Editor | Project | Live | bool | N | — |
+| …TextureMetaSettings.hpp:39 | maxSize default | 0 (unlimited) | SETTING | assets.import.texture.maxSize | TextureMetaSettings | Editor | Project | Live | 0..16384 | N | — |
 | App/EditorApp.cpp:1655-1656 | layout dir | %LOCALAPPDATA%\Arcane\editor\layouts | CONSTANT | — | — | — | — | — | — | N | rung location (s11.1), not a value |
 | App/EditorApp.cpp:98-99, :259-260; Viewport/ViewportSettings.hpp:72-73; Panels/InspectorWindows.cpp:507-508 | ini section names | "EditorPlayMode"/"State", … | CONSTANT | — | — | — | — | — | — | N | file format |
 

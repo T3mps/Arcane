@@ -33,18 +33,18 @@ namespace Arcane::Edit
     // Identity in `reg` -- "Entity" by default (the plain create), the
     // primitive's name for AddPrimitiveEntity ("Cube", "Cube_2"). The same
     // "_N" scheme InstantiateSubtrees' paste uniquify applies.
-    ARCANE_API std::string AutoEntityName(Astra::Registry& reg,
+    ARC_API std::string AutoEntityName(Astra::Registry& reg,
                                           std::string_view base = "Entity");
 
     // Identity.name when present and non-empty, else "Entity <id>".
-    ARCANE_API std::string DisplayName(Astra::Registry& reg, Astra::Entity e);
+    ARC_API std::string DisplayName(Astra::Registry& reg, Astra::Entity e);
 
     // New entity carrying Transform{} + Identity{Generate(), AutoEntityName},
     // parented under `parent` when valid. Returns the new entity.
     // A dead (stale) parent handle silently falls back to root creation --
     // Registry::SetParent no-ops on dead parents and a create is still a
     // real edit worth keeping.
-    ARCANE_API Astra::Entity CreateEntity(Astra::Registry& reg,
+    ARC_API Astra::Entity CreateEntity(Astra::Registry& reg,
                                           Astra::Entity parent);
 
     // Like CreateEntity, but for editor call sites that mean "add to the
@@ -63,7 +63,7 @@ namespace Arcane::Edit
     // the same data-loss bug rather than fix it. A refused create is
     // recoverable (open or start a scene, then try again); a silent create-
     // then-lose is not.
-    ARCANE_API Astra::Entity CreateEntityInScene(Astra::Registry& reg,
+    ARC_API Astra::Entity CreateEntityInScene(Astra::Registry& reg,
                                                  Astra::Entity parent);
 
     // The ONE live-root check (node page + editor upgrades s3.1): the
@@ -72,11 +72,11 @@ namespace Arcane::Edit
     // so "the resource exists" is not "there is a scene": SaveJson would seed
     // its walk with the dead entity and write one empty entity. Every
     // "add/move/save into the scene" path asks this, never the bare resource.
-    ARCANE_API std::optional<Astra::Entity> LiveSceneRoot(const Astra::Registry& reg);
+    ARC_API std::optional<Astra::Entity> LiveSceneRoot(const Astra::Registry& reg);
 
     // `e` is valid and is the live scene root. The structural verbs' root
     // guard (the editor's SelectionWithoutSceneRoot) is built on this.
-    ARCANE_API bool IsSceneRoot(const Astra::Registry& reg, Astra::Entity e);
+    ARC_API bool IsSceneRoot(const Astra::Registry& reg, Astra::Entity e);
 
     // F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object > <primitive>`.
     // CreateEntityInScene(reg, parent) -- so the same SceneRoot fallback and
@@ -89,7 +89,7 @@ namespace Arcane::Edit
     // reuse is the ASSET's policy (EditorApp::MintOrReusePrimitiveMesh), never
     // the entity's. Undo is the caller's RegistryStateCommand, as for every
     // mutator here.
-    ARCANE_API Astra::Entity AddPrimitiveEntity(Astra::Registry& reg,
+    ARC_API Astra::Entity AddPrimitiveEntity(Astra::Registry& reg,
                                                 Astra::Entity parent,
                                                 glm::vec3 position,
                                                 const Guid& mesh,
@@ -98,7 +98,7 @@ namespace Arcane::Edit
     // Delete every entity in `set` (duplicates tolerated). Children of a
     // deleted entity first splice up to its nearest NOT-being-deleted
     // ancestor (or to the root when none). Returns entities destroyed.
-    ARCANE_API std::size_t DeleteEntities(Astra::Registry& reg,
+    ARC_API std::size_t DeleteEntities(Astra::Registry& reg,
                                           std::span<const Astra::Entity> set);
 
     // Reparent every entity in `set` under `parent` (invalid = unparent to
@@ -106,7 +106,7 @@ namespace Arcane::Edit
     // any moved entity's subtree or is itself in `set` (cycle), or when
     // `parent` is a dead (stale) handle. Skips entities already under
     // `parent`; returns how many moved.
-    ARCANE_API std::size_t Reparent(Astra::Registry& reg,
+    ARC_API std::size_t Reparent(Astra::Registry& reg,
                                     std::span<const Astra::Entity> set,
                                     Astra::Entity parent);
 
@@ -117,13 +117,13 @@ namespace Arcane::Edit
     // never walk. Returns 0 and moves nothing when there is no live root.
     // Raw Reparent(Invalid) keeps its unparent-to-registry-root meaning
     // (pinned by EntityOpsTest and RegistryStateCommandTest).
-    ARCANE_API std::size_t ReparentInScene(Astra::Registry& reg,
+    ARC_API std::size_t ReparentInScene(Astra::Registry& reg,
                                            std::span<const Astra::Entity> set,
                                            Astra::Entity parent);
 
     // Add (hidden=true) or remove the Hidden marker on `e` AND every
     // descendant. Returns how many entities changed state.
-    ARCANE_API std::size_t SetHiddenRecursive(Astra::Registry& reg,
+    ARC_API std::size_t SetHiddenRecursive(Astra::Registry& reg,
                                               Astra::Entity e, bool hidden);
 
     // Rename an existing Identity. Returns false (mutating nothing) when the
@@ -139,7 +139,7 @@ namespace Arcane::Edit
     // (ActorTreeItem.cpp:269) and its third parameter `bMakeUnique` defaults to
     // FALSE (EditorEngine.h:3365) -- so an interactive rename in UE takes the
     // exact label typed, duplicates included.
-    ARCANE_API bool RenameEntity(Astra::Registry& reg, Astra::Entity e,
+    ARC_API bool RenameEntity(Astra::Registry& reg, Astra::Entity e,
                                  std::string name);
 
     // What RenameWithUndo did. Only `Renamed` produced a history entry.
@@ -164,16 +164,16 @@ namespace Arcane::Edit
     // Astra::TypeID<Identity>::Hash() by construction) -- keeping that lookup
     // engine-side is what lets every host share one implementation instead of
     // re-deriving the undo shape per panel.
-    ARCANE_API RenameResult RenameWithUndo(CommandStack& stack, Astra::Registry& reg,
+    ARC_API RenameResult RenameWithUndo(CommandStack& stack, Astra::Registry& reg,
                                            Astra::Entity e, const std::string& name);
 
     // Default-construct `desc`'s component on every entity in `set` that
     // lacks it / remove it from every entity that carries it. Return =
     // entities touched.
-    ARCANE_API std::size_t AddComponent(Astra::Registry& reg,
+    ARC_API std::size_t AddComponent(Astra::Registry& reg,
                                         std::span<const Astra::Entity> set,
                                         const Astra::ComponentDescriptor& desc);
-    ARCANE_API std::size_t RemoveComponent(Astra::Registry& reg,
+    ARC_API std::size_t RemoveComponent(Astra::Registry& reg,
                                            std::span<const Astra::Entity> set,
                                            const Astra::ComponentDescriptor& desc);
 
@@ -182,7 +182,7 @@ namespace Arcane::Edit
     // children through WorldTransform propagation, so applying to both
     // double-moves the children. Dead entities are skipped and duplicates
     // collapse; surviving order follows `set`.
-    ARCANE_API std::vector<Astra::Entity> SelectionRoots(Astra::Registry& reg,
+    ARC_API std::vector<Astra::Entity> SelectionRoots(Astra::Registry& reg,
                                                          std::span<const Astra::Entity> set);
 
     // Every entity of every subtree rooted in `roots` (each root + all its
@@ -190,7 +190,7 @@ namespace Arcane::Edit
     // hand DeleteEntities: DeleteEntities SPLICES children up to survivors,
     // so cutting only the roots would orphan the children the clipboard just
     // captured.
-    ARCANE_API std::vector<Astra::Entity> SubtreeEntities(Astra::Registry& reg,
+    ARC_API std::vector<Astra::Entity> SubtreeEntities(Astra::Registry& reg,
                                                           std::span<const Astra::Entity> roots);
 
     // Serialize the subtrees rooted at SelectionRoots(set) -- a nested
@@ -200,7 +200,7 @@ namespace Arcane::Edit
     // entry records "rootParentGuid" -- the Identity Guid of its ORIGINAL
     // parent (key absent when the parent has no Identity or none exists).
     // "entities" is empty when `set` holds nothing alive.
-    ARCANE_API nlohmann::json SerializeSubtrees(Astra::Registry& reg,
+    ARC_API nlohmann::json SerializeSubtrees(Astra::Registry& reg,
                                                 std::span<const Astra::Entity> set);
 
     // Instantiate a SerializeSubtrees payload: fresh entities with fresh
@@ -220,16 +220,16 @@ namespace Arcane::Edit
     // the paste; it is skipped and reported the way LoadJson reports the same
     // two cases (SceneSerializer.hpp) -- ARC_WARN plus an Arcane::Diagnostic
     // published under the "clipboard" key.
-    ARCANE_API std::vector<Astra::Entity> InstantiateSubtrees(Astra::Registry& reg,
+    ARC_API std::vector<Astra::Entity> InstantiateSubtrees(Astra::Registry& reg,
                                                               const nlohmann::json& payload);
 
     // World matrix of `e`: the product of Transform::ToMatrix up the parent
     // chain (identity for a missing Transform at any level). Computed from the
     // live graph rather than the WorldTransform component, which is only
     // refreshed for SceneRoot's subtree.
-    ARCANE_API glm::mat4 WorldMatrix(Astra::Registry& reg, Astra::Entity e);
+    ARC_API glm::mat4 WorldMatrix(Astra::Registry& reg, Astra::Entity e);
 
     // World matrix of `e`'s PARENT (identity when it has none) -- invert this
     // to convert a world pose back into `e`'s local Transform.
-    ARCANE_API glm::mat4 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e);
+    ARC_API glm::mat4 ParentWorldMatrix(Astra::Registry& reg, Astra::Entity e);
 }

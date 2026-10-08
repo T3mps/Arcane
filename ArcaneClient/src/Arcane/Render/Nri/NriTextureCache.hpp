@@ -61,7 +61,7 @@ namespace Arcane
     struct PixelData;
     struct LoadedClientArtifact;
 
-    class ARCANE_API NriTextureCache
+    class ARC_API NriTextureCache
     {
     public:
         // Guid -> decoded RGBA8 pixels, or null when the id names nothing this
@@ -172,12 +172,12 @@ namespace Arcane
         //                  cache-owned 8x8 checkerboard placeholder for this
         //                  colour space (lazily created, shared by every
         //                  pending key in that space), and RE-POLLS the
-        //                  supply every kPendingCookRepollInterval-th Resolve
-        //                  for this key (throttled, not every ask -- Resolve
-        //                  runs at declaration time, per frame, per span, and
-        //                  polling on every ask reaches all the way down to a
-        //                  directory scan; see kPendingCookRepollInterval's
-        //                  own comment) -- the placeholder is a stand-in for
+        //                  supply every assets.cook.pendingRepollInterval-th
+        //                  Resolve for this key (throttled, not every ask --
+        //                  Resolve runs at declaration time, per frame, per
+        //                  span, and polling on every ask reaches all the way
+        //                  down to a directory scan; see AssetsCookSettings.hpp)
+        //                  -- the placeholder is a stand-in for
         //                  "still cooking", not a memoized failure, because
         //                  Task 12's live cook queue is expected to promote
         //                  it later.
@@ -283,24 +283,6 @@ namespace Arcane
             return Bc7RowPitch(width) * ((height + 3u) / 4u);
         }
 
-        // REVIEW FIX (post-Task-7): how many Resolve() asks a PendingCook key
-        // absorbs -- silently returning the shared placeholder, no supply call
-        // -- between two actual polls of the artifact supply. Resolve runs at
-        // DECLARATION TIME, every frame, per on-screen span, so polling on
-        // EVERY ask meant every still-uncooked texture drove a fresh
-        // Assets::ArtifactFor call every single frame, which (before this fix)
-        // rescanned the whole Intermediate/Artifacts/** tree and read a
-        // meaningful prefix of every candidate .arcart on each miss -- an
-        // unbounded per-frame disk cost. 32 sits in the middle of the brief's
-        // own ~16-64 range: at a typical 60 Hz frame rate that is a re-poll
-        // roughly twice a second per pending texture -- prompt enough that a
-        // cook queue (Task 12, whose own cadence is nowhere near per-frame)
-        // promotes a key to Resident within about half a second of actually
-        // finishing, while cutting the per-frame scan cost by the same
-        // factor. Exposed (not file-local) so the cadence is unit-testable by
-        // name rather than by a magic number duplicated into the test.
-        static constexpr std::uint32_t kPendingCookRepollInterval = 32;
-
     private:
         NriTextureCache() = default;
 
@@ -324,7 +306,7 @@ namespace Arcane
         // One image made resident here. A FAILED load is kept with null
         // members: attempted once, not once per frame -- EXCEPT PendingCook,
         // which is deliberately retried, THROTTLED (see ResidentState and
-        // kPendingCookRepollInterval).
+        // assets.cook.pendingRepollInterval).
         struct Resident
         {
             nri::Texture*    texture = nullptr;

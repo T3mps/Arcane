@@ -1,13 +1,19 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 
 #include <Arcane/Plugin/Plugin.hpp>
+#include <Arcane/Plugin/Module.hpp>
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/PlayerSettings.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Paths::TempDir -- where the versioned plugin images are staged (settings spec s11.0)
 #include <Arcane/Plugin/ClientHooks.hpp>
+#include <Arcane/Plugin/PluginSettings.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Sim/NetDriver.hpp>
 
@@ -17,6 +23,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -24,42 +32,22 @@
 #include <utility>
 #include <vector>
 
-// Only for the process id that namespaces this host's plugin images (see
-// HostProcessTag). Every other platform detail lives behind Module.
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace Arcane
 {
     namespace
     {
-        // Copy-and-load stages the plugin into a temp image so the SOURCE dll stays
-        // rebuildable while the host has one mapped. That image directory must be
-        // per-PROCESS: two hosts on the same project (the editor with the game module
-        // loaded, plus a separate-window ArcaneRuntime spawned from its Play button)
-        // otherwise both stage "<stem>_1.dll" into one shared directory -- and the
-        // second one cannot write it, because Windows locks a mapped DLL against
-        // overwrite. That failed the copy, failed Init, and closed the new window a
-        // moment after it opened. The generation counter cannot fix this on its own:
-        // it restarts at 1 in every host, so the collision is on the FIRST load.
-        std::string HostProcessTag()
-        {
-#ifdef _WIN32
-            return std::to_string(static_cast<unsigned long>(::GetCurrentProcessId()));
-#else
-            return std::to_string(static_cast<long>(::getpid()));
-#endif
-        }
-
+        // Copy-and-load stages the plugin into a temp image (the PluginImage below,
+        // written by Impl::CopyVersioned) so the SOURCE dll stays rebuildable while
+        // the host has one mapped. That image directory must be per-PROCESS: two
+        // hosts on the same project (the editor with the game module loaded, plus a
+        // separate-window ArcaneRuntime spawned from its Play button) otherwise both
+        // stage "<stem>_1.dll" into one shared directory -- and the second one
+        // cannot write it, because Windows locks a mapped DLL against overwrite.
+        // That failed the copy, failed Init, and closed the new window a moment
+        // after it opened. The generation counter cannot fix this on its own: it
+        // restarts at 1 in every host, so the collision is on the FIRST load.
+        // Paths' TempDir is per process (<OS temp>/Arcane/<pid>), which is what
+        // keeps two hosts apart.
         struct PluginImage
         {
             std::optional<Plugin> plugin;
@@ -72,6 +60,61 @@ namespace Arcane
                 return plugin.has_value() && plugin->IsLoaded();
             }
         };
+
+        // Load under the SOURCE dll's stem as the cvar module (settings spec
+        // s4.3). The host loads a versioned copy (<stem>_<gen>.dll), but every
+        // generation of one module must register -- and unregister -- under one name.
+        std::optional<Plugin> LoadScoped(const std::filesystem::path& dll, const std::string& module,
+                                         PluginResolveError* error)
+        {
+            const CVarModuleScope scope(module);
+            std::optional<Plugin> loaded = Plugin::Load(dll, error);   // a null `error` is that overload's own contract
+            if (loaded)
+            {
+                const Module::ImageSpan image = loaded->LoadedModule().Image();
+                CVarRegistry::Get().RegisterModuleImage(loaded->CVarModule(), image.base, image.size);
+            }
+            return loaded;
+        }
+
+        // Process-wide: the dependency images some PluginHost load session has
+        // pinned (Impl::LoadTracked), and how many live sessions pin each. A
+        // second host whose game imports the same dependency sees it already
+        // mapped, so its own before/after diff never reports it; it adopts the
+        // entry instead, and the LAST session out -- not the first -- drops the
+        // image's registrations. A holder outside every PluginHost session (a
+        // bare Plugin::Load or LoadLibrary) is not counted.
+        struct SharedDependency
+        {
+            const void*   base = nullptr;
+            std::size_t   size = 0;
+            std::uint32_t sessions = 0;
+        };
+        std::mutex                    g_dependencyMutex;
+        std::vector<SharedDependency> g_dependencies;
+
+        // EVERY vtable call into an image runs inside CVarModuleScope(p.CVarModule())
+        // (settings spec s4.4; Review Focus 2). AddCallback tags a callback with the
+        // innermost scope and UnregisterModule drops only the tagged ones, so a
+        // module that AddCallbacks from Shutdown, SaveState/LoadState, FixedUpdate,
+        // Update or DrawUI -- not only from its statics or Init -- still has that
+        // callback leave with its image instead of dangling into unmapped code.
+        // LoadScoped (the statics) and InitImage (Init) open the same scope
+        // themselves; every other call into a vtable goes through here. A later
+        // PluginHost edit that adds a vt call keeps this invariant.
+        //
+        // The scope is AMBIENT: thread_local, not image-scoped. Module code also
+        // runs OUTSIDE every vtable call (its ECS systems tick through Runtime's
+        // SystemSchedulers). CVarRegistry judges those adds by CODE ADDRESS
+        // against the images Plugin::Load / LoadScoped publish, so an unscoped
+        // AddCallback whose fn lies in a loaded plugin is attributed to that
+        // module and leaves with UnregisterModuleRange.
+        template <class F>
+        auto ScopedCall(const Plugin& p, F&& f)
+        {
+            const CVarModuleScope scope(p.CVarModule());
+            return f();
+        }
 
         // Restores whatever ImGui context was current before a call into
         // PluginHost, regardless of what the plugin's entry point does to
@@ -194,11 +237,117 @@ namespace Arcane
         std::vector<std::filesystem::path> pluginSources;
         std::vector<PluginImage>           plugins;
 
+        // Dependency images a load mapped (see LoadTracked), pinned for this
+        // host's whole load session -- hot reload included, so a reload never
+        // unmaps and remaps them and re-runs their statics.
+        struct PinnedDependency
+        {
+            Module::ImageSpan image;
+            Module            pin;
+        };
+        std::vector<PinnedDependency> dependencies;
+
         Impl(ProcessContext& proc, std::filesystem::path src)
             : process(proc), source(std::move(src))
         {
-            tempDir = std::filesystem::temp_directory_path() / "arcane_plugins" / HostProcessTag();
+            tempDir = Paths::Join(Paths::Location::TempDir, Paths::Current(), "plugins");
             RefreshContext();
+        }
+
+        [[nodiscard]] bool IsPluginImage(const void* base) const noexcept
+        {
+            if (current && current->plugin && current->plugin->LoadedModule().Image().base == base)
+                return true;
+            return std::ranges::any_of(plugins, [base](const PluginImage& image) {
+                return image.plugin && image.plugin->LoadedModule().Image().base == base;
+            });
+        }
+
+        // LoadScoped, plus the dependency rule (S2 gate). A load can map more
+        // than the plugin image: a Core-only ArcaneServer maps ArcaneClient.dll
+        // only because the game DLL imports it. Such a DEPENDENCY's statics
+        // register settings blocks, cvars and Mosaic level setters into Core,
+        // but Plugin's own cleanup covers only the plugin image -- so FreeLibrary
+        // of the game unmapped Client under live registrations, and the next
+        // ApplyLogSettings / settings read jumped into freed code (the S2-13
+        // [witness][server] 0xC0000005). The rule is GENERAL, not a name match:
+        // every image THIS load newly mapped (before/after diff of the mapped
+        // set, taken around this load alone) is pinned for the session and
+        // disowned when the last session pinning it ends (EndLoadSession).
+        std::optional<Plugin> LoadTracked(const std::filesystem::path& dll, const std::string& module,
+                                          PluginResolveError* error)
+        {
+            const std::vector<Module::MappedModule> before = Module::MappedModules();
+            std::optional<Plugin> loaded = LoadScoped(dll, module, error);
+            if (loaded)
+                PinNewDependencies(before, loaded->LoadedModule().Image());
+            return loaded;
+        }
+
+        void PinNewDependencies(const std::vector<Module::MappedModule>& before,
+                                const Module::ImageSpan loadingImage)
+        {
+            for (const Module::MappedModule& mapped : Module::MappedModules())
+            {
+                const void* const base = mapped.image.base;
+                if (!base || mapped.image.size == 0 || base == loadingImage.base || IsPluginImage(base))
+                    continue;
+                if (std::ranges::any_of(dependencies, [base](const PinnedDependency& d) { return d.image.base == base; }))
+                    continue;
+                const bool fresh = std::ranges::none_of(before, [base](const Module::MappedModule& m) {
+                    return m.image.base == base;
+                });
+
+                std::optional<Module> pin;
+                {
+                    const std::lock_guard lock(g_dependencyMutex);
+                    const auto shared = std::ranges::find(g_dependencies, base, &SharedDependency::base);
+                    // Mapped before this load and pinned by no session: some
+                    // other owner's image, not a dependency of this load.
+                    if (!fresh && shared == g_dependencies.end())
+                        continue;
+                    pin = Module::PinMapped(mapped);
+                    if (!pin)
+                        continue;
+                    if (shared != g_dependencies.end())
+                        ++shared->sessions;
+                    else
+                        g_dependencies.push_back(SharedDependency{ base, mapped.image.size, 1 });
+                }
+                dependencies.push_back(PinnedDependency{ mapped.image, std::move(*pin) });
+                ARC_TRACE("plugin: pinned dependency image '{}' for the load session",
+                          mapped.path.generic_string());
+            }
+        }
+
+        // Ends the load session: every image of this host is already unloaded
+        // (or never loaded). Each pinned dependency is still mapped HERE, so the
+        // deleters UnregisterModuleRange runs are live code; its registrations
+        // drop only when no other host's session still pins it, then the pin
+        // goes and FreeLibrary may unmap it.
+        void EndLoadSession()
+        {
+            for (const PinnedDependency& dep : dependencies)
+            {
+                bool last = false;
+                {
+                    const std::lock_guard lock(g_dependencyMutex);
+                    const auto shared = std::ranges::find(g_dependencies, dep.image.base, &SharedDependency::base);
+                    if (shared != g_dependencies.end() && --shared->sessions == 0)
+                    {
+                        g_dependencies.erase(shared);
+                        last = true;
+                    }
+                }
+                if (last)
+                {
+                    const std::size_t dropped = CVarRegistry::Get().UnregisterModuleRange(dep.image.base, dep.image.size);
+                    if (dropped != 0)
+                        ARC_TRACE("plugin: disowned {} registration(s) of a dependency image '{}'",
+                                  dropped, dep.pin.Path().generic_string());
+                }
+            }
+            dependencies.clear();
         }
 
         // The primary world -- the one the module itself lives in. Asserted non-empty
@@ -209,6 +358,12 @@ namespace Arcane
         [[nodiscard]] IClientHooks* PrimaryHooks() const noexcept
         {
             return runtimes.empty() ? nullptr : runtimes.front()->ClientHooks();
+        }
+        // The primary MODULE's image, or null before Load() / after Unload(). The
+        // per-frame entry points read it to open that image's cvar module scope.
+        [[nodiscard]] const Plugin* PrimaryPlugin() const noexcept
+        {
+            return current && current->plugin ? &*current->plugin : nullptr;
         }
 
         void RefreshContext()
@@ -234,6 +389,9 @@ namespace Arcane
                 ctx.engine        = nullptr;
                 ctx.client        = nullptr;
                 ctx.netMode       = NetMode::Standalone;
+                // The session players' settings run in (settings spec s8.3): the SAME
+                // role the module reads, so PlayerSettings and EngineContext cannot disagree.
+                PlayerSettings::SetSessionMode(ctx.netMode);
                 return;
             }
             Runtime& primary  = Primary();
@@ -242,6 +400,9 @@ namespace Arcane
             ctx.engine        = &primary;
             ctx.client        = primary.Client();
             ctx.netMode       = primary.Mode();
+            // The session players' settings run in (settings spec s8.3): the SAME
+            // role the module reads, so PlayerSettings and EngineContext cannot disagree.
+            PlayerSettings::SetSessionMode(ctx.netMode);
             if (IClientHooks* h = primary.ClientHooks())
                 h->FillEngineContext(ctx);
         }
@@ -261,6 +422,7 @@ namespace Arcane
         // register, with the cause already named here.
         bool InitImage(Plugin& p)
         {
+            const CVarModuleScope scope(p.CVarModule());   // OnInit's AddCallback/RegisterCommand belong to the module
             const Module::ImageSpan image = p.LoadedModule().Image();
             if (!image.base)
             {
@@ -274,6 +436,22 @@ namespace Arcane
             const bool ok = p.VTable().Init(&ctx);
             process.SystemFactories().EndOwner();
             return ok;
+        }
+
+        // Settings spec s4.4 (O2): a module that (re)loaded gets exactly the
+        // values a cold boot would give it -- every config rung and the --set
+        // list, re-applied to its own cvars and published -- BEFORE its Init, so
+        // OnInit already reads configured values. Called OUTSIDE the module's
+        // scope on purpose: the Publish inside dispatches engine-side callbacks,
+        // which must stay engine-attributed.
+        void LayerModuleCVars(const Plugin& p)
+        {
+            if (runtimes.empty() || p.CVarModule().empty()) return;
+            const LayerSources layers = Primary().CVarLayerSources();
+            CVarRegistry::Get().ApplyLayersFor(p.CVarModule(), layers);
+            // The module's keys are known now: republish the whole set, and log
+            // (once per surviving issue -- OpenProject deferred its log to here).
+            PublishCVarConfigDiagnostics(ValidateCVarLayers(CVarRegistry::Get(), layers), CVarConfigLog::Now);
         }
 
         // Give every attached world the module's matching systems. Idempotent (Astra
@@ -324,7 +502,7 @@ namespace Arcane
 
             const PluginVTable& vt = img.plugin->VTable();
             if (callShutdown && vt.Shutdown)
-                vt.Shutdown();
+                ScopedCall(*img.plugin, [&] { vt.Shutdown(); });
             // Drop plugin-created audio handles before clearing systems/registry, the
             // same window in which we tear down plugin-owned ECS state. The 2026-06-26
             // host refactor unified all teardown paths (unload, init-failure, reload-of-
@@ -391,6 +569,12 @@ namespace Arcane
                 }
             }
 
+            // Settings spec s4.4: flush the User rung to the archive (when this
+            // host archives) BEFORE the module's cvars leave with the image
+            // (~Plugin unregisters them). A hot reload then reads them back.
+            if (!runtimes.empty())
+                (void)runtimes.front()->SaveUserCVars();
+
             img.plugin.reset();   // FreeLibrary / dlclose
         }
 
@@ -399,6 +583,10 @@ namespace Arcane
         // its Shutdown; this catches one that forgot, BEFORE FreeLibrary.
         void DisownPluginImages()
         {
+            // The secondaries' cvars go with their images at the caller's
+            // plugins.clear() (~Plugin); the User archive is written first (s4.4).
+            if (!plugins.empty() && !runtimes.empty())
+                (void)runtimes.front()->SaveUserCVars();
             for (auto& img : plugins)
             {
                 if (!img.plugin)
@@ -441,7 +629,8 @@ namespace Arcane
             {
                 const std::string name = src.stem().string();
                 PluginResolveError resolveError;
-                std::optional<Plugin> p = Plugin::Load(src, &resolveError);
+                std::optional<Plugin> p = LoadTracked(src, name, &resolveError);
+                if (p) LayerModuleCVars(*p);
                 RefreshContext();
                 if (!p || !InitImage(*p))
                 {
@@ -494,7 +683,7 @@ namespace Arcane
         {
             for (auto it = plugins.rbegin(); it != plugins.rend(); ++it)
                 if (it->plugin && it->plugin->VTable().Shutdown)
-                    it->plugin->VTable().Shutdown();
+                    ScopedCall(*it->plugin, [&] { it->plugin->VTable().Shutdown(); });
         }
 
         // Re-Init each loaded plugin (load order) on the SAME mapped modules -- used to
@@ -569,7 +758,7 @@ namespace Arcane
             if (vt.SaveState)
             {
                 Astra::BinaryWriter w(snapshot);
-                vt.SaveState(w);
+                ScopedCall(*current->plugin, [&] { vt.SaveState(w); });
                 if (w.HasError())
                 {
                     ARC_ERROR("plugin: SaveState failed; aborting reload, keeping live plugin");
@@ -612,14 +801,15 @@ namespace Arcane
                 rt->ResetRegistry();
 
         PluginResolveError resolveError;
-        std::optional<Plugin> loadedNext = Plugin::Load(next.dll, &resolveError);
+        std::optional<Plugin> loadedNext = LoadTracked(next.dll, name, &resolveError);
+        if (loadedNext) LayerModuleCVars(*loadedNext);
         RefreshContext();
         const bool initRan = loadedNext && InitImage(*loadedNext);
         bool ok = initRan;
         if (ok && restoreState)
         {
             Astra::BinaryReader r(snapshot);
-            ok = loadedNext->VTable().LoadState(r);
+            ok = ScopedCall(*loadedNext, [&] { return loadedNext->VTable().LoadState(r); });
             // RESTORE ALL: the other worlds come back from their own registry bytes.
             for (auto& [rt, bytes] : secondaryWorlds)
             {
@@ -665,7 +855,8 @@ namespace Arcane
         bool rolledBack = false;
         if (previous && !previous->dll.empty())
         {
-            std::optional<Plugin> rollback = Plugin::Load(previous->dll);
+            std::optional<Plugin> rollback = LoadTracked(previous->dll, name, nullptr);
+            if (rollback) LayerModuleCVars(*rollback);
             RefreshContext();
             if (rollback)
             {
@@ -683,7 +874,7 @@ namespace Arcane
                     if (restoreState && !snapshot.empty())
                     {
                         Astra::BinaryReader r(snapshot);
-                        if (!previous->plugin->VTable().LoadState(r))
+                        if (!ScopedCall(*previous->plugin, [&] { return previous->plugin->VTable().LoadState(r); }))
                             ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
                     }
                     // Same restore-all the success path performs: the other worlds are
@@ -733,12 +924,14 @@ namespace Arcane
     PluginHost::~PluginHost()
     {
         Unload();
-        // Unload's DeleteFiles removed the images; take the now-empty per-process
-        // directory with them so TEMP does not collect one dead folder per run.
-        // Best effort by design: remove() on a non-empty directory just reports an
-        // error into `ec`, which is the right outcome if something is still mapped.
+        // Unload's DeleteFiles removed the images; take the now-empty staging
+        // directory and its per-process parent with them so TEMP does not collect
+        // one dead folder per run. Best effort by design: remove() on a non-empty
+        // directory just reports an error into `ec`, which is the right outcome if
+        // something is still mapped (or if another subsystem still uses the parent).
         std::error_code ec;
         std::filesystem::remove(m_impl->tempDir, ec);
+        std::filesystem::remove(m_impl->tempDir.parent_path(), ec);   // <OS temp>/Arcane/<pid>, if now empty
     }
 
     void PluginHost::AddPlugin(std::filesystem::path dll)
@@ -852,7 +1045,10 @@ namespace Arcane
         if (m_impl->source.empty())
         {
             if (!m_impl->LoadInitPlugins())
+            {
+                m_impl->EndLoadSession();
                 return false;
+            }
             m_impl->InstantiateAll();
             return true;
         }
@@ -862,20 +1058,23 @@ namespace Arcane
         const std::uint32_t g = m_impl->gen + 1;
         PluginImage img;
         bool copied = false;
-        for (int attempt = 0; attempt < 5 && !copied; ++attempt)
+        const PluginHotReloadSettings hr = Settings<PluginHotReloadSettings>();   // a copy: the loop sleeps
+        for (int attempt = 0; attempt < hr.copyRetries && !copied; ++attempt)
         {
             copied = m_impl->CopyVersioned(g, img);
             if (!copied)
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::this_thread::sleep_for(std::chrono::milliseconds(hr.copyRetryMs));
         }
         if (!copied)
         {
             ARC_ERROR("plugin: cannot copy source DLL");
+            m_impl->EndLoadSession();
             return false;
         }
 
         PluginResolveError resolveError;
-        std::optional<Plugin> plugin = Plugin::Load(img.dll, &resolveError);
+        std::optional<Plugin> plugin = m_impl->LoadTracked(img.dll, name, &resolveError);
+        if (plugin) m_impl->LayerModuleCVars(*plugin);
         m_impl->RefreshContext();
         const bool initRan = plugin && m_impl->InitImage(*plugin);
         if (!initRan)
@@ -884,10 +1083,12 @@ namespace Arcane
             {
                 img.plugin = std::move(*plugin);
                 m_impl->TeardownImage(img, false);
+                m_impl->EndLoadSession();
             }
             else   // a real load failure, not Init()-returned-false -- name the cause
             {
                 PublishPluginLoadFailure(name, m_impl->source, resolveError);
+                m_impl->EndLoadSession();
             }
             m_impl->DeleteFiles(img);
             ARC_ERROR("plugin: initial load failed");
@@ -916,7 +1117,10 @@ namespace Arcane
     void PluginHost::Unload()
     {
         if (!m_impl->current && m_impl->plugins.empty())
+        {
+            m_impl->EndLoadSession();   // a session a failed reload emptied may still pin dependencies
             return;
+        }
 
         // See UiContextGuard's comment (Load() above).
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
@@ -945,6 +1149,7 @@ namespace Arcane
         }
         m_impl->DisownPluginImages();
         m_impl->plugins.clear();   // unload plugin DLLs AFTER the reset
+        m_impl->EndLoadSession();  // every module image is gone; the dependencies go last
     }
 
     bool PluginHost::Reload(bool restoreState)
@@ -1000,7 +1205,7 @@ namespace Arcane
             m_impl->pendingSince = now;
             return;
         }
-        if (now - m_impl->pendingSince >= std::chrono::milliseconds(250))
+        if (now - m_impl->pendingSince >= std::chrono::milliseconds(Settings<PluginHotReloadSettings>().settleMs))
         {
             m_impl->pending = false;
             Reload(true);
@@ -1016,18 +1221,23 @@ namespace Arcane
         // here makes, rather than special-casing "the ones we know misbehave
         // today."
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->FixedUpdate) vt->FixedUpdate(dt);
+        // Each call inside its own image's cvar module scope (ScopedCall, above).
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().FixedUpdate)
+            ScopedCall(*p, [&] { p->VTable().FixedUpdate(dt); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().FixedUpdate) img.plugin->VTable().FixedUpdate(dt);
+            if (img.plugin && img.plugin->VTable().FixedUpdate)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().FixedUpdate(dt); });
     }
 
     void PluginHost::UpdateAll(double dt, double alpha)
     {
         // See UiContextGuard's comment (Load() above).
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->Update) vt->Update(dt, alpha);
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().Update)
+            ScopedCall(*p, [&] { p->VTable().Update(dt, alpha); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().Update) img.plugin->VTable().Update(dt, alpha);
+            if (img.plugin && img.plugin->VTable().Update)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().Update(dt, alpha); });
     }
 
     void PluginHost::DrawUIAll()
@@ -1040,9 +1250,11 @@ namespace Arcane
         // once THIS FUNCTION returns, so every plugin's DrawUI is still free
         // to leave the game context set for as long as it's running.
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
-        if (const PluginVTable* vt = Vtable(); vt && vt->DrawUI) vt->DrawUI();
+        if (const Plugin* p = m_impl->PrimaryPlugin(); p && p->VTable().DrawUI)
+            ScopedCall(*p, [&] { p->VTable().DrawUI(); });
         for (auto& img : m_impl->plugins)
-            if (img.plugin && img.plugin->VTable().DrawUI) img.plugin->VTable().DrawUI();
+            if (img.plugin && img.plugin->VTable().DrawUI)
+                ScopedCall(*img.plugin, [&] { img.plugin->VTable().DrawUI(); });
     }
 
     bool PluginHost::IsLoaded() const noexcept
@@ -1060,5 +1272,20 @@ namespace Arcane
     std::uint32_t PluginHost::Generation() const noexcept
     {
         return m_impl->gen;
+    }
+
+    bool PluginHost::SaveStatePrimary(BinaryWriter& w)
+    {
+        const Plugin* p = m_impl->PrimaryPlugin();
+        if (!p || !p->VTable().SaveState) return false;
+        ScopedCall(*p, [&] { p->VTable().SaveState(w); });
+        return !w.HasError();
+    }
+
+    bool PluginHost::LoadStatePrimary(BinaryReader& r)
+    {
+        const Plugin* p = m_impl->PrimaryPlugin();
+        if (!p || !p->VTable().LoadState) return false;
+        return ScopedCall(*p, [&] { return p->VTable().LoadState(r); });
     }
 }

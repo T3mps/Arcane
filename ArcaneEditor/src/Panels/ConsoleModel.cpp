@@ -1,7 +1,11 @@
 #include <Panels/ConsoleModel.hpp>
 
+#include <Settings/EditorConsoleSettings.hpp>   // editor.console.categoryWidth (settings S6-41)
 #include <Widgets/IconsLucide.h>
 
+#include <Arcane/Config/Settings.hpp>
+
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <ctime>
@@ -109,9 +113,11 @@ namespace Arcane::Editor
         std::string out = ClockText(e.timestampMs);
         out += "  ";
         out += e.category;
-        // Pad to the panel's own 8-column category minimum ("%-8s") so a
-        // multi-row paste stays column-aligned in a monospace target.
-        for (std::size_t i = e.category.size(); i < 8; ++i)
+        // Pad to the panel's own category minimum (editor.console.categoryWidth,
+        // 8 by default: "%-8s") so a multi-row paste stays column-aligned in a
+        // monospace target.
+        const std::size_t width = static_cast<std::size_t>(std::max(0, Settings<EditorConsoleSettings>().categoryWidth));
+        for (std::size_t i = e.category.size(); i < width; ++i)
             out += ' ';
         out += "  ";
         out += e.message;

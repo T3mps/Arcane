@@ -76,10 +76,11 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityLog/Entry/Kind -- the recency-line case's own ring
-#include "Panels/AssetPanelCommon.hpp"    // AssetPanelActions/Services, kAssetPanelBottomBarHeight, kTableRowHeight
+#include "Panels/AssetPanelCommon.hpp"    // AssetPanelActions/Services, kAssetPanelBottomBarHeight, TableRowHeight()
 #include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel
-#include "Widgets/EditorWidgets.hpp"      // StatTile/MeterBar/BeginCardFrame/EndCardFrame, kAssetRowThumbSize
+#include "Widgets/EditorWidgets.hpp"      // StatTile/MeterBar/BeginCardFrame/EndCardFrame, AssetRowThumbSize()
+#include "Widgets/UiMetrics.hpp"          // Ui::Px -- the card padding mirror
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Guid.hpp>
@@ -448,20 +449,20 @@ TEST_CASE("Status panel Reveal control raises revealInBrowse only while Browse i
             probed = true;
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             // avail, read at rowMin.x (== the card's inner content left edge,
-            // one kCardFramePadding in from the card's own left border):
+            // one CardFramePadding() in from the card's own left border):
             // GetContentRegionAvail() measures to the ambient region's right
             // edge regardless of the card's own border (AssetStatusPanel.cpp's
             // own "Important 1" review-fix comment), so wellWidth is this
-            // value minus ONE more kCardFramePadding -- see that file's
+            // value minus ONE more CardFramePadding() -- see that file's
             // DrawUnreferencedCard for the two-pad derivation this repeats.
             const float avail = ImGui::GetContentRegionAvail().x;
             const float frameH = ImGui::GetFrameHeight();
             const ImGuiStyle& style = ImGui::GetStyle();
-            constexpr float kCardFramePaddingMirror = 8.0f;   // EditorWidgets.cpp kCardFramePadding (spec: 8px)
-            const float wellWidth = avail - kCardFramePaddingMirror;
+            const float cardPaddingMirror = Ui::Px(8.0f);   // EditorWidgets.cpp CardFramePadding() (spec: 8px at UI scale 1)
+            const float wellWidth = avail - cardPaddingMirror;
             const float revealW = ImGui::CalcTextSize("Reveal").x + style.FramePadding.x * 2.0f;
             const float revealX = rowMin.x + wellWidth - revealW;
-            const float revealY = rowMin.y + (kTableRowHeight - frameH) * 0.5f;
+            const float revealY = rowMin.y + (TableRowHeight() - frameH) * 0.5f;
             clickPoint = ImVec2(revealX + revealW * 0.5f, revealY + frameH * 0.5f);
         }
         return 0ull;
@@ -576,10 +577,10 @@ TEST_CASE("Status panel Problems control raises showProblems only while Problems
             const float avail = ImGui::GetContentRegionAvail().x;   // == the card's own cardWidth
             const float rowH = ImGui::GetFrameHeight();
             const ImGuiStyle& style = ImGui::GetStyle();
-            constexpr float kCardFramePaddingMirror = 8.0f;   // EditorWidgets.cpp kCardFramePadding (spec: 8px)
-            const float innerMinX = probePos.x + kCardFramePaddingMirror;
+            const float cardPaddingMirror = Ui::Px(8.0f);   // EditorWidgets.cpp CardFramePadding() (spec: 8px at UI scale 1)
+            const float innerMinX = probePos.x + cardPaddingMirror;
             const float innerMinY = probePos.y - rowH - style.ItemSpacing.y;
-            const float innerW    = avail - kCardFramePaddingMirror * 2.0f;
+            const float innerW    = avail - cardPaddingMirror * 2.0f;
             const float problemsW = ImGui::CalcTextSize("Problems").x + style.FramePadding.x * 2.0f;
             const float problemsX1 = innerMinX + innerW;
             const float problemsX0 = problemsX1 - problemsW;

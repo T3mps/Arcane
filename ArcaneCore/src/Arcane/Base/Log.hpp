@@ -19,39 +19,70 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Log
 {
-    ARCANE_CORE_API void Init(spdlog::level::level_enum level = spdlog::level::info);
-    ARCANE_CORE_API void Shutdown();
+    ARC_CORE_API void Init(spdlog::level::level_enum level = spdlog::level::info);
+    ARC_CORE_API void Shutdown();
 
     // Runtime level for every sink (the logger's level gates them all; no
     // sink is leveled individually). spdlog set_level is runtime-safe. Driven
     // by the `log.level` cvar Init registers (node-page phase s8.2).
-    ARCANE_CORE_API void SetLevel(spdlog::level::level_enum level);
+    ARC_CORE_API void SetLevel(spdlog::level::level_enum level);
 
     // Never returns null: lazily calls Init() with defaults if needed.
-    ARCANE_CORE_API spdlog::logger* Engine();
+    ARC_CORE_API spdlog::logger* Engine();
 
     // Mosaic diagnostics: the log SINK that forwards Mosaic/Manifold2D/Astra
     // records into the engine logger (Engine()). Defined in Log.cpp so it lives
     // once, in Arcane.dll, routing every module's records to one spdlog instance.
-    // ARCANE_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
-    ARCANE_CORE_API Mosaic::LogSink MosaicSink() noexcept;
+    // ARC_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
+    ARC_CORE_API Mosaic::LogSink MosaicSink() noexcept;
 
-    // Install the sink into the CALLING module's Mosaic storage. Inline on
-    // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
-    // (Arcane.dll, ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
-    inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
-    // ARCANE_INTERNAL_END
+    // Mosaic's LEVEL is a per-module inline atomic too (Mosaic/Log.hpp
+    // detail::g_logLevel). log.level therefore reaches Astra/Manifold2D output
+    // only if EVERY module's copy is set (settings arc S2; the 2026-10-03
+    // inventory bug was that Mosaic::SetLogLevel was never called). Each module
+    // registers its own setter, and ApplyLogSettings calls them all.
+    // Registering applies the current level at once.
+    using MosaicLevelFn = void (*)(Mosaic::LogLevel level) noexcept;
+    ARC_CORE_API void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    ARC_CORE_API void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    // Drop setters whose code address lies in [base, base+size).
+    // CVarRegistry::UnregisterModuleRange calls this while the image is still
+    // mapped (a plugin's unload, and PluginHost's dependency images).
+    ARC_CORE_API void UnregisterMosaicLevelTargetsInRange(const void* base, std::size_t size) noexcept;
+    // Sets ArcaneCore.dll's own copy and every registered module's.
+    ARC_CORE_API void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept;
+    // ArcaneCore.dll's own copy. Other modules read theirs with Mosaic::GetLogLevel().
+    ARC_CORE_API Mosaic::LogLevel CoreMosaicLevel() noexcept;
+
+    // THIS module's setter. It is inline, so its address is the CALLING module's copy.
+    inline void SetThisModuleMosaicLevel(Mosaic::LogLevel level) noexcept { Mosaic::SetLogLevel(level); }
+
+    // Install the sink into the CALLING module's Mosaic storage, and register
+    // that module's level setter. Inline on purpose: Mosaic's g_logSink and
+    // g_logLevel are per-module inline atomics, so each module (Arcane.dll,
+    // ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
+    inline void InstallMosaicSink() noexcept
+    {
+        Mosaic::SetLogSink(MosaicSink(), nullptr);
+        RegisterMosaicLevelTarget(&SetThisModuleMosaicLevel);
+    }
+    // A module that unloads (GameModule.hpp's Shutdown) unregisters its setter first.
+    inline void UninstallMosaicLevelTarget() noexcept { UnregisterMosaicLevelTarget(&SetThisModuleMosaicLevel); }
+    // ARC_INTERNAL_END
 
     // ------------------------------------------------------------------
     // File sink + backlog (spec S5.6, crash window plan 1 task 4).
     //
     // Attach a rotating file sink beside the stderr one. Whatever file
     // currently sits at `file` is rotated out of the way first: delete
-    // <stem>.5.log, shift .4->.5 ... .1->.2, then <file> -> <stem>.1.log
-    // (keep = 5); a fresh, truncated file is then opened at `file`. Safe to
+    // <stem>.N.log (and any stray past it), shift .N-1->.N ... .1->.2, then
+    // <file> -> <stem>.1.log, N = log.file.keepCount (default 5; 0 deletes
+    // the old file instead); a fresh, truncated file is then opened at
+    // `file`, flushing at log.file.flushLevel (default warn). Safe to
     // call repeatedly with the same path (each call rotates again) or with a
     // different one (the old sink is simply detached first). Returns false
     // if Log::Init() has not run yet (no engine logger to attach to) or if
@@ -66,15 +97,17 @@ namespace Arcane::Log
     // the caller's problem to serialise (Diagnostics does it under its report
     // mutex); this must be called off the crash path either way -- it opens
     // files and starts the flush helper thread.
-    ARCANE_CORE_API bool AttachFileSink(const std::filesystem::path& file);
+    ARC_CORE_API bool AttachFileSink(const std::filesystem::path& file);
     // The path passed to the most recent successful AttachFileSink, or an
     // empty path when no file sink is attached.
-    ARCANE_CORE_API std::filesystem::path FileSinkPath();
+    ARC_CORE_API std::filesystem::path FileSinkPath();
 
     // The backlog: the last kBacklogLines formatted lines the engine logger
     // produced, ring-buffered. Backed by a fixed static array -- no
     // allocation, ever, on any of the paths below.
+    ARC_CONSTANT("crash-path capacity: the static lock-free log backlog ring the crash report reads (lines)")
     inline constexpr std::size_t kBacklogLines = 512;
+    ARC_CONSTANT("crash-path capacity: the static lock-free log backlog ring the crash report reads (bytes per line)")
     inline constexpr std::size_t kBacklogLineBytes = 512;
 
     // FreezeBacklog: a single atomic store. Safe to call from the FAULTING
@@ -83,7 +116,7 @@ namespace Arcane::Log
     // the backlog sink checks the flag before doing anything else and simply
     // declines to record further lines, so the ring stays exactly as the
     // faulting thread left it for the crash thread to read.
-    ARCANE_CORE_API void FreezeBacklog() noexcept;
+    ARC_CORE_API void FreezeBacklog() noexcept;
     // Undoes FreezeBacklog(). A single atomic store, same discipline as the
     // freeze. Production caller: Diagnostics' crash thread at the end of a
     // SURVIVABLE report (a hang keeps the host alive -- spec S5.4 -- so the
@@ -91,20 +124,20 @@ namespace Arcane::Log
     // lost). A FATAL report deliberately never calls it: that process is
     // already on its way down and the ring must stay exactly as the fault
     // left it.
-    ARCANE_CORE_API void ThawBacklog() noexcept;
+    ARC_CORE_API void ThawBacklog() noexcept;
     // Test-only alias for ThawBacklog, kept for the tests that already name
     // it. FreezeBacklog is process-global (one static ring for the whole
     // module), so a test that freezes it must unfreeze it again.
-    ARCANE_CORE_API void UnfreezeBacklogForTests() noexcept;
+    ARC_CORE_API void UnfreezeBacklogForTests() noexcept;
     // min(total lines ever recorded, kBacklogLines). Lock-free, heap-free.
-    ARCANE_CORE_API std::size_t BacklogLineCount() noexcept;
+    ARC_CORE_API std::size_t BacklogLineCount() noexcept;
     // Copies line i (0 = oldest retained) into buf, NUL-free, and returns the
     // number of bytes copied (at most min(strlen(line), buf.size())). Reads
     // the ring directly with no lock of any kind -- a line concurrently being
     // written by another thread may come back torn (part old, part new
     // content); that is an accepted tradeoff for staying lock-free on the
     // crash path. Never allocates.
-    ARCANE_CORE_API std::size_t BacklogLine(std::size_t i, std::span<char> buf) noexcept;
+    ARC_CORE_API std::size_t BacklogLine(std::size_t i, std::span<char> buf) noexcept;
 
     // FlushFileSinkBounded: there must be NO thread creation on the crash
     // path, yet spdlog's file sink can only be flushed by a thread that is
@@ -131,7 +164,7 @@ namespace Arcane::Log
     // a static-destruction guard in Log.cpp also calls it at process exit
     // so a joinable helper thread never reaches ~std::thread() (which would
     // std::terminate the process) even when nothing ever calls Shutdown().
-    ARCANE_CORE_API bool FlushFileSinkBounded(std::uint32_t timeoutMs) noexcept;
+    ARC_CORE_API bool FlushFileSinkBounded(std::uint32_t timeoutMs) noexcept;
 }
 
 #define ARC_TRACE(...)    ::Arcane::Log::Engine()->trace(__VA_ARGS__)

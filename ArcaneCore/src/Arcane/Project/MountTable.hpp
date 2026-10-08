@@ -14,7 +14,7 @@
 
 namespace Arcane
 {
-    class ARCANE_CORE_API MountTable
+    class ARC_CORE_API MountTable
     {
     public:
         // Register (or replace) a mount root. `scheme` is the text before "://".

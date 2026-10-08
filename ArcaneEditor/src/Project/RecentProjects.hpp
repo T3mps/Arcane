@@ -65,9 +65,10 @@ namespace Arcane::Editor
 
     namespace Recents
     {
-        // How many entries the menu shows. Unreal bounds its own list the same
-        // way (a fixed pool of SwitchProjectCommands).
-        inline constexpr std::size_t kMaxShown = 10;
+        // How many entries the menu shows: editor.recents.maxProjectsShown
+        // (10 by default; settings sweep S6-41). Unreal bounds its own list the
+        // same way (a fixed pool of SwitchProjectCommands).
+        [[nodiscard]] std::size_t MaxShown();
 
         // --- Hub parity helpers (mirror state.rs) ---------------------------
 
@@ -101,7 +102,7 @@ namespace Arcane::Editor
                                              std::uint32_t thisAbi,
                                              std::string_view currentProjectPath,
                                              const std::function<bool(const std::string&)>& exists,
-                                             std::size_t cap = kMaxShown);
+                                             std::size_t cap = MaxShown());
 
         // "N project(s) hidden (built for another engine version)" -- the File
         // menu's line and the start page's (spec 2026-09-30 s8.4).

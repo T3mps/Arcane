@@ -8,7 +8,7 @@
 // via VerifyPassword and via the public HexEquals contract), and
 // GenerateSecureToken / GenerateRandomBytes basics.
 //
-// Runtime budget: a single PBKDF2 derivation at DEFAULT_ITERATIONS
+// Runtime budget: a single PBKDF2 derivation at DefaultIterations()
 // (200k) costs ~17s in Debug, so only two cases pay it -- the
 // production-config round-trip (kept from the smoke) and ONE malformed
 // VerifyPassword case (whose M-V3-3 dummy burn is intentionally a full
@@ -50,7 +50,7 @@ namespace
 TEST_CASE("crypto: password hash round-trips", "[crypto]")
 {
     // Kept from the original smoke: proves the production configuration
-    // (DEFAULT_ITERATIONS) end to end. ~3 x 200k derivations.
+    // (DefaultIterations()) end to end. ~3 x 200k derivations.
     const std::string hash = Crypto::HashPassword("correct horse battery staple");
     REQUIRE(Crypto::VerifyPassword("correct horse battery staple", hash));
     REQUIRE_FALSE(Crypto::VerifyPassword("wrong password", hash));
@@ -146,7 +146,7 @@ TEST_CASE("crypto: HexEquals compares equal-length strings byte-wise", "[crypto]
 
 TEST_CASE("crypto: NeedsRehash / IterationsOfStoredHash drive the lazy-rehash decision", "[crypto]")
 {
-    REQUIRE(Crypto::DEFAULT_ITERATIONS == 200000);
+    REQUIRE(Crypto::DefaultIterations() == 200000);
 
     // A real below-default hash wants a rehash.
     const std::string low = Crypto::HashPassword("pw", 1000);
@@ -192,7 +192,7 @@ TEST_CASE("crypto: IterationsOfStoredHash rejects malformed stored hashes", "[cr
 TEST_CASE("crypto: VerifyPassword fails closed on a malformed stored hash", "[crypto]")
 {
     // One representative case (~17s in Debug): the M-V3-3 path burns a
-    // full DEFAULT_ITERATIONS dummy derivation on parse failure so a
+    // full DefaultIterations() dummy derivation on parse failure so a
     // malformed row is as slow as a real verify (no username-enumeration
     // timing oracle). The full malformed-format matrix is asserted
     // cheaply through IterationsOfStoredHash above.

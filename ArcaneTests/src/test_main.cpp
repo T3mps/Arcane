@@ -4,19 +4,28 @@
 #include <catch2/catch_session.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Helpers/UserDataDirs.hpp"
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; the proof it took is NRI
-// logging "Using ID3D12Device10+".
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+#include <cstdio>
+
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 int main(int argc, char* argv[]) {
+    // A Dist build resolves game user data under the OS per-user dir (settings
+    // S7). Point it at a private folder under TEMP before anything resolves a
+    // path -- the pin below included -- so no case writes the real profile.
+    const Arcane::Test::PrivateUserDataRoot userData;
+    if (!userData.Ok())
+    {
+        std::fprintf(stderr, "ArcaneTests: no private per-user root, refusing to run: %s\n", userData.Error().c_str());
+        return 2;
+    }
     // Install the shared context in the TEST module BEFORE any test computes a
     // component TypeID, so engine/plugin/test agree (TypeID caches per-module).
     Astra::SetTypeContext(&Arcane::Test::SharedTypeContext());

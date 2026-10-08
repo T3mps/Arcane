@@ -2,7 +2,11 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN, ARC_ERROR
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Saved/Diagnostics and editor.lock resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
+#include <Arcane/Project/ProjectPaths.hpp>   // PathsConfigFor, kDistBuild
 
 #include <Json.hpp>
 
@@ -25,6 +29,22 @@ namespace Arcane
 {
     namespace
     {
+        bool ReplaceConfigFile(const std::filesystem::path& tmp, const std::filesystem::path& file)
+        {
+#ifdef _WIN32
+            if (MoveFileExW(tmp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                return true;
+#else
+            std::error_code ec;
+            std::filesystem::rename(tmp, file, ec);
+            if (!ec)
+                return true;
+#endif
+            std::error_code ignored;
+            std::filesystem::remove(tmp, ignored);
+            return false;
+        }
+
         // Read a .arcproj, apply ONE edit, write it back atomically. Shared by
         // SetBootScene, the Open-time guid self-heal, and RestampEngineAbi
         // (whose target is NESTED -- engine.abi -- which is why this takes an
@@ -159,6 +179,31 @@ namespace Arcane
 #endif
             return true;
         }
+
+        // Paths for THIS project's identity (company and game from its
+        // manifest), so a Dist build resolves DiagnosticsDir under this
+        // project's own per-user folder. Paths::ForProject keeps Current()'s
+        // names, and a Runtime opens a project before it configures Paths for
+        // it (S7-DIST). The dist rule is Runtime's: always in Dist, else a preset.
+        Paths::Config PathsOf(const Project& project)
+        {
+            const Paths::Config current = Paths::Current();
+            return PathsConfigFor(project, current.engineDir, kDistBuild || current.dist);
+        }
+    }
+
+    void ApplyLegacyManifestSettings(CVarRegistry& registry, const ProjectManifest& manifest,
+                                     const std::filesystem::path& manifestFile)
+    {
+        for (const auto& [category, block] : manifest.legacySettings.items())
+        {
+            // The Project rung's refusals (settings S7-SEC). The block is no
+            // folder ValidateCVarLayers reads, so the warning is said here.
+            const CVarApplyReport report = ApplyCVarCategory(registry, category, block, SetBy::Project, false, "project-manifest");
+            for (const CVarRefusedKey& refused : report.refused)
+                ARC_WARN("cvar config: config.cvar.refused '{}' in the settings block of {} (project '{}') -- {}",
+                         refused.key, manifestFile.generic_string(), manifest.name, RungRefusalReason(refused.why));
+        }
     }
 
     std::optional<std::filesystem::path> Project::ResolveManifestFile(const std::filesystem::path& pathOrFile)
@@ -197,6 +242,61 @@ namespace Arcane
         return manifestFile;
     }
 
+    bool Project::MigrateLegacySettingsAt(const std::filesystem::path& manifestFile)
+    {
+        const auto manifest = ProjectManifest::LoadFile(manifestFile);
+        if (!manifest || manifest->legacySettings.empty())
+            return false;
+
+        const std::filesystem::path config = manifestFile.parent_path() / "Config";
+        std::error_code ec;
+        std::filesystem::create_directories(config, ec);
+        if (ec)
+            return false;
+
+        for (const auto& [category, block] : manifest->legacySettings.items())
+        {
+            const std::filesystem::path file = config / (category + ".json");
+            nlohmann::json doc = nlohmann::json::object();
+            if (std::ifstream in(file); in)
+            {
+                try { doc = nlohmann::json::parse(in); }
+                catch (...) { doc = nlohmann::json::object(); }
+            }
+            doc.merge_patch(block);
+
+            const std::filesystem::path tmp = file.string() + ".tmp";
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            out << doc.dump(2) << '\n';
+            if (!out.good())
+            {
+                out.close();
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
+                return false;
+            }
+            out.close();
+            if (!ReplaceConfigFile(tmp, file))
+                return false;
+        }
+
+        return RewriteManifest(manifestFile, "Project::MigrateLegacySettings",
+                               [](nlohmann::ordered_json& doc)
+                               {
+                                   doc.erase("physics");
+                                   doc.erase("splash");
+                               });
+    }
+
+    bool Project::MigrateLegacySettings()
+    {
+        if (!MigrateLegacySettingsAt(m_manifestFile))
+            return false;
+        m_manifest.legacySettings = nlohmann::json::object();
+        m_manifest.formatVersion = ProjectManifest::kFormatVersion;
+        return true;
+    }
+
     std::optional<Project> Project::Open(const std::filesystem::path& pathOrFile,
                                          AssetRegistry::ScanProgressFn onProgress,
                                          ProjectOpenOptions opts)
@@ -226,6 +326,18 @@ namespace Arcane
         auto manifest = ProjectManifest::LoadFile(*manifestFile);
         if (!manifest)
             return std::nullopt;   // LoadFile already logged
+
+        // A read-only (unmigratable) project keeps legacySettings populated;
+        // Open itself applies NOTHING to the global CVarRegistry, so a probe
+        // Open (the editor's project-switch validation) has no side effects.
+        // The in-memory application belongs to the rung appliers:
+        // Runtime::OpenProject (right after the Project Config dir) and
+        // HostBoot's ApplyEarlyConfigRungs.
+        if (!manifest->legacySettings.empty() && MigrateLegacySettingsAt(*manifestFile))
+        {
+            manifest->legacySettings = nlohmann::json::object();
+            manifest->formatVersion = ProjectManifest::kFormatVersion;
+        }
 
         // Self-heal the project's durable identity: a manifest that predates
         // the guid field (or carries a mangled one) gets a fresh Guid stamped
@@ -276,7 +388,7 @@ namespace Arcane
         // (below) still lists this root unconditionally, so a run that ITSELF
         // writes a report mid-session can still mount diag:// -- out of scope,
         // the defect is enumeration of PRE-EXISTING crash history at open time.
-        const std::filesystem::path diagDir = root / "Saved" / "Diagnostics";
+        const std::filesystem::path diagDir = Paths::Resolve(Paths::Location::DiagnosticsDir, PathsOf(proj));
         if (opts.mountDiagnostics && std::filesystem::is_directory(diagDir, ec))
         {
             proj.m_mounts.Mount("diag", diagDir);
@@ -425,7 +537,6 @@ namespace Arcane
         manifestJson["gameModule"]    = "";
         manifestJson["plugins"]       = nlohmann::json::array();
         manifestJson["bootScene"]     = "";
-        manifestJson["physics"]       = { { "gravity", { 0.0, -9.81 } } };   // stamped at birth with the engine default (+Y up, F4)
         // Stamped at birth so the Open() below never needs its self-heal write.
         manifestJson["guid"]          = Guid::Generate().ToString();
 
@@ -491,7 +602,7 @@ namespace Arcane
         // unconditionally is safe.
         std::vector<std::pair<std::string, std::filesystem::path>> roots;
         roots.emplace_back("game", m_root / "Content");
-        roots.emplace_back("diag", m_root / "Saved" / "Diagnostics");
+        roots.emplace_back("diag", Paths::Resolve(Paths::Location::DiagnosticsDir, PathsOf(*this)));
         // source:// listed unconditionally for the same reason diag:// is: a
         // Source/ created after Open() (a first New C++ Class, one day) must
         // still find its root here rather than warn "outside every content
@@ -621,7 +732,7 @@ namespace Arcane
     {
         std::filesystem::path FileFor(const std::filesystem::path& projectRoot)
         {
-            return projectRoot / "Saved" / "editor.lock";
+            return Paths::Join(Paths::Location::ProjectSaved, Paths::ForProject(projectRoot), "editor.lock");
         }
 
         std::string ToJson(const Info& info)

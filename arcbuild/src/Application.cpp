@@ -3,14 +3,41 @@
 #include "Exit.hpp"
 #include "Request.hpp"
 
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>
+
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace arcbuild
 {
+    namespace
+    {
+        // The editor's Tools -> Rebuild Game Module spawns this exe, so it
+        // reads the same build.* tool preferences (BuildToolSettings) the
+        // editor does: the machine-wide EditorUser rung, then --set (the
+        // CommandLine rung), published before anything resolves a tool.
+        // Editor context: build.* is Editor-audience, and arcbuild is an
+        // editor tool in every configuration.
+        void ApplyToolPreferences(const std::vector<std::string>& sets)
+        {
+            Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+            const std::filesystem::path editorUser =
+                Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir);
+            if (!editorUser.empty())
+                Arcane::ApplyCVarDirectory(cvars, editorUser / "Config",
+                                           Arcane::SetBy::EditorUser, "editor-user");
+            Arcane::ApplyCVarCommandLine(cvars, sets, Arcane::CVarContext::Editor);
+            cvars.PublishImmediate();
+        }
+    }
+
     void Application::PrintUsage() const
     {
         std::printf(
@@ -18,7 +45,7 @@ namespace arcbuild
             "--project <dir|.arcproj>\n"
             "                [--config Debug|Release|Dist] "
             "[--sdk <root>] [--action <premake-action>]\n"
-            "                [--force-rebuild] [--quiet]\n"
+            "                [--force-rebuild] [--quiet] [--set name=value]...\n"
             "  generate   run Premake <action> in the project root\n"
             "  build      generate, then invoke the action's build backend;\n"
             "             perform a full rebuild only when required by the slot\n"
@@ -89,6 +116,9 @@ namespace arcbuild
 
         output_.SetQuiet(
             request.quiet);
+
+        ApplyToolPreferences(
+            request.cvarSets);
 
         BootstrapResult prepared =
             bootstrap_.Prepare(

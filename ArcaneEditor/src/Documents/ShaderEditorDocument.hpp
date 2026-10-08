@@ -42,6 +42,9 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData: the mesh-surface preview sphere (T3-D6)
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
+#include "Settings/DocumentSettings.hpp"   // editor.shader.previewResolution, read once per document
+
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>
 // PostChainDesc -- the DEVICE-FREE description of a compiled fullscreen
 // material (bytecode + merged template + instance + input wiring). Held BY
@@ -89,7 +92,7 @@ namespace Arcane::Editor
     struct AssetRefEdit;       // Panels/AssetReferenceField.hpp (ApplyParamRefEdit)
     struct AssetRefServices;   // Panels/AssetReferenceField.hpp (DocServices::assetRefs)
 
-    // NodeLOD, the kLod* boundaries and NodeLODForScale now live in
+    // NodeLOD, the tier boundaries (editor.graph.lod.*) and NodeLODForScale live in
     // Widgets/GraphNodeLod.hpp (included above) so both node canvases read one
     // table; only the per-tier DEGRADATION -- which branches in DrawGraphNode
     // drop what -- is still this document's own.
@@ -801,6 +804,7 @@ namespace Arcane::Editor
         // Both run inside the canvas Begin/End (they use ed:: selection and
         // canvas-space coordinates).
         [[nodiscard]] std::string BuildGraphClipJson();   // "" = nothing copyable
+        void DeleteCanvasSelection();   // queue selected nodes and links for the canvas delete pass
         void PasteGraphClipText(const char* text);              // ignores foreign clips
         // One undo step per completed graph gesture: `before` was captured at
         // the gesture start; `after` is read from the graph at push time. The
@@ -979,10 +983,9 @@ namespace Arcane::Editor
         // does too.
         std::vector<ViewEntry> m_navHistory;
         int m_navIndex = -1;
-        // Modest cap; the oldest entry drops when it is hit. Nobody walks back
-        // 32 view changes, and an uncapped vector on a long session is a leak
+        // Capped at editor.shader.navHistoryMax (default 32); the oldest entry
+        // drops when it is hit. An uncapped vector on a long session is a leak
         // with extra steps.
-        static constexpr int kNavHistoryMax = 32;
 
         // Instance mode (Slice 7): the resolved ancestry, immediate parent first,
         // BASE (the snippet owner) last. Empty for base materials.
@@ -1004,11 +1007,13 @@ namespace Arcane::Editor
         // seam. There is no second preview path.
         Arcane::PostChainDesc m_graphPost;
         SpriteBlobs           m_graphSpriteBlobs;
-        // 512x512 and FIXED -- and that is load-bearing rather than cosmetic:
-        // a preview that never resizes has no ResizeOffscreen seam at all, so
-        // the ONLY InvalidateUserTextureNow this document owes is the one at
-        // destruction (NriGraphContext.hpp, item (2)).
-        static constexpr std::uint32_t kGraphPreviewSize = 512;
+        // Square (editor.shader.previewResolution, default 512), read ONCE when
+        // the document opens and FIXED for its life -- and that is load-bearing
+        // rather than cosmetic: a preview that never resizes has no
+        // ResizeOffscreen seam at all, so the ONLY InvalidateUserTextureNow this
+        // document owes is the one at destruction (NriGraphContext.hpp, item (2)).
+        std::uint32_t m_graphPreviewSize =
+            static_cast<std::uint32_t>(Arcane::Settings<ShaderEditorSettings>().previewResolution);
         std::unique_ptr<Arcane::NriGraphContext> m_graphPreview;
         // ===== The late-bound seam's state (s3.2) =====
         Arcane::ImGuiNriNode* m_previewHud = nullptr;     // the chrome node captured at vehicle creation

@@ -2028,7 +2028,7 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
     ShaderSourceProvider provider;
     provider.AddRoot("data/shaders");
     ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     auto compileBoth = [&](const std::string& hlsl, const char* name)
     {

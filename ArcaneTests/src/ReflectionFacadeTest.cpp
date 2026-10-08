@@ -1,6 +1,6 @@
-// The reflection facade (input-seam spec 2026-10-02 s6.1): ARCANE_REFLECT_*
+// The reflection facade (input-seam spec 2026-10-02 s6.1): ARC_REFLECT_*
 // produce the same metadata as ASTRA_REFLECT_*, every Astra attribute has an
-// Arcane::Attr alias (Review Focus #5), and ARCANE_CHANGE_TRACKED spells
+// Arcane::Attr alias (Review Focus #5), and ARC_CHANGE_TRACKED spells
 // Astra's change-tracking member.
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,25 +22,25 @@ namespace FacadeProbe
 {
     struct Probe
     {
-        ARCANE_CHANGE_TRACKED
+        ARC_CHANGE_TRACKED
         float speed = 1.0f;
         float angle = 0.0f;
         bool  transient = false;
     };
 
-    ARCANE_REFLECT_TYPE(Probe)
-        ARCANE_REFLECT_FIELD(Probe, speed)
-            ARCANE_REFLECT_ATTR(Range, 0.0f, 10.0f)
-            ARCANE_REFLECT_ATTR(Tooltip, "metres per second")
-            ARCANE_REFLECT_ATTR(Category, "Motion")
-            ARCANE_REFLECT_ATTR(DragSpeed, 0.1f)
-            ARCANE_REFLECT_ATTR(Precision, 2)
-        ARCANE_REFLECT_FIELD(Probe, angle)
-            ARCANE_REFLECT_ATTR(AngleFormat, Arcane::Attr::AngleFormat::Unit::Degrees)
-        ARCANE_REFLECT_FIELD(Probe, transient)
-            ARCANE_REFLECT_ATTR(Serializable, false)
-            ARCANE_REFLECT_ATTR(Hidden)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Probe)
+        ARC_REFLECT_FIELD(Probe, speed)
+            ARC_REFLECT_ATTR(Range, 0.0f, 10.0f)
+            ARC_REFLECT_ATTR(Tooltip, "metres per second")
+            ARC_REFLECT_ATTR(Category, "Motion")
+            ARC_REFLECT_ATTR(DragSpeed, 0.1f)
+            ARC_REFLECT_ATTR(Precision, 2)
+        ARC_REFLECT_FIELD(Probe, angle)
+            ARC_REFLECT_ATTR(AngleFormat, Arcane::Attr::AngleFormat::Unit::Degrees)
+        ARC_REFLECT_FIELD(Probe, transient)
+            ARC_REFLECT_ATTR(Serializable, false)
+            ARC_REFLECT_ATTR(Hidden)
+    ARC_END_REFLECT_TYPE()
 
     // The other spellings: a type-level attribute with the _END terminator, and
     // both enum terminators over every value macro.
@@ -49,30 +49,30 @@ namespace FacadeProbe
         int count = 0;
     };
 
-    ARCANE_REFLECT_TYPE(Tagged)
-        ARCANE_REFLECT_TYPE_ATTR(Category, "Probes")
-        ARCANE_REFLECT_FIELD(Tagged, count)
-            ARCANE_REFLECT_ATTR(ReadOnly)
-    ARCANE_REFLECT_TYPE_END()
+    ARC_REFLECT_TYPE(Tagged)
+        ARC_REFLECT_TYPE_ATTR(Category, "Probes")
+        ARC_REFLECT_FIELD(Tagged, count)
+            ARC_REFLECT_ATTR(ReadOnly)
+    ARC_REFLECT_TYPE_END()
 
     enum class Mode : int { Idle, Walk, Run };
 
-    ARCANE_REFLECT_ENUM(Mode)
-        ARCANE_REFLECT_ENUM_VALUE(Mode, Idle)
-        ARCANE_REFLECT_ENUM_VALUE_NAMED(Mode, Walk, "Walking")
-        ARCANE_REFLECT_ENUM_VALUE_FULL(Mode, Run, "Running", "Fastest gait")
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(Mode)
+        ARC_REFLECT_ENUM_VALUE(Mode, Idle)
+        ARC_REFLECT_ENUM_VALUE_NAMED(Mode, Walk, "Walking")
+        ARC_REFLECT_ENUM_VALUE_FULL(Mode, Run, "Running", "Fastest gait")
+    ARC_END_REFLECT_ENUM()
 
     enum class Mask : int { None = 0, A = 1, B = 2 };
 
-    ARCANE_REFLECT_ENUM(Mask)
-        ARCANE_REFLECT_ENUM_FLAGS()
-        ARCANE_REFLECT_ENUM_VALUE(Mask, A)
-        ARCANE_REFLECT_ENUM_VALUE(Mask, B)
-    ARCANE_REFLECT_ENUM_END()
+    ARC_REFLECT_ENUM(Mask)
+        ARC_REFLECT_ENUM_FLAGS()
+        ARC_REFLECT_ENUM_VALUE(Mask, A)
+        ARC_REFLECT_ENUM_VALUE(Mask, B)
+    ARC_REFLECT_ENUM_END()
 }
 
-TEST_CASE("ARCANE_REFLECT_* register the same metadata ASTRA_REFLECT_* would", "[facade][reflection]")
+TEST_CASE("ARC_REFLECT_* register the same metadata ASTRA_REFLECT_* would", "[facade][reflection]")
 {
     STATIC_REQUIRE(FacadeProbe::Probe::AstraChangeTracked);
     const Astra::TypeMeta* meta = Astra::GetMeta(Astra::TypeID<FacadeProbe::Probe>::Hash());
@@ -96,7 +96,7 @@ TEST_CASE("ARCANE_REFLECT_* register the same metadata ASTRA_REFLECT_* would", "
     CHECK(transient.HasAttribute<Astra::Serializable>());
 }
 
-TEST_CASE("ARCANE_REFLECT_TYPE_ATTR and the enum macros forward to Astra's", "[facade][reflection]")
+TEST_CASE("ARC_REFLECT_TYPE_ATTR and the enum macros forward to Astra's", "[facade][reflection]")
 {
     const Astra::TypeMeta* tagged = Astra::GetMeta(Astra::TypeID<FacadeProbe::Tagged>::Hash());
     REQUIRE(tagged);
@@ -122,7 +122,7 @@ TEST_CASE("ARCANE_REFLECT_TYPE_ATTR and the enum macros forward to Astra's", "[f
 }
 
 // Review Focus #5: Astra grows an attribute, the facade misses it, and a game
-// author's ARCANE_REFLECT_ATTR fails to compile. The vendored Attribute.hpp is
+// author's ARC_REFLECT_ATTR fails to compile. The vendored Attribute.hpp is
 // the list; Arcane/Reflection.hpp must alias every entry.
 TEST_CASE("every Astra reflection attribute has an Arcane::Attr alias", "[facade][reflection]")
 {

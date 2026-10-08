@@ -44,7 +44,7 @@ TEST_CASE("cvar registry owns the value and kills stale handles", "[cvar]") {
 
     const CVarHandle again = reg.Register(CVarDesc{
         "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(true),
-        std::nullopt, std::nullopt, CVarFlags::None, "", "engine" });
+        std::nullopt, std::nullopt, CVarFlags::None, "test cvar", "engine" });
     REQUIRE(again.index == h.index);
     REQUIRE(again.generation != h.generation);
     REQUIRE_FALSE(reg.Get(h).has_value());
@@ -53,8 +53,8 @@ TEST_CASE("cvar registry owns the value and kills stale handles", "[cvar]") {
 
 TEST_CASE("duplicate cvar registration names both modules", "[cvar]") {
     CVarRegistry reg;
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "a.b", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "one" }).IsStale());
-    REQUIRE(reg.Register(CVarDesc{ "a.b", CVarType::Int32, CVarValue::Int32(2), {}, {}, {}, "", "two" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "a.b", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "one" }).IsStale());
+    REQUIRE(reg.Register(CVarDesc{ "a.b", CVarType::Int32, CVarValue::Int32(2), {}, {}, {}, "test cvar", "two" }).IsStale());
     REQUIRE(reg.LastError().find("one") != std::string::npos);
     REQUIRE(reg.LastError().find("two") != std::string::npos);
     REQUIRE(reg.Get(reg.Find("a.b"))->AsInt32() == 1);
@@ -63,7 +63,7 @@ TEST_CASE("duplicate cvar registration names both modules", "[cvar]") {
 TEST_CASE("weaker SetBy cannot stomp, and module unload pops its sets", "[cvar]") {
     CVarRegistry reg;
     const CVarHandle h = reg.Register(CVarDesc{
-        "render.meshCull", CVarType::Bool, CVarValue::Bool(true), {}, {}, {}, "", "engine" });
+        "render.meshCull", CVarType::Bool, CVarValue::Bool(true), {}, {}, {}, "test cvar", "engine" });
     REQUIRE(reg.Set(h, CVarValue::Bool(false), SetBy::Project, "project") == SetResult::Applied);
     REQUIRE(reg.Set(h, CVarValue::Bool(true), SetBy::EngineConfig, "engine-config") == SetResult::RefusedWeaker);
     reg.Publish();
@@ -84,7 +84,7 @@ TEST_CASE("weaker SetBy cannot stomp, and module unload pops its sets", "[cvar]"
 TEST_CASE("a set is invisible until publish, and a callback set waits", "[cvar]") {
     CVarRegistry reg;
     const CVarHandle h = reg.Register(CVarDesc{
-        "debug.step", CVarType::Int32, CVarValue::Int32(0), {}, {}, CVarFlags::UserSettable, "", "engine" });
+        "debug.step", CVarType::Int32, CVarValue::Int32(0), {}, {}, CVarFlags::UserSettable, "test cvar", "engine" });
     REQUIRE(reg.Set(h, CVarValue::Int32(3), SetBy::Code) == SetResult::Applied);
     REQUIRE(reg.Get(h)->AsInt32() == 0);
     int fires = 0;
@@ -107,7 +107,7 @@ TEST_CASE("a set is invisible until publish, and a callback set waits", "[cvar]"
 
 TEST_CASE("cvarlist hides Hidden and cvar_explain names the winning layer", "[cvar]") {
     CVarRegistry reg;
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "secret.token", CVarType::String, CVarValue::String("x"), {}, {}, CVarFlags::Hidden, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "secret.token", CVarType::String, CVarValue::String("x"), {}, {}, CVarFlags::Hidden, "test cvar", "engine" }).IsStale());
     REQUIRE_FALSE(reg.Register(CVarDesc{ "visible.knob", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "a knob", "engine" }).IsStale());
     const auto list = reg.List();
     bool sawSecret = false;
@@ -120,7 +120,7 @@ TEST_CASE("cvarlist hides Hidden and cvar_explain names the winning layer", "[cv
     REQUIRE_FALSE(sawSecret);
     REQUIRE(sawKnob);
 
-    const ExecResult explained = reg.Execute("cvar_explain visible.knob", Permission::Editor);
+    const ExecResult explained = reg.Execute("cvar_explain visible.knob", CVarContext::Editor);
     REQUIRE(explained.ok);
     REQUIRE(explained.text.find("Default") != std::string::npos);
     REQUIRE(explained.text.find("visible.knob") != std::string::npos);
@@ -128,28 +128,31 @@ TEST_CASE("cvarlist hides Hidden and cvar_explain names the winning layer", "[cv
 
 TEST_CASE("default-deny and cheat revert", "[cvar]") {
     CVarRegistry reg;
-    const CVarHandle plain = reg.Register(CVarDesc{
-        "game.speed", CVarType::Float32, CVarValue::Float32(1.f), {}, {}, {}, "", "engine" });
-    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, Permission::Player) == SetResult::Denied);
-    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, Permission::Editor) == SetResult::Applied);
+    CVarDesc plainDesc;
+    plainDesc.name = "game.speed"; plainDesc.type = CVarType::Float32; plainDesc.defaultValue = CVarValue::Float32(1.f);
+    plainDesc.help = "Speed."; plainDesc.module = "engine";
+    const CVarHandle plain = reg.Register(plainDesc);
+    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, CVarContext::Client) == SetResult::Denied);
+    REQUIRE(reg.Set(plain, CVarValue::Float32(2.f), SetBy::Console, {}, CVarContext::Editor) == SetResult::Applied);
 
-    const CVarHandle cheat = reg.Register(CVarDesc{
-        "game.noclip", CVarType::Bool, CVarValue::Bool(false), {}, {},
-        CVarFlags::Cheat | CVarFlags::UserSettable, "", "engine" });
+    CVarDesc cheatDesc;
+    cheatDesc.name = "game.noclip"; cheatDesc.type = CVarType::Bool; cheatDesc.defaultValue = CVarValue::Bool(false);
+    cheatDesc.flags = CVarFlags::Cheat; cheatDesc.help = "Noclip."; cheatDesc.module = "engine";
+    const CVarHandle cheat = reg.Register(cheatDesc);
     REQUIRE(reg.Set(cheat, CVarValue::Bool(false), SetBy::Project, "project") == SetResult::Applied);
     reg.Publish();
-    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", Permission::Player) == SetResult::Denied);
+    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", CVarContext::Client) == SetResult::Denied);
 
-    const CVarHandle gate = reg.Register(CVarDesc{
-        "cheats", CVarType::Bool, CVarValue::Bool(false), {}, {}, {}, "", "engine" });
-    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Console, {}, Permission::Player) == SetResult::Denied);
-    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Code, "editor", Permission::Editor) == SetResult::Applied);
+    const CVarHandle gate = reg.Find("server.cheats");   // registered by every registry (settings spec s3.2)
+    REQUIRE_FALSE(gate.IsStale());
+    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Console, {}, CVarContext::Client) == SetResult::Denied);
+    REQUIRE(reg.Set(gate, CVarValue::Bool(true), SetBy::Code, "editor", CVarContext::Editor) == SetResult::Applied);
     reg.Publish();
-    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", Permission::Player) == SetResult::Applied);
+    REQUIRE(reg.Set(cheat, CVarValue::Bool(true), SetBy::Code, "tool", CVarContext::Client) == SetResult::Applied);
     reg.Publish();
     REQUIRE(reg.Get(cheat)->AsBool() == true);
 
-    REQUIRE(reg.Set(gate, CVarValue::Bool(false), SetBy::Code, "editor", Permission::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(gate, CVarValue::Bool(false), SetBy::Code, "editor", CVarContext::Editor) == SetResult::Applied);
     reg.Publish();
     REQUIRE(reg.Get(cheat)->AsBool() == false);
     REQUIRE(reg.Explain("game.noclip")->setBy == SetBy::Project);
@@ -157,7 +160,7 @@ TEST_CASE("default-deny and cheat revert", "[cvar]") {
 
 TEST_CASE("config apply warns on a cvar category and ignores a document", "[cvar]") {
     CVarRegistry reg;
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "test cvar", "engine" }).IsStale());
     nlohmann::json diagnostics = { {"drawMarkers", true}, {"notACvar", 1} };
     const CVarApplyReport cvars = ApplyCVarCategory(reg, "diagnostics", diagnostics, SetBy::Project, false, "project");
     REQUIRE(cvars.unknownKeys.size() == 1);
@@ -181,7 +184,7 @@ TEST_CASE("config apply warns on a cvar category and ignores a document", "[cvar
     REQUIRE_FALSE(std::filesystem::exists(user / "diagnostics.json"));
 
     CVarRegistry userReg;
-    REQUIRE_FALSE(userReg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "engine" }).IsStale());
+    REQUIRE_FALSE(userReg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "test cvar", "engine" }).IsStale());
     REQUIRE(userReg.Set(userReg.Find("diagnostics.drawMarkers"), CVarValue::Bool(true), SetBy::User) == SetResult::Applied);
     userReg.Publish();
     WriteCVarArchive(userReg, user);
@@ -206,7 +209,7 @@ namespace
     {
         const auto add = [&](const char* name, CVarType type, CVarValue def, CVarFlags flags)
         {
-            REQUIRE_FALSE(reg.Register(CVarDesc{ name, type, def, {}, {}, flags, "", "test" }).IsStale());
+            REQUIRE_FALSE(reg.Register(CVarDesc{ name, type, def, {}, {}, flags, "test cvar", "test" }).IsStale());
         };
         add("editor.legend", CVarType::Bool, CVarValue::Bool(true), CVarFlags::Archive);
         add("editor.graph.zoom", CVarType::Float32, CVarValue::Float32(1.0f), CVarFlags::Archive);   // a dotted key
@@ -305,7 +308,7 @@ TEST_CASE("cvar archive T3-D2: a corrupt or partial user file is skipped at load
 
     CVarRegistry reg;
     RegisterArchiveRoster(reg);
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "test" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "test cvar", "test" }).IsStale());
     const CVarApplyReport report = ApplyCVarDirectory(reg, user, SetBy::User, "user");   // no throw, no crash
     CHECK(report.unknownKeys.empty());
     reg.Publish();
@@ -354,12 +357,15 @@ TEST_CASE("cvar RevertLayer drops one rung everywhere and leaves the others", "[
 
 TEST_CASE("command line set beats user and loses to code", "[cvar]") {
     CVarRegistry reg;
+    // PlayerSafe: the table lets the Client context below write it (UserSettable
+    // is derived from the audience, settings spec s3.2).
     const CVarHandle h = reg.Register(CVarDesc{
-        "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, CVarFlags::UserSettable, "", "engine" });
+        .name = "game.speed", .type = CVarType::Int32, .defaultValue = CVarValue::Int32(1),
+        .help = "test cvar", .module = "engine", .audience = Audience::PlayerSafe });
     REQUIRE(reg.Set(h, CVarValue::Int32(2), SetBy::User) == SetResult::Applied);
-    ApplyCVarCommandLine(reg, { "game.speed=4" }, Permission::Player);
+    ApplyCVarCommandLine(reg, { "game.speed=4" }, CVarContext::Client);
     REQUIRE(reg.Set(h, CVarValue::Int32(9), SetBy::Code) == SetResult::Applied);
-    ApplyCVarCommandLine(reg, { "game.speed=5" }, Permission::Player);
+    ApplyCVarCommandLine(reg, { "game.speed=5" }, CVarContext::Client);
     reg.Publish();
     REQUIRE(reg.Get(h)->AsInt32() == 9);
     REQUIRE(reg.Explain("game.speed")->setBy == SetBy::Code);
@@ -368,7 +374,7 @@ TEST_CASE("command line set beats user and loses to code", "[cvar]") {
 TEST_CASE("a command and a cvar cannot share a name", "[cvar]") {
     CVarRegistry reg;
     REQUIRE(reg.RegisterCommand("game.speed", CVarFlags::None, "", "mod", [](std::string_view, std::string&, void*) {}, nullptr));
-    REQUIRE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
     REQUIRE(reg.LastError().find("command") != std::string::npos);
 }
 
@@ -377,18 +383,18 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
     REQUIRE_FALSE(reg.Register(CVarDesc{
         "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, {}, "markers", "engine" }).IsStale());
     REQUIRE_FALSE(reg.Register(CVarDesc{
-        "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+        "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
     ConsoleModel model;
     model.SetInput("diag");
-    const auto matches = model.Complete(reg);
+    const auto matches = model.Complete(reg, CVarContext::Editor);
     REQUIRE(matches.size() == 1);
     REQUIRE(matches[0] == "diagnostics.drawMarkers");
     model.SetInput("cvar_explain diagnostics.drawMarkers");
-    model.Submit(reg, Permission::Editor);
+    model.Submit(reg, CVarContext::Editor);
     REQUIRE(model.Lines().size() == 2);
     REQUIRE(model.Lines().back().text.find("Default") != std::string::npos);
     model.SetInput("game.speed 3");
-    model.Submit(reg, Permission::Player);
+    model.Submit(reg, CVarContext::Client);
     REQUIRE_FALSE(model.Lines().back().ok);
     REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
 
@@ -396,7 +402,7 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
     // any other, and only the frame driver's Publish makes it visible
     // (spec 6.4 -- read-your-own-writes is deliberately not provided).
     model.SetInput("game.speed 3");
-    model.Submit(reg, Permission::Editor);
+    model.Submit(reg, CVarContext::Editor);
     REQUIRE(model.Lines().back().ok);
     REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
     reg.Publish();
@@ -406,7 +412,16 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
 TEST_CASE("render.meshCull defaults on and publishes off", "[cvar]") {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle handle = reg.Find("render.meshCull");
-    if (handle.IsStale()) return;   // Dist compiles the Dev cvar out; missing means on
+#if defined(ARC_BUILD_DIST)
+    if (handle.IsStale()) {   // Dist compiles the Dev cvar out; missing means on
+        REQUIRE(MeshCullFrustumEnabled());
+        return;
+    }
+#endif
+    // Debug/Release: a cvar some other case removed FAILS here; it never
+    // passes vacuously (the S1 gate's Debug seed 1930880111 did, with 0
+    // assertions, before Plugin::Load stopped wiping a live module's cvars).
+    REQUIRE_FALSE(handle.IsStale());
     REQUIRE(MeshCullFrustumEnabled());
     REQUIRE(reg.Set(handle, CVarValue::Bool(false), SetBy::Code) == SetResult::Applied);
     reg.Publish();
@@ -418,23 +433,24 @@ TEST_CASE("render.meshCull defaults on and publishes off", "[cvar]") {
 
 TEST_CASE("Dev cvars are absent when the registry is built without them", "[cvar]") {
     CVarRegistry reg{ false };
-    REQUIRE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Dev, "", "engine" }).IsStale());
+    REQUIRE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Dev, "test cvar", "engine" }).IsStale());
     REQUIRE(reg.Find("diagnostics.drawMarkers").IsStale());
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
 }
 
 namespace
 {
-    ARC_CVAR_RANGED("tests.rangedProbe", "tests", Int32, CVarValue::Int32(5),
-                    CVarValue::Int32(1), CVarValue::Int32(10), CVarFlags::Archive,
-                    "ARC_CVAR_RANGED probe (CVarRegistryTest).");
+    ARC_CVAR(cvar_rangedProbe, "tests.rangedProbe", std::int32_t, 5,
+             .min = 1, .max = 10, .flags = CVarFlags::Archive,
+             .help = "ARC_CVAR range probe (CVarRegistryTest).");
 }
 
-TEST_CASE("ARC_CVAR_RANGED registers its range and its module", "[cvar]") {
+TEST_CASE("ARC_CVAR registers its range and its module", "[cvar]") {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("tests.rangedProbe");
     REQUIRE_FALSE(h.IsStale());
-    CHECK(reg.Get(h)->AsInt32() == 5);
+    CHECK(h == cvar_rangedProbe.Handle());
+    CHECK(cvar_rangedProbe.Get() == 5);
 
     reg.Set(h, CVarValue::Int32(50), SetBy::Console);
     reg.Publish();
@@ -445,9 +461,9 @@ TEST_CASE("ARC_CVAR_RANGED registers its range and its module", "[cvar]") {
 
     const CVarHandle dup = reg.Register(CVarDesc{
         "tests.rangedProbe", CVarType::Int32, CVarValue::Int32(5),
-        std::nullopt, std::nullopt, CVarFlags::None, "", "engine" });
+        std::nullopt, std::nullopt, CVarFlags::None, "test cvar", "engine" });
     CHECK(dup.IsStale());
-    CHECK(reg.LastError().find("module 'tests'") != std::string::npos);   // declared by the macro's module
+    CHECK(reg.LastError().find("module 'ArcaneTests'") != std::string::npos);   // declared by the macro's module
 
     reg.Set(h, CVarValue::Int32(5), SetBy::Console);
     reg.Publish();
@@ -457,7 +473,7 @@ TEST_CASE("log.level exists with range 0..6 and its publish drives the engine lo
     Arcane::Log::Init();
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("log.level");
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     if (h.IsStale()) return;   // Dist compiles the Dev cvar out
 #endif
     REQUIRE_FALSE(h.IsStale());   // Debug/Release: the pre-implementation run FAILS here
@@ -480,29 +496,29 @@ TEST_CASE("ListCommands lists live commands with List's Hidden/Dev rule; Complet
     bool sawList = false;
     for (const CVarListEntry& e : reg.ListCommands()) sawList = sawList || e.name == "cvarlist";
     REQUIRE(sawList);
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "cvar.knob", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "cvar.knob", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
     ConsoleModel model;
     model.SetInput("cvar");
-    REQUIRE(model.Complete(reg) == std::vector<std::string>{ "cvar.knob", "cvar_explain", "cvarlist" });   // sorted
+    REQUIRE(model.Complete(reg, CVarContext::Editor) == std::vector<std::string>{ "cvar.knob", "cvar_explain", "cvarlist" });   // sorted
 }
 
 TEST_CASE("CompleteInput: one match takes the name and a space; several take the common prefix and list them", "[cvar]") {
     CVarRegistry reg;
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
-    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.spawnRate", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.spawnRate", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "test cvar", "engine" }).IsStale());
     ConsoleModel model;
     model.SetInput("game.spe");
-    REQUIRE(model.CompleteInput(reg));
+    REQUIRE(model.CompleteInput(reg, CVarContext::Editor));
     REQUIRE(model.Input() == "game.speed ");
     model.SetInput("game.s");
     const std::size_t lines = model.Lines().size();
-    REQUIRE(model.CompleteInput(reg));
+    REQUIRE(model.CompleteInput(reg, CVarContext::Editor));
     REQUIRE(model.Input() == "game.sp");
     REQUIRE(model.Lines().size() == lines + 1);
     REQUIRE(model.Lines().back().text.find("game.spawnRate") != std::string::npos);
-    REQUIRE_FALSE(model.CompleteInput(reg));     // already the common prefix: nothing changes (the list repeats)
+    REQUIRE_FALSE(model.CompleteInput(reg, CVarContext::Editor));     // already the common prefix: nothing changes (the list repeats)
     model.SetInput("zzz");
-    REQUIRE_FALSE(model.CompleteInput(reg));
+    REQUIRE_FALSE(model.CompleteInput(reg, CVarContext::Editor));
 }
 
 TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplicates skipped, capped by console.historySize", "[cvar]") {
@@ -515,7 +531,7 @@ TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplica
     for (const char* line : { "cvarlist", "cvarlist", "cvar_explain cheats" })
     {
         model.SetInput(line);
-        model.Submit(reg, Permission::Editor);
+        model.Submit(reg, CVarContext::Editor);
     }
     REQUIRE(model.History().size() == 2);        // the duplicate was skipped
     model.SetInput("dra");
@@ -531,9 +547,9 @@ TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplica
 
     REQUIRE(reg.Set(cap, CVarValue::Int32(2), SetBy::Code) == SetResult::Applied);
     reg.Publish();
-    for (const char* line : { "a", "b", "c" }) { model.SetInput(line); model.Submit(reg, Permission::Editor); }
+    for (const char* line : { "a", "b", "c" }) { model.SetInput(line); model.Submit(reg, CVarContext::Editor); }
     REQUIRE(model.History() == std::deque<std::string>{ "b", "c" });
     model.SetInput("");
-    model.Submit(reg, Permission::Editor);       // empty: not recorded
+    model.Submit(reg, CVarContext::Editor);       // empty: not recorded
     REQUIRE(model.History().size() == 2);
 }

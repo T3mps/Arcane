@@ -16,6 +16,9 @@
 
 #include "Widgets/GraphGridPhase.hpp"
 #include "Widgets/GraphWire.hpp"   // GraphViewScale -- the GetCurrentZoom reciprocal flip
+#include "Widgets/UiMetrics.hpp"   // Ui::Px -- the grid's on-screen target follows editor.ui.scale
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_node_editor.h>
@@ -92,6 +95,11 @@ namespace Arcane::Editor
         // graph context per canvas would be a RenderGraph, a descriptor pool, a
         // graveyard lane and a chrome-side user-texture entry to invalidate, to
         // draw straight lines. DrawGraphGridFallback's own header states it.
+        // editor.graph.grid.* is Live: the published block, every frame. The
+        // minor target is a SCREEN size, so it follows the UI scale (s16.11);
+        // the spacing is canvas units, which the zoom already scales.
+        phase.tuning = Settings<GraphGridSettings>();
+        phase.tuning.minorTargetPx = Ui::Px(phase.tuning.minorTargetPx);
         DrawGraphGridFallback(ImGui::GetWindowDrawList(), canvasMin, canvasSize,
                               view, colors, phase);
     }

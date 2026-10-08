@@ -6,12 +6,17 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>   // EditorLock: the direct-launch double-open guard
+#include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "App/EditorApp.hpp"
+#include "Input/EditorActions.hpp"   // the shortcut cvars, declared before the early config rungs
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 
 #include <cstdio>
@@ -36,12 +41,8 @@
 static constexpr const wchar_t* kAppUserModelId = L"dev.starworks.arcane";
 #endif
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; the proof it took is NRI
-// logging "Using ID3D12Device10+".
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 // ===== THE EDITOR'S FULL PROCESS EXIT-CODE TABLE ============================
 // Gathered in ONE place. This function's own `return rc;` at the bottom is the
@@ -314,10 +315,10 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          FrameDesc::pickPixel instead, so there is nowhere
 //                          for this flag to plug in even if it were wired.
 //   --perf              -- REFUSED at launch on this host (Task 12 audit; see
-//                          the refusal below main()). EditorApp constructs
-//                          FramePerf m_perf(m_config.perf) and never calls
-//                          FrameStart/Add/Tick -- the ctor and the member
-//                          declaration are its ONLY references in this tree, so
+//                          the refusal below main()). EditorApp holds a
+//                          FramePerf m_perf and never calls
+//                          FrameStart/Add/Tick -- the member declaration is
+//                          its ONLY reference in this tree, so
 //                          no [PERF] line is emitted here by any build. The
 //                          runtime drives the same class from RuntimeFrame.cpp
 //                          (Tick is the sole emitter). NOT WIRED because
@@ -330,7 +331,7 @@ int main(int argc, char** argv)
     Arcane::Log::Init();
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
-    const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
+    Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);   // non-const: the early rungs fill backend/vsync
     if (!parsed.config) return parsed.exitCode;
 
     // Probe: identity to stdout, nothing else. Deliberately BEFORE any engine
@@ -377,8 +378,22 @@ int main(int argc, char** argv)
     // order IS still load-bearing (R16): Install attaches the log file sink
     // and the crash path freezes the log backlog, neither of which exists
     // before Log::Init runs.
+    // The editor.keys.* shortcut cvars are declared FIRST (S4-GATE): the
+    // registry layers a rung only onto cvars that already exist, and
+    // EditorActions registers its table lazily on the first Get(). Declared
+    // after the early rungs, every --set editor.keys.* was refused as unknown
+    // and a saved shortcut waited on the later re-application. Every other
+    // editor cvar is a static (ARC_CVAR) and exists before main.
+    (void)Arcane::Editor::EditorActions::Get();
+    // I2: engine/project/EditorUser/user/--set rungs before Install and Runtime.
+    Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CVarContext::Editor,
+                                            /*editor*/ true);
     {
-        Arcane::Diagnostics::Config diag;
+        // The tunables are diagnostics.* (settings arc S6-2), read after the
+        // early rungs above so a project, EditorUser, user or --set value
+        // reaches Install.
+        Arcane::Diagnostics::Config diag =
+            Arcane::Diagnostics::ConfigFromSettings(Arcane::Settings<Arcane::DiagnosticsSettings>());
         diag.appName     = "ArcaneEditor";
         diag.productName = "Arcane Editor";   // the reporter's window title
         // A --headless run has nobody to answer a reporter window: the report
@@ -461,9 +476,9 @@ int main(int argc, char** argv)
             "  --compare <name> [--bless] for a composited editor capture and verification.\n");
         return 2;
     }
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // --pick-probe: DEV-ONLY, matching HostConfig.hpp/.cpp's own
-    // #if !defined(ARCANE_DIST) guard around the pickProbe member and its Cli
+    // #if !defined(ARC_BUILD_DIST) guard around the pickProbe member and its Cli
     // registration -- the member does not exist on a Dist build, so reading
     // parsed.config->pickProbe unguarded would fail to COMPILE there, not just
     // misbehave (confirmed by building Dist below). Same reasoning and same
@@ -481,7 +496,7 @@ int main(int argc, char** argv)
 #endif
     // --perf: same reasoning and position as above (and its own #if is not
     // needed -- HostConfig::perf is NOT Dist-guarded, unlike pickProbe).
-    // EditorApp constructs FramePerf m_perf(m_config.perf) and never calls
+    // EditorApp holds a FramePerf m_perf and never calls
     // FrameStart/Add/Tick, so no [PERF] line is ever emitted on this host by
     // any build -- FramePerf's seven fixed buckets do not map onto this
     // host's 19-phase frame.

@@ -32,7 +32,9 @@ namespace Arcane
         Guid        id{};
         std::string name;
         Guid        texture{};                  // source texture asset; nil renders untextured
-        float       ppu = 100.0f;               // pixels per meter
+        float       ppu = 100.0f;               // pixels per meter; the absent-key fallback. A NEW
+                                                // sprite is seeded from assets.sprite.defaultPixelsPerUnit
+                                                // (the editor's mint, SpriteDocument::NewSpriteData)
         glm::vec2   sourcePos{0.0f, 0.0f};      // sub-rect origin, pixels
         glm::vec2   sourceSize{0.0f, 0.0f};     // sub-rect dims, pixels; (0,0) = whole texture
         // Normalized; (0,0) = BOTTOM-left of the image, (1,1) = top-right
@@ -69,14 +71,14 @@ namespace Arcane
     // written, so a plain full-texture sprite stays a minimal file (absent
     // keys resolve to the SpriteAssetData defaults on load). False on IO
     // failure.
-    ARCANE_CORE_API bool SaveSpriteAsset(const std::filesystem::path& path, const SpriteAssetData& data);
+    ARC_CORE_API bool SaveSpriteAsset(const std::filesystem::path& path, const SpriteAssetData& data);
 
     // Parse a .arcsprite. nullopt on IO/parse failure or when the file is not
     // a sprite asset (no structurally-unique key distinguishes a sprite, so
     // the "type":"sprite" tag IS the discriminator). Malformed individual
     // fields fall back to their SpriteAssetData default rather than failing
     // the whole load.
-    ARCANE_CORE_API std::optional<SpriteAssetData> LoadSpriteAsset(const std::filesystem::path& path);
+    ARC_CORE_API std::optional<SpriteAssetData> LoadSpriteAsset(const std::filesystem::path& path);
 
     // The pixel sub-rect + pivot resolved against a texture's actual pixel
     // dimensions: normalized UVs for sampling, and the sprite's world-space
@@ -91,7 +93,7 @@ namespace Arcane
     // texWidth/texHeight are the source texture's actual pixel dimensions
     // (0 before the texture asset has loaded -- returns a safe 1x1 m,
     // full-UV fallback rather than dividing by zero).
-    ARCANE_CORE_API ResolvedSpriteGeom ComputeSpriteGeom(const SpriteAssetData& data,
+    ARC_CORE_API ResolvedSpriteGeom ComputeSpriteGeom(const SpriteAssetData& data,
                                                      std::uint32_t texWidth, std::uint32_t texHeight);
 #if defined(_MSC_VER)
 #pragma warning(pop)

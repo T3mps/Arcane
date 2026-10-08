@@ -1,38 +1,35 @@
 #include "App/UndoSettings.hpp"
 
-#include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/Settings.hpp>
 
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace Arcane::Editor
 {
-    namespace
-    {
-        ARC_CVAR_RANGED("editor.undo.maxSteps", "editor", Int32, CVarValue::Int32(100),
-                        CVarValue::Int32(1), CVarValue::Int32(10000), CVarFlags::Archive,
-                        "Undo history depth in steps; the oldest step drops past it.");
-        ARC_CVAR_RANGED("editor.undo.byteBudgetMB", "editor", Int32, CVarValue::Int32(512),
-                        CVarValue::Int32(16), CVarValue::Int32(65536), CVarFlags::Archive,
-                        "Undo history byte budget (MB), memory plus Saved/UndoCache; the oldest step drops past it.");
-        ARC_CVAR_RANGED("editor.undo.spillThresholdKB", "editor", Int32, CVarValue::Int32(256),
-                        CVarValue::Int32(16), CVarValue::Int32(1048576), CVarFlags::Archive,
-                        "Undo payloads above this size (KB) spill to <project>/Saved/UndoCache.");
+    ARC_REFLECT_TYPE(EditorUndoSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.undo", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(EditorUndoSettings, maxSteps)
+            ARC_REFLECT_ATTR(Range, 1.0, 10000.0)
+            ARC_REFLECT_ATTR(Tooltip, "Undo history depth in steps; the oldest step drops past it.")
+        ARC_REFLECT_FIELD(EditorUndoSettings, byteBudgetMB)
+            ARC_REFLECT_ATTR(Range, 16.0, 65536.0)
+            ARC_REFLECT_ATTR(Tooltip, "Undo history byte budget (MB), memory plus Saved/UndoCache; the oldest step drops past it.")
+        ARC_REFLECT_FIELD(EditorUndoSettings, spillThresholdKB)
+            ARC_REFLECT_ATTR(Range, 16.0, 1048576.0)
+            ARC_REFLECT_ATTR(Tooltip, "Undo payloads above this size (KB) spill to <project>/Saved/UndoCache.")
+    ARC_END_REFLECT_TYPE()
 
-        std::int32_t ReadInt(const Arcane::CVarRegistry& cvars, std::string_view name, std::int32_t fallback)
-        {
-            const auto v = cvars.Get(cvars.Find(name));
-            return v ? v->AsInt32() : fallback;
-        }
-    }
+    ARC_SETTINGS(EditorUndoSettings);
 
-    Arcane::UndoLimits ReadUndoLimits(const Arcane::CVarRegistry& cvars)
+    Arcane::UndoLimits ToUndoLimits(const EditorUndoSettings& s)
     {
         Arcane::UndoLimits l;
-        l.maxSteps       = static_cast<std::size_t>(ReadInt(cvars, "editor.undo.maxSteps", 100));
-        l.byteBudget     = static_cast<std::uint64_t>(ReadInt(cvars, "editor.undo.byteBudgetMB", 512)) << 20;
-        l.spillThreshold = static_cast<std::uint64_t>(ReadInt(cvars, "editor.undo.spillThresholdKB", 256)) << 10;
+        l.maxSteps       = static_cast<std::size_t>(s.maxSteps);
+        l.byteBudget     = static_cast<std::uint64_t>(s.byteBudgetMB) << 20;
+        l.spillThreshold = static_cast<std::uint64_t>(s.spillThresholdKB) << 10;
         return l;
     }
+
+    Arcane::UndoLimits ReadUndoLimits() { return ToUndoLimits(Arcane::Settings<EditorUndoSettings>()); }
 }

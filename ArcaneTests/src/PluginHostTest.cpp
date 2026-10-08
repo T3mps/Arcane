@@ -42,13 +42,14 @@ namespace
         rt.Registry().CreateView<Pulse>().ForEach([&](Astra::Entity, Pulse& p) { v = p.ticks; });
         return v;
     }
-    void StepK(Arcane::Runtime& rt, const Arcane::PluginVTable& vt, int k)
-    {
-        for (int i = 0; i < k; ++i)
-            rt.Loop().Advance(1.0 / 60.0, [&](double dt){ vt.FixedUpdate(dt); }, [&](double,double){});
-    }
-    // Drive k fixed steps through the WHOLE host (primary + every secondary), the way a
-    // multi-module host advances the sim -- FixedUpdateAll instead of a single vtable.
+    // Drive k fixed steps through the HOST (primary + every secondary), the way every
+    // product host advances the sim -- FixedUpdateAll, never a raw Vtable()->FixedUpdate.
+    // The host entry point is also where the module's cvar scope opens around the call
+    // (settings spec s4.4; PluginHost.cpp ScopedCall): the fixture AddCallbacks from
+    // OnFixedUpdate, and a tick driven through the raw vtable would leave that callback
+    // untagged, so it would outlive the unload as a dangling pointer and fault the next
+    // [cvar][hotreload] case (CVarModuleLifetimeTest). The single-vtable StepK helper
+    // this file used to carry was exactly that bypass; it is gone.
     void StepAllK(Arcane::Runtime& rt, Arcane::PluginHost& host, int k)
     {
         for (int i = 0; i < k; ++i)
@@ -67,13 +68,13 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
     REQUIRE(host.Load());
     REQUIRE(host.IsLoaded());
 
-    StepK(rt, *host.Vtable(), 5);
+    StepAllK(rt, host, 5);
     CHECK(ReadPulse(rt) == 5);                     // V1 increments by 1
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();
 }
 
-// The GameModule hook-order probe (spec 2026-09-13 s7): ARCANE_GAME_MODULE's
+// The GameModule hook-order probe (spec 2026-09-13 s7): ARC_GAME_MODULE's
 // Shutdown calls OnShutdown BEFORE it closes the module's ComponentModule
 // handle (the instance goes first so a module can still touch its own
 // components). HotReloadPlugin's OnShutdown logs whether its Components()
@@ -90,7 +91,7 @@ TEST_CASE("GameModule: OnShutdown runs while the module's component handle is st
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
-    StepK(rt, *host.Vtable(), 2);
+    StepAllK(rt, host, 2);
     REQUIRE(ReadPulse(rt) == 2);
 
     std::string captured;
@@ -120,7 +121,7 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
-    StepK(rt, *host.Vtable(), 5);
+    StepAllK(rt, host, 5);
     REQUIRE(ReadPulse(rt) == 5);
 
     // Swap the binary under the watched path, then force a state-preserving reload.
@@ -129,7 +130,7 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
     REQUIRE(host.ForceReload());                   // SaveState -> unload -> load V2 -> Init -> LoadState
 
     CHECK(ReadPulse(rt) == 5);                     // STATE SURVIVED the swap
-    StepK(rt, *host.Vtable(), 1);
+    StepAllK(rt, host, 1);
     CHECK(ReadPulse(rt) == 15);                    // NEW CODE LIVE: V2 step is +10
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();
@@ -152,14 +153,14 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
-    StepK(rt, *host.Vtable(), 3);
+    StepAllK(rt, host, 3);
     REQUIRE(ReadPulse(rt) == 3);
 
     std::filesystem::copy_file("HotReloadPluginBad.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
     CHECK_FALSE(host.ForceReload());               // ABI mismatch -> reload fails
     CHECK(host.IsLoaded());                        // still on last-good
-    StepK(rt, *host.Vtable(), 1);
+    StepAllK(rt, host, 1);
     CHECK(ReadPulse(rt) == 4);                      // last-good V1 still running, state intact
     host.Unload();
 
@@ -414,7 +415,7 @@ TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotr
     REQUIRE(host.Load());
     REQUIRE(host.IsLoaded());
     REQUIRE(host.Vtable() != nullptr);
-    StepK(rt, *host.Vtable(), 3);
+    StepAllK(rt, host, 3);
     CHECK(ReadPulse(rt) == 3);
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();

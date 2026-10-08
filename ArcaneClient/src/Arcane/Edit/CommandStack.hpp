@@ -3,9 +3,10 @@
 // Arcane/Edit: undo/redo history. The undo unit is a Transaction of 1..N
 // ComponentEditCommands (Unreal FTransaction model). Begin/SnapshotComponent
 // (idempotent snapshot-on-first-touch)/Commit/Cancel groups a gesture into one
-// step. ARCANE_API; Arcane Editor owns one and brackets its Inspector edits.
+// step. ARC_API; Arcane Editor owns one and brackets its Inspector edits.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>   // ARC_CONSTANT
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/UndoPayload.hpp>
 
@@ -36,9 +37,12 @@ namespace Arcane
     // the editor pushes editor.undo.* in through SetLimits (s2.4).
     struct UndoLimits
     {
-        std::size_t   maxSteps       = 100;                    // 0 clamps to 1
-        std::uint64_t byteBudget     = 512ull * 1024 * 1024;   // RAM + spilled bytes
-        std::uint64_t spillThreshold = 256ull * 1024;          // payloads ABOVE it spill
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::size_t   maxSteps       = 100;              // 0 clamps to 1
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::uint64_t byteBudget     = 512ull << 20;     // RAM + spilled bytes
+        ARC_CONSTANT("engine fallback for an unconfigured CommandStack; the editor always pushes editor.undo.*")
+        std::uint64_t spillThreshold = 256ull << 10;     // payloads ABOVE it spill
         friend bool operator==(const UndoLimits&, const UndoLimits&) = default;
     };
 
@@ -46,7 +50,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::function/deque/vector/string members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API CommandStack
+    class ARC_API CommandStack
     {
     public:
         // `resolve` returns the CURRENT live registry each call (see
@@ -254,7 +258,7 @@ namespace Arcane
     // cancels, leaving that to the owner. NOT for a gesture that spans frames
     // (an Inspector field drag): the token has to outlive the scope, so those
     // use explicit Begin/Commit with the token parked in persistent state.
-    class ARCANE_API ScopedTransaction
+    class ARC_API ScopedTransaction
     {
     public:
         ScopedTransaction(CommandStack& stack, std::string label);

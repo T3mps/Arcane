@@ -50,12 +50,12 @@ namespace
     // replay: kGpuMarkerSlots x { begin, end }, zero meaning "never reached".
     struct MarkerRegion
     {
-        MarkerRegion() : words(Arcane::Diag::kGpuMarkerSlots * Arcane::Diag::kGpuMarkerValuesPerSlot, 0u) {}
+        MarkerRegion() : words(Arcane::Diag::GpuMarkerSlots(GpuBreadcrumbs{}) * Arcane::Diag::kGpuMarkerValuesPerSlot, 0u) {}
 
         // A backend writes `id + 1`, never `id`, so that 0 stays reserved.
         void Write(std::uint32_t id, bool begin)
         {
-            const std::uint32_t slot = id % Arcane::Diag::kGpuMarkerSlots;
+            const std::uint32_t slot = id % Arcane::Diag::GpuMarkerSlots(GpuBreadcrumbs{});
             words[slot * Arcane::Diag::kGpuMarkerValuesPerSlot + (begin ? 0u : 1u)] = id + 1;
         }
 
@@ -164,7 +164,7 @@ TEST_CASE("marker replay: the section carries the whole region, byte for byte", 
     REQUIRE(dump.has_value());
     REQUIRE(dump->sections.size() == 1);
     CHECK(dump->sections[0].tag == "markers");
-    REQUIRE(dump->sections[0].bytes.size() == Arcane::Diag::kGpuMarkerBytes);
+    REQUIRE(dump->sections[0].bytes.size() == Arcane::Diag::GpuMarkerBytes(GpuBreadcrumbs{}));
     // Slot 0's begin word is the scope id + 1, little-endian.
     CHECK(dump->sections[0].bytes[0] == static_cast<std::uint8_t>(scope + 1));
 }

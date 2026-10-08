@@ -25,6 +25,7 @@
                                             // it was read from (see GeometryIdentity()).
 #include <unordered_map>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -49,7 +50,9 @@ namespace Arcane
     // before blending, so 350deg->10deg travels +20deg through 0, not -340deg.
     [[nodiscard]] inline float AngleLerp(float a, float b, float t) noexcept
     {
+        ARC_CONSTANT("math identity / tolerance: pi")
         constexpr float kPi  = 3.14159265358979323846f;
+        ARC_CONSTANT("math identity / tolerance: tau = 2 pi")
         constexpr float kTau = 2.0f * kPi;
         float d = std::fmod(b - a, kTau);
         if (d < -kPi)      d += kTau;
@@ -94,9 +97,9 @@ namespace Arcane
         // PhysicsResource::entityToBody in the same pass that fills `prev`, so the
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
-        // ARCANE_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
+        // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
         Astra::FlatMap<Arcane::Entity, InterpSlot> slotOf;
-        // ARCANE_INTERNAL_END
+        // ARC_INTERNAL_END
         bool                    captured = false;   // false until the first capture
 
         template<typename Archive>

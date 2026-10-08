@@ -18,6 +18,7 @@
 #include <Arcane/Render/DeviceRemovedObservers.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // NoteGpuDeviceLost -- the host's device-lost latch
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.adapter, render.debug.minSeverity
 
 #include <vulkan/vulkan.hpp>
 
@@ -148,8 +149,10 @@ namespace Arcane
             const char* text = (data && data->pMessage) ? data->pMessage : "";
             if (severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
                 RenderErrorLatch::Instance().NoteNriError(text);
-            else
+            else if (severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
                 ARC_WARN("[vk] {}", text);
+            else
+                ARC_INFO("[vk] {}", text);   // eInfo: subscribed only when render.debug.minSeverity is Info
             return VK_FALSE;
         }
     }
@@ -363,8 +366,14 @@ namespace Arcane
         {
             using Severity = vk::DebugUtilsMessageSeverityFlagBitsEXT;
             using Type = vk::DebugUtilsMessageTypeFlagBitsEXT;
+            // render.debug.minSeverity (default Warning: Error | Warning) --
+            // the same subscription as the D3D12 info queue's deny list.
+            const MinSeverity minSeverity = Settings<RenderDebugSettings>().minSeverity;
+            vk::DebugUtilsMessageSeverityFlagsEXT severities = Severity::eError;
+            if (Reports(minSeverity, MinSeverity::Warning)) severities |= Severity::eWarning;
+            if (Reports(minSeverity, MinSeverity::Info))    severities |= Severity::eInfo;
             auto messengerInfo = vk::DebugUtilsMessengerCreateInfoEXT()
-                .setMessageSeverity(Severity::eError | Severity::eWarning)
+                .setMessageSeverity(severities)
                 .setMessageType(Type::eValidation | Type::eGeneral |
                                 Type::ePerformance)
                 .setPfnUserCallback(&VkDebugCallback);
@@ -388,14 +397,28 @@ namespace Arcane
             ARC_ERROR("No Vulkan physical devices");
             return false;
         }
-        out.physicalDevice = physicalDevices[0];
-        for (auto& candidate : physicalDevices)
+        // render.adapter: -1 (the default) takes the first discrete GPU,
+        // else [0]; an index picks that physical device, falling back to the
+        // default when absent.
+        const std::int32_t wantedAdapter = Settings<RenderSettings>().adapter;
+        if (wantedAdapter >= 0 && static_cast<std::size_t>(wantedAdapter) < physicalDevices.size())
         {
-            if (candidate.getProperties().deviceType ==
-                vk::PhysicalDeviceType::eDiscreteGpu)
+            out.physicalDevice = physicalDevices[static_cast<std::size_t>(wantedAdapter)];
+        }
+        else
+        {
+            if (wantedAdapter >= 0)
+                ARC_WARN("render.adapter {}: only {} Vulkan physical device(s); using the first discrete GPU",
+                         wantedAdapter, physicalDevices.size());
+            out.physicalDevice = physicalDevices[0];
+            for (auto& candidate : physicalDevices)
             {
-                out.physicalDevice = candidate;
-                break;
+                if (candidate.getProperties().deviceType ==
+                    vk::PhysicalDeviceType::eDiscreteGpu)
+                {
+                    out.physicalDevice = candidate;
+                    break;
+                }
             }
         }
         out.adapterName = std::string(

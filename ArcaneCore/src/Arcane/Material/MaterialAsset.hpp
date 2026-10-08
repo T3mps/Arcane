@@ -110,13 +110,13 @@ namespace Arcane
 
     // Write `data` as .arcmat JSON (values typed per MatParamValue: float /
     // [x,y] / [x,y,z,w] / texture guid string). False on IO failure.
-    ARCANE_CORE_API bool SaveMaterialAsset(const std::filesystem::path& path,
+    ARC_CORE_API bool SaveMaterialAsset(const std::filesystem::path& path,
                                       const MaterialAssetData& data);
 
     // Parse a .arcmat. nullopt on IO/parse/shape failure. Param VALUE types are
     // resolved against the snippet's own //@param decls (the decl is the truth;
     // a value that no longer matches its decl is dropped with a warning).
-    ARCANE_CORE_API std::optional<MaterialAssetData> LoadMaterialAsset(
+    ARC_CORE_API std::optional<MaterialAssetData> LoadMaterialAsset(
         const std::filesystem::path& path);
 
     // Guid -> path resolver, the shape every Guid-keyed cache in Render/ takes
@@ -147,19 +147,19 @@ namespace Arcane
     // Shared by SpriteMaterialCache::Request and MeshMaterialCache::Request
     // (both include this header already), so the cycle guard and the three
     // failure strings live in exactly one place.
-    ARCANE_CORE_API std::optional<std::string> LoadMaterialParentChain(
+    ARC_CORE_API std::optional<std::string> LoadMaterialParentChain(
         const ResolveMaterialAssetFn& resolveAsset, const Guid& leafId,
         const Guid& firstParent, std::vector<MaterialAssetData>& out);
 
     // Apply saved values onto an instance built over the asset's template
     // (unknown names / type mismatches warn + skip). Returns applied count.
-    ARCANE_CORE_API std::size_t ApplyMaterialParams(const MaterialAssetData& data,
+    ARC_CORE_API std::size_t ApplyMaterialParams(const MaterialAssetData& data,
                                                MaterialInstance& instance);
 
     // The self-typed {"type","value"} param-value shape shared by .arcmat params
     // and graph Param-node declarations (exported for MaterialGraph's use).
-    ARCANE_CORE_API nlohmann::json MatParamValueToJson(const MatParamValue& v);
-    ARCANE_CORE_API std::optional<MatParamValue> MatParamValueFromJson(const nlohmann::json& entry);
+    ARC_CORE_API nlohmann::json MatParamValueToJson(const MatParamValue& v);
+    ARC_CORE_API std::optional<MatParamValue> MatParamValueFromJson(const nlohmann::json& entry);
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif

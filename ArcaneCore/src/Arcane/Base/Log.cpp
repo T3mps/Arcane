@@ -6,7 +6,8 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
-#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Base/LogFileSettings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Mosaic/Assert.hpp>
 #include <Mosaic/Log.hpp>
@@ -16,10 +17,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -206,13 +210,12 @@ namespace Arcane::Log
         };
         FlushHelperShutdownGuard s_flushHelperShutdownGuard;
 
-        std::once_flag s_levelCvarOnce;
-
-        void OnLogLevelPublished(Arcane::CVarHandle handle, void*)
-        {
-            if (const auto v = Arcane::CVarRegistry::Get().Get(handle); v && v->type == Arcane::CVarType::Int32)
-                Arcane::Log::SetLevel(static_cast<spdlog::level::level_enum>(v->AsInt32()));
-        }
+        // settings arc S2: the other modules' Mosaic level setters (Log.hpp).
+        // Registration happens at module load and the set at a log.level
+        // publish, never on a hot path.
+        std::mutex                 s_mosaicLevelMutex;
+        std::vector<MosaicLevelFn> s_mosaicLevelTargets;
+        std::atomic<int>           s_mosaicLevel{ static_cast<int>(Mosaic::LogLevel::Info) };
     }
 
     void Init(spdlog::level::level_enum level)
@@ -229,6 +232,7 @@ namespace Arcane::Log
             // the Mosaic sink, so it is unaffected by which stream this uses.
             s_engine = existing ? existing : spdlog::stderr_color_mt("Arcane");
             s_engine->set_level(level);
+            ARC_CONSTANT("the editor Console parses this prefix (Panels/ConsoleModel.cpp, CategoryForMessage)")
             s_engine->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
             // The one and only mutation of the logger's own sink vector, made
             // here under call_once -- before any other thread can reach the
@@ -247,26 +251,6 @@ namespace Arcane::Log
             // installers are inline for exactly that reason.
             Mosaic::SetLogSink(MosaicSink(), nullptr);
             Mosaic::SetAssertHandler(Arcane::Assert::MosaicHandler(), nullptr);
-        });
-
-        // `log.level` (s2.4's Core exception): registered HERE, not by ARC_CVAR,
-        // because its default is Init's runtime argument -- the first caller's
-        // level, so an explicit Init(level) is never overridden by a static
-        // default. An Archive value from Saved/Config applies through the
-        // callback when config loads and publishes.
-        std::call_once(s_levelCvarOnce, [level] {
-            Arcane::CVarDesc desc;
-            desc.name = "log.level";
-            desc.type = Arcane::CVarType::Int32;
-            desc.defaultValue = Arcane::CVarValue::Int32(static_cast<std::int32_t>(level));
-            desc.min = Arcane::CVarValue::Int32(0);
-            desc.max = Arcane::CVarValue::Int32(6);
-            desc.flags = Arcane::CVarFlags::Archive | Arcane::CVarFlags::Dev;
-            desc.help = "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
-                        "Gates stderr, the log file and the Console.";
-            desc.module = "engine";
-            const Arcane::CVarHandle h = Arcane::CVarRegistry::Get().Register(desc);
-            if (!h.IsStale()) Arcane::CVarRegistry::Get().AddCallback(h, &OnLogLevelPublished, nullptr);   // Dist: refused (Dev)
         });
     }
 
@@ -302,6 +286,46 @@ namespace Arcane::Log
 
     Mosaic::LogSink MosaicSink() noexcept { return &MosaicLogSinkImpl; }
 
+    void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept
+    {
+        if (!fn) return;
+        std::lock_guard lock(s_mosaicLevelMutex);
+        if (std::find(s_mosaicLevelTargets.begin(), s_mosaicLevelTargets.end(), fn) == s_mosaicLevelTargets.end())
+            s_mosaicLevelTargets.push_back(fn);
+        fn(static_cast<Mosaic::LogLevel>(s_mosaicLevel.load(std::memory_order_relaxed)));
+    }
+
+    void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept
+    {
+        std::lock_guard lock(s_mosaicLevelMutex);
+        std::erase(s_mosaicLevelTargets, fn);
+    }
+
+    void UnregisterMosaicLevelTargetsInRange(const void* base, std::size_t size) noexcept
+    {
+        if (!base || size == 0) return;
+        const auto* b = static_cast<const unsigned char*>(base);
+        std::lock_guard lock(s_mosaicLevelMutex);
+        std::erase_if(s_mosaicLevelTargets, [b, size](MosaicLevelFn fn) {
+            const auto* p = reinterpret_cast<const unsigned char*>(fn);
+            return p >= b && p < b + size;
+        });
+    }
+
+    void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept
+    {
+        s_mosaicLevel.store(static_cast<int>(level), std::memory_order_relaxed);
+        Mosaic::SetLogLevel(level);   // ArcaneCore.dll's own copy
+        std::lock_guard lock(s_mosaicLevelMutex);
+        for (MosaicLevelFn fn : s_mosaicLevelTargets)
+            fn(level);
+    }
+
+    Mosaic::LogLevel CoreMosaicLevel() noexcept
+    {
+        return Mosaic::GetLogLevel();
+    }
+
     bool AttachFileSink(const std::filesystem::path& file)
     {
         // Deliberately checks s_engine/s_distSink directly rather than calling
@@ -321,19 +345,55 @@ namespace Arcane::Log
             s_fileSink.reset();
         }
 
-        // Rotate whatever already sits at `file`: delete .5, shift .4->.5 ..
-        // .1->.2, then file -> .1. keep = 5.
+        // Rotate whatever already sits at `file` (log.file.keepCount = N):
+        // delete .N and any stray past it (a run with a larger N left them),
+        // shift .N-1->.N .. .1->.2, then file -> .1. N = 0 deletes the file.
+        const LogFileSettings fileSettings = Settings<LogFileSettings>();   // a copy: no snapshot reference kept
         std::error_code ec;
         if (std::filesystem::exists(file, ec))
         {
-            constexpr int keep = 5;
+            const int keep = std::max(fileSettings.keepCount, 0);
             const std::filesystem::path dir = file.parent_path();
             const std::string stem = file.stem().string();
             const std::string ext = file.extension().string();
             const auto rotated = [&](int n) { return dir / (stem + "." + std::to_string(n) + ext); };
 
+            // Every <stem>.<n><ext> with n >= max(N, 1): .N is overwritten by
+            // the shift below, and anything past it is a stray. A directory
+            // scan rather than probing .N+1, .N+2 ..., because strays need not
+            // be contiguous. Collected first, removed after the scan. Names are
+            // compared in the native encoding: a foreign file in the folder
+            // whose name has no narrow spelling must not throw out of here.
+            const std::filesystem::path stemPath = file.stem();
+            const std::filesystem::path extPath = file.extension();
+            const auto rotationIndex = [&](const std::filesystem::path& entry) {   // -1: not <stem>.<n><ext>
+                const std::filesystem::path namePath = entry.filename();
+                const auto& name = namePath.native();
+                const auto& stemN = stemPath.native();
+                const auto& extN = extPath.native();
+                if (name.size() <= stemN.size() + 1 + extN.size() || name.compare(0, stemN.size(), stemN) != 0
+                    || name[stemN.size()] != '.' || name.compare(name.size() - extN.size(), extN.size(), extN) != 0)
+                    return -1;
+                int n = 0;
+                for (std::size_t i = stemN.size() + 1; i < name.size() - extN.size(); ++i)
+                {
+                    if (name[i] < '0' || name[i] > '9' || n > 1'000'000)
+                        return -1;
+                    n = n * 10 + static_cast<int>(name[i] - '0');
+                }
+                return n;
+            };
+            std::vector<std::filesystem::path> stale;
             ec.clear();
-            std::filesystem::remove(rotated(keep), ec);
+            for (std::filesystem::directory_iterator it(dir.empty() ? std::filesystem::path(".") : dir, ec), end;
+                 !ec && it != end; it.increment(ec))
+                if (rotationIndex(it->path()) >= std::max(keep, 1))
+                    stale.push_back(it->path());
+            for (const std::filesystem::path& path : stale)
+            {
+                ec.clear();
+                std::filesystem::remove(path, ec);
+            }
             for (int n = keep - 1; n >= 1; --n)
             {
                 ec.clear();
@@ -344,7 +404,10 @@ namespace Arcane::Log
                 }
             }
             ec.clear();
-            std::filesystem::rename(file, rotated(1), ec);
+            if (keep > 0)
+                std::filesystem::rename(file, rotated(1), ec);
+            else
+                std::filesystem::remove(file, ec);
         }
 
         try
@@ -365,7 +428,8 @@ namespace Arcane::Log
                 s_distSink->add_sink(s_backlogSink);
             }
 
-            s_engine->flush_on(spdlog::level::warn);
+            // log.file.flushLevel (Live; LogFileSettings.cpp re-applies it).
+            s_engine->flush_on(static_cast<spdlog::level::level_enum>(std::clamp(fileSettings.flushLevel, 0, 6)));
             EnsureFlushHelperStarted();
             return true;
         }

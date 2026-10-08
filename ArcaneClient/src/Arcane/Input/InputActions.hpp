@@ -103,13 +103,7 @@ namespace Arcane
         InputControlDisplay display;
     };
 
-    // The hold/tap interaction timings an undecorated "hold" / "tap" token
-    // gets ("hold(duration=0.3)" overrides). ONE definition: the evaluator's
-    // parser and the editor's readable interaction text both read these.
-    inline constexpr float kDefaultHoldSeconds = 0.4f;
-    inline constexpr float kDefaultTapSeconds = 0.2f;
-
-    class ARCANE_API InputActions
+    class ARC_API InputActions
     {
     public:
         static std::unique_ptr<InputActions> Create();

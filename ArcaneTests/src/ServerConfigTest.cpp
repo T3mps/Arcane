@@ -18,7 +18,7 @@ TEST_CASE("ServerConfig: --project is required; the defaults are the documented 
     REQUIRE(ok.config);
     CHECK(ok.config->projectPath == "ReferenceProject");
     CHECK(ok.config->frames == 0);
-    CHECK(ok.config->fixedDtSeconds == 1.0 / 60.0);
+    CHECK_FALSE(ok.config->fixedDtSupplied);   // no --fixed-dt: the tick is 1/server.tickHz (SweepSimTest)
     CHECK(ok.config->reportPath.empty());
 }
 TEST_CASE("ServerConfig: --frames, --fixed-dt, --report, --plugin parse; a non-positive --fixed-dt is refused", "[server]")
@@ -34,4 +34,13 @@ TEST_CASE("ServerConfig: --print-engine-info needs no --project; --help exits 0"
 {
     CHECK(Parse({"--print-engine-info"}).config->printEngineInfo);
     auto h = Parse({"--help"}); CHECK_FALSE(h.config); CHECK(h.exitCode == 0);
+}
+TEST_CASE("ServerConfig: the stdin admin console is on by default and --no-admin-console turns it off", "[server]")
+{
+    auto on = Parse({"--project", "P"});
+    REQUIRE(on.config);
+    CHECK(on.config->adminConsole);
+    auto off = Parse({"--project", "P", "--no-admin-console"});
+    REQUIRE(off.config);
+    CHECK_FALSE(off.config->adminConsole);
 }

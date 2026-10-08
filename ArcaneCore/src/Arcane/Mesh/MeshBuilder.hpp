@@ -83,7 +83,7 @@ namespace Arcane
     // shared-corner vertex cannot carry three different face normals at
     // once -- so every face gets its own 4 vertices (4 * 6 = 24). 36
     // indices: 2 triangles * 3 indices * 6 faces.
-    [[nodiscard]] ARCANE_CORE_API MeshData BuildCube(float sizeMeters);
+    [[nodiscard]] ARC_CORE_API MeshData BuildCube(float sizeMeters);
 
     // A UV sphere of the given radius, centered at the origin, poled on Y.
     // `rings` is the number of latitude bands between the poles (so there
@@ -97,7 +97,7 @@ namespace Arcane
     // same unit radial direction -- so the winding-consistency contract
     // above and the "on the sphere" contract are, for this builder, the same
     // geometry expressed twice.
-    [[nodiscard]] ARCANE_CORE_API MeshData BuildUvSphere(float radiusMeters, std::uint32_t rings, std::uint32_t segments);
+    [[nodiscard]] ARC_CORE_API MeshData BuildUvSphere(float radiusMeters, std::uint32_t rings, std::uint32_t segments);
 
     // Local axis-aligned bounds of a mesh, in the mesh's own space.
     //
@@ -113,7 +113,7 @@ namespace Arcane
     // Empty() distinction the comment above describes.
     using MeshBounds = Aabb;
 
-    [[nodiscard]] ARCANE_CORE_API MeshBounds ComputeMeshBounds(const MeshData& mesh);
+    [[nodiscard]] ARC_CORE_API MeshBounds ComputeMeshBounds(const MeshData& mesh);
 
     // ---- UNIT generators (F2a) ------------------------------------------
     // Every generator below emits a UNIT shape. Size is the Transform's job
@@ -130,7 +130,7 @@ namespace Arcane
     // (R_x(-90) would give (0,0,-1), i.e. facing AWAY, and cull.) Orientation
     // is the Transform's job for the same reason size is, which is why there
     // is no separate Quad source.
-    [[nodiscard]] ARCANE_CORE_API MeshData BuildPlane(std::uint32_t subdivisions);
+    [[nodiscard]] ARC_CORE_API MeshData BuildPlane(std::uint32_t subdivisions);
 
     // Unit cylinder: diameter 1, height 1, axis +Y, spanning [-0.5, +0.5] in Y,
     // with flat caps. `segments` is the radial count.
@@ -139,7 +139,7 @@ namespace Arcane
     // point: a cylinder scaled non-uniformly in Y is still a correct cylinder
     // (its caps are flat discs; nothing distorts), so every cylinder in the
     // family is reachable from this one by scale alone.
-    [[nodiscard]] ARCANE_CORE_API MeshData BuildCylinder(std::uint32_t segments);
+    [[nodiscard]] ARC_CORE_API MeshData BuildCylinder(std::uint32_t segments);
 
     // Unit-diameter capsule: radius 0.5, axis +Y. `lengthRatio` is TOTAL HEIGHT
     // divided by diameter, so total height == lengthRatio and the cylindrical
@@ -153,7 +153,7 @@ namespace Arcane
     //
     // `rings` is the arc step count per hemispherical cap; `segments` is the
     // radial count.
-    [[nodiscard]] ARCANE_CORE_API MeshData BuildCapsule(std::uint32_t rings,
+    [[nodiscard]] ARC_CORE_API MeshData BuildCapsule(std::uint32_t rings,
                                                    std::uint32_t segments,
                                                    float lengthRatio);
 }

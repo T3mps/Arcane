@@ -20,6 +20,7 @@
 // slow-mo is a render-interpolation concern (lerp by Alpha()), not a change to the
 // time model.
 
+#include <Arcane/Sim/SimSettingsData.hpp>   // the Config defaults (settings arc S6-8)
 #include <Arcane/Sim/SystemSchedulers.hpp>
 #include <Arcane/Sim/Time.hpp>
 
@@ -36,8 +37,8 @@ namespace Arcane
     public:
         struct Config
         {
-            double fixedHz = 60.0;
-            int    maxStepsPerFrame = 5;   // clamp to avoid the spiral of death
+            double fixedHz = SimSettings{}.fixedHz;
+            int    maxStepsPerFrame = SimSettings{}.maxStepsPerFrame;   // clamp to avoid the spiral of death
         };
 
         // Two constructors rather than one with `Config cfg = {}`: GCC (16)
@@ -91,6 +92,13 @@ namespace Arcane
         // (there is no sane default to clamp TO here).
         void SetFixedHz(double hz) noexcept { if (hz > 0.0) m_cfg.fixedHz = hz; }
         [[nodiscard]] double FixedHz() const noexcept { return m_cfg.fixedHz; }
+
+        // The spiral-of-death cap (sim.maxStepsPerFrame, Live): the hosts set
+        // it each frame through ApplySimStepCap (SimSettings.hpp). Refused for
+        // a non-positive count, which would run no fixed step and drop every
+        // frame's backlog.
+        void SetMaxStepsPerFrame(int steps) noexcept { if (steps > 0) m_cfg.maxStepsPerFrame = steps; }
+        [[nodiscard]] int MaxStepsPerFrame() const noexcept { return m_cfg.maxStepsPerFrame; }
 
         // Advance one real frame. Returns the render alpha in [0,1) for interpolation.
         double Advance(double realDt)

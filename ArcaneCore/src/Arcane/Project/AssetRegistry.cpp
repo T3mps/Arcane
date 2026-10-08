@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -194,6 +195,7 @@ namespace Arcane
         // The FromName namespace for source identities. A fixed, arbitrary
         // v4-shaped constant (not Nil, so a source guid can never collide with
         // an engine-built-in FromName id minted under some other namespace).
+        ARC_CONSTANT("ID space / sentinel: the namespace GUID stable source ids derive from; a change re-keys every asset")
         constexpr Guid kSourceIdNamespace{ 0x5a2c7e19b4d84f06ull, 0x9e3d1c8a7b6f5e40ull };
 
         Guid ResolveSourceId(std::string_view mountPath)

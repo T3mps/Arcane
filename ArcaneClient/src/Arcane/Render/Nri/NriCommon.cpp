@@ -188,7 +188,7 @@ namespace Arcane
         // property) -- mirror the same compile-time default
         // Render/RenderDeviceDesc.hpp already uses for
         // RenderDeviceDesc::enableValidation.
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         constexpr const char* kValidation = "on";
 #else
         constexpr const char* kValidation = "off";

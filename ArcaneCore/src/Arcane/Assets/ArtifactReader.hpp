@@ -208,6 +208,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -284,6 +285,7 @@ namespace Arcane
     // LOCKSTEP with that one; a mismatch left standing would make every artifact THIS
     // engine's own cook produces look "newer than the engine" to itself the moment the
     // pipeline-side constant moves without a matching edit here.
+    ARC_CONSTANT("file format: mirrors the asset pipeline's texture importer version, a cook-key input")
     inline constexpr std::uint32_t kClientTextureImporterVersionMirror = 1;
 
     // Reads and validates ONE .arcart file at `path` against the CURRENT staged source
@@ -294,7 +296,7 @@ namespace Arcane
     // conditions ArtifactFormat.hpp's own ReadTextureArtifact treats as nullopt), or its
     // header sourceGuid does not match `expectedSourceGuid` (a stray or renamed artifact
     // file sitting where the caller expected a different one).
-    [[nodiscard]] ARCANE_CORE_API ArtifactReadResult ReadClientArtifact(
+    [[nodiscard]] ARC_CORE_API ArtifactReadResult ReadClientArtifact(
         const std::filesystem::path& path,
         std::span<const std::byte> currentSourceBytes,
         const Guid& expectedSourceGuid);
@@ -327,6 +329,7 @@ namespace Arcane
     // This engine's own copy of AssetPipeline's kMeshImporterVersion -- mirrored BY
     // HAND, never included, exactly like kClientTextureImporterVersionMirror above.
     // Bump IN LOCKSTEP with that one.
+    ARC_CONSTANT("file format: mirrors the asset pipeline's mesh importer version, a cook-key input")
     inline constexpr std::uint32_t kClientMeshImporterVersionMirror = 1;
 
     struct MeshArtifactReadResult
@@ -343,7 +346,7 @@ namespace Arcane
     // for a .gltf with external buffers is the .gltf file's bytes FOLLOWED BY every
     // referenced buffer's, in glTF declaration order -- the exact concatenation
     // ComputeMeshCookKey hashes (Task 5), so the two sides agree by construction.
-    [[nodiscard]] ARCANE_CORE_API MeshArtifactReadResult ReadClientMeshArtifact(
+    [[nodiscard]] ARC_CORE_API MeshArtifactReadResult ReadClientMeshArtifact(
         const std::filesystem::path& path,
         std::span<const std::byte> currentSourceBytes,
         const Guid& expectedSourceGuid);
@@ -358,7 +361,7 @@ namespace Arcane
     // stale, superseded artifact is still on disk alongside the current one (C1a/C1b) --
     // the caller (Assets.cpp's ResolveArtifact) is responsible for validating candidates
     // and picking the first clean one, never this function.
-    [[nodiscard]] ARCANE_CORE_API std::vector<std::filesystem::path> FindArtifactForGuid(
+    [[nodiscard]] ARC_CORE_API std::vector<std::filesystem::path> FindArtifactForGuid(
         const std::filesystem::path& intermediateDir, const Guid& guid);
 
     // F2c Task 11: the CLIENT-SIDE re-derivation of a .gltf's external buffer list --

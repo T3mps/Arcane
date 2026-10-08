@@ -1,5 +1,5 @@
 // Arcane/Plugin/GameComponents.hpp: the per-module component registrar a
-// game module's ARCANE_COMPONENT(T) lines feed and its GamePlugin_Init drains
+// game module's ARC_COMPONENT(T) lines feed and its GamePlugin_Init drains
 // ONCE through Arcane::Game::RegisterComponents. This is what makes a
 // wizard-made component live after one Rebuild with no hand edit to Init --
 // the long-term shape chosen 2026-09-13 for the New C++ Class step. This test
@@ -38,8 +38,8 @@ namespace Arcane::GameComponentsTest
 
 // The two lines a Component template's .cpp carries. Namespace-qualified on
 // purpose: the macro must accept a qualified name (no token pasting on T).
-ARCANE_COMPONENT(Arcane::GameComponentsTest::Health)
-ARCANE_COMPONENT(Arcane::GameComponentsTest::Loot)
+ARC_COMPONENT(Arcane::GameComponentsTest::Health)
+ARC_COMPONENT(Arcane::GameComponentsTest::Loot)
 
 namespace
 {
@@ -62,7 +62,7 @@ namespace
     }
 }
 
-TEST_CASE("Arcane::Game::RegisterComponents registers every ARCANE_COMPONENT of this module, once", "[plugin]")
+TEST_CASE("Arcane::Game::RegisterComponents registers every ARC_COMPONENT of this module, once", "[plugin]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
     Astra::Registry& reg = rt.Registry();
@@ -77,13 +77,13 @@ TEST_CASE("Arcane::Game::RegisterComponents registers every ARCANE_COMPONENT of 
     REQUIRE(static_cast<bool>(module));
     const std::size_t n = Arcane::Game::RegisterComponents(module);
 
-    CHECK(n == 2);   // exactly this TU's two ARCANE_COMPONENT lines
+    CHECK(n == 2);   // exactly this TU's two ARC_COMPONENT lines
     const std::vector<std::string> after = RegisteredNames(reg);
     CHECK(Contains(after, "Arcane::GameComponentsTest::Health"));
     CHECK(Contains(after, "Arcane::GameComponentsTest::Loot"));
 }
 
-TEST_CASE("Arcane::Game::ComponentRegistrars lists the ARCANE_COMPONENT type names, for diagnostics", "[plugin]")
+TEST_CASE("Arcane::Game::ComponentRegistrars lists the ARC_COMPONENT type names, for diagnostics", "[plugin]")
 {
     // What a host could print ("module X brought 2 component(s): ...") --
     // the registrar carries the stringified type name alongside the thunk.

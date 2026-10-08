@@ -1,12 +1,18 @@
 #include <Arcane/Base/Diagnostics.hpp>
 
 #include <Arcane/Base/CrashArena.hpp>     // the ONLY allocator the crash thread may use (spec S5.5)
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope -- the GPU provider's own field carrier
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
 #include <Arcane/Base/ForeignModules.hpp> // ForeignModules::LastScan -- snapshotted OFF the crash path (R14)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ModuleTable.hpp>    // address -> module+offset, lock-free (Task 3)
 #include <Arcane/Base/PortableStack.hpp>  // RtlVirtualUnwind walk -- no DbgHelp anywhere below
+#include <Arcane/Base/DiagnosticsSettings.hpp>     // Settings<DiagnosticsSettings>() -- the reporter args, off the crash path
+#include <Arcane/Base/ReporterSettings.hpp>        // diagnostics.reporter.* (S6-4) -- likewise
+#include <Arcane/Config/Bindings/LogBinding.hpp>   // log.dir (ConfigFromSettings) -- never read on the crash path
+#include <Arcane/Config/UiSettings.hpp>            // ui.copyFlashSeconds (S6-4) -- likewise
+#include <Arcane/Platform/LaunchPath.hpp>          // CheckLaunchPath -- the configured reporter, at Install (S7-SEC)
 
 #include <Json.hpp>                        // the session record (plan 2, task 9) -- written OFF the crash path only
 
@@ -19,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>       // _set_abort_behavior, _set_invalid_parameter_handler, _set_purecall_handler
 #include <cstring>
+#include <cwchar>       // std::swprintf -- ReporterSettingsArgs
 #include <exception>     // set_terminate, current_exception, rethrow_exception
 #include <iterator>
 #include <new>           // std::bad_alloc -- the terminate handler's OOM arm
@@ -92,6 +99,7 @@ namespace
     // is still publishing it; a minimized host renders no frames at all, and its
     // frozen counter must read as "no data", not as a stall. Two seconds is ~120
     // frames of grace at 60Hz.
+    ARC_CONSTANT("a change would be a bug: the GPU freshness gate must trip before the stall rule; the window is DERIVED, min(2 s, diagnostics.gpuStallSeconds / 2)")
     constexpr double kGpuBeatFreshnessCapSeconds = 2.0;
 
     // The gate has to trip BEFORE the stall threshold could, or a host that
@@ -222,12 +230,19 @@ namespace
 
     // ---- crash thread -----------------------------------------------------
 
+    ARC_CONSTANT("crash-path capacity: a snapshotted path in UTF-8 bytes; the crash path cannot allocate or read cvars")
     constexpr std::size_t kPathMax    = 1024;   // UTF-8 bytes, generous vs MAX_PATH
+    ARC_CONSTANT("crash-path capacity: the crash reason text; the crash path cannot allocate or read cvars")
     constexpr std::size_t kReasonMax  = 1024;
+    ARC_CONSTANT("crash-path capacity: the walked stack frames; the crash path cannot allocate or read cvars")
     constexpr std::size_t kMaxFrames  = 96;
+    ARC_CONSTANT("crash-path capacity: the walked thread's text reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kSectionRsv = 32 * 1024;   // the walked thread's text
+    ARC_CONSTANT("crash-path capacity: the .txt header reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kHeaderRsv  = 8 * 1024;    // the .txt header
+    ARC_CONSTANT("crash-path capacity: one envelope's JSON reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kEnvRsv     = 64 * 1024;   // one envelope's JSON
+    ARC_CONSTANT("crash-path capacity: the lean envelope's JSON reservation; the crash path cannot allocate or read cvars")
     constexpr std::size_t kEnvLeanRsv = 8 * 1024;    // ...with the unbounded fields elided
     // Worst case 8 + 32 + (64 + 8) + (64 + 8) = 184 KiB of
     // CrashArena::kCapacity (256 KiB) -- both envelopes overrunning and
@@ -281,6 +296,7 @@ namespace
     // The injected third-party modules (R14): one rendered line for the .txt
     // and the base names for the envelope array. Guarded by its own mutex,
     // which the crash thread only ever TRY-locks.
+    ARC_CONSTANT("crash-path capacity: the injected-module list the crash thread renders without allocating")
     constexpr std::size_t kInjectedMax = 32;
     std::mutex  g_injectedMutex;
     bool        g_injectedScanned = false;
@@ -294,6 +310,15 @@ namespace
     wchar_t g_reporterExe[kPathMax]{};
     wchar_t g_productWide[128]{};
     wchar_t g_spawnCmd[8192]{};
+    // The reporter's settings flags (S6-4; ReporterSettingsArgs), formatted
+    // from the published settings at Install, at RetargetDumpDir and when a
+    // Live one publishes -- before the crash thread exists or under
+    // g_reportMutex, which it holds for a whole report. SpawnReporter appends
+    // the CURRENT buffer, so a Live change reaches the next crash reporter;
+    // the monitor (LaunchMonitor) was handed the buffer as it stood at its
+    // launch and keeps that tail for its lifetime -- it is not restarted for a
+    // settings change. The reporter has no registry of its own.
+    wchar_t g_reporterSettingsArgs[512]{};
 
     // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
     // so the reporter can OpenEventW it by name; the reporter handle is kept
@@ -364,27 +389,34 @@ namespace
     bool             g_walkedContextValid = false;
 #endif
 
+    // The host exe's folder (the default report dir's parent), or "." when
+    // the exe path is unknown.
+    [[nodiscard]] std::filesystem::path HostExeDir()
+    {
+        const std::string exe = ExecutablePathUtf8();
+        return exe.empty() ? std::filesystem::path(".") : std::filesystem::path(exe).parent_path();
+    }
+
     [[nodiscard]] std::filesystem::path ReportDir()
     {
+        // Beside the exe unless configured, never the CWD: the hosts are
+        // documented as cd-then-run, so a CWD-relative report is a report
+        // nobody finds. A configured dir that could break the reporter's
+        // command line falls back the same way (ReportDirFor, S7-SEC).
+        const std::filesystem::path dir = ReportDirFor(g_cfg.dumpDir, HostExeDir());
         std::error_code ec;
-        std::filesystem::path dir;
-
-        if (!g_cfg.dumpDir.empty())
-        {
-            dir = std::filesystem::path(g_cfg.dumpDir);
-        }
-        else
-        {
-            // Beside the exe, never the CWD: the hosts are documented as
-            // cd-then-run, so a CWD-relative report is a report nobody finds.
-            const std::string exe = ExecutablePathUtf8();
-            dir = exe.empty() ? std::filesystem::path(".")
-                              : std::filesystem::path(exe).parent_path();
-            dir /= "diagnostics";
-        }
-
         std::filesystem::create_directories(dir, ec);
         return dir;
+    }
+
+    // Install's and RetargetDumpDir's warning for a dumpDir ReportDirFor
+    // refused (S7-SEC fix round 1). Off the crash path.
+    void WarnIfDumpDirRefused()
+    {
+        std::string refusal;
+        (void)ReportDirFor(g_cfg.dumpDir, HostExeDir(), &refusal);
+        if (!refusal.empty())
+            ARC_WARN("Diagnostics: {}", refusal);
     }
 
     // Both stamp helpers write into a caller-supplied buffer: neither may
@@ -940,13 +972,19 @@ namespace
         mei.ExceptionPointers = ep;
         mei.ClientPointers    = FALSE;
 
-        // Not WithFullMemory: for a wedged GPU host that is hundreds of MB and
-        // takes long enough that the user gives up. This set keeps every
-        // thread's stack, the handle table (which lock is held -- the question a
-        // deadlock actually asks), and memory the stacks point at.
-        const auto type = static_cast<MINIDUMP_TYPE>(
+        // MinidumpKind::Default (diagnostics.minidumpKind): not WithFullMemory,
+        // which for a wedged GPU host is hundreds of MB and takes long enough
+        // that the user gives up. This set keeps every thread's stack, the
+        // handle table (which lock is held -- the question a deadlock actually
+        // asks), and memory the stacks point at. Full is the opt-in for deep
+        // debugging; Small is MiniDumpNormal.
+        MINIDUMP_TYPE type = static_cast<MINIDUMP_TYPE>(
             MiniDumpWithThreadInfo | MiniDumpWithHandleData |
             MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory);
+        if (g_cfg.minidumpKind == MinidumpKind::Small)
+            type = MiniDumpNormal;
+        else if (g_cfg.minidumpKind == MinidumpKind::Full)
+            type = static_cast<MINIDUMP_TYPE>(type | MiniDumpWithFullMemory | MiniDumpWithFullMemoryInfo);
 
         const BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
                                           type, ep ? &mei : nullptr, nullptr, nullptr);
@@ -1073,24 +1111,35 @@ namespace
             g_reporterProcess = nullptr;
         }
 
+        // The stem rides the line inside a plain quote wrap: a '"', CR or LF
+        // in it could add arguments of its own (the reporter honours
+        // --relaunch), and the crash thread may not call the allocating
+        // QuoteWindowsArg. ReportDirFor already refuses such a dumpDir at
+        // Install/RetargetDumpDir; this scan is the crash-thread backstop
+        // (S7-SEC fix round 1). No spawn: the caller says where the report is.
+        if (!ReporterStemSafe(stemUtf8)) return false;
+
         wchar_t wideStem[kPathMax];
         wchar_t wideKind[64];
         ToWide(stemUtf8, wideStem, static_cast<int>(kPathMax));
         ToWide(kind, wideKind, 64);
 
         _snwprintf_s(g_spawnCmd, sizeof(g_spawnCmd) / sizeof(g_spawnCmd[0]), _TRUNCATE,
-                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\" --host-created %llu%s%s%s",
+                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\" --host-created %llu%s%s%s%s",
                      g_reporterExe, wideStem,
                      static_cast<unsigned long>(GetCurrentProcessId()),
                      wideKind, g_productWide, g_hostCreated,
                      g_cfg.unattended ? L" --unattended" : L"",
                      (hangProtocol && g_recoveredEvent) ? L" --recovered-event " : L"",
-                     (hangProtocol && g_recoveredEvent) ? g_recoveredName : L"");
+                     (hangProtocol && g_recoveredEvent) ? g_recoveredName : L"",
+                     g_reporterSettingsArgs);
 
         STARTUPINFOW        si{};
         PROCESS_INFORMATION pi{};
         si.cb = sizeof(si);
-        if (!CreateProcessW(nullptr, g_spawnCmd, nullptr, nullptr, FALSE,
+        // lpApplicationName pins the exact binary Install checked
+        // (ReporterExeFor, S7-SEC): never re-parsed from the line, never searched.
+        if (!CreateProcessW(g_reporterExe, g_spawnCmd, nullptr, nullptr, FALSE,
                             CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
             return false;
         CloseHandle(pi.hThread);
@@ -1326,7 +1375,7 @@ namespace
             // faulting thread may have died holding spdlog's mutex), and the
             // hand-off.
             DumpBacklog(logTxtPath);
-            Log::FlushFileSinkBounded(2000);
+            Log::FlushFileSinkBounded(g_cfg.logFlushTimeoutMs);
             spawnOk = SpawnReporter(stem, kind, IsHangProtocolReport(kind, p.exitCode));
         }
 
@@ -1495,6 +1544,7 @@ namespace
     // __except and every vectored handler and is NONCONTINUABLE, so THIS
     // FILTER IS THE ONLY PLACE IN THE PROCESS THAT CAN SEE IT, and it can
     // only decide how to die -- never whether to.
+    ARC_CONSTANT("hardware/OS/API limit: the D3D12 debug layer's fail-fast exception code, defined by the API")
     constexpr DWORD kD3D12DebugLayerFailFast = 0x0000087dul;
 
     // MSVC's C++ exception code ('msc' | 0xE0000000). A `throw` that nothing
@@ -1504,6 +1554,7 @@ namespace
     // filter never gets to call terminate(). So the classification has to
     // live on both paths (see ActiveExceptionReason below), or every uncaught
     // exception -- an OOM included -- would be filed as a plain `crash`.
+    ARC_CONSTANT("hardware/OS/API limit: MSVC's C++ exception code ('msc' | 0xE0000000), defined by the toolchain")
     constexpr DWORD kMsvcCppException = 0xE06D7363ul;
 
     // Both defined with the fail-fast family below; ActiveExceptionReason is
@@ -2017,7 +2068,7 @@ namespace
 
         while (!g_watchdogStop.load(std::memory_order_acquire))
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::this_thread::sleep_for(std::chrono::milliseconds(g_cfg.watchdogPollMs));
 
 #if defined(_WIN32)
             // A breakpoint stops the main thread by design -- and with it every
@@ -2122,14 +2173,15 @@ namespace
         if (g_watchdogThread)
         {
             // BOUNDED, unlike the old join. The loop observes the stop flag
-            // within its 250 ms poll -- the same latency the join had -- but a
-            // watchdog that is mid-report may be parked on the crash thread
-            // for as long as crashHandlingTimeoutSeconds, and a teardown that
-            // blocks on that is a second hang nobody asked for. Five seconds
-            // covers a report that is actually writing. Past it the thread is
+            // within its poll (watchdogPollMs) -- the same latency the join had
+            // -- but a watchdog that is mid-report may be parked on the crash
+            // thread for as long as crashHandlingTimeoutSeconds, and a teardown
+            // that blocks on that is a second hang nobody asked for.
+            // watchdogJoinTimeoutMs (5 s by default) covers a report that is
+            // actually writing. Past it the thread is
             // ORPHANED, not abandoned: the handle moves to g_watchdogOrphan and
             // StartWatchdog refuses to run a second watchdog until it is gone.
-            if (WaitForSingleObject(g_watchdogThread, 5000) == WAIT_OBJECT_0)
+            if (WaitForSingleObject(g_watchdogThread, g_cfg.watchdogJoinTimeoutMs) == WAIT_OBJECT_0)
             {
                 CloseHandle(g_watchdogThread);
             }
@@ -2302,25 +2354,58 @@ namespace
         }
     }
 
+    // Why Install refused a configured reporter (S7-SEC), warned once the
+    // log sink is attached. Install's thread only.
+    std::string g_reporterRefusal;
+
     void ResolveReporterPath()
     {
-        std::filesystem::path exe;
-        if (!g_cfg.reporterPath.empty())
-        {
-            exe = std::filesystem::path(g_cfg.reporterPath);
-        }
-        else
-        {
-            const std::string self = ExecutablePathUtf8();
-            exe = (self.empty() ? std::filesystem::path(".")
-                                : std::filesystem::path(self).parent_path())
-                / "ArcaneCrashReporter.exe";
-        }
+        const std::string self = ExecutablePathUtf8();
+        const std::filesystem::path exeDir = self.empty() ? std::filesystem::path(".")
+                                                          : std::filesystem::path(self).parent_path();
+        g_reporterRefusal.clear();
+        const std::filesystem::path exe = ReporterExeFor(g_cfg.reporterPath, exeDir, &g_reporterRefusal);
 
         const std::wstring w = exe.wstring();
         const std::size_t n = w.size() < kPathMax - 1 ? w.size() : kPathMax - 1;
         std::wmemcpy(g_reporterExe, w.c_str(), n);
         g_reporterExe[n] = L'\0';
+    }
+
+    // S6-4: the reporter's settings, read from the published snapshot HERE
+    // (Install, RetargetDumpDir) so the crash thread only copies a buffer.
+    void SnapshotReporterSettingsArgs()
+    {
+        const std::wstring tail = ReporterSettingsArgs(Settings<DiagnosticsReporterSettings>(),
+                                                       Settings<DiagnosticsSettings>().logTailLines,
+                                                       Settings<UiSettings>().copyFlashSeconds);
+        wcsncpy_s(g_reporterSettingsArgs, tail.c_str(), _TRUNCATE);
+    }
+
+    // S6-4 carried gap (Live apply): diagnostics.logTailLines and
+    // ui.copyFlashSeconds are Live, so a change re-formats the tail for the
+    // NEXT spawn. Publish runs on the main thread; the lock is the one the
+    // crash thread holds for a whole report, so a report never reads a
+    // half-written buffer and the crash path still only copies it.
+    void OnReporterSettingPublished(CVarHandle, void*)
+    {
+        std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
+        SnapshotReporterSettingsArgs();
+    }
+
+    // S6-5 carried follow-up: attach the callback at every Install and
+    // RetargetDumpDir until BOTH cvars carry it -- a cvar not registered yet
+    // (an Install that ran before its TU's static init) is retried on the next
+    // call instead of being latched as watched. Dist compiles both Dev cvars
+    // out, so there nothing ever attaches and Install's snapshot stands.
+    std::mutex g_reporterWatchMutex;
+    bool       g_reporterWatchAttached[2]{};
+    void WatchLiveReporterSettings()
+    {
+        static constexpr std::string_view kNames[] = { "diagnostics.logTailLines", "ui.copyFlashSeconds" };
+        std::lock_guard<std::mutex> watchLock(g_reporterWatchMutex);
+        (void)AttachMissingCVarCallbacks(CVarRegistry::Get(), kNames, g_reporterWatchAttached,
+                                         &OnReporterSettingPublished, nullptr);
     }
 
     // ---- monitor mode (plan 2, task 9; spec S5.8, D15/D16) ----------------
@@ -2423,10 +2508,14 @@ namespace
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
         std::vector<unsigned char> attrStorage(attrSize);
         auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
-        std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
-                         + L" --host-handle ";
-        const std::wstring cmdTail = L" --session \"" + std::wstring(g_sessionPathWide) + L"\""
-                                   + (g_cfg.unattended ? L" --unattended" : L"");
+        // The exe and the session path go through QuoteWindowsArg (S7-SEC fix
+        // round 1): the session path is derived from diagnostics.dumpDir,
+        // which a project may suggest, so it is quoted by the rules the
+        // reporter's CommandLineToArgvW reads back, never by a plain wrap.
+        const MonitorCommand line = MonitorCommandFor(g_reporterExe, static_cast<unsigned long>(GetCurrentProcessId()),
+                                                      g_sessionPathWide, g_cfg.unattended, g_reporterSettingsArgs);
+        std::wstring cmd = line.head;
+        const std::wstring& cmdTail = line.tail;
         cmd.reserve(cmd.size() + 24 + cmdTail.size());
 
         HANDLE self = nullptr;
@@ -2439,10 +2528,9 @@ namespace
             return;
         }
 
-        // A path and three numbers: nothing here needs escaping (a Windows
-        // path cannot contain a double quote). The handle's digits go into
-        // the capacity reserved above, and swprintf writes them without
-        // allocating (at most 20 digits for a u64).
+        // The handle's digits go into the capacity reserved above, and
+        // swprintf writes them without allocating (at most 20 digits for a
+        // u64); the quoted parts were composed before the handle existed.
         wchar_t digits[24];
         _snwprintf_s(digits, std::size(digits), _TRUNCATE, L"%llu",
                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(self)));
@@ -2459,7 +2547,7 @@ namespace
                 si.StartupInfo.cb      = sizeof(si);
                 si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;   // all three null: see above
                 si.lpAttributeList     = attrs;
-                launched = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, /*bInheritHandles*/TRUE,
+                launched = CreateProcessW(g_reporterExe, cmd.data(), nullptr, nullptr, /*bInheritHandles*/TRUE,
                                           EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | DETACHED_PROCESS,
                                           nullptr, nullptr, &si.StartupInfo, &pi) != FALSE;
             }
@@ -2551,6 +2639,111 @@ const char* FormatReason(const char* fmt, ...) noexcept
     return t_reason;
 }
 
+Config ConfigFromSettings(const DiagnosticsSettings& s)
+{
+    Config c;
+    c.dumpDir                     = s.dumpDir;
+    c.hangSeconds                 = s.hangSeconds;
+    c.gpuStallSeconds             = s.gpuStallSeconds;
+    c.installCrashHandler         = s.installCrashHandler;
+    c.startHangWatchdog           = s.hangWatchdog;
+    c.reporterPath                = s.reporterPath;
+    c.spawnReporter               = s.spawnReporter;
+    c.exitSeconds                 = s.exitSeconds;
+    c.crashHandlingTimeoutSeconds = s.crashHandlingTimeoutSeconds;
+    c.minidumpKind                = s.minidumpKind;
+    c.logFlushTimeoutMs           = s.logFlushTimeoutMs;
+    c.watchdogPollMs              = s.watchdogPollMs;
+    c.watchdogJoinTimeoutMs       = s.watchdogJoinTimeoutMs;
+    c.minFatalWaitMs              = s.minFatalWaitMs;
+    c.logDir                      = Settings<LogSettings>().dir;
+    return c;
+}
+
+std::filesystem::path ReporterExeFor(std::string_view configured, const std::filesystem::path& exeDir, std::string* refusal)
+{
+    const std::filesystem::path bundled = exeDir / "ArcaneCrashReporter.exe";
+    if (configured.empty())
+        return bundled;
+    const std::filesystem::path exe(configured);
+    const LaunchPathStatus status = CheckLaunchPath(exe);
+    if (status == LaunchPathStatus::Ok)
+        return exe;
+    if (refusal)
+        *refusal = "diagnostics.reporterPath '" + std::string(configured) + "' " + std::string(LaunchPathStatusText(status))
+                 + "; the bundled reporter '" + bundled.string() + "' is used instead";
+    return bundled;
+}
+
+std::filesystem::path ReportDirFor(std::string_view configured, const std::filesystem::path& exeDir, std::string* refusal)
+{
+    const std::filesystem::path fallback = exeDir / "diagnostics";
+    if (configured.empty())
+        return fallback;
+    if (!HasCommandLineBreaker(configured))
+        return std::filesystem::path(std::string(configured));
+    if (refusal)
+        *refusal = "diagnostics.dumpDir '" + std::string(configured) + "' contains a quote or a line break, which the "
+                   "crash reporter's command line cannot carry; reports go to '" + fallback.string() + "' instead";
+    return fallback;
+}
+
+bool ReporterStemSafe(const char* stemUtf8) noexcept
+{
+    // std::string_view over a C string does not allocate, and '"', CR and LF
+    // are single bytes that never occur inside a UTF-8 multibyte sequence.
+    return stemUtf8 && stemUtf8[0] && !HasCommandLineBreaker(stemUtf8);
+}
+
+MonitorCommand MonitorCommandFor(const std::wstring& exe, unsigned long pid, const std::wstring& session,
+                                 bool unattended, std::wstring_view settingsArgs)
+{
+    MonitorCommand line;
+    line.head = QuoteWindowsArg(exe) + L" --monitor " + std::to_wstring(pid) + L" --host-handle ";
+    line.tail = L" --session " + QuoteWindowsArg(session) + (unattended ? L" --unattended" : L"")
+              + std::wstring(settingsArgs);
+    return line;
+}
+
+std::wstring ReporterSettingsArgs(const DiagnosticsReporterSettings& s, std::uint32_t logTailLines, double copyFlashSeconds)
+{
+    // One flag per ReporterArgs field, in the struct's order. 512 holds the
+    // widest line (every number at its maximum digits) with room to spare.
+    wchar_t buf[512];
+    const int n = std::swprintf(buf, std::size(buf),
+        L" --deadline %u --max-frames-thread %u --max-frames-fault %u --max-threads %u --dbgeng-wait-ms %u"
+        L" --log-tail %u --hang-log-tail %u --flush-ms %u --ui-poll-ms %u --window %ux%u --window-ready-ms %u --copy-flash %.17g",
+        s.deadlineSeconds, s.maxFramesPerThread, s.maxFramesFaultingThread, s.maxThreads, s.dbgengWaitMs,
+        logTailLines, s.hangLogTailLines, s.flushTimeoutMs, s.uiPollMs, s.windowWidth, s.windowHeight,
+        s.windowReadyMs, copyFlashSeconds);
+    return n > 0 ? std::wstring(buf, static_cast<std::size_t>(n)) : std::wstring{};
+}
+
+std::wstring CurrentReporterSettingsArgs()
+{
+#if defined(_WIN32)
+    std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
+    return std::wstring(g_reporterSettingsArgs);
+#else
+    return {};
+#endif
+}
+
+bool AttachMissingCVarCallbacks(CVarRegistry& reg, std::span<const std::string_view> names,
+                                std::span<bool> attached, void (*fn)(CVarHandle, void*), void* user)
+{
+    bool all = true;
+    for (std::size_t i = 0; i < names.size() && i < attached.size(); ++i)
+    {
+        if (attached[i]) continue;
+        const CVarHandle h = reg.Find(names[i]);
+        if (h.IsStale()) { all = false; continue; }
+        reg.AddCallback(h, fn, user);
+        attached[i] = true;
+    }
+    return all && names.size() <= attached.size();
+}
+
 void Install(const Config& cfg)
 {
     if (g_installed.exchange(true, std::memory_order_acq_rel)) return;
@@ -2622,7 +2815,15 @@ void Install(const Config& cfg)
     }
     SnapshotReportDir();
     ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
+    // The product name comes from the project's manifest and rides the
+    // reporter's command line as "--product \"<name>\"" (S7-SEC): a quote, a
+    // backslash (it would escape the closing quote) or a line break could add
+    // arguments of its own, so each becomes '_'. The reporter only shows it.
+    for (wchar_t& c : g_productWide)
+        if (c == L'"' || c == L'\\' || c == L'\r' || c == L'\n') c = L'_';
     ResolveReporterPath();
+    SnapshotReporterSettingsArgs();   // before ArmMonitor: the monitor's line carries them too
+    WatchLiveReporterSettings();      // ...and a Live change re-formats it for later spawns
 
     // The hang protocol's host half (plan 2, D11/D7), prepared here so the
     // crash thread only ever resets an existing event and prints a number.
@@ -2643,6 +2844,9 @@ void Install(const Config& cfg)
 
     // The engine log file sink, before anything that might want to warn.
     AttachLogSink();
+    if (!g_reporterRefusal.empty())
+        ARC_WARN("Diagnostics: {}", g_reporterRefusal);
+    WarnIfDumpDirRefused();
 
     // The module table the portable stack resolves against. Unfrozen first:
     // a report interrupted in a previous arming could otherwise have left it
@@ -2820,17 +3024,29 @@ void Shutdown() noexcept
 
 void RetargetDumpDir(const std::filesystem::path& dir)
 {
+#if defined(_WIN32)
+    // S6-5 carried follow-up: retry a watch an early Install could not attach
+    // (the registry is main-thread state, as is this call).
+    WatchLiveReporterSettings();
+#endif
     // Same lock RunReportOnCrashThread holds for its ENTIRE body -- a live
     // retarget from a host's main thread must never race a report the crash
     // thread is mid-way through writing.
     std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
     g_cfg.dumpDir = dir.string();
+    // A dir holding '"', CR or LF is refused for the default (ReportDirFor,
+    // S7-SEC fix round 1); say so once per retarget.
+    WarnIfDumpDirRefused();
 #if defined(_WIN32)
     // What the session record names until the rewrite below lands (R103).
     const std::string previousReportDir = g_reportDirSnap;
     // The crash path may not touch std::filesystem, so the new directory is
     // re-derived (and created) HERE and only the snapshot travels.
     SnapshotReportDir();
+    // S6-4: a project's own diagnostics.reporter.* / logTailLines /
+    // copyFlashSeconds rungs are applied by the time a host retargets onto
+    // it, so later crash spawns carry them. The monitor keeps its launch line.
+    SnapshotReporterSettingsArgs();
     // R5: a DERIVED log directory follows the reports, so a project's log
     // lands beside that project's crash reports. An explicit Config::logDir
     // is host state and never moves.
@@ -3027,9 +3243,7 @@ void SubmitReport(const ReportRequest& request) noexcept
     }
 
     const bool fatal = (request.exitCode != 0);
-    const std::uint32_t timeoutMs = g_cfg.crashHandlingTimeoutSeconds != 0
-                                  ? g_cfg.crashHandlingTimeoutSeconds * 1000u
-                                  : 60u * 1000u;
+    const std::uint32_t timeoutMs = g_cfg.crashHandlingTimeoutSeconds * 1000u;
     // ONE deadline for the lock AND the wait (plan 2, seam 2): plan 1 spent
     // the timeout twice in the worst case -- 60 s behind another submitter's
     // lock, then 60 s more on the crash thread -- and the spec's number is 60.
@@ -3048,8 +3262,9 @@ void SubmitReport(const ReportRequest& request) noexcept
     // the crash thread a real chance to finish. Defence in depth -- plan 1's R4
     // writes the MINIMAL envelope (portable stack included) before anything
     // that can wedge, so a kill mid-report already degrades the report rather
-    // than leaving an unparsable one.
-    constexpr DWORD kMinFatalWaitMs = 5000;
+    // than leaving an unparsable one. The floor is Config::minFatalWaitMs
+    // (diagnostics.minFatalWaitMs, 5 s by default).
+    const DWORD minFatalWaitMs = g_cfg.minFatalWaitMs;
 
     if (fatal)
     {
@@ -3096,8 +3311,8 @@ void SubmitReport(const ReportRequest& request) noexcept
         if (g_crashThread && g_crashEvent && g_handledEvent)
         {
             DWORD waitMs = remainingMs();
-            if (fatal && waitMs < kMinFatalWaitMs)
-                waitMs = kMinFatalWaitMs;
+            if (fatal && waitMs < minFatalWaitMs)
+                waitMs = minFatalWaitMs;
 
             ResetEvent(g_handledEvent);
             SetEvent(g_crashEvent);

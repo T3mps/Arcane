@@ -42,14 +42,14 @@ namespace Arcane
     // empty. Both are borrowed for the RenderFrame call, like FrameDesc::pickables.
     // A null context (the device-less declaration-shape drives) imports null
     // buffers, which the executor's barrier walk skips.
-    ARCANE_API GpuSceneNodeInputs AddGpuSceneSyncNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API GpuSceneNodeInputs AddGpuSceneSyncNode(RenderGraph& graph, NriGraphContext* context,
                                                        const GpuSceneFrame* frame,
                                                        std::span<const GpuInstance> adHoc);
 
     // TEST-ONLY (GpuScene::EnableDebugReadback): a Copy node that reads the
     // imported instances handle into GpuScene's HOST_READBACK buffer. Declared
     // by AddMeshNode after the mesh node, and only when the readback is armed.
-    ARCANE_API void AddGpuSceneDebugReadbackNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddGpuSceneDebugReadbackNode(RenderGraph& graph, NriGraphContext* context,
                                                  const GpuSceneNodeInputs& inputs);
 
     // OPT-IN (GpuScene::EnableVisibilityReadback, F3 plan 2 T5): a Copy node
@@ -62,7 +62,7 @@ namespace Arcane
     //
     // The RESULT is published later, by the graveyard, once this frame's fence
     // has retired -- never by a wait (GpuScene.hpp's ring block).
-    ARCANE_API void AddGpuSceneVisibilityReadbackNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddGpuSceneVisibilityReadbackNode(RenderGraph& graph, NriGraphContext* context,
                                                       const GpuSceneNodeInputs& inputs,
                                                       const GpuSceneFrame* frame);
 }

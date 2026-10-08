@@ -3,6 +3,7 @@
 // GpuFrameSlot). Same include-order rule as NriDevice.cpp/NriCommon.hpp
 // (nri::Message::ERROR vs wingdi.h's ERROR macro) -- NRI headers first.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRISwapChain.h>
 
 #include "NriSwapChain.hpp"
@@ -13,6 +14,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the device-lost teardown gate
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.allowTearing
 #include <Arcane/Platform/Window.hpp>
 
 #include <SDL3/SDL_timer.h>
@@ -36,7 +38,9 @@ namespace Arcane
         // helper.
         // ---------------------------------------------------------------
 
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr Uint64 kFencePollSleepNs = 1'000'000;         // 1ms, via SDL's high-resolution waitable timer -- NOT std::this_thread::sleep_for's ~15.6ms Windows quantum
+        ARC_CONSTANT("OS timer floor: the poll sleep/window; below the scheduling quantum a sleep degrades into a spin")
         constexpr std::chrono::seconds kFencePollWindow{ 15 };  // comfortably above Config::gpuStallSeconds' 8s default
 
         void PollingWaitForTimelineFence(const nri::CoreInterface& core, nri::Fence* fence, uint64_t value)
@@ -122,32 +126,35 @@ namespace Arcane
         desc.queue               = m_device->GraphicsQueue();
         desc.width               = (nri::Dim_t)m_width;
         desc.height              = (nri::Dim_t)m_height;
-        // kSwapchainFramesInFlight + 1: the textureNum shape NRISamples'
+        // FramesInFlight() + 1: the textureNum shape NRISamples'
         // NRIFramework recommends
         // (GetOptimalSwapChainTextureNum() == GetQueuedFrameNum() + 1) --
         // texture count strictly greater than frames-in-flight is also what
         // makes the recycled-by-frame-index acquire-fence indexing below
         // valid (NRISwapChain.h's usage comment: "valid if the number of
         // swap chain images >= queued frames").
-        desc.textureNum = kSwapchainFramesInFlight + 1;
+        desc.textureNum = FramesInFlight() + 1;
         // BT709_G22_8BIT: 8 bits/channel, gamma ~2.2, LDR, no HDR
         // reinterpretation -- an sRGB-nonlinear presentation class. See
         // Format()'s comment: NRI does not let a wrapper pin exact channel
         // order, only this abstract class -- the concrete nri::Format is
         // queried after creation, not assumed.
         desc.format = nri::SwapChainFormat::BT709_G22_8BIT;
-        // No ALLOW_TEARING: on D3D12 that means FLIP_DISCARD with
-        // DXGI_PRESENT_ALLOW_TEARING never passed. On Vulkan, leaving it unset
-        // means NRI's own present-mode search (SwapChainVK.hpp) tries MAILBOX
-        // first when not syncing, falling back to FIFO_LATEST_READY or FIFO if
-        // Mailbox is unavailable. Present-mode selection past what the VSYNC
-        // bit alone controls is deliberately not chased.
+        // ALLOW_TEARING only when render.allowTearing is on AND vsync is off
+        // (default off). Without it: on D3D12, FLIP_DISCARD with
+        // DXGI_PRESENT_ALLOW_TEARING never passed; on Vulkan, NRI's own
+        // present-mode search (SwapChainVK.hpp) tries MAILBOX first when not
+        // syncing, falling back to FIFO_LATEST_READY or FIFO if Mailbox is
+        // unavailable. Present-mode selection past what these two bits
+        // control is deliberately not chased.
         desc.flags = m_vsync ? nri::SwapChainBits::VSYNC : nri::SwapChainBits::NONE;
+        if (!m_vsync && Settings<RenderSettings>().allowTearing)
+            desc.flags |= nri::SwapChainBits::ALLOW_TEARING;
         // aka "frames in flight" per NRISwapChain.h -- keep DXGI's own
         // frame-latency machinery (SetMaximumFrameLatency, D3D12 non-WAITABLE
         // path) aligned with the depth our OWN timeline-fence pacing already
         // enforces, rather than leaving it at NRI's default.
-        desc.queuedFrameNum = (uint8_t)kSwapchainFramesInFlight;
+        desc.queuedFrameNum = (uint8_t)FramesInFlight();
 
         if (!ARC_NRI_CHECK(m_swapChainInterface.CreateSwapChain(m_device->Device(), desc, m_swapChain)) || !m_swapChain)
         {
@@ -246,7 +253,7 @@ namespace Arcane
         // unconditional ARC_WARN on the release path so the violation is
         // never silent in ANY config, matching Graveyard's own
         // debug-fatal/release-warn idiom (Graveyard.cpp's ~Graveyard()).
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         ARC_ASSERT(!m_acquired,
                     "NriSwapChain::Resize: called with an outstanding un-Presented "
                     "AcquireNextTexture() -- sequence Resize() at frame boundaries only");
@@ -315,12 +322,13 @@ namespace Arcane
             return m_textures[m_currentTextureIndex].texture;
 
         // Pacing wait: skip entirely (no call at all, not even a trivially-
-        // true one) for the first kSwapchainFramesInFlight frames, rather than
+        // true one) for the first FramesInFlight() frames, rather than
         // NRISamples' literal shape of always calling Wait() with a value of 0
         // for early frames.
-        if (m_frameCounter >= kSwapchainFramesInFlight)
+        const uint32_t framesInFlight = FramesInFlight();
+        if (m_frameCounter >= framesInFlight)
         {
-            const uint64_t waitValue = m_frameCounter - kSwapchainFramesInFlight + 1;
+            const uint64_t waitValue = m_frameCounter - framesInFlight + 1;
             PollingWaitForTimelineFence(m_device->Core(), m_frameFence, waitValue);
         }
 
@@ -328,8 +336,8 @@ namespace Arcane
         // the acquire fence handed to AcquireNextTexture must not still be in
         // flight, and NRISwapChain.h's own usage example indexes it exactly
         // this way ("recycledSemaphoreIndex = frameIndex % textureNum"),
-        // valid here because textureNum (kSwapchainFramesInFlight + 1) is
-        // strictly greater than kSwapchainFramesInFlight.
+        // valid here because textureNum (FramesInFlight() + 1) is
+        // strictly greater than FramesInFlight().
         const uint32_t recycled = (uint32_t)(m_frameCounter % m_textures.size());
         nri::Fence* acquireFence = m_textures[recycled].acquireFence;
 

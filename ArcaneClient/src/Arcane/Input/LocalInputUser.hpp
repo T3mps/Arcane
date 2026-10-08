@@ -19,7 +19,7 @@ namespace Arcane
 {
     // One gameplay input session for one running client. The host keeps its raw
     // snapshot and editor shortcut evaluator independently of this object.
-    class ARCANE_API LocalInputUser
+    class ARC_API LocalInputUser
     {
     public:
         LocalInputUser();

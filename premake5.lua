@@ -29,7 +29,7 @@ workspace "Arcane"
     filter {}
 
     -- C4251 ("needs to have dll-interface"): disabled workspace-wide, deliberately.
-    -- Every hit is an ARCANE_API class holding STL members. The warning exists for
+    -- Every hit is an ARC_API class holding STL members. The warning exists for
     -- DLL/client CRT-layout mismatches; this workspace's foundational rule is /MD
     -- everywhere + one toolset + one shared heap (memory crosses the
     -- ArcaneClient.dll/Game.dll boundary by design), so the mismatch it warns about is
@@ -37,6 +37,13 @@ workspace "Arcane"
     -- only exports) buy nothing under that contract; Unreal ships with 4251
     -- disabled engine-wide for the same reason.
     disablewarnings { "4251" }
+
+    -- Each module's own name, for the cvar registry's module capture (settings
+    -- spec s4.3/s4.4, O1): Arcane/Config/CVarModule.hpp stringizes it, so an
+    -- ARC_CVAR/ARC_COMMAND outside a plugin host's CVarModuleScope names the
+    -- module that declared it. Workspace scope, so every project -- engine,
+    -- hosts, tests, test plugins -- gets its own project name.
+    defines { "ARC_MODULE_NAME=%{prj.name}" }
 
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
     -- bin/ under its own dir) separate from the static-CRT flavors the
@@ -162,7 +169,7 @@ project "ArcaneCore"
     links { "enkiTS", "Manifold2D" }
 
     defines {
-        "ARCANE_CORE_BUILD_DLL",
+        "ARC_CORE_API_EXPORTS",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         "NOMINMAX",
@@ -181,18 +188,18 @@ project "ArcaneCore"
         links { "dbghelp", "user32", "gdi32" }
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -234,6 +241,8 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.glm}",            -- F2c Task 7: MeshImporter's bake math (node-transform
                                          -- composition, inverse-transpose normals, winding-flip
                                          -- cross/dot). Header-only -- no link.
+        "%{IncludeDir.Astra}",          -- settings arc S6-6: TextureMetaSettings is a reflected settings struct
+        "%{IncludeDir.Mosaic}",         -- ...and Astra's platform layer
     }
 
     defines {
@@ -247,18 +256,18 @@ project "ArcaneAssetPipeline"
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -297,6 +306,8 @@ project "arccook"
         -- CookSession.hpp pulls in TextureMetaSettings.hpp (a public
         -- ArcaneAssetPipeline header), which needs <Json.hpp>.
         "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.Astra}",      -- settings arc S6-6: TextureMetaSettings.hpp (reflected settings struct)
+        "%{IncludeDir.Mosaic}",     -- ...and Astra's platform layer
     }
 
     -- bc7enc_rdo: ArcaneAssetPipeline's TextureImporter calls into it for the BC7 encode
@@ -327,18 +338,18 @@ project "arccook"
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -408,18 +419,18 @@ project "arcbuild"
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -537,18 +548,18 @@ project "death-fixture"
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -643,9 +654,9 @@ project "ArcaneCrashReporter"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
 end   -- ArcaneCrashReporter: Windows target only
 
@@ -714,7 +725,7 @@ project "ArcaneClient"
     filter {}
 
     defines {
-        "ARCANE_BUILD_DLL",
+        "ARC_API_EXPORTS",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
@@ -749,7 +760,7 @@ project "ArcaneClient"
         libdirs { VCPKG_INSTALLED_MD .. "/lib" }
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
 
@@ -760,13 +771,13 @@ project "ArcaneClient"
         -- dispatch tables carry NDEBUG-gated layout risk, so a mismatch between
         -- ArcaneClient.dll and the statically-linked NRI causes a function-pointer
         -- lookup to read the wrong offset.
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -859,9 +870,9 @@ project "ArcaneServer"
         -- pressure ArcaneClient.dll's own /bigobj (above) exists for.
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
 
 -- ============================================================================
@@ -998,17 +1009,17 @@ project "ArcaneRuntime"
         -- without this. Same reason ArcaneServer/ArcaneEditor/ArcaneClient carry it.
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }                   runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }          runtime "Release" optimize "speed" symbols "off"
     filter {}
 
 -- ============================================================================
 -- Arcane Editor: the editor shell (ArcaneEditor.exe). Engine boot + RunLoop + PluginHost
 -- + ImGui docking shell. Hosts the open project's gameModule. Consumes the engine's
 -- host-boot helpers (Arcane::GpuContext/FramePerf/HostConfig, Arcane/Host/ --
--- exported ARCANE_API from ArcaneClient.dll, same as ArcaneRuntime) rather than source-
--- compiling its own copy. Consumes only ARCANE_API otherwise.
+-- exported ARC_API from ArcaneClient.dll, same as ArcaneRuntime) rather than source-
+-- compiling its own copy. Consumes only ARC_API otherwise.
 -- ============================================================================
 project "ArcaneEditor"
     location "ArcaneEditor"
@@ -1087,6 +1098,8 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         -- Task C (F2c debts): wipe the staged Content/Source/Verify subtrees before the
         -- whole-tree {COPYDIR} below re-populates them, same reasoning (and NOT-mirrored
         -- list -- Intermediate/, Saved/, Binaries/, the .arcproj, and any other non-source-of-
@@ -1145,9 +1158,9 @@ project "ArcaneEditor"
         -- references arcane.ico by name; resincludedirs points RC at its folder.
         files { "%{prj.location}/resources/ArcaneEditor.rc" }
         resincludedirs { "%{prj.location}/resources" }
-    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
-    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
 group ""
 
@@ -1178,7 +1191,7 @@ project "ArcaneTests"
         "%{prj.location}/src/**.hpp",
         -- HostConfig (the typed host CLI result over Arcane::Cli), GpuContext,
         -- FramePerf, and ProjectBoot all moved into Arcane/Host (ArcaneClient.dll,
-        -- ARCANE_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
+        -- ARC_API) alongside Module/Plugin/PluginHost (Arcane/Plugin) -- the
         -- test exe now consumes all of them via the "Arcane" link, not source-
         -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
@@ -1239,9 +1252,38 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
-        -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
+        -- editor.undo.* (T1-B10; S6-33): EditorUndoSettings + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
         "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
+        -- astra.snapshot.compression (S6-45 fix): the Editor setting + its push into Runtime::SetSnapshotSaveConfig.
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorSnapshotSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/InspectorSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiStyleSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorViewportSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/FontsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/LayoutLibrary.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/LayoutSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/LayoutPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
+        "%{wks.location}/ArcaneEditor/src/Input/EditorActionTable.cpp",
+        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportActions.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
@@ -1496,6 +1538,7 @@ project "ArcaneTests"
         -- main.cpp already establish.
         "%{wks.location}/ArcaneServer/src/ServerConfig.cpp",
         "%{wks.location}/ArcaneServer/src/ServerReport.cpp",
+        "%{wks.location}/ArcaneServer/src/ServerAdminConsole.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/
@@ -1622,6 +1665,18 @@ project "ArcaneTests"
         -- (its pure halves here; the cell joins in T2-B2). InspectorView's
         -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
+        -- Settings arc S3: the settings windows' model/edit/apply/rows/window/host/pages, driven headless by the [settings-ui] units.
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsModel.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsEdit.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsApply.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsRows.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsWindow.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/SettingsHost.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/ProjectSettingsPage.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorRestart.cpp",
+        -- S6-5: assets.sprite.* (Editor audience), read by SpriteDocument::NewSpriteData above.
+        "%{wks.location}/ArcaneEditor/src/Settings/AssetsSpriteSettings.cpp",
+        "%{wks.location}/ArcaneEditor/src/Settings/EditorPerfSettings.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
@@ -1756,8 +1811,23 @@ project "ArcaneTests"
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/EditorThemes"',
+        '{COPYDIR} "%{wks.location}/data/EditorThemes" "%{cfg.buildtarget.directory}/data/EditorThemes"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/fonts"',
         '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/fonts/Roboto-Regular.ttf"',
+        -- The editor's bundled fonts at the editor's exe-relative paths, so
+        -- EditorFontsTest's InstallEditorFonts falls back to the real bundled
+        -- faces (mirrors ArcaneEditor's font lines).
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/jetbrainsmono"',
+        '{COPYFILE} "%{wks.location}/data/font/inter/static/Inter_18pt-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/inter/static/Inter_18pt-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/roboto/static/Roboto-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/roboto/static/Roboto-Regular.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
+        '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
@@ -1841,7 +1911,7 @@ project "ArcaneTests"
         links { "ws2_32", "d3d12", "dxgi", "dxguid" }
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
         -- /Zi, not /ZI (input-seam gate): under Edit and Continue MSVC spells
@@ -1854,13 +1924,13 @@ project "ArcaneTests"
         editandcontinue "Off"
 
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
 
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
@@ -1873,7 +1943,7 @@ project "ArcaneTests"
 -- so a module links BOTH engine import libs, exactly as build/arcane.lua does
 -- for a real game module (spec 2026-09-15 s1.2).
 -- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
--- Built ON Arcane/Plugin/GameModule.hpp (ARCANE_GAME_MODULE_ABI) -- the macro's plugin test vehicle.
+-- Built ON Arcane/Plugin/GameModule.hpp (ARC_GAME_MODULE_ABI) -- the macro's plugin test vehicle.
 -- ============================================================================
 local function test_plugin(name, defs)
     project(name)
@@ -1908,9 +1978,9 @@ local function test_plugin(name, defs)
             systemversion "latest"
             buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }   -- /utf-8: spdlog/fmt via Log.hpp, as arcane.lua sets
             fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-        filter "configurations:Debug"   defines { "ARCANE_DEBUG" }                    runtime "Debug"   symbols "on"
-        filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
-        filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
+        filter "configurations:Debug"   defines { "ARC_BUILD_DEBUG" }                    runtime "Debug"   symbols "on"
+        filter "configurations:Release" defines { "ARC_BUILD_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
+        filter "configurations:Dist"    defines { "ARC_BUILD_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
         filter {}
 end
 
@@ -1966,9 +2036,9 @@ project "ReferenceGameUnderTest"
         -- header codegen shared across the DLL boundary must agree).
         buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
         fatalwarnings { "4715" }
-    filter "configurations:Debug"   defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
-    filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"   defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release" defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"    defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
 
 -- ============================================================================
@@ -2019,9 +2089,9 @@ project "TemplateSmokePlugin"
         -- header codegen shared across the DLL boundary must agree).
         buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
         fatalwarnings { "4715" }
-    filter "configurations:Debug"   defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
-    filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
-    filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter "configurations:Debug"   defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release" defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"    defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
 
 group ""

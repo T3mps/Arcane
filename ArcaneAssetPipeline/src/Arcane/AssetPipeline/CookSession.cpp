@@ -4,6 +4,8 @@
 #include "Arcane/AssetPipeline/ArtifactStore.hpp"
 #include "Arcane/AssetPipeline/CookKey.hpp"
 
+#include <Arcane/Core/Constant.hpp>
+
 #include <Json.hpp>
 
 #include <algorithm>
@@ -195,6 +197,7 @@ namespace Arcane::AssetPipeline
         // cook key already encodes which kind's importer/settings produced it, and this
         // file only ever reads/writes by key, never by kind.
 
+        ARC_CONSTANT("file format: a cook key (u64) as 16 hex digits in memo file names")
         constexpr std::size_t kHexDigits = 16;
 
         std::string ToHex16(std::uint64_t v)
@@ -317,7 +320,8 @@ namespace Arcane::AssetPipeline
                 {
                 case CookKind::Texture:
                 {
-                    textureSettings = TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                    textureSettings = TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey),
+                                                                        m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, textureSettings, kTextureImporterVersion);
                     break;
                 }
@@ -520,7 +524,7 @@ namespace Arcane::AssetPipeline
                 case CookKind::Texture:
                 {
                     const TextureMetaSettings settings =
-                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey), m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, settings, kTextureImporterVersion);
                     break;
                 }
@@ -584,7 +588,7 @@ namespace Arcane::AssetPipeline
                 case CookKind::Texture:
                 {
                     const TextureMetaSettings settings =
-                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey));
+                        TextureMetaSettings::FromMetaJson(ReadMetaBlock(metaPath, kindEntry.metaBlockKey), m_textureDefaults);
                     cookKeyOpt = ComputeCookKey(*bytes, settings, kTextureImporterVersion);
                     break;
                 }

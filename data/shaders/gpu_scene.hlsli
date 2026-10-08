@@ -9,8 +9,8 @@
 // bytes land field-for-field with no cbuffer-style padding rules involved.
 // The matrices are COLUMN-MAJOR (dxc's default for both DXIL and SPIR-V,
 // and glm::mat4's memory layout), same as mesh.hlsl's own MATRIX PACKING note.
-#ifndef ARCANE_GPU_SCENE_HLSLI
-#define ARCANE_GPU_SCENE_HLSLI
+#ifndef ARC_GPU_SCENE_HLSLI
+#define ARC_GPU_SCENE_HLSLI
 
 struct GpuInstance
 {

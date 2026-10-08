@@ -28,13 +28,16 @@
 #include <span>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Serialization
 {
     using SnapshotResult = Astra::Result<std::vector<std::byte>, Astra::SerializationError>;
 
     // 'A','R','S','S' as little-endian bytes; bumps if the frame layout changes.
+    ARC_CONSTANT("file format: the registry snapshot blob magic ('ARSS')")
     inline constexpr uint32_t kSnapshotMagic   = 0x53535241u;
+    ARC_CONSTANT("file format: the registry snapshot blob version")
     inline constexpr uint16_t kSnapshotVersion = 1u;
 
     // Byte offset where the registry blob begins: magic(4) + version(2) + len(4).

@@ -22,8 +22,8 @@
 //    shrink every panel at 1920x1080. BuildDefaultLayout (EditorPanels.cpp)
 //    converts each target against the node's CURRENT size; the targets are
 //    clamped here so the central node keeps at least
-//    kDefaultCentralMinFraction of each axis at the build size (a 1280x720
-//    build must still be usable).
+//    LayoutFactorySettings::centralMinFraction of each axis at the build size
+//    (a 1280x720 build must still be usable).
 //  * The BAND's split (Asset Browser | Inspector 2) has NO central node on
 //    either side, so ImGui re-divides it by the children's SizeRef RATIO on
 //    every resize (its rule 4) -- a pixel target there only holds at the
@@ -32,23 +32,23 @@
 //    own saved layout behaves (its ini stores SizeRef 1144 / 392) -- so it
 //    is right at every size. The legacy upgrade's split of the browser's
 //    node shares the rule and the proportion.
-// Pure: unit-tested.
+// The numbers are the editor.layout.factory.* cvars (settings S6-32,
+// LayoutFactorySettings): BuildDefaultLayout reads the published snapshot
+// when it builds (Reset Layout, a first run), so a changed value shows at the
+// next Reset Layout. The maths below stays pure: unit-tested.
+
+#include "Settings/EditorPlaySettings.hpp"   // LayoutFactorySettings
 
 #include <algorithm>
 
 namespace Arcane::Editor
 {
-    inline constexpr float kDefaultInspectorWidthPx   = 380.0f;   // the main Inspector's column
-    inline constexpr float kDefaultOutlinerWidthPx    = 270.0f;
-    inline constexpr float kDefaultBottomBandPx       = 350.0f;   // the asset/console band's height
-    inline constexpr float kDefaultCentralMinFraction = 0.40f;    // the central node keeps >= 40% of each axis
-    // The band's browser : Inspector 2 proportion, from the user's layout at 1920x1080.
-    inline constexpr float kDefaultBandBrowserRefPx     = 1144.0f;
-    inline constexpr float kDefaultAssetsInspectorRefPx = 392.0f;
     // Inspector 2's share of the node it splits (the default's band, or the
     // legacy upgrade's browser node) -- DockBuilderSplitNode's ratio, as is.
-    inline constexpr float kDefaultAssetsInspectorBandFraction =
-        kDefaultAssetsInspectorRefPx / (kDefaultBandBrowserRefPx + kDefaultAssetsInspectorRefPx);
+    [[nodiscard]] inline float DefaultAssetsInspectorBandFraction(const LayoutFactorySettings& f)
+    {
+        return f.assetsInspectorRefPx / (f.browserRefPx + f.assetsInspectorRefPx);
+    }
 
     struct DefaultLayoutPixels
     {
@@ -58,19 +58,20 @@ namespace Arcane::Editor
     };
 
     // The central-adjacent geometry at a dockspace of `width` x `height`
-    // (Inspector 2 is not a pixel target: kDefaultAssetsInspectorBandFraction).
-    [[nodiscard]] inline DefaultLayoutPixels ComputeDefaultLayoutPixels(float width, float height)
+    // (Inspector 2 is not a pixel target: DefaultAssetsInspectorBandFraction).
+    [[nodiscard]] inline DefaultLayoutPixels ComputeDefaultLayoutPixels(float width, float height,
+                                                                       const LayoutFactorySettings& f)
     {
         DefaultLayoutPixels px;
         // Width: Inspector + Outliner may take at most (1 - min) of it; over
         // that, both shrink by the same factor (their proportion kept).
-        const float sideMax = width * (1.0f - kDefaultCentralMinFraction);
-        const float sides = kDefaultInspectorWidthPx + kDefaultOutlinerWidthPx;
+        const float sideMax = width * (1.0f - f.centralMinFraction);
+        const float sides = f.inspectorWidth + f.outlinerWidth;
         const float sideScale = sides > sideMax ? sideMax / sides : 1.0f;
-        px.inspector = kDefaultInspectorWidthPx * sideScale;
-        px.outliner  = kDefaultOutlinerWidthPx * sideScale;
+        px.inspector = f.inspectorWidth * sideScale;
+        px.outliner  = f.outlinerWidth * sideScale;
         // Height: the bottom band may take at most (1 - min) of it.
-        px.bottomBand = std::min(kDefaultBottomBandPx, height * (1.0f - kDefaultCentralMinFraction));
+        px.bottomBand = std::min(f.bottomBand, height * (1.0f - f.centralMinFraction));
         return px;
     }
 }

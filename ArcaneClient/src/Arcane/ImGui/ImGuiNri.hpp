@@ -84,7 +84,7 @@
 //   * one pipeline layout registered in the shared NriPipelineCache:
 //     ROOT CONSTANTS b0 (16 bytes, VERTEX) + one space-0 descriptor set
 //     { t0 texture, s0 sampler } -- see THE ROOT-CONSTANT FINDING below;
-//   * a GROWING CHAIN of descriptor pools (PoolCapacityFor sizes each link),
+//   * a GROWING CHAIN of descriptor pools (LinkCapacity sizes each link),
 //     handing out ONE SET PER TEXTURE (never per frame slot: a set here is
 //     written exactly once, at the moment its texture is first seen, and
 //     never rewritten while the GPU might read it -- the same discipline
@@ -120,6 +120,7 @@
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
 // <windows.h>, via spdlog, #defines ERROR).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -137,7 +138,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API ImGuiNri
+    class ARC_API ImGuiNri
     {
     public:
         ImGuiNri() = default;
@@ -304,35 +305,43 @@ namespace Arcane
         // draw that named it.
         //
         // SO THE CAPACITY GROWS INSTEAD. When the newest pool is full,
-        // AcquireSet creates another, sized by PoolCapacityFor(its index):
-        // kFirstPoolSets, doubling per link, clamped at kMaxPoolSets. Earlier
+        // AcquireSet creates another, sized by LinkCapacity(its index):
+        // render.imgui.firstPoolSets, doubling per link, clamped at
+        // render.imgui.maxPoolSetsPerLink (both Restart, latched by Init). Earlier
         // pools are never destroyed before Release -- their sets are live or
         // retired, and a retired set is RECYCLED (m_retired) before any pool
         // grows, so the chain tracks the PEAK concurrent texture count, not
         // the lifetime one.
         //
-        // WHY kMaxPoolSets CLAMPS A LINK (not the total): on D3D12 every pool
-        // owns its own shader-visible heaps, and a shader-visible SAMPLER heap
-        // may hold at most 2048 descriptors; each set here takes one sampler
-        // slot. 1024 keeps every link comfortably inside that limit while
-        // still meaning a pathological count needs only a handful of links.
+        // WHY maxPoolSetsPerLink CLAMPS A LINK (not the total): on D3D12 every
+        // pool owns its own shader-visible heaps, and a shader-visible SAMPLER
+        // heap may hold at most 2048 descriptors; each set here takes one
+        // sampler slot, so 2048 is the setting's ceiling. The 1024 default
+        // keeps every link comfortably inside that limit while still meaning
+        // a pathological count needs only a handful of links.
         //
         // WHAT A SECOND LINK COSTS AT RECORD TIME: RenderDrawData re-binds the
         // pool (CmdSetDescriptorPool -> ID3D12GraphicsCommandList::
         // SetDescriptorHeaps on D3D12; a no-op on Vulkan) whenever two
         // consecutive draws' sets live in different links. Geometric growth is
         // what keeps the link count -- and so that switching -- small.
-        static constexpr std::uint32_t kFirstPoolSets = 64;
-        static constexpr std::uint32_t kMaxPoolSets   = 1024;
-
-        // The set capacity of the `poolIndex`-th link of the chain. PURE (no
-        // device), which is what lets a non-[nri] case pin the growth policy.
-        [[nodiscard]] static constexpr std::uint32_t PoolCapacityFor(std::size_t poolIndex) noexcept
+        //
+        // The set capacity of the `poolIndex`-th link of a chain that starts
+        // at `firstPoolSets` and clamps at `maxPoolSets`. PURE (no device),
+        // which is what lets a non-[nri] case pin the growth policy.
+        [[nodiscard]] static constexpr std::uint32_t PoolCapacityFor(std::size_t poolIndex,
+                                                                     std::uint32_t firstPoolSets,
+                                                                     std::uint32_t maxPoolSets) noexcept
         {
-            std::uint32_t capacity = kFirstPoolSets;
-            for (std::size_t i = 0; i < poolIndex && capacity < kMaxPoolSets; ++i)
+            std::uint32_t capacity = firstPoolSets;
+            for (std::size_t i = 0; i < poolIndex && capacity < maxPoolSets; ++i)
                 capacity *= 2u;
-            return capacity < kMaxPoolSets ? capacity : kMaxPoolSets;
+            return capacity < maxPoolSets ? capacity : maxPoolSets;
+        }
+        // PoolCapacityFor over the caps this backend latched at Init.
+        [[nodiscard]] std::uint32_t LinkCapacity(std::size_t poolIndex) const noexcept
+        {
+            return PoolCapacityFor(poolIndex, m_firstPoolSets, m_maxPoolSets);
         }
 
         // Introspection for the [nri] tests and the node's logging. Not part
@@ -347,7 +356,7 @@ namespace Arcane
         [[nodiscard]] bool HasEntryFor(nri::Texture* texture) const noexcept;
         // Descriptor sets evicted but not yet recycled. NRI cannot free a
         // single set, so a disposed entry's set lands here for
-        // kSwapchainFramesInFlight recorded frames rather than being destroyed
+        // FramesInFlight() recorded frames rather than being destroyed
         // -- this is what proves a disposal took the RETIREMENT path.
         [[nodiscard]] std::size_t RetiredSetCount() const noexcept { return m_retired.size(); }
 
@@ -399,7 +408,7 @@ namespace Arcane
         // but only once the submission that last bound it has retired, which
         // is the same pacing argument every per-frame-slot resource on this
         // path rests on: frame N's record happens after frame
-        // N - kSwapchainFramesInFlight completed (the wait inside
+        // N - FramesInFlight() completed (the wait inside
         // NriSwapChain::AcquireNextTexture).
         struct RetiredSet
         {
@@ -410,7 +419,7 @@ namespace Arcane
 
         bool CreateSampler();
         bool CreateLayout();
-        // Appends one link, sized PoolCapacityFor(m_pools.size()). Init calls
+        // Appends one link, sized LinkCapacity(m_pools.size()). Init calls
         // it once (so a device that cannot make even one pool fails at boot);
         // AcquireSet calls it whenever the newest link is full.
         bool CreatePool();
@@ -442,6 +451,7 @@ namespace Arcane
         // One shared cache, so every node's opaque shader-pair id space must
         // stay disjoint: Batch2DNode 0x2000+, TonemapNode 0x3000, the outline
         // passes 0x4000-0x4002, PickNode 0x4100. ImGui takes 0x5000.
+        ARC_CONSTANT("id scheme: the ImGui shader-pair id")
         static constexpr std::uint64_t kShaderPairId = 0x5000;
 
         NriDevice*        m_device    = nullptr;
@@ -464,6 +474,9 @@ namespace Arcane
         // The pool chain, oldest first. Only the LAST link can have room: a
         // new one is appended only once the previous is full.
         std::vector<PoolLink> m_pools;
+        // render.imgui.firstPoolSets / .maxPoolSetsPerLink, latched by Init.
+        std::uint32_t         m_firstPoolSets = 0;
+        std::uint32_t         m_maxPoolSets   = 0;
 
         std::vector<Entry>      m_textures;
         std::vector<RetiredSet> m_retired;

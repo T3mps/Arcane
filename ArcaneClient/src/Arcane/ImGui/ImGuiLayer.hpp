@@ -26,7 +26,7 @@ namespace Arcane
 {
     class Window;
 
-    class ARCANE_API ImGuiLayer
+    class ARC_API ImGuiLayer
     {
     public:
         // Window must outlive the layer (the layer taps its events, and the

@@ -24,7 +24,7 @@ namespace Arcane
     // Every nri call that returns nri::Result goes through this. Logs the
     // failing expression + result name at ERROR and bumps RenderErrorCount
     // (the 0/0 gate latch), returns false on failure. Never throws.
-    ARCANE_API bool NriCheckImpl(nri::Result result, const char* expr, const char* file, int line);
+    ARC_API bool NriCheckImpl(nri::Result result, const char* expr, const char* file, int line);
     #define ARC_NRI_CHECK(expr) ::Arcane::NriCheckImpl((expr), #expr, __FILE__, __LINE__)
 
     // Install into DeviceCreationDesc/wrapper descs: routes NRI's
@@ -32,8 +32,8 @@ namespace Arcane
     // RenderErrorCount. Feeds the ONE gate every render-layer error producer
     // feeds (Render/RenderErrorLatch.hpp -- see NriCommon.cpp's
     // RouteNriError).
-    ARCANE_API nri::CallbackInterface MakeNriCallbacks() noexcept;
+    ARC_API nri::CallbackInterface MakeNriCallbacks() noexcept;
 
     // One INFO line: nriVersion + which backend + validation on/off.
-    ARCANE_API void LogNriIdentity(nri::Device& device);
+    ARC_API void LogNriIdentity(nri::Device& device);
 }

@@ -4,6 +4,7 @@
 // Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and <windows.h>
 // (via Arcane/Base/Log.hpp -> spdlog) #defines ERROR via wingdi.h.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include "NriDiagnostics.hpp"
 
@@ -18,8 +19,9 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>
 #include <Arcane/Render/IGpuCrashBackend.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderShaderSettings.hpp>
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     #include <Arcane/Render/GpuFaultInjector.hpp>   // kPassName -- ONE spelling of the breadcrumb both arms produce
     #include <Arcane/Render/ShaderConventions.hpp>  // kCsEntry -- the entry name the artifact was compiled with
     #include <Arcane/Render/ShaderPaths.hpp>        // ResolveFlavorDir -- the ONE artifact directory every shader loader resolves through
@@ -339,7 +341,7 @@ namespace Arcane
     }
 }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
 
 namespace Arcane
 {
@@ -368,14 +370,19 @@ namespace Arcane
         // ReportMessage aborted the process before the injector could ever
         // dispatch. The shader reads only the first 16 bytes; the rest is
         // zero-filled padding.
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultCBSize       = 256u;
         static_assert(sizeof(FaultCB) <= kFaultCBSize,
                       "the fault constant buffer must fit in one 256-byte CBV window");
 
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultSinkElements = 256u;
         constexpr std::uint32_t kFaultSinkStride   = sizeof(std::uint32_t);
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultThreadGroups = 256u;
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultIterations   = 0xFFFFFFFFu;
+        ARC_CONSTANT("test-only fault injection: chosen to guarantee a TDR or out-of-bounds fault")
         constexpr std::uint32_t kFaultOobElement   = 1u << 30;
 
         // The artifact stem + the directory literal every shader loader in
@@ -826,15 +833,16 @@ namespace Arcane
             // The budget is generous on purpose (observed 15.9 s here; TdrDelay
             // is machine-configurable) and bounded on purpose (a `--crash-gpu`
             // that somehow did NOT kill the device must not wedge the host).
-            // This whole function is `#if !defined(ARCANE_DIST)` and only runs
+            // This whole function is `#if !defined(ARC_BUILD_DIST)` and only runs
             // under an explicit `--crash-gpu`, so a multi-second poll costs
             // nothing anyone ships. The hang watchdog WILL file a report while
             // we sit here -- vulkan's arm already does exactly that at ~12 s
             // and the battery already expects it.
             if (device.Backend() == GraphicsBackend::D3D12 && !GpuDeviceLostObserved())
             {
-                constexpr auto kRemovalBudget = std::chrono::seconds(45);
-                constexpr auto kRemovalPoll   = std::chrono::milliseconds(50);
+                const DiagnosticsGpuFaultSettings& fault = Settings<DiagnosticsGpuFaultSettings>();
+                const auto kRemovalBudget = std::chrono::seconds(fault.removalBudgetSeconds);
+                const auto kRemovalPoll   = std::chrono::milliseconds(fault.removalPollMs);
 
                 void* const nativeDev = core.GetDeviceNativeObject
                                             ? core.GetDeviceNativeObject(&device.Device())
@@ -881,4 +889,4 @@ namespace Arcane
     }
 }
 
-#endif   // !ARCANE_DIST
+#endif   // !ARC_BUILD_DIST

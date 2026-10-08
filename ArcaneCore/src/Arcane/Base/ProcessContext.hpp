@@ -26,7 +26,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr/SystemFactoryTable members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_CORE_API ProcessContext
+    class ARC_CORE_API ProcessContext
     {
     public:
         [[nodiscard]] static std::unique_ptr<ProcessContext> Create(ProcessContextDesc desc);

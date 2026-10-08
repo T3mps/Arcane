@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -21,7 +22,7 @@ namespace Arcane
     // never treat it as a mismatch.
     enum class CrtFlavor : std::uint8_t { Unknown, Release, Debug };
 
-    class ARCANE_CORE_API Module
+    class ARC_CORE_API Module
     {
     public:
         Module() = default;
@@ -63,6 +64,15 @@ namespace Arcane
         [[nodiscard]] static CrtFlavor DetectCrtFlavorFromImage(const unsigned char* data, std::size_t size,
                                                                 std::string* matchedImport = nullptr) noexcept;
 
+        // True when an image `path` names is ALREADY mapped in this process --
+        // a bare file name matches by base name, a path by its full path -- so
+        // a Load() of it bumps the loader's reference and runs NO static
+        // initializer. Plugin::Load asks before it loads: a refused image that
+        // was already mapped (an engine DLL named as a plugin by mistake) owns
+        // none of the registrations under its stem, and must not drop the live
+        // owner's. Never throws; false on any failure.
+        [[nodiscard]] static bool IsMapped(const std::filesystem::path& path) noexcept;
+
         void* Symbol(const char* name) const noexcept;
         void Unload() noexcept;
 
@@ -84,6 +94,29 @@ namespace Arcane
             std::size_t size = 0;
         };
         [[nodiscard]] ImageSpan Image() const noexcept;
+
+        struct MappedModule
+        {
+            std::filesystem::path path;
+            ImageSpan             image;
+        };
+        // Snapshot every image currently mapped in this process. PluginHost
+        // diffs this around each load so dependency DLLs that ran registration
+        // statics can be disowned before the load session releases them.
+        // Windows-only; empty elsewhere (no dependency is then tracked).
+        [[nodiscard]] static std::vector<MappedModule> MappedModules() noexcept;
+        // Take a loader reference on the ALREADY-mapped image `mapped` names,
+        // located by its base address (not its path, so a renamed or
+        // differently-pathed DLL is still the one image). Nothing is loaded and
+        // no initializer runs; destroying the returned Module drops exactly that
+        // reference. nullopt when no image is mapped at that base any more, and
+        // always on non-Windows.
+        [[nodiscard]] static std::optional<Module> PinMapped(const MappedModule& mapped) noexcept;
+        // The image span of a module `path` already mapped in this process, or
+        // `{nullptr, 0}` when it is not. Plugin::Load compares this to the
+        // span after Load() so a refused already-mapped engine DLL is not
+        // mistaken for a fresh image whose statics this Load ran.
+        [[nodiscard]] static ImageSpan MappedImage(const std::filesystem::path& path) noexcept;
 
     private:
         using NativeHandle = void*;

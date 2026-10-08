@@ -5,9 +5,11 @@
 
 namespace Arcane::Editor
 {
-    CookQueue::CookQueue(std::filesystem::path projectDir, SubmitFn submit)
+    CookQueue::CookQueue(std::filesystem::path projectDir, SubmitFn submit,
+                         const Arcane::AssetPipeline::TextureMetaSettings& textureDefaults)
         : m_projectDir(std::move(projectDir))
         , m_submit(std::move(submit))
+        , m_textureDefaults(textureDefaults)
     {
     }
 
@@ -61,6 +63,17 @@ namespace Arcane::Editor
         m_submit([this] { RunOnePass(); });
     }
 
+    void CookQueue::SetTextureDefaults(const Arcane::AssetPipeline::TextureMetaSettings& defaults)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (defaults == m_textureDefaults)
+                return;
+            m_textureDefaults = defaults;
+        }
+        NoteChanged();
+    }
+
     bool CookQueue::CookPending() const
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -78,6 +91,10 @@ namespace Arcane::Editor
         // change.
         for (;;)
         {
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_session.SetTextureDefaults(m_textureDefaults);   // S6-6: this pass's project defaults
+            }
             Arcane::AssetPipeline::CookResult result = m_session.CookProject(m_projectDir);
 
             std::lock_guard<std::mutex> lock(m_mutex);

@@ -7,12 +7,12 @@
 //
 //   - ReferenceProject's game sources and every editor C++ template render:
 //     OUTSIDE COMMENTS only (ScanMode::CommentsOnly). An #include of a
-//     library header, a #define, a string literal or an ARCANE_INTERNAL fence
+//     library header, a #define, a string literal or an ARC_INTERNAL fence
 //     in game code is exactly the leak the guard exists to catch.
 //   - The 15 headers a game module reads (kGameFacingHeaders): PUBLIC
 //     DECLARATIONS only (ScanMode::PublicDeclarations) -- comments, string
 //     literals, preprocessor directives (incl. #define continuations) and
-//     `// ARCANE_INTERNAL_BEGIN: <why>` ... `// ARCANE_INTERNAL_END` fences are
+//     `// ARC_INTERNAL_BEGIN: <why>` ... `// ARC_INTERNAL_END` fences are
 //     exempt, since the engine includes and implements on the libraries.
 
 #include <catch2/catch_test_macros.hpp>
@@ -59,7 +59,7 @@ namespace
 
     // Line-oriented scan. Comments are always stripped; PublicDeclarations also
     // strips string literals, preprocessor directives (+ continuations) and
-    // ARCANE_INTERNAL fences. CommentsOnly still parses string literals (so a
+    // ARC_INTERNAL fences. CommentsOnly still parses string literals (so a
     // "//" inside one is not read as a comment) but keeps their contents.
     std::vector<Hit> Scan(const std::string& where, const std::string& text, ScanMode mode)
     {
@@ -76,8 +76,8 @@ namespace
             if (!raw.empty() && raw.back() == '\r') raw.pop_back();
             if (decl)
             {
-                if (raw.find("ARCANE_INTERNAL_BEGIN") != std::string::npos) { inFence = true;  continue; }
-                if (raw.find("ARCANE_INTERNAL_END")   != std::string::npos) { inFence = false; continue; }
+                if (raw.find("ARC_INTERNAL_BEGIN") != std::string::npos) { inFence = true;  continue; }
+                if (raw.find("ARC_INTERNAL_END")   != std::string::npos) { inFence = false; continue; }
                 if (inFence) continue;
                 if (inDefine) { inDefine = !raw.empty() && raw.back() == '\\'; continue; }
             }
@@ -145,9 +145,9 @@ namespace
         "#include <Manifold2D/Physics/PhysicsWorld.hpp>\n"
         "#define M(x) \\\n"
         "    Astra::Thing(x)\n"
-        "// ARCANE_INTERNAL_BEGIN: test\n"
+        "// ARC_INTERNAL_BEGIN: test\n"
         "Astra::Registry hidden;\n"
-        "// ARCANE_INTERNAL_END\n"
+        "// ARC_INTERNAL_END\n"
         "Arcane::Registry fine;\n"
         "Astra::Registry leaked;\n";
 }
@@ -165,7 +165,7 @@ TEST_CASE("guard: comments-only mode flags includes, #define continuations, stri
     std::vector<int> lines;
     for (const Hit& h : hits) lines.push_back(h.line);
     // 2 = string, 3 = #include <Manifold2D/...>, 5 = #define continuation,
-    // 7 = inside an ARCANE_INTERNAL fence, 10 = plain code. Comments (1, 6, 8) stay exempt.
+    // 7 = inside an ARC_INTERNAL fence, 10 = plain code. Comments (1, 6, 8) stay exempt.
     CHECK(lines == std::vector<int>{ 2, 3, 5, 7, 10 });
 
     // A "//" inside a string is not a comment start: the token after it still counts.

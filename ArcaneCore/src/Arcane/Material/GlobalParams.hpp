@@ -9,19 +9,25 @@
 // %{MATERIAL_CBUFFER} block the template stitcher emits.
 
 #include <cstdint>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
     // cbuffer register assignments shared by every material template.
+    ARC_CONSTANT("shader contract: cbuffer Material is register(b0) in the material shaders")
     inline constexpr std::uint32_t kMaterialCbSlot = 0;   // cbuffer Material : register(b0)
+    ARC_CONSTANT("shader contract: cbuffer Globals is register(b1) in the material shaders")
     inline constexpr std::uint32_t kGlobalCbSlot   = 1;   // cbuffer Globals  : register(b1)
 
     // Sprite-surface register map (sprite_material.hlsl, Slice 8): the batcher's
     // push constants own b0 and the sprite's own texture owns t0, so material
     // params shift up one slot. The template declares MaterialSampler (s0)
     // itself -- the generated bindings block must not re-declare it.
+    ARC_CONSTANT("shader contract: the sprite material's cbuffer Material is register(b1)")
     inline constexpr std::uint32_t kSpriteMaterialCbSlot      = 1;   // cbuffer Material : register(b1)
+    ARC_CONSTANT("shader contract: the sprite material's cbuffer Globals is register(b2)")
     inline constexpr std::uint32_t kSpriteGlobalCbSlot        = 2;   // cbuffer Globals  : register(b2)
+    ARC_CONSTANT("shader contract: the sprite material's declared textures start at t1")
     inline constexpr std::uint32_t kSpriteMaterialTextureBase = 1;   // declared textures at t1..
 
     struct GlobalParams

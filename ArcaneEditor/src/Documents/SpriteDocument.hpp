@@ -152,6 +152,10 @@ namespace Arcane::Editor
         // The Texture row's cell: thumb + name + browse-to, READ-ONLY (v1:
         // reassigning goes through "Create Sprite" on another texture).
         static AssetRefArgs TextureRefArgs(const Arcane::SpriteAssetData& data);
+        // What a newly minted sprite holds (EditorApp's "Create Sprite"): a
+        // fresh id, `name`, the whole of `texture`, and ppu seeded from
+        // assets.sprite.defaultPixelsPerUnit (settings arc S6-5).
+        static Arcane::SpriteAssetData NewSpriteData(const Arcane::Guid& texture, std::string name);
 
     private:
         // The sprite page: the form, drawn by the Inspector instance showing

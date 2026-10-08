@@ -12,12 +12,19 @@
 // mapped onto Arcane's pin domain; Unity's vec3-yellow has no counterpart here
 // (no 3-lane pin), so that row of the reference table is absent rather than
 // mapped onto something it does not mean. Its texture row is spent on the PASS
-// canvas (kPinTextureColor, ShaderEditorDocument.cpp), not here.
+// canvas (editor.theme.graph.pinTexture), not here.
+//
+// The colours themselves are theme cvars (settings S6-27,
+// editor.theme.graph.pin*; Settings/GraphThemeSettings.hpp): PinColorForWidth
+// reads the published snapshot, so the canvas, the node page and the legend
+// follow an edit or a preset in the same frame.
 //
 // A DYNAMIC pin whose node has resolved (ResolveGraphNodeWidths -- the same
 // resolution codegen emits from) is painted in the colour of the width it
 // resolved to, plus a thin grey outer ring that says "adapts to its input".
-// An unresolved dynamic pin stays plain grey. Pure: no ImGui context needed.
+// An unresolved dynamic pin stays plain grey. No ImGui context needed.
+
+#include "Settings/GraphThemeSettings.hpp"
 
 #include <imgui.h>
 
@@ -28,19 +35,14 @@ namespace Arcane::Editor
 {
     // DISPLAY-REFERRED, like the rest of the canvas palette (ImGui draws
     // post-tonemap into the backbuffer).
-    inline constexpr ImVec4 kPinScalarColor  = ImVec4(0.502f, 0.808f, 1.0f,   1.0f); // pale azure
-    inline constexpr ImVec4 kPinVec2Color    = ImVec4(0.549f, 0.863f, 0.549f, 1.0f); // green
-    inline constexpr ImVec4 kPinVec4Color    = ImVec4(0.941f, 0.549f, 0.863f, 1.0f); // magenta
-    inline constexpr ImVec4 kPinDynamicColor = ImVec4(0.745f, 0.745f, 0.765f, 1.0f); // gray
-
-    [[nodiscard]] constexpr ImVec4 PinColorForWidth(int width) noexcept
+    [[nodiscard]] inline ImVec4 PinColorForWidth(int width)
     {
         switch (width)
         {
-            case 1:  return kPinScalarColor;
-            case 2:  return kPinVec2Color;
-            case 4:  return kPinVec4Color;
-            default: return kPinDynamicColor;   // 0 = adapts to what feeds it
+            case 1:  return GraphThemeColor(&GraphThemeSettings::pinScalar);
+            case 2:  return GraphThemeColor(&GraphThemeSettings::pinVec2);
+            case 4:  return GraphThemeColor(&GraphThemeSettings::pinVec4);
+            default: return GraphThemeColor(&GraphThemeSettings::pinDynamic);   // 0 = adapts to what feeds it
         }
     }
 
@@ -48,20 +50,20 @@ namespace Arcane::Editor
     // dynamic AND resolved); `color` is the fill/inner ring either way.
     struct GraphPinPaint
     {
-        ImVec4 color = kPinDynamicColor;
+        ImVec4 color;
         bool   adapts = false;
     };
 
     // `declaredWidth` = GraphPinDesc::width (0 = dynamic); `resolvedWidth` =
     // the node's resolution for that side (GraphNodeWidths::inputs/outputs,
     // 0 = unresolved). Fixed pins ignore the resolution.
-    [[nodiscard]] constexpr GraphPinPaint PinPaintFor(int declaredWidth, int resolvedWidth) noexcept
+    [[nodiscard]] inline GraphPinPaint PinPaintFor(int declaredWidth, int resolvedWidth)
     {
         if (declaredWidth != 0)
             return { PinColorForWidth(declaredWidth), false };
         if (resolvedWidth > 0)
             return { PinColorForWidth(resolvedWidth), true };
-        return { kPinDynamicColor, false };
+        return { PinColorForWidth(0), false };
     }
 
     // THE width -> word map: 1/2/4 -> float/float2/float4, anything else

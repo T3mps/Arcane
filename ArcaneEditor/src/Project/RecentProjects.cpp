@@ -1,4 +1,9 @@
 #include "Project/RecentProjects.hpp"
+#include "Settings/EditorConsoleSettings.hpp"   // editor.recents.maxProjectsShown (settings S6-41)
+
+#include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Paths::UserRoot -- the Hub's store sits under it (DefaultFile; settings spec s11.0)
 
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
 
@@ -13,7 +18,6 @@
 
 #if defined(_WIN32)
 #include <process.h>   // _getpid -- the temp-name tag; far lighter than <windows.h>
-#include <cstdlib>     // _wgetenv
 #define ARC_RECENTS_GETPID _getpid
 #else
 #include <unistd.h>
@@ -22,11 +26,17 @@
 
 namespace Arcane::Editor::Recents
 {
+std::size_t MaxShown()
+{
+    return static_cast<std::size_t>(std::max(1, Settings<RecentsSettings>().maxProjectsShown));
+}
+
 namespace
 {
     // Mirrors store.rs STATE_FORMAT_VERSION. A document numbered ABOVE this was
     // written by a newer Hub: we read it as empty and never rewrite it, which is
     // that file's own rule applied from this side.
+    ARC_CONSTANT("file format: the Hub's shared recents file version")
     constexpr std::uint32_t kFormatVersion = 1;
 
     constexpr std::string_view kProjExt = ".arcproj";
@@ -114,11 +124,11 @@ std::string ProjectDirKey(std::string_view p)
 std::filesystem::path DefaultFile()
 {
 #if defined(_WIN32)
-    // %LOCALAPPDATA%, not %APPDATA%: every path in this file is a
-    // machine-specific absolute path, so the Hub deliberately keeps it
-    // machine-local (paths.rs).
-    if (const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
-        return std::filesystem::path(localAppData) / L"Arcane" / L"hub" / L"recents.archub";
+    // The Hub's own store (%LOCALAPPDATA%\Arcane\hub\recents.archub; paths.rs):
+    // machine-local, so it sits under Paths' user root. It is read and written
+    // here, never redefined.
+    if (const std::filesystem::path root = Arcane::Paths::UserRoot(); !root.empty())
+        return root / L"hub" / L"recents.archub";
 #endif
     return {};
 }

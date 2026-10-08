@@ -1,5 +1,5 @@
 // HostConfig::Parse round-trip. PRESENTATION-FREE. HostConfig now lives in the
-// engine DLL (Arcane/Host/HostConfig.hpp, ARCANE_API) so this test exe links
+// engine DLL (Arcane/Host/HostConfig.hpp, ARC_API) so this test exe links
 // it via the "Arcane" link, not a source-compile.
 #include <vector>
 #include <string>
@@ -94,7 +94,7 @@ TEST_CASE("HostConfig parses --scene as a guid override", "[host]") {
     REQUIRE(def.config.has_value());
     CHECK(def.config->sceneOverride.empty());
 }
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
 // --nri-graph is a retired no-op (the NRI frame graph is the only render path,
 // unconditionally) and is registered unconditionally, so the every-configuration
 // claim belongs to the last case in this file. What THIS one pins, still inside
@@ -201,7 +201,7 @@ TEST_CASE("host config: --hang-main round-trips and kHangMainSeconds is 15", "[h
 }
 // The pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's
-// `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the
+// `#if !defined(ARC_BUILD_DIST)` block), and, like it, the parse round-trip is the
 // ONLY coverage the flag can have: everything past it needs a window,
 // a device and a scene.
 //
@@ -328,7 +328,7 @@ TEST_CASE("host config: --nri-graph is accepted and ignored in every configurati
 }
 
 // --headless / --fixed-dt / --probe / --report. UNGUARDED (not behind
-// ARCANE_DIST): headless agent verification must work in Release and Dist,
+// ARC_BUILD_DIST): headless agent verification must work in Release and Dist,
 // not just dev builds.
 namespace {
     Arcane::HostConfig::ParseOutcome ParseArgs(std::vector<const char*> args)

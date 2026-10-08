@@ -2,6 +2,7 @@
 // (spec s7.2 / R2). No NRI, no GPU, no files.
 
 #include <Arcane/Render/Nri/MeshResidencyBudget.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderMeshSettings -- render.mesh.residencyBudgetBytes
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -13,7 +14,6 @@ namespace
     using Arcane::MeshResidencyEntry;
     using Arcane::SelectEvictions;
     using Arcane::MeshResidencyBytes;
-    using Arcane::kMeshResidencyBudgetBytes;
 
     Guid GuidA() { return Guid{1, 0}; }
     Guid GuidB() { return Guid{2, 0}; }
@@ -80,6 +80,6 @@ TEST_CASE("mesh residency: the CPU copy is counted, on purpose", "[render]")
     // vertices 320 + indices 96 kept on BOTH sides, plus 40 bytes of CPU-only section
     // strings: 2*(320+96) + 40.
     CHECK(MeshResidencyBytes(320, 96, 40) == 872ull);
-    // And the constant is what s7.2 pins, spelled so a typo is visible.
-    CHECK(kMeshResidencyBudgetBytes == 536870912ull);
+    // And the budget's default is what s7.2 pins, spelled so a typo is visible.
+    CHECK(Arcane::RenderMeshSettings{}.residencyBudgetBytes == 536870912ull);
 }

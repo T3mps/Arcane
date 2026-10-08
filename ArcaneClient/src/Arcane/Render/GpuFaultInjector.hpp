@@ -46,7 +46,7 @@
 
 namespace Arcane
 {
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
 
     namespace GpuFaultInjector
     {
@@ -64,5 +64,5 @@ namespace Arcane
         inline constexpr const char* kPassName = "pass:gpu-fault";
     }
 
-#endif   // !ARCANE_DIST
+#endif   // !ARC_BUILD_DIST
 }

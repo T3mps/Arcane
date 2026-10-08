@@ -5,11 +5,11 @@
 //   // PlayerControllerSystem.cpp
 //   #include "PlayerControllerSystem.hpp"
 //   #include <Arcane/Plugin/GameSystems.hpp>
-//   ARCANE_SYSTEM(MyGame::PlayerControllerSystem,
+//   ARC_SYSTEM(MyGame::PlayerControllerSystem,
 //                 Arcane::RoleMask::Client,
 //                 Arcane::SystemPhase::Update)
 //
-// ARCANE_GAME_MODULE drains this module-local list while PluginHost's owner
+// ARC_GAME_MODULE drains this module-local list while PluginHost's owner
 // bracket is open. The result is still a factory per Runtime, never a static
 // system instance: each world instantiates only the entries matching its role.
 //
@@ -58,9 +58,9 @@ namespace Arcane::Game
                               Args... args)
         {
             table.Add(SystemFactoryEntry{
-                // ARCANE_INTERNAL_BEGIN: the entry name is Astra's TypeID spelling of the system type
+                // ARC_INTERNAL_BEGIN: the entry name is Astra's TypeID spelling of the system type
                 std::string(Astra::TypeID<System>::Name()), mask, phase,
-                // ARCANE_INTERNAL_END
+                // ARC_INTERNAL_END
                 [args...](Arcane::SystemScheduler& scheduler)
                 {
                     // Two system shapes (input-seam spec s5.2): a PARAMETER
@@ -69,12 +69,12 @@ namespace Arcane::Game
                     // keyed by its own type and ordered by its SystemTraits;
                     // a registry-style system (operator()(Registry&) + traits)
                     // through the typed path, as before.
-                    // ARCANE_INTERNAL_BEGIN: the shape test is Astra's own concept
+                    // ARC_INTERNAL_BEGIN: the shape test is Astra's own concept
                     if constexpr (Astra::ParamFunctor<System>)
                         std::ignore = scheduler.AddSystem(System{args...});
                     else
                         std::ignore = scheduler.AddSystem<System>(args...);
-                    // ARCANE_INTERNAL_END
+                    // ARC_INTERNAL_END
                 },
                 nullptr });
         }
@@ -115,9 +115,9 @@ namespace Arcane::Game
 // create one registrar per including translation unit and be rejected as a
 // duplicate at module load. __COUNTER__ supplies an internal-linkage symbol;
 // the system type itself may be namespace-qualified.
-#define ARCANE_SYSTEM(T, Role, Phase) ARCANE_SYSTEM_IMPL_(T, Role, Phase, __COUNTER__)
-#define ARCANE_SYSTEM_IMPL_(T, Role, Phase, N) ARCANE_SYSTEM_IMPL2_(T, Role, Phase, N)
-#define ARCANE_SYSTEM_IMPL2_(T, Role, Phase, N)                                      \
+#define ARC_SYSTEM(T, Role, Phase) ARC_SYSTEM_IMPL_(T, Role, Phase, __COUNTER__)
+#define ARC_SYSTEM_IMPL_(T, Role, Phase, N) ARC_SYSTEM_IMPL2_(T, Role, Phase, N)
+#define ARC_SYSTEM_IMPL2_(T, Role, Phase, N)                                      \
     namespace                                                                        \
     {                                                                                \
         ::Arcane::Game::SystemRegistrar arcaneSystemRegistrar_##N{                   \

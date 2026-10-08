@@ -44,7 +44,7 @@
 #include <Arcane/Host/GpuSceneHost.hpp>            // the NRI-free arm/read seam the hosts use
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Mesh/MeshBuilder.hpp>             // BuildCube -- the fixture's geometry
-#include <Arcane/Render/FramePacing.hpp>           // kSwapchainFramesInFlight -- how long a publish takes to land
+#include <Arcane/Render/FramePacing.hpp>           // FramesInFlight() -- how long a publish takes to land
 #include <Arcane/Render/GpuSceneSync.hpp>          // GpuSceneSync / BuildGpuSceneFrame -- the CPU half under comparison
 #include <Arcane/Render/GpuSceneTypes.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>      // the shared 0/0 latch every [gpu] case guards
@@ -109,7 +109,7 @@ namespace
         CullVehicle v;
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // The same validation set the [gpu][pixel] vehicle turns on: this case
         // adds a copy node reading the args buffer the mesh pass consumed as
         // indirect arguments, which is exactly the barrier-placement class
@@ -484,7 +484,7 @@ namespace
         // the offscreen pacing wait ahead of declaration, which makes this
         // Execute's reap publish it, and failing that by the slot-reuse publish
         // inside the record callback. No wait, no flush, no idle anywhere.
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 1u; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight() + 1u; ++i)
             renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* landed = device->LatestVisibility();
@@ -532,7 +532,7 @@ namespace
                                       + static_cast<std::uint32_t>(frame2.transparentDraws.size()));
 
         scene.scene = &frame2;
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight() + 2u; ++i)
             renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* shrunkResult = device->LatestVisibility();
@@ -577,7 +577,7 @@ namespace
         CHECK(frame3.stats.draws == 2);                  // the identity, on a batch-less frame: 0 + 2
 
         scene.scene = &frame3;
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight() + 2u; ++i)
             renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* emptyResult = device->LatestVisibility();
@@ -609,7 +609,7 @@ namespace
         REQUIRE(frame4.transparentDraws.size() == 2);
 
         scene.scene = &frame4;
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight() + 2u; ++i)
             renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* returnedResult = device->LatestVisibility();

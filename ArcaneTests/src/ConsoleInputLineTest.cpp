@@ -17,7 +17,7 @@ namespace
         LineHarness()
         {
             REQUIRE_FALSE(reg.Register(Arcane::CVarDesc{ "game.speed", Arcane::CVarType::Int32, Arcane::CVarValue::Int32(1),
-                                                         {}, {}, {}, "", "engine" }).IsStale());
+                                                         {}, {}, {}, "test cvar", "engine" }).IsStale());
             ctx = ImGui::CreateContext();
             ImGui::SetCurrentContext(ctx);
             ImGuiIO& io = ImGui::GetIO();
@@ -35,7 +35,7 @@ namespace
             ImGui::SetNextWindowSize(ImVec2(640, 200));
             ImGui::Begin("ConsoleLineTest");
             if (focusNext) { ImGui::SetKeyboardFocusHere(); focusNext = false; }
-            submitted = Arcane::DrawConsoleInputLine("##line", model, reg, Arcane::Permission::Editor) || submitted;
+            submitted = Arcane::DrawConsoleInputLine("##line", model, reg, Arcane::CVarContext::Editor) || submitted;
             ImGui::End();
             ImGui::Render();
         }

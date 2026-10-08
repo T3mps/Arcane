@@ -60,21 +60,56 @@ namespace Arcane::Editor
 
         std::filesystem::path metaPath = sourcePath;
         metaPath += ".meta";
-        Arcane::AssetPipeline::TextureMetaSettings settings = ReadTextureMetaSettingsDisplay(metaPath);
+        // Settings arc S6-6: a field the .meta leaves out shows the project's
+        // assets.import.texture.* value (what the cook resolves it to) with a
+        // "(project default)" tooltip; a field the .meta sets carries the reset
+        // arrow, which removes it so it follows the project again. An edit writes
+        // only the fields the .meta already set plus the edited one. No label
+        // change and no extra row: a row's label is its ImGui id, and the page's
+        // 1080p fit has no height to spare.
+        using TextureMetaSettings = Arcane::AssetPipeline::TextureMetaSettings;
+        TextureMetaSettings::FieldsSet set;
+        TextureMetaSettings settings =
+            ReadTextureMetaSettingsDisplay(metaPath, Arcane::Settings<TextureMetaSettings>(), &set);
+        TextureMetaSettings::FieldsSet write = set;
         bool changed = false;
+        // The reset slot exists only while the .meta sets the field: an empty
+        // slot still narrows the value widget, and a .meta that sets nothing
+        // must draw exactly the pre-sweep rows (the editor-asset-page golden;
+        // S6-GATE fix forward of S6-6).
+        const auto decorate = [&grid](bool isSet) {
+            grid.SetNextRowDecor(RowDecor{ .reset = isSet, .resetActive = isSet });
+        };
+        // After the row: an edit pins the field, a reset unpins it, and an absent
+        // field's value widget says where its value comes from.
+        const auto settle = [&grid, &changed](bool edited, bool isSet, bool& field, const char* tip) {
+            if (edited)
+                field = true;
+            else if (grid.LastRowEvents().resetClicked)
+                field = false;
+            changed |= edited || grid.LastRowEvents().resetClicked;
+            if (!isSet)
+                ImGui::SetItemTooltip("%s%s(project default: Project Settings > assets.import.texture)", tip,
+                                      *tip ? "\n" : "");
+            else if (*tip)
+                ImGui::SetItemTooltip("%s", tip);
+        };
         static constexpr const char* kFormats[] = { "Auto", "Bc7", "Rgba8" };
-        if (const int f = grid.ComboRow("Format", kFormats, 3, static_cast<int>(settings.format)); f >= 0)
-        {
-            settings.format = static_cast<Arcane::AssetPipeline::TextureMetaSettings::Format>(f);
-            changed = true;
-        }
-        changed |= grid.CheckboxRow("sRGB", settings.srgb);
-        changed |= grid.CheckboxRow("Generate Mips", settings.generateMips);
+        decorate(set.format);
+        const int f = grid.ComboRow("Format", kFormats, 3, static_cast<int>(settings.format));
+        if (f >= 0)
+            settings.format = static_cast<TextureMetaSettings::Format>(f);
+        settle(f >= 0, set.format, write.format, "");
+        decorate(set.srgb);
+        settle(grid.CheckboxRow("sRGB", settings.srgb), set.srgb, write.srgb, "");
+        decorate(set.generateMips);
+        settle(grid.CheckboxRow("Generate Mips", settings.generateMips), set.generateMips, write.generateMips, "");
         int maxSize = static_cast<int>(settings.maxSize);
-        changed |= grid.IntRow("Max Size", maxSize, Astra::Range(0.0, 16384.0, 1.0));   // true once per gesture
-        ImGui::SetItemTooltip("0 = unlimited");
+        decorate(set.maxSize);
+        const bool maxSizeEdited = grid.IntRow("Max Size", maxSize, Astra::Range(0.0, 16384.0, 1.0));   // true once per gesture
+        settle(maxSizeEdited, set.maxSize, write.maxSize, "0 = unlimited");
         settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
         if (changed)
-            WriteTextureMetaSettingsMerged(metaPath, settings);   // one write per commit, as before
+            WriteTextureMetaSettingsMerged(metaPath, settings, &write);   // one write per commit, as before
     }
 }

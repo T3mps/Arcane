@@ -8,6 +8,7 @@
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Assets/ArtifactReader.hpp>   // TextureInfo -- TextureInfoFor's payload
+#include <Arcane/Assets/AssetsSettings.hpp>   // AssetsCacheSettings -- AssetsDesc's default
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface -- MaterialSurfaceFor's payload
 #include <Arcane/Project/AssetId.hpp>
@@ -65,17 +66,18 @@ namespace Arcane
         // larger than the whole budget is served to the caller but swept
         // right back out (never cached). Memoized failures cost ~0 bytes and
         // are never evicted by the sweep. 0 disables eviction (unbounded,
-        // the legacy contract). Default: 256 MiB -- roughly 16 uncompressed
-        // 2048^2 RGBA atlases, generous for the 2D engine while still
-        // bounding growth.
-        uint64_t byteBudget = 256ull * 1024 * 1024;
+        // the legacy contract). Default: assets.cache.byteBudget's (256 MiB
+        // -- roughly 16 uncompressed 2048^2 RGBA atlases, generous for the
+        // 2D engine while still bounding growth); a Runtime passes the
+        // published setting.
+        uint64_t byteBudget = AssetsCacheSettings{}.byteBudget;
     };
 
     // THE FACADE IS DEVICE-FREE. It owns no render device, uploads nothing,
     // and hands out no texture object: PixelsFor(Guid) below is the
     // device-free supply, and the graph path's NriTextureCache is what puts
     // those pixels on a device.
-    class ARCANE_CORE_API Assets
+    class ARC_CORE_API Assets
     {
     public:
         static std::unique_ptr<Assets> Create(const AssetsDesc& desc = {});
@@ -260,7 +262,7 @@ namespace Arcane
         // scratch and picks up the fresh artifact on its own. (On the render
         // path this is cheap in practice because NriTextureCache::
         // ResolveArtifactKey's own PendingCook branch throttles how often IT
-        // re-asks this facade -- see kPendingCookRepollInterval's comment; a
+        // re-asks this facade -- see assets.cook.pendingRepollInterval; a
         // caller that asks every frame with no throttle of its own pays for a
         // fresh ResolveArtifact scan every time it is still pending, the same
         // cost class InvalidateArtifact's promotion path already accepts.)
@@ -441,7 +443,7 @@ namespace Arcane
     // both main-thread-only by their own contracts), but the install/read is
     // still mutex-guarded rather than relying on that.
     using ArtifactRefusalObserver = void (*)(const Guid& id, const char* kind, void* user);
-    ARCANE_CORE_API void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user);
+    ARC_CORE_API void SetArtifactRefusalObserver(ArtifactRefusalObserver observer, void* user);
 
     // -----------------------------------------------------------------
     // The process-wide content-artifact-refusal latch
@@ -462,13 +464,13 @@ namespace Arcane
     // does NOT poll it: Task 12 publishes the SAME refusals to the Problems pane instead
     // of exiting, so an artifact refusal never takes down an editing session the way it
     // takes down a game host.
-    [[nodiscard]] ARCANE_CORE_API bool ContentArtifactRefusalObserved() noexcept;
+    [[nodiscard]] ARC_CORE_API bool ContentArtifactRefusalObserved() noexcept;
 
     // The first refusal's own description -- "<refusal kind>: <guid>", e.g.
     // "HashMismatch: 11111111-2222-4333-8444-555555555555" -- naming the refusal is Step
     // 3's contract ("exits nonzero with the refusal named"). Empty when
     // ContentArtifactRefusalObserved() is false.
-    [[nodiscard]] ARCANE_CORE_API std::string ContentArtifactRefusalDetail();
+    [[nodiscard]] ARC_CORE_API std::string ContentArtifactRefusalDetail();
 
     // TEST-ONLY reset -- clears the latch (and its detail string) back to the never-fired
     // state. Unlike GpuInstrumentation.hpp's ResetGpuDeviceLost (which pairs with a real
@@ -479,7 +481,7 @@ namespace Arcane
     // construction. Exists purely so ArcaneTests' [assets]/[artifact] cases can prove their
     // OWN refusal fired without inheriting an earlier, unrelated case's latch from the same
     // process (Catch2 runs every TEST_CASE in one process, random order).
-    ARCANE_CORE_API void ResetContentArtifactRefusal() noexcept;
+    ARC_CORE_API void ResetContentArtifactRefusal() noexcept;
 
     // NOTHING BELOW TAKES A DEVICE OR A TEXTURE OBJECT. Reading a rendered
     // image back is NriGraphContext::ReadCapture's job; everything here is
@@ -500,7 +502,7 @@ namespace Arcane
     // tests' RenderErrorCount()==0 gate). maxSize (0 = off) caps the LARGER
     // dimension, aspect preserved -- the loader's rule, not the thumbnail
     // writer's width cap.
-    ARCANE_CORE_API bool LoadDisplayPixels(
+    ARC_CORE_API bool LoadDisplayPixels(
         const std::filesystem::path& path, uint32_t maxSize, PixelData& out);
 
     // Repack mapped staging rows (rowPitch may exceed w*4) into a tight RGBA
@@ -510,7 +512,7 @@ namespace Arcane
     // alpha channel must not punch holes in it. Exported so that byte-order
     // contract is unit-testable without a device, which is now the only way it
     // is exercised: ReadTexturePixels, its one caller, went at ABI v15.
-    ARCANE_CORE_API void RepackStagingToRgba(
+    ARC_CORE_API void RepackStagingToRgba(
         const unsigned char* src, size_t rowPitch, uint32_t width, uint32_t height,
         bool bgraSource, std::vector<unsigned char>& out);
 
@@ -527,7 +529,7 @@ namespace Arcane
     // is a viewport whose aspect the user chose. Alpha is forced OPAQUE, the
     // same rule and the same reason RepackStagingToRgba states. Parent
     // directories are created. False on failure, logged as WARN, never ERROR.
-    ARCANE_CORE_API bool WriteThumbnailPngRgba(
+    ARC_CORE_API bool WriteThumbnailPngRgba(
         const std::filesystem::path& path, std::uint32_t width, std::uint32_t height,
         std::vector<unsigned char> rgba, uint32_t maxWidth = 0);
 }

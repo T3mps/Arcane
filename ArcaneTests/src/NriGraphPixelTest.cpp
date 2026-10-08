@@ -40,7 +40,7 @@
 // EVERYTHING GOES THROUGH EXPORTED Arcane CLASSES, never a raw nri* call. This
 // exe links its OWN static copy of NRI, so a bare nri* function here would run
 // against a different function table than the device it was handed. Both
-// NativeDeviceOwner and NriDevice are ARCANE_API, so `Wrap` executes inside
+// NativeDeviceOwner and NriDevice are ARC_API, so `Wrap` executes inside
 // ArcaneClient.dll and the device that comes back is the DLL's -- which is the
 // one CreateOffscreen must be given. NriSubstrateTest.cpp's wrap smoke carries
 // the same rule for the same reason.
@@ -61,7 +61,7 @@
 
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/FramePacing.hpp>          // kSwapchainFramesInFlight -- the probe latency
+#include <Arcane/Render/FramePacing.hpp>          // FramesInFlight() -- the probe latency
 #include <Arcane/Render/GpuSceneSync.hpp>         // GpuSceneSync / BuildGpuSceneFrame -- the registry-backed draw (F3 plan 1 T7)
 #include <Arcane/Render/VisibilitySystem.hpp>     // BuildVisibleSet / VisibleSet -- what the indirect path draws from
 #include <Arcane/Scene/BoundsSystem.hpp>          // WorldBounds for the GPU scene's rows
@@ -81,6 +81,7 @@
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
 #include <Arcane/Scene/ViewTransform.hpp>         // Orthographic -- the world-space batch case (3b)
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
 // Extensions/NRIHelper.h: HelperInterface::UploadData, used by the four-cube
 // bindless proof's own MakeSolidTexture (mirrors MeshNode::CreateWhiteTexel's
@@ -164,7 +165,7 @@ namespace
 
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // Mirror OffscreenVehicle::Create / NriGraphContext.cpp's windowed
         // creation half EXACTLY (same three flags, same Debug-only gate).
         // These [gpu][pixel] cases are node-level frame-graph tests -- they
@@ -434,7 +435,7 @@ namespace
         // without one). Pixel = (80 + (x + 4) * 10, 48 - (y - 0.4) * 10).
         constexpr glm::vec2 kCentre(-4.0f, 0.4f);
         const Arcane::ViewTransform view =
-            Arcane::ViewTransform::Orthographic(kCentre, 4.8f, glm::uvec2(kW, kH));
+            Arcane::Ortho2DView(kCentre, 4.8f, glm::uvec2(kW, kH));
 
         auto batcher = Arcane::Batcher2D::Create();
         REQUIRE(batcher != nullptr);
@@ -511,8 +512,8 @@ TEST_CASE("pixel: a QuadWorld quad and a screen Rect land in their own rectangle
 //    cases need no registry and leave it default-constructed deliberately.
 //
 //    THE LATENCY IS PART OF THE CONTRACT: the readback rides
-//    kSwapchainFramesInFlight frames behind, so ProbeId() is nullopt until that
-//    many frames have gone by. Rendering exactly kSwapchainFramesInFlight + 1
+//    FramesInFlight() frames behind, so ProbeId() is nullopt until that
+//    many frames have gone by. Rendering exactly FramesInFlight() + 1
 //    frames and requiring a value on the last is what pins the latency at its
 //    documented depth -- a regression that made it deeper would fail here
 //    rather than silently return a stale id to a host.
@@ -526,7 +527,7 @@ namespace
     // (40, kH - 24).
     Arcane::ViewTransform PixelIdentityView()
     {
-        return Arcane::ViewTransform::Orthographic(glm::vec2(kW * 0.5f, kH * 0.5f), kH * 0.5f, { kW, kH });
+        return Arcane::Ortho2DView(glm::vec2(kW * 0.5f, kH * 0.5f), kH * 0.5f, { kW, kH });
     }
 
     Arcane::PickDrawable WorldQuadAtPixel(glm::vec2 pixelCentre, glm::vec2 halfPx)
@@ -554,7 +555,7 @@ namespace
         frame.pickPixel   = pixel;
         frame.pickTicket  = ticket;
 
-        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight; ++i)
+        for (std::uint32_t i = 0; i < Arcane::FramesInFlight(); ++i)
         {
             RenderOne(*v.ctx, frame);
             // Nothing has come back yet, by construction. Asserted rather than
@@ -1176,7 +1177,7 @@ namespace
             v.ctx->SetMeshSupply(SupplyTwo(nearId, nearCube, farId, farCube));
             Arcane::NriGraphContext::FrameDesc frame;
             frame.pickOutline = true; frame.pickables = drawables; frame.pickPixel = pixel; frame.pickView = view;
-            for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight; ++i) RenderOne(*v.ctx, frame);
+            for (std::uint32_t i = 0; i < Arcane::FramesInFlight(); ++i) RenderOne(*v.ctx, frame);
             RenderOne(*v.ctx, frame);
             const auto id = v.ctx->ProbeId();
             REQUIRE(id.has_value());
@@ -1914,7 +1915,9 @@ namespace
 
         Arcane::GpuScene* device = v.ctx->Scene();
         REQUIRE(device != nullptr);
-        REQUIRE(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+        // The latched render.gpuScene.initialRows (its 256 default in this process).
+        const std::uint32_t kInitialRows = device->InitialRows();
+        REQUIRE(device->RowCapacity() == kInitialRows);
         REQUIRE(device->EnableDebugReadback());
         const std::uint64_t generationBefore = device->InstanceBufferGeneration();
         CHECK(Arcane::GpuSceneSyncedGeneration(device) == 0u);
@@ -1922,7 +1925,7 @@ namespace
 
         constexpr std::uint32_t kRowA = 0u;
         constexpr std::uint32_t kRowB = 5u;                               // NOT adjacent: per-row copies, not one span
-        constexpr std::uint32_t kRowC = Arcane::GpuScene::kInitialRows;   // the row that forces the growth
+        const std::uint32_t     kRowC = kInitialRows;   // the row that forces the growth
         const Arcane::GpuInstance rowA  = MakeInstanceRow(1.0f);
         const Arcane::GpuInstance rowB  = MakeInstanceRow(2.0f);
         const Arcane::GpuInstance rowB2 = MakeInstanceRow(4.0f);   // row B re-staged INSIDE the copied range, in the growth frame
@@ -1933,11 +1936,11 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = { kRowA, kRowB };
             frame.stage.values      = { rowA, rowB };
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.rowCapacity = kInitialRows;
             frame.stage.fullRebuild = true;
             frame.stage.generation  = 42u;
             const std::uint32_t visible[] = { kRowA, kRowB };
-            FillOneBatch(frame, Arcane::GpuScene::kInitialRows, visible);
+            FillOneBatch(frame, kInitialRows, visible);
 
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
@@ -1954,7 +1957,7 @@ namespace
             CHECK(bytes.size() == device->InstanceBytes());
             CheckRowBytes(bytes, kRowA, rowA);
             CheckRowBytes(bytes, kRowB, rowB);
-            CHECK(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+            CHECK(device->RowCapacity() == kInitialRows);
             CHECK(device->InstanceBufferGeneration() == generationBefore);
             CHECK(device->SyncedGeneration() == 42u);
             CHECK(Arcane::GpuSceneSyncedGeneration(device) == 42u);
@@ -1972,11 +1975,11 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = { kRowB, kRowC };
             frame.stage.values      = { rowB2, rowC };
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows + 1u;
+            frame.stage.rowCapacity = kInitialRows + 1u;
             frame.stage.fullRebuild = false;
             frame.stage.generation  = 42u;
             const std::uint32_t visible[] = { kRowA, kRowB, kRowC };
-            FillOneBatch(frame, Arcane::GpuScene::kInitialRows + 1u, visible);
+            FillOneBatch(frame, kInitialRows + 1u, visible);
 
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
@@ -1988,7 +1991,7 @@ namespace
 
             std::vector<std::uint8_t> bytes;
             REQUIRE(device->ReadDebugInstances(bytes));
-            CHECK(device->RowCapacity() == 2u * Arcane::GpuScene::kInitialRows);
+            CHECK(device->RowCapacity() == 2u * kInitialRows);
             CHECK(bytes.size() == device->InstanceBytes());
             CheckRowBytes(bytes, kRowA, rowA);    // survived the grow-copy
             CheckRowBytes(bytes, kRowB, rowB2);   // the re-stage won over the grow-copy
@@ -2040,6 +2043,7 @@ namespace
 
         Arcane::GpuScene* device = v.ctx->Scene();
         REQUIRE(device != nullptr);
+        const std::uint32_t kInitialRows = device->InitialRows();   // the latched render.gpuScene.initialRows
         REQUIRE(device->EnableDebugReadback());
         REQUIRE(device->SyncedGeneration() == 0u);
 
@@ -2053,10 +2057,10 @@ namespace
             Arcane::GpuSceneFrame frame;
             frame.stage.rows        = std::move(rows);
             frame.stage.values      = std::move(values);
-            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.rowCapacity = kInitialRows;
             frame.stage.fullRebuild = fullRebuild;
             frame.stage.generation  = generation;
-            frame.rowCount          = Arcane::GpuScene::kInitialRows;   // no batches: nothing draws
+            frame.rowCount          = kInitialRows;   // no batches: nothing draws
             Arcane::MeshSceneDesc scene;
             scene.scene = &frame;
             FillCamera(scene);
@@ -2469,8 +2473,7 @@ namespace
         constexpr std::uint32_t kCellW = kW / kCols;   // 16
         constexpr std::uint32_t kCellH = kH / 10u;     // 9
         static_assert(kCount > 32u, "must exceed the old single-pool cap");
-        static_assert(kCount > Arcane::ImGuiNri::PoolCapacityFor(0),
-                      "must spill past the chain's first link");
+        REQUIRE(kCount > renderer.LinkCapacity(0));   // must spill past the chain's first link
 
         const auto colourOf = [](std::uint32_t i)
         {
@@ -2492,11 +2495,11 @@ namespace
         CHECK(renderer.PoolCount() >= 2);
         CHECK(Arcane::RenderErrorCount() == before);
 
-        // kSwapchainFramesInFlight + 1 frames, so a steady-state frame (the
+        // FramesInFlight() + 1 frames, so a steady-state frame (the
         // atlas already registered, every set reused) is recorded too; the
         // last one is captured.
-        constexpr std::uint32_t kFrames = Arcane::kSwapchainFramesInFlight + 1u;
-        for (std::uint32_t frameIndex = 0; frameIndex < kFrames; ++frameIndex)
+        const std::uint32_t frames = Arcane::FramesInFlight() + 1u;
+        for (std::uint32_t frameIndex = 0; frameIndex < frames; ++frameIndex)
         {
             ImGui::NewFrame();
             ImDrawList* const draw = ImGui::GetForegroundDrawList();
@@ -2514,7 +2517,7 @@ namespace
 
             Arcane::NriGraphContext::FrameDesc frame;
             frame.imgui   = ImGui::GetDrawData();
-            frame.capture = frameIndex + 1u == kFrames;
+            frame.capture = frameIndex + 1u == frames;
             RenderOne(*v.ctx, frame);
         }
 

@@ -1,4 +1,5 @@
 #include <Arcane/Input/InputRebindOperation.hpp>
+#include <Arcane/Input/InputSettings.hpp>
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
@@ -150,10 +151,11 @@ namespace Arcane
             static constexpr const char* axisNames[] = {
                 "leftStick/x", "leftStick/y", "rightStick/x", "rightStick/y",
                 "leftTrigger", "rightTrigger" };
+            const float axisThreshold = Settings<InputRebindSettings>().axisThreshold;
             for (uint8_t axis = 0; axis < 6; ++axis)
             {
-                if (std::abs(snapshot.gamepadAxes[axis]) > 0.5f &&
-                    std::abs(previous_.gamepadAxes[axis]) <= 0.5f)
+                if (std::abs(snapshot.gamepadAxes[axis]) > axisThreshold &&
+                    std::abs(previous_.gamepadAxes[axis]) <= axisThreshold)
                 {
                     complete(std::string("<Gamepad>/") + axisNames[axis]);
                     return;

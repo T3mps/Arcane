@@ -1,11 +1,24 @@
 #include "Arcane/AssetPipeline/TextureMetaSettings.hpp"
 
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Platform/Paths.hpp>
+
 #include <Arcane/Util/Logger.hpp>
+// After Util/Logger.hpp: it defines SPDLOG_ACTIVE_LEVEL before spdlog is first included.
+#include <Arcane/Base/Log.hpp>   // ARC_WARN: config.cvar.refused goes to the engine log (S7-SEC)
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <optional>
+#include <set>
 #include <string>
+
+// Settings arc S6-6: assets.import.texture.* registered HERE, in the TU that
+// defines FromMetaJson -- every cooker calls it, so this static-lib object is
+// always linked into the editor, arccook and the tests.
+ARC_SETTINGS(Arcane::AssetPipeline::TextureMetaSettings);
 
 namespace Arcane::AssetPipeline
 {
@@ -27,7 +40,7 @@ namespace Arcane::AssetPipeline
         // typo is visible instead of silently doing nothing. ToMetaJson's own output
         // spelling is UNCHANGED by this fix (still "Auto"/"Bc7"/"Rgba8") -- round-trip
         // through this engine's own writer is unaffected either way.
-        TextureMetaSettings::Format FormatFromString(const std::string& s, TextureMetaSettings::Format fallback)
+        std::optional<TextureMetaSettings::Format> FormatFromString(const std::string& s)
         {
             const std::string lower = ToLowerAscii(s);
             if (lower == "auto")  return TextureMetaSettings::Format::Auto;
@@ -36,8 +49,9 @@ namespace Arcane::AssetPipeline
 
             ::Arcane::Logger::Get("AssetPipeline")->warn(
                 "TextureMetaSettings: unrecognised \"format\" value '{}' in a .meta texture "
-                "block (expected auto|bc7|rgba8, case-insensitive) -- falling back to Auto", s);
-            return fallback;   // unrecognised string -- keep the default rather than throw
+                "block (expected auto|bc7|rgba8, case-insensitive) -- falling back to the project "
+                "default (assets.import.texture.format)", s);
+            return std::nullopt;   // unrecognised string -- keep the default rather than throw
         }
 
         const char* FormatToString(TextureMetaSettings::Format f)
@@ -52,18 +66,30 @@ namespace Arcane::AssetPipeline
         }
     }
 
-    TextureMetaSettings TextureMetaSettings::FromMetaJson(const nlohmann::json& j)
+    TextureMetaSettings TextureMetaSettings::FromMetaJson(const nlohmann::json& j, const TextureMetaSettings& defaults,
+                                                          FieldsSet* set)
     {
-        TextureMetaSettings settings{};   // every untouched field keeps its struct default
+        TextureMetaSettings settings = defaults;   // every untouched field keeps the caller's default
+        FieldsSet from;
 
         if (j.contains("format") && j["format"].is_string())
-            settings.format = FormatFromString(j["format"].get<std::string>(), settings.format);
+            if (const auto f = FormatFromString(j["format"].get<std::string>()))
+            {
+                settings.format = *f;
+                from.format = true;
+            }
 
         if (j.contains("srgb") && j["srgb"].is_boolean())
+        {
             settings.srgb = j["srgb"].get<bool>();
+            from.srgb = true;
+        }
 
         if (j.contains("generateMips") && j["generateMips"].is_boolean())
+        {
             settings.generateMips = j["generateMips"].get<bool>();
+            from.generateMips = true;
+        }
 
         if (j.contains("maxSize") && j["maxSize"].is_number_integer())
         {
@@ -72,9 +98,14 @@ namespace Arcane::AssetPipeline
             // narrowing conversion.
             const std::int64_t v = j["maxSize"].get<std::int64_t>();
             if (v >= 0 && v <= static_cast<std::int64_t>(UINT32_MAX))
+            {
                 settings.maxSize = static_cast<std::uint32_t>(v);
+                from.maxSize = true;
+            }
         }
 
+        if (set)
+            *set = from;
         return settings;
     }
 
@@ -86,5 +117,26 @@ namespace Arcane::AssetPipeline
         j["generateMips"] = generateMips;
         j["maxSize"] = maxSize;
         return j;
+    }
+
+    TextureMetaSettings ApplyProjectCookConfig(const std::filesystem::path& projectDir)
+    {
+        // A project with no Config folder simply leaves the struct defaults in place.
+        // Unknown keys stay silent here (the editor's ValidateCVarLayers reports them),
+        // but a key the Project rung refuses -- one that names a program, or a
+        // machine-wide preference (settings S7-SEC) -- warns once per key per load,
+        // naming the folder, the key and the reason, as the editor's rungs do.
+        const std::filesystem::path configDir =
+            Paths::Resolve(Paths::Location::ProjectConfig, Paths::ForProject(projectDir));
+        const std::filesystem::path roots[] = { projectDir };
+        const CVarApplyReport report = ApplyCVarDirectory(CVarRegistry::Get(), configDir, SetBy::Project,
+                                                          "project", {}, roots);
+        std::set<std::string> warned;
+        for (const CVarRefusedKey& refused : report.refused)
+            if (warned.insert(refused.key).second)
+                ARC_WARN("cvar config: config.cvar.refused '{}' in {} -- {}",
+                         refused.key, configDir.generic_string(), RungRefusalReason(refused.why));
+        CVarRegistry::Get().PublishImmediate();
+        return Settings<TextureMetaSettings>();
     }
 }

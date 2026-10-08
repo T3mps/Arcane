@@ -1,7 +1,7 @@
 #pragma once
 
 // NRISwapChain over our SDL window, plus
-// kSwapchainFramesInFlight-deep frame pacing on ONE timeline nri::Fence.
+// FramesInFlight()-deep frame pacing on ONE timeline nri::Fence.
 //
 // Adapted from .example/NRISamples (MIT -- see that tree's LICENSE.txt):
 // Source/Triangle.cpp's swap chain setup/acquire/present shape and
@@ -43,11 +43,11 @@
 // -------------------------------------------------------------------------
 // Frame pacing
 // -------------------------------------------------------------------------
-// ONE timeline nri::Fence, kSwapchainFramesInFlight slots
+// ONE timeline nri::Fence, FramesInFlight() slots
 // (Render/FramePacing.hpp -- reused, not reinvented), signalled with an
 // increasing value at the tail of Present() and waited on at the top of
-// AcquireNextTexture() once frameCounter >= kSwapchainFramesInFlight (so the
-// first kSwapchainFramesInFlight frames never wait at all -- no call, not
+// AcquireNextTexture() once frameCounter >= FramesInFlight() (so the
+// first FramesInFlight() frames never wait at all -- no call, not
 // even a trivially-true one).
 //
 // The wait is NOT a bare `Core().Wait(fence, value)`. Both backends'
@@ -80,7 +80,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
-#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // FramesInFlight()
 
 #include <cstdint>
 #include <memory>
@@ -90,7 +90,7 @@ namespace Arcane
 {
     class Window;
 
-    class ARCANE_API NriSwapChain
+    class ARC_API NriSwapChain
     {
     public:
         // `device` and `window` must outlive this object.
@@ -210,7 +210,7 @@ namespace Arcane
         };
         std::vector<TextureSlot> m_textures;
 
-        // The pacing fence: ONE timeline fence, kSwapchainFramesInFlight
+        // The pacing fence: ONE timeline fence, FramesInFlight()
         // slots deep. Survives Resize() (see Resize()'s comment).
         nri::Fence* m_frameFence = nullptr;
 

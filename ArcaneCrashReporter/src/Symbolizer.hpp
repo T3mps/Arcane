@@ -18,6 +18,8 @@
 
 #include "SymbolizedText.hpp"
 
+#include <Arcane/Base/ReporterSettingsData.hpp>
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -36,15 +38,17 @@ namespace Arcane::Reporter
         // in, and "PDBs hidden" hides nothing on the desk that built them.
         bool          ignoreCvRecord     = false;
         // R78: the walk stops at these, and the report SAYS SO when it does.
-        std::uint32_t maxFramesPerThread = 64;
+        // Settings arc S6-4: the defaults are diagnostics.reporter.*'s;
+        // ReporterMain fills the live values from Args.
+        std::uint32_t maxFramesPerThread = DiagnosticsReporterSettings{}.maxFramesPerThread;
         // R112: the FAULTING thread only, matching UE's MaxFrames = 8192
         // (WindowsPlatformStackWalkExt.cpp:481) -- a stack overflow is exactly
         // the report that needs the deep frames. Every OTHER thread keeps the
         // small maxFramesPerThread cap above, same as UE walking only the
         // responsible thread for a stall/ensure.
-        std::uint32_t maxFramesFaultingThread = 8192;
-        std::uint32_t maxThreads         = 64;
-        std::uint32_t waitForEventMs     = 30000;
+        std::uint32_t maxFramesFaultingThread = DiagnosticsReporterSettings{}.maxFramesFaultingThread;
+        std::uint32_t maxThreads         = DiagnosticsReporterSettings{}.maxThreads;
+        std::uint32_t waitForEventMs     = DiagnosticsReporterSettings{}.dbgengWaitMs;
     };
 
     [[nodiscard]] Symbolized SymbolizeDump(const std::filesystem::path& dmp, const SymbolizeOptions& opt);

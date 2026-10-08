@@ -68,7 +68,7 @@ namespace Arcane
     struct PostChainDesc;
     struct ShaderCompileResult;
 
-    class ARCANE_API SceneRenderResolver
+    class ARC_API SceneRenderResolver
     {
     public:
         struct Services

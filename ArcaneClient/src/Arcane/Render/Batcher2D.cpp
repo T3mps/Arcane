@@ -1,4 +1,5 @@
 #include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
@@ -21,6 +22,7 @@ namespace Arcane
         // alias keeps every use site below spelled exactly as it was.
         using Vertex = Batch2DVertex;
 
+        ARC_CONSTANT("id scheme: the built-in 2D material ids and sort-key encoding")
         constexpr uint16_t kBuiltInMaterialCount = 3;   // sprite / circle / text
 
         // One recorded draw (a quad: 4 vertices already in m_vertices).

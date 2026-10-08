@@ -4,6 +4,7 @@
 //
 // Same include-order rule as every file under Render/Nri/ (NriCommon.hpp).
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIHelper.h>
 
 #include "FullscreenNodes.hpp"
@@ -16,6 +17,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>    // kSceneInput / kMaxPassInputs
 #include <Arcane/Material/MaterialTemplate.hpp>
+#include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderPostSettings -- the caps the constructor latches
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/PostChainCache.hpp>      // PostChainDesc
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
@@ -40,7 +42,9 @@ namespace Arcane
         // contract, rule 3, requires the key to change whenever the bytecode
         // would -- a CONTENT hash satisfies that by construction) and the stamp
         // that decides whether the built chain is still current.
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvPrime  = 1099511628211ull;
 
         std::uint64_t HashBytes(const void* data, std::size_t size,
@@ -157,6 +161,29 @@ namespace Arcane
     // not drift.
     static_assert(PostChainNode::kMaxInputs == kMaxPassInputs,
                   "PostChainNode::kMaxInputs must match MaterialSource's kMaxPassInputs");
+
+    PostChainNode::Caps PostChainNode::CapsFrom(const RenderPostSettings& settings) noexcept
+    {
+        Caps caps;
+        caps.maxPasses       = settings.maxPasses;
+        caps.maxTextures     = settings.maxTextures;
+        caps.materialCbBytes = MaterialCbRegionBytes(settings.materialCbBytes);
+        return caps;
+    }
+
+    // THE LATCH (Restart) -- Batch2DNode's shape: the pool, the arena and the
+    // record scratch are sized from m_caps, so a render.post.* value published
+    // after this point waits for the next node.
+    PostChainNode::PostChainNode()
+    {
+        const RenderPostSettings& settings = Settings<RenderPostSettings>();
+        m_caps = CapsFrom(settings);
+        if (m_caps.materialCbBytes != settings.materialCbBytes)
+            ARC_WARN("[nri-graph] PostChainNode: render.post.materialCbBytes {} is not a multiple of 256 -- "
+                     "using {}", settings.materialCbBytes, m_caps.materialCbBytes);
+        m_wantedScratch.assign(m_caps.maxTextures + kMaxInputs, nullptr);
+        m_viewScratch.assign(m_caps.maxTextures + kMaxInputs, nullptr);
+    }
 
     std::unique_ptr<PostChainNode> PostChainNode::Create(NriGraphContext& context)
     {
@@ -296,12 +323,12 @@ namespace Arcane
         // frame slot) so the set a frame binds is the one whose arena region
         // that same frame owns -- which is what keeps ResetDescriptorPool (and
         // its fence discipline) out of this file entirely.
-        constexpr std::uint32_t kSets = kMaxPasses * kSwapchainFramesInFlight;
+        const std::uint32_t sets = m_caps.maxPasses * FramesInFlight();
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kSets;
-        poolDesc.constantBufferMaxNum = 2 * kSets;                       // b0 + b1
-        poolDesc.textureMaxNum        = (kMaxTextures + kMaxInputs) * kSets;
-        poolDesc.samplerMaxNum        = kSets;
+        poolDesc.descriptorSetMaxNum  = sets;
+        poolDesc.constantBufferMaxNum = 2 * sets;                        // b0 + b1
+        poolDesc.textureMaxNum        = (m_caps.maxTextures + kMaxInputs) * sets;
+        poolDesc.samplerMaxNum        = sets;
         if (!ARC_NRI_CHECK(m_device->Core().CreateDescriptorPool(m_device->Device(), poolDesc, m_pool))
             || !m_pool)
         {
@@ -321,10 +348,10 @@ namespace Arcane
         // straight into D3D12_CONSTANT_BUFFER_VIEW_DESC::SizeInBytes, which
         // D3D12 requires to be a multiple of 256 -- so the views name a whole
         // region and the shader simply reads less than it.
-        m_arenaStride = CbRegionStride(deviceDesc.memoryAlignment.constantBufferOffset);
+        m_arenaStride = CbRegionStride(m_caps.materialCbBytes, deviceDesc.memoryAlignment.constantBufferOffset);
 
         const std::uint64_t arenaBytes =
-            (std::uint64_t)kCbRegionsPerFrame * kSwapchainFramesInFlight * m_arenaStride;
+            (std::uint64_t)kCbRegionsPerFrame * FramesInFlight() * m_arenaStride;
 
         nri::BufferDesc bufferDesc = {};
         bufferDesc.size  = arenaBytes;
@@ -354,7 +381,7 @@ namespace Arcane
         // Both CB views per frame slot, created ONCE. Their contents change
         // every frame; their (buffer, offset) never does, which is what lets a
         // descriptor set naming them be written once too.
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < FramesInFlight(); ++slot)
         {
             nri::BufferViewDesc viewDesc = {};
             viewDesc.buffer = m_arena;
@@ -560,7 +587,7 @@ namespace Arcane
         // replaced without RenderGraph::PoolEpoch moving, which would be a bug
         // in the graph rather than here. Say so, once, rather than letting it
         // grow silently.
-        if (m_views.size() >= (std::size_t)kMaxPasses + 2 && !m_warnedViewChurn)
+        if (m_views.size() >= (std::size_t)m_caps.maxPasses + 2 && !m_warnedViewChurn)
         {
             m_warnedViewChurn = true;
             GraphError("PostChainNode: more distinct source textures than a chain can have -- pool "
@@ -599,21 +626,21 @@ namespace Arcane
                       desc.templ->Name(), why);
             return false;
         };
-        if (passCount > kMaxPasses)
+        if (passCount > m_caps.maxPasses)
             return refuse("it has " + std::to_string(passCount) + " passes, over this node's cap of "
-                          + std::to_string(kMaxPasses) + " -- raise kMaxPasses (it sizes the "
-                          "descriptor pool)");
-        if (textureCount > kMaxTextures)
+                          + std::to_string(m_caps.maxPasses) + " -- raise render.post.maxPasses (it "
+                          "sizes the descriptor pool)");
+        if (textureCount > m_caps.maxTextures)
             return refuse("it declares " + std::to_string(textureCount) + " texture params, over "
-                          "this node's cap of " + std::to_string(kMaxTextures)
-                          + " -- raise kMaxTextures");
+                          "this node's cap of " + std::to_string(m_caps.maxTextures)
+                          + " -- raise render.post.maxTextures");
         if (chainInputs > kMaxInputs)
             return refuse("it reserves " + std::to_string(chainInputs) + " input slots, over "
                           "MaterialSource's own kMaxPassInputs");
-        if (cbSize > kCbMaxBytes)
+        if (cbSize > m_caps.materialCbBytes)
             return refuse("its merged constant buffer is " + std::to_string(cbSize)
-                          + " bytes, over this node's arena region of " + std::to_string(kCbMaxBytes)
-                          + " -- raise kCbMaxBytes");
+                          + " bytes, over this node's arena region of "
+                          + std::to_string(m_caps.materialCbBytes) + " -- raise render.post.materialCbBytes");
 
         // THE LAYOUT -- see FullscreenMaterialLayout for the whole of its shape
         // and its reasoning. A separate object so the device-less [nri] cases can
@@ -665,14 +692,12 @@ namespace Arcane
         // uses. An unbound, unresolvable or undecodable param falls back to
         // the white texel (the cache says why, once). Chain INPUTS are
         // unaffected: those are graph transients, always bound for real.
-        for (nri::Texture*& texture : m_paramTextures)
-            texture = nullptr;
-        for (nri::Descriptor*& view : m_paramViews)
-            view = nullptr;
+        m_paramTextures.assign(textureCount, nullptr);
+        m_paramViews.assign(textureCount, nullptr);
         if (textureCount > 0 && desc.instance)
         {
             const std::vector<Guid> paramIds = desc.instance->ResolveTextures();
-            for (std::uint32_t t = 0; t < textureCount && t < kMaxTextures; ++t)
+            for (std::uint32_t t = 0; t < textureCount; ++t)
             {
                 if (!m_textures || t >= paramIds.size())
                     continue;
@@ -684,6 +709,7 @@ namespace Arcane
             }
         }
 
+        const std::uint32_t framesInFlight = FramesInFlight();
         for (std::uint32_t p = 0; p < passCount; ++p)
         {
             Pass& pass = m_passes[p];
@@ -701,7 +727,7 @@ namespace Arcane
                                           HashBytes(pass.vs->data(), pass.vs->size()))
                               | kShaderPairMark;
 
-            for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+            for (std::uint32_t slot = 0; slot < framesInFlight; ++slot)
             {
                 if (!pass.set[slot]
                     && (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *pipelineLayout, 0,
@@ -709,8 +735,8 @@ namespace Arcane
                         || !pass.set[slot]))
                 {
                     return refuse("a descriptor set could not be allocated -- the pool holds "
-                                  + std::to_string(kMaxPasses * kSwapchainFramesInFlight)
-                                  + " sets, sized by kMaxPasses");
+                                  + std::to_string(m_caps.maxPasses * framesInFlight)
+                                  + " sets, sized by render.post.maxPasses");
                 }
 
                 // EVERY `descriptors` SOURCE BELOW MUST OUTLIVE THE
@@ -758,8 +784,7 @@ namespace Arcane
                 // Execute() has realized the pool, so Record writes it on
                 // first sight and whenever a resolved pointer changes.
                 pass.written[slot] = false;
-                for (nri::Texture*& texture : pass.bound[slot])
-                    texture = nullptr;
+                pass.bound[slot].assign(m_caps.maxTextures + kMaxInputs, nullptr);
             }
 
             // The PSO, built HERE so a first-frame pipeline compile does not
@@ -889,7 +914,7 @@ namespace Arcane
     {
         const nri::CoreInterface& core = context.core;
 
-        if (!m_ready || pass >= m_passes.size() || frameSlot >= kSwapchainFramesInFlight)
+        if (!m_ready || pass >= m_passes.size() || frameSlot >= FramesInFlight())
         {
             GraphError("PostChainNode: asked to record a pass of a chain that is not prepared");
             return;
@@ -954,7 +979,9 @@ namespace Arcane
         // records (the pacing wait inside NriSwapChain::AcquireNextTexture).
         // ---------------------------------------------------------------
         const std::uint32_t textureCount = m_textureCount + m_chainInputs;
-        nri::Texture* wanted[kMaxTextures + kMaxInputs] = {};
+        // m_wantedScratch holds Caps::maxTextures + kMaxInputs entries and
+        // BuildChain refused anything wider, so textureCount always fits.
+        std::vector<nri::Texture*>& wanted = m_wantedScratch;
         for (std::uint32_t t = 0; t < m_textureCount; ++t)
             wanted[t] = m_paramTextures[t] ? m_paramTextures[t] : m_white;
         for (std::uint32_t i = 0; i < m_chainInputs; ++i)
@@ -971,7 +998,7 @@ namespace Arcane
 
         if (changed && textureCount > 0 && m_textureRange != FullscreenMaterialLayout::kNoRange)
         {
-            const nri::Descriptor* views[kMaxTextures + kMaxInputs] = {};
+            std::vector<const nri::Descriptor*>& views = m_viewScratch;
             for (std::uint32_t t = 0; t < textureCount; ++t)
             {
                 // THE INDEX IS THE DISCRIMINATOR, and it has to be: a DECLARED
@@ -1000,7 +1027,7 @@ namespace Arcane
             nri::UpdateDescriptorRangeDesc update = {};
             update.descriptorSet = current.set[frameSlot];
             update.rangeIndex    = m_textureRange;
-            update.descriptors   = views;
+            update.descriptors   = views.data();
             update.descriptorNum = textureCount;
             core.UpdateDescriptorRanges(&update, 1);
 
@@ -1031,7 +1058,8 @@ namespace Arcane
                                 std::uint32_t width, std::uint32_t height)
     {
         // Defensive, not expected: PrepareChain returns m_passes.size(), which
-        // IS desc.passes.size(), and the device-less drive clamps to kMaxPasses.
+        // IS desc.passes.size(), and the device-less drive clamps to
+        // render.post.maxPasses.
         passCount = (std::uint32_t)std::min<std::size_t>(passCount, desc.passes.size());
         if (passCount == 0)
             return scene;
@@ -1066,7 +1094,7 @@ namespace Arcane
                 [&graph, targets, sources, p, width, height](RenderGraphBuilder& builder)
                 {
                     RgTextureDesc textureDesc;
-                    textureDesc.format = kGraphCanvasFormat;
+                    textureDesc.format = GraphCanvasFormat();
                     textureDesc.width  = width;
                     textureDesc.height = height;
                     // Its OWN transient. The pool allocator is what makes two
@@ -1174,16 +1202,17 @@ namespace Arcane
         }
 
         // ONE SET PER FRAME SLOT -- see SOURCE VIEWS AND THE POOL, mechanism 2.
+        const std::uint32_t framesInFlight = FramesInFlight();
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum = kSwapchainFramesInFlight;
-        poolDesc.textureMaxNum       = kSwapchainFramesInFlight;
-        poolDesc.samplerMaxNum       = kSwapchainFramesInFlight;
+        poolDesc.descriptorSetMaxNum = framesInFlight;
+        poolDesc.textureMaxNum       = framesInFlight;
+        poolDesc.samplerMaxNum       = framesInFlight;
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] TonemapNode: descriptor pool creation failed");
             return false;
         }
-        for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
+        for (std::uint32_t slot = 0; slot < framesInFlight; ++slot)
         {
             if (!ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &m_set[slot], 1, 0))
                 || !m_set[slot])
@@ -1304,7 +1333,7 @@ namespace Arcane
     bool TonemapNode::EnsureSource(const nri::CoreInterface& core, nri::Texture* texture,
                                    std::uint32_t frameSlot)
     {
-        if (frameSlot >= kSwapchainFramesInFlight || !m_set[frameSlot])
+        if (frameSlot >= FramesInFlight() || !m_set[frameSlot])
         {
             GraphError("TonemapNode: no descriptor set for this frame slot");
             return false;

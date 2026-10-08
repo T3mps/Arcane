@@ -62,7 +62,9 @@
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 #include "Documents/PreviewStatus.hpp"
+#include "Settings/DocumentSettings.hpp"   // editor.mesh.previewResolution, read once per document
 
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>          // MeshAssetData; also brings MeshBuilder.hpp (MeshData)
 
@@ -441,11 +443,11 @@ namespace Arcane::Editor
         bool          m_previewPresented     = false;   // a frame has landed in THIS vehicle's texture
         std::uint32_t m_previewVehicleAttempts = 0;
 
-        // Square, matching ShaderEditorDocument::kGraphPreviewSize -- there is
-        // no shape reason for a mesh preview to differ, and reusing the same
-        // constant keeps every open-document preview texture the same size
-        // class.
-        static constexpr std::uint32_t kPreviewSize = 512;
+        // Square (editor.mesh.previewResolution, default 512 like the shader
+        // editor's preview), read ONCE when the document opens and fixed for
+        // its life: the preview vehicle has no resize seam.
+        std::uint32_t m_previewSize =
+            static_cast<std::uint32_t>(Arcane::Settings<MeshDocSettings>().previewResolution);
 
         // The Inspector page's selection (key "mesh", epoch 1 = selected at
         // open) and the page itself. m_page holds a reference to *this;

@@ -49,7 +49,7 @@ namespace Arcane
     // `file:line:col: {note|warning|error|fatal error}: message`, optionally
     // followed by the echoed source line and a caret line. Location-less
     // `error: message` lines are captured too.
-    ARCANE_API std::vector<ShaderDiag> ParseDxcDiagnostics(std::string_view text);
+    ARC_API std::vector<ShaderDiag> ParseDxcDiagnostics(std::string_view text);
 
     struct ShaderCompileRequest
     {
@@ -95,7 +95,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std members on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API ShaderCompiler
+    class ARC_API ShaderCompiler
     {
     public:
         ShaderCompiler();
@@ -107,8 +107,10 @@ namespace Arcane
         // search path), hash their bytes into the cache key, start the worker.
         // False (and IsAvailable()==false) when the compiler DLL cannot be
         // loaded; a missing dxil.dll only warns (DXIL comes out unsigned).
-        // debounceSeconds = the quiet window Poll enforces per coalesceKey.
-        bool Initialize(double debounceSeconds = 0.2);
+        // The published render.shader setting supplies the quiet window.
+        bool Initialize();
+        // Explicit override for clock-pinned tests and tools.
+        bool InitializeWithDebounce(double debounceSeconds);
         void Shutdown();
         bool IsAvailable() const { return m_available; }
 

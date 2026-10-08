@@ -77,10 +77,15 @@ namespace Arcane::Editor
     // fits, else the most that fit beside an overflow button of `moreWidth`.
     [[nodiscard]] std::size_t ActionsThatFit(std::span<const float> widths, float moreWidth,
                                              float spacing, float avail) noexcept;
-    // The thumbnail side. compact: min(140, availX - spacing - 110, clamp(f x H,
-    // floor, 140)); stacked: min(140, availX, clamp(f x H, floor, 140)).
+    // The thumbnail side, maxPx = editor.inspector.assetThumbMaxPx (140).
+    // compact: min(maxPx, availX - spacing - 110, clamp(f x H, floor, maxPx));
+    // stacked: min(maxPx, availX, clamp(f x H, floor, maxPx)). A floor above
+    // maxPx is taken as maxPx.
     [[nodiscard]] float AssetPageThumbSize(bool compact, float availX, float spacing, float innerHeight,
-                                           float heightFraction, float floorPx) noexcept;
+                                           float heightFraction, float floorPx, float maxPx) noexcept;
+    // The thumbnail floor the page uses: editor.inspector.assetThumbMinPx,
+    // never above the maximum (the two are independent settings).
+    [[nodiscard]] float AssetPageThumbFloor(std::int32_t minPx, float maxPx) noexcept;
 
     // The asset page (s5.6): header (height-aware thumb, clamped name, ellipsized
     // guid), one icon row, Derived and (textures) Import sections. Exposed for

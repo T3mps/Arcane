@@ -9,7 +9,7 @@
 // milliseconds, so those never expire mid-test. No sleeps, no
 // production seam added.
 //
-// LRU-eviction behavior (cap = RateLimiter::MAX_RECORDS) is observed
+// LRU-eviction behavior (cap = net.rateLimit.maxRecords) is observed
 // through the public API only: an evicted key loses its record, so a
 // previously-tripped key that suddenly Allow()s again proves eviction,
 // and a denied (N+1)th attempt proves record continuity (survival).
@@ -23,6 +23,13 @@ using Arcane::RateLimiter;
 namespace
 {
     using Config = RateLimiter::Config;
+
+    // net.rateLimit.maxRecords: the LRU cap a RateLimiter is built with
+    // (settings arc S6-11; 10000 by default).
+    std::size_t MaxRecords()
+    {
+        return static_cast<std::size_t>(Arcane::Settings<Arcane::NetRateLimitSettings>().maxRecords);
+    }
 
     // Drive `count` fresh unique keys through Allow(). Each insert lands
     // at MRU and pushes older entries toward the LRU end (and past it,
@@ -176,7 +183,7 @@ TEST_CASE("RateLimiter: global disable bypasses limiting without erasing records
     REQUIRE(limiter.GetCooldownRemaining("k", cfg) > 0);
 }
 
-// ---- LRU eviction under key-spray pressure (cap = MAX_RECORDS) -----------
+// ---- LRU eviction under key-spray pressure (cap = maxRecords) ------------
 
 TEST_CASE("RateLimiter: a unique-key spray evicts the LRU entry at cap", "[ratelimiter]")
 {
@@ -188,8 +195,8 @@ TEST_CASE("RateLimiter: a unique-key spray evicts the LRU entry at cap", "[ratel
     REQUIRE_FALSE(limiter.Allow("victim", cfg));
     REQUIRE_FALSE(limiter.Allow("victim", cfg));
 
-    // MAX_RECORDS fresh keys push the victim (the oldest entry) out.
-    Spray(limiter, cfg, RateLimiter::MAX_RECORDS);
+    // maxRecords fresh keys push the victim (the oldest entry) out.
+    Spray(limiter, cfg, MaxRecords());
 
     // The evicted victim gets a brand-new record: allowed again. This is
     // the M-V2-10 forward-progress guarantee observed from the outside.
@@ -204,7 +211,7 @@ TEST_CASE("RateLimiter: an allowed key is touched to MRU and survives spray pres
     REQUIRE(limiter.Allow("legit", cfg));               // attempt 1
 
     // Fill the cache to exactly cap; "legit" is now the LRU entry.
-    Spray(limiter, cfg, RateLimiter::MAX_RECORDS - 1);
+    Spray(limiter, cfg, MaxRecords() - 1);
 
     // An accepted attempt touches the entry back to MRU (attempt 2).
     REQUIRE(limiter.Allow("legit", cfg));
@@ -233,7 +240,7 @@ TEST_CASE("RateLimiter: cooldown-rejected probes do not refresh recency", "[rate
     REQUIRE_FALSE(limiter.Allow("attacker", cfg));      // trip (no touch)
 
     // 9998 fresh keys: cache size = 9999, attacker is the LRU entry.
-    Spray(limiter, cfg, RateLimiter::MAX_RECORDS - 2);
+    Spray(limiter, cfg, MaxRecords() - 2);
 
     // Hammer the cooldown-rejected key. None of these may touch it.
     for (int i = 0; i < 5; ++i)

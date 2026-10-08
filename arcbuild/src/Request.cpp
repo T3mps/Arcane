@@ -71,6 +71,14 @@ namespace arcbuild
             "suppress the driver's own [arcbuild] info lines "
             "(child output still streams)");
 
+        // The HostConfig spelling: the build.* tool paths (BuildToolSettings)
+        // are cvars, so a one-off override needs no preferences file.
+        cli.Option(
+            "set",
+            "",
+            "repeatable: set a cvar, name=value, before any tool is resolved")
+            .Many();
+
         return cli;
     }
 
@@ -86,6 +94,7 @@ namespace arcbuild
         request.action       = result.Get("action");
         request.forceRebuild = result.Flag("force-rebuild");
         request.quiet        = result.Flag("quiet");
+        request.cvarSets     = result.GetMany("set");
 
         if (result.Supplied("sdk"))
             request.sdk = std::filesystem::path(result.Get("sdk"));

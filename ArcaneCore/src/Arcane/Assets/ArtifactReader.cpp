@@ -7,11 +7,13 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
     namespace
     {
+        ARC_CONSTANT("file format: the cooked-artifact version this reader accepts (the pipeline's ArtifactFormat writes it)")
         constexpr std::uint32_t kArtifactVersion = 1;
         constexpr std::array<std::uint8_t, 4> kMagic{
             static_cast<std::uint8_t>('A'), static_cast<std::uint8_t>('R'),
@@ -20,20 +22,25 @@ namespace Arcane
         // On-disk width of one section table entry: tag(u32) + offset(u64) + size(u64).
         // Mirrors ArtifactFormat.cpp's own kSectionEntrySize -- duplicated, not shared,
         // per this file's no-pipeline-code banner (ArtifactReader.hpp).
+        ARC_CONSTANT("file format: a cooked artifact's section-table entry size in bytes")
         constexpr std::uint64_t kSectionEntrySize = 4 + 8 + 8;
         // On-disk width of one MipTable entry: offset(u64) + size(u64) + width(u32) +
         // height(u32). Mirrors ArtifactFormat.cpp's own kMipEntrySize -- same duplication
         // discipline as kSectionEntrySize above.
+        ARC_CONSTANT("file format: a cooked texture's mip-table entry size in bytes")
         constexpr std::uint64_t kMipEntrySize = 8 + 8 + 4 + 4;
         // Minimum on-disk width of one MESH SectionTable entry (a zero-length name):
         // nameLen(u16) + indexOffset(u32) + indexCount(u32) + slotIndex(u32). Mirrors
         // ArtifactFormat.cpp's own kMeshSectionEntrySize -- same duplication discipline as
         // kSectionEntrySize/kMipEntrySize above.
+        ARC_CONSTANT("file format: a cooked mesh's section entry size in bytes")
         constexpr std::uint64_t kMeshSectionEntrySize = 2 + 4 + 4 + 4;
         // Mirrors AssetPipeline::ContentKind's numeric values (ArtifactFormat.hpp) -- kept
         // in lockstep BY HAND, same discipline as ArtifactPixelFormatValue's own mirrored
         // values (ArtifactReader.hpp).
+        ARC_CONSTANT("file format: the artifact content-kind tag of a texture")
         constexpr std::uint8_t kContentKindTexture = 1;
+        ARC_CONSTANT("file format: the artifact content-kind tag of a mesh")
         constexpr std::uint8_t kContentKindMesh = 2;
 
         // Bounds-checked little-endian reader over an in-memory buffer, independently
@@ -240,6 +247,7 @@ namespace Arcane
         // start under-reading -- still minuscule next to a real artifact's payload (a
         // single BC7 mip alone is already this size or larger), which is the whole point:
         // ReadCommonPrefixOnly below must never pay for anything past the header.
+        ARC_CONSTANT("file format: the header-only read size, headroom over the artifact header's exact length")
         constexpr std::size_t kHeaderProbeBytes = 256;
 
         // Reads at most `maxBytes` from the START of `path` -- NEVER the whole file. A
@@ -477,6 +485,7 @@ namespace Arcane
                 entries.push_back(e);
             }
 
+            ARC_CONSTANT("file format: the cooked mesh vertex stride (8 floats)")
             constexpr std::uint64_t kVertexStride = 8 * 4;   // 8 floats, 4 bytes each
 
             ByteReader whole(raw->data(), raw->size());   // Slice() addresses the WHOLE buffer
@@ -611,6 +620,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t HashSourceBytes(std::span<const std::byte> bytes) noexcept
         {
             std::uint64_t h = 14695981039346656037ULL;
+            ARC_CONSTANT("file format: the FNV-1a 64-bit prime of the on-disk source hash (the pipeline's CookKey agrees)")
             constexpr std::uint64_t prime = 1099511628211ULL;
             for (std::byte b : bytes)
             {
@@ -868,9 +878,13 @@ namespace Arcane
             if (!isGlb)
                 return std::span<const char>(text, size);   // a .gltf: the whole file is the document
 
+            ARC_CONSTANT("file format: the glTF binary (GLB) container version")
             constexpr std::uint32_t kGlbVersion   = 2;
+            ARC_CONSTANT("file format: the GLB JSON chunk type tag")
             constexpr std::uint32_t kJsonChunkType = 0x4E4F534A;   // "JSON", little-endian
+            ARC_CONSTANT("file format: the GLB header length (magic + version + totalLength)")
             constexpr std::size_t   kHeaderBytes   = 12;            // magic + version + totalLength
+            ARC_CONSTANT("file format: the GLB chunk header length (chunkLength + chunkType)")
             constexpr std::size_t   kChunkHeaderBytes = 8;          // chunkLength + chunkType
 
             ByteReader r(sourceBytes.data(), size);

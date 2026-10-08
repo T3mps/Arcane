@@ -25,9 +25,10 @@
 // NOTHING ELSE -- no roll: ViewTransform::AsAffine2D() is nullopt for any
 // rotated orthographic view, and the gizmo / pick / physics overlays are gated
 // on it. Right-drag pans (grab-style, the world follows the cursor), the wheel
-// zooms multiplicatively about the cursor (kWheelStep; UE:
-// bCenterZoomAroundCursor), halfHeight clamps to [0.01 m, 1e6 m] (UE's
-// MIN_/MAX_ORTHOZOOM). F frames the selection, Home the scene.
+// zooms multiplicatively about the cursor (editor.camera.wheelZoomStep; UE:
+// bCenterZoomAroundCursor), halfHeight clamps to
+// editor.camera.ortho{Min,Max}HalfHeight (UE's MIN_/MAX_ORTHOZOOM). F frames
+// the selection, Home the scene.
 //
 // Perspective mode follows Unreal's input model: right-drag mouselooks about
 // the EYE (Look; the pivot moves with it), Alt+left-drag orbits the stored
@@ -35,7 +36,7 @@
 // ours, Unity's), middle-drag pans in the view plane (Pan3D), the wheel
 // dollies along the view vector (Dolly), and the wheel WHILE flying steps the
 // speed scalar (AdjustSpeed). Fly and pan speed scale with the distance to the
-// pivot (UE's bUseDistanceScaledCameraSpeed shape, ON here with a 0.1 floor)
+// pivot (UE's bUseDistanceScaledCameraSpeed shape, ON here with a floor)
 // times the persisted speedScalar (UE's CameraSpeedScalar). Pitch clamps to
 // +-90 deg minus an epsilon (UE's pitch lock). F sets the pivot to the bounds
 // centre and solves the distance from the AABB's half-diagonal and the fov
@@ -43,7 +44,11 @@
 // (Unity's model), never "orbit around selection".
 //
 // Persistence, the 3D input block and the --view-mode flag are Task 7's; this
-// header carries only the state and the math.
+// header carries only the state and the math. Every tunable is an
+// editor.camera.* cvar (EditorCameraSettings, settings S6-30): each method
+// reads the published snapshot once per call.
+
+#include "Settings/EditorViewportSettings.hpp"   // EditorCameraSettings
 
 #include <Arcane/Scene/ViewTransform.hpp>
 
@@ -74,7 +79,7 @@ namespace Arcane::Editor
     struct Ortho2D
     {
         glm::vec2 center{0.0f, 0.0f};
-        float     halfHeight = 5.0f;
+        float     halfHeight = EditorCameraSettings{}.default2DHalfHeight;
     };
 
     // The perspective transform: the eye sits `distance` from `pivot` along
@@ -84,10 +89,10 @@ namespace Arcane::Editor
     struct Orbit3D
     {
         glm::vec3 pivot{0.0f, 0.0f, 0.0f};
-        float     yawDeg   = -30.0f;
-        float     pitchDeg =  30.0f;
-        float     distance =  10.0f;
-        float     fovYDeg  =  60.0f;
+        float     yawDeg   = EditorCameraSettings{}.default3DYaw;
+        float     pitchDeg = EditorCameraSettings{}.default3DPitch;
+        float     distance = EditorCameraSettings{}.default3DDistance;
+        float     fovYDeg  = EditorCameraSettings{}.fovYDeg;
     };
 
     // World-space AABB for framing (3D; the 2D camera fits its XY projection).
@@ -106,36 +111,10 @@ namespace Arcane::Editor
 
     struct EditorCamera
     {
-        // 2D zoom clamp, in world half-height: UE's MIN_/MAX_ORTHOZOOM. Both
-        // ends are finite and positive, so the pixels-per-metre the 2D ops
-        // divide by can never be zero and the scene can never be scrolled to a
-        // scale it cannot come back from.
-        static constexpr float kMinHalfHeight = 0.01f;
-        static constexpr float kMaxHalfHeight = 1.0e6f;
-
-        // Multiplicative zoom / dolly per wheel tick.
-        static constexpr float kWheelStep = 1.12f;
-
-        // Fraction of the viewport a framed AABB spans on its fitted axis:
-        // 10% total padding, 5% a side, so a framed object is not flush against
-        // the panel edge.
-        static constexpr float kFrameFill = 0.9f;
-
-        // Perspective distance clamp (the eye can never reach the pivot), and
-        // the fixed near/far planes Resolve hands ViewTransform::Perspective.
-        static constexpr float kMinDistance = 0.05f;
-        static constexpr float kMaxDistance = 1.0e5f;
-        static constexpr float kNearZ       = 0.05f;
-        static constexpr float kFarZ        = 5000.0f;
-
-        // Fly speed in m/s at speedScalar 1 and a 10 m pivot distance (the
-        // distance scale is 1 there).
-        static constexpr float kBaseFlySpeed = 5.0f;
-
         ViewMode mode = ViewMode::TwoD;
         Ortho2D  ortho;
         Orbit3D  orbit;
-        float    speedScalar = 1.0f;   // persisted; wheel while flying adjusts x1.1
+        float    speedScalar = EditorCameraSettings{}.speedScalar;   // editor.camera.speedScalar, synced per frame; the wheel steps it
 
         // The ONE view every consumer reads, for the current mode.
         [[nodiscard]] ViewTransform Resolve(glm::uvec2 viewport) const noexcept;
@@ -154,20 +133,22 @@ namespace Arcane::Editor
 
         // ---- 3D ------------------------------------------------------------
         // Right-drag: yaw/pitch about the EYE (the pivot moves so the eye stays
-        // put); 0.2 deg per pixel.
+        // put); editor.camera.lookSensitivity deg per pixel.
         void Look(glm::vec2 mouseDeltaPx) noexcept;
-        // Alt+left-drag: yaw/pitch about the PIVOT; 0.2 deg per pixel.
+        // Alt+left-drag: yaw/pitch about the PIVOT; editor.camera.orbitSensitivity
+        // deg per pixel.
         void Orbit(glm::vec2 mouseDeltaPx) noexcept;
         // WASD/QE: move eye AND pivot along the camera's axes (x right, y
-        // world up, z forward) at kBaseFlySpeed * speedScalar * distance scale,
-        // x2 when boosted.
+        // world up, z forward) at baseFlySpeed * speedScalar * distance scale,
+        // x boostMultiplier when boosted.
         void Fly(glm::vec3 localAxis, float dtSeconds, bool boost) noexcept;
         // Middle-drag: grab-style pan in the camera plane (pivot and eye move).
         void Pan3D(glm::vec2 screenDelta, glm::uvec2 viewport) noexcept;
         // Wheel: multiplicative distance change about the pivot.
         void Dolly(float wheelTicks) noexcept;
-        // Wheel while flying: speedScalar x1.1 per tick, clamped.
-        void AdjustSpeed(float wheelTicks) noexcept;
+        // Wheel while flying: speedScalar x speedWheelStep per tick, clamped to the
+        // editor.camera.speedScalar cvar's range (the caller writes the cvar).
+        void AdjustSpeed(float wheelTicks);
 
         [[nodiscard]] glm::vec3 Eye() const noexcept;
         [[nodiscard]] glm::vec3 Forward() const noexcept;
@@ -176,9 +157,9 @@ namespace Arcane::Editor
 
         // ---- both ----------------------------------------------------------
         // Mode-aware framing. 2D: centre on the XY box and fit the tighter axis
-        // with kFrameFill (a zero-extent axis cannot imply a scale and is
+        // with frameFill (a zero-extent axis cannot imply a scale and is
         // ignored; a point only re-centres). Perspective: pivot = centre,
-        // distance = half-diagonal / (tan(fovY/2) * min(aspect, 1)) / kFrameFill.
+        // distance = half-diagonal / (tan(fovY/2) * min(aspect, 1)) / frameFill.
         // An invalid bounds or a zero viewport leaves the camera untouched.
         void Frame(const FramingBounds& bounds, glm::uvec2 viewport) noexcept;
 
@@ -188,6 +169,13 @@ namespace Arcane::Editor
         // 2D: (center, 0); 3D: the pivot.
         [[nodiscard]] glm::vec3 FocusPoint() const noexcept;
     };
+
+    // A FRESH camera's pose from the published editor.camera.default* cvars
+    // (NextWorld: the editor's boot camera and a windowed project switch's
+    // reset; a restored ini pose then overrides it). Sets ortho.halfHeight and
+    // orbit yaw / pitch / distance only -- mode, centre, pivot, fov and speed
+    // are untouched (the --view-mode seed and the per-frame sync own those).
+    void ApplyFreshPose(EditorCamera& cam);
 
     // Bounds over an explicit entity set (Frame Selected). A sprite contributes
     // the AABB of the quad RenderSubmissionSystem draws -- the SAME four world

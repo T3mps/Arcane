@@ -125,7 +125,7 @@ namespace Arcane
 
     Graveyard::~Graveyard()
     {
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         // Fatal in debug: a nonempty graveyard at destruction means the
         // owner never Reaped up to the final fence value nor called Drain()
         // -- pending destroy thunks are about to be silently dropped (leaking

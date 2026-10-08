@@ -14,6 +14,32 @@ namespace Arcane::Editor
 {
     [[nodiscard]] constexpr bool UndoBarred(bool playing) noexcept { return playing; }
 
+    // Settings arc S3-13: a focused settings window owns Ctrl+Z / Ctrl+Y for
+    // its window-local undo (spec s6.3). The scene stack stands down while
+    // that is true, and also while Play or an open transaction already bars it.
+    [[nodiscard]] constexpr bool SceneConsumesUndoKeys(bool playing, bool inTransaction,
+                                                       bool settingsWindowFocused) noexcept
+    {
+        return !UndoBarred(playing) && !inTransaction && !settingsWindowFocused;
+    }
+
+    // HandleUndoRedoAndSceneShortcuts's scene Ctrl+Z / Ctrl+Y apply. A focused
+    // settings window (spec s6.3) stands the scene stack down; Play and an
+    // open transaction already do. Tests drive this same function.
+    inline void DispatchSceneUndoKeys(Arcane::CommandStack& scene,
+                                      bool shortcutsLive,
+                                      bool playing,
+                                      bool inTransaction,
+                                      bool settingsWindowFocused,
+                                      bool undoPressed,
+                                      bool redoPressed)
+    {
+        const bool sceneOwns = shortcutsLive
+            && SceneConsumesUndoKeys(playing, inTransaction, settingsWindowFocused);
+        if (sceneOwns && undoPressed) scene.Undo();
+        if (sceneOwns && redoPressed) scene.Redo();
+    }
+
     // A document's view of the shared stack, resolved per edit. Null = no undo
     // coverage now (Play): the document still edits and saves, it just pushes
     // nothing -- the "null = Play mode" contract made true.

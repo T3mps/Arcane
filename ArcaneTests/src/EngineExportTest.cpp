@@ -1,4 +1,4 @@
-// BuildInfo() proves the Arcane.dll boundary (ARCANE_API export resolved
+// BuildInfo() proves the Arcane.dll boundary (ARC_API export resolved
 // through the import lib at run time). The VersionString() check is a
 // Core-consistency pin, not a boundary check -- it is inline and compiles
 // into this exe.

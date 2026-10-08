@@ -13,4 +13,4 @@ namespace Fixture
     struct Module final : Arcane::GameModule {};
 }
 
-ARCANE_GAME_MODULE(Fixture::Module)
+ARC_GAME_MODULE(Fixture::Module)

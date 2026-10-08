@@ -374,7 +374,7 @@ TEST_CASE("nri diagnostics: an armed NRI chain fills a real report's GPU section
     // the desk battery's item. RenderGraphExec's NodeScope does precisely this
     // against this same slot. Spelled as a literal rather than through
     // GpuFaultInjector::kPassName because that constant is itself
-    // `#if !defined(ARCANE_DIST)` and this exe builds in Dist too.
+    // `#if !defined(ARC_BUILD_DIST)` and this exe builds in Dist too.
     const std::uint32_t token = backend->Breadcrumbs().BeginScope("pass:gpu-fault");
 
     const std::string txtPath = Arcane::Diagnostics::WriteReport("gpu-crash: device removed (test)");

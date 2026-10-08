@@ -71,7 +71,7 @@ namespace Arcane
     // -- a parse error that silently disabled the mechanism would hide every
     // entry in the file. An ABSENT file is a different thing entirely and is
     // the caller's business; it legitimately means no exclusions.
-    [[nodiscard]] ARCANE_API std::optional<std::vector<ExclusionEntry>>
+    [[nodiscard]] ARC_API std::optional<std::vector<ExclusionEntry>>
         ParseExclusions(std::string_view json, std::string& error);
 
     // The first entry matching every axis the entry constrains, or nullptr.
@@ -84,7 +84,7 @@ namespace Arcane
     // expiry. What is missing is per-Catch2-case skipping, which is Arc B's
     // work (see ExclusionEntry::target). Kept, not deleted: the matching rules
     // are correct and pinned, and Arc B is what turns them into behaviour.
-    [[nodiscard]] ARCANE_API const ExclusionEntry*
+    [[nodiscard]] ARC_API const ExclusionEntry*
         MatchExclusion(const std::vector<ExclusionEntry>& entries, const ExclusionQuery& q);
 
     // Whether `entry` expired STRICTLY BEFORE `today` (ISO YYYY-MM-DD), i.e. an
@@ -101,9 +101,9 @@ namespace Arcane
     // because those sort somewhere arbitrary among real dates rather than
     // failing. There is no validation here on purpose: the refusal belongs at
     // the parse boundary, where it can name the offending entry.
-    [[nodiscard]] ARCANE_API bool IsExpired(const ExclusionEntry& entry, std::string_view today);
+    [[nodiscard]] ARC_API bool IsExpired(const ExclusionEntry& entry, std::string_view today);
 
     // Today as ISO YYYY-MM-DD from the system clock, local time. The ONE place
     // that reads a clock, kept out of IsExpired so every rule above stays pure.
-    [[nodiscard]] ARCANE_API std::string TodayIso();
+    [[nodiscard]] ARC_API std::string TodayIso();
 }

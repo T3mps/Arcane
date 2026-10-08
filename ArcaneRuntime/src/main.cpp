@@ -5,9 +5,13 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/DiagnosticsSettings.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include "RuntimeApp.hpp"
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 
@@ -17,12 +21,8 @@
 #include <string>
 #include <vector>
 
-// Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
-// the EXE to redirect device creation into the vendored D3D12Core.dll under
-// .\D3D12\. Version must match the vendored package; NRI logging "Using
-// ID3D12Device10+" is the confirmation that the redirect took.
-extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
-extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
+// Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
+ARC_AGILITY_SDK_EXPORTS();
 
 namespace
 {
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
     Arcane::Log::Init();
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
-    const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
+    Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);   // non-const: the early rungs fill backend/vsync
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 
     // Same probe as the editor: identity to stdout, no window, no device. The
@@ -80,8 +80,14 @@ int main(int argc, char** argv)
     // watchdog is a raw thread stopped from an atexit hook Install registers,
     // so an early `return` is clean and the boot itself is finally covered.
     // AFTER the Log::Init/Mosaic trio above, which is still load-bearing (R16).
+    // I2: engine/project/EditorUser/user/--set rungs before Install and Runtime.
+    Arcane::HostBoot::ApplyEarlyConfigRungs(*parsed.config, Arcane::CommandLineCVarContext(),
+                                            /*editor*/ false);
     {
-        Arcane::Diagnostics::Config diag;
+        // The tunables are diagnostics.* (settings arc S6-2), read after the
+        // early rungs above so a project, user or --set value reaches Install.
+        Arcane::Diagnostics::Config diag =
+            Arcane::Diagnostics::ConfigFromSettings(Arcane::Settings<Arcane::DiagnosticsSettings>());
         diag.appName     = "ArcaneRuntime";
         diag.productName = ProductNameFor(parsed.config->projectPath);
         diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window

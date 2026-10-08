@@ -6,7 +6,7 @@
 // the physics commands. The one trait is ordering: it moves the body before
 // PhysicsSystem steps.
 //
-// PlayerController2DSystem.cpp declares the phase and role with ARCANE_SYSTEM;
+// PlayerController2DSystem.cpp declares the phase and role with ARC_SYSTEM;
 // the game-module prologue discovers it. It reads locally resolved gameplay
 // actions, so it runs on the client role; an authoritative network game would
 // route commands to a server system.

@@ -48,6 +48,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>    // SpriteTable / MeshTable -- the resolution the emitter reads
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -417,7 +418,7 @@ TEST_CASE("CollectPickables: with a SceneVisibility resource only members are em
     Arcane::SceneVisibility* sv = reg.EmplaceResource<Arcane::SceneVisibility>();
     REQUIRE(sv);
     sv->views.emplace_back();
-    Arcane::BuildVisibleSet(reg, Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 5.0f, glm::uvec2{ 800, 600 }), sv->views[0]);
+    Arcane::BuildVisibleSet(reg, Arcane::Ortho2DView(glm::vec2(0.0f), 5.0f, glm::uvec2{ 800, 600 }), sv->views[0]);
 
     std::vector<Arcane::PickDrawable> some;
     Arcane::CollectPickables(reg, some);

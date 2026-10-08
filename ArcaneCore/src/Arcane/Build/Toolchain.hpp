@@ -10,6 +10,15 @@
 // Studio". Presentation-free, std + Win32 only; ArcaneCore is also compiled
 // into the Server workspace, where nothing here is called.
 //
+// Tool-path preferences (BuildToolSettings, settings arc S6): ResolvePremake,
+// ResolveMsBuild, ResolveMake, ResolveNinja and ResolveDevenv first return the
+// matching build.* cvar (premakePath, msbuildPath, makePath, ninjaPath,
+// ideExecutable) when it names a launchable file (CheckLaunchPath; on POSIX
+// also an executable bit), absolute + normalised; an empty value discovers as
+// described below, and any other value warns and discovers. The cvar is read
+// on every call (Live). The cvars are LaunchesProgram (settings S7-SEC): only
+// --set and the machine-wide EditorUser rung set them, never project config.
+//
 // DiscoverSolution, FindOnPath and the concrete Resolve* lookups (Premake,
 // MsBuild, Make, Ninja, XcodeBuild) are pure enough to unit-test against a
 // temp directory and an explicit PATH/PATHEXT ([build], ToolchainTest.cpp).
@@ -31,7 +40,7 @@ namespace Arcane::Toolchain
     // the project root (Aphelyon.slnx beside Aphelyon.arcproj), and a
     // recursive scan would find ThirdParty/vendor solutions that are not
     // ours to build.
-    ARCANE_CORE_API std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
+    ARC_CORE_API std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
 
     // A shell-free PATH search: split `searchPath` on the native list
     // separator (';' on Windows, ':' on POSIX) and probe each directory in
@@ -48,7 +57,7 @@ namespace Arcane::Toolchain
     // Resolve* functions below read PATH/PATHEXT themselves) so this stays a
     // pure function: temp-directory tests drive it directly without
     // mutating the process environment.
-    ARCANE_CORE_API std::filesystem::path FindOnPath(
+    ARC_CORE_API std::filesystem::path FindOnPath(
         std::string_view command,
         std::string_view searchPath,
         std::string_view pathExt = {});
@@ -62,35 +71,35 @@ namespace Arcane::Toolchain
     // it elsewhere. Empty when neither the bundled copy nor PATH has one;
     // callers refuse rather than shell out to an optimistic bare name (ledger
     // ruling, Task 2/3).
-    ARCANE_CORE_API std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
+    ARC_CORE_API std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
 
     // The one VS-install-aware query Microsoft documents: run
     // %ProgramFiles(x86)%/Microsoft Visual Studio/Installer/vswhere.exe with
     // `arguments` and return the FIRST line it prints (a path), or empty when
     // vswhere is absent or found nothing. Shared by the two lookups below --
     // one probe, two questions. Windows-only; always empty elsewhere.
-    ARCANE_CORE_API std::filesystem::path VsWhere(const std::string& arguments);
+    ARC_CORE_API std::filesystem::path VsWhere(const std::string& arguments);
 
     // MSBuild via VsWhere:
     //   vswhere -latest -requires Microsoft.Component.MSBuild
     //           -find MSBuild\**\Bin\MSBuild.exe
     // falling back to a concrete "msbuild"/"MSBuild.exe" FindOnPath() hit over
     // PATH (a Developer Command Prompt launch). Empty when neither answers.
-    ARCANE_CORE_API std::filesystem::path ResolveMsBuild();
+    ARC_CORE_API std::filesystem::path ResolveMsBuild();
 
     // Make: Windows prefers "mingw32-make" (MSYS2/MinGW's name) over "make"
     // on PATH; POSIX has only "make". Empty when PATH has neither.
-    ARCANE_CORE_API std::filesystem::path ResolveMake();
+    ARC_CORE_API std::filesystem::path ResolveMake();
 
     // Ninja: "ninja" on PATH (PATHEXT-aware on Windows). Empty when absent.
-    ARCANE_CORE_API std::filesystem::path ResolveNinja();
+    ARC_CORE_API std::filesystem::path ResolveNinja();
 
     // xcodebuild: the fixed macOS location (/usr/bin/xcodebuild), else PATH.
     // Always empty on a non-macOS host -- there is no PATH worth searching.
-    ARCANE_CORE_API std::filesystem::path ResolveXcodeBuild();
+    ARC_CORE_API std::filesystem::path ResolveXcodeBuild();
 
     // devenv.exe via VsWhere: vswhere -latest -find Common7\IDE\devenv.exe.
     // Empty when no Visual Studio install is found (the editor greys its
     // Open Visual Studio item on that).
-    ARCANE_CORE_API std::filesystem::path ResolveDevenv();
+    ARC_CORE_API std::filesystem::path ResolveDevenv();
 }

@@ -13,7 +13,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API InputDevices
+    class ARC_API InputDevices
     {
     public:
         static std::unique_ptr<InputDevices> Create();

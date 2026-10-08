@@ -73,7 +73,7 @@ namespace Arcane::Serialization
     // The process-wide serializable-resource set (defined in Arcane.dll). Default-
     // registers the SceneRoot codec on first access. Exported so a test/host in
     // another module registers into the SAME instance the engine snapshots with.
-    ARCANE_CORE_API ResourceSerializerRegistry& SerializableResources();
+    ARC_CORE_API ResourceSerializerRegistry& SerializableResources();
 
     // Serializes every registered + present resource into a length-framed section.
     inline std::vector<std::byte> WriteResourceSection(const Astra::Registry& reg,
