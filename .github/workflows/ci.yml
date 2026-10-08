@@ -197,7 +197,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           scripts/fetch-premake.sh
-          VK_SDK_BOOTSTRAP=1 scripts/fetch-vulkan-sdk-macos.sh --system
+          scripts/fetch-vulkan-sdk-macos.sh --system
           # MoltenVK is the ONLY ICD the leg may see.
           echo "VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
 
@@ -364,10 +364,3 @@ jobs:
             /tmp/arcane-witness/
           if-no-files-found: ignore
           retention-days: 14
-
-      # Until VK_SDK_PINNED_SHA256 is filled in, print the zip's digest LAST,
-      # where a log tail always reaches it (the bootstrap warning is buried
-      # under the build output). Remove once the pin lands.
-      - name: Vulkan SDK digest for the pin (macOS)
-        if: always() && runner.os == 'macOS'
-        run: shasum -a 256 ThirdParty/tools/vulkan-sdk-macos/download/*.zip || true

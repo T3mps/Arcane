@@ -159,5 +159,4 @@ powershell -File scripts\run-tests.ps1 Debug --rng-seed 1
 | No sanitizer lanes | Not yet: the engine has never been run under ASan/TSan on POSIX. Tracked as follow-up work, not a design choice. |
 | SDL3 and the Vulkan validation layer are built from source on Linux/macOS | Ubuntu 24.04 does not package SDL3 and its validation layer (1.3.275) is too old; both builds are pinned and cached. |
 | The Windows leg uses the vendored premake `.exe` rather than a fetched, SHA-pinned one | It is checked in (`ThirdParty/premake5/`), so the repo itself pins it. |
-| The macOS Vulkan SDK zip is version-pinned but its SHA-256 is still the all-zero placeholder (`VK_SDK_BOOTSTRAP=1` prints the digest and continues) | The digest has to be read off a runner (LunarG's download host is not reachable from the authoring sandbox); the last step of each macOS leg prints it. Fill in `VK_SDK_PINNED_SHA256` and drop `VK_SDK_BOOTSTRAP=1` and that step. |
 | The macOS [gpu] lane excludes the editor golden witnesses (E2-E6) | MoltenVK on the paravirtual device rasterises editor text differently from the Windows desk's reference; see `scripts/macos-test-exclusions.txt`. |
