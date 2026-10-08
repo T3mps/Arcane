@@ -51,6 +51,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include "ImGuiTestKeys.hpp"   // TestKeys::AddKeyEvent: Ctrl as this platform's user presses it
 
 using Arcane::Editor::DocServices;
 using Arcane::Editor::ShaderEditorDocument;
@@ -3285,9 +3286,9 @@ TEST_CASE("Node page s5.1.9: the page never creates, deletes, copies or pastes n
     h.Click(ImVec2(380.0f, 980.0f));                            // focus the page's window
     h.Key(ImGuiKey_Delete);
     ImGuiIO& io = ImGui::GetIO();
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    Arcane::TestKeys::AddKeyEvent(io, ImGuiMod_Ctrl, true);
     h.Key(ImGuiKey_C); h.Key(ImGuiKey_V); h.Key(ImGuiKey_D);
-    io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+    Arcane::TestKeys::AddKeyEvent(io, ImGuiMod_Ctrl, false); h.Frame();
     CHECK(h.doc->PassGraph(0)->nodes.size() == count);
     CHECK_FALSE(h.stack.CanUndo());
 }
