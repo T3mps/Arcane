@@ -712,6 +712,40 @@ namespace Arcane
 
         out.physicalDevice.getFeatures2(&enabledFeatures2);
 
+        // Record every portability gap on the device log, so a MoltenVK run
+        // names what it cannot do before anything trips over it.
+        if (havePortabilitySubset)
+        {
+            const struct { VkBool32 supported; const char* name; } kSubset[] = {
+                { portabilityFeatures.constantAlphaColorBlendFactors,         "constantAlphaColorBlendFactors"         },
+                { portabilityFeatures.events,                                 "events"                                 },
+                { portabilityFeatures.imageViewFormatReinterpretation,        "imageViewFormatReinterpretation"        },
+                { portabilityFeatures.imageViewFormatSwizzle,                 "imageViewFormatSwizzle"                 },
+                { portabilityFeatures.imageView2DOn3DImage,                   "imageView2DOn3DImage"                   },
+                { portabilityFeatures.multisampleArrayImage,                  "multisampleArrayImage"                  },
+                { portabilityFeatures.mutableComparisonSamplers,              "mutableComparisonSamplers"              },
+                { portabilityFeatures.pointPolygons,                          "pointPolygons"                          },
+                { portabilityFeatures.samplerMipLodBias,                      "samplerMipLodBias"                      },
+                { portabilityFeatures.separateStencilMaskRef,                 "separateStencilMaskRef"                 },
+                { portabilityFeatures.shaderSampleRateInterpolationFunctions, "shaderSampleRateInterpolationFunctions" },
+                { portabilityFeatures.tessellationIsolines,                   "tessellationIsolines"                   },
+                { portabilityFeatures.tessellationPointMode,                  "tessellationPointMode"                  },
+                { portabilityFeatures.triangleFans,                           "triangleFans"                           },
+                { portabilityFeatures.vertexAttributeAccessBeyondStride,      "vertexAttributeAccessBeyondStride"      },
+            };
+            std::string gaps;
+            for (const auto& feature : kSubset)
+            {
+                if (feature.supported)
+                    continue;
+                if (!gaps.empty())
+                    gaps += ", ";
+                gaps += feature.name;
+            }
+            ARC_INFO("Vulkan portability device '{}': VK_KHR_portability_subset gaps: {}",
+                     out.adapterName, gaps.empty() ? std::string("none") : gaps);
+        }
+
         // NRI capability contract item 14's rule applied to item 4's hard
         // set: keyed off the PHYSICAL query, so the message names the
         // capability the GPU does not offer rather than surfacing as a
