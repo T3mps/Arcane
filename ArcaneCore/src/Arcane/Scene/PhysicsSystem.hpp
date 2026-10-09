@@ -111,6 +111,10 @@ namespace Arcane
         Guid                               guid{};
         std::vector<Phys::FixtureHandle>   fixtures;
         bool                               retired = false;   // removed; erased after the next capture
+        // Previous handles after a paused rescale, same Collider2D indices.
+        // Side() falls back to these so that step's destroy-time End still
+        // translates; CaptureStep clears them once the step has been read.
+        std::vector<Phys::FixtureHandle>   retiredFixtures;
     };
 
     struct PhysicsEventBuffers2D
@@ -183,7 +187,8 @@ namespace Arcane
                                      std::vector<Phys::FixtureHandle> fixtures);
         ARC_CORE_API void RetireBody(Phys::BodyHandle handle);
         // Translate the world's arrays for the step just taken, replace stepEvents,
-        // append frameEvents, then erase retired records (their End has been read).
+        // append frameEvents, clear retiredFixtures (the step's Ends have been
+        // read), then erase retired records.
         ARC_CORE_API void CaptureStep();
         ARC_CORE_API PhysicsEvents2D StepEvents() const;    // the most recent physics step
         ARC_CORE_API PhysicsEvents2D FrameEvents() const;   // every step since this frame began
@@ -312,9 +317,13 @@ namespace Arcane
     // ones, so the body never transiently holds zero fixtures (sidesteps any
     // "body must keep >= 1 fixture" invariant). AddFixture / DropFixture recompute
     // body mass internally. The body is not moved, so pose is preserved.
+    // Returns the new handles in Collider2D order (R16). The caller parks the
+    // previous record handles in BodyRecord2D::retiredFixtures.
     // -------------------------------------------------------------------------
-    inline void RebuildScaledFixtures(Phys::PhysicsWorld& world, Phys::BodyHandle bh,
-                                      const Collider2D& col, glm::vec2 scale)
+    inline std::vector<Phys::FixtureHandle> RebuildScaledFixtures(Phys::PhysicsWorld& world,
+                                                                  Phys::BodyHandle bh,
+                                                                  const Collider2D& col,
+                                                                  glm::vec2 scale)
     {
         // Capture current fixtures BEFORE adding new ones (their indices are stable
         // until we mutate; the new fixtures append after them).
@@ -324,16 +333,19 @@ namespace Arcane
         for (std::uint32_t i = 0; i < n; ++i)
             old.push_back(world.GetBodyFixture(bh, i));
 
-        // Add authored fixtures at the new scaled dims.
+        // Add authored fixtures at the new scaled dims, Collider2D order.
+        std::vector<Phys::FixtureHandle> neu;
+        neu.reserve(col.fixtures.size());
         for (const Fixture& f : col.fixtures)
         {
             Phys::FixtureDef fd = MakeFixtureDef(f, scale);
-            world.AddFixture(bh, fd);
+            neu.push_back(world.AddFixture(bh, fd));
         }
 
         // Drop the pre-rebuild fixtures.
         for (Phys::FixtureHandle fh : old)
             world.DropFixture(fh);
+        return neu;
     }
 
     // -------------------------------------------------------------------------
@@ -669,8 +681,17 @@ namespace Arcane
                     const glm::vec2 planarScale(lt.scale);   // 2D solver: see the CREATE pass banner
                     if (planarScale != ref.appliedScale)
                     {
-                        RebuildScaledFixtures(world, ref.handle, col, planarScale);
+                        std::vector<Phys::FixtureHandle> neu =
+                            RebuildScaledFixtures(world, ref.handle, col, planarScale);
                         ref.appliedScale = planarScale;
+                        // R16: the record follows the new handles. The dropped
+                        // ones stay resolvable until CaptureStep reads their End.
+                        if (const auto rec = res->bodyRecords.find(PackBody(ref.handle));
+                            rec != res->bodyRecords.end())
+                        {
+                            rec->second.retiredFixtures = std::move(rec->second.fixtures);
+                            rec->second.fixtures = std::move(neu);
+                        }
                     }
 
                     // POS/ROT: stateless author reconcile. Only the Z-axis turn

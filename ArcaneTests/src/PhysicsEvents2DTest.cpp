@@ -12,6 +12,7 @@
 #include <Arcane/Scene/TransformSystems.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>
 #include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/SettingsSweep.hpp"
 
 namespace
 {
@@ -54,6 +55,18 @@ namespace
     Arcane::Fixture Box(float hw, float hh)
     {
         Arcane::Fixture f; f.kind = Manifold2D::Physics::ShapeKind::Aabb; f.halfW = hw; f.halfH = hh; return f;
+    }
+
+    int LandingHits()
+    {
+        World w;
+        Arcane::Fixture hitty = Box(0.5f, 0.5f); hitty.hitEvents = true;
+        w.Body("Ground", Manifold2D::Physics::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+        w.Body("Crate", Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -2.5f }, { hitty });
+        Arcane::PhysicsSystem physics(kDt);
+        int hits = 0;
+        for (int i = 0; i < 90; ++i) { physics(w.reg); hits += static_cast<int>(w.Res().StepEvents().contactHit.size()); }
+        return hits;
     }
 }
 
@@ -111,6 +124,30 @@ TEST_CASE("fixture indices map through the auto-fixture and AddFixture paths", "
     CHECK(sensorBegins == 1);
 }
 
+TEST_CASE("an AddFixture surface reports fixture index 1", "[physics][events]")
+{
+    World w;
+    Arcane::Fixture away = Box(0.2f, 0.2f); away.localPos = { 30.0f, 0.0f };   // fixture 0: auto-fixture, off the fall
+    Arcane::Fixture surface = Box(10.0f, 0.5f);                                 // fixture 1: AddFixture, the landing
+    const Astra::Entity ground = w.Body("Ground", Manifold2D::Physics::BodyType::Static, { 0.0f, 0.5f }, { away, surface });
+    const Astra::Entity crate  = w.Body("Crate",  Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem physics(kDt);
+    int begins = 0;
+    for (int i = 0; i < 120; ++i)
+    {
+        physics(w.reg);
+        for (const Arcane::ContactBegin2D& e : w.Res().StepEvents().contactBegin)
+        {
+            ++begins;
+            CHECK(e.a.entity == crate);
+            CHECK(e.b.entity == ground);
+            CHECK(e.b.guid == w.GuidOf(ground));
+            CHECK(e.b.fixture == 1u);
+        }
+    }
+    CHECK(begins == 1);
+}
+
 TEST_CASE("Opting one fixture out silences the pair (both-fixtures rule)", "[physics][events]")
 {
     World w;
@@ -159,16 +196,41 @@ TEST_CASE("a recycled body slot never resolves to the retired record", "[physics
     CHECK(sawSecondBegin);
 }
 
-TEST_CASE("physics.events.hitThreshold reaches the world", "[physics][events]")
+TEST_CASE("a paused rescale retires the old fixture until the next capture", "[physics][events]")
 {
     World w;
-    Arcane::Fixture hitty = Box(0.5f, 0.5f); hitty.hitEvents = true;
     w.Body("Ground", Manifold2D::Physics::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    w.Body("Crate", Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -2.5f }, { hitty });
+    const Astra::Entity crate = w.Body("Crate", Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    const Arcane::Guid guid = w.GuidOf(crate);
     Arcane::PhysicsSystem physics(kDt);
-    int hits = 0;
-    for (int i = 0; i < 90; ++i) { physics(w.reg); hits += static_cast<int>(w.Res().StepEvents().contactHit.size()); }
-    CHECK(hits >= 1);                              // the default 1 m/s threshold; a 6 m/s landing hits
+    for (int i = 0; i < 10; ++i) physics(w.reg);   // resting contact, Begin already delivered
+
+    Arcane::PhysicsSystem paused(kDt, /*stepWorld*/ false);
+    w.reg.GetComponent<Arcane::Transform>(crate)->scale = glm::vec3(2.0f, 2.0f, 1.0f);
+    paused(w.reg);                                 // rebuild: old handle retired, new handle current
+
+    bool sawEnd = false, sawBegin = false;
+    for (int i = 0; i < 8; ++i)
+    {
+        physics(w.reg);
+        for (const Arcane::ContactEnd2D& e : w.Res().StepEvents().contactEnd)
+            if (e.a.entity == crate && e.a.fixture == 0u && e.a.guid == guid) sawEnd = true;
+        for (const Arcane::ContactBegin2D& e : w.Res().StepEvents().contactBegin)
+            if (e.a.entity == crate && e.a.fixture == 0u && e.a.guid == guid) sawBegin = true;
+    }
+    CHECK(sawEnd);                                 // destroy-time End of the dropped fixture
+    CHECK(sawBegin);                               // Begin of the rebuilt fixture
+}
+
+TEST_CASE("physics.events.hitThreshold reaches the world", "[physics][events]")
+{
+    {
+        // Above the ~6 m/s landing. The guard publishes, and clears the Code
+        // rung on the way out -- including when a REQUIRE fails.
+        const Arcane::Test::ScopedCodeRung high("physics.events.hitThreshold", Arcane::CVarValue::Float32(50.0f));
+        CHECK(LandingHits() == 0);
+    }
+    CHECK(LandingHits() >= 1);                     // default 1 m/s, restored
 }
 
 TEST_CASE("PhysicsEvents2D.hpp includes no Manifold2D header", "[physics][events][guard]")

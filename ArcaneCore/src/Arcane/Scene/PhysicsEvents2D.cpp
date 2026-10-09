@@ -14,12 +14,21 @@ namespace Arcane
         {
             const auto it = res.bodyRecords.find(PackBody(body));
             if (it == res.bodyRecords.end()) return false;
-            const auto& fxs = it->second.fixtures;
-            const auto f = std::find(fxs.begin(), fxs.end(), fx);
-            if (f == fxs.end()) return false;
-            out.entity  = it->second.entity;
-            out.guid    = it->second.guid;
-            out.fixture = static_cast<std::uint32_t>(f - fxs.begin());
+            const BodyRecord2D& rec = it->second;
+            // Current handles first, then the ones a paused rescale just dropped
+            // (same Collider2D indices). A recycled slot's new generation does
+            // not match the retired handle.
+            auto indexOf = [](const std::vector<Phys::FixtureHandle>& fxs, Phys::FixtureHandle handle) -> int
+            {
+                const auto f = std::find(fxs.begin(), fxs.end(), handle);
+                return f == fxs.end() ? -1 : static_cast<int>(f - fxs.begin());
+            };
+            int idx = indexOf(rec.fixtures, fx);
+            if (idx < 0) idx = indexOf(rec.retiredFixtures, fx);
+            if (idx < 0) return false;
+            out.entity  = rec.entity;
+            out.guid    = rec.guid;
+            out.fixture = static_cast<std::uint32_t>(idx);
             return true;
         }
     }
@@ -79,6 +88,8 @@ namespace Arcane
         append(frameEvents.contactHit,   stepEvents.contactHit);
         append(frameEvents.sensorBegin,  stepEvents.sensorBegin);
         append(frameEvents.sensorEnd,    stepEvents.sensorEnd);
+        for (auto& kv : bodyRecords)
+            kv.second.retiredFixtures.clear();
         std::erase_if(bodyRecords, [](const auto& kv) { return kv.second.retired; });
     }
 
