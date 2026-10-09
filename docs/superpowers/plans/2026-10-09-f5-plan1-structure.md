@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-09-f5-unified-world-pipeline-design.md`. This plan implements section 8.1 and every ruling that lands in plan 1 (sections 3.1–3.4, 3.7, 4.1–4.4, 7.1). Where this plan and the spec disagree, the spec wins; stop and report.
 
-**Revision:** rev 3, 2026-10-09. Review round 2. Sprite extract submits into the host's persistent Batcher2D and copies the drained spans, so a registered QuadWorld material id is not rewritten to kMaterialSprite. ImDrawSnapshotRebuild fills ImDrawData by direct field assignment and never calls AddDrawList. Findings the re-review marked closed are unchanged.
+**Revision:** rev 3.1, 2026-10-09. Review round 2, plus the round-3 fix: both CPU ImGui tests set RendererHasTextures before NewFrame. Sprite extract submits into the host's persistent Batcher2D and copies the drained spans, so a registered QuadWorld material id is not rewritten to kMaterialSprite. ImDrawSnapshotRebuild fills ImDrawData by direct field assignment and never calls AddDrawList. Findings the re-review marked closed are unchanged.
 
 ## Global Constraints
 
@@ -1624,6 +1624,9 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and refu
     // Before NewFrame. NewFrame copies this into ImDrawListFlags_AllowVtxOffset
     // (imgui.cpp:5706-5707). A window list created afterwards carries the flag.
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+    // Matches the live backend (ImGuiNri.cpp:119). Without it NewFrame demands a
+    // built font atlas (imgui_draw.cpp:2778).
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
 
     ImGui::NewFrame();
     ImGui::Begin("one");
@@ -3402,6 +3405,10 @@ TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][e
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(32.0f, 32.0f);
+    // Before NewFrame, matching the live backend (ImGuiNri.cpp:119):
+    // without RendererHasTextures NewFrame demands a built font atlas
+    // (imgui_draw.cpp:2778).
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
 
     ImGui::NewFrame();
     ImGui::Begin("one");
