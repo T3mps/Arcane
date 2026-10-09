@@ -6,6 +6,9 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
+#if ARCANE_PLATFORM_MACOS
+#include <SDL3/SDL_metal.h>
+#endif
 
 #include <stb_image.h>   // decode the icon file; implementation lives in Assets/StbImpl.cpp (same DLL)
 
@@ -101,10 +104,35 @@ namespace Arcane
         SDL_WindowFlags flags = 0;
         if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
         if (desc.hidden)    flags |= SDL_WINDOW_HIDDEN;
+#if ARCANE_PLATFORM_MACOS
+        // macOS: the Vulkan backend (MoltenVK) presents to a CAMetalLayer that
+        // NRI wraps with VK_EXT_metal_surface (NativeHandle below), so the
+        // window is a METAL window. SDL_WINDOW_VULKAN would make SDL load its
+        // own Vulkan library at creation -- a second loader path nothing uses.
+        // Only Cocoa has Metal views: SDL refuses SDL_WINDOW_METAL on the
+        // "offscreen" driver (the test lanes), and with NO graphics flag SDL
+        // 3.2 on macOS defaults the window to OpenGL, which offscreen cannot
+        // load. So every other macOS window is created with an external
+        // graphics context: SDL attaches no API, and NativeHandle has no layer
+        // to hand out there anyway.
+        const char* driver = SDL_GetCurrentVideoDriver();
+        const bool cocoa = driver && SDL_strcmp(driver, "cocoa") == 0;
+        if (desc.vulkan && cocoa) flags |= SDL_WINDOW_METAL;
+        const SDL_PropertiesID createProps = SDL_CreateProperties();
+        SDL_SetStringProperty(createProps, SDL_PROP_WINDOW_CREATE_TITLE_STRING, desc.title.c_str());
+        SDL_SetNumberProperty(createProps, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, (Sint64)desc.width);
+        SDL_SetNumberProperty(createProps, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, (Sint64)desc.height);
+        SDL_SetNumberProperty(createProps, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, (Sint64)flags);
+        if (!(flags & SDL_WINDOW_METAL))
+            SDL_SetBooleanProperty(createProps, SDL_PROP_WINDOW_CREATE_EXTERNAL_GRAPHICS_CONTEXT_BOOLEAN, true);
+        m_window = SDL_CreateWindowWithProperties(createProps);
+        SDL_DestroyProperties(createProps);
+#else
         if (desc.vulkan)    flags |= SDL_WINDOW_VULKAN;
 
         m_window = SDL_CreateWindow(desc.title.c_str(),
                                     (int)desc.width, (int)desc.height, flags);
+#endif
         if (!m_window)
         {
             ARC_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());
@@ -128,6 +156,13 @@ namespace Arcane
     {
         if (m_window)
         {
+#if ARCANE_PLATFORM_MACOS
+            if (m_metalView)
+            {
+                SDL_Metal_DestroyView(m_metalView);
+                m_metalView = nullptr;
+            }
+#endif
             SDL_DestroyWindow(m_window);
             m_window = nullptr;
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
@@ -382,6 +417,23 @@ namespace Arcane
 #if ARCANE_PLATFORM_WINDOWS
         return SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#elif ARCANE_PLATFORM_MACOS
+        // macOS port: the CAMetalLayer of a Metal view SDL attaches to the
+        // NSWindow, created on first ask and owned by this Window. The
+        // "offscreen" driver (no Cocoa window) has none: nullptr, as on Linux.
+        if (!m_metalView)
+        {
+            if (!SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
+                                        SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr))
+                return nullptr;
+            m_metalView = SDL_Metal_CreateView(m_window);
+            if (!m_metalView)
+            {
+                ARC_ERROR("SDL_Metal_CreateView failed: {}", SDL_GetError());
+                return nullptr;
+            }
+        }
+        return SDL_Metal_GetLayer(m_metalView);
 #else
         // Linux port: whichever window system SDL's video driver is on. An X11
         // Window is an integer XID, carried pointer-sized; the "offscreen"
@@ -396,7 +448,7 @@ namespace Arcane
 
     void* Window::NativeDisplay() const
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARCANE_PLATFORM_WINDOWS || ARCANE_PLATFORM_MACOS
         return nullptr;
 #else
         if (!m_window) return nullptr;
@@ -409,7 +461,7 @@ namespace Arcane
 
     bool Window::IsWaylandWindow() const
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARCANE_PLATFORM_WINDOWS || ARCANE_PLATFORM_MACOS
         return false;
 #else
         return m_window && SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),

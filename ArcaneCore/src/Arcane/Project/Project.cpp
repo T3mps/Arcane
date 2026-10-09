@@ -3,6 +3,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN, ARC_ERROR
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
+#include <Arcane/Platform/Process.hpp>   // Platform::QueryProcess -- EditorLock liveness off-Windows
 
 #include <Json.hpp>
 
@@ -656,37 +657,14 @@ namespace Arcane
 #ifndef _WIN32
         namespace
         {
-            // Linux port (2026-10-05): /proc/<pid>/stat is the liveness oracle.
-            // Field 3 is the state ('Z' = exited, awaiting its parent's reap --
-            // the ELF twin of Windows' lingering process OBJECT) and field 22
-            // the start time in clock ticks since boot -- a recycled pid has a
-            // different one, which is the creation-time tell.
-            struct ProcStat
+            // The liveness oracle (Linux: /proc/<pid>/stat; macOS:
+            // proc_pidinfo -- Arcane/Platform/Process.hpp): the pid exists,
+            // its creation stamp (a recycled pid has a different one), and
+            // whether it has exited awaiting its parent's reap -- the POSIX
+            // twin of Windows' lingering process OBJECT.
+            Platform::ProcessStat ReadProcStat(uint32_t pid)
             {
-                bool     found = false;
-                char     state = '?';
-                uint64_t start = 0;
-            };
-
-            ProcStat ReadProcStat(uint32_t pid)
-            {
-                ProcStat st;
-                std::ifstream f("/proc/" + std::to_string(pid) + "/stat");
-                if (!f.is_open())
-                    return st;
-                std::string all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-                const std::size_t close = all.rfind(')');   // comm may contain spaces and ')'
-                if (close == std::string::npos || close + 2 >= all.size())
-                    return st;
-                std::istringstream rest(all.substr(close + 2));
-                std::string field;
-                for (int i = 3; i <= 22 && rest >> field; ++i)
-                {
-                    if (i == 3)  st.state = field.empty() ? '?' : field[0];
-                    if (i == 22) st.start = std::strtoull(field.c_str(), nullptr, 10);
-                }
-                st.found = true;
-                return st;
+                return Platform::QueryProcess(pid);
             }
         }
 #endif
@@ -770,14 +748,14 @@ namespace Arcane
                 return std::nullopt;
             return info->pid;
 #else
-            // The same three tells via /proc (see ReadProcStat): the pid still
+            // The same three tells via the OS process table (see ReadProcStat): the pid still
             // has a stat entry, its start time matches, and it is not a zombie.
-            const ProcStat st = ReadProcStat(info->pid);
+            const Platform::ProcessStat st = ReadProcStat(info->pid);
             if (!st.found)
                 return std::nullopt;
             if (info->start != 0 && info->start != st.start)
                 return std::nullopt;
-            if (st.state == 'Z' || st.state == 'X')
+            if (st.exited)
                 return std::nullopt;
             return info->pid;
 #endif

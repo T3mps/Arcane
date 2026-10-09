@@ -12,7 +12,12 @@
 # dxc resolution, first hit wins:
 #   1. $ARCANE_DXC                                  (explicit path to a dxc binary)
 #   2. ThirdParty/tools/dxc-linux/bin/dxc           (scripts/fetch-dxc-linux.sh)
-#   3. dxc on PATH
+#   3. ThirdParty/tools/dxc-macos/bin/dxc           (scripts/fetch-vulkan-sdk-macos.sh)
+#   4. dxc on PATH
+#
+# macOS emits SPIR-V ONLY: a Mac runs the Vulkan backend (MoltenVK) and never
+# loads DXIL, and the Vulkan SDK's DXC has no libdxil to sign DXIL with.
+# ARCANE_SHADER_TARGETS ("dxil spirv" / "spirv") overrides the per-OS default.
 set -eu
 SRC=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$SRC/../.." && pwd)
@@ -23,13 +28,32 @@ DXC="${ARCANE_DXC:-}"
 if [ -z "$DXC" ] && [ -x "$ROOT/ThirdParty/tools/dxc-linux/bin/dxc" ]; then
     DXC="$ROOT/ThirdParty/tools/dxc-linux/bin/dxc"
 fi
+if [ -z "$DXC" ] && [ -x "$ROOT/ThirdParty/tools/dxc-macos/bin/dxc" ]; then
+    DXC="$ROOT/ThirdParty/tools/dxc-macos/bin/dxc"
+fi
 if [ -z "$DXC" ] && command -v dxc >/dev/null 2>&1; then
     DXC=$(command -v dxc)
 fi
 if [ -z "$DXC" ]; then
-    echo "compile-shaders.sh: no dxc found. Run scripts/fetch-dxc-linux.sh, put dxc on PATH, or set ARCANE_DXC." >&2
+    echo "compile-shaders.sh: no dxc found. Run scripts/fetch-dxc-linux.sh (Linux) or scripts/fetch-vulkan-sdk-macos.sh (macOS), put dxc on PATH, or set ARCANE_DXC." >&2
     exit 1
 fi
+
+if [ -z "${ARCANE_SHADER_TARGETS:-}" ]; then
+    case "$(uname -s)" in
+        Darwin) ARCANE_SHADER_TARGETS=spirv ;;
+        *)      ARCANE_SHADER_TARGETS="dxil spirv" ;;
+    esac
+fi
+WANT_DXIL=0
+WANT_SPIRV=0
+for t in $ARCANE_SHADER_TARGETS; do
+    case "$t" in
+        dxil)  WANT_DXIL=1 ;;
+        spirv) WANT_SPIRV=1 ;;
+        *) echo "compile-shaders.sh: unknown shader target '$t' (dxil, spirv)" >&2; exit 1 ;;
+    esac
+done
 
 mkdir -p "$OUT/dxil" "$OUT/spirv"
 
@@ -46,8 +70,12 @@ tr -d '\r' < "$BAT" | sed -n 's/^call :compile[[:space:]]\{1,\}\([^|]*\)||.*$/\1
 while read -r src entry profile out; do
     [ -n "$src" ] || continue
     # shellcheck disable=SC2086 -- SPIRV_FLAGS is a word list on purpose.
-    "$DXC" -T "$profile" -E "$entry" -Fo "$OUT/dxil/$out.bin" "$SRC/$src.hlsl"
-    "$DXC" -T "$profile" -E "$entry" $SPIRV_FLAGS -Fo "$OUT/spirv/$out.bin" "$SRC/$src.hlsl"
+    if [ "$WANT_DXIL" = 1 ]; then
+        "$DXC" -T "$profile" -E "$entry" -Fo "$OUT/dxil/$out.bin" "$SRC/$src.hlsl"
+    fi
+    if [ "$WANT_SPIRV" = 1 ]; then
+        "$DXC" -T "$profile" -E "$entry" $SPIRV_FLAGS -Fo "$OUT/spirv/$out.bin" "$SRC/$src.hlsl"
+    fi
     count=$((count + 1))
 done < "$OUT/.entries"
 rm -f "$OUT/.entries"
@@ -56,4 +84,4 @@ if [ "$count" -eq 0 ]; then
     echo "compile-shaders.sh: no 'call :compile' lines found in $BAT" >&2
     exit 1
 fi
-echo "Shaders compiled to $OUT ($count entry points)"
+echo "Shaders compiled to $OUT ($count entry points; targets: $ARCANE_SHADER_TARGETS)"

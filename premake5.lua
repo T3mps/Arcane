@@ -77,6 +77,18 @@ function arcane_posix(cmd)
     if ARCANE_WINDOWS then return false end
     return cmd
 end
+-- The runtime compile service's DXC library, staged beside a host/test exe
+-- when present (never vendored off-Windows). Linux: libdxcompiler.so +
+-- libdxil.so from scripts/fetch-dxc-linux.sh. macOS: libdxcompiler.dylib
+-- from the Vulkan SDK (scripts/fetch-vulkan-sdk-macos.sh links it into
+-- ThirdParty/tools/dxc-macos/); no libdxil -- a Mac emits SPIR-V only.
+function arcane_stage_dxc()
+    if ARCANE_WINDOWS then return false end
+    if os.target() == "macosx" then
+        return 'if [ -f "%{wks.location}/ThirdParty/tools/dxc-macos/lib/libdxcompiler.dylib" ]; then cp -fL "%{wks.location}/ThirdParty/tools/dxc-macos/lib/libdxcompiler.dylib" "%{cfg.buildtarget.directory}/"; fi'
+    end
+    return 'if [ -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" ]; then cp -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxil.so" "%{cfg.buildtarget.directory}/"; fi'
+end
 function arcane_cmds(list)
     local out = {}
     for _, c in ipairs(list) do
@@ -98,8 +110,31 @@ else
     ARCANE_IMGUI_IMPORT = ""
 end
 
+-- macOS port (2026-10-07): a Mac target builds for the HOST's architecture --
+-- arm64 on Apple Silicon (the supported Mac), x86_64 on an Intel Mac --
+-- overridable with ARCANE_MAC_ARCH=arm64|x86_64 (e.g. to cross-generate from
+-- Linux with --os=macosx). Every other target keeps "x64". premake reports
+-- ARM64 as %{cfg.architecture} = "AARCH64", so the Mac bin dirs are
+-- bin/<Config>-macosx-AARCH64-md (scripts/arcane-bin-dir.sh spells it once).
+-- build/arcane.lua carries the same rule so a game module matches its engine.
+function arcane_mac_architecture()
+    local want = os.getenv("ARCANE_MAC_ARCH")
+    if not want or want == "" then
+        if os.host() == "macosx" then
+            want = os.outputof("uname -m") or "arm64"
+        else
+            want = "arm64"
+        end
+    end
+    want = want:lower()
+    if want == "arm64" or want == "aarch64" then return "ARM64" end
+    if want == "x86_64" or want == "x64" then return "x86_64" end
+    error("ARCANE_MAC_ARCH must be arm64 or x86_64, got '" .. want .. "'")
+end
+ARCANE_ARCH = (os.target() == "macosx") and arcane_mac_architecture() or "x64"
+
 workspace "Arcane"
-    architecture "x64"
+    architecture(ARCANE_ARCH)
     startproject "ArcaneTests"
     configurations { "Debug", "Release", "Dist" }
     multiprocessorcompile "On"
@@ -121,6 +156,14 @@ workspace "Arcane"
     filter "system:not windows"
         pic "On"
         buildoptions { "-ffp-contract=off", "-fno-fast-math" }
+        -- The crash path walks a FOREIGN thread's stack (a faulting thread
+        -- parked in its signal handler, a hung main thread) by its frame-
+        -- pointer chain (Base/PortableStack.cpp): ELF has no PE-style
+        -- RtlVirtualUnwind over an arbitrary context, and a DWARF unwinder
+        -- for one is a libunwind-sized dependency. Kept in every config, as
+        -- Ubuntu 24.04 and Fedora now do distro-wide; the cost is one
+        -- register, low single-digit percent at worst.
+        buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
         -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
         -- beside the exe) must win, exactly as the PE loader searches the exe
         -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy
@@ -286,6 +329,9 @@ project "ArcaneCore"
         -- user32/gdi32: Platform/NativeWindow.cpp (crash window plan 2) --
         -- explicit rather than inherited from the VS default list.
         links { "dbghelp", "user32", "gdi32" }
+        -- The POSIX backend of Diagnostics (signals, the snapshot signal, the
+        -- Breakpad-format minidump) never builds into a PE image.
+        removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
 
     -- ELF: dlopen/dladdr (Module, ForeignModules) and threads; -z defs makes
     -- an unresolved symbol a link error HERE, not at the first exe link.
@@ -298,9 +344,12 @@ project "ArcaneCore"
     -- (SharedTypeContext, Log::Engine) assume is per-module.
     filter "system:not windows"
         links { "dl", "pthread" }
-        linkoptions { "-Wl,-z,defs" }
         visibility "Hidden"
         inlinesvisibility "Hidden"
+    -- Mach-O's ld64 already refuses undefined symbols in a dylib by default
+    -- (-undefined error); -z defs is a GNU ld spelling it rejects.
+    filter "system:linux"
+        linkoptions { "-Wl,-z,defs" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -613,12 +662,11 @@ end   -- arcbuild-process-fixture: Windows target only (Task 6)
 -- own include root plus the two vendored header-only deps those headers
 -- pull in transitively (spdlog via Log.hpp, Mosaic via Assert.hpp/Log.hpp).
 --
--- Windows target only, same gate as arcbuild-process-fixture above (R7):
--- Diagnostics is Windows-only today (Base/Diagnostics.hpp's own header
--- comment says every entry point no-ops elsewhere), so a Linux generation
--- would build a fixture that could never prove anything.
+-- Every target since the Diagnostics POSIX port (2026-10-05): the fixture
+-- proves the signal-based crash path exactly as it proves the SEH one. Only
+-- its `--reporter`/`--monitor` hand-off stays Windows-only (below), because
+-- ArcaneCrashReporter does.
 -- ============================================================================
-if os.target() == "windows" then
 project "death-fixture"
     location "ArcaneTests/death-fixture"
     kind "ConsoleApp"
@@ -678,8 +726,11 @@ project "death-fixture"
 
     -- Crash window plan 2 (spec §12 item 2): the fixture's `--reporter` mode
     -- hands off to the STAGED reporter beside it, exactly as a host does, so
-    -- the hand-off is proven end to end as two real processes.
-    dependson { "ArcaneCrashReporter" }
+    -- the hand-off is proven end to end as two real processes. The reporter
+    -- is a Windows-target project (its own gate below).
+    if os.target() == "windows" then
+        dependson { "ArcaneCrashReporter" }
+    end
 
     -- The fixture loads ArcaneCore.dll from its own directory, same as every
     -- other consumer (mirrors ArcaneTests' matching postbuild line).
@@ -688,7 +739,6 @@ project "death-fixture"
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
         arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
     })
-end   -- death-fixture: Windows target only (task 6, mirrors arcbuild-process-fixture's gate)
 
 -- ============================================================================
 -- ArcaneCrashReporter (crash window plan 2; spec §6): the out-of-process crash
@@ -854,13 +904,24 @@ project "ArcaneClient"
     -- --whole-archive applies to the inputs that FOLLOW it on the command line.
     -- -z defs: an ELF shared object otherwise links with undefined symbols
     -- and they surface only at the exe link (84 SDL_* did, inventory A11).
-    filter "system:not windows"
+    filter "system:linux"
         linkoptions {
             "-Wl,--whole-archive",
             "%{wks.location}/ThirdParty/imgui/bin/" .. outputdir .. "/imgui/libimgui.a",
             "-Wl,--no-whole-archive",
             "-Wl,-z,defs",
         }
+    -- Mach-O twin: ld64's -force_load takes the archive as its argument
+    -- (undefined symbols are already a dylib link error by default there).
+    -- SDL3 is a from-source dylib whose install name is @rpath/libSDL3.0.dylib,
+    -- so the dylib that links it carries an rpath to its lib dir; dyld resolves
+    -- @rpath through every image on the load chain, so the hosts need nothing.
+    filter "system:macosx"
+        linkoptions {
+            "-Wl,-force_load,%{wks.location}/ThirdParty/imgui/bin/" .. outputdir .. "/imgui/libimgui.a",
+        }
+        if SDL3_LIB_DIR then linkoptions { "-Wl,-rpath," .. SDL3_LIB_DIR } end
+    filter "system:not windows"
         -- SDL3 (shared, from the system -- see SDL3_INCLUDE_DIR at the top),
         -- dlopen/dladdr, threads.
         links { "SDL3", "dl", "pthread" }
@@ -873,8 +934,13 @@ project "ArcaneClient"
         if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR } end
         -- dxcapi.h + its WinAdapter.h COM shim for the runtime ShaderCompiler
         -- (the Windows SDK supplies dxcapi.h there). From the Linux DXC
-        -- release that scripts/fetch-dxc-linux.sh drops in place.
+        -- release that scripts/fetch-dxc-linux.sh drops in place; on macOS
+        -- the Vulkan SDK's copy (scripts/fetch-vulkan-sdk-macos.sh links it
+        -- into ThirdParty/tools/dxc-macos/).
+    filter "system:linux"
         includedirs { "%{wks.location}/ThirdParty/tools/dxc-linux/include/dxc" }
+    filter "system:macosx"
+        includedirs { "%{wks.location}/ThirdParty/tools/dxc-macos/include/dxc" }
     filter {}
 
     defines {
@@ -1150,7 +1216,7 @@ project "ArcaneRuntime"
         -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
         -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
         -- gitignored); staged when present, so a box without it still builds.
-        arcane_posix('if [ -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" ]; then cp -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxil.so" "%{cfg.buildtarget.directory}/"; fi'),
+        arcane_stage_dxc(),
         -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
         -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
         -- and looks there for D3D12Core.dll to unlock enhanced barriers /
@@ -1296,7 +1362,7 @@ project "ArcaneEditor"
         -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
         -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
         -- gitignored); staged when present, so a box without it still builds.
-        arcane_posix('if [ -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" ]; then cp -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxil.so" "%{cfg.buildtarget.directory}/"; fi'),
+        arcane_stage_dxc(),
         -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
         -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
         -- and looks there for D3D12Core.dll to unlock enhanced barriers /
@@ -1898,19 +1964,21 @@ project "ArcaneTests"
     -- name a target that was never emitted. The POSIX process cases in
     -- BuildDriverTest.cpp spawn /bin/sh instead and need no build dependency.
     --
-    -- death-fixture (crash window plan 1, task 6): same reasoning -- it is
-    -- also Windows-only (its own gate above), and CrashPathTest.cpp's
-    -- "death fixture: ..." cases locate it the same "../<project>/
-    -- <project>.exe" way BuildDriverTest.cpp locates arcbuild-process-
-    -- fixture.exe, so it must exist before this project's tests can run.
+    -- death-fixture (crash window plan 1, task 6): CrashPathTest.cpp's
+    -- "death fixture: ..." cases locate it as "../death-fixture/<exe>" the
+    -- way BuildDriverTest.cpp locates arcbuild-process-fixture.exe, so it
+    -- must exist before this project's tests can run -- on every target
+    -- since the Diagnostics POSIX port, unlike the two below.
     --
     -- ArcaneCrashReporter (crash window plan 2, task 4): same reasoning again --
     -- Windows-only by its own gate. CrashPathTest.cpp's `--reporter` case
     -- requires the exe STAGED beside the death fixture (death-fixture's own
     -- dependson + postbuild do that), and the later `reporter:` cases run
     -- "../ArcaneCrashReporter/ArcaneCrashReporter.exe" directly (Task 5).
+    -- death-fixture builds for every target since the Diagnostics POSIX port.
+    dependson { "death-fixture" }
     if os.target() == "windows" then
-        dependson { "arcbuild-process-fixture", "death-fixture", "ArcaneCrashReporter" }
+        dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
 
     -- The test exe loads ArcaneClient.dll from its own directory.
@@ -1983,7 +2051,7 @@ project "ArcaneTests"
         -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
         -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
         -- gitignored); staged when present, so a box without it still builds.
-        arcane_posix('if [ -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" ]; then cp -f "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxcompiler.so" "%{wks.location}/ThirdParty/tools/dxc-linux/lib/libdxil.so" "%{cfg.buildtarget.directory}/"; fi'),
+        arcane_stage_dxc(),
         -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
         -- reads this exe's exported D3D12SDKPath (".\D3D12\", see test_main.cpp)
         -- and looks there for D3D12Core.dll to unlock enhanced barriers /

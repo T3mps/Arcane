@@ -27,6 +27,9 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <Arcane/Platform/Process.hpp>
+#endif
 #endif
 
 namespace Arcane::Test
@@ -227,6 +230,11 @@ namespace Arcane::Test
         // the same "monotonic CPU scalar" ProcessCpu100ns is on Windows.
         std::uint64_t ProcessCpuTicks(pid_t pid)
         {
+#if defined(__APPLE__)
+            // No /proc on macOS: proc_pidinfo's task times, in nanoseconds
+            // (Platform::QueryProcess). Only ever compared with itself.
+            return Arcane::Platform::QueryProcess(static_cast<std::uint32_t>(pid)).cpuNs;
+#endif
             std::ifstream f("/proc/" + std::to_string(pid) + "/stat");
             std::string all((std::istreambuf_iterator<char>(f)), {});
             const std::size_t close = all.rfind(')');   // comm may contain spaces

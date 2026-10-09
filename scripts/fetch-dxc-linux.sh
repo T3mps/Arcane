@@ -35,7 +35,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 echo "fetch-dxc-linux: $URL"
 curl -fsSL --retry 4 -o "$TMP/dxc.tar.gz" "$URL"
-if ! (cd "$TMP" && echo "$DXC_SHA256  dxc.tar.gz" | sha256sum -c -); then
+if ! "$ROOT/scripts/sha256-check.sh" "$TMP/dxc.tar.gz" "$DXC_SHA256"; then
     echo "fetch-dxc-linux: SHA-256 MISMATCH for $URL (expected $DXC_SHA256) -- refusing to install" >&2
     exit 1
 fi

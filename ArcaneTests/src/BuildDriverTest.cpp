@@ -330,7 +330,7 @@ TEST_CASE("arcbuild default action is host-specific", "[build]")
 {
     CHECK(DefaultActionFor(HostPlatform::Windows) == "vs2026");
     CHECK(DefaultActionFor(HostPlatform::Linux) == "gmake");
-    CHECK(DefaultActionFor(HostPlatform::MacOS) == "xcode4");
+    CHECK(DefaultActionFor(HostPlatform::MacOS) == "gmake");
 }
 
 TEST_CASE("arcbuild::MakeCli + RequestFromCli carry every flag of spec s3", "[build]")
@@ -1799,12 +1799,24 @@ TEST_CASE("arcbuild::BackendResolver turns an empty low-level tool lookup into a
         CHECK(result.error().find("Ninja") != std::string::npos);
     }
 
+#ifdef __APPLE__
+    // On a Mac the toolchain is never a PATH question: ResolveXcodeBuild
+    // takes /usr/bin/xcodebuild (the xcode-select shim every macOS has)
+    // first, so even the empty PATH above resolves it.
+    SECTION("XcodeBuild: the fixed /usr/bin shim, whatever PATH says")
+    {
+        const auto result = resolver.ResolveBuilder(BuildBackend::XcodeBuild);
+        REQUIRE(result.has_value());
+        CHECK(result->filename() == "xcodebuild");
+    }
+#else
     SECTION("XcodeBuild: no macOS toolchain to find")
     {
         const auto result = resolver.ResolveBuilder(BuildBackend::XcodeBuild);
         REQUIRE_FALSE(result.has_value());
         CHECK(result.error().find("xcodebuild") != std::string::npos);
     }
+#endif
 }
 
 TEST_CASE("arcbuild::BackendResolver reports a missing generated build context descriptively", "[build]")

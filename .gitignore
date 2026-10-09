@@ -124,8 +124,18 @@ Desktop.ini
 # -- Linux DXC (scripts/fetch-dxc-linux.sh) -----------------------------------
 # The Linux shader compiler release, fetched rather than vendored.
 ThirdParty/tools/dxc-linux/
-# The Linux premake5 (scripts/fetch-premake-linux.sh), beside the vendored .exe.
+# The Linux/macOS premake5 (scripts/fetch-premake.sh), beside the vendored .exe.
 ThirdParty/premake5/premake5
+
+# -- macOS Vulkan SDK + DXC (scripts/fetch-vulkan-sdk-macos.sh) --------------
+# MoltenVK, the loader, the validation layer and DXC, installed per machine;
+# dxc-macos/ is the wrapper + symlinks into it.
+ThirdParty/tools/vulkan-sdk-macos/
+ThirdParty/tools/dxc-macos/
+
+# -- Test reports (scripts/run-tests.sh / run-tests.ps1) ---------------------
+/test-results/
+/logs/
 
 # -- Engine gmake/ninja outputs (Linux port, 2026-10-05) ----------------------
 # `premake5 gmake` writes the root Makefile plus one <Project>.make beside each
@@ -136,6 +146,7 @@ ThirdParty/premake5/premake5
 /Arcane*/Makefile
 /arcbuild/Makefile
 /arccook/Makefile
+/ArcaneTests/death-fixture/Makefile
 /ThirdParty/*/ide-md/Makefile
 *.make
 *.ninja

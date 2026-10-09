@@ -121,6 +121,11 @@ namespace Arcane
         nri::SwapChainDesc desc = {};
 #if ARCANE_PLATFORM_WINDOWS
         desc.window.windows.hwnd = m_window->NativeHandle();
+#elif ARCANE_PLATFORM_MACOS
+        // macOS port: MoltenVK presents to the window's CAMetalLayer through
+        // VK_EXT_metal_surface (NRI's VK backend is built with
+        // VK_USE_PLATFORM_METAL_EXT on a Mac target).
+        desc.window.metal.caMetalLayer = m_window->NativeHandle();
 #else
         // Linux port: NRI's VK backend is built with the Xlib + Wayland surface
         // paths (ThirdParty/NRI/premake5.lua); fill whichever SDL is on.
