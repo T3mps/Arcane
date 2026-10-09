@@ -8,7 +8,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Crypto/Crypto.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
@@ -244,6 +246,75 @@ TEST_CASE("InstantiateSubtrees refuses on a schema version mismatch",
     CHECK(roots.empty());
     CHECK(IdentityCount(w.reg) == before);
 }
+
+#if !defined(ARC_BUILD_DIST)
+namespace
+{
+    // Records Diagnostics::Publish. The paste failure row replaces the
+    // "clipboard" key, so Last is the row InstantiateSubtrees kept.
+    struct PasteDiagCapture
+    {
+        std::vector<std::pair<std::string, std::vector<Diagnostic>>> calls;
+        PasteDiagCapture() { Diagnostics::SetSink(&Sink, this); }
+        ~PasteDiagCapture() { (void)Diagnostics::ClearSinkIfCurrent(&Sink, this); }
+
+        static void Sink(std::string_view key, std::span<const Diagnostic> diags, void* user)
+        {
+            static_cast<PasteDiagCapture*>(user)->calls.emplace_back(
+                std::string(key), std::vector<Diagnostic>(diags.begin(), diags.end()));
+        }
+
+        const std::vector<Diagnostic>* Last(std::string_view key) const
+        {
+            for (auto it = calls.rbegin(); it != calls.rend(); ++it)
+                if (it->first == key)
+                    return &it->second;
+            return nullptr;
+        }
+    };
+
+    bool PasteFailingFill(std::uint8_t*, std::size_t)
+    {
+        return false;
+    }
+}
+
+TEST_CASE("InstantiateSubtrees records an RNG failure and rolls the paste back",
+          "[outliner][crypto]")
+{
+    World w;
+    Astra::Entity root = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    w.reg.SetResource<SceneRoot>(SceneRoot{ root });
+    Astra::Entity a = Edit::CreateEntity(w.reg, root);
+    Edit::RenameEntity(w.reg, a, "Foo");
+
+    const std::array<Astra::Entity, 1> selection{ a };
+    const nlohmann::json payload = Edit::SerializeSubtrees(w.reg, selection);
+    const std::size_t before = IdentityCount(w.reg);
+
+    PasteDiagCapture cap;
+    {
+        // CreateEntity above already drew a guid, so the latch is warm
+        // and this failing fill is the paste's own Guid::Generate.
+        Crypto::Detail::ScopedPlatformFillOverride guard(&PasteFailingFill);
+        const std::vector<Astra::Entity> roots = Edit::InstantiateSubtrees(w.reg, payload);
+        CHECK(roots.empty());
+    }
+    CHECK(IdentityCount(w.reg) == before);
+
+    const std::vector<Diagnostic>* rows = cap.Last("clipboard");
+    REQUIRE(rows != nullptr);
+    REQUIRE(rows->size() == 1);
+    CHECK(rows->front().code == "clipboard.instantiate.failed");
+    CHECK(rows->front().severity == DiagSeverity::Error);
+#ifdef _WIN32
+    const char* const needle = "Crypto: BCryptGenRandom failed";
+#else
+    const char* const needle = "Crypto: /dev/urandom unavailable or short read";
+#endif
+    CHECK(rows->front().message.find(needle) != std::string::npos);
+}
+#endif
 
 TEST_CASE("InstantiateSubtrees rolls back everything created so far on a malformed mid-walk entry",
           "[outliner][json]")

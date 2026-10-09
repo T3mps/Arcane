@@ -445,6 +445,136 @@ TEST_CASE("crypto: FillRandomBytesChunked fails closed and covers every byte onc
     }
 }
 
+#if !defined(ARC_BUILD_DIST)
+namespace
+{
+    // Shared by the public-API seam cases. A stuck stamp would latch a
+    // degenerate self-test if a cold latch ever drew through this fill;
+    // bytes vary, and successive calls do not repeat the same sample.
+    int g_platformFillCalls = 0;
+    size_t g_platformFillBytes = 0;
+    size_t g_platformFillLastN = 0;
+    uint8_t g_platformFillStamp = 0;
+
+    void ResetPlatformFillCounts()
+    {
+        g_platformFillCalls = 0;
+        g_platformFillBytes = 0;
+        g_platformFillLastN = 0;
+    }
+
+    bool CountingPlatformFill(uint8_t* dst, size_t n)
+    {
+        ++g_platformFillCalls;
+        g_platformFillBytes += n;
+        g_platformFillLastN = n;
+        for (size_t i = 0; i < n; ++i)
+            dst[i] = static_cast<uint8_t>(g_platformFillStamp + static_cast<uint8_t>(i));
+        g_platformFillStamp = static_cast<uint8_t>(g_platformFillStamp + static_cast<uint8_t>(n) + 1);
+        return true;
+    }
+
+    bool FailingPlatformFill(uint8_t*, size_t)
+    {
+        return false;
+    }
+
+#ifdef _WIN32
+    const char* const kPlatformFillFailure = "Crypto: BCryptGenRandom failed";
+#else
+    const char* const kPlatformFillFailure = "Crypto: /dev/urandom unavailable or short read";
+#endif
+}
+
+TEST_CASE("crypto: a zero-length public draw returns empty and does not fill", "[crypto]")
+{
+    // EnsureEntropySelfTest's verdict is a function-local static. It
+    // cannot be reset, and Catch2's random order means this case almost
+    // never observes a cold latch. The assertion below therefore proves
+    // that count 0 does not reach the platform fill. The ordering against
+    // the latch is the early return in GenerateRandomBytes, ahead of
+    // EnsureEntropySelfTest; the fill itself is only reached from
+    // GenerateRandomBytesUnchecked after that function's own count == 0
+    // return, via FillRandomBytesChunked.
+    g_platformFillStamp = 1;
+    ResetPlatformFillCounts();
+    Crypto::Detail::ScopedPlatformFillOverride guard(&CountingPlatformFill);
+
+    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(0);
+    REQUIRE(out.empty());
+    REQUIRE(g_platformFillCalls == 0);
+    REQUIRE(g_platformFillBytes == 0);
+}
+
+TEST_CASE("crypto: the public RNG fails closed when the platform fill fails", "[crypto]")
+{
+    // Warm the latch on the real platform RNG first. A failing fill
+    // during the once-per-process self-test throws out of the latch's
+    // initializer (it retries next time) and would make this case's
+    // call count depend on order.
+    (void)Crypto::GenerateRandomBytes(1);
+
+    Crypto::Detail::ScopedPlatformFillOverride guard(&FailingPlatformFill);
+
+    std::vector<uint8_t> returned(1, 0xFF);
+    bool bytesThrew = false;
+    try
+    {
+        returned = Crypto::GenerateRandomBytes(16);
+    }
+    catch (const std::runtime_error& ex)
+    {
+        bytesThrew = true;
+        REQUIRE(std::string(ex.what()) == kPlatformFillFailure);
+    }
+    REQUIRE(bytesThrew);
+    REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+
+    std::string token = "sentinel";
+    bool tokenThrew = false;
+    try
+    {
+        token = Crypto::GenerateSecureToken(16);
+    }
+    catch (const std::runtime_error& ex)
+    {
+        tokenThrew = true;
+        REQUIRE(std::string(ex.what()) == kPlatformFillFailure);
+    }
+    REQUIRE(tokenThrew);
+    REQUIRE(token == "sentinel");
+}
+
+TEST_CASE("crypto: the public RNG draws through the chunked platform fill", "[crypto]")
+{
+    (void)Crypto::GenerateRandomBytes(1);
+
+    g_platformFillStamp = 3;
+    ResetPlatformFillCounts();
+    Crypto::Detail::ScopedPlatformFillOverride guard(&CountingPlatformFill);
+
+    // 16 bytes is one chunk: the Windows cap is ULONG max, the POSIX
+    // cap is size_t max, and the helper asks the fill for
+    // min(maxChunk, remaining). A random_device fallback, or a draw
+    // that never calls PlatformFill, cannot reproduce this stamp.
+    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(16);
+    REQUIRE(g_platformFillCalls == 1);
+    REQUIRE(g_platformFillLastN == 16);
+    REQUIRE(g_platformFillBytes == 16);
+    REQUIRE(out.size() == 16);
+    for (size_t i = 0; i < out.size(); ++i)
+        REQUIRE(out[i] == static_cast<uint8_t>(3 + i));
+
+    g_platformFillStamp = 1;
+    ResetPlatformFillCounts();
+    const std::string token = Crypto::GenerateSecureToken(4);
+    REQUIRE(g_platformFillCalls == 1);
+    REQUIRE(g_platformFillLastN == 4);
+    REQUIRE(g_platformFillBytes == 4);
+    REQUIRE(token == "01020304");
+}
+#endif
+
 TEST_CASE("crypto: EntropySamplesDegenerate rejects stuck or echoing RNG output", "[crypto]")
 {
     const std::vector<uint8_t> zeros(32, 0x00);
