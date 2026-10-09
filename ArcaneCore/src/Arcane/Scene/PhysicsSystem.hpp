@@ -102,6 +102,14 @@ namespace Arcane
     namespace Phys = Manifold2D::Physics;
     // ARC_INTERNAL_END
 
+    // One fixture a paused rescale replaced, with the Collider2D index it had
+    // while it was current. Generations accumulate until CaptureStep.
+    struct RetiredFixture2D
+    {
+        Phys::FixtureHandle handle{};
+        std::uint32_t       index = 0;
+    };
+
     // One minted body (spec s7.3): who it is and its fixture handles in
     // Collider2D order. Keyed by the packed Phys handle (index << 32 | generation),
     // so a recycled slot (new generation) never resolves to a retired record.
@@ -111,10 +119,10 @@ namespace Arcane
         Guid                               guid{};
         std::vector<Phys::FixtureHandle>   fixtures;
         bool                               retired = false;   // removed; erased after the next capture
-        // Previous handles after a paused rescale, same Collider2D indices.
-        // Side() falls back to these so that step's destroy-time End still
-        // translates; CaptureStep clears them once the step has been read.
-        std::vector<Phys::FixtureHandle>   retiredFixtures;
+        // Every handle a paused rescale has dropped since the last capture.
+        // Side() falls back to these so each generation's destroy-time End
+        // still translates. CaptureStep clears the list once that step is read.
+        std::vector<RetiredFixture2D>      retiredFixtures;
     };
 
     struct PhysicsEventBuffers2D
@@ -684,13 +692,17 @@ namespace Arcane
                         std::vector<Phys::FixtureHandle> neu =
                             RebuildScaledFixtures(world, ref.handle, col, planarScale);
                         ref.appliedScale = planarScale;
-                        // R16: the record follows the new handles. The dropped
-                        // ones stay resolvable until CaptureStep reads their End.
+                        // R16: the record follows the new handles. Each dropped
+                        // generation is appended (handle + Collider2D index) and
+                        // stays resolvable until CaptureStep reads its End.
                         if (const auto rec = res->bodyRecords.find(PackBody(ref.handle));
                             rec != res->bodyRecords.end())
                         {
-                            rec->second.retiredFixtures = std::move(rec->second.fixtures);
-                            rec->second.fixtures = std::move(neu);
+                            auto& record = rec->second;
+                            record.retiredFixtures.reserve(record.retiredFixtures.size() + record.fixtures.size());
+                            for (std::uint32_t i = 0; i < record.fixtures.size(); ++i)
+                                record.retiredFixtures.push_back(RetiredFixture2D{ record.fixtures[i], i });
+                            record.fixtures = std::move(neu);
                         }
                     }
 

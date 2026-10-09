@@ -15,16 +15,18 @@ namespace Arcane
             const auto it = res.bodyRecords.find(PackBody(body));
             if (it == res.bodyRecords.end()) return false;
             const BodyRecord2D& rec = it->second;
-            // Current handles first, then the ones a paused rescale just dropped
-            // (same Collider2D indices). A recycled slot's new generation does
-            // not match the retired handle.
-            auto indexOf = [](const std::vector<Phys::FixtureHandle>& fxs, Phys::FixtureHandle handle) -> int
+            // Current handles first, then every generation a paused rescale has
+            // dropped since the last capture. A recycled slot's new generation
+            // does not match a retired handle.
+            const auto cur = std::find(rec.fixtures.begin(), rec.fixtures.end(), fx);
+            int idx = cur == rec.fixtures.end() ? -1 : static_cast<int>(cur - rec.fixtures.begin());
+            if (idx < 0)
             {
-                const auto f = std::find(fxs.begin(), fxs.end(), handle);
-                return f == fxs.end() ? -1 : static_cast<int>(f - fxs.begin());
-            };
-            int idx = indexOf(rec.fixtures, fx);
-            if (idx < 0) idx = indexOf(rec.retiredFixtures, fx);
+                for (const RetiredFixture2D& old : rec.retiredFixtures)
+                {
+                    if (old.handle == fx) { idx = static_cast<int>(old.index); break; }
+                }
+            }
             if (idx < 0) return false;
             out.entity  = rec.entity;
             out.guid    = rec.guid;

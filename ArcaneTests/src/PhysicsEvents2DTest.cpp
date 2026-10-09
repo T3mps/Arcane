@@ -222,6 +222,86 @@ TEST_CASE("a paused rescale retires the old fixture until the next capture", "[p
     CHECK(sawBegin);                               // Begin of the rebuilt fixture
 }
 
+TEST_CASE("consecutive paused rescales keep every retired fixture resolvable", "[physics][events]")
+{
+    World w;
+    w.Body("Ground", Manifold2D::Physics::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate = w.Body("Crate", Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    const Arcane::Guid guid = w.GuidOf(crate);
+    Arcane::PhysicsSystem physics(kDt);
+    for (int i = 0; i < 10; ++i) physics(w.reg);
+
+    const auto key = Arcane::PackBody(w.Res().entityToBody.at(crate));
+    const auto gen0 = w.Res().bodyRecords.at(key).fixtures.at(0);
+
+    Arcane::PhysicsSystem paused(kDt, /*stepWorld*/ false);
+    w.reg.GetComponent<Arcane::Transform>(crate)->scale = glm::vec3(2.0f, 2.0f, 1.0f);
+    paused(w.reg);
+    const auto gen1 = w.Res().bodyRecords.at(key).fixtures.at(0);
+
+    w.reg.GetComponent<Arcane::Transform>(crate)->scale = glm::vec3(3.0f, 3.0f, 1.0f);
+    paused(w.reg);                                 // second rescale before any capture
+    const auto gen2 = w.Res().bodyRecords.at(key).fixtures.at(0);
+    const auto& retired = w.Res().bodyRecords.at(key).retiredFixtures;
+    REQUIRE(retired.size() == 2u);
+    CHECK(retired[0].handle == gen0);
+    CHECK(retired[0].index == 0u);
+    CHECK(retired[1].handle == gen1);
+    CHECK(retired[1].index == 0u);
+
+    // R10: DropFixture queues an End iff that fixture's Begin was delivered.
+    // gen1 is added and dropped with no Step between the two paused rescales,
+    // so it never beginReported and the world queues no End for it. Both
+    // handles stay in retiredFixtures until this capture (the REQUIRE above),
+    // so Side() resolves whichever generation the world does end. The queued
+    // End is gen0; gen2's Begin is the fixture that is current now.
+    bool sawGen0End = false, sawGen1End = false, sawBegin = false;
+    for (int i = 0; i < 8; ++i)
+    {
+        physics(w.reg);
+        const auto raw = w.Res().world->GetContactEvents();
+        const auto sen = w.Res().world->GetSensorEvents();
+        const auto ev  = w.Res().StepEvents();
+        // A dropped Side() shrinks the translated array. Equal sizes means
+        // every event the world queued was kept.
+        CHECK(ev.contactBegin.size() == raw.begin.size());
+        CHECK(ev.contactEnd.size() == raw.end.size());
+        CHECK(ev.contactHit.size() == raw.hit.size());
+        CHECK(ev.sensorBegin.size() == sen.begin.size());
+        CHECK(ev.sensorEnd.size() == sen.end.size());
+
+        for (std::size_t n = 0; n < raw.end.size(); ++n)
+        {
+            const auto& src = raw.end[n];
+            const bool aOld = src.a == gen0 || src.a == gen1;
+            const bool bOld = src.b == gen0 || src.b == gen1;
+            if (!aOld && !bOld) continue;
+            const auto& side = aOld ? ev.contactEnd[n].a : ev.contactEnd[n].b;
+            CHECK(side.entity == crate);
+            CHECK(side.guid == guid);
+            CHECK(side.fixture == 0u);
+            if (src.a == gen0 || src.b == gen0) sawGen0End = true;
+            if (src.a == gen1 || src.b == gen1) sawGen1End = true;
+        }
+        for (std::size_t n = 0; n < raw.begin.size(); ++n)
+        {
+            const auto& src = raw.begin[n];
+            const bool aNew = src.a == gen2;
+            const bool bNew = src.b == gen2;
+            if (!aNew && !bNew) continue;
+            const auto& side = aNew ? ev.contactBegin[n].a : ev.contactBegin[n].b;
+            CHECK(side.entity == crate);
+            CHECK(side.guid == guid);
+            CHECK(side.fixture == 0u);
+            sawBegin = true;
+        }
+    }
+    CHECK(sawGen0End);                             // first rescale's queued End
+    CHECK_FALSE(sawGen1End);                       // R10: gen1 never began, so no End
+    CHECK(sawBegin);                               // the fixture that is current now
+    CHECK(w.Res().bodyRecords.at(key).retiredFixtures.empty());
+}
+
 TEST_CASE("physics.events.hitThreshold reaches the world", "[physics][events]")
 {
     {
