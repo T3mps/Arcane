@@ -428,6 +428,7 @@ namespace Arcane
         // '+' or '-' through (M-V4-5 only closed trailing junk). Now: any
         // non-digit before the colon, an empty prefix, or more than
         // kMaxLengthDigits digits is an error however the bytes arrive.
+        ARC_CONSTANT("wire protocol: a LENGTH prefix is at most 10 ASCII digits; an 11th digit is a framing error however the bytes arrive")
         constexpr size_t kMaxLengthDigits = 10;
         const size_t scan = (std::min)(buffer.size(), kMaxLengthDigits + 1);   // parenthesized: windows.h min()
         size_t colonPos = 0;
