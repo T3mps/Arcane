@@ -14,7 +14,9 @@
     Every real run stamps ThirdParty/<Library>/VENDORED.txt (UTF-8, no BOM).
     -Commit vendors that commit through a temporary detached git worktree, so
     the source working tree does not have to be checked out at it. The
-    worktree is removed in a finally.
+    finally always removes that temp path (worktree remove --force, delete
+    the directory if it remains, then worktree prune) and warns if
+    `git worktree list` still names it. No other worktree is touched.
 
     After a real sync the script reads the Mosaic commit each upstream library
     pins (Manifold2D's ThirdParty/Mosaic/VENDORED.txt, Astra's vendor/Mosaic)
@@ -85,9 +87,22 @@ $banned = @('premake5.lua', 'ThirdParty', 'vendor', 'tests', 'docs')
 
 function Invoke-Robocopy {
     param(
-        [Parameter(Mandatory = $true)] [string[]] $RoboArgs
+        [Parameter(Mandatory = $true)] [string[]] $RoboArgs,
+        [switch] $ShowOutput
     )
-    & robocopy.exe @RoboArgs | Out-Null
+    # Write-Host, not the success stream: a function's stdout is its return
+    # value, and the caller ORs that into the robocopy code. Robocopy
+    # overwrites its directory line with CR; split those so a captured log
+    # does not glue the count to the path.
+    if ($ShowOutput) {
+        & robocopy.exe @RoboArgs | ForEach-Object {
+            foreach ($line in ("$_" -split "`r")) {
+                if ($line -ne '') { Write-Host ($line -replace "`t", '  ') }
+            }
+        }
+    } else {
+        & robocopy.exe @RoboArgs | Out-Null
+    }
     $code = $LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     if ($code -ge 8) {
@@ -107,10 +122,17 @@ function Invoke-MirrorDir {
     }
     # /MIR mirrors including deletions. /XO is deliberately not used: an
     # upstream revert must come back even when its timestamp is older.
-    # /NJH /NJS trim the banner; /NFL /NDL /NP trim the per-file list.
-    $roboArgs = @($From, $To, '/MIR', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:2', '/W:1')
-    if ($ListOnly) { $roboArgs += '/L' }
-    return (Invoke-Robocopy -RoboArgs $roboArgs)
+    # /NJH /NJS /NP trim the banner. A real sync also hides the per-file
+    # list (/NFL /NDL). A dry run (/L) drops those two so the would-copy
+    # and would-purge names are printed, and writes nothing.
+    $roboArgs = @($From, $To, '/MIR', '/NJH', '/NJS', '/NP', '/R:2', '/W:1')
+    if ($ListOnly) {
+        $roboArgs += '/L'
+    } else {
+        $roboArgs += '/NFL'
+        $roboArgs += '/NDL'
+    }
+    return (Invoke-Robocopy -RoboArgs $roboArgs -ShowOutput:$ListOnly)
 }
 
 function Invoke-CopyOneFile {
@@ -125,10 +147,16 @@ function Invoke-CopyOneFile {
         throw "required file '$Name' not found at '$srcFile'."
     }
     # A single file, not /MIR of the repo root (that would sweep premake5.lua,
-    # tests/ and docs/ into the vendor tree).
-    $roboArgs = @($FromRoot, $ToRoot, $Name, '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:2', '/W:1')
-    if ($ListOnly) { $roboArgs += '/L' }
-    return (Invoke-Robocopy -RoboArgs $roboArgs)
+    # tests/ and docs/ into the vendor tree). Same /NFL /NDL split as the
+    # directory mirror: hidden on a real copy, printed on /L.
+    $roboArgs = @($FromRoot, $ToRoot, $Name, '/NJH', '/NJS', '/NP', '/R:2', '/W:1')
+    if ($ListOnly) {
+        $roboArgs += '/L'
+    } else {
+        $roboArgs += '/NFL'
+        $roboArgs += '/NDL'
+    }
+    return (Invoke-Robocopy -RoboArgs $roboArgs -ShowOutput:$ListOnly)
 }
 
 function Get-GitMeta {
@@ -249,6 +277,36 @@ function Write-MosaicDrift {
     }
 }
 
+# $Work is this invocation's temp path only. remove --force, then delete the
+# directory if it is still there, then prune, so a failed remove cannot leave
+# a registration whose directory was deleted afterwards (prune ignores a
+# path that is still on disk). Warn if the list still names it. Never pass
+# any other path to worktree remove.
+function Remove-SyncWorktree {
+    param(
+        [Parameter(Mandatory = $true)] [string] $SourcePath,
+        [Parameter(Mandatory = $true)] [string] $Work
+    )
+    & git -C $SourcePath worktree remove --force -- $Work | Out-Null
+    if (Test-Path -LiteralPath $Work) {
+        Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    & git -C $SourcePath worktree prune | Out-Null
+    $needle = Split-Path -Leaf $Work
+    $listed = @(& git -C $SourcePath worktree list)
+    $hit = @($listed | Where-Object { $_ -and ($_ -like ('*' + $needle + '*')) })
+    if ($hit.Count -gt 0) {
+        Write-Warning @"
+TEMPORARY WORKTREE STILL REGISTERED after remove --force, directory delete, and prune.
+Path: $Work
+git worktree list still names it:
+$($hit -join "`n")
+No other worktree was touched. Remove this one by hand:
+  git -C "$SourcePath" worktree remove --force -- "$Work"
+"@
+    }
+}
+
 function Test-CrlfFanout {
     param(
         [Parameter(Mandatory = $true)] [string] $Root,
@@ -314,8 +372,10 @@ function Sync-OneLibrary {
     }
 
     $copyRoot = $SourcePath
+    # Set as soon as the temp path is chosen, before worktree add. A failed
+    # add can still create the directory or a registration, and finally must
+    # clean that path even though the add did not succeed.
     $work = $null
-    $added = $false
     $rc = 0
     $meta = $null
     try {
@@ -332,7 +392,6 @@ function Sync-OneLibrary {
             if ($LASTEXITCODE -ne 0) {
                 throw "git worktree add --detach failed for $Name @ $At."
             }
-            $added = $true
             $copyRoot = $work
         }
 
@@ -345,15 +404,8 @@ function Sync-OneLibrary {
         }
         $meta = Get-GitMeta -Repo $SourcePath -At $At
     } finally {
-        if ($added -and $work) {
-            & git -C $SourcePath worktree remove --force $work
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "worktree remove failed for '$work'; pruning."
-                & git -C $SourcePath worktree prune
-                if (Test-Path -LiteralPath $work) {
-                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
+        if ($work) {
+            Remove-SyncWorktree -SourcePath $SourcePath -Work $work
         }
     }
     return @{ Rc = [int]$rc; Meta = $meta; DestRoot = $destRoot }
