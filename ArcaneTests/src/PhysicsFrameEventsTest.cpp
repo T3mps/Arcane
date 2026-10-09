@@ -1,19 +1,23 @@
 // PhysicsFrameEventsTest.cpp -- [physics][events]: the per-frame window across
-// 0, 1 and N fixed steps, and its clearing (spec 2026-10-08 s7.2). Real Runtime +
-// RunLoop; EnsurePhysics mints a +Y-UP world (default gravity -9.81).
+// 0, 1 and N fixed steps, and its clearing (spec 2026-10-08 s7.2, s9.2). Real
+// Runtime + RunLoop; EnsurePhysics mints a +Y-UP world (default gravity -9.81).
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Sim/Time.hpp>
 
+#include <App/PlayMode.hpp>
+
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -171,6 +175,28 @@ namespace
         REQUIRE(e.contactHit.empty());
         REQUIRE(e.sensorBegin.empty());
         REQUIRE(e.sensorEnd.empty());
+    }
+
+    void RequireBothWindowsEmpty(Arcane::Runtime& rt)
+    {
+        REQUIRE(rt.Registry().GetResource<Arcane::PhysicsResource>() != nullptr);
+        RequireFrameEmpty(Res(rt).StepEvents());
+        RequireFrameEmpty(Res(rt).FrameEvents());
+    }
+
+    // The crate in Scene() touches the ground within the first few steps. Stop
+    // at the first non-empty window so the transition under test cannot be a
+    // later frame that simply produced nothing.
+    void RequireContactBegin(Arcane::Runtime& rt)
+    {
+        bool saw = false;
+        for (int f = 0; f < 30 && !saw; ++f)
+        {
+            rt.Loop().Advance(kFixed);
+            saw = !Res(rt).StepEvents().contactBegin.empty()
+               || !Res(rt).FrameEvents().contactBegin.empty();
+        }
+        REQUIRE(saw);
     }
 
     // One concatenated window plus the fixed-step index that produced each event.
@@ -428,6 +454,67 @@ TEST_CASE("Re-minting and restoring clear both windows", "[physics][events]")
     CHECK(Res(rt).world.get() != before);
     CHECK(Res(rt).StepEvents().contactBegin.empty());
     CHECK(Res(rt).FrameEvents().contactBegin.empty());
+}
+
+// s9.2: Play drops the world (ResetPhysics), Stop restores a snapshot that
+// cannot carry the transient resource, and File > Open Scene swaps the
+// registry (ResetRegistry -- EditorPlayModeTest / ResourceSwapTest). Each
+// path is checked with a contact begin already in the windows, then with
+// the replacement resource's windows empty before any new step.
+TEST_CASE("Play, Stop and scene open clear both windows", "[physics][events]")
+{
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        Scene(rt);
+        RequireContactBegin(rt);
+
+        Arcane::Editor::PlaySession play;
+        REQUIRE(play.Play(rt));
+        CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+        rt.EnsurePhysics();
+        RequireBothWindowsEmpty(rt);
+
+        RequireContactBegin(rt);
+        REQUIRE(play.Stop(rt));
+        CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+        rt.EnsurePhysics();
+        RequireBothWindowsEmpty(rt);
+    }
+
+    Arcane::Runtime opened(Arcane::Test::Process());
+    Scene(opened);
+    RequireContactBegin(opened);
+    opened.ResetRegistry();
+    CHECK(opened.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    opened.EnsurePhysics();
+    RequireBothWindowsEmpty(opened);
+}
+
+// PluginHost::ForceReload is the headless module-reload seam (ResourceSwapTest,
+// PluginHostTest). Teardown resets every attached registry before LoadState
+// restores one that cannot carry PhysicsResource.
+TEST_CASE("a module hot reload clears both windows", "[physics][events]")
+{
+    const std::filesystem::path dll = "PhysicsEventsReload.dll";
+    std::error_code ec;
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", dll,
+                               std::filesystem::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    Arcane::PluginHost host(Arcane::Test::Process(), dll);
+    REQUIRE(host.AttachRuntime(rt));
+    REQUIRE(host.Load());
+    Scene(rt);
+    RequireContactBegin(rt);
+
+    REQUIRE(host.ForceReload());
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    rt.EnsurePhysics();
+    RequireBothWindowsEmpty(rt);
+
+    host.Unload();
+    std::filesystem::remove(dll, ec);
 }
 
 TEST_CASE("the frame hook tolerates a registry without PhysicsResource", "[physics][events]")
