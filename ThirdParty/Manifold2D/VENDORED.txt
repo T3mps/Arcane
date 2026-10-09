@@ -1,1 +1,10 @@
-Vendored from github.com/T3mps/Manifold2D @ 5523f77fd09df28c3aba1d646e8fae582946af18 on 2026-08-11T10:30:54 -- include/ + src/ + LICENSE only; the premake5.lua here is the CONSUMER's wrapper, never synced.
+Manifold2D vendored from the standalone repo. DO NOT EDIT THESE FILES IN PLACE --
+change them in the Manifold2D repo and re-run scripts\sync-vendor.ps1, or the next
+sync silently reverts your edit.
+
+source  : D:\dev\starworks\Manifold2D
+commit  : 82b98e03b1b570d08deda945ca9eae9b91580e56
+branch  : detached
+subject : chore(vendor): Mosaic synced from upstream 53078ee with a VENDORED stamp
+synced  : 2026-10-08 18:04:37
+scope   : include/ + src/ + LICENSE (premake5.lua is the consumer wrapper and is never synced)

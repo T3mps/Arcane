@@ -84,6 +84,7 @@
 #include <Manifold2D/Physics/Island.hpp>             // Island::Island registry struct + constants (Phase A)
 #include <Manifold2D/Physics/IslandManager.hpp>      // island topology collaborator (decomp step 1)
 #include <Manifold2D/Physics/ConstraintGraph.hpp>    // contact subsystem collaborator (decomp step 2)
+#include <Manifold2D/Physics/StepTrace.hpp>          // StepTraced's snapshot record
 
 namespace Manifold2D
 {
@@ -136,6 +137,11 @@ namespace Manifold2D
             Real sleepThreshold = Real(-1);
             bool fixedRotation  = false;       // invInertia forced to 0
             bool bullet         = false;       // CCD clamp (P3); stored now
+            // Continuous collision safety factor (Box2D v3 b2BodyDef::safetyFactor,
+            // default 0.5): a dynamic body is FAST -- and its step is swept against
+            // static geometry -- when it moves more than safetyFactor * minExtent
+            // in a step (minExtent: its shapes' smallest centroid-to-surface distance).
+            Real safetyFactor   = Real(0.5);
 
             // ---- primary fixture filter + local transform (T6 fix) ----------
             //
@@ -156,8 +162,52 @@ namespace Manifold2D
             // Existing dynamics tests therefore stay byte-for-byte green.
             std::uint32_t categoryBits = 1u;           // collision category
             std::uint32_t maskBits     = 0xFFFFFFFFu;  // collision mask
+            std::int32_t  groupIndex   = 0;            // collision group (see FixtureDef)
             Vec2          localPos     { Real(0), Real(0) }; // body-frame offset
             Real          localAngle   = Real(0);            // body-frame rotation
+
+            // Per-body multiplier on BOTH the world gravity and the gravity well
+            // (see GravityWell). 1 = full gravity, 0 = none (a drone, a floating
+            // marker), negative = pulled the other way. Dynamic bodies only.
+            Real          gravityScale = Real(1);
+        };
+
+        // ----------------------------------------------------------------
+        // GravityWell: an optional radial gravity field (a planet), added to
+        // the world gravity for every awake Dynamic body.
+        // ----------------------------------------------------------------
+        //
+        // Evaluated per body INSIDE the per-sub-step velocity integration, at
+        // the body's current in-step position (start-of-step position + the TGS
+        // position delta), the same place and the same way world gravity is
+        // applied. That is semi-implicit Euler at the sub-step, which keeps
+        // orbits bounded. (Pushing bodies once per Step from outside -- an
+        // impulse or a held force -- integrates the field at the start-of-step
+        // position for every sub-step, which pumps energy into orbits and wakes
+        // every body it touches; this is the engine-side alternative.)
+        //
+        // Field magnitude at distance r from `center` (R = surfaceRadius,
+        // g0 = surfaceGravity), always pointing at `center`:
+        //   r <  R                         : g0 * r / R            (interior, uniform-density planet)
+        //   InverseSquare, r >= R          : g0 * (R / r)^2        (real orbits)
+        //   Fade, R <= r <= fadeStart      : g0                    (a flat-feeling surface band)
+        //   Fade, fadeStart < r < fadeEnd  : g0 * (1 - smoothstep) (thins out with altitude)
+        //   Fade, r >= fadeEnd             : 0                     (deep space floats)
+        enum class GravityFalloff : std::uint8_t
+        {
+            InverseSquare = 0,
+            Fade          = 1,
+        };
+
+        struct GravityWell
+        {
+            bool           enabled        = false;
+            Vec2           center         { Real(0), Real(0) };
+            Real           surfaceRadius  = Real(1);  // > 0
+            Real           surfaceGravity = Real(0);  // m/s^2 at the surface (pulls toward center)
+            GravityFalloff falloff        = GravityFalloff::InverseSquare;
+            Real           fadeStart      = Real(0);  // Fade only: fadeStart < fadeEnd
+            Real           fadeEnd        = Real(0);
         };
 
         // ----------------------------------------------------------------
@@ -212,6 +262,9 @@ namespace Manifold2D
             Real          restitutionThreshold = Real(1);
             // Box2D v3 b2DefaultWorldDef.maxContactPushSpeed (types.c:16): 3 m/s.
             Real          contactPushMaxVelocity = Real(3);
+            // Box2D v3 b2WorldDef::enableContinuous (default true): FAST non-bullet
+            // dynamic bodies are swept against static geometry (see BulletSweep).
+            bool          enableContinuous = true;
 
             // Box2D v3 max linear speed clamp (b2WorldDef::maximumLinearSpeed,
             // types.c:21 default 400 * lengthUnitsPerMeter). Bodies faster than
@@ -290,6 +343,41 @@ namespace Manifold2D
             // Skip this body when casting (e.g. the caster itself). Ports
             // opts.exclude (a body handle, kInvalidBody = exclude nothing).
             BodyHandle exclude = kInvalidBody;
+        };
+
+        // ----------------------------------------------------------------
+        // QueryFilter: which fixtures a world query sees (Box2D v3 b2QueryFilter).
+        // A fixture is a candidate when (its categoryBits & maskBits) != 0 AND
+        // (its maskBits & categoryBits) != 0 -- b2ShouldQueryShape: the query is
+        // a body of category `categoryBits` that collides with `maskBits`, and the
+        // fixture must collide with it too. `exclude` skips one body (Box2D does
+        // that in the query callback; the closest-hit query has no callback).
+        // ----------------------------------------------------------------
+        struct QueryFilter
+        {
+            std::uint32_t categoryBits = 1u;           // B2_DEFAULT_CATEGORY_BITS
+            std::uint32_t maskBits     = 0xFFFFFFFFu;  // B2_DEFAULT_MASK_BITS
+            BodyHandle    exclude      = kInvalidBody;
+            // Manifold2D extension: a NEGATIVE group skips every fixture of that
+            // group -- a ragdoll's own parts, all of them (exclude is one body).
+            // Box2D's b2QueryFilter has no group; its users filter in the callback.
+            std::int32_t  groupIndex   = 0;
+        };
+
+        // ----------------------------------------------------------------
+        // RayResult: CastRayClosest's hit (Box2D v3 b2RayResult). `fixture` is
+        // invalid for a tile span (no fixture) or a fixtureless legacy body;
+        // `body` is kInvalidBody for a tile span. `normal` is the unit surface
+        // normal at `point`, facing back along the ray; `fraction` is the share
+        // of the translation travelled to `point`.
+        // ----------------------------------------------------------------
+        struct RayResult
+        {
+            BodyHandle    body = kInvalidBody;
+            FixtureHandle fixture{};
+            Vec2          point{ Real(0), Real(0) };
+            Vec2          normal{ Real(0), Real(0) };
+            Real          fraction = Real(0);
         };
 
         // A body slot NOT in the awake-set (static, kinematic, sleeping, or dead).
@@ -491,6 +579,51 @@ namespace Manifold2D
             [[nodiscard]] Real GetAngle(BodyHandle h) const noexcept;
             void SetAngle(BodyHandle h, Real angle);
 
+            // ---- gravity well + per-body gravity scale ----------------------
+
+            // Install (or, with enabled = false, remove) the world's radial
+            // gravity field. An invalid well (non-finite fields, surfaceRadius
+            // <= 0, or a Fade with fadeEnd <= fadeStart or fadeStart < 0) is
+            // refused with a warning and the previous well is kept. Takes effect
+            // on the next Step for every AWAKE dynamic body; sleeping bodies keep
+            // sleeping until something wakes them (as with world gravity).
+            void SetGravityWell(const GravityWell& well);
+            [[nodiscard]] const GravityWell& GetGravityWell() const noexcept { return m_gravityWell; }
+
+            // The well's acceleration at world point p ((0,0) when disabled).
+            // The solver calls this per body per sub-step; exposed for queries
+            // (e.g. a renderer drawing the field, a controller cancelling it).
+            [[nodiscard]] Vec2 GravityWellAccel(Vec2 p) const noexcept;
+
+            // Per-body gravity multiplier (see BodyDef::gravityScale). Setting it
+            // on a Dynamic body wakes it so the change takes effect; a
+            // non-finite scale is refused.
+            void SetGravityScale(BodyHandle h, Real scale);
+            [[nodiscard]] Real GravityScale(BodyHandle h) const noexcept;
+
+            // Change the collision filter of every fixture on a live body
+            // (b2Shape_SetFilter): each fixture's contacts are destroyed and its
+            // broadphase proxy re-inserted, so pairs the new filter rejects stop
+            // at once and pairs it admits are found on the next Step (static
+            // pairs are re-queried every step for awake bodies). The body and
+            // the bodies it touched are woken. Not for every tick: it costs a
+            // contact teardown, like Box2D's.
+            void SetBodyFilter(BodyHandle h, std::uint32_t categoryBits, std::uint32_t maskBits);
+
+            // Make a live body a bullet, or stop it being one (b2Body_SetBullet). A
+            // dynamic bullet's step is swept against statics, kinematic bodies and
+            // non-bullet dynamic bodies, and clamped to the earliest time of impact
+            // (a kinematic bullet sweeps statics only). For bodies that move fast
+            // for a while -- a thrown object, a projectile -- not for every body:
+            // each bullet costs a shape cast per fixture per step.
+            void SetBullet(BodyHandle h, bool bullet);
+            [[nodiscard]] bool IsBullet(BodyHandle h) const noexcept;
+
+            // Continuous collision for fast non-bullet bodies vs statics
+            // (b2World_EnableContinuous); on by default (WorldDef::enableContinuous).
+            void EnableContinuous(bool on) noexcept { m_enableContinuous = on; }
+            [[nodiscard]] bool IsContinuousEnabled() const noexcept { return m_enableContinuous; }
+
             // Render-boundary lerp between prev and current step positions
             // (ports Body:drawPosition).
             [[nodiscard]] Vec2 DrawPosition(BodyHandle h, Real alpha) const noexcept;
@@ -537,12 +670,38 @@ namespace Manifold2D
             // removeJoint drops it). Ports `#w.joints`.
             [[nodiscard]] std::size_t JointCount() const noexcept { return m_joints.size(); }
 
+            // The force (N, world frame) and torque (N m) joint `j` applied to its
+            // body B over the last step it was solved in (b2Joint_GetConstraintForce
+            // / b2Joint_GetConstraintTorque; the definition is on Joint::
+            // ReactionForce). A breakable joint reads these each step and removes
+            // the joint past its threshold. Zero for a joint this world does not
+            // own (nullptr, removed, or never solved).
+            [[nodiscard]] Vec2 JointReactionForce(const Joint* j) const noexcept;
+            [[nodiscard]] Real JointReactionTorque(const Joint* j) const noexcept;
+
             // ---- step (kinematic subset) -----------------------------------
 
             // Advance the world by dt: prev snapshot + KINEMATIC velocity
             // integration + mover-broadphase update, then ContactManager::Step
             // (events + gating + deferred flush). NO dynamics solving.
             void Step(Real dt);
+
+            // Step(dt) PLUS one StepTraceSnapshot after every solver stage: the
+            // five in-sub-step stages (IntegrateVelocities / WarmStart / Solve /
+            // IntegratePositions / Relax) with their sub-step index, then
+            // Restitution and StoreImpulses once with substep == substepCount.
+            // At the default substepCount == 4 that is exactly 22 snapshots,
+            // APPENDED to trace.snapshots (clear it yourself to keep one step).
+            //
+            // Shares ONE implementation with Step (StepImpl), so the world it
+            // leaves is BIT-IDENTICAL to the world Step(dt) would have left: the
+            // snapshots are pure reads plus one behaviourally-neutral
+            // lane->constraint impulse copy-out (SimdSolve::StoreImpulses, which
+            // the StoreImpulses stage runs anyway). It ALLOCATES (the snapshot
+            // vectors), so this is an inspection / visualization entry point --
+            // not for a hot loop, and not covered by the zero-steady-state-alloc
+            // contract Step honors.
+            void StepTraced(Real dt, StepTrace& trace);
 
             // Phase D1: inject the task executor the solver parallelizes over.
             // nullptr -> the world's owned SerialWorkScheduler (deterministic default).
@@ -572,6 +731,20 @@ namespace Manifold2D
             [[nodiscard]] std::optional<RaycastHit>
             Raycast(const Vec2& from, const Vec2& to,
                     const RaycastOpts& opts = {}) const;
+
+            // The nearest fixture the ray origin -> origin + translation hits
+            // (Box2D v3 b2World_CastRayClosest). Candidates: tile spans, static
+            // bodies and the mover fixtures (kinematic + dynamic), gathered by the
+            // ray's bounding box from the static index and the mover broadphase
+            // (so it works with any BroadphaseKind; Box2D walks its trees along the
+            // ray instead, which only pays for long rays). Sensors are skipped and
+            // the filter applies to each fixture; tile spans and fixtureless legacy
+            // bodies have no filter. A fixture containing the origin is not
+            // reported (Box2D's shape ray casts miss from inside). std::nullopt for
+            // a miss or a zero translation.
+            [[nodiscard]] std::optional<RayResult>
+            CastRayClosest(const Vec2& origin, const Vec2& translation,
+                           const QueryFilter& filter = {}) const;
 
             // Line-of-sight (PORT of lineOfSight): true iff NO sight-blocking
             // (TALL) cell lies between `from` and `to`. Equivalent to
@@ -878,6 +1051,7 @@ namespace Manifold2D
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
             [[nodiscard]] Real FricSlot(std::uint32_t i) const noexcept { return m_fric[i]; }
             [[nodiscard]] Real LinDampSlot(std::uint32_t i) const noexcept { return m_linDamp[i]; }
+            [[nodiscard]] Real GravityScaleSlot(std::uint32_t i) const noexcept { return m_gravityScale[i]; }
             [[nodiscard]] Vec2 VelSlot(std::uint32_t i) const noexcept
             {
                 return Vec2(m_velX[i], m_velY[i]);
@@ -977,6 +1151,7 @@ namespace Manifold2D
             {
                 m_prevX[i] = m_posX[i];
                 m_prevY[i] = m_posY[i];
+                m_prevAngle[i] = m_angle[i];
             }
             // Visit each LIVE island's member-slot list (Phase A sleep seam). A live
             // island has a non-empty member list; freed ids (empty) are skipped.
@@ -1125,6 +1300,12 @@ namespace Manifold2D
             { return m_residencyGrid.QueryAABB(region, out); }
 
         private:
+            // The ONE Step implementation. trace == nullptr -> exactly Step(dt)
+            // (the only added cost is a null check before the solve); non-null ->
+            // record each solver row's start pose and install the per-stage
+            // snapshot hook on SolverContext::traceHook. See StepTraced.
+            void StepImpl(Real dt, StepTrace* trace);
+
             // ---- per-fixture broadphase helpers (Phase 2, Task 1) -------------
             //
             // UpdateMoverProxies(b): refreshes residency and all fixture proxies in
@@ -1132,6 +1313,7 @@ namespace Manifold2D
             // every position-commit site so the fixture broadphase stays in lockstep
             // with residency automatically.
             void UpdateMoverProxies(std::uint32_t b);
+
 
             // Add / remove a single fixture proxy in m_fixtureBroadphase.
             // AddFixtureProxy skips Static bodies (they are not mover proxies).
@@ -1186,6 +1368,18 @@ namespace Manifold2D
             std::vector<Real>           m_fxRestitution;
             std::vector<std::uint32_t>  m_fxFilterCat;
             std::vector<std::uint32_t>  m_fxFilterMask;
+            std::vector<std::int32_t>   m_fxFilterGroup;
+        public:
+            // Box2D b2ShouldShapesCollide over two live fixtures: a shared negative
+            // group never collides, a shared positive group always does, otherwise
+            // each side's category must be in the other's mask.
+            [[nodiscard]] bool FixturesCollide(std::uint32_t fa, std::uint32_t fb) const noexcept
+            {
+                const std::int32_t ga = m_fxFilterGroup[fa];
+                if (ga != 0 && ga == m_fxFilterGroup[fb]) { return ga > 0; }
+                return (m_fxFilterCat[fa] & m_fxFilterMask[fb]) != 0u && (m_fxFilterCat[fb] & m_fxFilterMask[fa]) != 0u;
+            }
+        private:
             std::vector<std::uint8_t>   m_fxSensor;
             std::vector<std::uint32_t>  m_fxBody;    // owning body slot
             std::vector<std::uint32_t>  m_fxGen;     // generation per fixture slot
@@ -1265,6 +1459,7 @@ namespace Manifold2D
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;
             std::vector<Real>          m_prevX, m_prevY;
+            std::vector<Real>          m_prevAngle;           // start-of-step angle (the continuous sweep rotates)
             std::vector<Real>          m_velX, m_velY;
             std::vector<std::uint8_t>  m_btype;   // BodyType
             std::vector<std::uint8_t>  m_evtOn;   // per-body event gate
@@ -1283,11 +1478,14 @@ namespace Manifold2D
             std::vector<Real>          m_invMass, m_invInertia;
             std::vector<Real>          m_rest, m_fric;        // solver params (P2.2)
             std::vector<Real>          m_linDamp;             // velocity decay
+            std::vector<Real>          m_gravityScale;        // per-body gravity multiplier (world gravity + well)
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
             std::vector<Real>          m_maxExtent;           // body COM->farthest-point dist (+radius); sleep test
             std::vector<Real>          m_sleepThreshold;      // per-body sleep speed gate (m/s); see WorldDef/BodyDef
             std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
+            std::vector<Real>          m_minExtent;           // shapes' min centroid->surface dist (continuous test)
+            std::vector<Real>          m_safetyFactor;        // BodyDef::safetyFactor (continuous test)
 
             // ---- persistent island registry (Phase A) -----------------------
             // MOVED to IslandManager m_islandMgr (decomp step 1): m_islandId +
@@ -1369,6 +1567,7 @@ namespace Manifold2D
             // Global gravity applied to awake Dynamic bodies in Step.
             Real m_gravityX = Real(0);
             Real m_gravityY = Real(10);   // Box2D v3 default (types.c:13, y-down)
+            GravityWell m_gravityWell{};  // optional radial field (SetGravityWell); disabled by default
 
             // Soft Step config (copied from WorldDef; read by the solver).
             std::uint32_t m_substepCount         = 4u;
@@ -1376,6 +1575,7 @@ namespace Manifold2D
             Real          m_contactDampingRatio  = Real(10);
             Real          m_restitutionThreshold = Real(1);     // Box2D v3 (types.c:15)
             Real          m_contactPushMaxVelocity = Real(3);   // Box2D v3 (types.c:16)
+            bool          m_enableContinuous = true;            // Box2D v3 b2WorldDef::enableContinuous
             Real          m_maxLinearVelocity = Real(400);
             Real          m_sleepThresholdDefault  = Real(0.05); // WorldDef::sleepThreshold (Box2D v3, types.c:34)
 
@@ -1443,7 +1643,11 @@ namespace Manifold2D
             // conservative-advancement cast is fixed-iteration, no wall-clock).
             // Runs AFTER the solver commits dynamic positions and BEFORE events
             // (so contact events + island sleep see the clamped position).
-            void BulletSweep();
+            void BulletSweep(Real dt);
+            // The earliest time of impact in (0, 1] for one fixture of a body swept over
+            // this step -- position AND rotation, start pose to end pose (1 = no hit).
+            // See the definition for the rules.
+            [[nodiscard]] Real CcdFixtureToi(std::uint32_t body, std::uint32_t fi, bool movers);
 
             // ---- query scratch (zero steady-state alloc) -------------------
             //
@@ -1462,6 +1666,8 @@ namespace Manifold2D
             // thread_local or caller-supplied scratch.
             mutable std::vector<Aabb2>         m_scratchSpans;
             mutable std::vector<std::uint32_t> m_scratchStatics;
+            std::vector<std::uint32_t>         m_ccdMoverScratch; // CcdFixtureToi's mover candidates
+            mutable std::vector<std::uint32_t> m_rayMoverScratch; // CastRayClosest's mover candidates
 
             // ---- persistent contact pool (collision-rebuild Phase 3, Task 2/4) --
             //
