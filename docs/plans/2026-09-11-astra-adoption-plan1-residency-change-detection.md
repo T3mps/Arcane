@@ -182,13 +182,13 @@ TEST(ChangeDetectionStamp, IsChangedDoesNotStamp)
 **The executor ASKS THE USER before merging.** `dev` @ `f3e311d` is an ancestor of `feat/change-detection`, so the merge is a fast-forward — say so when asking, and do not proceed until the user says go.
 
 **Files:**
-- Modify (Arcane): `ThirdParty/Astra/include/**` + `ThirdParty/Astra/VENDORED.txt` (by `scripts/sync-astra.ps1`), `ArcaneClient/src/Arcane/Plugin/PluginABI.hpp` (v26 ledger + constant), `ReferenceProject/ReferenceProject.arcproj` (`"abi": 25` → `26`)
+- Modify (Arcane): `ThirdParty/Astra/include/**` + `ThirdParty/Astra/VENDORED.txt` (by `scripts/sync-vendor.ps1 -Library Astra`), `ArcaneClient/src/Arcane/Plugin/PluginABI.hpp` (v26 ledger + constant), `ReferenceProject/ReferenceProject.arcproj` (`"abi": 25` → `26`)
 - Test: none new — the whole suite is the test.
 
 **Interfaces:** `inline constexpr uint32_t kGamePluginABIVersion = 26;`
 
 - [ ] **Step 1: Ask, then merge (Astra).** `cd D:\dev\starworks\Astra && git checkout dev && git merge --ff-only feat/change-detection && git log --oneline -1` — HEAD must now be Task 1's commit. Stay on `dev` for the sync.
-- [ ] **Step 2: Sync.** `cd D:\dev\starworks\Arcane && powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1 -DryRun` (review), then without `-DryRun`. Verify `ThirdParty/Astra/VENDORED.txt` records `branch  : dev` and Task 1's commit SHA. Then `GenerateProjects.bat`.
+- [ ] **Step 2: Sync.** `cd D:\dev\starworks\Arcane && powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra -DryRun` (review), then without `-DryRun`. Verify `ThirdParty/Astra/VENDORED.txt` records `branch  : dev` and Task 1's commit SHA. Then `GenerateProjects.bat`.
 - [ ] **Step 3: The v26 ledger entry** in `PluginABI.hpp`, appended directly above `kGamePluginABIVersion` (after the v25 entry, `:687`), then the constant:
 
 ```cpp

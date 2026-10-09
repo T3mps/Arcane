@@ -523,8 +523,9 @@ The Plan A spec's 2026-08-25 amendment stated that the doctor would drive *"the
 existing `scripts/setup.ps1` orchestrator"*, and `PackagesView.svelte`'s comment
 said the same. **That was factually wrong, and it is corrected here.** Arcane's
 `scripts/` contains `check-faults.ps1`, `gen_icons_lucide.py`, `generate.bat`,
-`golden-gate.ps1`, `launch.bat`, `launch.ps1`, `setup-vcpkg-deps.bat`, and
-`sync-astra.ps1`. **There is no `setup.ps1` in this repository.**
+`golden-gate.ps1`, `launch.bat`, `launch.ps1`, `setup-vcpkg-deps.bat`,
+`sync-vendor.ps1`, and `sync-astra.ps1` (a shim that calls
+`sync-vendor.ps1 -Library Astra`). **There is no `setup.ps1` in this repository.**
 
 `setup.ps1` lives in a **different repository** — the Aphelyon/Gacha repo at
 `D:\dev\starworks\Gacha\scripts\setup.ps1` — where it is the headless

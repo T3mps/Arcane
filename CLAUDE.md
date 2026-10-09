@@ -122,7 +122,10 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   treats Box3D as the oracle -- Box3D already *is* Rubikon-Lite + Box2D.
   Binding: `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`.
 - The ECS is **Astra**, vendored at `ThirdParty/Astra` -- keep it current
-  with the standalone repo (commit there first, then sync).
+  with the standalone repo (commit there first, then
+  `scripts/sync-vendor.ps1 -Library Astra`; `scripts/sync-astra.ps1` is a
+  shim that calls that). Manifold2D and Mosaic use the same script
+  (`-Library Manifold2D`, `-Library Mosaic`).
 - **3D visual target is Deadlock / Source 2 the renderer, not Unreal.**
   Feature contract: `docs/research/2026-08-12-deadlock-render-target.md`.
   Ceiling, sequencing, and "weeks not department-years": the 2026-09-14

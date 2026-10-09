@@ -57,7 +57,7 @@
   bin\Debug-windows-x86_64\AstraTest\AstraTest.exe
   ```
   New Astra tests go into EXISTING test files, so Astra needs no premake regeneration.
-- **Vendoring Astra:** `powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1 -DryRun`, then without `-DryRun`.
+- **Vendoring Astra:** `powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra -DryRun`, then without `-DryRun`.
   - Stage by name the headers that really changed, plus `ThirdParty/Astra/VENDORED.txt`.
   - Never stage CRLF-only fan-out: `git diff --ignore-all-space --stat` tells the real changes from the noise.
   - Arcane never edits `ThirdParty/Astra` by hand.
@@ -706,7 +706,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 - Consumes: Astra `dev` HEAD from Task 2.
 - **This also brings Astra's 2026-10-01 commits (`b8291b9..975cdb7`).** These are slot retirement, recycling `Clear`, ordered children, `SetParent` returning `bool`, and `GetInstanceId`. The node-page branch vendored the same commits (`31fd76d8`) with no Arcane source change, so the merge resolves to the later stamp.
 
-- [ ] **Step 1:** Run `powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1 -DryRun`. Expected: the list includes `System/SystemParam.hpp`, `System/SystemScheduler.hpp`, plus the 2026-10-01 entity/registry headers.
+- [ ] **Step 1:** Run `powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra -DryRun`. Expected: the list includes `System/SystemParam.hpp`, `System/SystemScheduler.hpp`, plus the 2026-10-01 entity/registry headers.
 - [ ] **Step 2:** Run it without `-DryRun`. Run `git diff --ignore-all-space --stat ThirdParty/Astra` and keep only the files with real changes.
 - [ ] **Step 3:** Run `ThirdParty\premake5\premake5.exe vs2026`, then a full Debug build (`-t:Rebuild` the first time: Registry layout moved).
 - [ ] **Step 4:** Run `.\ArcaneTests.exe "~[gpu]~[shell]"` and `.\ArcaneTests.exe "[trajectory]"`. Expected: PASS, with seeds recorded.
@@ -3347,7 +3347,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 Spec s9. The controller does this when it integrates. It is listed here so nothing is lost.
 
 1. **Rebase** `feat/input-time-resources` onto the merged node-page work.
-   - Expected conflicts: `ThirdParty/Astra/**` (take the later vendor, re-run `sync-astra.ps1`), `scripts/automation-baselines.json` (re-measure), and possibly CVar files (the `HasFlag` rename vs the node-page T3-D2 cvar work; re-apply the rename to new callers).
+   - Expected conflicts: `ThirdParty/Astra/**` (take the later vendor, re-run `sync-vendor.ps1 -Library Astra`), `scripts/automation-baselines.json` (re-measure), and possibly CVar files (the `HasFlag` rename vs the node-page T3-D2 cvar work; re-apply the rename to new callers).
    - Re-run Task 19's gate.
 2. **ONE ABI bump to the next free number** (49 or 50 when the node-page phase lands, or later). Add a `// vNN (date, input-seam):` history line in `PluginABI.hpp` naming:
    - `LocalInputUser` gained `generation_` (layout of the class held by value inside `ARCANE_API ClientRuntime`);

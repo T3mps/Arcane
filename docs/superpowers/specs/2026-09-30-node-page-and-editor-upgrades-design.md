@@ -65,7 +65,7 @@ Intermediate steps inside a tranche need only the build and ArcaneTests. The gol
 ### 2.2 Astra first
 
 1. Commit in the Astra repo (`D:\dev\starworks\Astra`, branch `dev`), with its tests.
-2. Run `scripts\sync-astra.ps1` to re-vendor into `Arcane/ThirdParty/Astra`.
+2. Run `scripts\sync-vendor.ps1 -Library Astra` to re-vendor into `Arcane/ThirdParty/Astra`.
 3. Stage the changed files BY NAME plus `VENDORED.txt`. Never stage the CRLF-only fan-out.
 
 Arcane never edits `ThirdParty/Astra` directly. T1's "now" batch (s3.4) is the only Astra work in this phase.
@@ -2902,7 +2902,7 @@ The user approved the whole plan on 2026-09-30 ("write what you need"); these de
 
 **9.25 Crash viewer source-compiles the reporter's pure files** (`ReportView.cpp`, `SymbolizedText.cpp`, `ReporterArgs.cpp`, `LogTail.cpp`) into ArcaneEditor as ArcaneTests does **(default)**. Rejected: Core promotion now (reporter vocabulary + Core ABI move for two consumers; a third triggers it). Reporter display fixes land too **(default)**.
 
-**9.26 Mechanics.** Astra: commit in `dev` FIRST, then `scripts/sync-astra.ps1`; stage real files by name + `VENDORED.txt`, never the CRLF fan-out. ABI bumps are cheap; each = Aphelyon restamp + module rebuild.
+**9.26 Mechanics.** Astra: commit in `dev` FIRST, then `scripts/sync-vendor.ps1 -Library Astra`; stage real files by name + `VENDORED.txt`, never the CRLF fan-out. ABI bumps are cheap; each = Aphelyon restamp + module rebuild.
 
 **9.27 Defaults accepted as a group (for review).**
 1. Root-only selection disables Delete/Cut/Duplicate/Copy/Drag with a reason tooltip; mixed selection drops the root.
@@ -2955,7 +2955,7 @@ No pages for post-chain pass-canvas nodes; Comment page edits text, not size; no
 
 Run order and tranche checklist; the authoritative lists are the **Tests** paragraphs in sections 3-8.
 
-**Every tranche closes with (s2.1):** `msbuild Arcane.slnx` Debug + Release (VS 18, `-nr:false`); `ArcaneTests.exe "~[gpu]"` + `[witness]` (`[shell]` excluded) FROM THE EXE DIR, seed captured, report through `scripts/check-baselines.ps1 -Invocation "~[gpu]"`, count rises committed on purpose; `scripts/golden-gate.ps1 -Configuration Release` then `Debug` (ends on Debug; single-slot `Binaries/`); Astra tranches run `Astra.slnx` in the Astra repo first, then `scripts/sync-astra.ps1` (`-DryRun` first), staging by name + `VENDORED.txt`; every ABI bump moves `kGamePluginABIVersion` (46, `ArcaneCore/src/Arcane/Plugin/PluginABI.hpp:987`) with the ReferenceProject restamp in that commit, plus `engine.abi` in `D:\dev\starworks\Aphelyon\Aphelyon.arcproj` and `arcbuild build`; no tranche closes with a restamp owed.
+**Every tranche closes with (s2.1):** `msbuild Arcane.slnx` Debug + Release (VS 18, `-nr:false`); `ArcaneTests.exe "~[gpu]"` + `[witness]` (`[shell]` excluded) FROM THE EXE DIR, seed captured, report through `scripts/check-baselines.ps1 -Invocation "~[gpu]"`, count rises committed on purpose; `scripts/golden-gate.ps1 -Configuration Release` then `Debug` (ends on Debug; single-slot `Binaries/`); Astra tranches run `Astra.slnx` in the Astra repo first, then `scripts/sync-vendor.ps1 -Library Astra` (`-DryRun` first), staging by name + `VENDORED.txt`; every ABI bump moves `kGamePluginABIVersion` (46, `ArcaneCore/src/Arcane/Plugin/PluginABI.hpp:987`) with the ReferenceProject restamp in that commit, plus `engine.abi` in `D:\dev\starworks\Aphelyon\Aphelyon.arcproj` and `arcbuild build`; no tranche closes with a restamp owed.
 
 **Golden procedure:** gate, read `Saved\Verify\*-diff.png`, delete exe-dir `imgui.ini`, bless the STAGED slot from the host exe dir (`--headless --backend dx12 --frames 60 --settle 30 --report <p> --compare <slot> --bless`), IMMEDIATELY copy to `ReferenceProject/Verify/References/<slot>.png` (post-build restages `Verify\`), re-gate both configs.
 
@@ -3081,7 +3081,7 @@ Derived from git on 2026-10-03, not recalled: `git log --oneline 84e3d127..2c866
 
 **R18 Ordered children change visible order** after deletes/reparents. At 57af0cab no caller relies on same-parent "moves last" (`Reparent` skips same-parent moves, `ArcaneClient/src/Arcane/Edit/EntityOps.cpp:189`; other sites parent fresh entities). *Mitigation:* re-grep Arcane and Aphelyon at implementation; update order assertions found.
 
-**R19 CRLF fan-out on re-vendor.** `sync-astra.ps1` reports CRLF-only "modified" files. *Mitigation:* stage by name + `VENDORED.txt`; never `git add -A` the vendored tree.
+**R19 CRLF fan-out on re-vendor.** `sync-vendor.ps1 -Library Astra` reports CRLF-only "modified" files. *Mitigation:* stage by name + `VENDORED.txt`; never `git add -A` the vendored tree.
 
 **R20 Machine-dependent badge and chip.** Foreign-module rows vary per machine (`EditorApp.cpp:2319`); `"Problems  3###Problems"` keeps ini/dock identity (`ImHashStr` resets at `###`, `ThirdParty/imgui/imgui.cpp:2539-2545`) but the text still varies. *Mitigation:* harness suppression covers the T4-cluster chip and tab badges; the Console's unseen count is never drawn under the harness.
 
