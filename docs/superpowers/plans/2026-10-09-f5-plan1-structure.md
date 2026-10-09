@@ -49,7 +49,7 @@ Redirect to a log and `Select-String 'error|Warning\(s\)|Error\(s\)'`. `ArcaneCl
 & "D:\dev\starworks\Arcane-f5\bin\<Cfg>-windows-x86_64-md\arcbuild\arcbuild.exe" build --project ReferenceProject --config <Cfg> --sdk D:\dev\starworks\Arcane-f5
 ```
 
-Pass `--sdk` explicitly. Do not rely on `ARCANE_SDK` pointing at `D:\dev\starworks\Arcane`. The first-ever build of this worktree has no `arcbuild.exe` until ArcaneClient has been built once: build the engine **Debug** once, then the per-config order above applies. After a config flip, `arcbuild rebuild` (not `build`). The last command of Task 7 is `arcbuild rebuild --config Debug`, so the slot ends as a Debug DLL.
+Pass `--sdk` explicitly. Do not rely on `ARCANE_SDK` pointing at `D:\dev\starworks\Arcane`. The first-ever build of this worktree has no `arcbuild.exe` until ArcaneClient has been built once: build the engine **Debug** once, then the per-config order above applies. After a config flip, `arcbuild rebuild` (not `build`). The last command of Task 13 is `arcbuild rebuild --config Debug`, so the slot ends as a Debug DLL.
 
 - **Tests run from the exe directory:**
 
@@ -60,7 +60,7 @@ Set-Location D:\dev\starworks\Arcane-f5\bin\<Cfg>-windows-x86_64-md\ArcaneTests
 
 Record the `Randomness seeded to:` line. GPU tests are tagged `[gpu]`. Device-less graph tests are `[nri]`. `Arcane::Test::RepoRoot()` is `ArcaneTests/src/Helpers/ConstantScan.hpp:34`.
 
-- **Goldens are Task 7 only.** Tasks 1–6 do not run `scripts\golden-gate.ps1`. After Task 3 the editor grid pixels differ from the blessed PNGs on purpose; `editor-ui` stays red until Task 7's explained re-bless. World lanes (`runtime-scene`, `f3-cull-blend`) must stay `diffCount == 0` with no re-bless. Before any golden run, delete `imgui.ini` in both host exe dirs (`bin\<Cfg>-windows-x86_64-md\ArcaneRuntime` and `ArcaneEditor`). Re-bless only the grid/overlay class, and only with the written note in Task 7. Bless from the host exe directory (the project resolves to the staged copy), then immediately copy the blessed PNGs from the staged `Verify\References` into source `ReferenceProject\Verify\References`. `git status` must show those PNGs. Gate Debug and Release. Do not bless again under Release. Do not bless `inprocess-lit-cube` (it has no bless mode). If mesh thumbnails move, stop: the tonemap include refactor must stay pixel-identical on world content.
+- **Goldens are Task 13 only.** Tasks 1–12 do not run `scripts\golden-gate.ps1`. After Task 3 the editor grid pixels differ from the blessed PNGs on purpose; `editor-ui` stays red until Task 13's explained re-bless. World lanes (`runtime-scene`, `f3-cull-blend`) must stay `diffCount == 0` with no re-bless. Before any golden run, delete `imgui.ini` in both host exe dirs (`bin\<Cfg>-windows-x86_64-md\ArcaneRuntime` and `ArcaneEditor`). Re-bless only the grid/overlay class, and only with the written note in Task 13. Bless from the host exe directory (the project resolves to the staged copy), then immediately copy the blessed PNGs from the staged `Verify\References` into source `ReferenceProject\Verify\References`. `git status` must show those PNGs. Gate Debug and Release. Do not bless again under Release. Do not bless `inprocess-lit-cube` (it has no bless mode). If mesh thumbnails move, stop: the tonemap include refactor must stay pixel-identical on world content.
 
 - **Nothing on the frame path blocks the main thread.** Extract returns before `RenderFrame` / `RenderFrameOffscreen`. The `/showIncludes` compile is a Catch2 test, not a per-frame step. No `DeviceWaitIdle` is added.
 
@@ -71,17 +71,17 @@ Record the `Randomness seeded to:` line. GPU tests are tagged `[gpu]`. Device-le
 These are the five inputs most likely to bite that a task's other tests would miss. Each one has a pinning test in the task named, written in that task's step style.
 
 1. **The chrome graph declares a world pass.** `PresentChromeFrame` (`EditorAppFrame.cpp:4016-4035`) sets only `frame.imgui` today, and `DeclareGraphFrame` always starts with `batch2d` (`NriGraphContext.cpp:1277`), so an imgui-only shape clears a canvas through an empty batcher and then tonemaps it (`RenderGraphTest.cpp:6177-6220`). Plan 1 adds `RgFrameShape::world` / `FrameDesc::world`, default `true`. Chrome sets `frame.world = false` and gets a letterbox raster (colour load-op CLEAR to `render.clearColor`, no draws), then tonemap, then imgui. Forbidden names on that shape: `batch2d`, `mesh`, `grid`, `overlay`, `gbuffer`, `lighting`, `taa`, `gpuscene-sync`, `mesh-cull`. An empty-batcher *world* frame still declares `batch2d`. Pinned in Task 2 (`"chrome world=false is letterbox, tonemap, imgui"` and `"PresentChromeFrame sets frame.world = false"`).
-2. **A frame still in flight holds the previous packet while extract writes the slot `FramesInFlight()` extracts old.** The GPU never reads packet memory. After `FramesInFlight() - 1` further extracts the first packet's bytes are intact; the next extract overwrites that slot. A span taken from the packet lies inside the packet's own vector. Mutating the source component after extract leaves the packet unchanged. Render origin translation is `{0,0,0}`. The packet header does not include `Astra/Registry/Registry.hpp`. Pinned in Task 4 (`"a packet slot stays intact until FramesInFlight extracts have passed"`).
-3. **An empty post chain is not pixel-identity for a blended overlay, and a post chain does not grade an opaque overlay primitive.** Blending a partial-alpha linear colour into scene colour and then running the tonemap differs from running the tonemap operator on the primitive and blending after, including when the chain is empty (C3). Separately, an opaque overlay primitive (alpha 1) reads the same bytes with a scene-tinting post chain and without one, while a world pixel in that same pair of frames differs. Pinned in Task 3 (`"tonemap-then-blend differs from blend-then-tonemap"` and `"an opaque overlay pixel is unchanged by a post chain"`). Task 7 carries the explained re-bless note; it does not claim the empty-chain grid matches today's golden.
-4. **A headless runtime draws, so it runs extract; ArcaneServer records no graph, so it does not.** `RuntimeFrame.cpp:748` branches `IsOffscreen() ? RenderFrameOffscreen : RenderFrame`. The one `ExtractFrame` call sits above that branch. `ArcaneServer` links `ArcaneCore` only (`premake5.lua:785-792`). Pinned in Task 5 (`"runtime calls ExtractFrame once, above both render paths"` and `"ArcaneServer does not name ExtractFrame"`).
-5. **Overlay class, colour space, and a missing depth target.** Each primitive is depth-tested or always-on-top (spec section 3.1). A depth-tested line behind an opaque mesh is hidden; the same line tagged always-on-top is visible. The 2D grid is depth-tested and, because sprites write no depth in this plan, draws over sprites (that crossing is part of the Task 7 note). The 3D grid uses nearer-or-equal and does not write depth. Physics debug does not call `SetLayer` today (`EditorAppFrame.cpp:1893-1981`) and must be tagged always-on-top explicitly. Gizmo colours are already display-referred (`GizmoOverlay.hpp:26-45`, `ColorConvertFloat4ToU32`); a display-referred red `(1,0,0)` reads back unscaled and is not `ACES(1,0,0)`. Linear primitives go through ACES then true sRGB with no exposure term (`tonemap.hlsl:36-56`). With no mesh pass, today's grid comment (`NriGraphContext.cpp:1374-1378`) draws unoccluded and does not attach the placeholder depth; the overlay does the same and does not sample a missing texture. Pinned in Task 3 (`"depth-tested hides, always-on-top shows, display-referred red is not ACES, missing depth draws unoccluded"`).
+2. **A frame still in flight holds the previous packet while extract writes the slot `FramesInFlight()` extracts old.** The GPU never reads packet memory. After `FramesInFlight() - 1` further extracts the first packet's bytes are intact; the next extract overwrites that slot. A span taken from the packet lies inside the packet's own vector. Mutating the source component after extract leaves the packet unchanged. Render origin translation is `{0,0,0}`. The packet header includes `SceneCameraView.hpp` and keeps `spriteView` as `std::optional<SceneCameraView>`. The ImGui snapshot is an owned per-list copy inside that same slot (`ImTextureID` stored as `ImU64`, list boundaries kept, callback commands refused). Pinned in Task 4 (`"a packet slot stays intact until FramesInFlight extracts have passed"` and `"an ImDrawSnapshot keeps list boundaries and refuses a callback"`).
+3. **An empty post chain is not pixel-identity for a blended overlay, and a post chain does not grade an opaque overlay primitive.** Blending a partial-alpha linear colour into scene colour and then running the tonemap differs from running the tonemap operator on the primitive and blending after, including when the chain is empty (C3). Separately, an opaque overlay primitive (alpha 1) reads the same bytes with a scene-tinting post chain and without one, while a world pixel in that same pair of frames differs. Pinned in Task 3 (`"tonemap-then-blend differs from blend-then-tonemap"` and `"an opaque overlay pixel is unchanged by a post chain"`). Task 13 carries the explained re-bless note; it does not claim the empty-chain grid matches today's golden.
+4. **A rendering host runs extract once per frame. A non-rendering host leaves the counter at 0.** `RuntimeApp --headless` builds an offscreen vehicle and draws (`RuntimeApp.cpp:447-457`); that process prints `extract-frames: N` after `--frames N`. `Arcane::Runtime` has no client and an empty render scheduler (`ClientRuntimeTest.cpp:26-36`); `Loop().Advance` (`RunLoop.hpp:104`) leaves `ExtractFrameCallCount()` at 0. `ArcaneServer` links `ArcaneCore` only (`premake5.lua:785-792`), ticks with `Loop().Advance` (`ServerApp.cpp:191`), and writes that same Core counter into `ServerReport::extractFrameCalls`, which stays 0. Pinned in Task 11 by running those three hosts. Source text is not the proof.
+5. **Overlay class, colour space, a missing depth target, and perspective grid depth.** Each primitive is depth-tested or always-on-top (spec section 3.1). A depth-tested line behind an opaque mesh is hidden; the same line tagged always-on-top is visible. The 2D grid is depth-tested and, because sprites write no depth in this plan, draws over sprites (that crossing is part of the Task 13 note). The 3D grid uses nearer-or-equal and does not write depth. Physics debug does not call `SetLayer` today (`EditorAppFrame.cpp:1893-1981`) and must be tagged always-on-top explicitly. Gizmo colours are already display-referred (`GizmoOverlay.hpp:26-45`, `ColorConvertFloat4ToU32`); a display-referred red `(1,0,0)` reads back unscaled and is not `ACES(1,0,0)`. Linear primitives go through ACES then true sRGB with no exposure term (`tonemap.hlsl:36-56`). With no mesh pass, today's grid comment (`NriGraphContext.cpp:1374-1378`) draws unoccluded and does not attach the placeholder depth; the overlay does the same and does not sample a missing texture. The screen-space witness writes `clip.w = 1`, so a second divide of `SV_Position.z` by `SV_Position.w` still compares the right value on those lines. A perspective grid fragment does not: in the pixel shader `SV_Position.z` is already post-divide and `SV_Position.w` is `1/clip.w`. Both overlay pixel shaders use `input.clip.z`. Pinned in Task 3 (`"depth-tested hides, always-on-top shows, display-referred red is not ACES, missing depth draws unoccluded"` and `"a perspective grid axis is hidden on the cube and visible beside it"`).
 
 ## Out of scope
 
 Do not implement any of these in this plan. A task that starts one of them is wrong; stop.
 
 - Plan 2: Surface domain, `.arcmat` migration, vertex factories, the six mesh shaders becoming one material, preview rows, checkerboard moving off the world quad. The checkerboard stays a world quad (spec section 5.7). `Impl::Harvest` and `ShaderEditorDocument::RenderGraphPreview` contain no forbidden registry calls today; they must not grow any, and they do not have to call `ExtractFrame` when they author a local quad.
-- Plan 3: one world raster pass, the shared back-to-front sprite list, sprite depth writes, quantized sort keys, sprite texture/cutoff, the 50k budget, sprite-edge parity, `Camera::primary`, editing `main.arcscene` or `f3_cull_blend.arcscene`, the perspective occlusion witness, the view-space slab witness, the `runtime-scene` two-mesh re-bless.
+- Plan 3: one world raster pass, the shared back-to-front sprite list, sprite depth writes, quantized sort keys, sprite texture/cutoff, the 50k budget, sprite-edge parity, `Camera::primary`, editing `main.arcscene` or `f3_cull_blend.arcscene`, the perspective world-mesh occlusion witness, the view-space slab witness, the `runtime-scene` two-mesh re-bless. Task 3's perspective witness is the overlay grid and a world-space overlay line. It does not re-bless `runtime-scene`.
 - Selecting reverse-Z. The enum value exists so a later change is one assignment. This plan selects `ForwardZ`.
 - An exposure multiply. Overlay conversion is the tonemap operator alone. When D1 adds exposure it scales scene colour and does not scale overlay primitives. `overlay.hlsl` has no `exposure` identifier.
 - A velocity target, TAA jitter, or filling the G-buffer, lighting, or TAA slots. Those three nodes are empty.
@@ -95,7 +95,7 @@ Do not implement any of these in this plan. A task that starts one of them is wr
 | File | Task | Responsibility |
 |---|---|---|
 | `ArcaneCore/src/Arcane/Scene/DepthConvention.hpp` (new) | 1 | `DepthConvention`, `kSelectedDepthConvention`. No Astra, no NRI. |
-| `ArcaneCore/src/Arcane/Scene/SceneCamera.hpp` | 1 | Include the new header immediately above the DEPTH CONVENTION comment (`:120`). `ActiveSceneCamera` (`:57`) and `ActivePerspectiveSceneCamera` (`:206`) stay. |
+| `ArcaneCore/src/Arcane/Scene/SceneCamera.hpp` | 1, 4 | Task 1 includes `DepthConvention.hpp` above the DEPTH CONVENTION comment (`:120`). Task 4 deletes `struct SceneCameraView` (`:31-42`) and includes `SceneCameraView.hpp`. `ActiveSceneCamera` (`:57`) still returns `std::optional<SceneCameraView>`. `ActivePerspectiveSceneCamera` (`:206`) still returns `std::optional<ViewTransform>`. |
 | `ArcaneClient/src/Arcane/Render/DepthConventionMap.hpp` (new) | 1 | `DepthClearValue`, `NearerWinsOp`, `NearerOrEqualOp`. |
 | `ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.cpp` | 1, 2 | Compare at `:832` reads `NearerWinsOp`. Depth clear sites `:83`, `:955`, `:1309` read `DepthClearValue` in Task 2. `CmdClearAttachments` at `:942-957` deleted in Task 2. |
 | `ArcaneClient/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp` | 1 | Compare at `:582` reads `NearerWinsOp`. `:400` stays. |
@@ -107,23 +107,35 @@ Do not implement any of these in this plan. A task that starts one of them is wr
 | `ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp` | 2, 3 | `DeclareGraphFrame` (`:1231`) and `BuildFrame` (`:1632-1664`). |
 | `ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp` | 2, 5 | Delete the colour `CmdClearAttachments` (`:1395-1408`). Task 5 drains the packet's owned copy. |
 | `ArcaneTests/src/RenderGraphTest.cpp` | 2, 3 | Every `DeclareGraphFrame` node census. Task 3 moves the grid census to `overlay`. |
-| `ArcaneEditor/src/App/EditorAppFrame.cpp` | 2, 3, 5 | `PresentChromeFrame` (`:4016`) sets `world = false` in Task 2. Task 3 retargets grid/physics/camera/gizmo submissions. Task 5 moves the registry reads into extract. |
+| `ArcaneEditor/src/App/EditorAppFrame.cpp` | 2, 3, 5, 7, 8, 9, 10 | `PresentChromeFrame` (`:4016`) sets `world = false` in Task 2. Task 3 retargets grid/physics/camera/gizmo submissions. Tasks 5 and 7–10 move the named builder reads into extract. |
 | `ArcaneClient/src/Arcane/Render/GridSceneDesc.hpp` (new) | 3 | `GridSceneDesc` moved out of `GridNode.hpp:95-155`. No NRI, no Astra. |
 | `ArcaneClient/src/Arcane/Render/OverlayPrimitive.hpp` (new) | 3 | Overlay enums and primitive records. |
 | `ArcaneClient/src/Arcane/Render/Nri/nodes/OverlayNode.hpp`, `.cpp` (new) | 3 | Node `"overlay"`. |
 | `data/shaders/tonemap_operator.hlsl` (new), `data/shaders/tonemap.hlsl`, `data/shaders/overlay.hlsl` (new), `data/shaders/compile-shaders.bat` | 3 | Shared ACES + sRGB. Overlay entry points. |
 | `ArcaneTests/src/OverlayWitnessTest.cpp` (new) | 3 | Review Focus 3 and 5. |
+| `ArcaneCore/src/Arcane/Scene/SceneCameraView.hpp` (new) | 4 | `SceneCameraView`. Includes `ViewTransform.hpp`. No registry. |
 | `ArcaneClient/src/Arcane/Render/VisibleSet.hpp` (new) | 4 | `VisibleEntry`, `VisibleSet`. No `Registry.hpp`. |
-| `ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp` | 4 | Includes `VisibleSet.hpp`. `BuildVisibleSet` (`:119`) stays here. |
-| `ArcaneClient/src/Arcane/Render/RenderFramePacket.hpp`, `.cpp` (new) | 4 | Packet, `PacketRing`. |
-| `ArcaneTests/src/RenderFramePacketTest.cpp` (new) | 4 | Review Focus 2. |
-| `ArcaneClient/src/Arcane/Render/ExtractFrame.hpp`, `.cpp` (new) | 5 | The one allowlisted registry TU. |
-| `ArcaneClient/src/Arcane/Render/Grid2D.hpp`, `.cpp` (new) | 5 | `PlanGrid2D` / line emission moved from the editor so extract can call it. |
-| `ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp` | 5 | `BuildGpuSceneFrame` (`:285`) drops `const MeshTable*`. |
-| `ArcaneRuntime/src/RuntimeFrame.cpp`, `RuntimeApp.cpp` | 5 | One `ExtractFrame` above `:748`. `PushSceneCamera` (`:846`) asks extract for the view. |
-| `ArcaneTests/src/ExtractFrameTest.cpp` (new) | 5 | Owned snapshot, camera split, Review Focus 4. |
-| `ArcaneTests/src/RenderRegistryIncludeTest.cpp` (new) | 6 | `/showIncludes` gate and the host frame-builder gate. |
-| Golden PNGs under `ReferenceProject/Verify/References` | 7 | Explained grid/overlay re-bless only. |
+| `ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp` | 4 | Includes `VisibleSet.hpp`. `BuildVisibleSet` (`:119`) stays here. The header's own `#include <Astra/Registry/Registry.hpp>` (`:30`) stays; only `ExtractFrame.cpp` may include this header from a Render `.cpp`. |
+| `ArcaneClient/src/Arcane/Render/RenderFramePacket.hpp`, `.cpp` (new) | 4 | Packet, `PacketRing`, `CopyImDrawSnapshot`, `ImDrawSnapshotRebuild`. |
+| `ArcaneTests/src/RenderFramePacketTest.cpp` (new) | 4 | Review Focus 2, camera field type, ImGui snapshot. |
+| `ArcaneCore/src/Arcane/Base/ExtractAccounting.hpp`, `.cpp` (new) | 5 | `NoteExtractFrameCall`, `ExtractFrameCallCount`, `ResetExtractFrameCallCount`. Core, so ArcaneServer links it. |
+| `ArcaneClient/src/Arcane/Render/ExtractFrame.hpp`, `.cpp` (new) | 5–10 | The one Render `.cpp` allowed to include `Registry.hpp`. Each task adds one producer family. |
+| `ArcaneClient/src/Arcane/Client/ClientRuntime.cpp` | 5 | `InstallRenderSystems` (`:45-49`) stops adding `RenderSubmissionSystem`. |
+| `ArcaneTests/src/ClientRuntimeTest.cpp` | 5 | The two `HasSystem<RenderSubmissionSystem>` checks on `ClientRuntime` become `CHECK_FALSE`. |
+| `ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp` | 6 | `BuildGpuSceneFrame` (`:285`) takes `std::span<const MeshSectionRange>`. Header include of `Registry.hpp` (`:27`) stays; only `ExtractFrame.cpp` includes this header from a Render `.cpp`. |
+| `ArcaneClient/src/Arcane/Host/GpuSceneHost.hpp` | 6 | `PrepareSceneForRender` (`:87-111`) becomes a function `ExtractFrame.cpp` calls. |
+| `ArcaneRuntime/src/RuntimeFrame.cpp` | 5, 6, 7, 8 | One `ExtractFrame` above `:748` from Task 5. Later tasks delete the producer calls this function used to make. `GpuSceneInvalidate` at `:756` stays. |
+| `ArcaneRuntime/src/RuntimeApp.cpp` | 7, 11 | Task 7 moves the no-camera `CreateView` (`:870-874`) into extract. Task 11 prints `extract-frames:` once at shutdown. |
+| `ArcaneClient/src/Arcane/Render/PickEmit.cpp` | 8 | Move `CollectPickables` (`:32` through the line before `BuildPickIdGeometry` at `:243`). Drop `:5` `VisibilitySystem.hpp`, `:8` `PhysicsSystem.hpp`, `:11` `Registry.hpp`. |
+| `ArcaneClient/src/Arcane/Render/Grid2D.hpp`, `.cpp` (new) | 9 | `PlanGrid2D` / `EmitGrid2D`, moved from the editor. |
+| `ArcaneEditor/src/Viewport/ViewportGrid.hpp`, `.cpp` | 9 | `DrawGrid2D` forwards to `EmitGrid2D`. |
+| `ArcaneClient/src/Arcane/Render/RenderSystems.hpp` | 5 | `operator()` from `:50` through its closing brace is what extract runs. The header's `Registry.hpp` include (`:37`) stays. Only `ExtractFrame.cpp` includes this header from a Render `.cpp`. |
+| `ArcaneClient/src/Arcane/Render/Nri/nodes/ImGuiNriNode.cpp` | 10 | `Record` (`:58`) rebuilds `ImDrawData` from the packet snapshot. |
+| `ArcaneServer/src/ServerReport.hpp`, `.cpp`, `ArcaneServer/src/ServerApp.cpp` | 11 | `extractFrameCalls` written from `ExtractFrameCallCount()` after the tick loop (`ServerApp.cpp:225-230`). |
+| `ArcaneTests/src/ExtractFrameTest.cpp` (new) | 5–10 | One Catch2 case per producer family. |
+| `ArcaneTests/src/ExtractHostTest.cpp` (new) | 11 | Review Focus 4. Runs the three hosts. |
+| `ArcaneTests/src/RenderRegistryIncludeTest.cpp` (new) | 12 | `/showIncludes` gate and the host frame-builder gate. |
+| Golden PNGs under `ReferenceProject/Verify/References` | 13 | Explained grid/overlay re-bless only. |
 
 ---
 
@@ -815,6 +827,12 @@ TEST_CASE("overlay.hlsl uses the shared operator and has no exposure term", "[nr
     CHECK(overlay.find("float4(ndc, input.pos.z, 1.0)") != std::string::npos);
     CHECK(overlay.find("float4(ndc, 0.0, 1.0)") == std::string::npos);
     CHECK(overlay.find("g_HasDepth > 0.5 && input.depthTest > 0.5") != std::string::npos);
+    // SV_Position.z is already post-divide. A second divide by .w must fail this scan.
+    CHECK(overlay.find("input.clip.z / input.clip.w") == std::string::npos);
+    CHECK(overlay.find("clip.z / clip.w") == std::string::npos);
+    const auto fragD = overlay.find("float fragD = input.clip.z;");
+    CHECK(fragD != std::string::npos);
+    CHECK(overlay.find("float fragD = input.clip.z;", fragD + 1) != std::string::npos);
 }
 
 // The placeholder depth node (NriGraphContext.cpp:1352-1364) stays unconsumed.
@@ -893,7 +911,7 @@ GPU cases live in the same file. The helpers they call are in `NriGraphPixelTest
 
 Add the includes those ranges use, the same ones at the top of `NriGraphPixelTest.cpp` (`HostConfig.hpp`, `GpuSceneSync.hpp`, `VisibilitySystem.hpp`, `BoundsSystem.hpp`, `Components.hpp`, `SceneModule.hpp`, `SceneResources.hpp`, `TransformSystems.hpp`, `SceneCamera.hpp`, `MeshBuilder.hpp`, `RenderErrorLatch.hpp`, `NriDevice.hpp`, `GpuScene.hpp`, `NriMeshBufferCache.hpp`, `Helpers/GpuCapability.hpp`, `Astra/Registry/Registry.hpp`, `glm/gtc/matrix_transform.hpp`), plus `PostChainCache.hpp`, `ShaderCompiler.hpp`, `ShaderSourceProvider.hpp`, `ShaderConventions.hpp`, `MaterialSource.hpp`, and `MaterialInstance.hpp`.
 
-`BuildGpuSceneFrame` in this task still takes `const MeshTable*` (`GpuSceneSync.hpp:285`). Task 5 changes that signature and updates the call below in the same commit as the other call sites.
+`BuildGpuSceneFrame` in this task still takes `const MeshTable*` (`GpuSceneSync.hpp:285`). Task 6 changes that signature and updates the call below in the same commit as the other call sites.
 
 A screen-space line is expanded in Step 3 into a quad of pixel `thickness`. The segments below are 16px long and 8px thick, so the named pixel centre sits inside the quad: `(80, 48)` is the centre of the 160x96 target (`NriGraphPixelTest.cpp:2249` reads that centre as the lit cube), and `(10, 10)` is the background corner that same capture reads.
 
@@ -1136,6 +1154,125 @@ TEST_CASE("post chain does not grade an opaque overlay pixel (vulkan)", "[gpu][o
 {
     CheckPostDoesNotGradeOverlay(Arcane::GraphicsBackend::Vulkan);
 }
+
+// Review Focus 5, perspective half. The screen-space lines above write clip.w = 1,
+// so fragD = SV_Position.z / SV_Position.w still equals SV_Position.z and those
+// checks stay green under the wrong formula. This one does not.
+//
+// FillCamera (eye z = 4, fovY 60, near 0.1, far 100, perspectiveRH_ZO) puts the
+// cube's front face (world z = +1, view depth 3) at ndc.z ≈ 0.968. A world point
+// on z = 0 has view depth 4 and ndc.z ≈ 0.976, farther than the front face and
+// nearer than the depth clear of 1. The wrong formula divides that ndc.z by
+// SV_Position.w (1/clip.w), producing ≈ ndc.z * viewDepth ≈ 3.9, which is past
+// the clear and discards the unoccluded axis as well as the in-front line.
+void CheckPerspectiveGridDepth(Arcane::GraphicsBackend backend)
+{
+    ARC_REQUIRE_BACKEND(backend);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    GpuSceneWorld w;
+    w.AddMesh(cubeId, cube);
+    w.Spawn(glm::vec3(0.0f), cubeId);
+    w.Schedulers();
+
+    Arcane::MeshSceneDesc scene;
+    FillCamera(scene);
+    Arcane::ViewTransform view;
+    view.view       = scene.view;
+    view.projection = scene.projection;
+    view.viewport   = glm::uvec2{ kW, kH };
+
+    Arcane::VisibleSet vis;
+    Arcane::BuildVisibleSet(w.reg, view, vis);
+    Arcane::GpuSceneMirror mirror;
+    Arcane::GpuSceneFrame gpu;
+    Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
+    Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, gpu);
+    for (Arcane::GpuInstance& row : gpu.stage.values)
+        row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+    PixelVehicle v = MakeVehicle(backend);
+    v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
+    scene.scene = &gpu;
+
+    auto shoot = [&](const Arcane::OverlayPrimitiveList& list) {
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.mesh = &scene;
+        frame.overlay = &list;
+        RenderOne(*v.ctx, frame);
+        std::uint32_t width = 0, height = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+        REQUIRE(width == kW);
+        REQUIRE(height == kH);
+        return rgba;
+    };
+
+    // Axis only. Camera at y = 0 looking down -Z, so the world-X axis projects
+    // onto y = kH/2. The cube's front face covers about x in [52, 108]; x = 10
+    // is beside it. fwidth is about one pixel, so accept the midline and its
+    // two neighbours. The wrong divide discards all three.
+    Arcane::OverlayPrimitiveList grid;
+    grid.hasGrid3d = true;
+    grid.grid3d.view = view;
+    grid.grid3d.SetPlane(Arcane::GridSceneDesc::Plane::XZ);
+    grid.grid3d.minorSpacing = 1.0f;
+    grid.grid3d.majorEvery = 8.0f;
+    grid.grid3d.fadeDistance = 1000.0f;
+    grid.grid3d.minHalfExtent = 20.0f;
+    grid.grid3d.extentPerAltitude = 1.0f;
+    grid.grid3d.minorColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+    grid.grid3d.majorColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+    grid.grid3d.axisUColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    grid.grid3d.axisVColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    const std::vector<unsigned char> gridPx = shoot(grid);
+    const Rgba centre = At(gridPx, kW, kW / 2u, kH / 2u);
+    CHECK(centre.r > centre.g + 60);
+    bool axis = false;
+    for (std::uint32_t y = (kH / 2u) - 1u; y <= (kH / 2u) + 1u; ++y)
+    {
+        const Rgba px = At(gridPx, kW, 10u, y);
+        if (px.g > 200 && px.g < 250 && px.r < 80)
+            axis = true;
+    }
+    CHECK(axis);
+
+    auto worldLine = [](float z) {
+        Arcane::OverlayLine line{};
+        line.a = { -0.4f, 0.0f, z };
+        line.b = {  0.4f, 0.0f, z };
+        line.thickness = 0.5f;
+        line.depth = Arcane::OverlayDepthClass::DepthTested;
+        line.space = Arcane::OverlayColorSpace::DisplayReferred;
+        line.color = { 0.0f, 1.0f, 0.0f, 1.0f };
+        line.screenSpace = false;
+        return line;
+    };
+    Arcane::OverlayPrimitiveList inFront;
+    inFront.lines.push_back(worldLine(2.0f));
+    const Rgba front = At(shoot(inFront), kW, kW / 2u, kH / 2u);
+    CHECK(front.r == 0);
+    CHECK(front.g == 255);
+    CHECK(front.b == 0);
+
+    Arcane::OverlayPrimitiveList behind;
+    behind.lines.push_back(worldLine(-2.0f));
+    const Rgba back = At(shoot(behind), kW, kW / 2u, kH / 2u);
+    CHECK(back.r > back.g + 60);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("a perspective grid axis is hidden on the cube and visible beside it (d3d12)", "[gpu][overlay][d3d12]")
+{
+    CheckPerspectiveGridDepth(Arcane::GraphicsBackend::D3D12);
+}
+TEST_CASE("a perspective grid axis is hidden on the cube and visible beside it (vulkan)", "[gpu][overlay][vulkan]")
+{
+    CheckPerspectiveGridDepth(Arcane::GraphicsBackend::Vulkan);
+}
 ```
 
 `compile-shaders.bat` is an explicit list. The test also reads the bat and requires both lines:
@@ -1143,6 +1280,8 @@ TEST_CASE("post chain does not grade an opaque overlay pixel (vulkan)", "[gpu][o
 ```cpp
 CHECK(bat.find("call :compile overlay vs_main vs_6_5 overlay_vs") != std::string::npos);
 CHECK(bat.find("call :compile overlay ps_main ps_6_5 overlay_ps") != std::string::npos);
+CHECK(bat.find("call :compile overlay grid_vs_main vs_6_5 overlay_grid_vs") != std::string::npos);
+CHECK(bat.find("call :compile overlay grid_ps_main ps_6_5 overlay_grid_ps") != std::string::npos);
 ```
 
 - [ ] **Step 2: Generate, compile shaders by building ArcaneClient, run the overlay tag.**
@@ -1231,7 +1370,8 @@ float4 ps_main(VSOut input) : SV_Target0
     {
         float2 uv = input.clip.xy / g_Viewport;
         float sceneD = g_Depth.Sample(g_Point, uv);
-        float fragD = input.clip.z / input.clip.w;
+        // SV_Position.z is the post-divide depth. SV_Position.w is 1/clip.w.
+        float fragD = input.clip.z;
         bool farther = (g_DiscardIfGreater > 0.5) ? (fragD > sceneD) : (fragD < sceneD);
         if (farther) discard;
     }
@@ -1253,7 +1393,7 @@ call :compile overlay grid_vs_main vs_6_5 overlay_grid_vs || exit /b 1
 call :compile overlay grid_ps_main ps_6_5 overlay_grid_ps || exit /b 1
 ```
 
-`grid_vs_main` writes `depthTest = 1`. `grid_ps_main` computes the same linear grid colour `grid.hlsl`'s `ps_main` computes today, then `return float4(LinearToSrgb(ACESFilmic(linear.rgb)), linear.a);`, and it runs the same discard guard as `ps_main` (`g_HasDepth > 0.5 && depthTest > 0.5`). Do not change `grid.hlsl` itself: `AddGridNode`'s direct test still loads `grid_vs` / `grid_ps` (`GridNode.cpp:37-38`) for a linear canvas, and that path is no longer on the frame.
+`grid_vs_main` writes `depthTest = 1` and `clip = mul(g_ViewProjection, float4(world, 1.0))`, the same perspective quad `grid.hlsl`'s `vs_main` (`data/shaders/grid.hlsl:69`) builds. `grid_ps_main` computes the same linear grid colour `grid.hlsl`'s `ps_main` computes today, then `return float4(LinearToSrgb(ACESFilmic(linear.rgb)), linear.a);`. Its discard guard is the same six lines as `ps_main`, including `float fragD = input.clip.z;`. Paste that assignment into both functions so the source scan's second hit exists. Do not change `grid.hlsl` itself: `AddGridNode`'s direct test still loads `grid_vs` / `grid_ps` (`GridNode.cpp:37-38`) for a linear canvas, and that path is no longer on the frame.
 
 Draw order inside `OverlayNode::Record`: 3D grid (when `hasGrid3d` or `shape.grid`), then lines and fills whose `depth` is `DepthTested`, then lines and fills whose `depth` is `AlwaysOnTop`. Depth write stays off (the pass has no depth attachment). Blend is straight alpha, source-over, on the tonemap target.
 
@@ -1292,15 +1432,15 @@ Declare it beside `WasWritten` (`RenderGraph.hpp:698`).
 
 Update the frame-shape section at `RenderGraphTest.cpp:7089`. Today's names are `batch2d, gpuscene-sync, mesh-cull, mesh, grid, tonemap`. After Tasks 2 and 3 they are `gbuffer, lighting, batch2d, gpuscene-sync, mesh-cull, mesh, taa, tonemap, overlay`. There is no node named `"grid"`. `WasRead(handles.depth)` is true. `DepthLoadOp` of the overlay node is null. The depth transient is still the one the mesh node created (`NameOf` `"depth"`).
 
-**Editor submissions move in this same commit.** Otherwise the grid disappears until Task 5.
+**Editor submissions move in this same commit.** Otherwise the grid disappears until Task 9.
 
-- `SubmitSceneToBatcher` (`:1857`): stop calling `DrawGrid2D` (`:1887`). Build `OverlayLine`s by walking the same world segments `DrawGrid2D` would have emitted (call `DrawGrid2D` into a local `Batcher2D`, `Drain()` it, and convert each line span into `OverlayLine` with `depth = DepthTested`, `space = Linear`, `screenSpace = false`). Store them on `EditorApp` and point `FrameDesc::overlay` at that list from `ArmGraphViewportFrame`. Task 5 replaces this drain with `Grid2D` inside extract; this task only has to keep the lines on screen.
+- `SubmitSceneToBatcher` (`:1857`): stop calling `DrawGrid2D` (`:1887`). Build `OverlayLine`s by walking the same world segments `DrawGrid2D` would have emitted (call `DrawGrid2D` into a local `Batcher2D`, `Drain()` it, and convert each line span into `OverlayLine` with `depth = DepthTested`, `space = Linear`, `screenSpace = false`). Store them on `EditorApp` and point `FrameDesc::overlay` at that list from `ArmGraphViewportFrame`. Task 9 replaces this drain with `Grid2D` inside extract; this task only has to keep the lines on screen.
 - Physics debug (`:1898-1922`) and the camera rect (`:1953-1981`) stop submitting into the scene batcher. Convert their `Line`/`Circle`/`Rect` calls into `OverlayLine` / `OverlayFill` tagged `AlwaysOnTop`, `Linear`, `screenSpace = false`. Physics debug has no `SetLayer` today; the tag is what keeps it above the grid.
-- The gizmo lambda (`DrawViewportPanelPhase`, `:3713`) stops constructing `ImGuiGizmoSink`. It fills `OverlayLine` and `OverlayFill` from the same `Line`/`Triangle`/`Rect`/`Circle` callbacks, tagged `AlwaysOnTop`, `DisplayReferred`, `screenSpace = true`, positions in viewport pixels. The interaction `GetComponent` calls at `:1241`, `:1283`, `:1339` stay. Removing the ImGui sink draw here is what prevents a double draw once Task 5 also emits those primitives.
+- The gizmo lambda (`DrawViewportPanelPhase`, `:3713`) stops constructing `ImGuiGizmoSink`. It fills `OverlayLine` and `OverlayFill` from the same `Line`/`Triangle`/`Rect`/`Circle` callbacks, tagged `AlwaysOnTop`, `DisplayReferred`, `screenSpace = true`, positions in viewport pixels. The interaction `GetComponent` calls at `:1241`, `:1283`, `:1339` stay. Removing the ImGui sink draw here is what prevents a double draw once Task 9 also emits those primitives.
 
 `FrameDesc::grid` stays the 3D grid desc the editor already fills. The overlay node reads it. Runtime frames leave `overlay` null and `grid` null, so they do not declare the node and `runtime-scene` node order is Task 2's order.
 
-Do not run the golden gate. `editor-ui` and `editor-ui-perspective` will differ on grid pixels. That is expected until Task 7.
+Do not run the golden gate. `editor-ui` and `editor-ui-perspective` will differ on grid pixels. That is expected until Task 13.
 
 - [ ] **Step 4: Run the overlay tests and the device-less graph tests.**
 
@@ -1326,6 +1466,8 @@ git commit -m "feat(render): post-tonemap overlay pass for grid, debug, and gizm
 ### Task 4: RenderFramePacket and the in-flight ring
 
 **Files:**
+- Create: `ArcaneCore/src/Arcane/Scene/SceneCameraView.hpp`
+- Modify: `ArcaneCore/src/Arcane/Scene/SceneCamera.hpp:31-42` (delete the struct; include the new header beside `ViewTransform.hpp`)
 - Create: `ArcaneClient/src/Arcane/Render/VisibleSet.hpp`
 - Modify: `ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp:48-84` (the two structs move; `BuildVisibleSet` at `:119` stays)
 - Create: `ArcaneClient/src/Arcane/Render/RenderFramePacket.hpp`
@@ -1333,13 +1475,18 @@ git commit -m "feat(render): post-tonemap overlay pass for grid, debug, and gizm
 - Test: `ArcaneTests/src/RenderFramePacketTest.cpp`
 
 **Interfaces:**
-- Consumes: `VisibleEntry` / `VisibleSet` fields (`VisibilitySystem.hpp:48-84`), `GpuSceneFrame` (`GpuSceneTypes.hpp:275-289`), `Batch2DVertex` (`Batcher2D.hpp:126-132`), `Batch2DDrawSpan` (`:139-157`), `Batch2DDrained` (`:163-188`, non-owning, valid until the next `Begin()`), `GlobalParams` (`ArcaneCore/src/Arcane/Material/GlobalParams.hpp:33-39`), `PickDrawable` (`PickEmit.hpp:46-70`, `Astra::Entity` by value), `OverlayPrimitiveList` from Task 3, `PostChainDesc` (`PostChainCache.hpp:66-78`), `ViewTransform`, `FramesInFlight()`, `kMaxFramesInFlight`.
+- Consumes: `VisibleEntry` / `VisibleSet` fields (`VisibilitySystem.hpp:48-84`), `GpuSceneFrame` (`GpuSceneTypes.hpp:275-289`), `Batch2DVertex` (`Batcher2D.hpp:126-132`), `Batch2DDrawSpan` (`:139-157`), `Batch2DDrained` (`:163-188`, non-owning, valid until the next `Begin()`), `GlobalParams` (`ArcaneCore/src/Arcane/Material/GlobalParams.hpp:33-39`), `PickDrawable` (`PickEmit.hpp:46-70`, `Astra::Entity` by value), `OverlayPrimitiveList` from Task 3, `PostChainDesc` (`PostChainCache.hpp:66-78`), `ViewTransform` (`ViewTransform.hpp:50`), `SceneCameraView` (`SceneCamera.hpp:31` today; this task moves it), `ActiveSceneCamera`'s return type `std::optional<SceneCameraView>` (`SceneCamera.hpp:57`), `ActivePerspectiveSceneCamera`'s return type `std::optional<ViewTransform>` (`SceneCamera.hpp:206`), `ImTextureID` as `ImU64` (`imgui.h:344`), `ImDrawCmd::GetTexID` (`imgui.h:3327`), `ImDrawCallback` (`imgui.h:3303`), `FramesInFlight()`, `kMaxFramesInFlight`. `ViewTransform` has no `operator==`; tests compare `.view`, `.projection`, and `.viewport`.
 - Produces:
+  - `struct SceneCameraView` in `SceneCameraView.hpp`, with the three fields that are at `SceneCamera.hpp:31-42` today: `glm::vec2 worldCenter`, `float halfHeight`, `ViewTransform view`.
   - `struct RenderOrigin { glm::vec3 translation{0.0f}; };`
-  - `struct ImDrawSnapshot` with owned `std::vector<ImDrawVert> vertices`, `std::vector<ImDrawIdx> indices`, a `struct Cmd { ImVec4 clip; ImTextureID texture; std::uint32_t idxOffset, idxCount, vtxOffset; }`, `std::vector<Cmd> cmds`, and `glm::vec2 displayPos, displaySize, framebufferScale`.
-  - `struct RenderFramePacket` with the fields listed in Step 3. No `Astra::Registry` member. The header does not include `Astra/Registry/Registry.hpp`, `SceneCamera.hpp`, `VisibilitySystem.hpp`, or `GridNode.hpp`.
+  - `struct ImDrawListSnapshot` and `struct ImDrawSnapshot` as written in Step 3. One snapshot owns its lists. `ImTextureID` is stored as `ImU64` and initialised to `0` (`ImTextureID_Invalid`).
+  - `bool CopyImDrawSnapshot(const ImDrawData* src, ImDrawSnapshot& out);` — `false` and an empty `out` when any command has `UserCallback != nullptr`.
+  - `class ImDrawSnapshotRebuild` — builds an `ImDrawData` whose `CmdLists` point at `IM_NEW`'d `ImDrawList`s owned by the rebuild object.
+  - `struct RenderFramePacket` with the fields listed in Step 3. `spriteView` is `std::optional<SceneCameraView>`. `meshView` is `std::optional<ViewTransform>`. No `Astra::Registry` member. The header includes `SceneCameraView.hpp`. It does not include `Astra/Registry/Registry.hpp`, `SceneCamera.hpp`, `VisibilitySystem.hpp`, or `GridNode.hpp`.
   - `class PacketRing` with `RenderFramePacket& BeginExtract();` and `const RenderFramePacket& Slot(std::uint32_t extractsAgo) const;`.
   - `BeginExtract` returns the slot at `extractCount % FramesInFlight()`, clears that slot, then increments `extractCount`.
+
+`ImDrawData` has no clone (`imgui.h:3590` exposes `AddDrawList` only). `ImDrawList::CloneOutput` (`imgui.h:3530`) copies `UserCallback` pointers and leaves `SharedData` null, and `ImGuiNri::RenderDrawData` walks each list's own `VtxBuffer` with a running offset (`ImGuiNri.cpp:944-955`) while asserting `UserCallback == nullptr` (`:954`). A flat command vector drops those list boundaries, so `VtxOffset` would address the wrong buffer. `TexRef` can hold an `ImTextureData*` that dies at the next `NewFrame`. The packet therefore stores `GetTexID()` resolved at copy time, one vertex/index/command vector per list, inside the ring slot. `ImDrawSnapshotRebuild` lives for the `Record` call in Task 10 and reads those vectors. The GPU still never reads packet memory.
 
 `VisibleSet.hpp` includes `Aabb.hpp`, `Frustum.hpp`, `ViewTransform.hpp`, `Astra/Entity/Entity.hpp`, and `<vector>`. It does not include `Registry.hpp`. `VisibilitySystem.hpp` includes `VisibleSet.hpp`, deletes the two struct definitions, and keeps `SceneVisibility`, `MainVisibleSet`, and `BuildVisibleSet`.
 
@@ -1354,6 +1501,9 @@ git commit -m "feat(render): post-tonemap overlay pass for grid, debug, and gizm
 #include <Arcane/Render/FramePacing.hpp>
 
 #include "Helpers/ConstantScan.hpp"
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <imgui.h>
 
 #include <fstream>
 #include <sstream>
@@ -1414,6 +1564,101 @@ TEST_CASE("RenderFramePacket.hpp does not include the Astra registry", "[nri][pa
     CHECK(text.find("Astra::Registry") == std::string::npos);
     CHECK(text.find("VisibilitySystem.hpp") == std::string::npos);
     CHECK(text.find("SceneCamera.hpp") == std::string::npos);
+    CHECK(text.find("SceneCameraView.hpp") != std::string::npos);
+    CHECK(text.find("optional<SceneCameraView> spriteView") != std::string::npos);
+    CHECK(text.find("optional<ViewTransform> meshView") != std::string::npos);
+}
+
+TEST_CASE("spriteView is a SceneCameraView and meshView is a ViewTransform", "[nri][packet]")
+{
+    Arcane::RenderFramePacket packet;
+    Arcane::SceneCameraView sprite;
+    sprite.worldCenter = { 1.0f, 2.0f };
+    sprite.halfHeight = 3.0f;
+    sprite.view.view = glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 0.0f, 0.0f));
+    sprite.view.projection = glm::mat4(1.0f);
+    sprite.view.viewport = { 8u, 9u };
+    packet.spriteView = sprite;
+    Arcane::ViewTransform mesh;
+    mesh.projection = glm::mat4(2.0f);
+    packet.meshView = mesh;
+    REQUIRE(packet.spriteView.has_value());
+    CHECK(packet.spriteView->worldCenter == glm::vec2(1.0f, 2.0f));
+    CHECK(packet.spriteView->halfHeight == 3.0f);
+    CHECK(packet.spriteView->view.view[3][0] == 4.0f);
+    CHECK(packet.spriteView->view.viewport == glm::uvec2(8u, 9u));
+    REQUIRE(packet.meshView.has_value());
+    CHECK(packet.meshView->projection[0][0] == 2.0f);
+}
+
+static void DummyImGuiCallback(const ImDrawList*, const ImDrawCmd*) {}
+
+TEST_CASE("an ImDrawSnapshot keeps list boundaries and refuses a callback", "[nri][packet]")
+{
+    ImDrawList a(nullptr);
+    ImDrawVert va{};
+    va.pos = ImVec2(1.0f, 2.0f);
+    a.VtxBuffer.push_back(va);
+    a.VtxBuffer.push_back(va);
+    a.IdxBuffer.push_back(0);
+    a.IdxBuffer.push_back(1);
+    a.IdxBuffer.push_back(0);
+    ImDrawCmd ca{};
+    ca.ClipRect = ImVec4(0.0f, 0.0f, 10.0f, 10.0f);
+    ca.TexRef = ImTextureRef(static_cast<ImTextureID>(42));
+    ca.IdxOffset = 0;
+    ca.ElemCount = 3;
+    ca.VtxOffset = 0;
+    ca.UserCallback = nullptr;
+    a.CmdBuffer.push_back(ca);
+
+    ImDrawList b(nullptr);
+    b.VtxBuffer.push_back(va);
+    ImDrawCmd cb{};
+    cb.ClipRect = ImVec4(1.0f, 1.0f, 2.0f, 2.0f);
+    cb.TexRef = ImTextureRef(static_cast<ImTextureID>(7));
+    cb.ElemCount = 3;
+    cb.UserCallback = nullptr;
+    b.CmdBuffer.push_back(cb);
+
+    ImDrawData src;
+    src.AddDrawList(&a);
+    src.AddDrawList(&b);
+    src.DisplayPos = ImVec2(3.0f, 4.0f);
+    src.DisplaySize = ImVec2(100.0f, 50.0f);
+    src.FramebufferScale = ImVec2(2.0f, 2.0f);
+
+    Arcane::ImDrawSnapshot snap;
+    REQUIRE(Arcane::CopyImDrawSnapshot(&src, snap));
+    REQUIRE(snap.lists.size() == 2u);
+    CHECK(snap.lists[0].vertices.size() == 2u);
+    CHECK(snap.lists[0].indices.size() == 3u);
+    CHECK(snap.lists[0].cmds.size() == 1u);
+    CHECK(snap.lists[0].cmds[0].texture == static_cast<ImTextureID>(42));
+    CHECK(snap.lists[0].cmds[0].elemCount == 3u);
+    CHECK(snap.lists[1].vertices.size() == 1u);
+    CHECK(snap.lists[1].cmds[0].texture == static_cast<ImTextureID>(7));
+    CHECK(snap.displayPos == glm::vec2(3.0f, 4.0f));
+    CHECK(snap.framebufferScale == glm::vec2(2.0f, 2.0f));
+
+    Arcane::ImDrawSnapshotRebuild rebuilt(snap);
+    ImDrawData* data = rebuilt.Data();
+    REQUIRE(data->CmdLists.Size == 2);
+    CHECK(data->CmdLists[0]->VtxBuffer.Size == 2);
+    CHECK(data->CmdLists[0]->IdxBuffer.Size == 3);
+    CHECK(data->CmdLists[0]->CmdBuffer.Size == 1);
+    CHECK(data->CmdLists[0]->CmdBuffer[0].GetTexID() == static_cast<ImTextureID>(42));
+    CHECK(data->CmdLists[0]->CmdBuffer[0].VtxOffset == 0u);
+    CHECK(data->CmdLists[0]->CmdBuffer[0].UserCallback == nullptr);
+    CHECK(data->CmdLists[1]->VtxBuffer.Size == 1);
+    CHECK(data->CmdLists[1]->CmdBuffer[0].GetTexID() == static_cast<ImTextureID>(7));
+    CHECK(data->DisplayPos.x == 3.0f);
+    CHECK(data->FramebufferScale.x == 2.0f);
+
+    a.CmdBuffer[0].UserCallback = &DummyImGuiCallback;
+    Arcane::ImDrawSnapshot refused;
+    CHECK_FALSE(Arcane::CopyImDrawSnapshot(&src, refused));
+    CHECK(refused.lists.empty());
 }
 ```
 
@@ -1446,6 +1691,7 @@ Expected: FAIL. `RenderFramePacket.hpp` does not exist.
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Render/PostChainDesc.hpp>
 #include <Arcane/Render/VisibleSet.hpp>
+#include <Arcane/Scene/SceneCameraView.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <imgui.h>
@@ -1462,28 +1708,50 @@ namespace Arcane
         glm::vec3 translation{ 0.0f };
     };
 
-    struct ImDrawSnapshot
+    struct ImDrawListSnapshot
     {
         std::vector<ImDrawVert> vertices;
         std::vector<ImDrawIdx>  indices;
         struct Cmd
         {
             ImVec4        clip{};
-            ImTextureID   texture = nullptr;
+            ImTextureID   texture = 0;   // ImU64. ImTextureID_Invalid is 0.
             std::uint32_t idxOffset = 0;
-            std::uint32_t idxCount  = 0;
+            std::uint32_t elemCount = 0;
             std::uint32_t vtxOffset = 0;
         };
         std::vector<Cmd> cmds;
+    };
+
+    struct ImDrawSnapshot
+    {
+        std::vector<ImDrawListSnapshot> lists;
         glm::vec2 displayPos{ 0.0f };
         glm::vec2 displaySize{ 0.0f };
         glm::vec2 framebufferScale{ 1.0f };
     };
 
+    bool CopyImDrawSnapshot(const ImDrawData* src, ImDrawSnapshot& out);
+
+    class ImDrawSnapshotRebuild
+    {
+    public:
+        explicit ImDrawSnapshotRebuild(const ImDrawSnapshot& snap);
+        ~ImDrawSnapshotRebuild();
+        ImDrawData* Data() { return &m_data; }
+
+        ImDrawSnapshotRebuild(const ImDrawSnapshotRebuild&) = delete;
+        ImDrawSnapshotRebuild& operator=(const ImDrawSnapshotRebuild&) = delete;
+
+    private:
+        ImDrawData m_data{};
+        std::vector<ImDrawList*> m_owned;
+    };
+
     struct RenderFramePacket
     {
-        std::optional<ViewTransform> spriteView;
-        std::optional<ViewTransform> meshView;
+        std::optional<SceneCameraView> spriteView;
+        std::optional<ViewTransform>   meshView;
         glm::uvec2                   viewport{ 0u, 0u };
         RenderOrigin                 origin{};
 
@@ -1548,6 +1816,106 @@ const RenderFramePacket& PacketRing::Slot(std::uint32_t extractsAgo) const
 }
 ```
 
+`SceneCameraView.hpp`:
+
+```cpp
+#pragma once
+#include <Arcane/Scene/ViewTransform.hpp>
+#include <glm/vec2.hpp>
+namespace Arcane
+{
+    struct SceneCameraView
+    {
+        glm::vec2 worldCenter{ 0.0f, 0.0f };
+        float halfHeight = 0.0f;
+        ViewTransform view{};
+    };
+}
+```
+
+`SceneCamera.hpp` includes that header beside `ViewTransform.hpp` and deletes the struct at `:31-42`. `ActiveSceneCamera` (`:57`) still returns `std::optional<SceneCameraView>`. `ActivePerspectiveSceneCamera` (`:206`) still returns `std::optional<ViewTransform>`.
+
+`CopyImDrawSnapshot` and `ImDrawSnapshotRebuild`, in `RenderFramePacket.cpp`:
+
+```cpp
+bool CopyImDrawSnapshot(const ImDrawData* src, ImDrawSnapshot& out)
+{
+    out = {};
+    if (!src)
+        return true;
+    out.displayPos = { src->DisplayPos.x, src->DisplayPos.y };
+    out.displaySize = { src->DisplaySize.x, src->DisplaySize.y };
+    out.framebufferScale = { src->FramebufferScale.x, src->FramebufferScale.y };
+    out.lists.reserve(static_cast<std::size_t>(src->CmdLists.Size));
+    for (const ImDrawList* list : src->CmdLists)
+    {
+        if (!list)
+            continue;
+        for (const ImDrawCmd& cmd : list->CmdBuffer)
+        {
+            if (cmd.UserCallback != nullptr)
+            {
+                out = {};
+                return false;
+            }
+        }
+        ImDrawListSnapshot snap;
+        if (list->VtxBuffer.Size > 0)
+            snap.vertices.assign(list->VtxBuffer.Data, list->VtxBuffer.Data + list->VtxBuffer.Size);
+        if (list->IdxBuffer.Size > 0)
+            snap.indices.assign(list->IdxBuffer.Data, list->IdxBuffer.Data + list->IdxBuffer.Size);
+        for (const ImDrawCmd& cmd : list->CmdBuffer)
+        {
+            ImDrawListSnapshot::Cmd c;
+            c.clip = cmd.ClipRect;
+            c.texture = cmd.GetTexID();
+            c.idxOffset = cmd.IdxOffset;
+            c.elemCount = cmd.ElemCount;
+            c.vtxOffset = cmd.VtxOffset;
+            snap.cmds.push_back(c);
+        }
+        out.lists.push_back(std::move(snap));
+    }
+    return true;
+}
+
+ImDrawSnapshotRebuild::ImDrawSnapshotRebuild(const ImDrawSnapshot& snap)
+{
+    m_data.DisplayPos = ImVec2(snap.displayPos.x, snap.displayPos.y);
+    m_data.DisplaySize = ImVec2(snap.displaySize.x, snap.displaySize.y);
+    m_data.FramebufferScale = ImVec2(snap.framebufferScale.x, snap.framebufferScale.y);
+    for (const ImDrawListSnapshot& src : snap.lists)
+    {
+        ImDrawList* list = IM_NEW(ImDrawList(nullptr));
+        for (const ImDrawVert& v : src.vertices)
+            list->VtxBuffer.push_back(v);
+        for (ImDrawIdx index : src.indices)
+            list->IdxBuffer.push_back(index);
+        for (const ImDrawListSnapshot::Cmd& c : src.cmds)
+        {
+            ImDrawCmd cmd{};
+            cmd.ClipRect = c.clip;
+            cmd.TexRef = ImTextureRef(c.texture);
+            cmd.IdxOffset = c.idxOffset;
+            cmd.ElemCount = c.elemCount;
+            cmd.VtxOffset = c.vtxOffset;
+            cmd.UserCallback = nullptr;
+            list->CmdBuffer.push_back(cmd);
+        }
+        m_owned.push_back(list);
+        m_data.AddDrawList(list);
+    }
+}
+
+ImDrawSnapshotRebuild::~ImDrawSnapshotRebuild()
+{
+    for (ImDrawList* list : m_owned)
+        IM_DELETE(list);
+}
+```
+
+`ImGuiNri::RenderDrawData` still asserts `UserCallback == nullptr` (`ImGuiNri.cpp:954`). The copy refuses before a callback can be stored, which is what the packet test checks. Task 10's `Record` constructs `ImDrawSnapshotRebuild` on the stack from the bound packet and passes `Data()` to `RenderDrawData`.
+
 Call `LatchFramesInFlight()` before the first `FramesInFlight()` use if it has not been latched; the test does that. The ring does not allocate `nri::Buffer` or `nri::Device` members.
 
 A comment on `batchVertices` states the contract: `Batch2DDrained`'s spans die at the next `Begin()` (`Batcher2D.hpp:159-162`); the packet owns the copy. Task 5 is what performs that copy. This task does not change hosts.
@@ -1568,77 +1936,84 @@ Expected: PASS.
 - [ ] **Step 5: Commit.**
 
 ```powershell
-git add ArcaneClient/src/Arcane/Render/VisibleSet.hpp ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp ArcaneClient/src/Arcane/Render/PostChainDesc.hpp ArcaneClient/src/Arcane/Render/PostChainCache.hpp ArcaneClient/src/Arcane/Render/RenderFramePacket.hpp ArcaneClient/src/Arcane/Render/RenderFramePacket.cpp ArcaneTests/src/RenderFramePacketTest.cpp
+git add ArcaneCore/src/Arcane/Scene/SceneCameraView.hpp ArcaneCore/src/Arcane/Scene/SceneCamera.hpp ArcaneClient/src/Arcane/Render/VisibleSet.hpp ArcaneClient/src/Arcane/Render/VisibilitySystem.hpp ArcaneClient/src/Arcane/Render/PostChainDesc.hpp ArcaneClient/src/Arcane/Render/PostChainCache.hpp ArcaneClient/src/Arcane/Render/RenderFramePacket.hpp ArcaneClient/src/Arcane/Render/RenderFramePacket.cpp ArcaneTests/src/RenderFramePacketTest.cpp
 git commit -m "feat(render): RenderFramePacket ring sized to FramesInFlight" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 ```
 
 ---
 
-### Task 5: ExtractFrame is the only frame-side registry reader
+### Task 5: Sprites and the batch copy
 
 **Files:**
+- Create: `ArcaneCore/src/Arcane/Base/ExtractAccounting.hpp`
+- Create: `ArcaneCore/src/Arcane/Base/ExtractAccounting.cpp`
 - Create: `ArcaneClient/src/Arcane/Render/ExtractFrame.hpp`
 - Create: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp`
-- Create: `ArcaneClient/src/Arcane/Render/Grid2D.hpp`
-- Create: `ArcaneClient/src/Arcane/Render/Grid2D.cpp`
-- Modify: `ArcaneEditor/src/Viewport/ViewportGrid.hpp` and `ViewportGrid.cpp` (forward `PlanGrid2D` / `DrawGrid2D` to the moved functions)
-- Modify: `ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp:285-376`
-- Modify: `ArcaneClient/src/Arcane/Host/GpuSceneHost.hpp:87-111`
-- Modify: `ArcaneClient/src/Arcane/Render/PickEmit.cpp` (move `CollectPickables` at `:32`; keep `BuildPickIdGeometry` at `:243`)
-- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp:508-756`
-- Modify: `ArcaneRuntime/src/RuntimeApp.cpp:846-874`
-- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (`RefreshSceneResolution` `:1506-1641`, `RenderSceneToViewport` `:1642`, `SubmitSceneToBatcher` `:1857-1991`, `ArmGraphViewportFrame` `:2042-2181`)
+- Modify: `ArcaneRuntime/src/RuntimeFrame.hpp` (`FrameIo` at `:71`, add `PacketRing` as the last member)
+- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp:519-550` and the branch at `:748`
+- Modify: `ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.hpp` (beside `CurrentBatch()` at `:1113`)
+- Modify: `ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp` (clear the bound pointer at the end of `RenderFrame` and `RenderFrameOffscreen`)
 - Modify: `ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp:1618-1641`
-- Modify: `ArcaneClient/src/Arcane/Render/Nri/nodes/ImGuiNriNode.cpp:58`
-- Modify every `BuildGpuSceneFrame` call: `GpuSceneHost.hpp:110`, `ArcaneTests/src/GpuSceneSyncTest.cpp:499,536,561,617,667,668`, `GpuSceneCullTest.cpp:417,524,570,606`, `MeshCullNodeTest.cpp:67,110,116`, `NriGraphPixelTest.cpp:2221,2301,2358,2387`, and the call `CheckOverlayClasses` makes in `ArcaneTests/src/OverlayWitnessTest.cpp` (Task 3 wrote it against the `const MeshTable*` overload)
+- Modify: `ArcaneClient/src/Arcane/Client/ClientRuntime.cpp:45-49`
+- Modify: `ArcaneEditor/src/App/EditorApp.hpp` (a `PacketRing` member on `EditorApp`, class at `:116`)
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` `RenderSceneToViewport` (`:1642`, editor view already computed at `:1685-1688`)
+- Modify: `ArcaneTests/src/ClientRuntimeTest.cpp:38-47`
 - Test: `ArcaneTests/src/ExtractFrameTest.cpp`
 
 **Interfaces:**
-- Consumes: the packet and `PacketRing` from Task 4. `OverlayPrimitiveList` from Task 3. `ActiveSceneCamera` (`SceneCamera.hpp:57`), `ActivePerspectiveSceneCamera` (`:206`), `BuildVisibleSet` (`VisibilitySystem.hpp:119`), `GpuSceneSync` (`GpuSceneSync.hpp:92`), `BuildGpuSceneFrame` (`:285`), `PrepareSceneForRender` (`GpuSceneHost.hpp:87`), `CollectPickables` (`PickEmit.cpp:32`), `RenderSubmissionSystem` (`RenderSystems.hpp:50-250`), `DrawPhysicsDebug` (`PhysicsDebugDraw.hpp:164`), `ApplyDefaultLight` (`MeshNode.hpp:362`).
-- Produces:
+- Consumes: `PacketRing::BeginExtract` from Task 4. `Batcher2D::Create` (`Batcher2D.hpp:201`). `Batch2DDrained` (`:163-188`). `RenderContext2D` (`SceneResources.hpp:109-122`). `Registry::HasResource` (`Registry.hpp:1159`), `SetResource`, `RemoveResource` (`:1165`). `RenderSubmissionSystem::operator()` (`RenderSystems.hpp:50` through its closing brace). `ActiveSceneCamera` returns `std::optional<SceneCameraView>` (`SceneCamera.hpp:57`). `ViewTransform::ViewProjection`. `Batch2DNode::Prepare` (`Batch2DNode.hpp:225`). `FrameIo` designated init at `RuntimeApp.cpp:732` (a new member with a default constructor needs no new initializer).
+- Produces the stable request and the one extract entry. Later tasks fill fields of this same struct. They do not add members.
 
 ```cpp
 struct ExtractRequest
 {
-    glm::uvec2                    viewport{ 0u, 0u };
-    std::optional<ViewTransform>  editorView;
-    bool                          playMode = false;
-    bool                          showGrid2d = false;
-    bool                          showGrid3d = false;
-    bool                          perspective = false;
-    GridSceneDesc                 grid3d{};
-    bool                          physicsDebug = false;
-    bool                          physicsWholeWorld = false;
-    std::optional<std::uint32_t>  selectedEntity;
-    OverlayPrimitiveList          gizmoPrims{};
-    const PostChainDesc*          post = nullptr;
-    ImDrawData*                   imgui = nullptr;
-    ImDrawData*                   gameUi = nullptr;
-    glm::vec3                     lightDirection{ 0.0f };
-    glm::vec3                     lightColor{ 0.0f };
-    glm::vec3                     ambient{ 0.0f };
-    GpuScene*                     device = nullptr;
+    glm::uvec2                   viewport{ 0u, 0u };
+    std::optional<ViewTransform> editorView;
+    bool                         playMode = false;
+    bool                         showGrid2d = false;
+    bool                         showGrid3d = false;
+    bool                         perspective = false;
+    GridSceneDesc                grid3d{};
+    float                        gridMinorAlpha = 0.35f;
+    float                        gridMajorAlpha = 0.55f;
+    glm::vec3                    gridLineRgb{ 0.5f, 0.5f, 0.5f };
+    float                        gridLineThicknessPx = 1.0f;
+    std::int64_t                 gridMaxLinesPerAxis = 4096;
+    glm::vec4                    gridAxisX{ 0.85f, 0.25f, 0.25f, 0.9f };
+    glm::vec4                    gridAxisY{ 0.3f, 0.8f, 0.3f, 0.9f };
+    bool                         physicsDebug = false;
+    bool                         physicsWholeWorld = false;
+    bool                         cameraRect = false;
+    glm::vec4                    cameraFrameColor{ 0.45f, 0.62f, 0.78f, 0.75f };
+    OverlayPrimitiveList         gizmoPrims{};
+    const PostChainDesc*         post = nullptr;
+    const ImDrawData*            imgui = nullptr;    // copied in Task 10; the pointer is not stored
+    const ImDrawData*            gameUi = nullptr;
+    glm::vec3                    lightDirection{ 0.0f };
+    glm::vec3                    lightColor{ 0.0f };
+    glm::vec3                    ambient{ 0.0f };
+    GpuScene*                    device = nullptr;
 };
 
 const RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring);
+
+void NoteExtractFrameCall() noexcept;
+std::uint64_t ExtractFrameCallCount() noexcept;
+void ResetExtractFrameCallCount() noexcept;
 ```
 
-`ExtractFrame.hpp` forward-declares `Astra::Registry` and does not include `Registry.hpp`. `ExtractFrame.cpp` is the one file under `ArcaneClient/src/Arcane/Render/` that includes `Registry.hpp`.
+`ExtractFrame.hpp` forward-declares `namespace Astra { class Registry; }` and `class GpuScene`. It includes `RenderFramePacket.hpp`. It does not include `Astra/Registry/Registry.hpp` or `SceneCamera.hpp`. `ExtractFrame.cpp` is the one `.cpp` under `ArcaneClient/src/Arcane/Render/` that includes `Registry.hpp`.
 
-`struct MeshSectionRange { Guid mesh{}; std::uint32_t section = 0; std::uint32_t indexOffset = 0; std::uint32_t indexCount = 0; };`
+`NriGraphContext` gains:
 
 ```cpp
-std::vector<MeshSectionRange> MeshSectionRanges(const MeshTable* table);
-void BuildGpuSceneFrame(const GpuSceneMirror& m, const VisibleSet* vis,
-                        std::span<const MeshSectionRange> sections,
-                        const ViewTransform& view, GpuSceneFrame& out);
+void BindPacket(const RenderFramePacket* packet) noexcept;
+const RenderFramePacket* Packet() const noexcept;
 ```
-
-The `const MeshTable*` overload is deleted. Lookup replaces `meshes->Resolve` (`GpuSceneSync.hpp:321-323` and `:360-363`): find the `MeshSectionRange` whose `mesh` and `section` match the batch key. Opaque/masked emit sort (`:349-357`) and the transparent `renderOrder`-then-depth sort (`:380-388`) stay as they are.
 
 - [ ] **Step 1: Write the failing test.**
 
-`ArcaneTests/src/ExtractFrameTest.cpp`. Copy `struct World` from `GpuSceneSyncTest.cpp:32-105` into this file's anonymous namespace (it is not visible outside that cpp). Add:
+Create `ArcaneTests/src/ExtractFrameTest.cpp`. Copy `struct World` from `GpuSceneSyncTest.cpp:32-105` into this file's anonymous namespace (that copy is not visible to other TUs). Add these methods inside `World`:
 
 ```cpp
 Astra::Entity sprite{};
@@ -1652,6 +2027,366 @@ Astra::Entity AddSprite(glm::vec3 pos)
     reg.AddComponent<Arcane::SpriteRenderer>(sprite, Arcane::SpriteRenderer{});
     return sprite;
 }
+```
+
+`WorldTransform` is a `glm::mat4` (`Components.hpp:87-91`). `SpriteRenderer::shape` defaults to `Rect` (`Components.hpp:152`). `GetComponent` returns a pointer. An unresolved Rect sprite is a 1x1 m quad: `Batcher2D.cpp:437-440` pushes four vertices.
+
+```cpp
+TEST_CASE("extract copies one sprite quad and ignores a later edit", "[nri][extract]")
+{
+    World world;
+    Astra::Entity sprite = world.AddSprite({ 0.0f, 0.0f, 0.0f });
+    Arcane::TransformPropagationSystem{}(world.reg);
+
+    Arcane::ResetExtractFrameCallCount();
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    // Ortho view so Task 6's visible set still contains this quad.
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    CHECK(packet.origin.translation == glm::vec3(0.0f));
+    CHECK(packet.viewport == req.viewport);
+    CHECK(packet.batchVertices.size() == 4u);
+    CHECK(Arcane::ExtractFrameCallCount() == 1u);
+    const glm::vec3 copied = packet.batchVertices[0].pos;
+
+    world.reg.GetComponent<Arcane::Transform>(sprite)->position = { 50.0f, 50.0f, 0.0f };
+    CHECK(packet.batchVertices[0].pos == copied);
+    CHECK(Arcane::ExtractFrameCallCount() == 1u);
+}
+```
+
+- [ ] **Step 2: Generate and run `[extract]`.**
+
+```powershell
+$env:_APH_NOPAUSE = '1'
+cmd /c GenerateProjects.bat
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "[extract]"
+```
+
+Expected: FAIL. `ExtractFrame` does not exist yet.
+
+- [ ] **Step 3: Implement the counter, the sprite copy, and the two host call sites.**
+
+`ExtractAccounting.hpp` declares the three functions in `namespace Arcane`. `ExtractAccounting.cpp`:
+
+```cpp
+#include <Arcane/Base/ExtractAccounting.hpp>
+#include <atomic>
+#include <cstdint>
+
+namespace Arcane
+{
+    namespace
+    {
+        std::atomic<std::uint64_t> g_extractFrameCalls{ 0 };
+    }
+
+    void NoteExtractFrameCall() noexcept
+    {
+        g_extractFrameCalls.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    std::uint64_t ExtractFrameCallCount() noexcept
+    {
+        return g_extractFrameCalls.load(std::memory_order_relaxed);
+    }
+
+    void ResetExtractFrameCallCount() noexcept
+    {
+        g_extractFrameCalls.store(0, std::memory_order_relaxed);
+    }
+}
+```
+
+`ExtractFrame` begins with `NoteExtractFrameCall()`, then `RenderFramePacket& packet = ring.BeginExtract()`. It sets `packet.viewport = req.viewport` and `packet.origin.translation = { 0.0f, 0.0f, 0.0f }`. It does not write `packet.spriteView` or `packet.meshView` in this task.
+
+Sprite copy, local to `ExtractFrame.cpp`:
+
+```cpp
+std::unique_ptr<Batcher2D> batcher = Batcher2D::Create();
+batcher->Begin(req.viewport.x, req.viewport.y);
+batcher->SetGlobals(GlobalParams{});
+glm::mat4 vp{ 1.0f };
+if (req.editorView)
+    vp = req.editorView->ViewProjection();
+else if (const std::optional<SceneCameraView> cam = ActiveSceneCamera(reg, req.viewport))
+    vp = cam->view.ViewProjection();
+batcher->SetViewProjection(vp);
+
+const bool had = reg.HasResource<RenderContext2D>();
+RenderContext2D saved = had ? *reg.GetResource<RenderContext2D>() : RenderContext2D{};
+RenderContext2D local = saved;
+local.batcher = batcher.get();
+reg.SetResource<RenderContext2D>(local);
+RenderSubmissionSystem{}(reg);
+if (had)
+    reg.SetResource<RenderContext2D>(saved);
+else
+    reg.RemoveResource<RenderContext2D>();
+
+const Batch2DDrained drained = batcher->Drain();
+packet.batchVertices.assign(drained.vertices.begin(), drained.vertices.end());
+packet.batchIndices.assign(drained.indices.begin(), drained.indices.end());
+packet.batchSpans.assign(drained.spans.begin(), drained.spans.end());
+if (drained.globals)
+    packet.globals = *drained.globals;
+packet.viewProjection = drained.viewProjection;
+return packet;
+```
+
+`ClientRuntime::InstallRenderSystems` (`ClientRuntime.cpp:45-49`) stops calling `render.AddSystem<RenderSubmissionSystem>()`. The function stays, so `OnSystemsCleared` still compiles. The type stays, so a test that constructs `RenderSubmissionSystem` still compiles. In `ClientRuntimeTest.cpp`, rename the second case to `"ClientRuntime owns a Runtime, attaches as its client, and leaves render submission uninstalled"`, and change both `CHECK(...HasSystem<RenderSubmissionSystem>())` assertions on `ClientRuntime` (lines 44 and 46) to `CHECK_FALSE`. Leave the bare-`Runtime` `CHECK_FALSE` assertions as they are.
+
+`FrameIo` gains `Arcane::PacketRing packetRing{};` as its last member. `NriGraphContext` stores `const RenderFramePacket* m_packet = nullptr;`, `BindPacket` assigns it, and `Packet()` returns it. Both `RenderFrame` and `RenderFrameOffscreen` set it back to null before they return.
+
+`RuntimeFrame.cpp` deletes the `SubmitRender` block at `:546-550`. The one `ExtractFrame` call sits immediately above the branch at `:748`, after `graphFrame.imgui` (`:508`) and `graphFrame.post` (`:692`) have been assigned:
+
+```cpp
+Arcane::ExtractRequest req;
+req.viewport = { frameWidth, frameHeight };
+req.device = io.graph->Scene();
+const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
+io.graph->BindPacket(&packet);
+```
+
+Leave `Begin`, `SetGlobals`, `PushSceneCamera`, `SetViewProjection`, `ActivePerspectiveSceneCamera`, and `PrepareSceneForRender` in this task. `PushSceneCamera` still calls `ActiveSceneCamera`. There is exactly one `ExtractFrame(` in the file, textually above both `RenderFrame(` and `RenderFrameOffscreen(`. `GpuSceneInvalidate` at `:756` stays. The `Batch().Stats()` reads at `:321` and `:791` use the live batcher, which no longer receives the sprite system. Point them at the packet: draw count is `packet.batchSpans.size()`, quad count is `packet.batchVertices.size() / 4`.
+
+`AddBatch2DNode` (`Batch2DNode.cpp:1628-1641`):
+
+```cpp
+Batch2DDrained drained;
+if (context && context->Packet())
+{
+    const RenderFramePacket* packet = context->Packet();
+    drained.vertices = packet->batchVertices;
+    drained.indices = packet->batchIndices;
+    drained.spans = packet->batchSpans;
+    drained.globals = &packet->globals;
+    drained.viewProjection = packet->viewProjection;
+    drained.viewport = glm::vec2(float(width), float(height));
+    if (Batcher2D* batcher = context->CurrentBatch())
+        if (Batch2DNode* node = context->Batch2D())
+            node->Prepare(*batcher, drained, canvasFormat);
+}
+else if (context)
+{
+    if (Batcher2D* batcher = context->CurrentBatch())
+    {
+        drained = batcher->Drain();
+        if (Batch2DNode* node = context->Batch2D())
+            node->Prepare(*batcher, drained, canvasFormat);
+    }
+}
+```
+
+The spans view the packet vectors. Those vectors live until `FramesInFlight()` later extracts recycle the slot. A graph with no bound packet, including thumbnail harvest and shader preview, keeps the `Drain()` path. Those two do not gain an `ExtractFrame` call.
+
+`EditorApp` holds `Arcane::PacketRing m_packetRing;`. Inside `RenderSceneToViewport`, when `m_viewportTargets.graph` is set, after the view block at `:1684-1688`: if `!InPlayMode()`, `req.editorView = m_runtime->View()`; `req.viewport` is `{ w, h }`; `req.device` is `m_viewportTargets.graph->Scene()`. Call `ExtractFrame` once and `m_viewportTargets.graph->BindPacket(&packet)` for the viewport frame. `BindPacket(nullptr)` runs when that frame returns. This task does not remove `PrepareSceneForRender` or `ActivePerspectiveSceneCamera` from the editor.
+
+- [ ] **Step 4: Run `[extract]` and the client-runtime case.**
+
+```powershell
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "[extract]"
+.\ArcaneTests.exe "ClientRuntime owns a Runtime"
+```
+
+Expected: PASS. The sprite case reports 4 vertices and a call count of 1. The client-runtime case reports the system absent on `ClientRuntime`.
+
+- [ ] **Step 5: Commit.**
+
+```powershell
+git add ArcaneCore/src/Arcane/Base/ExtractAccounting.hpp ArcaneCore/src/Arcane/Base/ExtractAccounting.cpp ArcaneClient/src/Arcane/Render/ExtractFrame.hpp ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.hpp ArcaneClient/src/Arcane/Render/Nri/NriGraphContext.cpp ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp ArcaneClient/src/Arcane/Client/ClientRuntime.cpp ArcaneRuntime/src/RuntimeFrame.hpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneEditor/src/App/EditorApp.hpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp ArcaneTests/src/ClientRuntimeTest.cpp
+git commit -m "feat(render): extract copies the sprite batch into the packet" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
+
+---
+
+### Task 6: GPU scene and the visible set
+
+**Files:**
+- Modify: `ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp:285-388`
+- Modify: `ArcaneClient/src/Arcane/Host/GpuSceneHost.hpp:110`
+- Modify: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp` (the sprite copy from Task 5 stays; this task adds the visible set and the mesh frame in front of it)
+- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp` (delete the `PrepareSceneForRender` call beside `:543`)
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (delete `PrepareSceneForRender` at `:1689`)
+- Modify every remaining `BuildGpuSceneFrame` call: `ArcaneTests/src/GpuSceneSyncTest.cpp:499,536,561,617,667,668`, `GpuSceneCullTest.cpp:417,524,570,606`, `MeshCullNodeTest.cpp:67,110,116`, `NriGraphPixelTest.cpp:2221,2301,2358,2387`, and both calls inside `ArcaneTests/src/OverlayWitnessTest.cpp` (`CheckOverlayClasses` and `CheckPerspectiveGridDepth`, which Task 3 wrote against `const MeshTable*`)
+- Test: `ArcaneTests/src/ExtractFrameTest.cpp` (the `World` fixture Task 5 added)
+
+**Interfaces:**
+- Consumes: `BuildGpuSceneFrame` (`GpuSceneSync.hpp:285`), `GpuSceneSync` (`:92`), `GpuSceneSyncedGeneration` (`GpuScene.hpp:351`, null returns 0), `BuildVisibleSet` (`VisibilitySystem.hpp:119`), `MeshTable::meshes` (`SceneResources.hpp:259`), `MeshEntry::data.sections` (`MeshBuilder.hpp:76`), `MeshSection::indexOffset` / `indexCount` (`:63-64`). `PrepareSceneForRender` (`GpuSceneHost.hpp:87-111`) is what the hosts stop calling. `CheckPerspectiveGridDepth`'s helpers (`FillCamera`, `GpuSceneWorld`, `MakeVehicle`, and the pixel readers) are the copies Task 3 pasted into `OverlayWitnessTest.cpp`. This task does not move them.
+- Produces:
+
+```cpp
+struct MeshSectionRange
+{
+    Guid mesh{};
+    std::uint32_t section = 0;
+    std::uint32_t indexOffset = 0;
+    std::uint32_t indexCount = 0;
+};
+
+std::vector<MeshSectionRange> MeshSectionRanges(const MeshTable* table);
+
+void BuildGpuSceneFrame(const GpuSceneMirror& m, const VisibleSet* vis,
+                        std::span<const MeshSectionRange> sections,
+                        const ViewTransform& view, GpuSceneFrame& out);
+```
+
+The `const MeshTable*` overload is deleted.
+
+- [ ] **Step 1: Write the failing test.**
+
+Append to `ExtractFrameTest.cpp`:
+
+```cpp
+TEST_CASE("extract publishes one mesh row and ignores a later transform edit", "[nri][extract][gpuscene]")
+{
+    World world;
+    const Arcane::Guid mesh = world.Mesh(1);
+    Astra::Entity spawned = world.Spawn({ 0.0f, 0.0f, 0.0f }, mesh);
+    Arcane::TransformPropagationSystem{}(world.reg);
+    Arcane::BoundsSystem{}(world.reg);
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    REQUIRE(packet.mesh.stats.total >= 1u);
+    const std::uint32_t total = packet.mesh.stats.total;
+    world.reg.GetComponent<Arcane::Transform>(spawned)->position = { 40.0f, 0.0f, 0.0f };
+    CHECK(packet.mesh.stats.total == total);
+    CHECK(packet.visible.entries.size() >= 1u);
+}
+```
+
+- [ ] **Step 2: Run `[extract]`.**
+
+```powershell
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "extract publishes one mesh row"
+```
+
+Expected: FAIL. `packet.mesh.stats.total` is 0. The sprite case from Task 5 still passes.
+
+- [ ] **Step 3: Publish the visible set and the section span.**
+
+`MeshSectionRanges`:
+
+```cpp
+std::vector<MeshSectionRange> MeshSectionRanges(const MeshTable* table)
+{
+    std::vector<MeshSectionRange> out;
+    if (!table || !table->meshes)
+        return out;
+    for (const auto& [guid, entry] : *table->meshes)
+    {
+        std::uint32_t section = 0;
+        for (const MeshSection& s : entry.data.sections)
+        {
+            out.push_back(MeshSectionRange{ guid, section, s.indexOffset, s.indexCount });
+            ++section;
+        }
+    }
+    return out;
+}
+```
+
+Inside `BuildGpuSceneFrame`, both lookup sites (`GpuSceneSync.hpp:321-323` and `:360-363`) become:
+
+```cpp
+const MeshSectionRange* section = nullptr;
+for (const MeshSectionRange& candidate : sections)
+    if (candidate.mesh == key.mesh && candidate.section == key.section)
+        section = &candidate;
+if (!section)
+    continue;
+```
+
+`section->indexOffset` and `section->indexCount` replace `section.indexOffset` and `section.indexCount` from the old `MeshSection`. The opaque/masked emit sort (`:349-357`) and the transparent `renderOrder`-then-depth sort (`:380-388`) stay.
+
+Every old call `BuildGpuSceneFrame(mirror, vis, tablePtr, view, out)` becomes `BuildGpuSceneFrame(mirror, vis, MeshSectionRanges(tablePtr), view, out)`, including a null `tablePtr` (`MeshSectionRanges(nullptr)` returns an empty vector) and both calls in `OverlayWitnessTest.cpp`. `PrepareSceneForRender`'s call at `GpuSceneHost.hpp:110` uses the same wrapper. Hosts stop calling `PrepareSceneForRender`. The function stays for the tests that already call it.
+
+`ExtractFrame`, before the sprite `RenderSubmissionSystem` call, so `MainVisibleSet` sees this frame's set:
+
+```cpp
+ViewTransform cullView{};
+if (req.editorView)
+    cullView = *req.editorView;
+else if (const std::optional<SceneCameraView> cam = ActiveSceneCamera(reg, req.viewport))
+    cullView = cam->view;
+cullView.viewport = req.viewport;
+
+SceneVisibility* sv = reg.GetResource<SceneVisibility>();
+if (!sv)
+    sv = reg.EmplaceResource<SceneVisibility>();
+sv->views.resize(1);
+BuildVisibleSet(reg, cullView, sv->views[0]);
+packet.visible = sv->views[0];
+
+GpuSceneMirror* mirror = reg.GetResource<GpuSceneMirror>();
+if (!mirror)
+    mirror = reg.EmplaceResource<GpuSceneMirror>();
+GpuSceneStage stage;
+GpuSceneSync(reg, *mirror, GpuSceneSyncedGeneration(req.device), stage);
+const std::vector<MeshSectionRange> sections = MeshSectionRanges(reg.GetResource<MeshTable>());
+BuildGpuSceneFrame(*mirror, &packet.visible, sections, cullView, packet.mesh);
+packet.mesh.stage = stage;
+```
+
+`GpuSceneSync` advances the mirror tick. The host call is gone, so the sync runs once. `RuntimeFrame.cpp` deletes the `PrepareSceneForRender` call at `:543`. The mesh-scene block at `:669-683` moves to immediately after `ExtractFrame` and before the `:748` branch. `MeshSceneDesc::scene` is `const GpuSceneFrame*` (`MeshNode.hpp:331`), so that block sets `meshScene.scene = &packet.mesh`. `EditorAppFrame.cpp:1689` deletes its `PrepareSceneForRender` call, and `:2078` becomes `m_meshScene.scene = &packet.mesh`. `GpuSceneInvalidate` at `RuntimeFrame.cpp:756` and `EditorAppFrame.cpp:1764` stays.
+
+- [ ] **Step 4: Run the mesh tests.**
+
+```powershell
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "[extract]"
+.\ArcaneTests.exe "[gpuscene]"
+.\ArcaneTests.exe "[overlay]"
+```
+
+Expected: PASS. `[overlay]` covers `CheckOverlayClasses` and `CheckPerspectiveGridDepth`, both now calling the span overload. `[gpuscene]` covers the updated call sites in `GpuSceneSyncTest.cpp` and `GpuSceneCullTest.cpp`.
+
+- [ ] **Step 5: Commit.**
+
+```powershell
+git add ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp ArcaneClient/src/Arcane/Host/GpuSceneHost.hpp ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp ArcaneTests/src/GpuSceneSyncTest.cpp ArcaneTests/src/GpuSceneCullTest.cpp ArcaneTests/src/MeshCullNodeTest.cpp ArcaneTests/src/NriGraphPixelTest.cpp ArcaneTests/src/OverlayWitnessTest.cpp
+git commit -m "feat(render): extract publishes the visible set and the GPU scene" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
+
+---
+
+### Task 7: Cameras and views
+
+**Files:**
+- Modify: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp` (fill `spriteView` and `meshView`; the cull view and the batch view-projection read them)
+- Modify: `ArcaneRuntime/src/RuntimeApp.cpp:846-874` (`PushSceneCamera`)
+- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp:521-548` (the camera sweeps leave; the one `ExtractFrame` from Task 5 stays above `:748`)
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` `RenderSceneToViewport` (`:1688`, stop calling `ActivePerspectiveSceneCamera` for the world view)
+- Test: `ArcaneTests/src/ExtractFrameTest.cpp`
+
+**Interfaces:**
+- Consumes: `ActiveSceneCamera` (`SceneCamera.hpp:57`) returns `std::optional<SceneCameraView>`. `ActivePerspectiveSceneCamera` (`:206`) returns `std::optional<ViewTransform>`. `using PerspectiveCameraView = ViewTransform` (`:146`). `SceneCameraView` fields are `worldCenter`, `halfHeight`, `view` (`SceneCameraView.hpp`). `ViewTransform` has `view`, `projection`, `viewport` and no `operator==` (`ViewTransform.hpp:50`). `BuildVisibleSet` takes a `ViewTransform`.
+- Produces: `packet.spriteView` as `std::optional<SceneCameraView>`, `packet.meshView` as `std::optional<ViewTransform>`.
+
+- [ ] **Step 1: Write the failing test.**
+
+`ViewTransform` comparisons are field-wise. Append:
+
+```cpp
 void AddOrthoCamera()
 {
     Arcane::Camera cam;
@@ -1675,36 +2410,12 @@ void AddPerspectiveCamera()
     cam.farZ = 500.0f;
     reg.AddComponent<Arcane::Camera>(e, cam);
 }
-```
 
-`WorldTransform` is a `glm::mat4` (`Components.hpp:87-91`), not a position. Mutate `Transform::position`. `GetComponent` returns a pointer (`CommandStackTest.cpp:231`).
-
-```cpp
-TEST_CASE("extract copies one sprite quad and one mesh row, then ignores later edits", "[nri][extract]")
+static void CheckView(const Arcane::ViewTransform& a, const Arcane::ViewTransform& b)
 {
-    World world;
-    world.AddOrthoCamera();
-    world.AddPerspectiveCamera();
-    const Arcane::Guid mesh = world.Mesh(1);
-    world.Spawn({ 0.0f, 0.0f, 0.0f }, mesh);
-    Astra::Entity sprite = world.AddSprite({ 0.0f, 0.0f, 0.0f });
-    Arcane::TransformPropagationSystem{}(world.reg);
-    Arcane::BoundsSystem{}(world.reg);
-
-    Arcane::PacketRing ring;
-    Arcane::ExtractRequest req;
-    req.viewport = { 128u, 128u };
-    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
-
-    CHECK(packet.origin.translation == glm::vec3(0.0f));
-    CHECK(packet.batchVertices.size() == 4u);
-    CHECK(packet.mesh.stats.total >= 1u);
-    const glm::vec3 copied = packet.batchVertices[0].pos;
-
-    world.reg.GetComponent<Arcane::Transform>(sprite)->position = { 50.0f, 50.0f, 0.0f };
-    CHECK(packet.batchVertices[0].pos == copied);
-    CHECK(packet.spriteView.has_value());
-    CHECK(packet.meshView.has_value());
+    CHECK(a.view == b.view);
+    CHECK(a.projection == b.projection);
+    CHECK(a.viewport == b.viewport);
 }
 
 TEST_CASE("runtime extract keeps the ortho sprite view and the perspective mesh view", "[nri][extract]")
@@ -1715,16 +2426,17 @@ TEST_CASE("runtime extract keeps the ortho sprite view and the perspective mesh 
     Arcane::PacketRing ring;
     Arcane::ExtractRequest req;
     req.viewport = { 200u, 100u };
-    // editorView left empty: runtime / Play path.
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    const std::optional<Arcane::SceneCameraView> ortho = Arcane::ActiveSceneCamera(world.reg, req.viewport);
+    const std::optional<Arcane::ViewTransform> persp = Arcane::ActivePerspectiveSceneCamera(world.reg, req.viewport);
     REQUIRE(packet.spriteView.has_value());
     REQUIRE(packet.meshView.has_value());
-    const auto ortho = Arcane::ActiveSceneCamera(world.reg, req.viewport);
-    const auto persp = Arcane::ActivePerspectiveSceneCamera(world.reg, req.viewport);
     REQUIRE(ortho.has_value());
     REQUIRE(persp.has_value());
-    CHECK(packet.spriteView->view == ortho->view);
-    CHECK(packet.meshView->projection == persp->projection);
+    CheckView(packet.spriteView->view, ortho->view);
+    CHECK(packet.spriteView->worldCenter == ortho->worldCenter);
+    CHECK(packet.spriteView->halfHeight == ortho->halfHeight);
+    CheckView(*packet.meshView, *persp);
 }
 
 TEST_CASE("an editorView is the world view and is not replaced by a scene camera", "[nri][extract]")
@@ -1732,8 +2444,11 @@ TEST_CASE("an editorView is the world view and is not replaced by a scene camera
     World world;
     world.AddOrthoCamera();
     world.AddPerspectiveCamera();
-    Arcane::ViewTransform editor = *Arcane::ActiveSceneCamera(world.reg, { 64u, 64u });
-    editor.view[3][0] += 3.0f;   // a translation the scene cameras do not have
+    world.reg.GetComponent<Arcane::Transform>(world.root)->position = { 4.0f, 0.0f, 0.0f };
+    const std::optional<Arcane::SceneCameraView> scene = Arcane::ActiveSceneCamera(world.reg, { 64u, 64u });
+    REQUIRE(scene.has_value());
+    Arcane::ViewTransform editor = scene->view;
+    editor.view[3][0] += 3.0f;
     Arcane::PacketRing ring;
     Arcane::ExtractRequest req;
     req.viewport = { 64u, 64u };
@@ -1741,86 +2456,454 @@ TEST_CASE("an editorView is the world view and is not replaced by a scene camera
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
     REQUIRE(packet.spriteView.has_value());
     REQUIRE(packet.meshView.has_value());
-    CHECK(packet.spriteView->view == editor.view);
+    CHECK(packet.spriteView->view.view == editor.view);
+    CHECK(packet.spriteView->view.projection == editor.projection);
     CHECK(packet.meshView->view == editor.view);
+    CHECK(packet.meshView->projection == editor.projection);
+    CHECK(packet.spriteView->worldCenter == glm::vec2(0.0f));
+    CHECK(scene->worldCenter != packet.spriteView->worldCenter);
 }
+```
 
+`AddOrthoCamera` and `AddPerspectiveCamera` are methods of `World`. `CameraProjection::Orthographic` is 0 and `Perspective` is 1 (`Components.hpp:256-260`).
+
+- [ ] **Step 2: Run the two cases.**
+
+```powershell
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "runtime extract keeps the ortho sprite view"
+.\ArcaneTests.exe "an editorView is the world view"
+```
+
+Expected: FAIL. `spriteView` is empty.
+
+- [ ] **Step 3: Fill the two views inside extract, and stop the host sweeps.**
+
+At the top of the cull block from Task 6:
+
+```cpp
+if (req.editorView)
+{
+    packet.spriteView = SceneCameraView{};
+    packet.spriteView->view = *req.editorView;
+    packet.meshView = *req.editorView;
+}
+else
+{
+    packet.spriteView = ActiveSceneCamera(reg, req.viewport);
+    packet.meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
+    if (!packet.spriteView && !warnedNoSceneCamera)
+    {
+        warnedNoSceneCamera = true;
+        int total = 0;
+        reg.CreateView<const Camera>().ForEach([&](Astra::Entity, const Camera&) { ++total; });
+        if (total == 0)
+            ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
+                     "Add a Camera component to an entity (a New Scene ships one).");
+        else
+            ARC_WARN("scene carries {} Camera component(s) but none is usable "
+                     "as the sprite camera.", total);
+    }
+}
+```
+
+`warnedNoSceneCamera` is a function-local `static bool`, the same once-per-process warning `PushSceneCamera` prints today (`RuntimeApp.cpp:862-878`). The `CreateView` lives in `ExtractFrame.cpp`.
+
+The cull view becomes `packet.spriteView ? packet.spriteView->view : ViewTransform{}`, with `viewport` set to `req.viewport`. `BuildVisibleSet` receives that `ViewTransform`, not the `SceneCameraView`. The batcher's `SetViewProjection` becomes `packet.spriteView ? packet.spriteView->view.ViewProjection() : glm::mat4{ 1.0f }`. `BuildGpuSceneFrame` receives `packet.meshView` when it has a value, and skips the batch build when it does not (the stage still lands, matching `PrepareSceneForRender`'s empty-meshView arm at `GpuSceneHost.hpp:103-108`).
+
+`PushSceneCamera` (`RuntimeApp.cpp:846`) takes the packet and, when `spriteView` has a value, calls `SetView(packet.spriteView->view)`. It does not call `ActiveSceneCamera`. Move its call from `:523` to immediately after the `ExtractFrame` call that Task 5 placed above `:748`, and pass that packet. `RuntimeFrame.cpp:541-544` deletes the `ActivePerspectiveSceneCamera` local. The one `ExtractFrame(` stays above both render paths. The editor's `RenderSceneToViewport` keeps passing `req.editorView` on the Edit path and leaves it empty when `InPlayMode()`. Delete the `ActivePerspectiveSceneCamera` call at `:1688`. After `ExtractFrame`, `m_meshView = packet.meshView`.
+
+- [ ] **Step 4: Run the camera cases and the sprite case.**
+
+```powershell
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "[extract]"
+```
+
+Expected: PASS. The editor case keeps `worldCenter` at 0 while the scene camera's `worldCenter` differs. The runtime case matches both live cameras field by field.
+
+- [ ] **Step 5: Commit.**
+
+```powershell
+git add ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneRuntime/src/RuntimeApp.cpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp
+git commit -m "feat(render): extract publishes the sprite and mesh views" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
+
+---
+
+### Task 8: Picking
+
+**Files:**
+- Modify: `ArcaneClient/src/Arcane/Render/PickEmit.cpp` (`CollectPickables` at `:32`; `BuildPickIdGeometry` stays at `:243`; `PickBoundHalfExtents` at `:226` stays because `:294` calls it)
+- Modify: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp` (the moved function)
+- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp:573` and `:621` (delete both `CollectPickables` calls)
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp:2165` (`ArmGraphViewportFrame`'s `CollectPickables`; the selection loop at `:2177-2181` stays)
+- Test: `ArcaneTests/src/ExtractFrameTest.cpp`
+
+**Interfaces:**
+- Consumes: `CollectPickables(Astra::Registry&, std::vector<PickDrawable>&)` (`PickEmit.cpp:32`). `PickEmit.hpp:35` already forward-declares `Astra::Registry`. `BuildPickIdGeometry` (`:243`) reads `PickDrawable` and `glm` only. `PickEmit.cpp` today includes `VisibilitySystem.hpp` (`:5`), `PhysicsSystem.hpp` (`:8`, which includes `Ecs.hpp`, which includes `Registry.hpp`), and `Registry.hpp` (`:11`).
+- Produces: `packet.pickDrawables`. After this task `PickEmit.cpp` includes only `PickEmit.hpp`, `Constant.hpp`, `glm/glm.hpp`, `<algorithm>`, and `<cmath>`.
+
+- [ ] **Step 1: Write the failing test.**
+
+```cpp
+TEST_CASE("extract publishes a pick drawable that survives a later edit", "[nri][extract]")
+{
+    World world;
+    Astra::Entity sprite = world.AddSprite({ 1.0f, 2.0f, 0.0f });
+    Arcane::TransformPropagationSystem{}(world.reg);
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 4.0f, req.viewport);
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    REQUIRE(packet.pickDrawables.size() == 1u);
+    CHECK(packet.pickDrawables[0].entity == sprite);
+    const glm::vec3 corner = packet.pickDrawables[0].corners[0];
+    world.reg.GetComponent<Arcane::Transform>(sprite)->position = { 30.0f, 30.0f, 0.0f };
+    CHECK(packet.pickDrawables[0].corners[0] == corner);
+}
+```
+
+- [ ] **Step 2: Run the case.**
+
+```powershell
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "extract publishes a pick drawable"
+```
+
+Expected: FAIL. `pickDrawables` is empty.
+
+- [ ] **Step 3: Move the collector and drop the three registry includes.**
+
+Move `RotateVec` (`PickEmit.cpp:24-29`) and `CollectPickables` (`:32` through the line before `PickBoundHalfExtents`) into `ExtractFrame.cpp`'s anonymous namespace, and call it so `packet.pickDrawables` receives the appended drawables. `ExtractFrame.cpp` includes `PickEmit.hpp`, `SpriteGeometry.hpp`, `Components.hpp`, `PhysicsComponents.hpp`, `PhysicsSystem.hpp`, `SceneResources.hpp`, and `VisibilitySystem.hpp`. Those headers stay legal in this one TU.
+
+`PickEmit.cpp` keeps `PickBoundHalfExtents` and `BuildPickIdGeometry`. Its include list becomes:
+
+```cpp
+#include <Arcane/Render/PickEmit.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <glm/glm.hpp>
+#include <algorithm>
+#include <cmath>
+```
+
+Delete the `CollectPickables` calls at `RuntimeFrame.cpp:573` and `:621`. `packet.pickDrawables` is the list the pick node already consumes; the frame passes `std::span<const PickDrawable>(packet.pickDrawables)`. `ArmGraphViewportFrame` deletes the `CollectPickables` call at `:2165`. The selection loop at `:2177-2181` stays and reads `PickPassIdOf` against `packet.pickDrawables`.
+
+- [ ] **Step 4: Run the pick case.**
+
+```powershell
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "extract publishes a pick drawable"
+.\ArcaneTests.exe "[pick]"
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit.**
+
+```powershell
+git add ArcaneClient/src/Arcane/Render/PickEmit.cpp ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp
+git commit -m "feat(render): extract publishes pick drawables" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
+
+---
+
+### Task 9: Overlays
+
+**Files:**
+- Create: `ArcaneClient/src/Arcane/Render/Grid2D.hpp`
+- Create: `ArcaneClient/src/Arcane/Render/Grid2D.cpp`
+- Modify: `ArcaneEditor/src/Viewport/ViewportGrid.hpp` and `ViewportGrid.cpp` (`PlanGrid2D` at `:78`, `DrawGrid2D` at `:132`)
+- Modify: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp`
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (`SubmitSceneToBatcher` `:1857-1991`, the gizmo draw read at `:3720`)
+- Test: `ArcaneTests/src/ExtractFrameTest.cpp`
+- `ArcaneTests/src/ViewportGridTest.cpp` stays green without an edit
+
+**Interfaces:**
+- Consumes: `DrawGrid2D` (`ViewportGrid.cpp:132` through its closing brace), `PlanGrid2D` (`:78`), `PixelsPerMetre` (`:70`). `DrawPhysicsDebug` (`PhysicsDebugDraw.hpp:164`) calls only `Line`, `Circle`, and `Rect` (`:142-145`). `Batcher2D`'s pure virtuals, in declaration order: `Begin` (`:237`), `SetLayer` (`:250`), `Quad` (`:259`), `Glyph` (`:285`), `Rect` (`:291`), `Line` (`:293`), `Circle` (`:295`), `Triangle` (`:301`), `End` (`:321`), `Stats` (`:325`), `QuadWorld` (`:405`), `CircleWorld` (`:412`), `SetViewProjection` (`:421`). `RegisterMaterial`, `UpdateMaterial`, `SetGlobals`, `QuadMaterial`, `Drain`, `MaterialDesc`, and `QuadTextured` have defaults. `kCameraFrameColor` is `{ 0.45, 0.62, 0.78, 0.75 }` (`EditorThemeSettings.hpp:181`). `EditorGridSettings` fields read at `ViewportGrid.cpp:142-145` are `minorAlpha`, `majorAlpha`, `lineColor`, `lineThickness`, `maxLinesPerAxis`.
+- Produces: `Arcane::PlanGrid2D(float ppm, float minorAlpha, float majorAlpha)`, `Arcane::EmitGrid2D(...)`, and the local collector below. `Editor::PlanGrid2D` and `Editor::DrawGrid2D` keep their signatures so `ViewportGridTest.cpp` stays green.
+
+`DrawPhysicsDebug` submits pixels through `PhysicsDebugDrawOptions::view` (`EditorAppFrame.cpp:1911-1926`). The collector stores those calls as screen-space overlay primitives. Grid lines are the world endpoints `DrawGrid2D` already computes before `WorldToScreen` (`ViewportGrid.cpp:166-175`), stored with `screenSpace == false` so the overlay shader projects them.
+
+- [ ] **Step 1: Write the failing test.**
+
+```cpp
 TEST_CASE("overlay tags: grid is depth-tested linear, physics camera and gizmo are always on top", "[nri][extract]")
 {
     World world;
     world.AddOrthoCamera();
     world.AddSprite({ 0.0f, 0.0f, 0.0f });
     Arcane::TransformPropagationSystem{}(world.reg);
-    Arcane::BoundsSystem{}(world.reg);
+
+    Manifold2D::Physics::WorldDef wd;
+    wd.gravityX = Manifold2D::Physics::Real(0);
+    wd.gravityY = Manifold2D::Physics::Real(0);
+    Arcane::PhysicsResource& resource = *world.reg.EmplaceResource<Arcane::PhysicsResource>();
+    resource.world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
+    Manifold2D::Physics::BodyDef bd;
+    bd.type = Manifold2D::Physics::BodyType::Static;
+    bd.position = Manifold2D::Physics::Vec2(Manifold2D::Physics::Real(0), Manifold2D::Physics::Real(0));
+    bd.shape = Manifold2D::Physics::MakeAabb(Manifold2D::Physics::Real(1), Manifold2D::Physics::Real(1));
+    resource.world->AddBody(bd);
+
     Arcane::PacketRing ring;
     Arcane::ExtractRequest req;
     req.viewport = { 128u, 128u };
     req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
     req.showGrid2d = true;
+    req.gridMinorAlpha = 0.35f;
+    req.gridMajorAlpha = 0.55f;
+    req.gridLineRgb = { 0.5f, 0.5f, 0.5f };
+    req.gridLineThicknessPx = 1.0f;
+    req.gridMaxLinesPerAxis = 4096;
     req.physicsDebug = true;
+    req.physicsWholeWorld = true;
+    req.cameraRect = true;
     Arcane::OverlayLine gizmo{};
+    gizmo.a = { 0.0f, 0.0f, 0.0f };
+    gizmo.b = { 10.0f, 0.0f, 0.0f };
     gizmo.color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    gizmo.thickness = 1.0f;
     gizmo.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
     gizmo.space = Arcane::OverlayColorSpace::DisplayReferred;
     gizmo.screenSpace = true;
     req.gizmoPrims.lines.push_back(gizmo);
+
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
 
     bool sawGrid = false;
     bool sawGizmo = false;
+    bool sawScreenLinear = false;
     for (const Arcane::OverlayLine& line : packet.overlay.lines)
     {
         if (line.space == Arcane::OverlayColorSpace::Linear &&
-            line.depth == Arcane::OverlayDepthClass::DepthTested)
+            line.depth == Arcane::OverlayDepthClass::DepthTested &&
+            line.screenSpace == false)
             sawGrid = true;
         if (line.space == Arcane::OverlayColorSpace::DisplayReferred)
         {
             sawGizmo = true;
             CHECK(line.depth == Arcane::OverlayDepthClass::AlwaysOnTop);
+            CHECK(line.screenSpace == true);
         }
+        if (line.space == Arcane::OverlayColorSpace::Linear &&
+            line.depth == Arcane::OverlayDepthClass::AlwaysOnTop &&
+            line.screenSpace == true)
+            sawScreenLinear = true;
     }
     CHECK(sawGrid);
     CHECK(sawGizmo);
-    for (const Arcane::OverlayLine& line : packet.overlay.lines)
-    {
-        if (line.space == Arcane::OverlayColorSpace::Linear && line.screenSpace == false &&
-            line.depth != Arcane::OverlayDepthClass::DepthTested)
-            CHECK(line.depth == Arcane::OverlayDepthClass::AlwaysOnTop);   // physics / camera rect
-    }
-}
-
-// Review Focus 4.
-TEST_CASE("runtime calls ExtractFrame once, above both render paths", "[nri][extract]")
-{
-    std::ifstream in(Arcane::Test::RepoRoot() / "ArcaneRuntime/src/RuntimeFrame.cpp");
-    REQUIRE(in.good());
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    const std::string text = ss.str();
-    const std::size_t call = text.find("ExtractFrame(");
-    REQUIRE(call != std::string::npos);
-    CHECK(text.find("ExtractFrame(", call + 1) == std::string::npos);
-    const std::size_t presented = text.find("RenderFrame(", call);
-    const std::size_t offscreen = text.find("RenderFrameOffscreen(", call);
-    CHECK(presented != std::string::npos);
-    CHECK(offscreen != std::string::npos);
-}
-
-TEST_CASE("ArcaneServer does not name ExtractFrame", "[nri][extract]")
-{
-    const std::filesystem::path dir = Arcane::Test::RepoRoot() / "ArcaneServer/src";
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir))
-    {
-        if (!entry.is_regular_file()) continue;
-        std::ifstream in(entry.path());
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        CHECK(ss.str().find("ExtractFrame") == std::string::npos);
-    }
+    CHECK(sawScreenLinear);
 }
 ```
 
-- [ ] **Step 2: Generate and run `[extract]`.**
+- [ ] **Step 2: Run the case.**
+
+```powershell
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "overlay tags"
+```
+
+Expected: FAIL. `packet.overlay.lines` is empty.
+
+- [ ] **Step 3: Move the grid, add the collector, and append the editor primitives.**
+
+`Grid2D.hpp` (no editor settings, no `Registry.hpp`):
+
+```cpp
+struct Grid2DStyle
+{
+    float minorAlpha = 0.35f;
+    float majorAlpha = 0.55f;
+    glm::vec3 lineRgb{ 0.5f, 0.5f, 0.5f };
+    float lineThicknessPx = 1.0f;
+    std::int64_t maxLinesPerAxis = 4096;
+    glm::vec4 axisX{ 0.85f, 0.25f, 0.25f, 0.9f };
+    glm::vec4 axisY{ 0.3f, 0.8f, 0.3f, 0.9f };
+};
+
+Grid2DPlan PlanGrid2D(float pixelsPerMetre, float minorAlpha, float majorAlpha) noexcept;
+
+void EmitGrid2D(const ViewTransform& view, const Grid2DPlan& plan, const Grid2DStyle& style,
+                std::vector<OverlayLine>& out);
+```
+
+`GridLevel` and `Grid2DPlan` move with it from `ViewportGrid.hpp:85-97`. `Editor::PlanGrid2D(float)` reads `Settings<EditorGridSettings>()` and calls `Arcane::PlanGrid2D`. `EmitGrid2D` is the body of `DrawGrid2D` (`ViewportGrid.cpp:134` through its closing brace) with two substitutions. The `line` lambda pushes an `OverlayLine` instead of calling `b.Line`:
+
+```cpp
+OverlayLine line;
+line.a = glm::vec3(a, 0.0f);
+line.b = glm::vec3(wb, 0.0f);
+const float ppm = PixelsPerMetre(view);
+line.thickness = ppm > 0.0f ? style.lineThicknessPx / ppm : 0.0f;
+line.color = colour;
+line.depth = OverlayDepthClass::DepthTested;
+line.space = OverlayColorSpace::Linear;
+line.screenSpace = false;
+if (line.thickness > 0.0f)
+    out.push_back(line);
+```
+
+Axis lines use `style.axisX` and `style.axisY` and the same tags. Delete `b.SetLayer`. `Editor::DrawGrid2D` calls `EmitGrid2D`, then for each stored line calls `b.SetLayer(0, 0)` once and `b.Line(WorldToScreen(line.a), WorldToScreen(line.b), line.thickness * PixelsPerMetre(view), line.color)`. That keeps `ViewportGridTest.cpp` on screen pixels.
+
+`PixelsPerMetre` moves to `Arcane::` as well. `Editor::PixelsPerMetre` forwards to it.
+
+The collector, in `ExtractFrame.cpp`'s anonymous namespace. Every pure virtual is defined. New virtuals stay at the end of `Batcher2D`; this subclass does not change that class.
+
+```cpp
+class OverlayBatchCollector final : public Batcher2D
+{
+public:
+    explicit OverlayBatchCollector(OverlayPrimitiveList& out) : m_out(out) {}
+
+    void Begin(std::uint32_t, std::uint32_t) override {}
+    void SetLayer(std::uint16_t, std::uint16_t) override {}
+    void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4, float) override {}
+    void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
+    void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
+    void End() override {}
+    Batch2DStats Stats() const override { return {}; }
+    void QuadWorld(std::uint16_t, const Guid&, const std::array<glm::vec3, 4>&,
+                   glm::vec2, glm::vec2, glm::vec4) override {}
+    void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
+    void SetViewProjection(const glm::mat4&) override {}
+
+    void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 color) override
+    {
+        OverlayLine line;
+        line.a = glm::vec3(a, 0.0f);
+        line.b = glm::vec3(b, 0.0f);
+        line.thickness = thickness;
+        line.color = color;
+        line.depth = OverlayDepthClass::AlwaysOnTop;
+        line.space = OverlayColorSpace::Linear;
+        line.screenSpace = true;
+        m_out.lines.push_back(line);
+    }
+
+    void Circle(glm::vec2 center, float radius, glm::vec4 color) override
+    {
+        OverlayFill fill;
+        fill.kind = OverlayPrimKind::Circle;
+        fill.a = glm::vec3(center, 0.0f);
+        fill.radius = radius;
+        fill.color = color;
+        fill.depth = OverlayDepthClass::AlwaysOnTop;
+        fill.space = OverlayColorSpace::Linear;
+        fill.screenSpace = true;
+        m_out.fills.push_back(fill);
+    }
+
+    void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color, float) override
+    {
+        OverlayFill fill;
+        fill.kind = OverlayPrimKind::Rect;
+        fill.a = glm::vec3(pos, 0.0f);
+        fill.size = size;
+        fill.color = color;
+        fill.depth = OverlayDepthClass::AlwaysOnTop;
+        fill.space = OverlayColorSpace::Linear;
+        fill.screenSpace = true;
+        m_out.fills.push_back(fill);
+    }
+
+private:
+    OverlayPrimitiveList& m_out;
+};
+```
+
+Extract, after the views exist:
+
+```cpp
+if (req.showGrid2d && packet.spriteView)
+{
+    const ViewTransform& view = packet.spriteView->view;
+    const float ppm = PixelsPerMetre(view);
+    Grid2DStyle style;
+    style.minorAlpha = req.gridMinorAlpha;
+    style.majorAlpha = req.gridMajorAlpha;
+    style.lineRgb = req.gridLineRgb;
+    style.lineThicknessPx = req.gridLineThicknessPx;
+    style.maxLinesPerAxis = req.gridMaxLinesPerAxis;
+    style.axisX = req.gridAxisX;
+    style.axisY = req.gridAxisY;
+    EmitGrid2D(view, PlanGrid2D(ppm, style.minorAlpha, style.majorAlpha), style, packet.overlay.lines);
+}
+if (req.showGrid3d)
+{
+    packet.overlay.hasGrid3d = true;
+    packet.overlay.grid3d = req.grid3d;
+}
+if (req.physicsDebug && req.editorView)
+{
+    if (const PhysicsResource* phys = reg.GetResource<PhysicsResource>())
+    {
+        if (phys->world)
+        {
+            if (const std::optional<Affine2D> affine = req.editorView->AsAffine2D())
+            {
+                OverlayBatchCollector collector(packet.overlay);
+                collector.Begin(req.viewport.x, req.viewport.y);
+                PhysicsDebugDrawOptions opts = MakePhysicsDebugDrawOptions();
+                opts.view = *affine;
+                opts.alpha = 0.0f;
+                opts.interp = reg.GetResource<PhysicsInterpBuffer>();
+                opts.velocities = opts.comMarkers = opts.orientations = false;
+                opts.contacts = req.physicsWholeWorld;
+                DrawPhysicsDebug(*phys->world, collector, opts);
+            }
+        }
+    }
+}
+if (req.cameraRect && req.editorView && !req.playMode)
+{
+    if (const std::optional<SceneCameraView> cam = ActiveSceneCamera(reg, req.viewport))
+    {
+        const float aspect = req.viewport.y > 0u ? float(req.viewport.x) / float(req.viewport.y) : 1.0f;
+        const float hw = cam->halfHeight * aspect;
+        const float hh = cam->halfHeight;
+        const glm::vec2 c = cam->worldCenter;
+        const glm::vec3 world[4] = {
+            { c.x - hw, c.y - hh, 0.0f }, { c.x + hw, c.y - hh, 0.0f },
+            { c.x + hw, c.y + hh, 0.0f }, { c.x - hw, c.y + hh, 0.0f },
+        };
+        glm::vec3 screen[4];
+        bool finite = true;
+        for (int i = 0; i < 4; ++i)
+        {
+            screen[i] = req.editorView->WorldToScreen(world[i]);
+            finite = finite && std::isfinite(screen[i].x) && std::isfinite(screen[i].y);
+        }
+        if (finite)
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                OverlayLine line;
+                line.a = glm::vec3(glm::vec2(screen[i]), 0.0f);
+                line.b = glm::vec3(glm::vec2(screen[(i + 1) % 4]), 0.0f);
+                line.thickness = 1.0f;
+                line.color = req.cameraFrameColor;
+                line.depth = OverlayDepthClass::AlwaysOnTop;
+                line.space = OverlayColorSpace::Linear;
+                line.screenSpace = true;
+                packet.overlay.lines.push_back(line);
+            }
+        }
+    }
+}
+packet.overlay.lines.insert(packet.overlay.lines.end(), req.gizmoPrims.lines.begin(), req.gizmoPrims.lines.end());
+packet.overlay.fills.insert(packet.overlay.fills.end(), req.gizmoPrims.fills.begin(), req.gizmoPrims.fills.end());
+```
+
+`SubmitSceneToBatcher` stops calling `DrawGrid2D` (`:1887`), `SubmitRender` (`:1891`), the physics `GetResource` block (`:1898-1927`), and `ActiveSceneCamera` (`:1953`). The Task 3 local-batcher conversion is deleted in the same edit. The editor call site that already calls `ExtractFrame` sets `showGrid2d`, `physicsDebug`, `physicsWholeWorld`, `cameraRect`, the grid style fields from `Settings<EditorGridSettings>()`, and `cameraFrameColor` from the theme value it reads today (`:1977-1979`). Gizmo lines are copied into `req.gizmoPrims` with the tags Task 3 already applied.
+
+The `GetComponent` at `:3720` leaves whichever function contains it. Move that draw read into `EditorApp::BuildGizmoOverlayPrims`, a method that is not one of the seven host-gate functions, and call it before `RenderSceneToViewport`. It writes `m_gizmoPrims`. `RenderSceneToViewport` assigns `req.gizmoPrims = m_gizmoPrims` and does not call `GetComponent`. Interaction reads at `:1241`, `:1283`, and `:1339` stay in their current functions.
+
+- [ ] **Step 4: Run the overlay case and the editor grid tests.**
 
 ```powershell
 $env:_APH_NOPAUSE = '1'
@@ -1828,186 +2911,555 @@ cmd /c GenerateProjects.bat
 $env:CL = '/FS'
 & "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
 Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
-.\ArcaneTests.exe "[extract]"
+.\ArcaneTests.exe "overlay tags"
+.\ArcaneTests.exe "[editor][grid]"
 ```
 
-Expected: FAIL. `ExtractFrame` does not exist.
+Expected: PASS. `[editor][grid]` is `ViewportGridTest.cpp`, still drawing through `Editor::DrawGrid2D`.
 
-- [ ] **Step 3: Implement extract and move the reads.**
+- [ ] **Step 5: Commit.**
 
-`ExtractFrame.cpp` includes `Registry.hpp`, `SceneCamera.hpp`, `VisibilitySystem.hpp`, `GpuSceneSync.hpp`, `RenderSystems.hpp`, `PickEmit.hpp`, `Grid2D.hpp`, `PhysicsDebugDraw.hpp`. The function:
+```powershell
+git add ArcaneClient/src/Arcane/Render/Grid2D.hpp ArcaneClient/src/Arcane/Render/Grid2D.cpp ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneEditor/src/Viewport/ViewportGrid.hpp ArcaneEditor/src/Viewport/ViewportGrid.cpp ArcaneEditor/src/App/EditorApp.hpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp
+git commit -m "feat(render): extract publishes overlay primitives" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
 
-1. `RenderFramePacket& packet = ring.BeginExtract();`
-2. Views. If `req.editorView` is set, `packet.spriteView` and `packet.meshView` are both that value. Extract does not call `ActiveSceneCamera` to choose the world view on that path. If `req.editorView` is empty, `packet.spriteView = ActiveSceneCamera(reg, req.viewport)` and `packet.meshView = ActivePerspectiveSceneCamera(reg, req.viewport)`. The no-camera warning that `PushSceneCamera` builds with `CreateView<const Camera>` (`RuntimeApp.cpp:870-874`) moves here, still once, still only on the empty-editorView path.
-3. `packet.viewport = req.viewport` and `packet.origin.translation = {0, 0, 0}`. Do not add the origin into any row.
-4. If `packet.spriteView`, `BuildVisibleSet(reg, *packet.spriteView, packet.visible)`.
-5. `GpuSceneSync` into the registry's `GpuSceneMirror` (the body of `PrepareSceneForRender`, `GpuSceneHost.hpp:87-111`). Then `MeshSectionRanges(reg.GetResource<MeshTable>())` and `BuildGpuSceneFrame(..., sections, meshView, packet.mesh)`. The `MeshTable*` does not leave this function.
-6. Sprite submission. Run the body of `RenderSubmissionSystem::operator()` (`RenderSystems.hpp:50-250`) into a `Batcher2D` local to this function, `Drain()` it, and copy `vertices`, `indices`, `spans`, `*globals`, and `viewProjection` into the packet. Remove `RenderSubmissionSystem` from the client scheduler registration (`ClientRuntime.cpp`'s include of `RenderSystems.hpp` and the scheduler add) so the host's later `SubmitRender` does not submit those sprites again.
-7. `CollectPickables` into `packet.pickDrawables`. Move the function body from `PickEmit.cpp:32` up to but not including `BuildPickIdGeometry` (`:243`) into this cpp. `PickEmit.cpp` keeps `BuildPickIdGeometry` and drops `#include <Astra/Registry/Registry.hpp>` (`:11`) and `#include <Arcane/Render/VisibilitySystem.hpp>` (`:5`). `PickEmit.hpp` already forward-declares the registry.
-8. Overlay. If `req.showGrid2d` and `packet.spriteView`, call the moved `PlanGrid2D` / line emitter and append `OverlayLine`s tagged `DepthTested`, `Linear`, `screenSpace = false`. If `req.showGrid3d`, `packet.overlay.hasGrid3d = true` and `packet.overlay.grid3d = req.grid3d`. If `req.physicsDebug`, call `DrawPhysicsDebug` with a collector that writes `OverlayLine`s tagged `AlwaysOnTop`, `Linear`, instead of a `Batcher2D`. The collector is a `Batcher2D` subclass whose `Line`/`Circle`/`Rect` push overlay primitives; it is local to this cpp. Camera-rect corners: call `ActiveSceneCamera` here (this TU is the allowed caller) and append the rect lines tagged `AlwaysOnTop`, `Linear`. Append `req.gizmoPrims` unchanged.
-9. `packet.hasPost = req.post != nullptr`, and if so `packet.post = *req.post` (the `shared_ptr<const vector<uint8_t>>` members keep the bytecode alive; do not invent a second bytecode type). Copy `req.imgui` and `req.gameUi` into `packet.imgui` and `packet.gameUi` by walking `ImDrawData`'s lists into `ImDrawSnapshot`. Copy `req.lightDirection/lightColor/ambient`.
+---
 
-Return `const RenderFramePacket&` to the slot. After return the caller treats it as immutable.
+### Task 10: UI snapshot, post chain, and the default light
 
-`MeshSectionRanges` walks `table->meshes` (`SceneResources.hpp:259`) and each `MeshEntry::data.sections`, copying `indexOffset` and `indexCount`. Tests that called `BuildGpuSceneFrame(..., meshTable, ...)` become `BuildGpuSceneFrame(..., MeshSectionRanges(meshTable), ...)`, including `CheckOverlayClasses` in `OverlayWitnessTest.cpp`.
+**Files:**
+- Modify: `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp`
+- Modify: `ArcaneClient/src/Arcane/Render/Nri/nodes/ImGuiNriNode.cpp:58-110`
+- Modify: `ArcaneRuntime/src/RuntimeFrame.cpp:676-681` and the `req` fill from Task 5
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (`ApplyDefaultLight` at `:2089`, `RefreshSceneResolution` at `:1572`)
+- Test: `ArcaneTests/src/ExtractFrameTest.cpp`
 
-`Grid2D.hpp` declares `Grid2DPlan`, `PlanGrid2D`, `PixelsPerMetre`, and `EmitGrid2D(const ViewTransform&, const Grid2DPlan&, std::vector<OverlayLine>&)` — the line loop copied from `ViewportGrid.cpp`'s `DrawGrid2D` (`:132`), writing overlay lines instead of batcher lines. `ArcaneEditor`'s `DrawGrid2D` becomes a loop that emits those lines into the batcher, so `ViewportGridTest.cpp` stays green. Extract calls `EmitGrid2D`. The editor stops calling `DrawGrid2D` from `SubmitSceneToBatcher`.
+**Interfaces:**
+- Consumes: `CopyImDrawSnapshot` and `ImDrawSnapshotRebuild` from Task 4. `ImGuiNriNode::Record` (`ImGuiNriNode.cpp:58`) calls `RenderDrawData`. `AddImGuiNode` (`:63`) reads `CurrentImGuiDrawData()` / `CurrentGameUiDrawData()` at `:88` and `:110`. `ApplyDefaultLight` (`MeshNode.hpp:362`). `PostChainDesc` is copied by value; its bytecode members are `std::shared_ptr<const std::vector<std::uint8_t>>` (`PostChainDesc.hpp`, moved in Task 4 from `PostChainCache.hpp:55-78`).
+- Produces: `packet.imgui`, `packet.gameUi`, `packet.post` / `packet.hasPost`, and the three light vectors.
 
-**Runtime.** Replace the region `RuntimeFrame.cpp:521-548` (Begin, SetGlobals, `PushSceneCamera`, `SetViewProjection`, `ActivePerspectiveSceneCamera`, `PrepareSceneForRender`, `SubmitRender`) with one `ExtractFrame` call. The batcher's `Begin` stays, because screen-space host draws that are not world sprites still use it; world sprites come from the packet, and `AddBatch2DNode` drains `packet.batchVertices/Indices/Spans` instead of `context->CurrentBatch()->Drain()` when the packet is bound. Bind the packet on `NriGraphContext` for the duration of `RenderFrame` (a `const RenderFramePacket*` set by the caller, cleared before return). `PushSceneCamera` becomes: call `ExtractFrame` (or, if extract already ran, read `packet.spriteView`) and `SetView` from `packet.spriteView->view` when it has a value. Do not call `ActiveSceneCamera` in `PushSceneCamera`. The `CreateView<const Camera>` census leaves `RuntimeApp.cpp`.
+- [ ] **Step 1: Write the failing test.**
 
-There is exactly one `ExtractFrame(` in `RuntimeFrame.cpp`, textually above both `RenderFrame(` and `RenderFrameOffscreen(` at `:748`. Both branches therefore run extract. `GpuSceneInvalidate` at `:756` stays.
+```cpp
+static void PushVert(ImDrawList* list, float x, float y)
+{
+    list->VtxBuffer.push_back(ImDrawVert{ ImVec2(x, y), ImVec2(0, 0), IM_COL32_WHITE });
+    list->IdxBuffer.push_back(static_cast<ImDrawIdx>(list->VtxBuffer.Size - 1));
+}
 
-Delete the second `CollectPickables` at `:573` and `:621`. `packet.pickDrawables` is the list. The light `ApplyDefaultLight` at `:676-681` writes `req.lightDirection/lightColor/ambient` from `Settings<RenderMeshDefaultLightSettings>()` before the call. That read is a setting, not a component.
+TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][extract]")
+{
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImDrawData data{};
+    ImDrawList a(nullptr);
+    ImDrawList b(nullptr);
+    PushVert(&a, 1.0f, 2.0f);
+    PushVert(&a, 3.0f, 4.0f);
+    PushVert(&b, 5.0f, 6.0f);
+    ImDrawCmd ca{};
+    ca.ElemCount = 1;
+    ca.TexRef = ImTextureRef(static_cast<ImTextureID>(42));
+    a.CmdBuffer.push_back(ca);
+    ImDrawCmd cb{};
+    cb.ElemCount = 1;
+    cb.TexRef = ImTextureRef(static_cast<ImTextureID>(7));
+    b.CmdBuffer.push_back(cb);
+    data.AddDrawList(&a);
+    data.AddDrawList(&b);
 
-**Editor.** `RenderSceneToViewport` (`:1642`) stops calling `ActivePerspectiveSceneCamera` (`:1688`) and `PrepareSceneForRender` (`:1689`). It fills `ExtractRequest::editorView` from the editor camera it already computed (`:1685-1688` shares one editor camera in Edit) and calls `ExtractFrame`. `GpuSceneInvalidate` at `:1764` stays.
+    auto bytes = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{ 1, 2, 3, 4 });
+    Arcane::PostChainDesc desc;
+    desc.passes.push_back({});
+    desc.passes.back().vsBytes = bytes;
 
-`RefreshSceneResolution` (`:1506`) contains `ActiveSceneCamera` at `:1572`. That call moves into the extract request (Play sets `playMode` and leaves `editorView` empty; Edit sets `editorView`). Add `EditorApp::RefreshSceneResolution` to the host-gate table in Task 6 in this same change, because after the move the function must not grow a replacement call.
+    World world;
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 32u, 32u };
+    req.imgui = &data;
+    req.post = &desc;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
 
-`SubmitSceneToBatcher` stops calling `DrawGrid2D`, `SubmitRender`, `GetResource` for physics (`:1898-1922`), and `ActiveSceneCamera` (`:1953`). Those flags go on the request (`showGrid2d`, `physicsDebug`, `playMode`). The Task 3 local-batcher conversion is deleted here so the lines are not produced twice.
+    REQUIRE(packet.imgui.lists.size() == 2u);
+    CHECK(packet.imgui.lists[0].vertices.size() == 2u);
+    CHECK(packet.imgui.lists[1].vertices.size() == 1u);
+    CHECK(packet.imgui.lists[0].cmds[0].texture == static_cast<ImTextureID>(42));
+    CHECK(packet.imgui.lists[1].cmds[0].texture == static_cast<ImTextureID>(7));
+    CHECK(packet.hasPost);
+    desc = {};
+    bytes.reset();
+    REQUIRE(packet.post.passes.size() == 1u);
+    REQUIRE(packet.post.passes[0].vsBytes);
+    CHECK(packet.post.passes[0].vsBytes->size() == 4u);
 
-`ArmGraphViewportFrame` stops calling `CollectPickables` (`:2165`). The selection loop at `:2177-2181` stays and reads pick ids off the packet (`PickPassIdOf` against `packet.pickDrawables`). That loop is the allow-list entry.
+    ImDrawList bad(nullptr);
+    PushVert(&bad, 0.0f, 0.0f);
+    ImDrawCmd refused{};
+    refused.UserCallback = [](const ImDrawList*, const ImDrawCmd*) {};
+    refused.ElemCount = 1;
+    bad.CmdBuffer.push_back(refused);
+    ImDrawData badData{};
+    badData.AddDrawList(&bad);
+    Arcane::ExtractRequest req2;
+    req2.viewport = { 32u, 32u };
+    req2.imgui = &badData;
+    Arcane::PacketRing ring2;
+    const Arcane::RenderFramePacket& refusedPacket = Arcane::ExtractFrame(world.reg, req2, ring2);
+    CHECK(refusedPacket.imgui.lists.empty());
+    ImGui::DestroyContext(ctx);
+}
+```
 
-The gizmo draw `GetComponent` at `:3720` moves into extract (the editor copies the resulting lines into `req.gizmoPrims` before the named builders, or extract reads `Transform` itself when `editorView` is set and a gizmo is armed). Interaction reads at `:1241`, `:1283`, `:1339` stay. The ImGui sink draw was already removed in Task 3.
+`PostChainPassDesc::vsBytes` is the `shared_ptr<const vector<uint8_t>>` (`PostChainCache.hpp:57`, moved to `PostChainDesc.hpp` in Task 4). The copy is the struct assignment `packet.post = *req.post`.
 
-`AddBatch2DNode`, when the context has a bound packet, copies from `packet.batchVertices` rather than calling `Drain()` on the live batcher. `ImGuiNriNode::Record` (`ImGuiNriNode.cpp:58`) builds a stack `ImDrawData` whose `CmdLists` point at the packet's `ImDrawSnapshot` vectors and passes that to `RenderDrawData`. The snapshot outlives the frame because the ring retains the slot for `FramesInFlight()` extracts.
+- [ ] **Step 2: Run the case.**
 
-`PrepareSceneForRender` remains as a function that `ExtractFrame.cpp` calls, or its body is inlined there. No named frame builder calls it after this task.
+```powershell
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "extract copies two ImGui lists"
+```
 
-Thumbnail harvest and shader preview are not given an `ExtractFrame` call. They do not read the scene registry.
+Expected: FAIL. `packet.imgui.lists` is empty and `hasPost` is false.
 
-- [ ] **Step 4: Run extract, packet, and the GPU-scene tests.**
+- [ ] **Step 3: Copy the snapshot, the chain, and the light.**
+
+Inside `ExtractFrame`, after the overlay block:
+
+```cpp
+if (!CopyImDrawSnapshot(req.imgui, packet.imgui))
+    packet.imgui = {};
+if (!CopyImDrawSnapshot(req.gameUi, packet.gameUi))
+    packet.gameUi = {};
+packet.hasPost = req.post != nullptr;
+if (req.post)
+    packet.post = *req.post;
+packet.lightDirection = req.lightDirection;
+packet.lightColor = req.lightColor;
+packet.ambient = req.ambient;
+```
+
+`RuntimeFrame`, where it fills `req`, before `ExtractFrame`:
+
+```cpp
+Arcane::MeshSceneDesc light{};
+Arcane::ApplyDefaultLight(light, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+req.lightDirection = light.lightDirection;
+req.lightColor = light.lightColor;
+req.ambient = light.ambient;
+req.imgui = graphFrame.imgui;
+req.gameUi = graphFrame.gameUi;
+req.post = graphFrame.post;
+```
+
+`graphFrame.imgui` is assigned at `:508`. `graphFrame.post` is `const PostChainDesc*` (`NriGraphContext.hpp:457`), assigned at `RuntimeFrame.cpp:692`. `graphFrame.gameUi` is the `FrameDesc` field at `NriGraphContext.hpp:546`; `RuntimeFrame` leaves it null. Delete the `ApplyDefaultLight` call inside the mesh-scene block Task 6 moved to after `ExtractFrame`. That block copies `packet.lightDirection`, `packet.lightColor`, and `packet.ambient` onto the mesh desc. The editor deletes `ApplyDefaultLight` at `:2089` and fills the same three request fields at its `ExtractFrame` call.
+
+`AddImGuiNode`'s record lambda (`ImGuiNriNode.cpp:105-114`) becomes:
+
+```cpp
+[context, target, gameUi](RenderGraphNodeContext& nodeContext)
+{
+    if (!context)
+        return;
+    if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
+    {
+        if (context->Packet())
+        {
+            const ImDrawSnapshot& snap = gameUi ? context->Packet()->gameUi : context->Packet()->imgui;
+            ImDrawSnapshotRebuild rebuilt(snap);
+            node->Record(nodeContext, rebuilt.Data(), target);
+        }
+        else
+        {
+            node->Record(nodeContext,
+                         gameUi ? context->CurrentGameUiDrawData()
+                                : context->CurrentImGuiDrawData(),
+                         target);
+        }
+    }
+}
+```
+
+The declaration-time `PrepareFrame` call at `:88-91` uses the same rebuild when `context->Packet()` is set, and the live `CurrentGameUiDrawData()` / `CurrentImGuiDrawData()` pointers when it is not. A preview graph has no packet and keeps those live pointers. `ImGuiNriNode.cpp` includes `RenderFramePacket.hpp` for `ImDrawSnapshotRebuild`.
+
+`RefreshSceneResolution` deletes the `ActiveSceneCamera` branch at `:1572-1577`. Play mode leaves the runtime view for extract: the editor's `ExtractFrame` call sets `req.playMode = InPlayMode()` and leaves `req.editorView` empty on that path, and immediately after `ExtractFrame` returns calls `SetView(packet.spriteView->view)` when `spriteView` has a value. Edit mode keeps `SetView(m_camera.Resolve(ViewportSize()))` at `:1570` and passes that same value as `req.editorView`. `EditorApp::RefreshSceneResolution(` is already a host-gate signature; after this edit its body contains none of the forbidden tokens.
+
+Thumbnail `Impl::Harvest` and `RenderGraphPreview` do not gain `ExtractFrame` or a registry read.
+
+- [ ] **Step 4: Run the UI case.**
 
 ```powershell
 $env:CL = '/FS'
 & "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
 Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
-.\ArcaneTests.exe "[extract]"
+.\ArcaneTests.exe "extract copies two ImGui lists"
 .\ArcaneTests.exe "[packet]"
-.\ArcaneTests.exe "[gpuscene]"
-.\ArcaneTests.exe "[overlay]"
 ```
 
-Expected: PASS. `GpuSceneCullTest.cpp`, `MeshCullNodeTest.cpp`, and `NriGraphPixelTest.cpp` compile as part of the exe; a failed assertion names itself. `[overlay]` is in this list because `CheckOverlayClasses` calls `BuildGpuSceneFrame`.
+Expected: PASS. `[packet]` still covers `ImDrawSnapshotRebuild` from Task 4.
 
 - [ ] **Step 5: Commit.**
 
 ```powershell
-git add ArcaneClient/src/Arcane/Render/ExtractFrame.hpp ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneClient/src/Arcane/Render/Grid2D.hpp ArcaneClient/src/Arcane/Render/Grid2D.cpp ArcaneClient/src/Arcane/Render/GpuSceneSync.hpp ArcaneClient/src/Arcane/Host/GpuSceneHost.hpp ArcaneClient/src/Arcane/Render/PickEmit.cpp ArcaneClient/src/Arcane/Render/Nri/nodes/Batch2DNode.cpp ArcaneClient/src/Arcane/Render/Nri/nodes/ImGuiNriNode.cpp ArcaneEditor/src/Viewport/ViewportGrid.hpp ArcaneEditor/src/Viewport/ViewportGrid.cpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneRuntime/src/RuntimeApp.cpp ArcaneTests/src/ExtractFrameTest.cpp ArcaneTests/src/GpuSceneSyncTest.cpp ArcaneTests/src/GpuSceneCullTest.cpp ArcaneTests/src/MeshCullNodeTest.cpp ArcaneTests/src/NriGraphPixelTest.cpp ArcaneTests/src/OverlayWitnessTest.cpp
-git commit -m "feat(render): extract is the only frame reader of the registry" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+git add ArcaneClient/src/Arcane/Render/ExtractFrame.cpp ArcaneClient/src/Arcane/Render/Nri/nodes/ImGuiNriNode.cpp ArcaneRuntime/src/RuntimeFrame.cpp ArcaneEditor/src/App/EditorAppFrame.cpp ArcaneTests/src/ExtractFrameTest.cpp
+git commit -m "feat(render): extract publishes the UI snapshot and the post chain" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 ```
 
 ---
 
-### Task 6: The include gate and the host frame-builder gate
+### Task 11: Behavioural extract-skip on the three hosts
+
+**Files:**
+- Modify: `ArcaneRuntime/src/RuntimeApp.cpp` (one `fprintf` immediately before the `if (!m_config.reportPath.empty())` at `:1249`)
+- Modify: `ArcaneServer/src/ServerReport.hpp` (one field; `kSchemaVersion` stays 1)
+- Modify: `ArcaneServer/src/ServerReport.cpp:25` (`ToJson`)
+- Modify: `ArcaneServer/src/ServerApp.cpp:225-230` (assign the field before `Finish`)
+- Test: `ArcaneTests/src/ExtractHostTest.cpp`
+
+**Interfaces:**
+- Consumes: `ExtractFrameCallCount` / `ResetExtractFrameCallCount` from Task 5. `RunLoop::Advance(double)` (`RunLoop.hpp:104`). `Arcane::Runtime rt(Arcane::Test::Process())` (`ClientRuntimeTest.cpp:28`). `RuntimeApp --headless` still builds an offscreen vehicle (`RuntimeApp.cpp:447-457`). `WitnessScratch` / `RunWitness` (`HostWitness.hpp`, the pattern in `ServerWitnessTest.cpp:26-53`). `ServerApp::Run` ticks `Loop().Advance` (`ServerApp.cpp:191`) and sets `hasRenderSubmission = false` (`:230`). ArcaneServer links ArcaneCore only (`premake5.lua:785-792`).
+- Produces: `ServerReport::extractFrameCalls`, the stdout line `extract-frames: N`, and three tests. No source scan for the token `ExtractFrame`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+`ArcaneTests/src/ExtractHostTest.cpp`:
+
+```cpp
+#include "Helpers/HostWitness.hpp"
+#include <catch2/catch_test_macros.hpp>
+#include <Arcane/Base/ExtractAccounting.hpp>
+#include <Arcane/Base/Runtime.hpp>
+#include "Helpers/TestTypeContext.hpp"
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+TEST_CASE("a non-rendering runtime leaves the extract counter at 0", "[nri][extract]")
+{
+    Arcane::ResetExtractFrameCallCount();
+    Arcane::Runtime rt(Arcane::Test::Process());
+    for (int i = 0; i < 4; ++i)
+        rt.Loop().Advance(1.0 / 60.0);
+    CHECK(Arcane::ExtractFrameCallCount() == 0u);
+}
+
+static std::string Slurp(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+static int CountExactLine(const std::string& text, const std::string& want)
+{
+    int n = 0;
+    std::size_t i = 0;
+    while (i < text.size())
+    {
+        std::size_t end = text.find('\n', i);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(i, end - i);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == want) ++n;
+        i = end + (end < text.size() ? 1 : 0);
+        if (end == text.size()) break;
+    }
+    return n;
+}
+
+TEST_CASE("RuntimeApp --headless prints extract-frames equal to --frames", "[gpu][extract][witness]")
+{
+    const std::filesystem::path dir = std::filesystem::absolute("../ArcaneRuntime");
+    REQUIRE(std::filesystem::exists(dir / "ArcaneRuntime.exe"));
+    Arcane::Test::WitnessScratch scratch(dir, "extract-headless");
+    Arcane::Test::WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneRuntime.exe";
+    inv.workingDir = scratch.Dir();
+    inv.args = { "--project", "ReferenceProject", "--frames", "4", "--headless" };
+    inv.hardCapMs = 60000;
+    Arcane::Test::WitnessRun run = Arcane::Test::RunWitness(inv);
+    INFO(Slurp(run.stdoutPath));
+    CHECK(run.exitCode == 0);
+    CHECK(CountExactLine(Slurp(run.stdoutPath), "extract-frames: 4") == 1);
+}
+
+TEST_CASE("ArcaneServer ticks N frames with extractFrameCalls 0", "[witness][server][extract]")
+{
+    const std::filesystem::path dir = std::filesystem::absolute("../ArcaneServer");
+    REQUIRE(std::filesystem::exists(dir / "ArcaneServer.exe"));
+    Arcane::Test::WitnessScratch scratch(dir, "extract-server");
+    Arcane::Test::WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneServer.exe";
+    inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "server-report.json";
+    inv.args = { "--project", "ReferenceProject", "--frames", "4", "--report", inv.reportPath.generic_string() };
+    inv.hardCapMs = 60000;
+    Arcane::Test::WitnessRun run = Arcane::Test::RunWitness(inv);
+    REQUIRE(run.exitCode == 0);
+    CHECK(run.report.at("framesTicked") == 4);
+    CHECK(run.report.at("extractFrameCalls") == 0);
+    CHECK(run.report.at("systems").at("hasRenderSubmission") == false);
+    CHECK(run.report.at("systems").at("render") == 0);
+    CHECK(run.report.at("presentation").at("clientAttached") == false);
+    CHECK(run.report.at("presentation").at("clientDllLoadedAtBoot") == false);
+    CHECK(run.report.at("schemaVersion") == 1);
+}
+```
+
+Use the real namespaces from `HostWitness.hpp` (`Arcane::Test` is what `ServerWitnessTest.cpp` imports via `using namespace Arcane::Test`). Match `WitnessInvocation::args` to that header's element type.
+
+- [ ] **Step 2: Generate and run the three cases.**
+
+```powershell
+$env:_APH_NOPAUSE = '1'
+cmd /c GenerateProjects.bat
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "leaves the extract counter"
+.\ArcaneTests.exe "prints extract-frames"
+.\ArcaneTests.exe "extractFrameCalls"
+```
+
+Expected: the in-process case PASSes (the counter exists and nothing in that process calls `ExtractFrame`). The two witness cases FAIL: stdout has no `extract-frames: 4` line, and the server JSON has no `extractFrameCalls` key.
+
+- [ ] **Step 3: Report the counter from the rendering host and from the server.**
+
+Immediately before `if (!m_config.reportPath.empty())` at `RuntimeApp.cpp:1249`:
+
+```cpp
+std::fprintf(stdout, "extract-frames: %llu\n",
+             static_cast<unsigned long long>(Arcane::ExtractFrameCallCount()));
+std::fflush(stdout);
+```
+
+This is `fprintf`, not `ARC_INFO`. It runs when `reportPath` is empty. `VerifyReport::schemaVersion` stays 14.
+
+`ServerReport` gains `std::uint64_t extractFrameCalls = 0;`. `ToJson` writes `j["extractFrameCalls"] = extractFrameCalls;`. `kSchemaVersion` stays 1. `ServerApp::Run`, beside the other `rep.` assignments at `:225-230` and before `Finish`:
+
+```cpp
+rep.extractFrameCalls = Arcane::ExtractFrameCallCount();
+```
+
+A future `ExtractFrame` call inside the server tick would store N and fail the test. The existing named-key checks in `ServerWitnessTest.cpp:39-53` stay valid because the new key is additive.
+
+- [ ] **Step 4: Re-run the three cases.**
+
+```powershell
+$env:CL = '/FS'
+& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" D:\dev\starworks\Arcane-f5\Arcane.slnx /p:Configuration=Debug /m:8 /nodeReuse:false /v:m
+Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
+.\ArcaneTests.exe "leaves the extract counter"
+.\ArcaneTests.exe "prints extract-frames"
+.\ArcaneTests.exe "extractFrameCalls"
+```
+
+Expected: PASS. The headless runtime line equals `extract-frames: 4` once. The server report has `extractFrameCalls == 0` and `framesTicked == 4`.
+
+- [ ] **Step 5: Commit.**
+
+```powershell
+git add ArcaneRuntime/src/RuntimeApp.cpp ArcaneServer/src/ServerReport.hpp ArcaneServer/src/ServerReport.cpp ArcaneServer/src/ServerApp.cpp ArcaneTests/src/ExtractHostTest.cpp
+git commit -m "test(render): extract counter stays zero on non-rendering hosts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+```
+
+---
+
+### Task 12: The include gate and the host frame-builder gate
 
 **Files:**
 - Test: `ArcaneTests/src/RenderRegistryIncludeTest.cpp`
-- Modify: whichever render TU the first `/showIncludes` run names, other than `ExtractFrame.cpp`. The known offender before Task 5 was `PickEmit.cpp:11`. Task 5 already dropped that include. If this task's run names another TU, split that include in this task before the gate is allowed to pass. The done condition is: the only preprocessed `Astra/Registry/Registry.hpp` under `ArcaneClient/src/Arcane/Render/**/*.cpp` is `ExtractFrame.cpp`.
+- The product edits that make this gate pass are already named in Tasks 5, 6, 7, 8, 9, and 10. This task does not discover a new file. If the gate fails on a path that is absent from the table below, stop and correct this table before calling the task done.
 
 **Interfaces:**
-- Consumes: `ExtractFrame`, `DepthConvention.hpp` (no registry), `SceneCamera.hpp:20` (includes `Registry.hpp`). The named builders are spec section 4.4, plus `EditorApp::RefreshSceneResolution` added in Task 5.
-- Produces: two Catch2 cases, `[registry-gate]`. Neither runs on a frame.
+- Consumes: `ExtractFrame.cpp` as the one Render `.cpp` that includes `Astra/Registry/Registry.hpp`. `DepthConvention.hpp` (no registry). `SceneCamera.hpp:20` (includes `Registry.hpp`). The closed set below. `scripts/settings-compile-fail.ps1:11-14` (vswhere, then `VC\Auxiliary\Build\vcvars64.bat`).
+- Produces: `[registry-gate]`. The compiler is an absolute `cl.exe` resolved in the test, so the case passes when the process cwd is the ArcaneTests exe dir.
+
+Closed set. These are the only files the gate is allowed to talk about:
+
+| File | What it includes after its owning task | Owner |
+|---|---|---|
+| `ArcaneClient/src/Arcane/Render/ExtractFrame.cpp` | `Astra/Registry/Registry.hpp`, and the headers that pull it in: `VisibilitySystem.hpp` (`:30`), `GpuSceneSync.hpp` (`:27`), `RenderSystems.hpp` (`:37`), `SceneCamera.hpp`, `PhysicsSystem.hpp` (via `Ecs.hpp:23`) | 5–10 |
+| `ArcaneClient/src/Arcane/Render/PickEmit.cpp` | `PickEmit.hpp`, `Constant.hpp`, `glm/glm.hpp`, `<algorithm>`, `<cmath>`. Task 8 dropped `VisibilitySystem.hpp` (`:5`), `PhysicsSystem.hpp` (`:8`), and `Registry.hpp` (`:11`). `PickBoundHalfExtents` stayed. | 8 |
+| Every other `.cpp` under `ArcaneClient/src/Arcane/Render/` | None of `Registry.hpp`, `VisibilitySystem.hpp`, `GpuSceneSync.hpp`, `RenderSystems.hpp`, `SceneCamera.hpp`, `Ecs.hpp`, `BoundsSystem.hpp`, `PhysicsSystem.hpp`. `MeshNode.cpp` mentions `SceneCamera.hpp` in comments and does not include it. | already true before Task 5 |
+
+`GpuSceneHost.hpp:28` includes `Registry.hpp` and lives under `Host/`, outside this compile. `ClientRuntime.cpp` includes `RenderSystems.hpp` and lives under `Client/`, outside this compile. `ComponentRegistry.hpp` and `CVarRegistry.hpp` are different paths; the match string is `Astra/Registry/Registry.hpp` with either slash. `Nri/` has no allow-list entry.
+
+Host-gate functions, and the only token each one may strip from a line before the forbidden-token scan:
+
+| Signature | File | Strip from the line, then scan |
+|---|---|---|
+| `RenderGraph(` | `ArcaneRuntime/src/RuntimeFrame.cpp:452` | `GpuSceneInvalidate` (the call at `:756`) |
+| `EditorApp::RenderSceneToViewport(` | `ArcaneEditor/src/App/EditorAppFrame.cpp` | `GpuSceneInvalidate` (the call at `:1764`) |
+| `EditorApp::ArmGraphViewportFrame(` | `ArcaneEditor/src/App/EditorAppFrame.cpp` | `PickPassIdOf` (the loop at `:2177-2181`) |
+| `EditorApp::RefreshSceneResolution(` | `ArcaneEditor/src/App/EditorAppFrame.cpp:1506` | nothing |
+| `EditorApp::SubmitSceneToBatcher(` | `ArcaneEditor/src/App/EditorAppFrame.cpp` | nothing |
+| `MaterialPreviewHarvester::Impl::Harvest(` | `ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp:1138` | nothing |
+| `RenderGraphPreview(` | `ArcaneEditor/src/Documents/ShaderEditorDocument.cpp:1662` | nothing |
+
+A line that is only `GpuSceneInvalidate(reg);` inside `RenderGraph` has zero hits. A line `GpuSceneInvalidate(reg); reg.CreateView<const Transform>();` inside `RenderGraph` has one hit. A line `PickPassIdOf(e); reg.GetComponent<const Transform>(e);` inside `ArmGraphViewportFrame` has one hit. Forbidden tokens: `CreateView`, `GetComponent`, `GetResource`, `InspectEntity`, `ActiveSceneCamera`, `ActivePerspectiveSceneCamera`, `CollectPickables`, `PrepareSceneForRender`, `BuildVisibleSet`, `GpuSceneSync`. `CVarRegistry` and `Settings<` are not hits. Reads outside these seven functions stay legal, including the gizmo interaction reads at `:1241`, `:1283`, and `:1339`.
 
 - [ ] **Step 1: Write the failing test.**
 
-`ArcaneTests/src/RenderRegistryIncludeTest.cpp`. The compiler invocation is built from the generated vcxproj so the include set cannot drift from `premake5.lua:692-744`.
+`ArcaneTests/src/RenderRegistryIncludeTest.cpp`. Resolve `cl.exe` inside the test. MSBuild's absolute path does not put `cl` on PATH for a later process whose cwd is the exe dir.
 
 ```cpp
 #include <catch2/catch_test_macros.hpp>
-
 #include "Helpers/ConstantScan.hpp"
-
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <cstdlib>
+#include <cstdio>
 
-static std::string VcxprojIncludeAndDefines()
+static std::string ReadAll(const std::filesystem::path& path)
 {
-    const auto vcx = Arcane::Test::RepoRoot() / "ArcaneClient/ArcaneClient.vcxproj";
-    std::ifstream in(vcx);
+    std::ifstream in(path);
     REQUIRE(in.good());
     std::ostringstream ss;
     ss << in.rdbuf();
-    const std::string xml = ss.str();
-    // The Debug|x64 ItemDefinitionGroup holds one AdditionalIncludeDirectories
-    // and one PreprocessorDefinitions. Take the first occurrence of each;
-    // Debug and Release share the engine include set.
-    auto grab = [&](const char* tag) {
-        const std::string open = std::string("<") + tag + ">";
-        const std::string close = std::string("</") + tag + ">";
-        const std::size_t a = xml.find(open);
-        const std::size_t b = xml.find(close, a);
-        REQUIRE(a != std::string::npos);
-        REQUIRE(b != std::string::npos);
-        return xml.substr(a + open.size(), b - (a + open.size()));
-    };
-    return grab("AdditionalIncludeDirectories") + "\n" + grab("PreprocessorDefinitions");
+    return ss.str();
 }
 
-static int ShowIncludes(const std::filesystem::path& tu, const std::string& includes,
-                        const std::string& defines, std::string& output)
+static std::string Capture(const std::string& command)
 {
-    // cl is already on PATH inside the shell that built the exe, because the
-    // test is only required to pass in the environment that just ran MSBuild.
-    // The command is one translation unit, syntax-only (/Zs), dynamic CRT (/MD).
-    std::string cmd = "cl /nologo /showIncludes /Zs /std:c++latest /EHsc /MD /Zc:__cplusplus ";
+    FILE* pipe = _popen(command.c_str(), "r");
+    REQUIRE(pipe != nullptr);
+    std::string output;
+    char buf[512];
+    while (std::fgets(buf, sizeof buf, pipe))
+        output += buf;
+    _pclose(pipe);
+    return output;
+}
+
+struct ClTool
+{
+    std::string vcvars;
+    std::string cl;
+};
+
+static ClTool ResolveCl()
+{
+    const char* pfx86 = std::getenv("ProgramFiles(x86)");
+    REQUIRE(pfx86 != nullptr);
+    const std::filesystem::path vswhere = std::filesystem::path(pfx86)
+        / "Microsoft Visual Studio" / "Installer" / "vswhere.exe";
+    REQUIRE(std::filesystem::exists(vswhere));
+    const std::string vs = Capture(
+        "\"" + vswhere.string() + "\" -latest -prerelease -products * "
+        "-requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath");
+    std::string install = vs;
+    while (!install.empty() && (install.back() == '\n' || install.back() == '\r'))
+        install.pop_back();
+    REQUIRE(!install.empty());
+    ClTool tool;
+    tool.vcvars = (std::filesystem::path(install) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat").string();
+    REQUIRE(std::filesystem::exists(tool.vcvars));
+    const std::filesystem::path msvc = std::filesystem::path(install) / "VC" / "Tools" / "MSVC";
+    std::string best;
+    for (const auto& entry : std::filesystem::directory_iterator(msvc))
+        if (entry.is_directory() && entry.path().filename().string() > best)
+            best = entry.path().filename().string();
+    REQUIRE(!best.empty());
+    tool.cl = (msvc / best / "bin" / "Hostx64" / "x64" / "cl.exe").string();
+    REQUIRE(std::filesystem::exists(tool.cl));
+    return tool;
+}
+
+static std::string GrabTag(const std::string& xml, const char* tag)
+{
+    const std::string open = std::string("<") + tag + ">";
+    const std::string close = std::string("</") + tag + ">";
+    const std::size_t a = xml.find(open);
+    const std::size_t b = xml.find(close, a);
+    REQUIRE(a != std::string::npos);
+    REQUIRE(b != std::string::npos);
+    return xml.substr(a + open.size(), b - (a + open.size()));
+}
+
+static int ShowIncludes(const ClTool& tool, const std::filesystem::path& tu, std::string& output)
+{
+    const auto vcx = Arcane::Test::RepoRoot() / "ArcaneClient" / "ArcaneClient.vcxproj";
+    const std::filesystem::path projectDir = vcx.parent_path();
+    const std::string xml = ReadAll(vcx);
+    const std::string includes = GrabTag(xml, "AdditionalIncludeDirectories");
+    const std::string defines = GrabTag(xml, "PreprocessorDefinitions");
+
+    std::string cmd = "cmd /c \"call \"" + tool.vcvars + "\" >nul && \"" + tool.cl
+        + "\" /nologo /showIncludes /Zs /std:c++latest /EHsc /MD /Zc:__cplusplus ";
     std::stringstream def(defines);
     std::string item;
     while (std::getline(def, item, ';'))
-        if (!item.empty() && item.find("%") == std::string::npos)
-            cmd += "/D" + item + " ";
+    {
+        if (item.empty() || item.find('%') != std::string::npos)
+            continue;
+        cmd += "/D" + item + " ";
+    }
     std::stringstream inc(includes);
     while (std::getline(inc, item, ';'))
-        if (!item.empty())
-            cmd += "/I\"" + item + "\" ";
-    cmd += "\"" + tu.string() + "\" 2>&1";
+    {
+        if (item.empty())
+            continue;
+        const std::string projectToken = "$(ProjectDir)";
+        const std::string solutionToken = "$(SolutionDir)";
+        if (item.find(projectToken) != std::string::npos)
+            item.replace(item.find(projectToken), projectToken.size(), projectDir.string() + "\\");
+        if (item.find(solutionToken) != std::string::npos)
+            item.replace(item.find(solutionToken), solutionToken.size(),
+                         Arcane::Test::RepoRoot().string() + "\\");
+        REQUIRE(item.find("$(") == std::string::npos);
+        std::filesystem::path path(item);
+        if (path.is_relative())
+            path = projectDir / path;
+        cmd += "/I\"" + path.string() + "\" ";
+    }
+    cmd += "\"" + tu.string() + "\" 2>&1\"";
     FILE* pipe = _popen(cmd.c_str(), "r");
     REQUIRE(pipe != nullptr);
     char buf[512];
-    while (fgets(buf, sizeof buf, pipe))
+    while (std::fgets(buf, sizeof buf, pipe))
         output += buf;
     return _pclose(pipe);
 }
 
+static bool RegistryHit(const std::string& output)
+{
+    return output.find("Astra\\Registry\\Registry.hpp") != std::string::npos
+        || output.find("Astra/Registry/Registry.hpp") != std::string::npos;
+}
+
 TEST_CASE("render TUs preprocess Registry.hpp only from ExtractFrame.cpp", "[registry-gate]")
 {
-    const std::string block = VcxprojIncludeAndDefines();
-    const std::size_t split = block.find('\n');
-    const std::string includes = block.substr(0, split);
-    const std::string defines = block.substr(split + 1);
+    const ClTool tool = ResolveCl();
     const auto root = Arcane::Test::RepoRoot() / "ArcaneClient/src/Arcane/Render";
     bool sawExtract = false;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
     {
-        if (entry.path().extension() != ".cpp") continue;
+        if (entry.path().extension() != ".cpp")
+            continue;
         std::string output;
-        const int code = ShowIncludes(entry.path(), includes, defines, output);
+        const int code = ShowIncludes(tool, entry.path(), output);
         INFO(entry.path().string());
+        INFO(output);
         CHECK(code == 0);
-        const bool hit = output.find("Astra\\Registry\\Registry.hpp") != std::string::npos
-                      || output.find("Astra/Registry/Registry.hpp") != std::string::npos;
         const bool extract = entry.path().filename() == "ExtractFrame.cpp";
-        if (extract) sawExtract = true;
         if (extract)
-            CHECK(hit);          // the allowlisted TU really does include it
+            sawExtract = true;
+        if (extract)
+            CHECK(RegistryHit(output));
         else
-            CHECK_FALSE(hit);
-
-        std::ifstream src(entry.path());
-        std::ostringstream body;
-        body << src.rdbuf();
+            CHECK_FALSE(RegistryHit(output));
         if (!extract)
-            CHECK(body.str().find("Astra::Registry") == std::string::npos);
+            CHECK(ReadAll(entry.path()).find("Astra::Registry") == std::string::npos);
     }
     CHECK(sawExtract);
 }
 
 TEST_CASE("a clean include of DepthConvention passes and SceneCamera fails the same check", "[registry-gate]")
 {
-    const std::string block = VcxprojIncludeAndDefines();
-    const std::size_t split = block.find('\n');
+    const ClTool tool = ResolveCl();
     const auto dir = std::filesystem::temp_directory_path();
     const auto passTu = dir / "f5_depth_only.cpp";
     const auto failTu = dir / "f5_scene_camera.cpp";
@@ -2020,30 +3472,16 @@ TEST_CASE("a clean include of DepthConvention passes and SceneCamera fails the s
         o << "#include <Arcane/Scene/SceneCamera.hpp>\n";
     }
     std::string passOut, failOut;
-    CHECK(ShowIncludes(passTu, block.substr(0, split), block.substr(split + 1), passOut) == 0);
-    CHECK(passOut.find("Registry.hpp") == std::string::npos);
-    ShowIncludes(failTu, block.substr(0, split), block.substr(split + 1), failOut);
-    CHECK(failOut.find("Registry.hpp") != std::string::npos);
+    CHECK(ShowIncludes(tool, passTu, passOut) == 0);
+    CHECK_FALSE(RegistryHit(passOut));
+    ShowIncludes(tool, failTu, failOut);
+    CHECK(RegistryHit(failOut));
     std::filesystem::remove(passTu);
     std::filesystem::remove(failTu);
 }
 ```
 
-Host gate, same file. Parse each named function by brace depth from its signature to the next function at the same depth. Fail if the body contains `CreateView`, `GetComponent`, `GetResource`, `InspectEntity`, `ActiveSceneCamera`, `ActivePerspectiveSceneCamera`, `CollectPickables`, `PrepareSceneForRender`, `BuildVisibleSet`, or `GpuSceneSync`.
-
-Allow-list, and only these two sites: a line that calls `GpuSceneInvalidate` inside `RuntimeFrame.cpp`'s `RenderGraph` (the call at `:756`), and the `PickPassIdOf` loop inside `ArmGraphViewportFrame` (the loop that was at `:2177-2181`). Exempt the line, not the whole function. `CVarRegistry` is not a hit: the scanner matches `GetResource<` / `CreateView<` / `Astra::` call tokens, and `Settings<` is not one of them.
-
-Named functions and files:
-
-| Function | File |
-|---|---|
-| `RenderGraph` | `ArcaneRuntime/src/RuntimeFrame.cpp` |
-| `EditorApp::RefreshSceneResolution` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
-| `EditorApp::RenderSceneToViewport` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
-| `EditorApp::SubmitSceneToBatcher` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
-| `EditorApp::ArmGraphViewportFrame` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
-| `MaterialPreviewHarvester::Impl::Harvest` | `ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp` |
-| `ShaderEditorDocument::RenderGraphPreview` | `ArcaneEditor/src/Documents/ShaderEditorDocument.cpp` |
+Host gate, same file:
 
 ```cpp
 static std::string FunctionBody(const std::string& text, const std::string& signature)
@@ -2062,6 +3500,17 @@ static std::string FunctionBody(const std::string& text, const std::string& sign
     return {};
 }
 
+static std::string Strip(std::string row, const char* token)
+{
+    for (;;)
+    {
+        const std::size_t at = row.find(token);
+        if (at == std::string::npos)
+            return row;
+        row.erase(at, std::char_traits<char>::length(token));
+    }
+}
+
 static int HostGateHits(const std::string& text, const std::string& signature)
 {
     const std::string body = FunctionBody(text, signature);
@@ -2071,51 +3520,45 @@ static int HostGateHits(const std::string& text, const std::string& signature)
         "ActiveSceneCamera", "ActivePerspectiveSceneCamera", "CollectPickables",
         "PrepareSceneForRender", "BuildVisibleSet", "GpuSceneSync"
     };
+    const bool stripInvalidate = signature == "RenderGraph("
+        || signature == "EditorApp::RenderSceneToViewport(";
+    const bool stripPick = signature == "EditorApp::ArmGraphViewportFrame(";
     int hits = 0;
     std::size_t line = 0;
     while (line < body.size())
     {
         const std::size_t end = body.find('\n', line);
-        const std::string row = body.substr(line, (end == std::string::npos ? body.size() : end) - line);
-        const bool exempt = row.find("GpuSceneInvalidate") != std::string::npos
-                         || row.find("PickPassIdOf") != std::string::npos;
-        if (!exempt)
-            for (const char* token : tokens)
-                if (row.find(token) != std::string::npos)
-                    ++hits;
+        std::string row = body.substr(line, (end == std::string::npos ? body.size() : end) - line);
+        if (stripInvalidate) row = Strip(row, "GpuSceneInvalidate");
+        if (stripPick) row = Strip(row, "PickPassIdOf");
+        for (const char* token : tokens)
+            if (row.find(token) != std::string::npos)
+                ++hits;
         if (end == std::string::npos) break;
         line = end + 1;
     }
     return hits;
 }
 
-TEST_CASE("a planted CreateView in a builder body fails the host gate", "[registry-gate]")
+TEST_CASE("stripping a call name does not exempt the rest of the line", "[registry-gate]")
 {
-    const std::string sample =
-        "void EditorApp::SubmitSceneToBatcher(Arcane::Batcher2D& b)\n"
-        "{\n"
-        "    reg.CreateView<const Arcane::Transform>();\n"
-        "}\n"
-        "void EditorApp::Next()\n{\n}\n";
-    CHECK(HostGateHits(sample, "EditorApp::SubmitSceneToBatcher") == 1);
-    const std::string allowed =
+    const std::string mixed =
+        "void RenderGraph()\n{\n    GpuSceneInvalidate(reg); reg.CreateView<const Arcane::Transform>();\n}\nvoid Next(){}\n";
+    CHECK(HostGateHits(mixed, "RenderGraph(") == 1);
+    const std::string only =
         "void RenderGraph()\n{\n    GpuSceneInvalidate(reg);\n}\nvoid Next(){}\n";
-    CHECK(HostGateHits(allowed, "RenderGraph") == 0);
+    CHECK(HostGateHits(only, "RenderGraph(") == 0);
+    const std::string pick =
+        "void EditorApp::ArmGraphViewportFrame()\n{\n    PickPassIdOf(e); reg.GetComponent<Arcane::Transform>(e);\n}\nvoid Next(){}\n";
+    CHECK(HostGateHits(pick, "EditorApp::ArmGraphViewportFrame(") == 1);
 }
 
 TEST_CASE("named frame builders do not read the registry", "[registry-gate]")
 {
-    auto read = [](const char* rel) {
-        std::ifstream in(Arcane::Test::RepoRoot() / rel);
-        REQUIRE(in.good());
-        std::ostringstream ss;
-        ss << in.rdbuf();
-        return ss.str();
-    };
-    const std::string runtime = read("ArcaneRuntime/src/RuntimeFrame.cpp");
-    const std::string editor = read("ArcaneEditor/src/App/EditorAppFrame.cpp");
-    const std::string harvest = read("ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp");
-    const std::string preview = read("ArcaneEditor/src/Documents/ShaderEditorDocument.cpp");
+    const std::string runtime = ReadAll(Arcane::Test::RepoRoot() / "ArcaneRuntime/src/RuntimeFrame.cpp");
+    const std::string editor = ReadAll(Arcane::Test::RepoRoot() / "ArcaneEditor/src/App/EditorAppFrame.cpp");
+    const std::string harvest = ReadAll(Arcane::Test::RepoRoot() / "ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp");
+    const std::string preview = ReadAll(Arcane::Test::RepoRoot() / "ArcaneEditor/src/Documents/ShaderEditorDocument.cpp");
     CHECK(HostGateHits(runtime, "RenderGraph(") == 0);
     CHECK(HostGateHits(editor, "EditorApp::RefreshSceneResolution(") == 0);
     CHECK(HostGateHits(editor, "EditorApp::RenderSceneToViewport(") == 0);
@@ -2137,46 +3580,33 @@ Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "[registry-gate]"
 ```
 
-Expected on the first run, if any non-extract TU still includes the registry: FAIL, and the `INFO` names the file. A raw `#include` grep is not the assertion; the planted `SceneCamera.hpp` case is what proves a transitive include fails.
+Expected: PASS. `ExtractFrame.cpp` is the one `Astra/Registry/Registry.hpp` hit. The planted `SceneCamera.hpp` TU still reports that path. The planted mixed `GpuSceneInvalidate` + `CreateView` line reports one hit. The cwd of this command is the exe dir; `ResolveCl` is what finds the compiler.
 
-- [ ] **Step 3: Split any TU the gate names.**
+If a `.cpp` outside the table is the failure, stop. The table is the closed set. Do not add an allow-list entry, and do not add a step whose file is chosen by the compiler output.
 
-For each failing TU other than `ExtractFrame.cpp`: move the registry read into `ExtractFrame.cpp` (it is one of the section 4.2 reads Task 5 missed) or, when the include is only transitive, replace it with the registry-free header (`VisibleSet.hpp`, `DepthConvention.hpp`, `GridSceneDesc.hpp`, `PostChainDesc.hpp`). Do not add an allowlist entry. `Nri/` has no allowlist entry. Then re-run the gate. The case is green only when `ExtractFrame.cpp` is the one hit and the planted `SceneCamera.hpp` TU still fails.
-
-- [ ] **Step 4: Run `[registry-gate]` again.**
-
-```powershell
-Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
-.\ArcaneTests.exe "[registry-gate]"
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit.**
+- [ ] **Step 3: Commit.**
 
 ```powershell
 git add ArcaneTests/src/RenderRegistryIncludeTest.cpp
 git commit -m "test(render): showIncludes and host frame-builder gates" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 ```
 
-If Step 3 edited product files, add those paths too. Do not add an unrelated file.
+If a file named in the table still had to change for the gate to pass, add that path too. Do not add an unrelated file.
 
 ---
 
-### Task 7: Section 7.1 golden gate
+### Task 13: Section 7.1 golden gate
 
 **Files:**
-- Modify: only the blessed PNGs the grid/overlay class actually moves, under `ReferenceProject/Verify/References/` (and `vulkan/` for a backend-split lane, which these editor lanes are not). World lanes are not blessed.
+- Modify: only the blessed PNGs the grid/overlay class actually moves, under `ReferenceProject/Verify/References/`. World lanes are not blessed.
 
 **Interfaces:**
-- Consumes: the frame from Tasks 1–6. `scripts/golden-gate.ps1` lanes (`:345-394`): `runtime-scene` and `f3-cull-blend` (backend-split; `--scene 7e5a0030-0030-4030-8030-000000000030` for f3), `editor-ui`, `editor-ui-perspective` (`--view-mode perspective`), `editor-input-doc`, `editor-asset-page`, `editor-material-page`. The gate does not rebuild the engine. Comparator success is `diffCount == 0`.
+- Consumes: the frame from Tasks 1–12. `scripts/golden-gate.ps1` lanes (`:345-393`): `runtime-scene` and `f3-cull-blend` (backend-split; `--scene 7e5a0030-0030-4030-8030-000000000030` for f3), `editor-ui`, `editor-ui-perspective` (`--view-mode perspective`), `editor-input-doc`, `editor-asset-page`, `editor-material-page`. The gate does not rebuild the engine. Comparator success is `diffCount == 0`.
 - Produces: a green Debug gate and a green Release gate, a Debug game DLL in the slot, and a commit whose message contains the re-bless note below.
 
-- [ ] **Step 1: Write the failing check as the gate itself.**
+- [ ] **Step 1: Run the Debug gate.**
 
-There is no new Catch2 case. The gate is the check, and it fails on `editor-ui` / `editor-ui-perspective` until the explained bless. World lanes must already pass.
-
-Build Debug in the required order. `arcbuild.exe` exists from Task 1's engine build.
+`arcbuild.exe` exists from the Debug engine build in Task 1.
 
 ```powershell
 $env:CL = '/FS'
@@ -2188,17 +3618,17 @@ Set-Location D:\dev\starworks\Arcane-f5
 powershell -File scripts\golden-gate.ps1 -Configuration Debug
 ```
 
-Expected: `runtime-scene` and `f3-cull-blend` report `diffCount == 0` on both backends. `editor-ui` and `editor-ui-perspective` report a diff on the grid (and on physics-debug or camera-rect pixels if the frame contains them). Open the diff images the gate writes and confirm the changed pixels are that class. A world sprite or world mesh pixel in the diff is a stop: fix the earlier task, do not bless it. A gizmo pixel in the diff is a stop: Task 3 ran ACES on a display-referred colour; fix Task 3, do not bless the gizmo away.
+Expected: `runtime-scene` and `f3-cull-blend` report `diffCount == 0` on both backends. `editor-ui` and `editor-ui-perspective` report a diff on the grid, and on physics-debug or camera-rect pixels when the frame contains them. Open the diff images the gate writes and confirm the changed pixels are that class. A world sprite or world mesh pixel in the diff stops the task: fix the earlier task, and leave the PNG blessed as it was. A gizmo pixel in the diff stops the task: a display-referred gizmo colour went through ACES. Fix that path and leave the gizmo PNG blessed as it was.
 
-`editor-input-doc` and `editor-material-page` cover the viewport with a document tab. They are not pre-authorized for a bless. If their `diffCount` is 0, leave them. If a pixel moved and the diff image is the same grid/overlay class, it may be blessed with the same note. If the diff is anything else, stop.
+`editor-input-doc` and `editor-material-page` cover the viewport with a document tab. They have no pre-authorized bless. If their `diffCount` is 0, leave them. If a pixel moved and the diff image is the same grid/overlay class, it may be blessed with the same note. Any other diff stops the task.
 
-`editor-asset-page` leaves the viewport visible. A grid diff there is the same class. A mesh-thumbnail or HUD diff is a stop.
+`editor-asset-page` leaves the viewport visible. A grid diff there is the same class. A mesh-thumbnail or HUD diff stops the task.
 
 Do not bless `inprocess-lit-cube`. If `ARCANE_THUMBS` images moved, stop.
 
 - [ ] **Step 2: Re-bless the grid/overlay class from the staged slot, then copy back.**
 
-From the host exe directory so `--project` resolves to the staged tree (the gate's own working directory for that host). One dx12 bless covers a shared slot. `editor-ui` and `editor-ui-perspective` are shared (`golden-gate.ps1:347-354`).
+From the host exe directory so `--project` resolves to the staged tree. One dx12 bless covers a shared slot. `editor-ui` and `editor-ui-perspective` are shared (`golden-gate.ps1:347-354`).
 
 ```powershell
 Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneEditor
@@ -2216,9 +3646,9 @@ Copy-Item "$staged\Verify\References\editor-ui-perspective.png" "$src\Verify\Ref
 git -C D:\dev\starworks\Arcane-f5 status --short -- ReferenceProject/Verify/References
 ```
 
-`git status` must list those PNGs. If the bless wrote under a `vulkan\` directory for a shared lane, that write is the wrong slot; shared lanes bless the file at `References\<name>.png` only. Do not copy a vulkan overwrite onto the shared file.
+`git status` lists those PNGs. A bless that wrote a shared lane under `vulkan\` is the wrong slot. Shared lanes bless `References\<name>.png` only. Leave that vulkan file out of the copy.
 
-- [ ] **Step 3: Re-run the Debug gate, then Release, then put the slot back on Debug.**
+- [ ] **Step 3: Re-run Debug, then Release, then put the slot back on Debug.**
 
 ```powershell
 Set-Location D:\dev\starworks\Arcane-f5
@@ -2227,7 +3657,7 @@ powershell -File scripts\golden-gate.ps1 -Configuration Debug
 
 Expected: every lane `diffCount == 0`, both backends.
 
-Release, with no second bless. `rebuild` because the slot was Debug:
+Release, with no second bless:
 
 ```powershell
 $env:CL = '/FS'
@@ -2240,22 +3670,22 @@ powershell -File scripts\golden-gate.ps1 -Configuration Release
 
 Expected: PASS with no bless. World lanes still `diffCount == 0`. Editor lanes match the PNGs blessed in Debug.
 
-End on a Debug game DLL:
+End on a Debug game DLL. Use whichever `arcbuild.exe` exists after the Release engine build:
 
 ```powershell
 & "D:\dev\starworks\Arcane-f5\bin\Release-windows-x86_64-md\arcbuild\arcbuild.exe" rebuild --project ReferenceProject --config Debug --sdk D:\dev\starworks\Arcane-f5
 ```
 
-Use whichever `arcbuild.exe` exists; the Release one is present after the Release engine build. Do not msbuild Release again after this. The slot `ReferenceProject\Binaries\ReferenceGame.dll` is the Debug CRT.
+Do not msbuild Release again after this. The slot `ReferenceProject\Binaries\ReferenceGame.dll` is the Debug CRT.
 
-Also run the witness that pins `f3-cull-blend` counts, from the Debug exe dir:
+Also run the witness that pins `f3-cull-blend` counts, from the Debug exe dir, after a Debug engine rebuild if the Debug test exe is older than the Release engine just built (game module first, then `Arcane.slnx` Debug):
 
 ```powershell
 Set-Location D:\dev\starworks\Arcane-f5\bin\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "[witness]"
 ```
 
-`W5` stays `diffCount == 0` (`WitnessScenariosTest.cpp`, the f3 case). If the Debug test exe is stale relative to the Release engine just built, rebuild the Debug engine *after* the Debug `arcbuild rebuild` (game module first, then `Arcane.slnx` Debug) and re-run `[witness]`. That restage copies the Debug DLL beside the Debug hosts and is the configuration this task ends on.
+`W5` stays `diffCount == 0`.
 
 - [ ] **Step 4: Commit the PNGs and the note.**
 
@@ -2279,17 +3709,18 @@ If a lane did not change, it will not appear in `git status`. Add only the PNGs 
 | Spec | Task |
 |---|---|
 | 8.1 declarative clear on `batch2d`, `mesh` loads colour, depth clears to the convention, `CmdClearAttachments` gone for those two planes | 1, 2 |
-| 8.1 world-node order unchanged; sprites stay in `batch2d`; meshes stay in the mesh pass | 2, 5, 7 |
-| 8.1 overlay after tonemap; 3D grid folds in; screen UI after the overlay | 3 |
-| 8.1 extract + packet; section 4.2 reads move; 4.3 and 4.4 gates | 4, 5, 6 |
-| 8.1 non-rendering hosts skip extract; headless runtime runs it | 5 |
+| 8.1 world-node order unchanged; sprites stay in `batch2d`; meshes stay in the mesh pass | 2, 5, 6, 13 |
+| 8.1 overlay after tonemap; 3D grid folds in; screen UI after the overlay | 3, 9 |
+| 8.1 extract + packet; section 4.2 reads move; 4.3 and 4.4 gates | 4, 5, 6, 7, 8, 9, 10, 12 |
+| 8.1 `Arcane::Runtime` and ArcaneServer skip extract; `RuntimeApp --headless` runs it | 11 |
 | 3.1 depth table, ForwardZ selected, reverse-Z unselected | 1 |
-| 3.1 overlay classes, exposure excluded, empty-chain re-bless is not identity | 3, 7 |
+| 3.1 overlay classes, exposure excluded, empty-chain re-bless is not identity | 3, 9, 13 |
 | 3.1 chrome graph has no world pass and no overlay | 2 |
 | 3.2 G-buffer, lighting, TAA declared and empty. Forward world stays the mesh node. Translucent-world list is plan 3 | 2 |
 | 3.3 render origin field exists and is 0; no rebase | 4, 5 |
-| 3.4 overlay samples world-pass depth; no jitter; missing depth draws unoccluded | 3 |
-| 3.6 plans 1–2 keep today's camera split; hosts stop calling the two sweeps | 5, 6 |
-| 3.7 server skip, headless extract | 5 |
-| 4.1 packet fields, `FramesInFlight()` slots, GPU reads the upload ring | 4, 5 |
-| 7.1 world pixels identical; grid class re-blessed with a written note | 7 |
+| 3.4 overlay samples world-pass depth; missing depth draws unoccluded; perspective grid depth reads `SV_Position.z` | 3 |
+| 3.6 plans 1–2 keep today's camera split; hosts stop calling the two sweeps | 7, 12 |
+| 3.7 server skip; rendering `--headless` runs extract | 11 |
+| 4.1 packet fields, `FramesInFlight()` slots, GPU reads the upload ring | 4, 5, 10 |
+| 4.3 / 4.4 include gate and host frame-builder gate | 12 |
+| 7.1 world pixels identical; grid class re-blessed with a written note | 13 |
