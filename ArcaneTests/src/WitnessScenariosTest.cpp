@@ -304,7 +304,7 @@ TEST_CASE("W4: a dynamic body authored in physics.arcscene falls under the runti
     CHECK(resting["entity"].get<std::string>() == "Crate");       // and landed here
 }
 
-TEST_CASE("W5: a game system sees the Crate land (a dynamic-vs-static contact event) and tints it",
+TEST_CASE("W7: a game system sees the Crate land (a dynamic-vs-static contact event) and tints it",
           "[witness][gpu]")
 {
     // physics.arcscene: the Crate carries ReferenceProject::TintOnContact (red).
