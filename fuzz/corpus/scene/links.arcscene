@@ -1,0 +1,1 @@
+{"version":6,"id":"10d8ff06-45c2-47f2-90cb-ab7ac29cb51d","assets":[],"entities":[{"components":{"Arcane::Transform":null},"parent":-1,"links":[1,2]},{"components":{"Arcane::Identity":{"name":"A","id":{"hi":1,"lo":2}}},"parent":0,"links":[0,2,7,-1]},{"components":{"Arcane::Hidden":null},"parent":1,"links":[]}]}
