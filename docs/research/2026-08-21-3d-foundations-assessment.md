@@ -308,8 +308,8 @@ Two coupled changes, as written on 2026-08-21:
    `NriGraphContext.cpp:1123-1163` does not describe a clear.) This is how both
    D3D12 and Vulkan want it expressed, and it is faster on tiled hardware.
 2. **One world pass with a shared depth buffer** that 3D geometry and 2D world
-   content both sort into. That bridge is what the 2026-10-09 spec replaces:
-   sprites are world quads drawn through the 3D path.
+   content both sort into.
+   Clarification: this item is not the design. Sprites are drawn through the 3D path (`docs/superpowers/specs/2026-10-09-f5-unified-world-pipeline-design.md`).
 
 Until (1) exists, node ordering is forced: anything declared before `batch2d` is
 erased by its clear, and anything after composites on top. That is why 3D

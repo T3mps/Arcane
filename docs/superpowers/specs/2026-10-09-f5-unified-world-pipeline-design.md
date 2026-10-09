@@ -1,18 +1,18 @@
 # F5 unified world pipeline — design
 
 **Date:** 2026-10-09
-**Status:** APPROVED design 2026-10-09 (user). Plans are not yet written.
+**Status:** APPROVED design 2026-10-09 (user). Review round 1 (C1–C6) incorporated. Plans are not yet written.
 **Branch measured:** `feat/f5-unified-world` at `7e6f8881` (off `main`). Line citations below were re-read in this tree.
 **Roadmap:** the F-series foundation that precedes D17 and D1 (`docs/superpowers/specs/2026-10-05-arcane-1.0-roadmap.md`).
 **ABI:** `kGamePluginABIVersion` is 54 (`ArcaneCore/src/Arcane/Plugin/PluginABI.hpp:1131`). Any bump is numbered against `main` at execution, not in this spec.
 
-Binding rulings: Q1–Q7 and the adopted outside-review amendments (section 12). Material direction of 2026-10-02, with its exclusion of parts 3–4 superseded: F5 does all of it. Facts measured 2026-10-09, re-verified here before citation.
+Binding rulings: Q1–Q7, the adopted outside-review amendments, and review round 1 rulings C1–C6 (section 12). Material direction of 2026-10-02, with its exclusion of parts 3–4 superseded: F5 does all of it. Facts measured 2026-10-09, re-verified here before citation.
 
 ---
 
 ## 0. Status
 
-Approved design, 2026-10-09, by the user. Sections 1–4 of the design discussion, the adopted amendments, and Q7 are closed. This document is that design. No plan has been written from it, and no product code lands with it.
+Approved design, 2026-10-09, by the user. Sections 1–4 of the design discussion, the adopted amendments, and Q7 are closed. Review round 1 rulings C1–C6 are part of that design. No plan has been written from it, and no product code lands with it.
 
 Roadmap placement. D1 is the render foundation (clustered deferred, GGX, shadows, GTAO, TAA, the upscaler, and the Surface domain as a finished lighting model). D17 is large-world precision (64-bit positions, camera-relative rendering, origin rebasing). D3 is the render thread. F5 is the F-series foundation those rows attach to: one world pipeline, one material contract, one extract door, the deferred pass slots declared, and the TAA inputs reserved. D1, D17, and D3 each get built once, on this path.
 
@@ -173,7 +173,9 @@ extract (game thread)
   -> screen UI           game HUD, pick/outline, host ImGui
 ```
 
-The world pass is one raster pass with one depth target. Its colour load-op clears the canvas to `render.clearColor`. Its depth load-op clears to `1.0`. `CmdClearAttachments` is gone for those two planes (`Batch2DNode.cpp:1405` and `MeshNode.cpp:957` are the calls that die). The graph gains a per-attachment load op and clear value; the seam documented at `NriGraphContext.cpp:1235-1252` is the one this closes. Pick's own targets (`PickOutlineNodes.cpp:400`) may use the same load op in the same plan. Their pixels stay as they are.
+This diagram is the end state. Plan 3 is the frame that has one world raster pass with the sprites in it. Plan 1's graph is the arrangement in section 8.1: the same node order as today, the declarative clear on the first world node, sprites still in `batch2d`.
+
+The end-state world pass is one raster pass with one depth target. Its colour load-op clears the canvas to `render.clearColor`. Its depth load-op clears to `1.0`. `CmdClearAttachments` is gone for those two planes (`Batch2DNode.cpp:1405` and `MeshNode.cpp:957` are the calls that die). The graph gains a per-attachment load op and clear value; the seam documented at `NriGraphContext.cpp:1235-1252` is the one this closes. Pick's own targets (`PickOutlineNodes.cpp:400`) may use the same load op in the same plan. Their pixels stay as they are.
 
 Draw order inside the world pass:
 
@@ -185,7 +187,7 @@ Step 3 is what Q7 means by "later 3D transparents and particles occlude correctl
 
 The mesh row stays the 240-byte `GpuInstance`. Sprite rows are a second struct in the same GPU scene (section 6). They are coarse-culled by the same `VisibleSet` and then CPU-sorted. They do not enter `mesh-cull`'s indirect batches: an indirect batch grouped by mesh cannot express the key order. `mesh-cull` stays the opaque/masked mesh path.
 
-Post and tonemap read scene colour and do not read or write the world depth. The depth transient's lifetime extends through the overlay. The overlay samples it as a texture. The overlay's target is the tonemap target (display-referred), so overlay primitives are display-referred when they land: each one is passed through the tonemap operator alone, and never through the post chain. A frame whose post chain is empty therefore keeps today's grid colour. A frame whose post chain is not empty keeps today's scene colour and stops grading the grid. That is the bug named in Q4.
+Post and tonemap read scene colour and do not read or write the world depth. The depth transient's lifetime extends through the overlay. The overlay samples it as a texture. The overlay's target is the tonemap target (display-referred), so overlay primitives are display-referred when they land: each one is passed through the tonemap operator alone, and never through the post chain. Scene colour still goes through the post chain and then the tonemap. A post chain therefore grades the world and does not grade the grid. That is the bug named in Q4. Moving the grid from a blend into linear scene colour, before the nonlinear tonemap, to a blend after that tonemap changes the grid's pixels even when the post chain is empty (C3). That move is an explained re-bless, not a pixel-identity claim. The witness in section 7.1 pins the bug: the same grid pixel with a post chain and without one is equal.
 
 Overlay primitive classes:
 
@@ -249,18 +251,34 @@ Unreal's Paper2D is the precedent for "a sprite is a mesh-pipeline primitive und
 
 ### 3.6 One world view
 
-One graph has one world view and one depth. Selection:
+One frame, one camera (C5). The world pass renders with that camera and one depth. A camera that is not the world view is not drawn into that graph.
 
-- **Editor Edit.** The editor camera, 2D or Persp. Sprites and meshes already share it (`EditorAppFrame.cpp:1685-1688`).
-- **Runtime and Editor Play.** The active orthographic scene camera when one exists (the camera `PushSceneCamera` already installs, `RuntimeApp.cpp:856-861`). Otherwise the first active perspective camera.
+One function replaces the frame's use of `ActiveSceneCamera` and `ActivePerspectiveSceneCamera`. Precedence, first match wins:
 
-A perspective camera that is not the world view is not drawn into that graph. Edit + Persp still looks through the editor camera, which is unchanged.
+1. **Editor Edit.** The editor camera, 2D or Persp. Scene cameras are not consulted. Sprites and meshes already share this camera (`EditorAppFrame.cpp:1685-1688`).
+2. **Runtime and Editor Play.** The active scene camera with `Camera::primary == true`. If more than one active camera is marked primary, the first in the registry walk wins and the others are not drawn. Extract warns once.
+3. **No primary.** The first active orthographic camera, which is the sweep `ActiveSceneCamera` does today (`SceneCamera.hpp:57-112`, installed by `PushSceneCamera` at `RuntimeApp.cpp:856-861`).
+4. **No active orthographic camera.** The first active perspective camera, which is the sweep `ActivePerspectiveSceneCamera` does today (`SceneCamera.hpp:206`).
+5. **No active camera.** No world view. The frame does not invent one.
 
-Consequences, both of them plan 3, neither of them plan 1 or 2:
+`Camera` gains `bool primary`, default `false`, a reflected field. A scene authored before the field loads with every camera not primary and hits step 3 or 4, which is today's split collapsed into one winner. The ABI bump is numbered at execution, in plan 3, the plan that reads the field.
 
-- Aphelyon's scene has only the orthographic camera. Its picture stays on that camera (Q1).
-- `f3_cull_blend.arcscene` also has an active orthographic camera, and its witnessed picture is the perspective one. Plan 3 deactivates that orthographic camera in the fixture, so the rule above falls through to the perspective camera and the cull/blend picture stays the perspective picture. Plans 1 and 2 do not edit the scene and do not change camera selection, so the lane stays pixel-identical until that edit. The edit is an explained diff only if a pixel moves; deactivating an orthographic camera that the mesh pass does not use should move none.
-- `main.arcscene` keeps its orthographic camera as the world view. Its perspective meshes join that view and the shared depth in plan 3. `runtime-scene` is re-blessed then, with that sentence as the note. Plans 1 and 2 still draw those meshes with `ActivePerspectiveSceneCamera`, so the golden does not move early.
+Plans 1 and 2 do not change which camera draws. The host frame builders stop calling `ActiveSceneCamera` and `ActivePerspectiveSceneCamera` in plan 1 (section 4.4). Extract calls them, and through plan 2 it still applies today's split: sprites on the orthographic camera, meshes on the perspective camera. Plan 3 is when extract switches to the precedence above.
+
+An orthographic world view is `Ortho2DView` (`RenderViewSettings.hpp:33-36`). Its near is `-render.ortho2D.depthRange` and its far is `+render.ortho2D.depthRange` (`RenderViewSettings.hpp:21`). The default range is 1000 m either side of Z = 0. Content outside that slab is clipped. That is already how sprites are clipped. A mesh drawn through an orthographic world view uses the same near and far. There is no second slab for meshes. The editor's 2D camera already builds its view through `Ortho2DView`, so Edit + 2D uses the same slab.
+
+`main.arcscene` (the `runtime-scene` golden) relies on two cameras today. Entity "Scene" (`:12-18`) is active orthographic, `orthographicSize` 2, and `ActiveSceneCamera` draws the sprites through it. Entity "PerspectiveCamera" (`:292-298`) is active perspective, eye at z = 5, fovY 50, near 0.05, far 500, and `ActivePerspectiveSceneCamera` draws the two `MeshRenderer`s through it. The golden is that composite.
+
+Plan 3 makes the scene's intent explicit. "Scene" gets `primary: true`. "PerspectiveCamera" stays active and is not primary, so it is not drawn. What changes in `runtime-scene`, and only in plan 3:
+
+- Sprites stay on the orthographic camera. Their framing does not change.
+- The two meshes leave the perspective lens and are drawn with that orthographic view: center at the Scene entity's XY, half-height 2 m, near and far ±`render.ortho2D.depthRange` (default ±1000). Perspective foreshortening is gone. A mesh whose Z falls outside that slab is clipped, the same rule a sprite already has.
+
+That is an explained re-bless of `runtime-scene` on both backends, required in plan 3. Plans 1 and 2 still draw those meshes with `ActivePerspectiveSceneCamera`, so the golden does not move then.
+
+`f3_cull_blend.arcscene` also has both cameras active. Its witnessed picture is the perspective camera (`:66-72`, eye at z = 7). Plan 3 sets that camera `primary: true`. The orthographic camera (`:27-33`) stays active and is not the world view. Selecting the same perspective camera should move no pixel. An explained re-bless of `f3-cull-blend` is required only if a pixel does move. Plans 1 and 2 do not edit the scene.
+
+Aphelyon's scene has one active orthographic camera and no second camera. Step 3 selects it. Its picture stays (Q1). Plan 3 does not edit that scene.
 
 `SceneVisibility::views` keeps the ability to hold more than one set (`VisibilitySystem.hpp:88`). F5 fills one. Further views are the multi-view seam (section 9).
 
@@ -287,7 +305,7 @@ The packet carries:
 | Sprite rows | Section 6. Empty in plans 1 and 2; the packet still carries the drained world quads those plans record through `Batcher2D`, so the pixels do not move. |
 | Visibility | The `VisibleSet` for the world view. |
 | Overlay primitives | 2D grid lines, 3D grid description, physics-debug lines, camera-rect lines, gizmo lines. Each primitive has a flag: depth-tested or always-on-top. |
-| Pick drawables | The `PickDrawable` span `CollectPickables` builds today. |
+| Pick drawables | The `PickDrawable` span `CollectPickables` builds today. Each sprite drawable carries the section 6.1 key (C2). |
 | Post, tonemap inputs, UI | The post-chain bytes, the ImGui draw data, the pick selection. These are already snapshots; extract is where they enter the packet. |
 | Light | The default directional light `RuntimeFrame.cpp:676-681` already resolves. No light component is added. |
 
@@ -313,9 +331,31 @@ These are the render-related registry reads in this tree. Each one moves into th
 
 ### 4.3 The include test
 
-A Catch2 test walks the sources under `ArcaneClient/src/Arcane/Render/` and fails if a file other than the extract translation unit includes `Astra/Registry/Registry.hpp` or names `Astra::Registry`. `ArcaneClient/src/Arcane/Render/Nri/` has no allowlist entry: a node that grows a registry include fails the test. The extract TU is the one allowlisted file. The test is the gate that the list in section 4.2 stays moved.
+A Catch2 test walks the sources under `ArcaneClient/src/Arcane/Render/` and fails if a file other than the extract translation unit includes `Astra/Registry/Registry.hpp` or names `Astra::Registry`. `ArcaneClient/src/Arcane/Render/Nri/` has no allowlist entry: a node that grows a registry include fails the test. The extract TU is the one allowlisted file. The test is the gate that the list in section 4.2 stays moved inside `ArcaneClient`.
 
-Hosts (the editor, the runtime) may include the registry for gameplay. They do not, after this move, walk `SpriteRenderer`, `MeshRenderer`, `WorldBounds`, or `Camera` in order to build a frame. They call extract.
+### 4.4 The host frame-builder gate
+
+The include test does not see the hosts (C1). Frame-building code obtains render data only through the extract API. A second gate, a Catch2 test or a scripted source check, fails if any named frame builder below reads the Astra registry for render data: a `CreateView`, `GetComponent`, `GetResource`, or `InspectEntity` on that registry, or a call to `ActiveSceneCamera`, `ActivePerspectiveSceneCamera`, `CollectPickables`, `PrepareSceneForRender`, `BuildVisibleSet`, or `GpuSceneSync`.
+
+Named frame builders:
+
+| Function | File |
+|---|---|
+| `RenderGraph` | `ArcaneRuntime/src/RuntimeFrame.cpp` |
+| `EditorApp::RenderSceneToViewport` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
+| `EditorApp::SubmitSceneToBatcher` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
+| `EditorApp::ArmGraphViewportFrame` | `ArcaneEditor/src/App/EditorAppFrame.cpp` |
+| `MaterialPreviewHarvester` harvest (`Impl::Harvest`) | `ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp` |
+| `ShaderEditorDocument::RenderGraphPreview` | `ArcaneEditor/src/Documents/ShaderEditorDocument.cpp` |
+
+The thumbnail harvest and the shader-editor preview are the frame builders `EditorApp::PumpEditorDocuments` reaches (`EditorAppFrame.cpp:2284-2286`). Their bodies are not in `EditorAppFrame.cpp`. The gate names them anyway, because a registry read that builds their picture is the same hole.
+
+Allow-list, and nothing else inside those functions:
+
+- `GpuSceneInvalidate` in `RenderGraph`, after the frame outcome is not Presented (`RuntimeFrame.cpp:756`). It bumps the mirror generation so the next extract restages. It does not read components to build the picture.
+- Mapping the editor selection onto pick ids already in the packet (`ArmGraphViewportFrame`, the loop at `EditorAppFrame.cpp:2177-2181`). The selection is editor state. The drawables came from extract.
+
+Reads outside those functions stay legal. Gizmo transform edits, the outliner, clipboard, scene save, and gameplay `Update` are not frame builders. `CVarRegistry` is not the Astra registry. A new frame builder is added to the table in the same change that adds the function.
 
 ---
 
@@ -393,6 +433,20 @@ Lit means Lambert from BaseColor, as above. It does not read Metallic, Specular,
 
 The material editor gains domain, shading model, and blend mode as three controls. An instance does not show domain. A domain switch keeps every node, marks the ones that do not fit, and greys the pins that do not apply. The mesh-material page, which today says the material is not compiled (`golden-gate.ps1:369-371`), compiles the Surface template from plan 2 on. Its golden is re-blessed only with that explained diff, in plan 2, if the compiled preview is part of the picture; the page's job in plan 2 is to show the same pixels the six shaders produced.
 
+### 5.7 Previews
+
+Plan 2 owns this contract (C4). Material thumbnails (`MaterialPreviewHarvester::Impl::Harvest`, `MaterialPreviewHarvester.cpp:1137`) and shader-editor previews (`ShaderEditorDocument::RenderGraphPreview`, `ShaderEditorDocument.cpp:1662`) each render in their own offscreen graph.
+
+A sprite-surface preview is one sprite GPU-scene row through the Surface sprite vertex factory, in that graph's world pass, before post and before tonemap. That is where today's `QuadMaterial` sits (`MaterialPreviewHarvester.cpp:1191`, `ShaderEditorDocument.cpp:1714`). One row, Unlit Translucent unless the material says otherwise, the sprite factory's UV covering the quad.
+
+The checkerboard stays a world quad in that same world pass, drawn before the sprite row. It is not an overlay primitive and it is not a `SpriteRenderer`. Today's harvest paints the checkerboard and the quad into one linear canvas, and a fullscreen material's post chain samples that canvas as `kSceneInput` (`MaterialPreviewHarvester.cpp:1154-1158`, `ShaderEditorDocument.cpp:1699-1700`). A world quad keeps both in scene colour, so the preview's post chain and the tonemap see the composite they see today. An overlay checkerboard would blend after the nonlinear tonemap, which is a different picture (the difference C3 names for the grid).
+
+Mesh-surface previews stay the lit sphere they already draw through the mesh path, in the same world pass. Fullscreen materials stay a post chain over the checkerboard canvas.
+
+Invalidation is the existing preview cache. `MaterialPreviewHarvester::Invalidate` (`MaterialPreviewHarvester.cpp:532`) drops the refusal memo and re-queues a harvest, and keeps serving the last-good thumbnail until the new one lands. Plan 2 calls that `Invalidate` when a sprite material is recompiled. The shader-editor preview rebuilds on the same recompilation, through the document's existing rebuild into `RenderGraphPreview`.
+
+Witness, plan 2: recompile a sprite material and its thumbnail changes to the recompiled shader. The last-good image is not left in place after the harvest lands.
+
 ---
 
 ## 6. Sprites in the world
@@ -436,11 +490,19 @@ Sprite pipelines use `CompareOp::LESS_EQUAL` against the depth meshes wrote in s
 
 Circle and capsule stay. They are sprite-factory shapes (section 5.3), Unlit, Translucent, in the same sorted list. Dropping them would fail parity for any scene that uses them to match a collider.
 
-### 6.3 What Batcher2D keeps
+### 6.3 Picking
 
-After plan 3, `Batcher2D` records overlay primitives and screen-space work: the 2D grid lines, physics debug, the camera rect, preview checkerboards, preview quads, and the glyph API. It does not record `SpriteRenderer`. `QuadWorld` / `CircleWorld` for world sprites are gone. The screen `Quad` / `Rect` / `Line` / `Glyph` API stays.
+Picking follows the same key (C2). Today `CollectPickables` emits sprites in registry iteration order (`PickEmit.cpp:32`), which is not the key. From plan 3, each sprite pick drawable in the packet carries the section 6.1 key. The pick pass draws sprite ids in that order, first = behind, with `LESS_EQUAL`, the compare the world pass uses for sprites. A later sprite at equal view depth replaces the id. The visually top sprite is the one the id buffer returns.
 
-### 6.4 Reserved row flags
+Meshes in the pick pass keep the depth test the world pass uses for meshes. A sprite that draws over a mesh is the one the pick returns, and a mesh that draws over a sprite is the one the pick returns.
+
+Witness, plan 3, both backends: two overlapping sprites at equal z on different `sortingLayer` values, and the hit is the higher layer. The same pair with `sortAxis` `(0, -1, 0)` and different world Y, and the hit is the smaller Y, the one that draws on top.
+
+### 6.4 What Batcher2D keeps
+
+After plan 3, `Batcher2D` records overlay primitives and screen-space work: the 2D grid lines, physics debug, the camera rect, and the glyph API. It does not record `SpriteRenderer`, and it does not record material-preview checkerboards or preview quads (those are section 5.7, plan 2). `QuadWorld` / `CircleWorld` for world sprites are gone. The screen `Quad` / `Rect` / `Line` / `Glyph` API stays.
+
+### 6.5 Reserved row flags
 
 `casts-shadow` on the sprite row, default false. A chunked tilemap row kind is reserved beside the sprite row and the mesh row: no fields are allocated and no shader is compiled. World-space UI, when it exists, is a quad through this same path (a later UI domain, or a Surface quad). It is not built. Screen UI is not that quad.
 
@@ -454,11 +516,11 @@ Goldens are re-blessed only with an explained diff, written in the bless note. A
 
 ### 7.1 Plans 1 and 2 — pixel identity of world content
 
-On both backends, world sprites and world meshes match the existing goldens. The one expected picture change is the editor grid leaving the post chain: grid pixels are identical when the post chain is empty (the overlay tonemaps them on their own, section 3.1), and they do not move when a post chain is added. `editor-ui` and `editor-ui-perspective` carry the boot scene's post process (`main.arcscene:27-31`), so those lanes' grid pixels are an explained re-bless. The 2D grid also leaves the batcher's layer 0, so a grid line that crosses a sprite is part of that same note.
+On both backends, world sprites and world meshes match the existing goldens. The editor grid leaving the linear canvas is an explained re-bless on every grid pixel, including a frame whose post chain is empty (C3): blending the grid into linear scene colour before the nonlinear tonemap differs from running the tonemap operator on the grid alone and blending after it. `editor-ui` and `editor-ui-perspective` carry the boot scene's post process (`main.arcscene:27-31`), so those lanes' grid pixels are part of that same note. The 2D grid also leaves the batcher's layer 0, so a grid line that crosses a sprite is part of the note too.
 
 Physics-debug lines and the camera rect leave the canvas with the grid. If a blessed frame contains them, they are in the same note. The gizmo is already outside the post chain; its pixels stay.
 
-A test pins the bug directly: the same grid pixel with a post chain and without one is equal. World pixels in that test still show the post chain.
+The grid-unaffected-by-post witness pins the bug: the same grid pixel with a post chain and without one is equal. World pixels in that witness still show the post chain. The witness does not claim the empty-chain grid matches today's golden.
 
 Plan 2's extra identity: the default Surface material reproduces the six mesh shaders. `f3-cull-blend` and `W5` stay at `diffCount == 0` on both backends. Lit goldens are not re-blessed in F5. D1 re-blesses them when Lambert becomes GGX.
 
@@ -466,7 +528,7 @@ Plan 2's extra identity: the default Surface material reproduces the six mesh sh
 
 The old world path is deleted only after every one of these has passed.
 
-**Parity.** Every existing 2D scene renders equivalently on the new path and the old path, including ReferenceProject's sprites viewed through the orthographic camera and Aphelyon's one sprite. "Equivalently" means sprite pixels that no mesh occludes match the old batcher, and sprite pixels a mesh occludes match the depth rule in section 6 (a closer opaque or masked mesh hides the sprite; a farther one does not). The two-camera composite in today's `runtime-scene` is not the parity picture: plan 3 re-blesses that golden with the section 3.6 note.
+**Parity.** Every existing 2D scene renders equivalently on the new path and the old path, including ReferenceProject's sprites viewed through the orthographic camera and Aphelyon's one sprite. "Equivalently" means sprite pixels that no mesh occludes match the old batcher, and sprite pixels a mesh occludes match the depth rule in section 6 (a closer opaque or masked mesh hides the sprite; a farther one does not). The two-camera composite in today's `runtime-scene` is not the parity picture: plan 3 re-blesses that golden with the section 3.6 note. A mesh outside the orthographic slab is clipped, which the slab witness below pins.
 
 **Stress scene.** Many sorting layers, Y-sorted overlaps, and mixed masked and translucent sprites at the same z. The picture is checked against a CPU oracle of the key in section 6.1, not against the old batcher (the old key cannot express Y-sort or "masked and translucent at the same z"). Each sprite carries a flat colour so the order is visible.
 
@@ -480,24 +542,34 @@ The old world path is deleted only after every one of these has passed.
 | Sprite occluded by a mesh | A mesh in front hides the sprite; a sprite in front (closer view depth, `LESS_EQUAL`) draws over the mesh. |
 | Lit opt-in sprite | An Unlit sprite and a Lit sprite of the same BaseColor differ by the Lambert term, and the Unlit one matches the default sprite. |
 | Extract include test | Section 4.3. |
+| Host frame-builder gate | Section 4.4. Lands with plan 1, including the preview functions, which already exist and must not grow a registry read. |
 | Overlay depth-tested vs always-on-top | One line behind a mesh is hidden when depth-tested and visible when always-on-top. |
-| Grid unaffected by post | Section 7.1. |
+| Grid unaffected by post | Section 7.1. The empty-chain grid is an explained re-bless, not an identity claim. |
+| Pick follows the key | Section 6.3. Equal z, different layer, the higher layer is picked. Y-sort, the sprite that draws on top is picked. |
+| Ortho slab boundary | A sprite and a mesh just inside `render.ortho2D.depthRange` are drawn; the same drawables just outside are clipped. Plan 3. |
+| Recompiled sprite thumbnail | Section 5.7. Plan 2. |
 | Stress parity | The scene above. |
 | Perf, 50k | The witness above. |
-| Goldens | Plans 1–2 identity; plan 3 explained re-blesses only. Both backends. |
+| Goldens | Plans 1–2: world sprites and world meshes identical; grid (and any overlay that left the canvas) is an explained re-bless. Plan 3: `runtime-scene` explained re-bless required; other diffs only with a note. Both backends. |
 
 ---
 
 ## 8. Phased delivery
 
-Three plans, in this order (Q6). Each plan leaves the tree green on both backends before the next starts. ABI bumps, if a reflected field or a game-visible header changed, are taken in the plan that changes them and numbered against `main` at that time. Known causes: `MaterialSurface` becoming `{Surface, Post}` in a public header, and `Camera::sortAxis`. This branch is ABI 54.
+Three plans, in this order (Q6). Each plan leaves the tree green on both backends before the next starts. ABI bumps, if a reflected field or a game-visible header changed, are taken in the plan that changes them and numbered against `main` at that time. Known causes: `MaterialSurface` becoming `{Surface, Post}` in a public header, `Camera::sortAxis`, and `Camera::primary`. This branch is ABI 54.
 
 ### 8.1 Plan 1 — structure
 
-- Declarative clear on the world colour and the world depth. The mid-pass `CmdClearAttachments` for those planes goes away.
-- The world pass is the mesh pass under that clear. Sprites still reach the GPU through `Batcher2D`. Camera selection is unchanged, so `runtime-scene` and `f3-cull-blend` world pixels stay.
-- Extract and `RenderFramePacket`. The reads in section 4.2 move. The include test lands. The packet's sprite payload is still the batch the batcher drains.
-- The overlay pass after tonemap: 2D grid, 3D grid (GridNode folds in), physics debug, camera rect, gizmo lines. Screen UI stays after it.
+Plan 1 does not merge sprites into the mesh pass (C6). The graph stays two world nodes, in today's order.
+
+- The graph gains a per-attachment load op and clear value (`NriGraphContext.cpp:1235-1252`).
+- The declarative clear is the load-op of the first world node, which is still `batch2d`. Colour loads cleared to `render.clearColor`. `batch2d` stops calling `CmdClearAttachments` (`Batch2DNode.cpp:1405`).
+- `mesh` stays the next node. Its depth load-op clears to `1.0`, and its colour load-op is LOAD, so it does not erase what `batch2d` drew. `MeshNode`'s depth `CmdClearAttachments` (`MeshNode.cpp:957`) goes away.
+- World-node order is unchanged: `batch2d` still precedes `gpuscene-sync` / `mesh-cull` / `mesh`. The Q4 overlay still moves to after tonemap in this plan (the 3D grid leaves its pre-post slot and joins it). That move is the explained grid re-bless, not a change to the order of `batch2d` and `mesh`.
+- World sprites are still `Batcher2D` draws inside `batch2d`. World meshes are still the mesh pass. That is today's order, so world content stays pixel-identical on both backends. Camera selection is unchanged, so `runtime-scene` and `f3-cull-blend` world pixels stay.
+- The single unified world pass, with sprites in it, arrives in plan 3.
+- Extract and `RenderFramePacket`. The reads in section 4.2 move. The include test (section 4.3) and the host frame-builder gate (section 4.4) land. The packet's sprite payload is still the batch the batcher drains.
+- The overlay pass after tonemap: 2D grid, 3D grid (GridNode folds in), physics debug, camera rect, gizmo lines. Screen UI stays after it. The grid move is the explained re-bless in section 7.1.
 - Non-rendering hosts do not call extract.
 - Gate: section 7.1.
 
@@ -506,18 +578,22 @@ Three plans, in this order (Q6). Each plan leaves the tree green on both backend
 - Domain, shading model, blend mode. `.arcmat` migration. Instances inherit domain. Domain switch keeps the graph, errors the nodes that do not fit, greys the pins that do not.
 - The Surface template, both vertex factories, the output struct in section 5.2.
 - The six fixed mesh shaders become the default Surface material and reproduce today's pixels under the golden comparator, both backends.
-- The default sprite factory permutation reproduces `sprite.hlsl` for Unlit Translucent, so a sprite preview does not churn.
+- The default sprite factory permutation reproduces `sprite.hlsl` for Unlit Translucent.
+- Preview contract (section 5.7): thumbnail and shader-editor sprite previews become one sprite GPU-scene row in their own world pass, checkerboard as a world quad before that row, invalidation through `MaterialPreviewHarvester::Invalidate`. The recompiled-thumbnail witness lands.
 - Editor controls (section 5.6).
-- Meshes look identical. Sprites are still drawn by the batcher. Lit is Lambert. No golden is re-blessed for a lighting change.
-- Gate: section 7.1, plus the six-shader identity.
+- Meshes look identical. World sprites are still drawn by the batcher. Lit is Lambert. No golden is re-blessed for a lighting change. A preview picture that changes because `QuadMaterial` became the sprite row is an explained diff, in plan 2, if that picture is in a golden.
+- Gate: section 7.1, plus the six-shader identity, plus the thumbnail witness.
 
 ### 8.3 Plan 3 — sprites, parity, retirement
 
 - Sprite rows, the key, the CPU sort, the instanced draws, circle and capsule, `LESS_EQUAL`, masked depth writes.
-- One world view (section 3.6), including the `f3` fixture edit.
+- One world view (section 3.6). `main.arcscene` marks "Scene" primary. `f3_cull_blend.arcscene` marks "PerspectiveCamera" primary. `Camera::primary` and `Camera::sortAxis` land here.
+- The unified world pass: sprites leave `batch2d` and join the mesh pass as section 3.1 describes. `batch2d` no longer draws world sprites.
+- Picking follows the key (section 6.3), including the layer witness and the Y-sort witness.
+- The ortho slab witness (section 7.2).
 - The parity gate, the stress scene, and the 50k witness, all green, both backends.
-- Then `Batcher2D` retires from world content (section 6.3). Not before.
-- `runtime-scene` re-bless, explained. `f3-cull-blend` stays the perspective picture.
+- Then `Batcher2D` retires from world content (section 6.4). Not before.
+- `runtime-scene` re-bless, explained, required. `f3-cull-blend` stays the perspective picture unless a pixel moves, in which case the note says why.
 - Aphelyon's sprite matches the old path.
 
 ---
@@ -548,10 +624,10 @@ Named so a later arc extends them instead of replacing the pipeline.
 | CPU sort cost at 50k. | Overlapping translucent sprites do not instance across a material change, and the sort is on the game thread. | The 50k witness gates plan 3. The old path stays if the new path loses more than the sort. GPU sort is reserved on the same key. |
 | Vertex-factory permutation count. | Domain × shading × blend × factory × sidedness is a large product. | Compile on use (section 5.5). The live set is the six mesh permutations plus the sprite permutations something actually references. |
 | `.arcmat` migration of user content. | ReferenceProject and Aphelyon both have `sprite` and `mesh` kinds on disk. A bad load is a blank material. | Load maps `sprite`/`mesh` → Surface and `fullscreen` → Post. Save writes the new tokens. Instances inherit domain and are not rewritten into a domain of their own. A domain switch keeps the graph. |
-| Golden churn. | The grid leaves the post chain in plan 1. The boot scene's two cameras become one view in plan 3. | Plans 1–2 re-bless only the grid class of diff, with a note, and pin it with a test. Plan 3 re-blesses `runtime-scene` with the section 3.6 note. Any other diff fails the plan. Lit goldens are not touched until D1. |
-| Two cameras in `main.arcscene` and `f3`. | One depth cannot be both projections. | Section 3.6. Plans 1–2 do not change selection, so neither golden moves then. |
-| 2D grid coverage. | The 2D grid was batcher layer 0, under sprites. The overlay is after tonemap, so a line can cross a sprite it used to sit under. | Named in the plan-1 bless note. The pinned test is the post-chain half, which is the bug. Plan 3's masked sprites occlude a depth-tested grid; translucent sprites do not write depth, so the grid shows through them. |
-| Extract misses a read. | A registry read left behind compiles, and the include test is the only thing that catches the next one. | Section 4.2 is the move list. Section 4.3 fails CI on a new include outside the extract TU. |
+| Golden churn. | The grid leaves the linear canvas in plan 1, and the blend-before-tonemap versus blend-after-tonemap difference moves grid pixels even with an empty post chain. Plan 2 may move a preview picture off `QuadMaterial`. The boot scene's two cameras become one view in plan 3. | Plans 1–2 re-bless the grid class of diff, and plan 2 may re-bless that preview picture, each with a note. The grid-unaffected-by-post witness pins that a post chain does not move a grid pixel. Plan 3 re-blesses `runtime-scene` with the section 3.6 note. Any other diff fails the plan. Lit goldens are not touched until D1. |
+| Two cameras in `main.arcscene` and `f3`. | One depth cannot be both projections. | Section 3.6. The primary flag makes the winner explicit. Plans 1–2 do not change selection, so neither golden moves then. |
+| 2D grid coverage. | The 2D grid was batcher layer 0, under sprites. The overlay is after tonemap, so a line can cross a sprite it used to sit under. | Named in the plan-1 bless note, with the tonemap-order difference. The pinned witness is the post-chain half, which is the bug. Plan 3's masked sprites occlude a depth-tested grid; translucent sprites do not write depth, so the grid shows through them. |
+| Extract misses a read. | A registry read left in a host frame builder compiles, and the Render include test does not see it. | Section 4.2 is the move list. Section 4.3 fails CI on a new include outside the extract TU. Section 4.4 fails CI on a render-data registry read in a named frame builder. |
 | Circle and capsule parity. | They are not quads. A quad-only row would move every collider-matched sprite. | They are sprite-factory shapes in the same sorted list (section 5.3). |
 | Default Lit on meshes, default Unlit on sprites. | Using one default for both would move either the mesh goldens or Aphelyon. | Section 5.1. The template is shared; the setting is not. |
 
@@ -576,7 +652,7 @@ Recorded so a plan does not pick them up.
 
 ## 12. Rulings ledger
 
-Each line is the user's pick on 2026-10-09. The amendments were adopted from the outside review the same day. Q7 replaces the depth-bias sentence that was attached to Q2; the precedence Q2 named is unchanged.
+Each line is the user's pick on 2026-10-09. The amendments were adopted from the outside review the same day. Q7 replaces the depth-bias sentence that was attached to Q2; the precedence Q2 named is unchanged. C1–C6 are the review-round rulings the same day.
 
 | # | Pick |
 |---|---|
@@ -600,6 +676,12 @@ Each line is the user's pick on 2026-10-09. The amendments were adopted from the
 | Amendment | A `casts-shadow` flag is reserved on sprite rows. |
 | Amendment | Plan 3 gates on the 50k perf witness, the stress parity scene, and per-backend goldens for D3D12 and Vulkan. |
 | Amendment | `arc` is helpful and is not a dependency. |
+| C1 | Extract enforcement covers the hosts too. Frame-building code in ArcaneRuntime (`RuntimeFrame.cpp`) and ArcaneEditor (`EditorAppFrame.cpp` viewport, thumbnail, and preview frame builders) obtains render data only through the extract API. A gate fails if those frame builders read the registry for render data: a test or a scripted source check over the named functions, plus a documented allow-list for non-render reads, in addition to the `ArcaneClient/Render` include test. |
+| C2 | Picking follows the unified sprite sort key. Pick drawables in the packet carry the same key. The pick pass resolves equal-depth overlaps by that key. Witness: two overlapping sprites at equal z on different layers, the visually top one is picked, and the same with Y-sort. |
+| C3 | The pixel-identity promise for the grid with an empty post chain is removed. The overlay move is an explained re-bless, because a blend before a nonlinear tonemap differs from a blend after it, pinned by the grid-unaffected-by-post witness. |
+| C4 | Preview contract, plan 2. Material thumbnails and shader-editor previews render their sprite-surface preview as one sprite GPU-scene row through the Surface sprite vertex factory, in their own offscreen graph's world pass, before post and tonemap, as today's batch is. The checkerboard backdrop is a world quad in that pass, drawn before the sprite row, so both stay in scene colour for the preview's post chain and tonemap. Preview invalidation follows material recompilation through the existing preview cache. Witness: a recompiled sprite material updates its thumbnail. |
+| C5 | One world view per frame. The world pass renders with one camera. The host's main view is the active scene camera resolved by one rule that extends today's `ActiveSceneCamera` / `ActivePerspectiveSceneCamera` split: editor Edit uses the editor camera; otherwise an active `Camera::primary`, else the first active orthographic camera, else the first active perspective camera. Orthographic cameras use `render.ortho2D.depthRange` as near and far, and content outside is clipped, as sprites are today. A slab-boundary witness is required. `main.arcscene` relies on two cameras today; plan 3 marks the orthographic "Scene" camera primary, states the `runtime-scene` change, and requires an explained re-bless. |
+| C6 | Plan 1's temporary arrangement: the declarative clear is the load-op of the first world node, `batch2d` stops clearing, node order is unchanged (`batch2d`, then `mesh`, then the overlays), so world content stays pixel-identical. The single unified world pass with sprites in it arrives in plan 3. |
 
 ---
 
@@ -617,6 +699,7 @@ Applied in the same change as this file. Each edit points back here.
 
 - A supersession line at the F5 heading: the "both sort into a shared depth" bridge is not the design; this spec is. The clear still moves off `CmdClearAttachments`. The mid-pass clear cite is corrected from `Batch2DNode.cpp:1321-1325` to `Batch2DNode.cpp:1395-1405`. The clear-seam cite is corrected from `NriGraphContext.cpp:1123-1163` to `NriGraphContext.cpp:1235-1252`.
 - The open question "does `SpriteRenderer` stay 2D-positioned?" is answered: it is a world quad in the shared depth buffer, drawn through the 3D path. The sequencing line for F5 points here.
+- The old numbered shared-depth item carries its own pointer at this spec, so a reader of that item does not have to find the heading banner.
 
 **Material direction of 2026-10-02** (`D:/dev/starworks/Arcane/.superpowers/sdd/2026-10-09-f5-spec/material-direction-2026-10-02.md`).
 
