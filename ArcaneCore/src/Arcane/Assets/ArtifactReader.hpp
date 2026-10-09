@@ -409,6 +409,6 @@ namespace Arcane
     // as empty" comment for the texture path's identical posture). An empty (or absent)
     // "buffers" array is NOT a failure -- zero external buffers is the common everything-
     // embedded case (a plain .glb, or a .gltf with data: URIs).
-    [[nodiscard]] std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
+    [[nodiscard]] ARC_CORE_API std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
         std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath);
 }
