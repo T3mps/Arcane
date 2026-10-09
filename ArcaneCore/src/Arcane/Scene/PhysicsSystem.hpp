@@ -201,6 +201,9 @@ namespace Arcane
         ARC_CORE_API PhysicsEvents2D StepEvents() const;    // the most recent physics step
         ARC_CORE_API PhysicsEvents2D FrameEvents() const;   // every step since this frame began
         ARC_CORE_API void BeginFrame();                     // clears frameEvents (RunLoop frame hook)
+        // Touching solver contacts right now, sleepers included. A side whose
+        // body has no record is skipped (Side resolves fixtures, then retiredFixtures).
+        ARC_CORE_API void ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const;
 
         // ---- The game-facing commands (input-seam spec s5.3) -----------------
         // Exported: PhysicsWorld is linked inside ArcaneCore, so a game module

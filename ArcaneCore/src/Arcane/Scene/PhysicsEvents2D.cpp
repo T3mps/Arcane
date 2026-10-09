@@ -98,4 +98,21 @@ namespace Arcane
     PhysicsEvents2D PhysicsResource::StepEvents() const  { return stepEvents.View(); }
     PhysicsEvents2D PhysicsResource::FrameEvents() const { return frameEvents.View(); }
     void PhysicsResource::BeginFrame() { frameEvents.Clear(); }
+
+    void PhysicsResource::ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const
+    {
+        out.clear();
+        const auto it = entityToBody.find(entity);
+        if (!world || it == entityToBody.end() || !world->IsValid(it->second)) return;
+        std::vector<Phys::BodyContact> raw;
+        world->GetBodyContacts(it->second, raw);
+        for (const Phys::BodyContact& c : raw)
+        {
+            ContactPoint2D p;
+            if (!Side(*this, c.selfBody, c.self, p.self) || !Side(*this, c.otherBody, c.other, p.other)) continue;
+            p.normal = glm::vec2(static_cast<float>(c.normal.x), static_cast<float>(c.normal.y));
+            p.pointCount = static_cast<std::uint32_t>(c.pointCount);
+            out.push_back(p);
+        }
+    }
 }

@@ -302,6 +302,24 @@ TEST_CASE("consecutive paused rescales keep every retired fixture resolvable", "
     CHECK(w.Res().bodyRecords.at(key).retiredFixtures.empty());
 }
 
+TEST_CASE("ContactsOf lists a resting crate's ground contact by entity", "[physics][events]")
+{
+    World w;
+    const Astra::Entity ground = w.Body("Ground", Manifold2D::Physics::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate  = w.Body("Crate",  Manifold2D::Physics::BodyType::Dynamic, { 0.0f, -0.5f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem physics(kDt);
+    for (int i = 0; i < 300; ++i) physics(w.reg);     // long enough to sleep
+    std::vector<Arcane::ContactPoint2D> out;
+    w.Res().ContactsOf(crate, out);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].self.entity == crate);
+    CHECK(out[0].other.entity == ground);
+    CHECK(out[0].other.guid == w.GuidOf(ground));
+    CHECK(out[0].normal.y > 0.99f);                   // from the crate down to the ground (+Y down here)
+    w.Res().ContactsOf(Astra::Entity::Invalid(), out);
+    CHECK(out.empty());
+}
+
 TEST_CASE("physics.events.hitThreshold reaches the world", "[physics][events]")
 {
     {
