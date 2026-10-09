@@ -1,6 +1,6 @@
 # arc CLI (D27) -- design
 
-**DRAFT 2026-10-05 -- awaiting the user's review; no plan or code until approved.**
+**APPROVED 2026-10-09 (user): every recommended pick in s0 (0.1-0.28) plus amendments AM1-AM6 (s0.29). Build scope now: P0 + `play|stop|pause|resume|step` pulled forward from P1 (s13). Branch `feat/arc-cli`.** Drafted 2026-10-05.
 
 **Roadmap row:** D27 (`docs/superpowers/specs/2026-10-05-arcane-1.0-roadmap.md`). **Research:** `docs/research/2026-10-05-arc-cli-research.md` (the external survey and the seam inventory this spec builds on; its Q1-Q30 table is superseded by section 0 below). **Verified against:** Arcane `main` at `c0fb42e1`, plus `feat/settings-s7` at `b982b4a8` for the settings-arc types (`CVarContext`, `Audience`, `RemoteCVarService`), which are not on `main` yet.
 
@@ -182,6 +182,15 @@ Each item is a real fork. The recommended pick is what the rest of this spec ass
 - (b) A `/arc/v1` path prefix.
 - (c) **Both: `/arc/v1` changes only on a breaking change; `capabilities[]` announces additive features; the CLI refuses a too-new major with exit 4 and a remediation, and degrades with a notification on missing capabilities.**
 - **Recommended: (c).**
+
+**0.29 Amendments (user, 2026-10-09, after an outside review by two other assistants of the s0 summary)**
+Most of that review is already covered here: the Origin/Host checks and the header-only token (s10.1, s4.5); stale descriptors (the `{pid, start}` rule, s4.4); the thin client with host-served schemas (s5.3, `arc call`); one build path, since the editor's rebuild spawns arcbuild (0.22); 0.25 deferred to P1; and the Astra schema fixes carried in the Astra lane. The six points it raised that are new are adopted:
+- **AM1, server tick semantics.** On a host whose loop is a fixed-tick server (ArcaneServer, or a headless runtime with no render), "frame" in 0.12, s4.3 and s7 means one **tick**. Commands drain at the tick boundary, before the simulation step. `host.frame` carries the tick number. `wait frames N` and `step N` count ticks. Captures are refused on a host with no renderer (`capture.no-renderer`, exit 2).
+- **AM2, fan-out.** `--all <hostKind>` (or `--all` for every live host of the project) sends one command to every matching live host in parallel. The client prints one envelope per host, inside a `{hosts:[{pid, hostKind, envelope}]}` wrapper (an ndjson frame per host under `--format ndjson`). The exit code is the worst per-host code, ranked 7 > 6 > 8 > 5 > 4 > 3 > 2 > 0. `--all` with a `drive` command needs `--yes`. The bot-swarm milestone depends on this.
+- **AM3, reserved netcode observability.** The catalogue reserves the `net.*` group for the replication arc (D10). Expected commands: `net.connections` (per connection: peer, RTT, loss, in/out bytes per second), `net.replication` (entities replicated, snapshot bytes, deltas, budget drops), `net.tick` (tick time, budget, overruns) and `ecs.archetypes` (entity counts by archetype; read-only, may land in P0). The commands register through the same declaration macro. arc builds none of them except `ecs.archetypes`.
+- **AM4, `--json` alias.** `--json` equals `--format json`, and it wins over TTY auto-detection. Agents run under pseudo-terminals, so the agent instructions (the P4 skill and every dispatch brief) always pass `--json`.
+- **AM5, descriptor permissions.** The descriptor holds the token. On Windows it is created with an owner-only DACL (the current user plus SYSTEM); on POSIX it is created 0600. It is written under the same rule to its temp file before the rename.
+- **AM6, exit codes 5 vs 7 stated.** 5 means `host.busy`: the request was provably not run, and retrying at the same target is safe. 7 means the host is unreachable, died or is restarting: rediscover first (`arc status`), then retry against the new pid. Every `host.busy{state}` (including 0.27's minimized state and the queue-full state) is exit 5.
 
 ---
 
@@ -853,6 +862,8 @@ Each phase ends at a gate (the full suite, the golden gate, and the phase's acce
 - `arc.exe`: status, launch, quit, wait (`ready`, `settled`, `frames`, `state`), world list, commands, list, describe, schema, call; formats `json`, `human`, `ndjson`; the exit-code table.
 - Verbs: `cvar get|set|list|explain`, `console`, `logs` (with the new sink), `problems` (with the Core store), `entity get`, `ecs query` (read-only), `ecs stats`, `resource list|get`, `scene tree`, `selection`, `stats frame`, `screenshot viewport|window`, `compare`.
 - **Acceptance:** a CI script launches a headless editor on ReferenceProject, waits for `settled`, reads `MeshCube`'s `LocalTransform`, sets a `PlayerSafe` cvar and reads it back with `explain` provenance, compares against the `editor-ui` reference with the lane's own capture source, reads `problems`, and quits, using only envelopes and exit codes; the same against a headless runtime and a server (cvars, ecs). The `[arc]` unit and integration suites are green, and the self-test proves the gate can fail.
+
+**P0 additions (2026-10-09):** `play|stop|pause|resume|step` (from P1; undoable:false, declared per 0.16), AM1 tick semantics, AM2 `--all` fan-out, AM4 `--json`, AM5 descriptor DACL, AM6 exit mapping, `ecs.archetypes`. Acceptance adds: a headless runtime and a server launched together, `arc --all cvar get ...` answering from both, and `arc play`/`step 10`/`stop` on the headless runtime with `host.frame` advancing exactly 10.
 
 **P1, act.**
 - `entity set|add|remove` (transactional component edits), `entity spawn|despawn|duplicate` (structural, one step each), `batch` (component-only transactional; structural members refused with `undo.batch-structural`), `undo`, `redo`.
