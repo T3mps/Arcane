@@ -13,6 +13,7 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <string>
 #include <vector>
 
@@ -231,11 +232,11 @@ namespace
             const Arcane::ContactHit2D& y = oracle.contactHit[i];
             RequireSide(x.a, y.a);
             RequireSide(x.b, y.b);
-            REQUIRE(x.point.x == y.point.x);
-            REQUIRE(x.point.y == y.point.y);
-            REQUIRE(x.normal.x == y.normal.x);
-            REQUIRE(x.normal.y == y.normal.y);
-            REQUIRE(x.approachSpeed == y.approachSpeed);
+            REQUIRE(std::bit_cast<std::uint32_t>(x.point.x) == std::bit_cast<std::uint32_t>(y.point.x));
+            REQUIRE(std::bit_cast<std::uint32_t>(x.point.y) == std::bit_cast<std::uint32_t>(y.point.y));
+            REQUIRE(std::bit_cast<std::uint32_t>(x.normal.x) == std::bit_cast<std::uint32_t>(y.normal.x));
+            REQUIRE(std::bit_cast<std::uint32_t>(x.normal.y) == std::bit_cast<std::uint32_t>(y.normal.y));
+            REQUIRE(std::bit_cast<std::uint32_t>(x.approachSpeed) == std::bit_cast<std::uint32_t>(y.approachSpeed));
         }
         REQUIRE(got.sensorBegin.size() == oracle.sensorBegin.size());
         for (std::size_t i = 0; i < got.sensorBegin.size(); ++i)
@@ -253,17 +254,21 @@ namespace
         }
     }
 
-    // True when the events a frame actually holds were produced by more than one
-    // fixed step. `stepOf` is the oracle's per-event step index; the frame owns
-    // the half-open slice [cursor, cursor + count).
-    bool SliceSpansSteps(const std::vector<int>& stepOf, std::size_t cursor, std::size_t count)
+    // `stepOf` records Time::fixedStep (the first step is 1). The frame owns the
+    // slice [cursor, cursor + count). Every index in it must sit in the inclusive
+    // range that frame actually stepped. Distinct indices are appended to `seen`.
+    void AttributeSlice(const std::vector<int>& stepOf, std::size_t cursor, std::size_t count,
+                        std::uint64_t rangeLo, std::uint64_t rangeHi, std::vector<int>& seen)
     {
         REQUIRE(cursor + count <= stepOf.size());
-        if (count < 2) return false;
-        const int first = stepOf[cursor];
-        for (std::size_t i = 1; i < count; ++i)
-            if (stepOf[cursor + i] != first) return true;
-        return false;
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            const int step = stepOf[cursor + i];
+            REQUIRE(static_cast<std::uint64_t>(step) >= rangeLo);
+            REQUIRE(static_cast<std::uint64_t>(step) <= rangeHi);
+            if (std::find(seen.begin(), seen.end(), step) == seen.end())
+                seen.push_back(step);
+        }
     }
 }
 
@@ -308,11 +313,15 @@ TEST_CASE("FrameEvents matches the per-step oracle in order", "[physics][events]
         if (FixedStep(oracleRt) == static_cast<std::uint64_t>(kLiftAt))
             Teleport(oracleRt, kLifted, kLiftTo);
         oracleRt.Loop().Advance(step);
-        AppendStamped(oracle, Res(oracleRt).StepEvents(), s);
+        // Time::fixedStep is 1 on the first step. B's frame range is that same
+        // number, so the stamp is the clock after the step, not the loop index.
+        const Arcane::Time* clock = oracleRt.Registry().GetResource<Arcane::Time>();
+        REQUIRE(clock != nullptr);
+        AppendStamped(oracle, Res(oracleRt).StepEvents(), static_cast<int>(clock->fixedStep));
     }
     REQUIRE(FixedStep(oracleRt) == static_cast<std::uint64_t>(kSteps));
     std::string shape;
-    for (int s = 0; s < kSteps; ++s)
+    for (int s = 1; s <= kSteps; ++s)
     {
         const int b = static_cast<int>(std::count(oracle.beginStep.begin(), oracle.beginStep.end(), s));
         const int e = static_cast<int>(std::count(oracle.endStep.begin(), oracle.endStep.end(), s));
@@ -333,6 +342,10 @@ TEST_CASE("FrameEvents matches the per-step oracle in order", "[physics][events]
     Arcane::Runtime frameRt(Arcane::Test::Process());
     DropScene(frameRt);
     const double frameStep = 1.0 / frameRt.Loop().FixedHz();
+    // Time is published by Advance. A zero-step frame leaves the clock at 0 so
+    // every measured frame can read fixedStep before it steps.
+    frameRt.Loop().Advance(0.0);
+    REQUIRE(frameRt.Registry().GetResource<Arcane::Time>()->fixedStep == 0);
     EventCopy frames;
     bool sawMultiStepFrame = false;
     std::size_t beginCursor = 0, endCursor = 0, hitCursor = 0, sensorBeginCursor = 0, sensorEndCursor = 0;
@@ -341,20 +354,20 @@ TEST_CASE("FrameEvents matches the per-step oracle in order", "[physics][events]
         const int expect = (f % 2 == 0) ? 2 : 3;
         if (FixedStep(frameRt) == static_cast<std::uint64_t>(kLiftAt))
             Teleport(frameRt, kLifted, kLiftTo);
-        const std::uint64_t before = FixedStep(frameRt);
+        const std::uint64_t before = frameRt.Registry().GetResource<Arcane::Time>()->fixedStep;
         frameRt.Loop().Advance(expect * frameStep);
-        const std::uint64_t taken = FixedStep(frameRt) - before;
-        REQUIRE(taken == static_cast<std::uint64_t>(expect));
+        const std::uint64_t after = frameRt.Registry().GetResource<Arcane::Time>()->fixedStep;
+        REQUIRE(after - before == static_cast<std::uint64_t>(expect));
         const Arcane::PhysicsEvents2D ev = Res(frameRt).FrameEvents();
-        // This frame's own events, attributed by the oracle's per-event step
-        // index. Counting oracle steps that merely fell inside the window is
-        // not the same thing: the slice is the events the frame holds.
-        const bool beginSpans = SliceSpansSteps(oracle.beginStep, beginCursor, ev.contactBegin.size());
-        const bool endSpans = SliceSpansSteps(oracle.endStep, endCursor, ev.contactEnd.size());
-        const bool hitSpans = SliceSpansSteps(oracle.hitStep, hitCursor, ev.contactHit.size());
-        const bool sensorBeginSpans = SliceSpansSteps(oracle.sensorBeginStep, sensorBeginCursor, ev.sensorBegin.size());
-        const bool sensorEndSpans = SliceSpansSteps(oracle.sensorEndStep, sensorEndCursor, ev.sensorEnd.size());
-        if (beginSpans || endSpans || hitSpans || sensorBeginSpans || sensorEndSpans)
+        // The slice is the events this frame holds. Each one must name a
+        // fixedStep inside [before + 1, after], the steps this Advance took.
+        std::vector<int> frameSteps;
+        AttributeSlice(oracle.beginStep, beginCursor, ev.contactBegin.size(), before + 1, after, frameSteps);
+        AttributeSlice(oracle.endStep, endCursor, ev.contactEnd.size(), before + 1, after, frameSteps);
+        AttributeSlice(oracle.hitStep, hitCursor, ev.contactHit.size(), before + 1, after, frameSteps);
+        AttributeSlice(oracle.sensorBeginStep, sensorBeginCursor, ev.sensorBegin.size(), before + 1, after, frameSteps);
+        AttributeSlice(oracle.sensorEndStep, sensorEndCursor, ev.sensorEnd.size(), before + 1, after, frameSteps);
+        if (frameSteps.size() >= 2)
             sawMultiStepFrame = true;
         beginCursor += ev.contactBegin.size();
         endCursor += ev.contactEnd.size();
