@@ -12,6 +12,7 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -20,7 +21,7 @@ namespace
     constexpr double kFixed = 1.0 / 60.0;
 
     void AddBody(Astra::Registry& reg, Manifold2D::Physics::BodyType type, glm::vec2 pos, float hw, float hh,
-                 Arcane::Guid guid = {})
+                 Arcane::Guid guid = {}, bool sensor = false, bool hitEvents = false)
     {
         if (guid.IsNil()) guid = Arcane::Guid::Generate();
         Astra::Entity e = reg.CreateEntity();
@@ -33,6 +34,8 @@ namespace
             rb.fixedRotation = true;
         reg.AddComponent<Arcane::RigidBody2D>(e, rb);
         Arcane::Fixture f; f.kind = Manifold2D::Physics::ShapeKind::Aabb; f.halfW = hw; f.halfH = hh;
+        f.isSensor = sensor;
+        f.hitEvents = hitEvents;
         Arcane::Collider2D c; c.fixtures.push_back(f); reg.AddComponent<Arcane::Collider2D>(e, c);
         reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
     }
@@ -46,24 +49,50 @@ namespace
         rt.EnsurePhysics();
     }
 
-    // Four crates, spaced in x, dropped from different heights so their landings
-    // fall on different steps. Gaps are the distance from the ground top to the
-    // crate's bottom face (half-height 0.25). Two pairs sit inside a 3-step
-    // frame of the 2,3,2,3 pattern (steps 3-5 and steps 8-10).
+    // Ground top is y = 0. A resting crate of half-height 0.25 occupies y [0, 0.50].
+    // The sensor band y [0.55, 0.75] sits entirely above that, and every crate
+    // bottom starts above the band, so each crate enters and leaves the sensor
+    // before it lands. Gaps put three landings in step indices 27-29, which is
+    // one 3-step frame of the 2,3 alternation. hitEvents is on the crates; the
+    // drop clears the 1 m/s hit threshold. Guid{2,1} is teleported to y = 50 at
+    // fixed step 35, after those landings, which is the contact End.
     void DropScene(Arcane::Runtime& rt)
     {
         Astra::Registry& reg = rt.Registry();
         AddBody(reg, Manifold2D::Physics::BodyType::Static, { 0.0f, -0.5f }, 10.0f, 0.5f, Arcane::Guid{ 1, 1 });
+        AddBody(reg, Manifold2D::Physics::BodyType::Static, { 0.0f,  0.65f },  8.0f, 0.10f, Arcane::Guid{ 6, 1 }, true);
         const struct { float x; float gap; Arcane::Guid guid; } crates[] = {
-            { -4.5f, 0.010f, Arcane::Guid{ 2, 1 } },
-            { -1.5f, 0.032f, Arcane::Guid{ 3, 1 } },
-            {  1.5f, 0.090f, Arcane::Guid{ 4, 1 } },
-            {  4.5f, 0.140f, Arcane::Guid{ 5, 1 } },
+            { -4.5f, 1.05f, Arcane::Guid{ 2, 1 } },
+            { -1.5f, 1.12f, Arcane::Guid{ 3, 1 } },
+            {  1.5f, 1.20f, Arcane::Guid{ 4, 1 } },
+            {  4.5f, 1.45f, Arcane::Guid{ 5, 1 } },
         };
         for (const auto& c : crates)
-            AddBody(reg, Manifold2D::Physics::BodyType::Dynamic, { c.x, c.gap + 0.25f }, 0.25f, 0.25f, c.guid);
+            AddBody(reg, Manifold2D::Physics::BodyType::Dynamic, { c.x, c.gap + 0.25f }, 0.25f, 0.25f,
+                    c.guid, false, true);
         rt.EnsurePhysics();
         rt.Loop().SetMaxStepsPerFrame(8);   // the 2/3-step frames must not hit the spiral cap
+    }
+
+    // Snap a landed crate out of its contact. Both runtimes call this at the same
+    // fixed-step boundary, so the End lands on the same step of each sequence.
+    void Teleport(Arcane::Runtime& rt, Arcane::Guid guid, glm::vec2 pos)
+    {
+        Astra::Registry& reg = rt.Registry();
+        Arcane::PhysicsResource* res = reg.GetResource<Arcane::PhysicsResource>();
+        REQUIRE(res != nullptr);
+        REQUIRE(res->world != nullptr);
+        bool found = false;
+        reg.CreateView<const Arcane::Identity, const Arcane::PhysicsBodyRef>().ForEach(
+            [&](Astra::Entity, const Arcane::Identity& id, const Arcane::PhysicsBodyRef& ref)
+            {
+                if (id.id != guid || found) return;
+                res->world->SetPosition(ref.handle, Manifold2D::Physics::Vec2(pos.x, pos.y));
+                res->world->SetVelocity(ref.handle, Manifold2D::Physics::Vec2(0.0f, 0.0f));
+                res->world->Wake(ref.handle);
+                found = true;
+            });
+        REQUIRE(found);
     }
 
     const Arcane::PhysicsResource& Res(Arcane::Runtime& rt) { return *rt.Registry().GetResource<Arcane::PhysicsResource>(); }
@@ -143,31 +172,98 @@ namespace
         REQUIRE(e.sensorEnd.empty());
     }
 
-    // Oracle identity: GUID + fixture. Entity ids belong to one registry.
-    struct SideId
+    // One concatenated window plus the fixed-step index that produced each event.
+    struct StampedEvents
     {
-        Arcane::Guid guid{};
-        std::uint32_t fixture = 0;
-        bool operator==(const SideId& o) const { return guid == o.guid && fixture == o.fixture; }
-    };
-    struct PairId
-    {
-        SideId a, b;
-        bool operator==(const PairId& o) const { return a == o.a && b == o.b; }
+        EventCopy events;
+        std::vector<int> beginStep;
+        std::vector<int> endStep;
+        std::vector<int> hitStep;
+        std::vector<int> sensorBeginStep;
+        std::vector<int> sensorEndStep;
     };
 
-    SideId IdOf(const Arcane::ContactSide2D& s) { return { s.guid, s.fixture }; }
-
-    struct PairLog
+    template <typename T>
+    void Take(std::vector<T>& dst, std::vector<int>& steps, const std::vector<T>& src, int step)
     {
-        std::vector<PairId> begin;
-        std::vector<PairId> end;
-    };
+        dst.insert(dst.end(), src.begin(), src.end());
+        steps.insert(steps.end(), src.size(), step);
+    }
 
-    void AppendPairs(PairLog& log, const Arcane::PhysicsEvents2D& e)
+    void AppendStamped(StampedEvents& log, const Arcane::PhysicsEvents2D& ev, int step)
     {
-        for (const Arcane::ContactBegin2D& ev : e.contactBegin) log.begin.push_back({ IdOf(ev.a), IdOf(ev.b) });
-        for (const Arcane::ContactEnd2D& ev : e.contactEnd)     log.end.push_back({ IdOf(ev.a), IdOf(ev.b) });
+        const EventCopy c = CopyEvents(ev);
+        Take(log.events.contactBegin, log.beginStep, c.contactBegin, step);
+        Take(log.events.contactEnd, log.endStep, c.contactEnd, step);
+        Take(log.events.contactHit, log.hitStep, c.contactHit, step);
+        Take(log.events.sensorBegin, log.sensorBeginStep, c.sensorBegin, step);
+        Take(log.events.sensorEnd, log.sensorEndStep, c.sensorEnd, step);
+    }
+
+    void RequireSide(const Arcane::ContactSide2D& a, const Arcane::ContactSide2D& b)
+    {
+        REQUIRE(a.entity == b.entity);
+        REQUIRE(a.guid == b.guid);
+        REQUIRE(a.fixture == b.fixture);
+    }
+
+    void RequireSameEvents(const EventCopy& got, const EventCopy& oracle)
+    {
+        REQUIRE(got.contactBegin.size() == oracle.contactBegin.size());
+        for (std::size_t i = 0; i < got.contactBegin.size(); ++i)
+        {
+            INFO("contactBegin[" << i << "]");
+            RequireSide(got.contactBegin[i].a, oracle.contactBegin[i].a);
+            RequireSide(got.contactBegin[i].b, oracle.contactBegin[i].b);
+        }
+        REQUIRE(got.contactEnd.size() == oracle.contactEnd.size());
+        for (std::size_t i = 0; i < got.contactEnd.size(); ++i)
+        {
+            INFO("contactEnd[" << i << "]");
+            RequireSide(got.contactEnd[i].a, oracle.contactEnd[i].a);
+            RequireSide(got.contactEnd[i].b, oracle.contactEnd[i].b);
+        }
+        REQUIRE(got.contactHit.size() == oracle.contactHit.size());
+        for (std::size_t i = 0; i < got.contactHit.size(); ++i)
+        {
+            INFO("contactHit[" << i << "]");
+            const Arcane::ContactHit2D& x = got.contactHit[i];
+            const Arcane::ContactHit2D& y = oracle.contactHit[i];
+            RequireSide(x.a, y.a);
+            RequireSide(x.b, y.b);
+            REQUIRE(x.point.x == y.point.x);
+            REQUIRE(x.point.y == y.point.y);
+            REQUIRE(x.normal.x == y.normal.x);
+            REQUIRE(x.normal.y == y.normal.y);
+            REQUIRE(x.approachSpeed == y.approachSpeed);
+        }
+        REQUIRE(got.sensorBegin.size() == oracle.sensorBegin.size());
+        for (std::size_t i = 0; i < got.sensorBegin.size(); ++i)
+        {
+            INFO("sensorBegin[" << i << "]");
+            RequireSide(got.sensorBegin[i].sensor, oracle.sensorBegin[i].sensor);
+            RequireSide(got.sensorBegin[i].visitor, oracle.sensorBegin[i].visitor);
+        }
+        REQUIRE(got.sensorEnd.size() == oracle.sensorEnd.size());
+        for (std::size_t i = 0; i < got.sensorEnd.size(); ++i)
+        {
+            INFO("sensorEnd[" << i << "]");
+            RequireSide(got.sensorEnd[i].sensor, oracle.sensorEnd[i].sensor);
+            RequireSide(got.sensorEnd[i].visitor, oracle.sensorEnd[i].visitor);
+        }
+    }
+
+    // True when the events a frame actually holds were produced by more than one
+    // fixed step. `stepOf` is the oracle's per-event step index; the frame owns
+    // the half-open slice [cursor, cursor + count).
+    bool SliceSpansSteps(const std::vector<int>& stepOf, std::size_t cursor, std::size_t count)
+    {
+        REQUIRE(cursor + count <= stepOf.size());
+        if (count < 2) return false;
+        const int first = stepOf[cursor];
+        for (std::size_t i = 1; i < count; ++i)
+            if (stepOf[cursor + i] != first) return true;
+        return false;
     }
 }
 
@@ -192,64 +288,94 @@ TEST_CASE("FrameEvents gathers every step of a frame and empties on a zero-step 
 TEST_CASE("FrameEvents matches the per-step oracle in order", "[physics][events]")
 {
     // Runtime A: one fixed step per frame. Concatenated StepEvents is the
-    // per-step sequence. Runtime B runs the same scene in alternating 2-step
-    // and 3-step frames. 2.5 fixed steps does not alternate in double (the
-    // leftover is just under one step, so two frames in a row take 2). Passing
-    // an integer multiple of the loop's own fixed dt does. Determinism makes
-    // A's sequence the oracle for B's FrameEvents.
+    // per-step sequence, and each event records the step index that produced
+    // it. Runtime B runs the same scene in alternating 2-step and 3-step
+    // frames. 2.5 fixed steps does not alternate in double (the leftover is
+    // just under one step, so two frames in a row take 2). Passing an integer
+    // multiple of the loop's own fixed dt does. Determinism makes A's sequence
+    // the oracle for B's FrameEvents.
     constexpr int kSteps = 40;                        // 8 * (2 + 3)
+    constexpr int kLiftAt = 35;                       // after the landings; five steps remain
+    const Arcane::Guid kLifted{ 2, 1 };
+    const glm::vec2 kLiftTo{ -4.5f, 50.0f };
+
     Arcane::Runtime oracleRt(Arcane::Test::Process());
     DropScene(oracleRt);
     const double step = 1.0 / oracleRt.Loop().FixedHz();
-    PairLog oracle;
-    std::vector<int> beginsPerStep;
-    std::vector<char> stepHadEvents;
+    StampedEvents oracle;
     for (int s = 0; s < kSteps; ++s)
     {
+        if (FixedStep(oracleRt) == static_cast<std::uint64_t>(kLiftAt))
+            Teleport(oracleRt, kLifted, kLiftTo);
         oracleRt.Loop().Advance(step);
-        const Arcane::PhysicsEvents2D ev = Res(oracleRt).StepEvents();
-        beginsPerStep.push_back(static_cast<int>(ev.contactBegin.size()));
-        stepHadEvents.push_back(!ev.contactBegin.empty() || !ev.contactEnd.empty() ? 1 : 0);
-        AppendPairs(oracle, ev);
+        AppendStamped(oracle, Res(oracleRt).StepEvents(), s);
     }
     REQUIRE(FixedStep(oracleRt) == static_cast<std::uint64_t>(kSteps));
-    REQUIRE(oracle.begin.size() >= 4);                // one landing per crate
+    std::string shape;
+    for (int s = 0; s < kSteps; ++s)
+    {
+        const int b = static_cast<int>(std::count(oracle.beginStep.begin(), oracle.beginStep.end(), s));
+        const int e = static_cast<int>(std::count(oracle.endStep.begin(), oracle.endStep.end(), s));
+        const int h = static_cast<int>(std::count(oracle.hitStep.begin(), oracle.hitStep.end(), s));
+        const int sb = static_cast<int>(std::count(oracle.sensorBeginStep.begin(), oracle.sensorBeginStep.end(), s));
+        const int se = static_cast<int>(std::count(oracle.sensorEndStep.begin(), oracle.sensorEndStep.end(), s));
+        if (b || e || h || sb || se)
+            shape += std::to_string(s) + ":b" + std::to_string(b) + " e" + std::to_string(e)
+                + " h" + std::to_string(h) + " sb" + std::to_string(sb) + " se" + std::to_string(se) + " ";
+    }
+    INFO("per-step events: " << shape);
+    REQUIRE(oracle.events.contactBegin.size() >= 4);          // one landing per crate
+    REQUIRE_FALSE(oracle.events.contactEnd.empty());
+    REQUIRE_FALSE(oracle.events.contactHit.empty());
+    REQUIRE_FALSE(oracle.events.sensorBegin.empty());
+    REQUIRE_FALSE(oracle.events.sensorEnd.empty());
 
     Arcane::Runtime frameRt(Arcane::Test::Process());
     DropScene(frameRt);
     const double frameStep = 1.0 / frameRt.Loop().FixedHz();
-    PairLog frames;
-    int multiStepFrames = 0;
-    std::size_t cursor = 0;
+    EventCopy frames;
+    bool sawMultiStepFrame = false;
+    std::size_t beginCursor = 0, endCursor = 0, hitCursor = 0, sensorBeginCursor = 0, sensorEndCursor = 0;
     for (int f = 0; f < 16; ++f)
     {
         const int expect = (f % 2 == 0) ? 2 : 3;
+        if (FixedStep(frameRt) == static_cast<std::uint64_t>(kLiftAt))
+            Teleport(frameRt, kLifted, kLiftTo);
         const std::uint64_t before = FixedStep(frameRt);
         frameRt.Loop().Advance(expect * frameStep);
         const std::uint64_t taken = FixedStep(frameRt) - before;
         REQUIRE(taken == static_cast<std::uint64_t>(expect));
         const Arcane::PhysicsEvents2D ev = Res(frameRt).FrameEvents();
-        int stepsWithEvents = 0;
-        for (std::uint64_t i = 0; i < taken; ++i)
-        {
-            const std::size_t step = cursor + static_cast<std::size_t>(i);
-            REQUIRE(step < stepHadEvents.size());
-            if (stepHadEvents[step]) ++stepsWithEvents;
-        }
-        if (stepsWithEvents > 1) ++multiStepFrames;
-        cursor += static_cast<std::size_t>(taken);
-        AppendPairs(frames, ev);
+        // This frame's own events, attributed by the oracle's per-event step
+        // index. Counting oracle steps that merely fell inside the window is
+        // not the same thing: the slice is the events the frame holds.
+        const bool beginSpans = SliceSpansSteps(oracle.beginStep, beginCursor, ev.contactBegin.size());
+        const bool endSpans = SliceSpansSteps(oracle.endStep, endCursor, ev.contactEnd.size());
+        const bool hitSpans = SliceSpansSteps(oracle.hitStep, hitCursor, ev.contactHit.size());
+        const bool sensorBeginSpans = SliceSpansSteps(oracle.sensorBeginStep, sensorBeginCursor, ev.sensorBegin.size());
+        const bool sensorEndSpans = SliceSpansSteps(oracle.sensorEndStep, sensorEndCursor, ev.sensorEnd.size());
+        if (beginSpans || endSpans || hitSpans || sensorBeginSpans || sensorEndSpans)
+            sawMultiStepFrame = true;
+        beginCursor += ev.contactBegin.size();
+        endCursor += ev.contactEnd.size();
+        hitCursor += ev.contactHit.size();
+        sensorBeginCursor += ev.sensorBegin.size();
+        sensorEndCursor += ev.sensorEnd.size();
+        const EventCopy frameCopy = CopyEvents(ev);
+        frames.contactBegin.insert(frames.contactBegin.end(), frameCopy.contactBegin.begin(), frameCopy.contactBegin.end());
+        frames.contactEnd.insert(frames.contactEnd.end(), frameCopy.contactEnd.begin(), frameCopy.contactEnd.end());
+        frames.contactHit.insert(frames.contactHit.end(), frameCopy.contactHit.begin(), frameCopy.contactHit.end());
+        frames.sensorBegin.insert(frames.sensorBegin.end(), frameCopy.sensorBegin.begin(), frameCopy.sensorBegin.end());
+        frames.sensorEnd.insert(frames.sensorEnd.end(), frameCopy.sensorEnd.begin(), frameCopy.sensorEnd.end());
     }
     REQUIRE(FixedStep(frameRt) == static_cast<std::uint64_t>(kSteps));
-    REQUIRE(cursor == beginsPerStep.size());
-    std::string shape;
-    for (std::size_t i = 0; i < beginsPerStep.size(); ++i)
-        if (beginsPerStep[i] > 0)
-            shape += std::to_string(i + 1) + ":" + std::to_string(beginsPerStep[i]) + " ";
-    INFO("per-step contact begins: " << shape);
-    REQUIRE(multiStepFrames >= 1);                    // one frame held landings from two steps
-    REQUIRE(frames.begin == oracle.begin);
-    REQUIRE(frames.end == oracle.end);
+    REQUIRE(beginCursor == oracle.beginStep.size());
+    REQUIRE(endCursor == oracle.endStep.size());
+    REQUIRE(hitCursor == oracle.hitStep.size());
+    REQUIRE(sensorBeginCursor == oracle.sensorBeginStep.size());
+    REQUIRE(sensorEndCursor == oracle.sensorEndStep.size());
+    REQUIRE(sawMultiStepFrame);                      // one B frame held events from two steps
+    RequireSameEvents(frames, oracle.events);
 }
 
 TEST_CASE("Re-minting and restoring clear both windows", "[physics][events]")
