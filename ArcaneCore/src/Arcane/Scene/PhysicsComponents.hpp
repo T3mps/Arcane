@@ -119,6 +119,13 @@ namespace Arcane
         uint32_t maskBits     = 0xFFFFFFFFu;
 
         bool isSensor = false;
+
+        // Event opt-ins (spec 2026-10-08 s7.4). contact and sensor need both
+        // fixtures of a pair; a hit needs either. Absent scene-JSON keys keep
+        // these defaults.
+        bool contactEvents = true;
+        bool sensorEvents  = true;
+        bool hitEvents     = false;
     };
 
     // -------------------------------------------------------------------------
@@ -240,6 +247,12 @@ namespace Arcane
         ARC_REFLECT_FIELD(Fixture, categoryBits)
         ARC_REFLECT_FIELD(Fixture, maskBits)
         ARC_REFLECT_FIELD(Fixture, isSensor)
+        ARC_REFLECT_FIELD(Fixture, contactEvents)
+            ARC_REFLECT_ATTR(Tooltip, "Report contact begin/end for this fixture. Both fixtures of a pair must allow it.")
+        ARC_REFLECT_FIELD(Fixture, sensorEvents)
+            ARC_REFLECT_ATTR(Tooltip, "Report sensor enter/exit, as the sensor or as the visitor. Both must allow it.")
+        ARC_REFLECT_FIELD(Fixture, hitEvents)
+            ARC_REFLECT_ATTR(Tooltip, "Report impacts faster than physics.events.hitThreshold. Either fixture suffices.")
     ARC_END_REFLECT_TYPE()
 
     // Collider2D: reflects the fixture list. Serializable on BOTH paths since

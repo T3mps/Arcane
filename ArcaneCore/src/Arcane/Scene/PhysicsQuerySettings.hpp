@@ -27,4 +27,18 @@ namespace Arcane
             ARC_REFLECT_ATTR(Range, 0.0, 1.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "How far (m) below a resting body the grounded probe looks for floor.")
     ARC_END_REFLECT_TYPE()
+
+    // physics.events.* (spec 2026-10-08 s7.5): Live, read by PhysicsSystem at the
+    // top of every pass. Deterministic: it changes which hits are reported.
+    struct PhysicsEventSettings
+    {
+        float hitThreshold = 1.0f;   // m/s a contact point's approach speed must exceed to report a hit
+    };
+
+    ARC_REFLECT_TYPE(PhysicsEventSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "physics.events", SettingScope::Project, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(PhysicsEventSettings, hitThreshold)
+            ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Approach speed (m/s) an impact must exceed to report a hit event (Fixture::hitEvents).")
+    ARC_END_REFLECT_TYPE()
 }

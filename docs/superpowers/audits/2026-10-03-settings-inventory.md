@@ -11,10 +11,10 @@
 
 | Part | SETTING | CONSTANT | DERIVED | OTHER-STORE |
 |---|---|---|---|---|
-| Part 1: ArcaneCore and the vendored library configs | 88 | 101 | 28 | 1 |
+| Part 1: ArcaneCore and the vendored library configs | 89 | 101 | 28 | 1 |
 | Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 148 | 104 | 32 | 0 |
 | Part 3: ArcaneEditor and ArcaneHub | 221 | 40 | 100 | 14 |
-| **Total** | **457** | **245** | **160** | **15** |
+| **Total** | **458** | **245** | **160** | **15** |
 
 (SETTING rows were 82 / 126 / 207 = 415 at the freeze; the post-freeze amendments below split rows and add the names the sweeps registered.)
 
@@ -201,6 +201,7 @@ The freeze binds names, audiences, scopes and apply modes. These rows changed af
 | (none) | `net.defaultPort`, `net.tokenLength`, `net.sessionLifetimeSeconds`, `net.idleTimeoutSeconds`, `net.heartbeatIntervalSeconds` | protocol.json's `settings` keys, layered over net.* (S6-12) | S6-45 |
 | (none) | `server.cheats`, `server.cheatsAllowed`, `server.allowClientSetServer` | the spec's engine knobs (s3.2, s9), registered by the registry since S1 | S6-45 |
 | (none) | `editor.settings.saveDebounceMs`, `.openAtBoot`, `.openCategory`, `.keysConflictsOnly` | the settings windows' own cvars (S3, S4-14) | S6-45 |
+| (none) | `physics.events.hitThreshold` | 2D physics hit threshold; PhysicsSystem reads it Live (spec 2026-10-08 s7.5) | task A3, 2026-10-08 |
 
 Frozen names S6-45 registered in code (no inventory change): `editor.camera.floor` (S6-30 spelled it `speedFloor`), `editor.preview.light.colour` (was `.color`), `editor.shader.previewCheckerLight` / `previewCheckerSpriteScale` (were `editor.preview.checkerLight` / `checkerExtent`), `editor.graph.nodePreviewMinPx` / `dragSpeed` / `rangeDragSpeed` (were under `editor.shader.*`), `editor.mesh.primitiveRanges.*` (were `editor.mesh.subdivMax` ...; the minima are now settings too, each floored at ValidateMeshAsset's rule), and the rows no sweep had converted: `astra.snapshot.compression`, `editor.gizmo.color.*`, `editor.graph.const*Width` / `paramNameFieldWidth` / `passNameFieldWidth` / `swizzleFieldWidth`, `editor.shader.chainLayout.*`, `editor.shader.passThumbPx`, `editor.crash.initialSize` (a Vec2) / `textRows`, `editor.ui.toolbar.logoScale` / `brandScale`, `editor.viewport.grid.fadeInPx` / `fadeFullPx`.
 
@@ -326,6 +327,7 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 | Core/Base/Runtime.cpp:429 | `ProjectManifest::PhysicsConfig{}.gravity` fallback | (0,-9.81) | DERIVED | — | — | — | — | — | — | N | no-project fallback = physics.gravity default |
 | Core/Scene/Physics2D.cpp:19, :22, :46 | floor-normal threshold | 0.5 (normal.y, about 60 deg slope) | SETTING | physics.ground.minNormalY | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (walkable slope) |
 | Core/Scene/Physics2D.cpp:44 | ground probe reach | 0.05 (m) | SETTING | physics.ground.probeDistance | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (coyote reach) |
+| Core/Scene/PhysicsSystem.hpp | hit event threshold | 1.0 (m/s) | SETTING | physics.events.hitThreshold | PhysicsEventSettings | Game | Project | Live | [0,100] | Y | approach speed an impact must exceed to report a hit (spec 2026-10-08 s7.5) |
 | Core/Scene/PhysicsSystem.hpp:207-208 | `kAuthorPosEps`, `kAuthorRotEps` | 1e-5 m / rad | CONSTANT | — | — | — | — | — | — | N | numeric round-trip noise tolerance |
 | Core/Scene/PhysicsSystem.hpp:213-214; SceneResources.hpp:52-53 | `kPi`, `kTau` | pi, 2pi | CONSTANT | — | — | — | — | — | — | N | math identity |
 | Core/Scene/PhysicsSystem.hpp:696; Runtime.cpp:418, :461 | `m_fixedDt` = 1/fixedHz | s | DERIVED | — | — | — | — | — | — | N | from sim.fixedHz, captured at AddSystem |
