@@ -198,11 +198,24 @@ namespace Arcane
         // append frameEvents, clear retiredFixtures (the step's Ends have been
         // read), then erase retired records.
         ARC_CORE_API void CaptureStep();
+        // StepEvents() and FrameEvents() view this resource's own vectors
+        // (PhysicsEventBuffers2D::View). Copy what you need to keep.
+        //   StepEvents: valid until the next stepping pass replaces the step
+        //     buffer (CaptureStep). BeginFrame does not clear it, and a
+        //     zero-step frame leaves it.
+        //   FrameEvents: valid until BeginFrame clears it. The next stepping
+        //     pass appends, and that append may reallocate.
+        //   Either view dies when this PhysicsResource is destroyed: an
+        //     EnsurePhysics re-mint (gravity change), ResetPhysics (Play),
+        //     RestoreRegistry (Stop -- the resource is transient, so a restore
+        //     carries none), or ResetRegistry (scene open, and hot-reload
+        //     teardown).
         ARC_CORE_API PhysicsEvents2D StepEvents() const;    // the most recent physics step
         ARC_CORE_API PhysicsEvents2D FrameEvents() const;   // every step since this frame began
         ARC_CORE_API void BeginFrame();                     // clears frameEvents (RunLoop frame hook)
         // Touching solver contacts right now, sleepers included. A side whose
         // body has no record is skipped (Side resolves fixtures, then retiredFixtures).
+        // Copies into out; the caller owns the vector. Not a view of resource storage.
         ARC_CORE_API void ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const;
 
         // ---- The game-facing commands (input-seam spec s5.3) -----------------
