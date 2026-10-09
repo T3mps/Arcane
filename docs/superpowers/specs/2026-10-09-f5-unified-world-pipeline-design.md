@@ -12,7 +12,7 @@ Binding rulings: Q1–Q7, the adopted outside-review amendments, and review ruli
 
 ## 0. Status
 
-Approved design, 2026-10-09, by the user. Sections 1–4 of the design discussion, the adopted amendments, and Q7 are closed. Review rulings C1–C17 are part of that design. No plan has been written from it, and no product code lands with it.
+**SPEC APPROVED 2026-10-09 by the user (final written-spec review, after two Codex reviews and two outside reviews).** Sections 1–4 of the design discussion, the adopted amendments, and Q7 are closed. Review rulings C1–C17 are part of that design. Plans are written one at a time (plan 1 structure, plan 2 materials, plan 3 sprites); no product code lands with this spec.
 
 Roadmap placement. D1 is the render foundation (clustered deferred, GGX, shadows, GTAO, TAA, the upscaler, and the Surface domain as a finished lighting model). D17 is large-world precision (64-bit positions, camera-relative rendering, origin rebasing). D3 is the render thread. F5 is the F-series foundation those rows attach to: one world pipeline, one material contract, one extract door, the deferred pass slots declared, and the TAA inputs reserved. D1, D17, and D3 each get built once, on this path.
 
