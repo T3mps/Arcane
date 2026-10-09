@@ -16,8 +16,10 @@
 // hashes, and the malformed-format matrix goes through
 // IterationsOfStoredHash, which parses without deriving.
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
@@ -258,6 +260,13 @@ TEST_CASE("crypto: GenerateRandomBytes returns the requested count with variatio
 // ReadExactFromStream and the pure EntropySamplesDegenerate predicate,
 // both fully unit-tested here. Runtime validation of the POSIX branch
 // on real ARM/Linux hardware is deferred to the Linux-port milestone.
+//
+// The Windows chunking + fail-closed policy lives in the
+// platform-neutral FillRandomBytesChunked helper (an injected fill, so
+// a generator that refuses a chunk is unit-tested here without waiting
+// for BCryptGenRandom to actually fail). A zero-length request must
+// not call the fill. A false fill throws and must not hand back a
+// buffer. Chunks tile the request exactly once per byte.
 
 TEST_CASE("crypto: ReadExactFromStream fails closed on short or bad sources", "[crypto]")
 {
@@ -297,6 +306,142 @@ TEST_CASE("crypto: ReadExactFromStream fails closed on short or bad sources", "[
         std::istringstream src("x");
         std::vector<uint8_t> buf(1, 0);
         REQUIRE(Crypto::ReadExactFromStream(src, buf.data(), 0));
+    }
+}
+
+TEST_CASE("crypto: FillRandomBytesChunked fails closed and covers every byte once", "[crypto]")
+{
+    const char* const kFailure = "Crypto: test fill failed";
+
+    // count 0 returns empty and never calls the fill, even when the
+    // injected chunk size would be unusable for a real draw.
+    {
+        int calls = 0;
+        const auto out = Crypto::FillRandomBytesChunked(
+            0, 0,
+            [&](uint8_t*, size_t) {
+                ++calls;
+                return true;
+            },
+            kFailure);
+        REQUIRE(out.empty());
+        REQUIRE(calls == 0);
+    }
+
+    // A fill that fails on the first chunk throws. The caller's buffer
+    // is left untouched -- the helper must not return a buffer.
+    {
+        int calls = 0;
+        std::vector<uint8_t> returned(1, 0xFF);
+        bool threw = false;
+        try
+        {
+            returned = Crypto::FillRandomBytesChunked(
+                8, 3,
+                [&](uint8_t*, size_t) {
+                    ++calls;
+                    return false;
+                },
+                kFailure);
+        }
+        catch (const std::runtime_error& ex)
+        {
+            threw = true;
+            REQUIRE(std::string(ex.what()) == kFailure);
+        }
+        REQUIRE(threw);
+        REQUIRE(calls == 1);
+        REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+    }
+
+    // A fill that succeeds once and then fails must still throw, and
+    // must not return the bytes already written.
+    {
+        int calls = 0;
+        std::vector<uint8_t> returned(1, 0xFF);
+        bool threw = false;
+        try
+        {
+            returned = Crypto::FillRandomBytesChunked(
+                8, 3,
+                [&](uint8_t* dst, size_t n) {
+                    ++calls;
+                    REQUIRE(n > 0);
+                    for (size_t i = 0; i < n; ++i)
+                        dst[i] = 0x11;
+                    return calls < 2;
+                },
+                kFailure);
+        }
+        catch (const std::runtime_error& ex)
+        {
+            threw = true;
+            REQUIRE(std::string(ex.what()) == kFailure);
+        }
+        REQUIRE(threw);
+        REQUIRE(calls == 2);
+        REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+    }
+
+    // Success fills every byte. One chunk larger than the request is a
+    // single fill of the whole buffer.
+    {
+        int calls = 0;
+        const auto out = Crypto::FillRandomBytesChunked(
+            7, 64,
+            [&](uint8_t* dst, size_t n) {
+                ++calls;
+                REQUIRE(n == 7);
+                for (size_t i = 0; i < n; ++i)
+                    dst[i] = 0x5A;
+                return true;
+            },
+            kFailure);
+        REQUIRE(calls == 1);
+        REQUIRE(out == std::vector<uint8_t>(7, 0x5A));
+    }
+
+    // Chunking: a count larger than the injected chunk size is covered
+    // exactly once per byte (10 bytes, 3-byte chunks -> 3,3,3,1).
+    {
+        struct ChunkNote
+        {
+            uint8_t stamp;
+            size_t n;
+        };
+        std::vector<ChunkNote> notes;
+        uint8_t stamp = 1;
+        constexpr size_t kCount = 10;
+        constexpr size_t kChunk = 3;
+        const auto out = Crypto::FillRandomBytesChunked(
+            kCount, kChunk,
+            [&](uint8_t* dst, size_t n) {
+                REQUIRE(n > 0);
+                REQUIRE(n <= kChunk);
+                for (size_t i = 0; i < n; ++i)
+                    dst[i] = stamp;
+                notes.push_back(ChunkNote{ stamp, n });
+                ++stamp;
+                return true;
+            },
+            kFailure);
+
+        REQUIRE(out.size() == kCount);
+        REQUIRE(notes.size() == 4);
+        REQUIRE(notes[0].n == 3);
+        REQUIRE(notes[1].n == 3);
+        REQUIRE(notes[2].n == 3);
+        REQUIRE(notes[3].n == 1);
+
+        size_t offset = 0;
+        for (const ChunkNote& note : notes)
+        {
+            REQUIRE(offset + note.n <= out.size());
+            for (size_t i = 0; i < note.n; ++i)
+                REQUIRE(out[offset + i] == note.stamp);
+            offset += note.n;
+        }
+        REQUIRE(offset == out.size());
     }
 }
 

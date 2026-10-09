@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <istream>
-#include <random>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -157,19 +157,27 @@ namespace Arcane
         // service with a broken generator fails loudly on its first
         // secret instead of minting predictable tokens/salts.
         //
-        // The POSIX branch is fail-closed: a missing /dev/urandom or a
-        // short read throws instead of silently leaving the buffer tail
-        // zeroed, and the old std::random_device fallback is gone from
-        // that path (historically deterministic on some libstdc++/MinGW
-        // builds). The Windows BCrypt branch is byte-identical to the
-        // pre-E03-3 behavior (incl. its WARN + random_device fallback --
-        // BCryptGenRandom effectively never fails there).
+        // Both branches are fail-closed. Neither falls back to
+        // std::random_device (historically deterministic on some
+        // libstdc++/MinGW builds). A zero-length request returns an
+        // empty buffer and does not call the platform RNG: on Windows
+        // a length-0 BCryptGenRandom with a possibly-null buffer is a
+        // spurious failure, and that used to take the fallback.
         //
-        // The POSIX branch cannot execute on this repo's Windows-only CI,
-        // so its read-validation decision lives in the platform-neutral
-        // ReadExactFromStream helper below, which IS unit-tested on
-        // Windows. Runtime validation on real Linux/ARM is deferred to
+        // POSIX: a missing /dev/urandom or a short read throws instead
+        // of silently leaving the buffer tail zeroed. That decision
+        // lives in ReadExactFromStream, which is unit-tested on
+        // Windows because this repo's CI cannot execute the POSIX
+        // branch. Runtime validation on real Linux/ARM is deferred to
         // the Linux-port milestone.
+        //
+        // Windows: BCryptGenRandom takes a ULONG length, so the draw is
+        // filled in ULONG-sized chunks and a count above ULONG max is
+        // never truncated. Any !BCRYPT_SUCCESS logs CRITICAL and throws
+        // std::runtime_error. The chunking and fail-closed policy live
+        // in FillRandomBytesChunked, which takes the fill as a callable
+        // and is unit-tested on Windows with an injected fill (the
+        // Windows branch passes a BCrypt lambda).
         // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
         ARC_CONSTANT("security: the RNG self-test entropy sample size")
         static constexpr size_t ENTROPY_SAMPLE_BYTES = 32;
@@ -193,6 +201,44 @@ namespace Arcane
                 return true;
             source.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(count));
             return source.gcount() == static_cast<std::streamsize>(count);
+        }
+
+        // Platform-neutral chunked fill. `fill(dst, n)` writes exactly
+        // `n` bytes and returns true on success. Each `n` is in
+        // (0, maxChunk]. count == 0 returns an empty vector and does
+        // not call `fill`. A false return logs CRITICAL and throws
+        // std::runtime_error(failureMessage) -- the caller does not
+        // receive a buffer. Public so the fail-closed contract is
+        // unit-testable on Windows; the Windows branch passes a
+        // BCryptGenRandom lambda and maxChunk == ULONG max.
+        template <typename FillFn>
+        static std::vector<uint8_t> FillRandomBytesChunked(size_t count,
+                                                            size_t maxChunk,
+                                                            FillFn&& fill,
+                                                            const char* failureMessage)
+        {
+            if (count == 0)
+                return {};
+
+            if (maxChunk == 0 || failureMessage == nullptr)
+            {
+                LOG_CORE_CRITICAL("Crypto: RNG chunked fill is misconfigured -- refusing to generate secrets");
+                throw std::runtime_error("Crypto: RNG chunked fill is misconfigured");
+            }
+
+            std::vector<uint8_t> bytes(count);
+            size_t offset = 0;
+            while (offset < count)
+            {
+                const size_t n = std::min(maxChunk, count - offset);
+                if (!fill(bytes.data() + offset, n))
+                {
+                    LOG_CORE_CRITICAL("{} -- refusing to generate secrets", failureMessage);
+                    throw std::runtime_error(failureMessage);
+                }
+                offset += n;
+            }
+            return bytes;
         }
 
         // Pure degeneracy predicate over two same-size RNG samples.
@@ -290,22 +336,32 @@ namespace Arcane
         // use the public, latched GenerateRandomBytes.
         static std::vector<uint8_t> GenerateRandomBytesUnchecked(size_t count)
         {
-            std::vector<uint8_t> bytes(count);
+            // A zero-length request never touches the platform RNG.
+            // On Windows, BCryptGenRandom(nullptr, data(), 0, ...) passes
+            // a possibly-null buffer (vector::data() on an empty vector)
+            // and that spurious failure used to take the random_device
+            // fallback. Both branches return empty here instead.
+            if (count == 0)
+                return {};
 
 #ifdef _WIN32
-            // Use Windows BCrypt API (CSPRNG)
-            NTSTATUS status = BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(count), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-
-            if (!BCRYPT_SUCCESS(status))
-            {
-                LOG_CORE_WARN("BCryptGenRandom failed, falling back to std::random_device");
-                // Fallback to std::random_device if BCrypt fails
-                std::random_device rd;
-                for (size_t i = 0; i < count; i++)
-                {
-                    bytes[i] = static_cast<uint8_t>(rd() & 0xFF);
-                }
-            }
+            // BCryptGenRandom's length argument is a ULONG. Fill in
+            // ULONG-sized chunks so a count above ULONG max is never
+            // truncated by the cast, and fail closed: any
+            // !BCRYPT_SUCCESS refuses the draw. There is deliberately
+            // NO std::random_device fallback on this path.
+            return FillRandomBytesChunked(
+                count,
+                static_cast<size_t>(std::numeric_limits<ULONG>::max()),
+                [](uint8_t* dst, size_t n) -> bool {
+                    const NTSTATUS status = BCryptGenRandom(
+                        nullptr,
+                        dst,
+                        static_cast<ULONG>(n),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+                    return BCRYPT_SUCCESS(status);
+                },
+                "Crypto: BCryptGenRandom failed");
 #else
             // /dev/urandom, fail closed (E03-3): a missing device or a
             // short read must never silently yield a zero-tailed buffer,
@@ -313,15 +369,15 @@ namespace Arcane
             // on this path -- it has been deterministic on some
             // libstdc++/MinGW implementations, which is worse than
             // stopping the service.
+            std::vector<uint8_t> bytes(count);
             std::ifstream urandom("/dev/urandom", std::ios::binary);
             if (!ReadExactFromStream(urandom, bytes.data(), count))
             {
                 LOG_CORE_CRITICAL("Crypto: /dev/urandom unavailable or short read -- refusing to generate secrets");
                 throw std::runtime_error("Crypto: /dev/urandom unavailable or short read");
             }
-#endif
-
             return bytes;
+#endif
         }
 
         // ============================================================================
