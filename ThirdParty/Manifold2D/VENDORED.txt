@@ -3,8 +3,8 @@ change them in the Manifold2D repo and re-run scripts\sync-vendor.ps1, or the ne
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Manifold2D
-commit  : 82b98e03b1b570d08deda945ca9eae9b91580e56
+commit  : 5ef1a7acdd7f2b118f40fcc93191ccbbf3962398
 branch  : detached
-subject : chore(vendor): Mosaic synced from upstream 53078ee with a VENDORED stamp
-synced  : 2026-10-08 18:04:37
+subject : test(events): the MT determinism trace proves more than one worker executed solver work (R13)
+synced  : 2026-10-08 22:20:05
 scope   : include/ + src/ + LICENSE (premake5.lua is the consumer wrapper and is never synced)
