@@ -124,3 +124,57 @@ TEST_CASE("message: serialize -> extract -> parse round-trips", "[wire]")
     REQUIRE(back.token == m.token);
     REQUIRE(back.payload == m.payload);
 }
+
+// ---- Fuzz regressions (fuzz/regressions/protocol, 2026-10-07) --------------
+
+TEST_CASE("framing: LENGTH verdict does not depend on TCP segmentation", "[wire][fuzz]")
+{
+    // 15-byte zero-padded prefix: used to be accepted whole (colon found
+    // anywhere) but refused byte-by-byte (>10 bytes without a colon).
+    const std::string stream = "000000000000065:";
+    auto whole = ExtractLengthFramed(stream);
+    REQUIRE(whole.error);
+
+    std::string buf;
+    bool erroredIncrementally = false;
+    for (char c : stream)
+    {
+        buf.push_back(c);
+        auto r = ExtractLengthFramed(buf);
+        if (r.error) { erroredIncrementally = true; break; }
+        REQUIRE(r.needMoreData);
+    }
+    REQUIRE(erroredIncrementally);
+}
+
+TEST_CASE("framing: LENGTH must be plain digits -- no sign or whitespace", "[wire][fuzz]")
+{
+    REQUIRE(ExtractLengthFramed("+5:hello\n").error);
+    REQUIRE(ExtractLengthFramed(" 5:hello\n").error);
+    REQUIRE(ExtractLengthFramed("-1:x\n").error);
+    REQUIRE(ExtractLengthFramed(":x\n").error);
+    REQUIRE(ExtractLengthFramed("x").error);   // a non-digit is refused at once, not after 10 bytes
+
+    auto ok = ExtractLengthFramed("0000000005:hello\n");   // 10 digits is still legal
+    REQUIRE_FALSE(ok.error);
+    REQUIRE(ok.body == "hello");
+}
+
+TEST_CASE("message: TYPE must be plain decimal in [1, 65535]", "[wire][fuzz]")
+{
+    // Minimized fuzz input: trailing junk after the digits used to parse as 2.
+    CHECK(Message::ParseBody("2\xC1\xBF|").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody("1abc|tok|{}").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody(" 1|tok|{}").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody("+1|tok|{}").type == Arcane::kInvalidMsgId);
+    // uint16 wrap: 65537 and -65535 both used to become id 1.
+    CHECK(Message::ParseBody("65537|tok|{}").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody("-65535|tok|{}").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody("0|tok|{}").type == Arcane::kInvalidMsgId);
+    CHECK(Message::ParseBody("|tok|{}").type == Arcane::kInvalidMsgId);
+
+    const Message max = Message::ParseBody("65535|tok|{\"a\":\"x|y\"}");
+    CHECK(max.type == 65535);
+    CHECK(max.token == "tok");
+    CHECK(max.payload == "{\"a\":\"x|y\"}");
+}

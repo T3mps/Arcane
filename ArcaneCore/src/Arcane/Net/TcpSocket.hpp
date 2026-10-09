@@ -34,6 +34,8 @@ using SocketType = int;
 #define CloseSocket close
 #endif
 
+#include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <string>
 
@@ -434,26 +436,41 @@ namespace Arcane
         LengthFrameResult r;
         if (buffer.empty()) { r.needMoreData = true; return r; }
 
-        size_t colonPos = buffer.find(':');
-        if (colonPos == std::string::npos)
+        // Fuzz finding (fuzz/regressions/protocol, 2026-10-07): the LENGTH
+        // prefix is 1..kMaxLengthDigits ASCII digits, decided from the
+        // prefix bytes ALONE. The colon used to be searched for in the whole
+        // buffer while "no colon yet" only waited up to 10 bytes, so a
+        // prefix like "000000000000065:" was accepted when it arrived in
+        // one recv() and refused when TCP split it -- the framing verdict
+        // depended on segmentation. std::stoull also let a leading space,
+        // '+' or '-' through (M-V4-5 only closed trailing junk). Now: any
+        // non-digit before the colon, an empty prefix, or more than
+        // kMaxLengthDigits digits is an error however the bytes arrive.
+        constexpr size_t kMaxLengthDigits = 10;
+        const size_t scan = (std::min)(buffer.size(), kMaxLengthDigits + 1);   // parenthesized: windows.h min()
+        size_t colonPos = 0;
+        while (colonPos < scan && buffer[colonPos] >= '0' && buffer[colonPos] <= '9')
+            ++colonPos;
+        if (colonPos == buffer.size())
         {
-            r.needMoreData = (buffer.size() <= 10);
+            // Digits only so far: wait for the colon, unless the prefix is
+            // already longer than any legal length.
+            r.needMoreData = (colonPos <= kMaxLengthDigits);
             r.error        = !r.needMoreData;
             return r;
         }
+        if (colonPos == 0 || colonPos > kMaxLengthDigits || buffer[colonPos] != ':')
+        {
+            r.error = true;
+            return r;
+        }
 
-        // Audit M-V4-5 networking (2026-06-03): std::stoull is a partial
-        // parse -- it would happily return 12 from "12abc" and leave "abc"
-        // unconsumed. With the colon search above, that means a prefix
-        // like "12abc:body" would be treated as length 12 with no error.
-        // Capture the parsed-char count via the `pos` out-param and
-        // require it to consume the entire pre-colon substring so the
-        // length prefix must be all-numeric.
+        // Audit M-V4-5 networking (2026-06-03): the length prefix must be
+        // all-numeric -- guaranteed by the digit scan above; from_chars over
+        // exactly those digits cannot partial-parse.
         size_t expectedLen = 0;
-        std::size_t parsedChars = 0;
-        try { expectedLen = std::stoull(buffer.substr(0, colonPos), &parsedChars); }
-        catch (...) { r.error = true; return r; }
-        if (parsedChars != colonPos) { r.error = true; return r; }
+        const auto [lenEnd, lenEc] = std::from_chars(buffer.data(), buffer.data() + colonPos, expectedLen);
+        if (lenEc != std::errc{} || lenEnd != buffer.data() + colonPos) { r.error = true; return r; }
 
         if (expectedLen > maxBodySize) { r.error = true; return r; }
 
