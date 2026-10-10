@@ -1,0 +1,10 @@
+Mosaic vendored from the standalone repo. DO NOT EDIT THESE FILES IN PLACE --
+change them in the Mosaic repo and re-run scripts\sync-vendor.ps1, or the next
+sync silently reverts your edit.
+
+source  : D:\dev\starworks\Mosaic
+commit  : c63a4b26780be6400aa539e402e0268557713f7a
+branch  : detached
+subject : docs(license): copyright to Ethan Temprovich (Starworks); contributions sign off under the DCO (MIT unchanged)
+synced  : 2026-10-10 10:56:52
+scope   : include/ + src/ + LICENSE
