@@ -99,7 +99,7 @@ namespace Arcane::Physics2D
             }
 
             // ------------------------------------------------------------------
-            // PASS 1.5: ENSURE PhysicsBodyRef. The Inspector can never add one
+            // PASS 1.5: ENSURE BodyRef. The Inspector can never add one
             // (ComponentCatalog structure-locks it), so an editor-authored
             // RigidBody + Collider entity would otherwise never match PASS 2's
             // view. Collected, then added -- AddComponent moves the entity
@@ -186,12 +186,12 @@ namespace Arcane::Physics2D
                                                    fx0.localPos.y * lt.scale.y);
                     def.localAngle    = static_cast<Phys::Real>(fx0.localAngle);
 
-                    // Body-level dynamics from RigidBody2D.
+                    // Body-level dynamics from RigidBody.
                     def.linearDamping = rb.linearDamping;
                     def.fixedRotation = rb.fixedRotation;
                     def.bullet        = rb.bullet;
 
-                    // Optional mass override: RigidBody2D.mass > 0 beats density-derived.
+                    // Optional mass override: RigidBody.mass > 0 beats density-derived.
                     if (rb.mass > 0.0f)
                         def.mass = rb.mass;
 

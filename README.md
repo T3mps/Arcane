@@ -208,7 +208,7 @@ engine resources -- and the scheduler orders and parallelises it from that:
 ```cpp
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Input/GameInput.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Physics2D.hpp>
 
 struct Jumper : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D::System>>
 {

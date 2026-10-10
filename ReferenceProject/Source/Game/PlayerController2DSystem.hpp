@@ -13,7 +13,6 @@
 
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Input/GameInput.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Physics2D.hpp>
 #include <Arcane/Sim/Time.hpp>
 

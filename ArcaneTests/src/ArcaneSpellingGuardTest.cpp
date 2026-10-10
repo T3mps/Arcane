@@ -9,7 +9,7 @@
 //     OUTSIDE COMMENTS only (ScanMode::CommentsOnly). An #include of a
 //     library header, a #define, a string literal or an ARC_INTERNAL fence
 //     in game code is exactly the leak the guard exists to catch.
-//   - The 16 headers a game module reads (kGameFacingHeaders): PUBLIC
+//   - The 20 headers a game module reads (kGameFacingHeaders): PUBLIC
 //     DECLARATIONS only (ScanMode::PublicDeclarations) -- comments, string
 //     literals, preprocessor directives (incl. #define continuations) and
 //     `// ARC_INTERNAL_BEGIN: <why>` ... `// ARC_INTERNAL_END` fences are
@@ -48,6 +48,10 @@ namespace
         "ArcaneCore/src/Arcane/Scene/PhysicsComponents.hpp",
         "ArcaneCore/src/Arcane/Scene/PhysicsSystem.hpp",
         "ArcaneCore/src/Arcane/Scene/PhysicsEvents2D.hpp",
+        "ArcaneCore/src/Arcane/Physics2D.hpp",
+        "ArcaneCore/src/Arcane/Physics2DFwd.hpp",
+        "ArcaneCore/src/Arcane/Scene/Physics2DWorld.hpp",
+        "ArcaneCore/src/Arcane/Scene/Physics2DHandles.hpp",
     };
 
     struct Hit { std::string where; int line; std::string text; };
@@ -55,7 +59,7 @@ namespace
     enum class ScanMode
     {
         CommentsOnly,       // game sources + template renders: only comments are exempt
-        PublicDeclarations, // the 16 headers: comments, strings, preprocessor lines and fences are exempt
+        PublicDeclarations, // the 20 headers: comments, strings, preprocessor lines and fences are exempt
     };
 
     // Line-oriented scan. Comments are always stripped; PublicDeclarations also
@@ -211,7 +215,7 @@ TEST_CASE("guard: every editor C++ template render spells Arcane:: only (outside
     Report(hits);
 }
 
-TEST_CASE("guard: the 16 game-facing engine headers spell Arcane:: outside comments, preprocessor lines and fences", "[guard]")
+TEST_CASE("guard: the 20 game-facing engine headers spell Arcane:: outside comments, preprocessor lines and fences", "[guard]")
 {
     const auto root = Arcane::Test::FindReferenceProjectDir().parent_path();
     std::vector<Hit> hits;

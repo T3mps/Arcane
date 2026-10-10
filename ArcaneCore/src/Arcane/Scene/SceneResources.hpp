@@ -11,7 +11,7 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 #include <Arcane/Scene/ViewTransform.hpp>   // RenderContext2D::view (F4 plan 1 T3)
 
-#include <Astra/Container/FlatMap.hpp>    // PhysicsInterpBuffer::slotOf (fenced below)
+#include <Astra/Container/FlatMap.hpp>    // Physics2D::InterpBuffer::slotOf (fenced below)
 
 #include <glm/glm.hpp>
 
@@ -75,7 +75,7 @@ namespace Physics2D
     // the handle generation it had then. Manifold2D-free on purpose -- this
     // header is compiled by every game module, whose include surface has no
     // Manifold2D row, so Phys::BodyHandle cannot appear here (and that is why
-    // RenderSubmissionSystem reads THIS map rather than PhysicsBodyRef).
+    // RenderSubmissionSystem reads THIS map rather than Physics2D::BodyRef).
     struct InterpSlot
     {
         std::uint32_t index      = 0;
@@ -83,7 +83,7 @@ namespace Physics2D
     };
 
     // Per-body previous-pose buffer, indexed by PhysicsWorld body SLOT index (the
-    // same space DrawPhysicsDebug iterates). Populated by PhysicsSystem before each
+    // same space DrawPhysicsDebug iterates). Populated by Physics2D::System before each
     // world.Step(); read by DrawPhysicsDebug and RenderSubmissionSystem. Transient
     // runtime state: AstraTransientResource, so Registry::Save skips it and a
     // restore never revives a stale history (IN-8; it replaced Runtime::
@@ -95,8 +95,8 @@ namespace Physics2D
         static constexpr bool AstraTransientResource = true;
 
         std::vector<InterpPose> prev;
-        // entity -> its slot at capture. Rebuilt by PhysicsSystem PASS 2.5 from
-        // PhysicsResource::entityToBody in the same pass that fills `prev`, so the
+        // entity -> its slot at capture. Rebuilt by Physics2D::System PASS 2.5 from
+        // Physics2D::World::entityToBody in the same pass that fills `prev`, so the
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
         // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)

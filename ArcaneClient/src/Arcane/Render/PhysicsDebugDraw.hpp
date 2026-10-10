@@ -115,7 +115,7 @@ namespace Physics2D
         bool drawManifolds = false;
 
         // ---- render interpolation (Epic 04.2) -------------------------------
-        // When `interp` is set (per-body previous-step poses from PhysicsSystem)
+        // When `interp` is set (per-body previous-step poses from Physics2D::System)
         // each body's outline / COM / orientation / velocity origin is drawn at
         // lerp(prev, current, alpha). Null -> current step pose (unchanged). A
         // per-body generation mismatch (recycled slot) falls back to current.

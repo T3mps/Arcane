@@ -6,7 +6,6 @@
 
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/PhysicsEvents2D.hpp>
 #include <Arcane/Physics2D.hpp>
 
 #include "TintOnContact.hpp"
