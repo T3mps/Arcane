@@ -31,7 +31,7 @@ namespace Arcane::Physics2D
 
     struct BodyRecord
     {
-        Arcane::ECS::Entity                  entity = Arcane::ECS::Entity::Invalid();
+        Arcane::Entity                  entity = Arcane::Entity::Invalid();
         Guid                                 guid{};
         std::vector<Detail::FixtureHandle>   fixtures;
         bool                                 retired = false;
@@ -70,9 +70,9 @@ namespace Arcane::Physics2D
         ARC_CORE_API Events StepEvents() const;
         ARC_CORE_API Events FrameEvents() const;
         ARC_CORE_API void BeginFrame();
-        ARC_CORE_API void ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint>& out) const;
-        ARC_CORE_API BodyMotion Motion(Arcane::ECS::Entity entity, const RigidBody& body) const;
-        ARC_CORE_API void SetVelocity(Arcane::ECS::Entity entity, RigidBody& body, float velocityX, float velocityY);
+        ARC_CORE_API void ContactsOf(Arcane::Entity entity, std::vector<ContactPoint>& out) const;
+        ARC_CORE_API BodyMotion Motion(Arcane::Entity entity, const RigidBody& body) const;
+        ARC_CORE_API void SetVelocity(Arcane::Entity entity, RigidBody& body, float velocityX, float velocityY);
 
         static constexpr bool AstraTransientResource = true;
 
@@ -83,14 +83,14 @@ namespace Arcane::Physics2D
         friend struct System;
         friend struct Detail::Access;
 
-        ARC_CORE_API void RecordBody(Arcane::ECS::Entity entity, Guid guid, Detail::BodyHandle handle,
+        ARC_CORE_API void RecordBody(Arcane::Entity entity, Guid guid, Detail::BodyHandle handle,
                                      std::vector<Detail::FixtureHandle> fixtures);
         ARC_CORE_API void RetireBody(Detail::BodyHandle handle);
         ARC_CORE_API void CaptureStep();
 
         std::unique_ptr<Detail::PhysicsWorld>                 world;
-        std::unordered_map<Arcane::ECS::Entity, Detail::BodyHandle> entityToBody;
-        Arcane::ECS::Tick  lastReconcile = 0;
+        std::unordered_map<Arcane::Entity, Detail::BodyHandle> entityToBody;
+        Arcane::Tick  lastReconcile = 0;
         std::uint32_t      reconciled = 0;
         std::unordered_map<std::uint64_t, BodyRecord> bodyRecords;
         EventBuffers stepEvents;
@@ -98,16 +98,16 @@ namespace Arcane::Physics2D
     };
 
     struct System
-        : Arcane::ECS::SystemTraits<Arcane::ECS::Reads<Collider>,
-                                    Arcane::ECS::Writes<Arcane::Transform, BodyRef, RigidBody>,
-                                    Arcane::ECS::Before<Arcane::TransformPropagationSystem>>
+        : Arcane::SystemTraits<Arcane::Reads<Collider>,
+                                    Arcane::Writes<Arcane::Transform, BodyRef, RigidBody>,
+                                    Arcane::Before<Arcane::TransformPropagationSystem>>
     {
         static constexpr bool RequiresExclusive = true;
 
         explicit System(float fixedDt, bool stepWorld = true) noexcept
             : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
 
-        void operator()(Arcane::ECS::Registry& reg);
+        void operator()(Arcane::Registry& reg);
 
     private:
         float m_fixedDt;

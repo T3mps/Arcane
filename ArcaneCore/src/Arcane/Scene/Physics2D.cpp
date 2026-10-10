@@ -54,7 +54,7 @@ namespace Arcane::Physics2D
         }
     }
 
-    BodyMotion World::Motion(Arcane::ECS::Entity entity, const RigidBody& body) const
+    BodyMotion World::Motion(Arcane::Entity entity, const RigidBody& body) const
     {
         BodyMotion motion;
         if (body.type != BodyType::Dynamic)
@@ -74,7 +74,7 @@ namespace Arcane::Physics2D
         return motion;
     }
 
-    void World::SetVelocity(Arcane::ECS::Entity entity, RigidBody& body,
+    void World::SetVelocity(Arcane::Entity entity, RigidBody& body,
                             float velocityX, float velocityY)
     {
         if (!std::isfinite(velocityX) || !std::isfinite(velocityY))

@@ -22,7 +22,7 @@
 
 namespace ReferenceProject
 {
-    struct PlayerController2DSystem : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D::System>>
+    struct PlayerController2DSystem : Arcane::SystemTraits<Arcane::Before<Arcane::Physics2D::System>>
     {
         Arcane::ActionRef move{"Player", "Move"};
         Arcane::ActionRef jump{"Player", "Jump"};
@@ -36,17 +36,17 @@ namespace ReferenceProject
             return std::max(current - distance, target);
         }
 
-        void operator()(Arcane::ECS::View<PlayerController2D, Arcane::Physics2D::RigidBody>& view,
-                        Arcane::ECS::Res<Arcane::Time> time,
-                        Arcane::ECS::Res<Arcane::GameInput> input,
-                        Arcane::ECS::ResMut<Arcane::Physics2D::World> physics)
+        void operator()(Arcane::View<PlayerController2D, Arcane::Physics2D::RigidBody>& view,
+                        Arcane::Res<Arcane::Time> time,
+                        Arcane::Res<Arcane::GameInput> input,
+                        Arcane::ResMut<Arcane::Physics2D::World> physics)
         {
             const float dt       = std::clamp(static_cast<float>(time->fixedDt), 0.0f, 0.05f);
             const float axis     = input->Value(move).scalar;
             const bool  jumped   = input->PressedThisFixedStep(jump);
             const bool  jumpHeld = input->Down(jump);
 
-            view.ForEach([&](Arcane::ECS::Entity entity, PlayerController2D& controller, Arcane::Physics2D::RigidBody& body)
+            view.ForEach([&](Arcane::Entity entity, PlayerController2D& controller, Arcane::Physics2D::RigidBody& body)
             {
                 const Arcane::Physics2D::BodyMotion motion = physics->Motion(entity, body);
                 if (motion.supported)

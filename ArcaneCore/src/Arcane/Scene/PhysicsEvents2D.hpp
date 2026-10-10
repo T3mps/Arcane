@@ -15,7 +15,7 @@
 
 namespace Arcane::Physics2D
 {
-    struct ContactSide  { Arcane::ECS::Entity entity = Arcane::ECS::Entity::Invalid(); Guid guid{}; std::uint32_t fixture = 0; };
+    struct ContactSide  { Arcane::Entity entity = Arcane::Entity::Invalid(); Guid guid{}; std::uint32_t fixture = 0; };
     struct ContactBegin { ContactSide a, b; };
     struct ContactEnd   { ContactSide a, b; };
     struct ContactHit   { ContactSide a, b; glm::vec2 point{ 0.0f }; glm::vec2 normal{ 0.0f }; float approachSpeed = 0.0f; };

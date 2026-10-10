@@ -5,7 +5,7 @@
 // Arcane::ActionRef, a by-name action handle. Systems declare it as a param:
 //
 //     Arcane::ActionRef jump{"Player", "Jump"};             // a system member
-//     void operator()(Arcane::ECS::Res<Arcane::GameInput> input) // input->PressedThisFixedStep(jump)
+//     void operator()(Arcane::Res<Arcane::GameInput> input) // input->PressedThisFixedStep(jump)
 //
 // Query only: maps, control schemes, rebinding and profiles stay on
 // Client()->GameInput() (the LocalInputUser). Every client world carries one,

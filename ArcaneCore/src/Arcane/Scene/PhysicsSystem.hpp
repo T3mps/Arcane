@@ -24,7 +24,7 @@ namespace Arcane::Physics2D
     ARC_CONSTANT("math identity / tolerance: authored-rotation round-trip noise")
     inline constexpr float kAuthorRotEps = 1e-5f;
 
-    inline void System::operator()(Arcane::ECS::Registry& reg)
+    inline void System::operator()(Arcane::Registry& reg)
     {
         namespace Phys = Detail::Phys;
 
@@ -55,15 +55,15 @@ namespace Arcane::Physics2D
             // the map entry when it calls AddBody for the same entity.
             // ------------------------------------------------------------------
             {
-                std::vector<Arcane::ECS::Entity> toRemove;
+                std::vector<Arcane::Entity> toRemove;
                 if (!m_stepWorld)
                 {
-                    reg.CreateView<const BodyRef, const Collider, Arcane::ECS::Changed<Collider>, Arcane::ECS::With<RigidBody>>()
+                    reg.CreateView<const BodyRef, const Collider, Arcane::Changed<Collider>, Arcane::With<RigidBody>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Arcane::ECS::Entity entity, const BodyRef&, const Collider&) { toRemove.push_back(entity); });
-                    reg.CreateView<const BodyRef, const RigidBody, Arcane::ECS::Changed<RigidBody>, Arcane::ECS::With<Collider>>()
+                        .ForEach([&](Arcane::Entity entity, const BodyRef&, const Collider&) { toRemove.push_back(entity); });
+                    reg.CreateView<const BodyRef, const RigidBody, Arcane::Changed<RigidBody>, Arcane::With<Collider>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Arcane::ECS::Entity entity, const BodyRef&, const RigidBody&) { toRemove.push_back(entity); });
+                        .ForEach([&](Arcane::Entity entity, const BodyRef&, const RigidBody&) { toRemove.push_back(entity); });
                 }
                 for (auto& [entity, handle] : entityToBody)
                 {
@@ -73,7 +73,7 @@ namespace Arcane::Physics2D
                     if (dead || noBody || noCollider)
                         toRemove.push_back(entity);
                 }
-                for (Arcane::ECS::Entity e : toRemove)
+                for (Arcane::Entity e : toRemove)
                 {
                     auto it = entityToBody.find(e);
                     if (it == entityToBody.end()) continue;   // listed twice, or never minted
@@ -106,10 +106,10 @@ namespace Arcane::Physics2D
             // between archetypes, never inside a ForEach.
             // ------------------------------------------------------------------
             {
-                std::vector<Arcane::ECS::Entity> missing;
-                reg.CreateView<const RigidBody, const Collider, Arcane::ECS::Not<BodyRef>>()
-                    .ForEach([&](Arcane::ECS::Entity entity, const RigidBody&, const Collider&) { missing.push_back(entity); });
-                for (Arcane::ECS::Entity e : missing)
+                std::vector<Arcane::Entity> missing;
+                reg.CreateView<const RigidBody, const Collider, Arcane::Not<BodyRef>>()
+                    .ForEach([&](Arcane::Entity entity, const RigidBody&, const Collider&) { missing.push_back(entity); });
+                for (Arcane::Entity e : missing)
                     reg.AddComponent<BodyRef>(e, BodyRef{});
             }
 
@@ -120,7 +120,7 @@ namespace Arcane::Physics2D
             // ------------------------------------------------------------------
             {
                 auto view = reg.CreateView<const RigidBody, const Collider, BodyRef, const Transform>();
-                view.ForEach([&](Arcane::ECS::Entity   entity,
+                view.ForEach([&](Arcane::Entity   entity,
                                  const RigidBody&    rb,
                                  const Collider&     col,
                                  BodyRef& ref,
@@ -314,9 +314,9 @@ namespace Arcane::Physics2D
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<BodyRef, const Transform, Arcane::ECS::Changed<Transform>,
-                                           const Collider, Arcane::ECS::With<RigidBody>>();
-                view.Since(res->lastReconcile).ForEach([&](Arcane::ECS::Entity   /*entity*/,
+                auto view = reg.CreateView<BodyRef, const Transform, Arcane::Changed<Transform>,
+                                           const Collider, Arcane::With<RigidBody>>();
+                view.Since(res->lastReconcile).ForEach([&](Arcane::Entity   /*entity*/,
                                                             BodyRef&  ref,
                                                             const Transform& lt,
                                                             const Collider& col)
@@ -388,7 +388,7 @@ namespace Arcane::Physics2D
             if (m_stepWorld)
             {
                 auto view = reg.CreateView<const BodyRef, Transform, RigidBody>();
-                view.ForEach([&](Arcane::ECS::Entity   /*entity*/,
+                view.ForEach([&](Arcane::Entity   /*entity*/,
                                  const BodyRef& ref,
                                  Transform& lt,
                                  RigidBody&    rb)

@@ -5,7 +5,7 @@
 // EngineContext is the C++ facade handed to the plugin (Arcane::Runtime).
 
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/EcsFwd.hpp>   // Arcane::ECS::{TypeContext,BinaryWriter,BinaryReader}, Arcane::IWorkScheduler
+#include <Arcane/EcsFwd.hpp>   // Arcane::{TypeContext,BinaryWriter,BinaryReader}, Arcane::IWorkScheduler
 #include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (an EngineContext field, ABI 30)
 
 #include <cstdint>
@@ -1163,7 +1163,7 @@ namespace Arcane
     struct EngineContext
     {
         uint32_t                abiVersion;    // == kGamePluginABIVersion at the host
-        Arcane::ECS::TypeContext*    typeContext;   // plugin calls Astra::SetTypeContext(this) FIRST
+        Arcane::TypeContext*    typeContext;   // plugin calls Astra::SetTypeContext(this) FIRST
         Arcane::IWorkScheduler* workScheduler; // the one engine enkiTS adapter (shared instance)
         Arcane::ITaskExecutor*  taskExecutor;  // SAME enki pool, worker-index ParallelFor (physics/general)
         Arcane::Runtime*        engine;        // registry, schedulers, snapshot/restore, render ctx
@@ -1210,8 +1210,8 @@ namespace Arcane
         void     (*Update)(double dt, double alpha)      = nullptr;
         // SaveState is void because BinaryWriter is error-latching; callers check writer.HasError()
         // after the call, mirroring how LoadState signals failure via its bool return.
-        void     (*SaveState)(Arcane::ECS::BinaryWriter&)     = nullptr;
-        bool     (*LoadState)(Arcane::ECS::BinaryReader&)     = nullptr;
+        void     (*SaveState)(Arcane::BinaryWriter&)     = nullptr;
+        bool     (*LoadState)(Arcane::BinaryReader&)     = nullptr;
         // v2: host calls this between ImGuiLayer BeginFrame and Render (the only valid
         // ImGui draw window). Update is sim-phase -- too early. May be null if a plugin
         // does not export it (resolution is lenient); the host null-checks before calling.

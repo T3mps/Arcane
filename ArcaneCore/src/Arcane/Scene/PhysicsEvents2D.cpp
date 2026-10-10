@@ -35,7 +35,7 @@ namespace
 
 namespace Arcane::Physics2D
 {
-    void World::RecordBody(Arcane::ECS::Entity entity, Guid guid, Detail::BodyHandle handle,
+    void World::RecordBody(Arcane::Entity entity, Guid guid, Detail::BodyHandle handle,
                            std::vector<Detail::FixtureHandle> fixtures)
     {
         bodyRecords[Detail::PackBody(handle)] = BodyRecord{ entity, guid, std::move(fixtures), false };
@@ -106,7 +106,7 @@ namespace Arcane::Physics2D
     Events World::FrameEvents() const { return frameEvents.View(); }
     void World::BeginFrame() { frameEvents.Clear(); }
 
-    void World::ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint>& out) const
+    void World::ContactsOf(Arcane::Entity entity, std::vector<ContactPoint>& out) const
     {
         namespace Phys = Detail::Phys;
         out.clear();

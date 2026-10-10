@@ -146,14 +146,14 @@ namespace Arcane::Physics2D
             ARC_REFLECT_ATTR(Hidden)
     ARC_END_REFLECT_TYPE()
 
-    inline void RegisterComponents(Arcane::ECS::ComponentRegistry& creg)
+    inline void RegisterComponents(Arcane::ComponentRegistry& creg)
     {
         creg.RegisterComponent<RigidBody>();
         creg.RegisterComponent<Collider>();
         creg.RegisterComponent<BodyRef>();
     }
 
-    inline void RegisterComponents(Arcane::ECS::Registry& reg)
+    inline void RegisterComponents(Arcane::Registry& reg)
     {
         RegisterComponents(*reg.GetComponentRegistry());
     }

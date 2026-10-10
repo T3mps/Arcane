@@ -6,7 +6,7 @@
 #include <type_traits>
 
 static_assert(std::is_class_v<Arcane::Physics2D::World>);
-static_assert(std::is_same_v<Arcane::ECS::Entity, Astra::Entity>);
+static_assert(std::is_same_v<Arcane::Entity, Astra::Entity>);
 
 int main()
 {

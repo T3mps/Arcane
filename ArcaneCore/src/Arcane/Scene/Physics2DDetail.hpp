@@ -29,7 +29,7 @@ namespace Arcane::Physics2D::Detail
         static const PhysicsWorld* Solver(const World& w) noexcept { return w.world.get(); }
         static auto& Entities(World& w) noexcept { return w.entityToBody; }
         static const auto& Entities(const World& w) noexcept { return w.entityToBody; }
-        static Arcane::ECS::Tick& LastReconcile(World& w) noexcept { return w.lastReconcile; }
+        static Arcane::Tick& LastReconcile(World& w) noexcept { return w.lastReconcile; }
         static std::uint32_t& Reconciled(World& w) noexcept { return w.reconciled; }
         static auto& Records(World& w) noexcept { return w.bodyRecords; }
         static const auto& Records(const World& w) noexcept { return w.bodyRecords; }
