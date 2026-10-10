@@ -115,11 +115,11 @@ TEST_CASE("flat Arcane:: ECS prelude names are present", "[namespaces]")
 
 TEST_CASE("Physics2D game-facing types", "[namespaces]")
 {
-    STATIC_REQUIRE(std::is_class_v<Arcane::Physics2D::World>);
-    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::BodyType>);
-    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::ShapeKind>);
-    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::RigidBody::type), Arcane::Physics2D::BodyType>);
-    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::Fixture::kind), Arcane::Physics2D::ShapeKind>);
+    STATIC_REQUIRE(std::is_class_v<Arcane::PhysicsWorld2D>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::BodyType2D>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::ShapeKind2D>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::RigidBody2D::type), Arcane::BodyType2D>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Fixture2D::kind), Arcane::ShapeKind2D>);
     STATIC_REQUIRE(std::is_same_v<Arcane::EngineComponentRoster,
         Arcane::TypeList<
             Arcane::Transform,
@@ -130,11 +130,11 @@ TEST_CASE("Physics2D game-facing types", "[namespaces]")
             Arcane::Hidden,
             Arcane::Camera,
             Arcane::MeshRenderer,
-            Arcane::Physics2D::SceneSettings,
+            Arcane::PhysicsSettings2D,
             Arcane::WorldBounds,
-            Arcane::Physics2D::RigidBody,
-            Arcane::Physics2D::Collider,
-            Arcane::Physics2D::BodyRef>>);
+            Arcane::RigidBody2D,
+            Arcane::Collider2D,
+            Arcane::PhysicsBodyRef2D>>);
 }
 
 // SA4: the names that must not exist (PhysicsWorld, Body, BodyHandle, Phys,

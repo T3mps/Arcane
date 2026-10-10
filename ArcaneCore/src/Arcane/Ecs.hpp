@@ -7,7 +7,7 @@
 // when an alias is added here. Every name is an ALIAS of the library type.
 // There is no Arcane::ECS namespace. File path stays Ecs.hpp.
 //
-//     struct Mover : Arcane::SystemTraits<Arcane::Before<Arcane::Physics2D::System>>
+//     struct Mover : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem2D>>
 //     {
 //         void operator()(Arcane::View<Arcane::Transform>& view, Arcane::Res<Arcane::Time> time);
 //     };

@@ -1,3 +1,3 @@
 #include <Arcane/Config/Bindings/Physics2DBinding.hpp>
 
-ARC_SETTINGS(Arcane::Physics2D::WorldSettings);
+ARC_SETTINGS(Arcane::PhysicsWorldSettings2D);

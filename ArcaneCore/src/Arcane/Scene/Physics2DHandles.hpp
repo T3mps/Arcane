@@ -14,7 +14,7 @@ namespace Manifold2D::Physics
     class PhysicsWorld;
 }
 
-namespace Arcane::Physics2D::Detail
+namespace Arcane::Detail::Physics2D
 {
     using PhysicsWorld  = ::Manifold2D::Physics::PhysicsWorld;
     using BodyHandle    = ::Manifold2D::Physics::BodyHandle;

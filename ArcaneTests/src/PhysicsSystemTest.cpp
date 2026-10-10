@@ -1,16 +1,16 @@
-// M6 Physics-v2 T6 -- Arcane::Physics2D::System + Arcane::Physics2D::World + transform sync,
-// updated for fixture-list Arcane::Physics2D::Collider schema.
+// M6 Physics-v2 T6 -- Arcane::PhysicsSystem2D + Arcane::PhysicsWorld2D + transform sync,
+// updated for fixture-list Arcane::Collider2D schema.
 //
 // Tests:
 //   1. Dynamic body under gravity: after N fixed steps, Transform.position.y
 //      has increased (fallen), and WorldTransform.matrix[3].y agrees (propagation ran).
 //   2. Kinematic body with authored velocity: after N steps, Transform.position.x
 //      has increased proportionally to velocity * dt * N.
-//   3. Remove: after DestroyEntity, the body row is removed from the Arcane::Physics2D::World's
-//      entityToBody map on the next Arcane::Physics2D::System invocation.
+//   3. Remove: after DestroyEntity, the body row is removed from the Arcane::PhysicsWorld2D's
+//      entityToBody map on the next Arcane::PhysicsSystem2D invocation.
 //   4. Determinism: two identical runs of the same scene yield exactly the same
 //      final Transform positions (binary ==, not Approx).
-//   5. Two-fixture body: an entity with a 2-fixture Arcane::Physics2D::Collider gets both fixtures
+//   5. Two-fixture body: an entity with a 2-fixture Arcane::Collider2D gets both fixtures
 //      attached in the PhysicsWorld (FixtureCount == 2), and Transform still
 //      updates after stepping.
 
@@ -70,7 +70,7 @@ namespace
     SceneHandles BuildScene(Astra::Registry& reg)
     {
         Arcane::RegisterSceneComponents(reg);
-        Arcane::Physics2D::RegisterComponents(reg);
+        Arcane::RegisterPhysicsComponents2D(reg);
 
         // Physics world resource: gravity +Y down. gravityX and the sleep/
         // restitution/push/hash-grid knobs are all left at the MKS engine
@@ -78,7 +78,7 @@ namespace
         // restitutionThreshold=1, contactPushMaxVelocity=3, hashCellSize=1).
         Manifold2D::Physics::WorldDef wd;
         wd.gravityY = kGravityY;
-        reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+        reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
 
         // SceneRoot (no physics, just anchors the hierarchy).
         Astra::Entity root = reg.CreateEntity();
@@ -95,21 +95,21 @@ namespace
             reg.AddComponent<Arcane::Transform>(dyn, lt);
             reg.AddComponent<Arcane::WorldTransform>(dyn, Arcane::WorldTransform{});
 
-            Arcane::Physics2D::RigidBody rb;
-            rb.type = Arcane::Physics2D::BodyType::Dynamic;
-            reg.AddComponent<Arcane::Physics2D::RigidBody>(dyn, rb);
+            Arcane::RigidBody2D rb;
+            rb.type = Arcane::BodyType2D::Dynamic;
+            reg.AddComponent<Arcane::RigidBody2D>(dyn, rb);
 
-            // Single-fixture Arcane::Physics2D::Collider (circle r=0.5).
-            Arcane::Physics2D::Collider col;
+            // Single-fixture Arcane::Collider2D (circle r=0.5).
+            Arcane::Collider2D col;
             {
-                Arcane::Physics2D::Fixture fx;
-                fx.kind   = Arcane::Physics2D::ShapeKind::Circle;
+                Arcane::Fixture2D fx;
+                fx.kind   = Arcane::ShapeKind2D::Circle;
                 fx.radius = 0.5f;
                 col.fixtures.push_back(fx);
             }
-            reg.AddComponent<Arcane::Physics2D::Collider>(dyn, col);
+            reg.AddComponent<Arcane::Collider2D>(dyn, col);
 
-            reg.AddComponent<Arcane::Physics2D::BodyRef>(dyn, Arcane::Physics2D::BodyRef{});
+            reg.AddComponent<Arcane::PhysicsBodyRef2D>(dyn, Arcane::PhysicsBodyRef2D{});
             reg.SetParent(dyn, root);
         }
 
@@ -120,22 +120,22 @@ namespace
             reg.AddComponent<Arcane::Transform>(kin, lt);
             reg.AddComponent<Arcane::WorldTransform>(kin, Arcane::WorldTransform{});
 
-            Arcane::Physics2D::RigidBody rb;
-            rb.type     = Arcane::Physics2D::BodyType::Kinematic;
+            Arcane::RigidBody2D rb;
+            rb.type     = Arcane::BodyType2D::Kinematic;
             rb.velocity = glm::vec2(kKinSpeed, 0.0f);
-            reg.AddComponent<Arcane::Physics2D::RigidBody>(kin, rb);
+            reg.AddComponent<Arcane::RigidBody2D>(kin, rb);
 
-            // Single-fixture Arcane::Physics2D::Collider (circle r=0.5).
-            Arcane::Physics2D::Collider col;
+            // Single-fixture Arcane::Collider2D (circle r=0.5).
+            Arcane::Collider2D col;
             {
-                Arcane::Physics2D::Fixture fx;
-                fx.kind   = Arcane::Physics2D::ShapeKind::Circle;
+                Arcane::Fixture2D fx;
+                fx.kind   = Arcane::ShapeKind2D::Circle;
                 fx.radius = 0.5f;
                 col.fixtures.push_back(fx);
             }
-            reg.AddComponent<Arcane::Physics2D::Collider>(kin, col);
+            reg.AddComponent<Arcane::Collider2D>(kin, col);
 
-            reg.AddComponent<Arcane::Physics2D::BodyRef>(kin, Arcane::Physics2D::BodyRef{});
+            reg.AddComponent<Arcane::PhysicsBodyRef2D>(kin, Arcane::PhysicsBodyRef2D{});
             reg.SetParent(kin, root);
         }
 
@@ -147,11 +147,11 @@ namespace
         return h;
     }
 
-    // Run N fixed steps via Arcane::Physics2D::System (physics only, not via RunLoop, so we
+    // Run N fixed steps via Arcane::PhysicsSystem2D (physics only, not via RunLoop, so we
     // can test in isolation), then run TransformPropagationSystem once.
     void RunNSteps(Astra::Registry& reg, int n)
     {
-        Arcane::Physics2D::System   physics(kDt);
+        Arcane::PhysicsSystem2D   physics(kDt);
         Arcane::TransformPropagationSystem propagate;
         for (int i = 0; i < n; ++i)
         {
@@ -164,7 +164,7 @@ namespace
 // ---------------------------------------------------------------------------
 // TEST 1 -- Dynamic body falls under gravity
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: dynamic body falls under gravity (Transform updated)", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: dynamic body falls under gravity (Transform updated)", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
@@ -192,7 +192,7 @@ TEST_CASE("Arcane::Physics2D::System: dynamic body falls under gravity (Transfor
 // ---------------------------------------------------------------------------
 // TEST 2 -- Kinematic body moves at authored velocity
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: kinematic body moves by authored velocity", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: kinematic body moves by authored velocity", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
@@ -224,7 +224,7 @@ TEST_CASE("Arcane::Physics2D::System: kinematic body moves by authored velocity"
 // ---------------------------------------------------------------------------
 // TEST 3 -- Body row removed when entity is destroyed
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: body row removed after entity is destroyed", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: body row removed after entity is destroyed", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
@@ -232,39 +232,39 @@ TEST_CASE("Arcane::Physics2D::System: body row removed after entity is destroyed
 
     // Run one step to register both bodies.
     {
-        Arcane::Physics2D::System physics(kDt);
+        Arcane::PhysicsSystem2D physics(kDt);
         physics(reg);
     }
 
     // Confirm both entities are tracked in the resource.
     {
-        const auto* res = reg.GetResource<Arcane::Physics2D::World>();
+        const auto* res = reg.GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res != nullptr);
-        CHECK(Arcane::Physics2D::Detail::Access::Entities(*res).count(h.dyn) == 1);
-        CHECK(Arcane::Physics2D::Detail::Access::Entities(*res).count(h.kin) == 1);
+        CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(h.dyn) == 1);
+        CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(h.kin) == 1);
     }
 
     // Destroy the dynamic entity.
     reg.DestroyEntity(h.dyn);
 
-    // Run another step: Arcane::Physics2D::System should detect the dead entity and remove its row.
+    // Run another step: Arcane::PhysicsSystem2D should detect the dead entity and remove its row.
     {
-        Arcane::Physics2D::System physics(kDt);
+        Arcane::PhysicsSystem2D physics(kDt);
         physics(reg);
     }
 
     {
-        const auto* res = reg.GetResource<Arcane::Physics2D::World>();
+        const auto* res = reg.GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res != nullptr);
-        CHECK(Arcane::Physics2D::Detail::Access::Entities(*res).count(h.dyn) == 0);  // removed
-        CHECK(Arcane::Physics2D::Detail::Access::Entities(*res).count(h.kin) == 1);  // still alive
+        CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(h.dyn) == 0);  // removed
+        CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(h.kin) == 1);  // still alive
     }
 }
 
 // ---------------------------------------------------------------------------
 // TEST 4 -- Determinism: two identical runs produce exactly the same positions
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: two identical runs yield bit-exact Transform positions", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: two identical runs yield bit-exact Transform positions", "[physics]")
 {
     constexpr int kSteps = 20;
 
@@ -300,17 +300,17 @@ TEST_CASE("Arcane::Physics2D::System: two identical runs yield bit-exact Transfo
 // ---------------------------------------------------------------------------
 // TEST 4b -- The reflected ShapeKind offers only what MakeScaledShape builds
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: every reflected ShapeKind value is one MakeScaledShape can build", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: every reflected ShapeKind value is one MakeScaledShape can build", "[physics]")
 {
     // 2026-09-12 review finding 2. The Inspector's enum combo (FieldKind::Enum,
-    // one level down inside the Arcane::Physics2D::Collider fixture list since the Vector
+    // one level down inside the Arcane::Collider2D fixture list since the Vector
     // editor) offers EVERY reflected value, and a paused pass re-mints the
-    // body on the resulting Changed<Arcane::Physics2D::Collider> -- so a reflected value
-    // MakeScaledShape cannot build (Polygon: Arcane::Physics2D::Fixture carries no vertex array;
+    // body on the resulting Changed<Arcane::Collider2D> -- so a reflected value
+    // MakeScaledShape cannot build (Polygon: Arcane::Fixture2D carries no vertex array;
     // MakeScaledShape asserts on it) was a Debug-editor abort one menu click
     // away. The reflected set is therefore exactly the buildable set; a
-    // Polygon comes back when Arcane::Physics2D::Fixture can carry its verts.
-    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::Physics2D::ShapeKind>();
+    // Polygon comes back when Arcane::Fixture2D can carry its verts.
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::ShapeKind2D>();
     REQUIRE(meta != nullptr);
     const Astra::EnumInfo* info = meta->GetEnumInfo();
     REQUIRE(info != nullptr);
@@ -324,24 +324,24 @@ TEST_CASE("Arcane::Physics2D::System: every reflected ShapeKind value is one Mak
     // scaled build, no fallback, no assert.
     for (const Astra::EnumValue& v : info->values)
     {
-        Arcane::Physics2D::Fixture fx;
-        fx.kind = static_cast<Arcane::Physics2D::ShapeKind>(v.value);
-        const Manifold2D::Physics::Shape s = Arcane::Physics2D::Detail::MakeScaledShape(fx, glm::vec2(1.0f, 1.0f));
+        Arcane::Fixture2D fx;
+        fx.kind = static_cast<Arcane::ShapeKind2D>(v.value);
+        const Manifold2D::Physics::Shape s = Arcane::Detail::Physics2D::MakeScaledShape(fx, glm::vec2(1.0f, 1.0f));
         INFO("kind: " << v.name);
-        CHECK(s.kind == Arcane::Physics2D::Detail::ToVendor(fx.kind));
+        CHECK(s.kind == Arcane::Detail::Physics2D::ToVendor(fx.kind));
     }
 }
 
 // ---------------------------------------------------------------------------
 // TEST 5 -- Two-fixture body: PhysicsWorld has 2 fixtures + transform updates
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider registers both fixtures in PhysicsWorld", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: two-fixture Arcane::Collider2D registers both fixtures in PhysicsWorld", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
 
     Arcane::RegisterSceneComponents(reg);
-    Arcane::Physics2D::RegisterComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
 
     // Physics world (no gravity needed; we only test fixture count + write-back).
     // BOTH gravity axes are explicitly zeroed as a deliberate scene statement
@@ -350,7 +350,7 @@ TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider re
     Manifold2D::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
     wd.gravityX = 0.0f;
-    reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+    reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
 
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
@@ -361,24 +361,24 @@ TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider re
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     }
 
-    // Entity with a 2-fixture Arcane::Physics2D::Collider.
-    // Arcane::Physics2D::Fixture 0: circle r=0.5 @ local(0,0).
-    // Arcane::Physics2D::Fixture 1: aabb(0.3,0.3) @ local(2,0), sensor.
+    // Entity with a 2-fixture Arcane::Collider2D.
+    // Arcane::Fixture2D 0: circle r=0.5 @ local(0,0).
+    // Arcane::Fixture2D 1: aabb(0.3,0.3) @ local(2,0), sensor.
     Astra::Entity e = reg.CreateEntity();
     {
         Arcane::Transform lt; lt.position = glm::vec3(10.0f, 5.0f, 0.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
-        Arcane::Physics2D::RigidBody rb;
-        rb.type = Arcane::Physics2D::BodyType::Kinematic;
-        reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
+        Arcane::RigidBody2D rb;
+        rb.type = Arcane::BodyType2D::Kinematic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
-        Arcane::Physics2D::Collider col;
+        Arcane::Collider2D col;
         // fixture 0
         {
-            Arcane::Physics2D::Fixture fx;
-            fx.kind     = Arcane::Physics2D::ShapeKind::Circle;
+            Arcane::Fixture2D fx;
+            fx.kind     = Arcane::ShapeKind2D::Circle;
             fx.radius   = 0.5f;
             fx.localPos = glm::vec2(0.0f, 0.0f);
             fx.density  = 1.0f;
@@ -387,8 +387,8 @@ TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider re
         }
         // fixture 1
         {
-            Arcane::Physics2D::Fixture fx;
-            fx.kind      = Arcane::Physics2D::ShapeKind::Aabb;
+            Arcane::Fixture2D fx;
+            fx.kind      = Arcane::ShapeKind2D::Aabb;
             fx.halfW     = 0.3f;
             fx.halfH     = 0.3f;
             fx.localPos  = glm::vec2(2.0f, 0.0f);
@@ -397,26 +397,26 @@ TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider re
             fx.friction  = 0.3f;
             col.fixtures.push_back(fx);
         }
-        reg.AddComponent<Arcane::Physics2D::Collider>(e, col);
-        reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
         reg.SetParent(e, root);
     }
 
     // Run one physics step to trigger the CREATE pass.
     {
-        Arcane::Physics2D::System physics(kDt);
+        Arcane::PhysicsSystem2D physics(kDt);
         physics(reg);
     }
 
     // The body must be live in the resource.
-    const auto* res = reg.GetResource<Arcane::Physics2D::World>();
+    const auto* res = reg.GetResource<Arcane::PhysicsWorld2D>();
     REQUIRE(res != nullptr);
-    REQUIRE(Arcane::Physics2D::Detail::Access::Entities(*res).count(e) == 1);
+    REQUIRE(Arcane::Detail::Physics2D::Access::Entities(*res).count(e) == 1);
 
     // Check that exactly 2 fixtures were registered on this body.
-    const Manifold2D::Physics::BodyHandle bh = Arcane::Physics2D::Detail::Access::Entities(*res).at(e);
-    REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res)->IsValid(bh));
-    CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->FixtureCount(bh) == 2u);
+    const Manifold2D::Physics::BodyHandle bh = Arcane::Detail::Physics2D::Access::Entities(*res).at(e);
+    REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res)->IsValid(bh));
+    CHECK(Arcane::Detail::Physics2D::Access::Solver(*res)->FixtureCount(bh) == 2u);
 
     // Transform still gets written back after Step.
     Arcane::TransformPropagationSystem propagate;
@@ -439,13 +439,13 @@ TEST_CASE("Arcane::Physics2D::System: two-fixture Arcane::Physics2D::Collider re
 // them. The test authors fixture[0] with non-default filter + local offset and
 // asserts the world's primary fixture carries the authored values.
 // ---------------------------------------------------------------------------
-TEST_CASE("Arcane::Physics2D::System: fixture[0] authored filter and local-xf flow through AddBody", "[physics]")
+TEST_CASE("Arcane::PhysicsSystem2D: fixture[0] authored filter and local-xf flow through AddBody", "[physics]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
 
     Arcane::RegisterSceneComponents(reg);
-    Arcane::Physics2D::RegisterComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
 
     // Physics world (zero gravity; we're testing fixture metadata, not dynamics).
     // Zero-g is a deliberate scene statement now that the engine default is
@@ -454,7 +454,7 @@ TEST_CASE("Arcane::Physics2D::System: fixture[0] authored filter and local-xf fl
     Manifold2D::Physics::WorldDef wd;
     wd.gravityY = 0.0f;
     wd.gravityX = 0.0f;
-    reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+    reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
 
     // Minimal SceneRoot.
     Astra::Entity root = reg.CreateEntity();
@@ -480,14 +480,14 @@ TEST_CASE("Arcane::Physics2D::System: fixture[0] authored filter and local-xf fl
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
 
-        Arcane::Physics2D::RigidBody rb;
-        rb.type = Arcane::Physics2D::BodyType::Kinematic;
-        reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
+        Arcane::RigidBody2D rb;
+        rb.type = Arcane::BodyType2D::Kinematic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
-        Arcane::Physics2D::Collider col;
+        Arcane::Collider2D col;
         {
-            Arcane::Physics2D::Fixture fx;
-            fx.kind         = Arcane::Physics2D::ShapeKind::Circle;
+            Arcane::Fixture2D fx;
+            fx.kind         = Arcane::ShapeKind2D::Circle;
             fx.radius       = 0.1f;
             fx.localPos     = glm::vec2(kLx, kLy);
             fx.localAngle   = 0.0f;
@@ -495,40 +495,40 @@ TEST_CASE("Arcane::Physics2D::System: fixture[0] authored filter and local-xf fl
             fx.maskBits     = kMask;
             col.fixtures.push_back(fx);
         }
-        reg.AddComponent<Arcane::Physics2D::Collider>(e, col);
-        reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
         reg.SetParent(e, root);
     }
 
     // Run one step to trigger the CREATE pass (registers the body).
     {
-        Arcane::Physics2D::System physics(kDt);
+        Arcane::PhysicsSystem2D physics(kDt);
         physics(reg);
     }
 
-    const auto* res = reg.GetResource<Arcane::Physics2D::World>();
+    const auto* res = reg.GetResource<Arcane::PhysicsWorld2D>();
     REQUIRE(res != nullptr);
-    REQUIRE(Arcane::Physics2D::Detail::Access::Entities(*res).count(e) == 1);
+    REQUIRE(Arcane::Detail::Physics2D::Access::Entities(*res).count(e) == 1);
 
-    const Manifold2D::Physics::BodyHandle bh = Arcane::Physics2D::Detail::Access::Entities(*res).at(e);
-    REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res)->IsValid(bh));
+    const Manifold2D::Physics::BodyHandle bh = Arcane::Detail::Physics2D::Access::Entities(*res).at(e);
+    REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res)->IsValid(bh));
 
-    // Exactly 1 fixture (single-fixture Arcane::Physics2D::Collider).
-    REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res)->FixtureCount(bh) == 1u);
+    // Exactly 1 fixture (single-fixture Arcane::Collider2D).
+    REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res)->FixtureCount(bh) == 1u);
 
     // Get the primary fixture handle via index 0.
-    const Manifold2D::Physics::FixtureHandle fh0 = Arcane::Physics2D::Detail::Access::Solver(*res)->GetBodyFixture(bh, 0u);
-    REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res)->IsValid(fh0));
+    const Manifold2D::Physics::FixtureHandle fh0 = Arcane::Detail::Physics2D::Access::Solver(*res)->GetBodyFixture(bh, 0u);
+    REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res)->IsValid(fh0));
 
     // Assert the authored filter flowed through.
     // BEFORE the fix these would observe 1 / 0xFFFFFFFF (the old hardcoded defaults).
-    CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->GetFixtureCategory(fh0) == kCat);
-    CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->GetFixtureMask(fh0)     == kMask);
+    CHECK(Arcane::Detail::Physics2D::Access::Solver(*res)->GetFixtureCategory(fh0) == kCat);
+    CHECK(Arcane::Detail::Physics2D::Access::Solver(*res)->GetFixtureMask(fh0)     == kMask);
 
     // Assert the authored local-xf flowed through:
     //   body at origin (0,0), angle 0 -> worldPos = (0,0) + R(0)*(0.3,0) = (0.3,0).
     // BEFORE the fix this would return (0,0) because localPos was hardcoded to (0,0).
-    const Manifold2D::Physics::Vec2 worldPos = Arcane::Physics2D::Detail::Access::Solver(*res)->GetFixtureWorldPos(fh0);
+    const Manifold2D::Physics::Vec2 worldPos = Arcane::Detail::Physics2D::Access::Solver(*res)->GetFixtureWorldPos(fh0);
     CHECK(static_cast<double>(worldPos.x) == Approx(static_cast<double>(kLx)).margin(1e-4));
     CHECK(static_cast<double>(worldPos.y) == Approx(static_cast<double>(kLy)).margin(1e-4));
 }

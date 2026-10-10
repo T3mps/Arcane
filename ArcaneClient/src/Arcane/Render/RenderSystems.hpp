@@ -53,7 +53,7 @@ namespace Arcane
             if (!ctx || !ctx->batcher) return;
             const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
-            const Arcane::Physics2D::InterpBuffer* interp = reg.GetResource<Arcane::Physics2D::InterpBuffer>();
+            const Arcane::PhysicsInterpBuffer2D* interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
             const VisibleSet* vis = MainVisibleSet(reg);   // nullptr: cull nothing (spec s4)
 
             auto view = reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>();
@@ -68,8 +68,8 @@ namespace Arcane
                 glm::mat4 m = world.matrix;
 
                 // Render interpolation (Epic 04.2, re-based 2026-09-11 spec s8): a
-                // physics body's PREVIOUS world-slot pose lives in Arcane::Physics2D::InterpBuffer
-                // (captured by Arcane::Physics2D::System PASS 2.5 before each step, indexed by
+                // physics body's PREVIOUS world-slot pose lives in Arcane::PhysicsInterpBuffer2D
+                // (captured by Arcane::PhysicsSystem2D PASS 2.5 before each step, indexed by
                 // PhysicsWorld body SLOT; slotOf is this entity's address into it,
                 // rebuilt by the same capture). Blend position (XY) and angle from it
                 // to the current WORLD pose by alpha -- Lerp/AngleLerp, the debug
@@ -108,12 +108,12 @@ namespace Arcane
                 // path hands the authored basis to SpriteWorldQuad untouched).
                 if (interp && interp->captured)
                 {
-                    if (const Arcane::Physics2D::InterpSlot* slot = interp->slotOf.TryGet(e))
+                    if (const Arcane::PhysicsInterpSlot2D* slot = interp->slotOf.TryGet(e))
                     {
                         if (slot->index < interp->prev.size()
                             && interp->prev[slot->index].generation == slot->generation)
                         {
-                            const Arcane::Physics2D::InterpPose& pp = interp->prev[slot->index];
+                            const Arcane::PhysicsInterpPose2D& pp = interp->prev[slot->index];
                             // Handedness of the XY basis: det < 0 is a mirror.
                             const bool mirrored = (m[0].x * m[1].y - m[0].y * m[1].x) < 0.0f;
                             // World rotation from the first basis column (for a
@@ -131,12 +131,12 @@ namespace Arcane
                                 curRot   = std::atan2(m[0].y, m[0].x);   // the raw column: t+pi of the X reading
                                 mirrorOnY = true;
                             }
-                            const float rot    = Arcane::Physics2D::AngleLerp(pp.angle, curRot, ctx->alpha);
+                            const float rot    = Arcane::Detail::Physics2D::AngleLerp(pp.angle, curRot, ctx->alpha);
                             const float sx = glm::length(glm::vec2(m[0])) * ((mirrored && !mirrorOnY) ? -1.0f : 1.0f);
                             const float sy = glm::length(glm::vec2(m[1])) * (mirrorOnY ? -1.0f : 1.0f);
                             const float c = std::cos(rot), s = std::sin(rot);
-                            m[3].x = Arcane::Physics2D::Lerp(pp.position.x, m[3].x, ctx->alpha);
-                            m[3].y = Arcane::Physics2D::Lerp(pp.position.y, m[3].y, ctx->alpha);
+                            m[3].x = Arcane::Detail::Physics2D::Lerp(pp.position.x, m[3].x, ctx->alpha);
+                            m[3].y = Arcane::Detail::Physics2D::Lerp(pp.position.y, m[3].y, ctx->alpha);
                             m[0].x =  c * sx; m[0].y = s * sx;
                             m[1].x = -s * sy; m[1].y = c * sy;
                         }

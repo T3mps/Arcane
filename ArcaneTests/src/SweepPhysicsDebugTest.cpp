@@ -1,5 +1,5 @@
 // Settings arc S6-10: the physics debug overlay's look and toggles are the
-// debug.physics.* cvars. Arcane::Physics2D::DebugDrawOptions inherits the four settings
+// debug.physics.* cvars. Arcane::PhysicsDebugDrawOptions2D inherits the four settings
 // blocks, so a default-constructed options block still carries the pre-sweep
 // literals bit for bit; MakePhysicsDebugDrawOptions() carries the published
 // values. The [physics-debug] rich/transform/capsule tests are the behavioural
@@ -21,7 +21,7 @@ using namespace Arcane;
 
 TEST_CASE("sweep: physics debug defaults are the pre-sweep literals", "[sweep][physics-debug]")
 {
-    const Arcane::Physics2D::DebugDrawOptions o{};
+    const Arcane::PhysicsDebugDrawOptions2D o{};
     CHECK(Test::SameBits(o.lineThickness, 1.0f));
     CHECK(o.contacts); CHECK_FALSE(o.aabbs); CHECK(o.velocities); CHECK(o.comMarkers); CHECK(o.orientations);
     CHECK(Test::SameBits(o.contactMarkerSize, 0.03f));
@@ -46,7 +46,7 @@ TEST_CASE("sweep: MakePhysicsDebugDrawOptions carries the published values", "[s
 
 TEST_CASE("sweep: physics debug palette, trace and arrow defaults are the pre-sweep literals", "[sweep][physics-debug]")
 {
-    const Arcane::Physics2D::DebugDrawOptions o{};
+    const Arcane::PhysicsDebugDrawOptions2D o{};
     CHECK(Test::SameBits(o.manifoldNormalLength, 20.0f));   // "world units" (pre-metres; converted as is)
     CHECK(Test::SameBits(o.manifoldPointPx, 3.0f));
     CHECK(Test::SameBits(o.normalLength, 28.0f));
@@ -95,7 +95,7 @@ TEST_CASE("sweep: debug.physics.* descriptors are Game Dev, per-project preferen
 // draw", SETTING; frozen names) is a settings block, not ARC_CONSTANT bases.
 TEST_CASE("sweep: debug.physics.style defaults are the pre-sweep literals", "[sweep][physics-debug]")
 {
-    const Arcane::Physics2D::DebugStyleSettings st{};
+    const Arcane::PhysicsDebugStyleSettings2D st{};
     CHECK(Test::SameBits(st.arrowShortLen, 12.0f));
     CHECK(Test::SameBits(st.arrowHeadLen, 6.0f));
     CHECK(Test::SameBits(st.arrowHeadSpread, 0.6f));

@@ -248,8 +248,8 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
         return K::ReadOnly;   // not found; the REQUIREs below catch that case
     };
 
-    // Bool + Float from a real engine component (Arcane::Physics2D::RigidBody reflects both).
-    const Astra::TypeMeta* body = Astra::GetMeta<Arcane::Physics2D::RigidBody>();
+    // Bool + Float from a real engine component (Arcane::RigidBody2D reflects both).
+    const Astra::TypeMeta* body = Astra::GetMeta<Arcane::RigidBody2D>();
     REQUIRE(body != nullptr);
     REQUIRE(std::any_of(body->fields.begin(), body->fields.end(),
                         [](const Astra::FieldInfo& f) { return f.name == "fixedRotation"; }));
@@ -289,7 +289,7 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     // Enum witnesses from the REAL roster: both physics enums are registered,
     // so both dropdowns light up the moment the arm exists.
     CHECK(kindOf(body, "type") == K::Enum);
-    const Astra::TypeMeta* fixture = Astra::GetMeta<Arcane::Physics2D::Fixture>();
+    const Astra::TypeMeta* fixture = Astra::GetMeta<Arcane::Fixture2D>();
     REQUIRE(fixture != nullptr);
     CHECK(kindOf(fixture, "kind") == K::Enum);
 
@@ -299,7 +299,7 @@ TEST_CASE("ClassifyField: every arm has a witness", "[editor]")
     REQUIRE(world != nullptr);
     REQUIRE_FALSE(world->fields.empty());
     CHECK(world->fields[0].HasAttribute<Astra::Hidden>());
-    const Astra::TypeMeta* bodyRef = Astra::GetMeta<Arcane::Physics2D::BodyRef>();
+    const Astra::TypeMeta* bodyRef = Astra::GetMeta<Arcane::PhysicsBodyRef2D>();
     REQUIRE(bodyRef != nullptr);
     for (const Astra::FieldInfo& bf : bodyRef->fields)
         CHECK(bf.HasAttribute<Astra::Hidden>());

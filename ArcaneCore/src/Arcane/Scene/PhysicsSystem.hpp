@@ -1,11 +1,10 @@
 #pragma once
 
-// Physics2D::System's pass body. Header-only: Astra's type id is per module,
+// PhysicsSystem2D's pass body. Header-only: Astra's type id is per module,
 // so the host that owns the simulation registry (and the tests) include this
-// header and instantiate the body there. Physics2D.hpp declares System and
+// header and instantiate the body there. Physics2D.hpp declares PhysicsSystem2D and
 // does not include this file. A game includes Physics2D.hpp.
 
-#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Physics2D.hpp>
 #include <Arcane/Scene/Physics2DDetail.hpp>
 
@@ -15,34 +14,27 @@
 #include <utility>
 #include <vector>
 
-namespace Arcane::Physics2D
+namespace Arcane
 {
-    // Author-edit detection. Metres and radians. They only reject a
-    // SetAngle/GetAngle round trip, not a real gizmo edit.
-    ARC_CONSTANT("math identity / tolerance: authored-position round-trip noise")
-    inline constexpr float kAuthorPosEps = 1e-5f;
-    ARC_CONSTANT("math identity / tolerance: authored-rotation round-trip noise")
-    inline constexpr float kAuthorRotEps = 1e-5f;
-
-    inline void System::operator()(Arcane::Registry& reg)
+    inline void PhysicsSystem2D::operator()(Arcane::Registry& reg)
     {
-        namespace Phys = Detail::Phys;
+        namespace Phys = Detail::Physics2D::Phys;
 
-            World* res = reg.GetResource<World>();
+            PhysicsWorld2D* res = reg.GetResource<PhysicsWorld2D>();
             if (!res || !res->world) return;
 
             Phys::PhysicsWorld& world        = *res->world;
             auto&                  entityToBody  = res->entityToBody;
 
-            // Event policy (spec s7.4, s7.5): System is the single owner. Both
+            // Event policy (spec s7.4, s7.5): PhysicsSystem2D is the single owner. Both
             // fixtures must opt into contact events; the hit threshold is Live.
             world.SetContactEventsRequireBoth(true);
-            world.SetHitEventThreshold(static_cast<Phys::Real>(Settings<EventSettings>().hitThreshold));
+            world.SetHitEventThreshold(static_cast<Phys::Real>(Settings<PhysicsEventSettings2D>().hitThreshold));
 
             // ------------------------------------------------------------------
             // PASS 1: DESTROY -- remove body rows for dead or un-physicised
             // entities, and (PAUSED passes only, spec s4.1a) for entities whose
-            // RigidBody or Collider changed since the last reconcile -- an
+            // RigidBody2D or Collider2D changed since the last reconcile -- an
             // author edit of shape, mass or body type -- so PASS 2 re-mints them
             // from the current components in this same pass. Stepping passes
             // skip the change criteria: PASS 4 writes velocity every step, which
@@ -58,18 +50,18 @@ namespace Arcane::Physics2D
                 std::vector<Arcane::Entity> toRemove;
                 if (!m_stepWorld)
                 {
-                    reg.CreateView<const BodyRef, const Collider, Arcane::Changed<Collider>, Arcane::With<RigidBody>>()
+                    reg.CreateView<const PhysicsBodyRef2D, const Collider2D, Arcane::Changed<Collider2D>, Arcane::With<RigidBody2D>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Arcane::Entity entity, const BodyRef&, const Collider&) { toRemove.push_back(entity); });
-                    reg.CreateView<const BodyRef, const RigidBody, Arcane::Changed<RigidBody>, Arcane::With<Collider>>()
+                        .ForEach([&](Arcane::Entity entity, const PhysicsBodyRef2D&, const Collider2D&) { toRemove.push_back(entity); });
+                    reg.CreateView<const PhysicsBodyRef2D, const RigidBody2D, Arcane::Changed<RigidBody2D>, Arcane::With<Collider2D>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Arcane::Entity entity, const BodyRef&, const RigidBody&) { toRemove.push_back(entity); });
+                        .ForEach([&](Arcane::Entity entity, const PhysicsBodyRef2D&, const RigidBody2D&) { toRemove.push_back(entity); });
                 }
                 for (auto& [entity, handle] : entityToBody)
                 {
                     const bool dead       = !reg.IsValid(entity);
-                    const bool noBody     = !dead && !reg.HasComponent<RigidBody>(entity);
-                    const bool noCollider = !dead && !reg.HasComponent<Collider>(entity);
+                    const bool noBody     = !dead && !reg.HasComponent<RigidBody2D>(entity);
+                    const bool noCollider = !dead && !reg.HasComponent<Collider2D>(entity);
                     if (dead || noBody || noCollider)
                         toRemove.push_back(entity);
                 }
@@ -90,27 +82,27 @@ namespace Arcane::Physics2D
                     // PASS 3.5 / PASS 4 -- which trust world.IsValid alone --
                     // would then move that entity's body on this one's edits.
                     // A dead entity has no component to clear (and nothing to
-                    // alias through); a live one without RigidBody/Collider
-                    // may have shed BodyRef with them.
+                    // alias through); a live one without RigidBody2D/Collider2D
+                    // may have shed PhysicsBodyRef2D with them.
                     if (!reg.IsValid(e)) continue;
-                    if (BodyRef* ref = reg.GetComponent<BodyRef>(e))
-                        ref->handle = Detail::kInvalidBody;
+                    if (PhysicsBodyRef2D* ref = reg.GetComponent<PhysicsBodyRef2D>(e))
+                        ref->handle = Detail::Physics2D::kInvalidBody;
                 }
             }
 
             // ------------------------------------------------------------------
-            // PASS 1.5: ENSURE BodyRef. The Inspector can never add one
+            // PASS 1.5: ENSURE PhysicsBodyRef2D. The Inspector can never add one
             // (ComponentCatalog structure-locks it), so an editor-authored
-            // RigidBody + Collider entity would otherwise never match PASS 2's
+            // RigidBody2D + Collider2D entity would otherwise never match PASS 2's
             // view. Collected, then added -- AddComponent moves the entity
             // between archetypes, never inside a ForEach.
             // ------------------------------------------------------------------
             {
                 std::vector<Arcane::Entity> missing;
-                reg.CreateView<const RigidBody, const Collider, Arcane::Not<BodyRef>>()
-                    .ForEach([&](Arcane::Entity entity, const RigidBody&, const Collider&) { missing.push_back(entity); });
+                reg.CreateView<const RigidBody2D, const Collider2D, Arcane::Not<PhysicsBodyRef2D>>()
+                    .ForEach([&](Arcane::Entity entity, const RigidBody2D&, const Collider2D&) { missing.push_back(entity); });
                 for (Arcane::Entity e : missing)
-                    reg.AddComponent<BodyRef>(e, BodyRef{});
+                    reg.AddComponent<PhysicsBodyRef2D>(e, PhysicsBodyRef2D{});
             }
 
             // ------------------------------------------------------------------
@@ -119,15 +111,15 @@ namespace Arcane::Physics2D
             // not depend on unordered_map hash/bucket layout.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<const RigidBody, const Collider, BodyRef, const Transform>();
+                auto view = reg.CreateView<const RigidBody2D, const Collider2D, PhysicsBodyRef2D, const Transform>();
                 view.ForEach([&](Arcane::Entity   entity,
-                                 const RigidBody&    rb,
-                                 const Collider&     col,
-                                 BodyRef& ref,
+                                 const RigidBody2D&    rb,
+                                 const Collider2D&     col,
+                                 PhysicsBodyRef2D& ref,
                                  const Transform& lt)
                 {
                     // Skip entities that already have a tracked live handle.
-                    if (ref.handle != Detail::kInvalidBody &&
+                    if (ref.handle != Detail::Physics2D::kInvalidBody &&
                         entityToBody.count(entity) &&
                         world.IsValid(ref.handle))
                     {
@@ -143,16 +135,16 @@ namespace Arcane::Physics2D
                     // {index, gen} to the next entity it mints.
                     if (col.fixtures.empty())
                     {
-                        ref.handle = Detail::kInvalidBody;
+                        ref.handle = Detail::Physics2D::kInvalidBody;
                         return;
                     }
 
                     // ---- PRIMARY FIXTURE (fixtures[0]) ----
-                    // Build the BodyDef from RigidBody dynamics params + fixture[0].
-                    const Fixture& fx0 = col.fixtures[0];
+                    // Build the BodyDef from RigidBody2D dynamics params + fixture[0].
+                    const Fixture2D& fx0 = col.fixtures[0];
 
                     Phys::BodyDef def;
-                    def.type = Detail::ToVendor(rb.type);
+                    def.type = Detail::Physics2D::ToVendor(rb.type);
                     // THE DEGENERATE CASE, STATED ONCE FOR THE WHOLE FILE
                     // (Task 3, F1): Transform is 3D but Manifold2D is a 2D
                     // solver, so this system reads and writes the XY PLANE and
@@ -166,7 +158,7 @@ namespace Arcane::Physics2D
                     def.position = Phys::Vec2(lt.position.x, lt.position.y);
 
                     // Primary fixture shape, scaled by the authored Transform.scale.
-                    def.shape = Detail::MakeScaledShape(fx0, glm::vec2(lt.scale));
+                    def.shape = Detail::Physics2D::MakeScaledShape(fx0, glm::vec2(lt.scale));
 
                     // Material + filter + local transform from fixture[0].
                     // T6 fix: categoryBits / maskBits / localPos / localAngle were
@@ -186,12 +178,12 @@ namespace Arcane::Physics2D
                                                    fx0.localPos.y * lt.scale.y);
                     def.localAngle    = static_cast<Phys::Real>(fx0.localAngle);
 
-                    // Body-level dynamics from RigidBody.
+                    // Body-level dynamics from RigidBody2D.
                     def.linearDamping = rb.linearDamping;
                     def.fixedRotation = rb.fixedRotation;
                     def.bullet        = rb.bullet;
 
-                    // Optional mass override: RigidBody.mass > 0 beats density-derived.
+                    // Optional mass override: RigidBody2D.mass > 0 beats density-derived.
                     if (rb.mass > 0.0f)
                         def.mass = rb.mass;
 
@@ -201,10 +193,10 @@ namespace Arcane::Physics2D
                     // ---- ADDITIONAL FIXTURES (fixtures[1..N-1]) ----
                     // AddBody already installed fixture[0] as the primary shape.
                     // Call AddFixture for each subsequent fixture so the body has
-                    // one physics fixture per authored Fixture descriptor.
+                    // one physics fixture per authored Fixture2D descriptor.
                     for (std::size_t i = 1; i < col.fixtures.size(); ++i)
                     {
-                        Phys::FixtureDef fd = Detail::MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
+                        Phys::FixtureDef fd = Detail::Physics2D::MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
                         fxs.push_back(world.AddFixture(handle, fd));
                     }
 
@@ -238,7 +230,7 @@ namespace Arcane::Physics2D
 
             // ------------------------------------------------------------------
             // PASS 2.5: CAPTURE PREVIOUS POSES (Epic 04.2 render interpolation).
-            // Snapshot every live body's PRE-STEP world pose into InterpBuffer
+            // Snapshot every live body's PRE-STEP world pose into PhysicsInterpBuffer2D
             // (opt-in resource; skipped if absent). Captured before Step so prev ==
             // the step-N-1 pose; multiple steps/frame leave prev = second-to-last.
             // Gated on m_stepWorld: a paused/mint-only pass does not step, so the
@@ -248,7 +240,7 @@ namespace Arcane::Physics2D
             // ------------------------------------------------------------------
             if (m_stepWorld)
             {
-                if (InterpBuffer* interp = reg.GetResource<InterpBuffer>())
+                if (PhysicsInterpBuffer2D* interp = reg.GetResource<PhysicsInterpBuffer2D>())
                 {
                     const std::uint32_t n = world.Count();
                     interp->prev.resize(n);
@@ -258,7 +250,7 @@ namespace Arcane::Physics2D
                         {
                             const Phys::BodyHandle h = world.HandleOf(i);
                             const Phys::Vec2       p = world.PosSlot(i);
-                            interp->prev[i] = InterpPose{
+                            interp->prev[i] = PhysicsInterpPose2D{
                                 glm::vec2(static_cast<float>(p.x), static_cast<float>(p.y)),
                                 static_cast<float>(world.GetAngle(h)),
                                 h.generation };
@@ -270,7 +262,7 @@ namespace Arcane::Physics2D
                     }
 
                     // The entity -> slot map the sprite path reads (RenderSystems.hpp
-                    // carries no BodyRef term: PhysicsComponents.hpp would drag
+                    // carries no PhysicsBodyRef2D term: PhysicsComponents.hpp would drag
                     // Manifold2D into every game module's include surface). Rebuilt
                     // from entityToBody in the SAME capture that filled `prev`, so the
                     // two are exactly as fresh as each other; a body PASS 1 removed
@@ -281,7 +273,7 @@ namespace Arcane::Physics2D
                     {
                         if (!world.IsValid(handle))
                             continue;
-                        interp->slotOf[entity] = InterpSlot{ handle.index, handle.generation };
+                        interp->slotOf[entity] = PhysicsInterpSlot2D{ handle.index, handle.generation };
                     }
 
                     interp->captured = true;
@@ -314,14 +306,14 @@ namespace Arcane::Physics2D
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<BodyRef, const Transform, Arcane::Changed<Transform>,
-                                           const Collider, Arcane::With<RigidBody>>();
+                auto view = reg.CreateView<PhysicsBodyRef2D, const Transform, Arcane::Changed<Transform>,
+                                           const Collider2D, Arcane::With<RigidBody2D>>();
                 view.Since(res->lastReconcile).ForEach([&](Arcane::Entity   /*entity*/,
-                                                            BodyRef&  ref,
+                                                            PhysicsBodyRef2D&  ref,
                                                             const Transform& lt,
-                                                            const Collider& col)
+                                                            const Collider2D& col)
                 {
-                    if (ref.handle == Detail::kInvalidBody) return;
+                    if (ref.handle == Detail::Physics2D::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))       return;
                     ++res->reconciled;
 
@@ -333,18 +325,18 @@ namespace Arcane::Physics2D
                     if (planarScale != ref.appliedScale)
                     {
                         std::vector<Phys::FixtureHandle> neu =
-                            Detail::RebuildScaledFixtures(world, ref.handle, col, planarScale);
+                            Detail::Physics2D::RebuildScaledFixtures(world, ref.handle, col, planarScale);
                         ref.appliedScale = planarScale;
                         // R16: the record follows the new handles. Each dropped
-                        // generation is appended (handle + Collider index) and
+                        // generation is appended (handle + Collider2D index) and
                         // stays resolvable until CaptureStep reads its End.
-                        if (const auto rec = res->bodyRecords.find(Detail::PackBody(ref.handle));
+                        if (const auto rec = res->bodyRecords.find(Detail::Physics2D::PackBody(ref.handle));
                             rec != res->bodyRecords.end())
                         {
                             auto& record = rec->second;
                             record.retiredFixtures.reserve(record.retiredFixtures.size() + record.fixtures.size());
                             for (std::uint32_t i = 0; i < record.fixtures.size(); ++i)
-                                record.retiredFixtures.push_back(RetiredFixture{ record.fixtures[i], i });
+                                record.retiredFixtures.push_back(Detail::Physics2D::RetiredFixture{ record.fixtures[i], i });
                             record.fixtures = std::move(neu);
                         }
                     }
@@ -356,9 +348,9 @@ namespace Arcane::Physics2D
                     // that part of the edit is simply not a divergence here.
                     const Phys::Vec2 bp = world.Position(ref.handle);
                     const float      ba = static_cast<float>(world.GetAngle(ref.handle));
-                    if (std::abs(lt.position.x - static_cast<float>(bp.x)) > kAuthorPosEps ||
-                        std::abs(lt.position.y - static_cast<float>(bp.y)) > kAuthorPosEps ||
-                        Detail::AngleDelta(RotationZ(lt.rotation), ba) > kAuthorRotEps)
+                    if (std::abs(lt.position.x - static_cast<float>(bp.x)) > Detail::Physics2D::kAuthorPosEps ||
+                        std::abs(lt.position.y - static_cast<float>(bp.y)) > Detail::Physics2D::kAuthorPosEps ||
+                        Detail::Physics2D::AngleDelta(RotationZ(lt.rotation), ba) > Detail::Physics2D::kAuthorRotEps)
                     {
                         // SetPosition + SetAngle are BOTH load-bearing for a moved STATIC
                         // body: SetPosition updates the pose but NOT the static broadphase
@@ -387,13 +379,13 @@ namespace Arcane::Physics2D
             // ------------------------------------------------------------------
             if (m_stepWorld)
             {
-                auto view = reg.CreateView<const BodyRef, Transform, RigidBody>();
+                auto view = reg.CreateView<const PhysicsBodyRef2D, Transform, RigidBody2D>();
                 view.ForEach([&](Arcane::Entity   /*entity*/,
-                                 const BodyRef& ref,
+                                 const PhysicsBodyRef2D& ref,
                                  Transform& lt,
-                                 RigidBody&    rb)
+                                 RigidBody2D&    rb)
                 {
-                    if (ref.handle == Detail::kInvalidBody) return;
+                    if (ref.handle == Detail::Physics2D::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))          return;
 
                     // THE 2D WRITE-BACK, NAMED DELIBERATELY (Task 3, F1). The
@@ -417,11 +409,11 @@ namespace Arcane::Physics2D
                     lt.position = glm::vec3(pos.x, pos.y, lt.position.z);
                     lt.rotation = RotationAboutZ(static_cast<float>(world.GetAngle(ref.handle)));
 
-                    // Mirror post-step velocity back into RigidBody for Dynamic
+                    // Mirror post-step velocity back into RigidBody2D for Dynamic
                     // bodies so authored velocity field stays consistent with physics.
                     // Kinematic velocity is authored and never written back: the solver
                     // does not modify it, so rb.velocity retains its authored value.
-                    if (rb.type == BodyType::Dynamic)
+                    if (rb.type == BodyType2D::Dynamic)
                     {
                         const Phys::Vec2 vel = world.Velocity(ref.handle);
                         rb.velocity = glm::vec2(vel.x, vel.y);
@@ -430,7 +422,7 @@ namespace Arcane::Physics2D
             }
 
             // Time base for the paused reconcile and the re-mint criteria
-            // (World::lastReconcile): AFTER PASS 4, so a stepping
+            // (PhysicsWorld2D::lastReconcile): AFTER PASS 4, so a stepping
             // pass's own write-back marks are never newer than it. Scheduled
             // (Runtime::InstallEngineSystems) or bare (Runtime::PhysicsEditPass,
             // tests) alike -- the advance-after-every-pass contract, spec

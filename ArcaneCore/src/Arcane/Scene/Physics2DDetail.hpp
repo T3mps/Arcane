@@ -19,68 +19,75 @@
 #include <utility>
 #include <vector>
 
-namespace Arcane::Physics2D::Detail
+namespace Arcane::Detail::Physics2D
 {
     namespace Phys = ::Manifold2D::Physics;
 
+    // Author-edit detection. Metres and radians. They only reject a
+    // SetAngle/GetAngle round trip, not a real gizmo edit.
+    ARC_CONSTANT("math identity / tolerance: authored-position round-trip noise")
+    inline constexpr float kAuthorPosEps = 1e-5f;
+    ARC_CONSTANT("math identity / tolerance: authored-rotation round-trip noise")
+    inline constexpr float kAuthorRotEps = 1e-5f;
+
     struct Access
     {
-        static PhysicsWorld* Solver(World& w) noexcept { return w.world.get(); }
-        static const PhysicsWorld* Solver(const World& w) noexcept { return w.world.get(); }
-        static auto& Entities(World& w) noexcept { return w.entityToBody; }
-        static const auto& Entities(const World& w) noexcept { return w.entityToBody; }
-        static Arcane::Tick& LastReconcile(World& w) noexcept { return w.lastReconcile; }
-        static std::uint32_t& Reconciled(World& w) noexcept { return w.reconciled; }
-        static auto& Records(World& w) noexcept { return w.bodyRecords; }
-        static const auto& Records(const World& w) noexcept { return w.bodyRecords; }
-        static void SetSolver(World& w, std::unique_ptr<PhysicsWorld> solver) noexcept
+        static PhysicsWorld* Solver(PhysicsWorld2D& w) noexcept { return w.world.get(); }
+        static const PhysicsWorld* Solver(const PhysicsWorld2D& w) noexcept { return w.world.get(); }
+        static auto& Entities(PhysicsWorld2D& w) noexcept { return w.entityToBody; }
+        static const auto& Entities(const PhysicsWorld2D& w) noexcept { return w.entityToBody; }
+        static Arcane::Tick& LastReconcile(PhysicsWorld2D& w) noexcept { return w.lastReconcile; }
+        static std::uint32_t& Reconciled(PhysicsWorld2D& w) noexcept { return w.reconciled; }
+        static auto& Records(PhysicsWorld2D& w) noexcept { return w.bodyRecords; }
+        static const auto& Records(const PhysicsWorld2D& w) noexcept { return w.bodyRecords; }
+        static void SetSolver(PhysicsWorld2D& w, std::unique_ptr<PhysicsWorld> solver) noexcept
         {
             w.world = std::move(solver);
         }
     };
 
-    inline World Adopt(std::unique_ptr<PhysicsWorld> solver)
+    inline PhysicsWorld2D Adopt(std::unique_ptr<PhysicsWorld> solver)
     {
-        World w;
+        PhysicsWorld2D w;
         Access::SetSolver(w, std::move(solver));
         return w;
     }
 
-    [[nodiscard]] constexpr Phys::BodyType ToVendor(BodyType t) noexcept
+    [[nodiscard]] constexpr Phys::BodyType ToVendor(BodyType2D t) noexcept
     {
         switch (t)
         {
-        case BodyType::Static:    return Phys::BodyType::Static;
-        case BodyType::Kinematic: return Phys::BodyType::Kinematic;
-        case BodyType::Dynamic:   return Phys::BodyType::Dynamic;
+        case BodyType2D::Static:    return Phys::BodyType::Static;
+        case BodyType2D::Kinematic: return Phys::BodyType::Kinematic;
+        case BodyType2D::Dynamic:   return Phys::BodyType::Dynamic;
         }
         return Phys::BodyType::Kinematic;
     }
 
-    [[nodiscard]] constexpr Phys::ShapeKind ToVendor(ShapeKind k) noexcept
+    [[nodiscard]] constexpr Phys::ShapeKind ToVendor(ShapeKind2D k) noexcept
     {
         switch (k)
         {
-        case ShapeKind::Circle:  return Phys::ShapeKind::Circle;
-        case ShapeKind::Capsule: return Phys::ShapeKind::Capsule;
-        case ShapeKind::Aabb:    return Phys::ShapeKind::Aabb;
-        case ShapeKind::Polygon: return Phys::ShapeKind::Polygon;
+        case ShapeKind2D::Circle:  return Phys::ShapeKind::Circle;
+        case ShapeKind2D::Capsule: return Phys::ShapeKind::Capsule;
+        case ShapeKind2D::Aabb:    return Phys::ShapeKind::Aabb;
+        case ShapeKind2D::Polygon: return Phys::ShapeKind::Polygon;
         }
         return Phys::ShapeKind::Circle;
     }
 
-    [[nodiscard]] inline Phys::BroadphaseKind ToBroadphaseKind(Broadphase b) noexcept
+    [[nodiscard]] inline Phys::BroadphaseKind ToBroadphaseKind(PhysicsBroadphase2D b) noexcept
     {
         switch (b)
         {
-        case Broadphase::Tree: return Phys::BroadphaseKind::Tree;
-        case Broadphase::Hash: return Phys::BroadphaseKind::Hash;
-        case Broadphase::Sap:  return Phys::BroadphaseKind::Sap;
+        case PhysicsBroadphase2D::Tree: return Phys::BroadphaseKind::Tree;
+        case PhysicsBroadphase2D::Hash: return Phys::BroadphaseKind::Hash;
+        case PhysicsBroadphase2D::Sap:  return Phys::BroadphaseKind::Sap;
         }
         return Phys::BroadphaseKind::Tree;
     }
 
-    [[nodiscard]] inline Phys::WorldDef ToWorldDef(const WorldSettings& s)
+    [[nodiscard]] inline Phys::WorldDef ToWorldDef(const PhysicsWorldSettings2D& s)
     {
         Phys::WorldDef wd;
         wd.broadphase             = ToBroadphaseKind(s.broadphase);
@@ -100,18 +107,18 @@ namespace Arcane::Physics2D::Detail
         return (static_cast<std::uint64_t>(h.index) << 32) | h.generation;
     }
 
-    [[nodiscard]] inline Phys::Shape MakeScaledShape(const Fixture& f, glm::vec2 scale)
+    [[nodiscard]] inline Phys::Shape MakeScaledShape(const Fixture2D& f, glm::vec2 scale)
     {
         const float sx   = std::abs(scale.x);
         const float sy   = std::abs(scale.y);
         const float sMax = std::max(sx, sy);
         switch (f.kind)
         {
-        case ShapeKind::Circle:  return Phys::MakeCircle(f.radius * sMax);
-        case ShapeKind::Capsule: return Phys::MakeCapsule(f.halfLen * sx, f.radius * sy);
-        case ShapeKind::Aabb:    return Phys::MakeAabb(f.halfW * sx, f.halfH * sy);
-        case ShapeKind::Polygon:
-            assert(false && "Physics2D::Detail::MakeScaledShape: ShapeKind::Polygon not supported");
+        case ShapeKind2D::Circle:  return Phys::MakeCircle(f.radius * sMax);
+        case ShapeKind2D::Capsule: return Phys::MakeCapsule(f.halfLen * sx, f.radius * sy);
+        case ShapeKind2D::Aabb:    return Phys::MakeAabb(f.halfW * sx, f.halfH * sy);
+        case ShapeKind2D::Polygon:
+            assert(false && "Detail::Physics2D::MakeScaledShape: ShapeKind2D::Polygon not supported");
             return Phys::MakeCircle(f.radius * sMax);
         }
         return Phys::MakeCircle(f.radius * sMax);
@@ -129,7 +136,7 @@ namespace Arcane::Physics2D::Detail
         return std::abs(d);
     }
 
-    [[nodiscard]] inline Phys::FixtureDef MakeFixtureDef(const Fixture& f,
+    [[nodiscard]] inline Phys::FixtureDef MakeFixtureDef(const Fixture2D& f,
                                                          glm::vec2 scale = glm::vec2(1.0f, 1.0f))
     {
         Phys::FixtureDef fd;
@@ -150,7 +157,7 @@ namespace Arcane::Physics2D::Detail
 
     [[nodiscard]] inline std::vector<Phys::FixtureHandle> RebuildScaledFixtures(Phys::PhysicsWorld& world,
                                                                                Phys::BodyHandle bh,
-                                                                               const Collider& col,
+                                                                               const Collider2D& col,
                                                                                glm::vec2 scale)
     {
         const std::uint32_t n = world.FixtureCount(bh);
@@ -161,7 +168,7 @@ namespace Arcane::Physics2D::Detail
 
         std::vector<Phys::FixtureHandle> neu;
         neu.reserve(col.fixtures.size());
-        for (const Fixture& f : col.fixtures)
+        for (const Fixture2D& f : col.fixtures)
         {
             Phys::FixtureDef fd = MakeFixtureDef(f, scale);
             neu.push_back(world.AddFixture(bh, fd));

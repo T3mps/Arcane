@@ -5,7 +5,7 @@
 // runtime and editor Play share. Deterministic: every field changes a
 // simulation's outcome.
 // - sim.fixedHz is NextWorld: the Runtime reads it into its loop config when it
-//   is built, and Arcane::Physics2D::System captures 1/fixedHz then (inventory Part 1 note 4).
+//   is built, and Arcane::PhysicsSystem2D captures 1/fixedHz then (inventory Part 1 note 4).
 // - sim.maxStepsPerFrame and sim.maxFrameDeltaSeconds are Live: both host
 //   frames read them each frame (ApplySimStepCap and ClampFrameDelta below),
 //   and editor Play's embedded server world takes the same cap each tick

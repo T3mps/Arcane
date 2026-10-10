@@ -8,18 +8,18 @@
 
 namespace
 {
-    namespace Phys = Arcane::Physics2D::Detail::Phys;
+    namespace Phys = Arcane::Detail::Physics2D::Phys;
 }
 
-namespace Arcane::Physics2D
+namespace Arcane
 {
-    World::~World() = default;
-    World::World(World&&) noexcept = default;
-    World& World::operator=(World&&) noexcept = default;
+    PhysicsWorld2D::~PhysicsWorld2D() = default;
+    PhysicsWorld2D::PhysicsWorld2D(PhysicsWorld2D&&) noexcept = default;
+    PhysicsWorld2D& PhysicsWorld2D::operator=(PhysicsWorld2D&&) noexcept = default;
 
     namespace
     {
-        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const GroundSettings& ground)
+        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const PhysicsGroundSettings2D& ground)
         {
             const Phys::Real minY = Phys::Real(ground.minNormalY);
             bool supported = false;
@@ -54,10 +54,10 @@ namespace Arcane::Physics2D
         }
     }
 
-    BodyMotion World::Motion(Arcane::Entity entity, const RigidBody& body) const
+    BodyMotion2D PhysicsWorld2D::Motion(Arcane::Entity entity, const RigidBody2D& body) const
     {
-        BodyMotion motion;
-        if (body.type != BodyType::Dynamic)
+        BodyMotion2D motion;
+        if (body.type != BodyType2D::Dynamic)
             return motion;
         motion.velocityX = body.velocity.x;
         motion.velocityY = body.velocity.y;
@@ -70,16 +70,16 @@ namespace Arcane::Physics2D
         motion.velocityY = static_cast<float>(velocity.y);
         motion.bodyReady = true;
         if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*world, it->second, Settings<GroundSettings>());
+            motion.supported = HasFloorSupport(*world, it->second, Settings<PhysicsGroundSettings2D>());
         return motion;
     }
 
-    void World::SetVelocity(Arcane::Entity entity, RigidBody& body,
+    void PhysicsWorld2D::SetVelocity(Arcane::Entity entity, RigidBody2D& body,
                             float velocityX, float velocityY)
     {
         if (!std::isfinite(velocityX) || !std::isfinite(velocityY))
             return;
-        if (body.type != BodyType::Dynamic)
+        if (body.type != BodyType2D::Dynamic)
             return;
         body.velocity = glm::vec2(velocityX, velocityY);
 

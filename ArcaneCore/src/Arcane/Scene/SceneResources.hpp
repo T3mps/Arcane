@@ -11,7 +11,7 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 #include <Arcane/Scene/ViewTransform.hpp>   // RenderContext2D::view (F4 plan 1 T3)
 
-#include <Astra/Container/FlatMap.hpp>    // Physics2D::InterpBuffer::slotOf (fenced below)
+#include <Astra/Container/FlatMap.hpp>    // PhysicsInterpBuffer2D::slotOf (fenced below)
 
 #include <glm/glm.hpp>
 
@@ -36,35 +36,36 @@ namespace Arcane
     // slow-mo renders smoothly instead of snapping. Rotation MUST use AngleLerp
     // (shortest arc), not a matrix-component lerp.
     //
-    // These two serve the PHYSICS-side InterpPose below, which stays a 2D pose
+    // These two serve PhysicsInterpPose2D below, which stays a 2D pose
     // (glm::vec2 + a scalar angle) because Manifold2D is a 2D solver. The
     // sprite path (RenderSubmissionSystem) blends through these same two
     // helpers since the Astra adoption (2026-09-11), so overlay and sprite
     // agree to the bit.
-namespace Physics2D
-{
-    [[nodiscard]] inline float Lerp(float a, float b, float t) noexcept
+    namespace Detail::Physics2D
     {
-        return a + (b - a) * t;
-    }
+        [[nodiscard]] inline float Lerp(float a, float b, float t) noexcept
+        {
+            return a + (b - a) * t;
+        }
 
-    // Shortest-arc angle interpolation (radians): wrap the delta into (-pi, pi]
-    // before blending, so 350deg->10deg travels +20deg through 0, not -340deg.
-    [[nodiscard]] inline float AngleLerp(float a, float b, float t) noexcept
-    {
-        ARC_CONSTANT("math identity / tolerance: pi")
-        constexpr float kPi  = 3.14159265358979323846f;
-        ARC_CONSTANT("math identity / tolerance: tau = 2 pi")
-        constexpr float kTau = 2.0f * kPi;
-        float d = std::fmod(b - a, kTau);
-        if (d < -kPi)      d += kTau;
-        else if (d >  kPi) d -= kTau;
-        return a + d * t;
+        // Shortest-arc angle interpolation (radians): wrap the delta into (-pi, pi]
+        // before blending, so 350deg->10deg travels +20deg through 0, not -340deg.
+        [[nodiscard]] inline float AngleLerp(float a, float b, float t) noexcept
+        {
+            ARC_CONSTANT("math identity / tolerance: pi")
+            constexpr float kPi  = 3.14159265358979323846f;
+            ARC_CONSTANT("math identity / tolerance: tau = 2 pi")
+            constexpr float kTau = 2.0f * kPi;
+            float d = std::fmod(b - a, kTau);
+            if (d < -kPi)      d += kTau;
+            else if (d >  kPi) d -= kTau;
+            return a + d * t;
+        }
     }
 
     // One body's previous fixed-step pose. `generation` mirrors the body handle's
     // generation so a recycled SoA slot (stale prev) is rejected by the consumer.
-    struct InterpPose
+    struct PhysicsInterpPose2D
     {
         glm::vec2     position{0.0f, 0.0f};
         float         angle      = 0.0f;   // radians
@@ -75,39 +76,38 @@ namespace Physics2D
     // the handle generation it had then. Manifold2D-free on purpose -- this
     // header is compiled by every game module, whose include surface has no
     // Manifold2D row, so Phys::BodyHandle cannot appear here (and that is why
-    // RenderSubmissionSystem reads THIS map rather than Physics2D::BodyRef).
-    struct InterpSlot
+    // RenderSubmissionSystem reads THIS map rather than PhysicsBodyRef2D).
+    struct PhysicsInterpSlot2D
     {
         std::uint32_t index      = 0;
         std::uint32_t generation = 0;
     };
 
     // Per-body previous-pose buffer, indexed by PhysicsWorld body SLOT index (the
-    // same space DrawPhysicsDebug iterates). Populated by Physics2D::System before each
+    // same space DrawPhysicsDebug iterates). Populated by PhysicsSystem2D before each
     // world.Step(); read by DrawPhysicsDebug and RenderSubmissionSystem. Transient
     // runtime state: AstraTransientResource, so Registry::Save skips it and a
     // restore never revives a stale history (IN-8; it replaced Runtime::
     // RestoreRegistry's hand-strip). The no-op Serialize still satisfies Astra's
     // HasSerializeMethod so the vector member does not hit the
     // trivially-copyable path when the descriptor is built.
-    struct InterpBuffer
+    struct PhysicsInterpBuffer2D
     {
         static constexpr bool AstraTransientResource = true;
 
-        std::vector<InterpPose> prev;
-        // entity -> its slot at capture. Rebuilt by Physics2D::System PASS 2.5 from
-        // Physics2D::World::entityToBody in the same pass that fills `prev`, so the
+        std::vector<PhysicsInterpPose2D> prev;
+        // entity -> its slot at capture. Rebuilt by PhysicsSystem2D PASS 2.5 from
+        // PhysicsWorld2D::entityToBody in the same pass that fills `prev`, so the
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
         // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
-        Astra::FlatMap<Arcane::Entity, InterpSlot> slotOf;
+        Astra::FlatMap<Arcane::Entity, PhysicsInterpSlot2D> slotOf;
         // ARC_INTERNAL_END
         bool                    captured = false;   // false until the first capture
 
         template<typename Archive>
         void Serialize(Archive& /*ar*/) {}
     };
-}
 
     struct RenderContext2D
     {

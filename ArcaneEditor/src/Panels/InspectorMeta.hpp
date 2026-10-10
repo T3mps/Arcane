@@ -96,7 +96,7 @@ namespace Arcane::Editor
     [[nodiscard]] bool FieldIsDrawable(const Astra::FieldInfo& field);
 
     // Does a component have any drawable field at all? False means its Inspector
-    // section can only ever be an empty header -- Arcane::Physics2D::Collider today, whose
+    // section can only ever be an empty header -- Arcane::Collider2D today, whose
     // sole reflected field (`fixtures`) is Serializable(false) because the
     // reflection->JSON bridge has no container branch (PhysicsComponents.hpp).
     // The caller draws a disabled hint row instead of an empty grid, so Add

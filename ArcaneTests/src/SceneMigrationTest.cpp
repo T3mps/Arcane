@@ -196,7 +196,7 @@ TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::Physics2D::RegisterComponents(reg);
+        Arcane::RegisterPhysicsComponents2D(reg);
         REQUIRE(Arcane::Scene::ApplySceneDocument(*read, reg));
 
         // The guard runs against the CANDIDATE document, in memory, BEFORE the
@@ -248,16 +248,16 @@ TEST_CASE("a v6 scene with the old physics keys skips those components", "[scene
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
     Arcane::RegisterSceneComponents(reg);
-    Arcane::Physics2D::RegisterComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
     REQUIRE(Arcane::Scene::LoadJson(reg, doc));
 
     int colliders = 0, bodies = 0, settings = 0, transforms = 0;
-    reg.CreateView<Arcane::Physics2D::Collider>().ForEach(
-        [&](Astra::Entity, Arcane::Physics2D::Collider&) { ++colliders; });
-    reg.CreateView<Arcane::Physics2D::RigidBody>().ForEach(
-        [&](Astra::Entity, Arcane::Physics2D::RigidBody&) { ++bodies; });
-    reg.CreateView<Arcane::Physics2D::SceneSettings>().ForEach(
-        [&](Astra::Entity, Arcane::Physics2D::SceneSettings&) { ++settings; });
+    reg.CreateView<Arcane::Collider2D>().ForEach(
+        [&](Astra::Entity, Arcane::Collider2D&) { ++colliders; });
+    reg.CreateView<Arcane::RigidBody2D>().ForEach(
+        [&](Astra::Entity, Arcane::RigidBody2D&) { ++bodies; });
+    reg.CreateView<Arcane::PhysicsSettings2D>().ForEach(
+        [&](Astra::Entity, Arcane::PhysicsSettings2D&) { ++settings; });
     reg.CreateView<Arcane::Transform>().ForEach(
         [&](Astra::Entity, Arcane::Transform&) { ++transforms; });
     CHECK(colliders == 0);
@@ -278,7 +278,7 @@ TEST_CASE("a v5 scene with the old physics keys still flips Y and does not alias
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
     Arcane::RegisterSceneComponents(reg);
-    Arcane::Physics2D::RegisterComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
     REQUIRE(Arcane::Scene::LoadJson(reg, doc));
 
     float y = 0.0f;
@@ -287,8 +287,8 @@ TEST_CASE("a v5 scene with the old physics keys still flips Y and does not alias
     CHECK(y == Approx(-2.0f));
 
     int settings = 0;
-    reg.CreateView<Arcane::Physics2D::SceneSettings>().ForEach(
-        [&](Astra::Entity, Arcane::Physics2D::SceneSettings&) { ++settings; });
+    reg.CreateView<Arcane::PhysicsSettings2D>().ForEach(
+        [&](Astra::Entity, Arcane::PhysicsSettings2D&) { ++settings; });
     CHECK(settings == 0);
 }
 

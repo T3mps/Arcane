@@ -8,20 +8,20 @@
 
 #include <cstdint>
 
-namespace Arcane::Physics2D
+namespace Arcane
 {
-    enum class Broadphase : std::uint8_t { Tree = 0, Hash = 1, Sap = 2 };
+    enum class PhysicsBroadphase2D : std::uint8_t { Tree = 0, Hash = 1, Sap = 2 };
 
-    ARC_REFLECT_ENUM(Broadphase)
-        ARC_REFLECT_ENUM_VALUE(Broadphase, Tree)
-        ARC_REFLECT_ENUM_VALUE(Broadphase, Hash)
-        ARC_REFLECT_ENUM_VALUE(Broadphase, Sap)
+    ARC_REFLECT_ENUM(PhysicsBroadphase2D)
+        ARC_REFLECT_ENUM_VALUE(PhysicsBroadphase2D, Tree)
+        ARC_REFLECT_ENUM_VALUE(PhysicsBroadphase2D, Hash)
+        ARC_REFLECT_ENUM_VALUE(PhysicsBroadphase2D, Sap)
     ARC_END_REFLECT_ENUM()
 
-    struct WorldSettings
+    struct PhysicsWorldSettings2D
     {
         CVarVec2  gravity{0.0f, -9.81f};
-        Broadphase broadphase             = Broadphase::Tree;
+        PhysicsBroadphase2D broadphase             = PhysicsBroadphase2D::Tree;
         float     hashCellSize           = 1.0f;
         std::uint32_t substepCount           = 4u;
         float     contactHertz           = 30.0f;
@@ -33,40 +33,40 @@ namespace Arcane::Physics2D
         bool      parallelSolver         = false;
     };
 
-    ARC_REFLECT_TYPE(WorldSettings)
+    ARC_REFLECT_TYPE(PhysicsWorldSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-        ARC_REFLECT_FIELD(WorldSettings, gravity)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, gravity)
             ARC_REFLECT_ATTR(Range, -1000.0, 1000.0)
             ARC_REFLECT_ATTR(Deterministic)
-            ARC_REFLECT_ATTR(Tooltip, "Project gravity in metres per second squared (+Y is up); a scene-root SceneSettings component overrides it.")
-        ARC_REFLECT_FIELD(WorldSettings, broadphase)
+            ARC_REFLECT_ATTR(Tooltip, "Project gravity in metres per second squared (+Y is up); a scene-root PhysicsSettings2D component overrides it.")
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, broadphase)
             ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "2D broadphase: dynamic tree, spatial hash or sweep-and-prune.")
-        ARC_REFLECT_FIELD(WorldSettings, hashCellSize)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, hashCellSize)
             ARC_REFLECT_ATTR(Range, 0.05, 100.0) ARC_REFLECT_ATTR(Deterministic) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Spatial-hash cell size in metres (Hash broadphase only).")
-        ARC_REFLECT_FIELD(WorldSettings, substepCount)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, substepCount)
             ARC_REFLECT_ATTR(Range, 1.0, 16.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Solver sub-steps per fixed step.")
-        ARC_REFLECT_FIELD(WorldSettings, contactHertz)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, contactHertz)
             ARC_REFLECT_ATTR(Range, 1.0, 240.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Soft-contact stiffness in Hz.")
-        ARC_REFLECT_FIELD(WorldSettings, contactDampingRatio)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, contactDampingRatio)
             ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Soft-contact damping ratio.")
-        ARC_REFLECT_FIELD(WorldSettings, restitutionThreshold)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, restitutionThreshold)
             ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Approach speed (m/s) below which bounces are suppressed.")
-        ARC_REFLECT_FIELD(WorldSettings, contactPushMaxVelocity)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, contactPushMaxVelocity)
             ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Clamp (m/s) on the penetration push-out speed.")
-        ARC_REFLECT_FIELD(WorldSettings, maxLinearVelocity)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, maxLinearVelocity)
             ARC_REFLECT_ATTR(Range, 1.0, 1e5) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Hard cap on body speed (m/s).")
-        ARC_REFLECT_FIELD(WorldSettings, sleepThreshold)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, sleepThreshold)
             ARC_REFLECT_ATTR(Range, 0.0, 10.0) ARC_REFLECT_ATTR(Deterministic)
             ARC_REFLECT_ATTR(Tooltip, "Speed (m/s) under which a body may sleep.")
-        ARC_REFLECT_FIELD(WorldSettings, parallelSolver)
+        ARC_REFLECT_FIELD(PhysicsWorldSettings2D, parallelSolver)
             ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
             ARC_REFLECT_ATTR(Tooltip, "Solve on the job system. Off = the serial solver. Results are thread-count invariant.")
     ARC_END_REFLECT_TYPE()
