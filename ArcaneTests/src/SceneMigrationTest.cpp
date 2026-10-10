@@ -11,12 +11,19 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>
+
+#include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/TestTypeContext.hpp"
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -223,4 +230,115 @@ TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
         CHECK(reread->doc.value("version", 0) == Arcane::Scene::kSceneJsonVersion);
         CHECK(EntityRosters(reread->doc).size() == before.size());
     }
+}
+
+TEST_CASE("a v6 scene with the old physics keys skips those components", "[scene][namespaces]")
+{
+    // N7: no loader alias table. The old keys are unknown names after the
+    // rename, so LoadJson warns and leaves the components off the entity.
+    nlohmann::json doc = nlohmann::json::parse(R"({
+      "version": 6, "assets": [], "entities": [
+        { "components": {
+            "Arcane::Transform": { "position": [0.0, 1.0, 0.0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+            "Arcane::Collider2D": { "fixtures": [ { "kind": "Aabb", "halfW": 0.5, "halfH": 0.5 } ] },
+            "Arcane::RigidBody2D": { "type": "Dynamic" },
+            "Arcane::PhysicsSettings": { "gravity": [0.0, -9.81] }
+        }, "parent": -1 } ] })");
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::Physics2D::RegisterComponents(reg);
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+
+    int colliders = 0, bodies = 0, settings = 0, transforms = 0;
+    reg.CreateView<Arcane::Physics2D::Collider>().ForEach(
+        [&](Astra::Entity, Arcane::Physics2D::Collider&) { ++colliders; });
+    reg.CreateView<Arcane::Physics2D::RigidBody>().ForEach(
+        [&](Astra::Entity, Arcane::Physics2D::RigidBody&) { ++bodies; });
+    reg.CreateView<Arcane::Physics2D::SceneSettings>().ForEach(
+        [&](Astra::Entity, Arcane::Physics2D::SceneSettings&) { ++settings; });
+    reg.CreateView<Arcane::Transform>().ForEach(
+        [&](Astra::Entity, Arcane::Transform&) { ++transforms; });
+    CHECK(colliders == 0);
+    CHECK(bodies == 0);
+    CHECK(settings == 0);
+    CHECK(transforms == 1);
+}
+
+TEST_CASE("a v5 scene with the old physics keys still flips Y and does not alias them", "[scene][namespaces]")
+{
+    nlohmann::json doc = nlohmann::json::parse(R"({
+      "version": 5, "assets": [], "entities": [
+        { "components": {
+            "Arcane::Transform": { "position": [0.0, 2.0, 0.0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+            "Arcane::PhysicsSettings": { "gravity": [0.0, 9.81] }
+        }, "parent": -1 } ] })");
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::Physics2D::RegisterComponents(reg);
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+
+    float y = 0.0f;
+    reg.CreateView<Arcane::Transform>().ForEach(
+        [&](Astra::Entity, Arcane::Transform& t) { y = t.position.y; });
+    CHECK(y == Approx(-2.0f));
+
+    int settings = 0;
+    reg.CreateView<Arcane::Physics2D::SceneSettings>().ForEach(
+        [&](Astra::Entity, Arcane::Physics2D::SceneSettings&) { ++settings; });
+    CHECK(settings == 0);
+}
+
+TEST_CASE("physics.arcscene round-trips byte-identical under the renamed keys", "[scene][namespaces]")
+{
+    const std::filesystem::path scene =
+        Arcane::Test::FindReferenceProjectDir() / "Content" / "scenes" / "physics.arcscene";
+    REQUIRE(std::filesystem::exists(scene));
+
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(scene, &err);
+    INFO(err);
+    REQUIRE(read.has_value());
+
+    // The authored scene carries ReferenceProject components. The game module
+    // has to be loaded or a save would drop them and the bytes could not match.
+    // OnInit requires the project's gameplay input (Player.Move / Player.Jump).
+    const std::filesystem::path projectDir = Arcane::Test::FindReferenceProjectDir();
+    Arcane::ClientRuntime client(Arcane::Test::Process());
+    auto project = Arcane::Project::Open(projectDir);
+    REQUIRE(project);
+    REQUIRE(Arcane::HostBoot::LoadGameplayInput(client, *project).status ==
+            Arcane::HostBoot::GameplayInputLoadResult::Status::Loaded);
+    Arcane::PluginHost host(Arcane::Test::Process(),
+                            std::filesystem::path("ReferenceGameUnderTest.dll"));
+    REQUIRE(host.AttachRuntime(client.Core()));
+    REQUIRE(host.Load());
+    client.ResetRegistry();
+    REQUIRE(Arcane::Scene::ApplySceneDocument(*read, client.Registry()));
+
+    const std::filesystem::path out =
+        std::filesystem::temp_directory_path() / "arcane_physics_roundtrip.arcscene";
+    std::error_code ec;
+    std::filesystem::remove(out, ec);
+    REQUIRE(Arcane::Scene::SaveSceneFile(out, client.Registry(), read->id, &err));
+    INFO(err);
+
+    auto slurp = [](const std::filesystem::path& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    const std::string before = slurp(scene);
+    const std::string after = slurp(out);
+    if (before != after)
+    {
+        std::ofstream dbg(std::filesystem::temp_directory_path() / "physics.arcscene.roundtrip",
+                          std::ios::binary | std::ios::trunc);
+        dbg << after;
+    }
+    CHECK(before.size() == after.size());
+    CHECK(before == after);
 }
