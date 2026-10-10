@@ -43,7 +43,8 @@ jobs:
   build-test:
     name: ${{ matrix.leg }} ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    # macOS gets a longer budget: its runner builds with fewer jobs (MAKE_JOBS).
+    timeout-minutes: ${{ matrix.timeout || 150 }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +72,8 @@ jobs:
             cc: clang
             cxx: clang++
             premake_cc: clang
+            make_jobs: 2
+            timeout: 300
     env:
       ARCANE_CI_LEG: ${{ matrix.leg }}
       CC: ${{ matrix.cc }}
@@ -83,8 +86,11 @@ jobs:
       MACOS_GPU_LANE: ${{ matrix.leg == 'macos-appleclang' && matrix.config == 'Debug' }}
       # Hosted Linux runners are 4 vCPU / 16 GB and the Debug ArcaneTests link
       # alone is ~500 MB: -j3 bounds peak memory. macos-15 arm64 runners are
-      # 3 vCPU / 7 GB.
-      MAKE_JOBS: 3
+      # 3 vCPU / 7 GB, and since the settings arc the heaviest editor/test TUs
+      # peak at 1.4-1.9 GB each: three at once swap the VM (a pre-merge macOS
+      # build took 51 minutes; CI 38076751748 hit the 150-minute cap mid-build),
+      # so macOS builds with -j2 under a longer timeout.
+      MAKE_JOBS: ${{ matrix.make_jobs || 3 }}
     defaults:
       run:
         shell: bash
