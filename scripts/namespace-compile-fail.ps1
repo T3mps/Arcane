@@ -1,4 +1,4 @@
-# namespace-compile-fail.ps1 -- SA4. Each forbidden spelling is its own TU and
+# namespace-compile-fail.ps1 -- FA2. Each forbidden spelling is its own TU and
 # must fail to compile. The control TU must compile. Exit 0 = PASS.
 [CmdletBinding()]
 param([string]$Root)
@@ -53,9 +53,9 @@ function Add-Compile([string]$name, [bool]$mustFail) {
 
 Add-Compile 'Control.cpp' $false
 foreach ($name in @(
-    'PhysicsWorld.cpp', 'Body.cpp', 'BodyHandle.cpp', 'VendorPhysicsWorld.cpp',
-    'Physics2DPhys.cpp', 'ArcanePhys.cpp', 'View.cpp', 'RigidBody2D.cpp',
-    'PhysicsResource.cpp', 'WorldMember.cpp')) {
+    'EcsEntity.cpp', 'Physics2DWorld.cpp', 'ArcanePhys.cpp', 'PhysicsResource.cpp',
+    'PhysicsSystem.cpp', 'RigidBody.cpp', 'PhysicsWorld.cpp', 'Body.cpp',
+    'BodyHandle.cpp', 'WorldMember.cpp')) {
     Add-Compile $name $true
 }
 $lines.Add("echo namespace-compile-fail: PASS (control compiles; 10 forbidden spellings do not)")

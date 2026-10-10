@@ -137,10 +137,11 @@ TEST_CASE("Physics2D game-facing types", "[namespaces]")
             Arcane::PhysicsBodyRef2D>>);
 }
 
-// SA4: the names that must not exist (PhysicsWorld, Body, BodyHandle, Phys,
-// the old flat physics types, and a game-side read of World::world) are one
-// translation unit each. scripts/namespace-compile-fail.ps1 compiles the
-// control and expects each forbidden TU to fail.
+// FA2: the names that must not exist (Arcane::ECS, Arcane::Physics2D,
+// Arcane::Phys, the unsuffixed physics types, and a game-side read of
+// PhysicsWorld2D::world) are one translation unit each.
+// scripts/namespace-compile-fail.ps1 compiles the control and expects each
+// forbidden TU to fail.
 TEST_CASE("forbidden namespace spellings fail to compile", "[namespaces]")
 {
     const auto script = Arcane::Test::FindReferenceProjectDir().parent_path()

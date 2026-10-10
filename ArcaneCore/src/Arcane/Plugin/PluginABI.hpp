@@ -1145,8 +1145,17 @@ namespace Arcane
     //     ShapeKind). World's solver members are private. A v55 module was
     //     compiled against the old names and the old World layout; reject the
     //     pairing. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    // v57 (2026-10-10, flat gameplay API): the ECS prelude moved back into
+    //     namespace Arcane, and the 2D physics types moved out of
+    //     Arcane::Physics2D onto flat Arcane names (PhysicsWorld2D,
+    //     PhysicsSystem2D, RigidBody2D, Collider2D, Fixture2D,
+    //     PhysicsSettings2D, PhysicsBodyRef2D, and the event and settings
+    //     types). Solver records live in Arcane::Detail::Physics2D. A v56
+    //     module was compiled against Arcane::ECS and Arcane::Physics2D;
+    //     reject the pairing. ReferenceProject.arcproj and Aphelyon.arcproj
+    //     restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr uint32_t kGamePluginABIVersion = 56;
+    inline constexpr uint32_t kGamePluginABIVersion = 57;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
