@@ -7,8 +7,6 @@ is NRI on D3D12 and Vulkan (MoltenVK on macOS). Gameplay code uses a flat
 the same renderer. Units are metres, kilograms, and seconds. The world is
 right-handed, +Y up, and the camera looks down -Z.
 
-https://starworks.dev/arcane
-
 This tree is the engine and its SDK. External projects set `ARCANE_SDK` to
 the repo root and consume `build/arcane.lua`. The in-repo sample is
 [ReferenceProject](ReferenceProject).
@@ -26,7 +24,7 @@ been hand-verified on Linux or macOS.
 |---|---|
 | Editor, runtime, hot reload, 2D physics, sprites, meshes, cooking | In the tree and used on Windows. |
 | Hosted CI on Windows, Linux, and macOS | In the tree. Build and the Catch2 suite run on all three. See [docs/ci.md](docs/ci.md). |
-| Real-GPU golden images | The Jenkins job on a Windows GPU agent. |
+| Real-GPU golden images | Defined in the [Jenkinsfile](Jenkinsfile) for a Windows GPU agent, and run on the Windows desk. |
 | Unified 2D and 3D world rendering | In progress on a separate branch. Sprites still draw through the 2D batcher. |
 | Entity replication, 3D physics, 64-bit worlds, game UI, VFX, skeletal animation | Specified or planned. Not in this tree. |
 | `arc` automation CLI | Designed. The checked-in note is still a draft, and the tool is not in this tree. |
@@ -150,7 +148,7 @@ Documents include the shader graph, materials, sprites (`.arcsprite`),
 meshes (`.arcmesh`), input actions, and crash reports. Play mode can run
 standalone, listen-server, embedded-server, or client-only. **Build,
 Rebuild Game Module** spawns `arcbuild`. **Create, C++ Class** emits a
-component, a system, or a module in the flat-API shape.
+component, a system, or a plain class in the flat-API shape.
 
 ### Settings and cvars
 
@@ -428,7 +426,12 @@ cannot pass on Linux are listed, each with a reason, in
 The GPU lane (lavapipe plus the pinned Vulkan validation layers):
 
 ```bash
-scripts/build-vvl-linux.sh
+# Build the pinned layers into a user-owned prefix, then install them into
+# /usr/local (the loader search root the script expects), as CI does.
+# Needs git, cmake, ninja and a C++ toolchain.
+scripts/build-vvl-linux.sh "$HOME/vvl-prefix"
+sudo cp -a "$HOME/vvl-prefix/." /usr/local/
+sudo ldconfig
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
 export SDL_VIDEODRIVER=x11
 xvfb-run -a -s "-screen 0 1920x1080x24" scripts/run-tests.sh --gpu Debug --rng-seed 1
@@ -719,8 +722,9 @@ Hosted CI runs the CPU filter twice per leg, on
 [`scripts/golden-gate.ps1`](scripts/golden-gate.ps1) launches the real
 runtime and editor, headless, against `ReferenceProject`, and compares
 each capture to a blessed PNG. It is fourteen lanes: seven references,
-each on D3D12 and Vulkan. The Jenkins job runs it on a GPU agent.
-Hosted GitHub Actions does not.
+each on D3D12 and Vulkan. The [Jenkinsfile](Jenkinsfile) defines it for a
+Windows GPU agent, and it runs on the Windows desk. Hosted GitHub Actions
+does not run it.
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
@@ -832,7 +836,7 @@ the CPU suite on two seeds. Extra Debug lanes: lavapipe `[gpu]` and
 the windowed smoke on `linux-gcc-14`, and MoltenVK `[gpu]` on
 `macos-appleclang`. There is no ASan or TSan leg.
 
-The [Jenkinsfile](Jenkinsfile) remains the Windows real-GPU gate:
+The [Jenkinsfile](Jenkinsfile) defines the Windows real-GPU gate:
 all three configurations, the unfiltered suite (including `[gpu]`),
 `arccook --check`, the golden gate (Release then Debug), the self-test
 on `main` and `milestone/*`, the sample built through the SDK, and
@@ -921,14 +925,16 @@ implemented in this tree.
 2. **64-bit large-world coordinates (D17).** Positions become 64-bit.
    Rendering is camera-relative. The world origin can rebase. This is
    end to end: physics, render, assets, editor, and (once it exists)
-   replication. Alongside it, in Astra: 64-bit entity ids, component
-   ids that stay dense for a hot range and spill past that range
-   (a fast path, not a hard cap), and a pass that exposes real runtime
-   tunables. Transforms in this tree are still 32-bit floats.
+   replication. Alongside it, in Astra (the Astra 1.0 work): 64-bit
+   entity ids (32-bit index, 32-bit version), component ids that use
+   dense arrays for a hot range and a lookup past it, so the component
+   count stops being a hard limit (today's default limit is 128), and
+   a pass that exposes real runtime tunables. Transforms in this tree are still 32-bit floats.
 3. **Box3D, the minimum.** Vendor Box3D with large-world double
    positions, rigid bodies, spatial queries, and the threading seam.
-   The broader 1.0 bar also includes a character controller and
-   ragdolls. The near-term slice is bodies, queries, and the seam.
+   The engine does not ship a character controller: games build their
+   own movers on the spatial queries. The near-term slice is bodies,
+   queries, and the seam.
 4. **Replication v1.** Per-entity authority, snapshots, interpolation,
    client prediction and reconciliation, and relevance. `INetDriver`
    starts as loopback and TCP, then GameNetworkingSockets. The target
@@ -962,14 +968,27 @@ scheduled ahead of the list above.
   - A render thread and parallel command recording.
   - The feature contract is
     [docs/research/2026-08-12-deadlock-render-target.md](docs/research/2026-08-12-deadlock-render-target.md).
-- **Also planned, after the items above have room:** world streaming,
+- **World and streaming.** Async asset loading and level/cell streaming.
+- **Terrain provider seam.** One terrain-provider interface (heightfield,
+  cube-sphere quadtree, or authored) with streaming and LOD hooks,
+  collision, and an atmosphere-scattering pass; 1.0 targets a
+  demo-quality cube-sphere planet.
+- **Gameplay frameworks (engine-level, game-agnostic).** An
+  inventory/item and stat-modifier framework, a building and
+  snap-socket framework with stability and damage, and seeded
+  procedural-generation utilities. Game-specific rules stay in each
+  game.
+- **Performance gates.** Job-pool utilization made visible, an async I/O
+  lane, and per-system frame budgets enforced as gates.
+- **Also planned, after the items above have room:**
   a Recast/Detour navmesh, Tracy wired through the engine (it is
   vendored and not called from engine code today), packaging beyond
   CI, a persistence seam, moving entity authority between server
   processes, server-authoritative hit validation with lag
   compensation, and a first-person animation rig. Astra's longer
-  hardening (entity remap, moving entities between registries,
-  relationship storage, replication change ticks) belongs to the same
+  hardening (entity remap, per-entity snapshot and restore, moving
+  entities between registries, relationship storage, replication change
+  ticks) belongs to the same
   Astra track as the 64-bit entity work.
 
 One CI system, with the Windows GPU desk as a self-hosted runner and
@@ -995,9 +1014,9 @@ Premake wrappers (`THIRDPARTY_STATICRUNTIME`,
 
 ## Contributing
 
-Contributions need a Contributor License Agreement, signed once.
-A bot comments on the first pull request with a link. One click covers
-later contributions. You keep the copyright. The agreement licenses
+Contributions need a Contributor License Agreement, signed once before
+the first pull request is merged; see [CONTRIBUTING.md](CONTRIBUTING.md)
+for how to sign. It covers later contributions. You keep the copyright. The agreement licenses
 the contribution to Starworks so it can ship under the Starworks
 Source License, offer commercial licenses, and relicense a version as
 MIT on that version's change date.
