@@ -284,7 +284,7 @@ namespace Arcane
 // Registration functions -- header-only, mirroring SceneModule.hpp.
 namespace Arcane
 {
-    inline void RegisterPhysicsComponents(Arcane::ComponentRegistry& creg)
+    inline void RegisterPhysicsComponents(Arcane::ECS::ComponentRegistry& creg)
     {
         creg.RegisterComponent<RigidBody2D>();
         creg.RegisterComponent<Collider2D>();
@@ -295,7 +295,7 @@ namespace Arcane
         // but it is NOT registered with ComponentRegistry (no entity slot needed).
     }
 
-    inline void RegisterPhysicsComponents(Arcane::Registry& reg)
+    inline void RegisterPhysicsComponents(Arcane::ECS::Registry& reg)
     {
         RegisterPhysicsComponents(*reg.GetComponentRegistry());
     }

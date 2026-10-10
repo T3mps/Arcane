@@ -83,7 +83,7 @@ namespace Arcane
         // SECONDARY-WORLD ctor: build this world on an EXISTING ComponentRegistry --
         // the PRIMARY Runtime's (spec s4, the N-worlds-on-one-module invariant).
         //
-        // WHY IT EXISTS. A game module opens its Arcane::ComponentModule on the
+        // WHY IT EXISTS. A game module opens its Arcane::ECS::ComponentModule on the
         // primary Runtime's registry and nowhere else (GameModule.hpp), so that is
         // the only registry its component descriptors reach. A secondary world with
         // a registry of its own would resolve NONE of the module's types: scene
@@ -98,7 +98,7 @@ namespace Arcane
         // whose Components() is not the primary's, so the invariant is enforced at
         // the one place it can be.
         Runtime(ProcessContext& process, NetMode mode,
-                std::shared_ptr<::Arcane::ComponentRegistry> sharedComponents);
+                std::shared_ptr<::Arcane::ECS::ComponentRegistry> sharedComponents);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;
@@ -132,7 +132,7 @@ namespace Arcane
         [[nodiscard]] INetDriver*  NetDriver() const noexcept;
 
         // --- substrate the plugin registers into / the host drives ---
-        ::Arcane::Registry&       Registry()      noexcept;
+        ::Arcane::ECS::Registry&       Registry()      noexcept;
         SystemSchedulers&         Schedulers()    noexcept;
         RunLoop&                  Loop()          noexcept;
         // Re-rate this Runtime's fixed step (a dedicated server's tick, settings
@@ -142,7 +142,7 @@ namespace Arcane
         // module loads (the PhysicsSystem is re-added). Ignores hz <= 0 or
         // non-finite.
         void                      SetFixedHz(double hz);
-        ::Arcane::TypeContext*    TypeContext()   noexcept;
+        ::Arcane::ECS::TypeContext*    TypeContext()   noexcept;
         ::Arcane::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*            TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         // The shared background job queue (F2b Task 12): JobSystem::Submit for
@@ -153,7 +153,7 @@ namespace Arcane
         // not pointer: the JobSystem is a fixed part of this Runtime's
         // substrate and outlives every caller that could hold the reference.
         JobSystem&                Jobs() noexcept;
-        std::shared_ptr<::Arcane::ComponentRegistry> Components() noexcept;
+        std::shared_ptr<::Arcane::ECS::ComponentRegistry> Components() noexcept;
         Assets&                   AssetsFacade() noexcept;
         Config&                   Configuration() noexcept;   // layered engine+project config (Slice 3)
 
@@ -321,7 +321,7 @@ namespace Arcane
         // Registry::Save() -> framed snapshot bytes. Returns a Result so a Save
         // failure surfaces as an actionable error at the call site rather than an
         // empty-but-"ok" vector that masks data loss as a later reload failure.
-        ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const;
+        ::Arcane::ECS::Result<std::vector<std::byte>, ::Arcane::ECS::SerializationError> SnapshotRegistry() const;
 
         // The Save configuration every SnapshotRegistry uses, process-wide
         // (settings arc S6-45). Core's default is Astra's SaveConfig{}. The knob
@@ -329,8 +329,8 @@ namespace Arcane
         // ArcaneEditor declares it (spec s3.2: a shipped game holds no Editor
         // settings) and pushes its choice here from the setting's publish
         // callback; a game keeps the default. Guarded: any thread may read.
-        static void SetSnapshotSaveConfig(const ::Arcane::Registry::SaveConfig& config);
-        [[nodiscard]] static ::Arcane::Registry::SaveConfig SnapshotSaveConfig();
+        static void SetSnapshotSaveConfig(const ::Arcane::ECS::Registry::SaveConfig& config);
+        [[nodiscard]] static ::Arcane::ECS::Registry::SaveConfig SnapshotSaveConfig();
 
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
@@ -358,7 +358,7 @@ namespace Arcane
         // calls this, and ClearSystems calls it again after clearing, so every
         // PluginHost load/reload/unload path keeps them. Idempotent (per-system
         // HasSystem guards). A game module registers ONLY its own systems and
-        // places them with Arcane::Before/After against these types
+        // places them with Arcane::ECS::Before/After against these types
         // (GameModule.hpp).
         // EnsurePhysics runs once per frame before Loop().Advance
         // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp

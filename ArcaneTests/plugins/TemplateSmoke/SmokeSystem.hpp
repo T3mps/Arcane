@@ -4,9 +4,9 @@
 // PARAMETERS say what it touches, so the scheduler can order and parallelise
 // it: views over components and engine resources such as the sim clock.
 //
-//     void operator()(Arcane::View<Arcane::Transform>& view,
-//                     Arcane::Res<Arcane::Time> time,
-//                     Arcane::Res<Arcane::GameInput> input)   // #include <Arcane/Input/GameInput.hpp>
+//     void operator()(Arcane::ECS::View<Arcane::Transform>& view,
+//                     Arcane::ECS::Res<Arcane::Time> time,
+//                     Arcane::ECS::Res<Arcane::GameInput> input)   // #include <Arcane/Input/GameInput.hpp>
 //
 // Fixed-update systems run before transform propagation by default so gameplay
 // can move local transforms first. Registrar discovery order is irrelevant:
@@ -19,9 +19,9 @@
 
 namespace TemplateSmoke
 {
-    struct SmokeSystem : Arcane::SystemTraits<Arcane::Before<Arcane::TransformPropagationSystem>>
+    struct SmokeSystem : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::TransformPropagationSystem>>
     {
-        void operator()(Arcane::Res<Arcane::Time> time)
+        void operator()(Arcane::ECS::Res<Arcane::Time> time)
         {
             (void)time;
         }

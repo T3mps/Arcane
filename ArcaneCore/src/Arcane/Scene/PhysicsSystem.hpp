@@ -115,7 +115,7 @@ namespace Arcane
     // so a recycled slot (new generation) never resolves to a retired record.
     struct BodyRecord2D
     {
-        Arcane::Entity                     entity = Arcane::Entity::Invalid();
+        Arcane::ECS::Entity                     entity = Arcane::ECS::Entity::Invalid();
         Guid                               guid{};
         std::vector<Phys::FixtureHandle>   fixtures;
         bool                               retired = false;   // removed; erased after the next capture
@@ -172,7 +172,7 @@ namespace Arcane
     struct PhysicsResource
     {
         std::unique_ptr<Phys::PhysicsWorld>                  world;
-        std::unordered_map<Arcane::Entity, Phys::BodyHandle> entityToBody;
+        std::unordered_map<Arcane::ECS::Entity, Phys::BodyHandle> entityToBody;
 
         // The paused reconcile's "since" tick (spec 2026-09-11 s6.5): PASS 3.5
         // visits only bodies whose Transform was written after it. Taken at the
@@ -180,7 +180,7 @@ namespace Arcane
         // write-back marks land AT lastReconcile (not newer) and an author edit
         // made between passes lands after it. On the resource, not the system:
         // the registry that owns the ticks owns this too.
-        Arcane::Tick  lastReconcile = 0;
+        Arcane::ECS::Tick  lastReconcile = 0;
         // Instrumentation: bodies PASS 3.5 actually visited, cumulative. The gate's
         // whole effect is "an untouched body is not visited"; this is how a test
         // says so.
@@ -191,7 +191,7 @@ namespace Arcane
         PhysicsEventBuffers2D stepEvents;     // replaced at the end of every stepping pass
         PhysicsEventBuffers2D frameEvents;    // appended per step, cleared by BeginFrame (RunLoop hook)
 
-        ARC_CORE_API void RecordBody(Arcane::Entity entity, Guid guid, Phys::BodyHandle handle,
+        ARC_CORE_API void RecordBody(Arcane::ECS::Entity entity, Guid guid, Phys::BodyHandle handle,
                                      std::vector<Phys::FixtureHandle> fixtures);
         ARC_CORE_API void RetireBody(Phys::BodyHandle handle);
         // Translate the world's arrays for the step just taken, replace stepEvents,
@@ -216,7 +216,7 @@ namespace Arcane
         // Touching solver contacts right now, sleepers included. A side whose
         // body has no record is skipped (Side resolves fixtures, then retiredFixtures).
         // Copies into out; the caller owns the vector. Not a view of resource storage.
-        ARC_CORE_API void ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const;
+        ARC_CORE_API void ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint2D>& out) const;
 
         // ---- The game-facing commands (input-seam spec s5.3) -----------------
         // Exported: PhysicsWorld is linked inside ArcaneCore, so a game module
@@ -224,10 +224,10 @@ namespace Arcane
         // comes from entityToBody (never PhysicsBodyRef: a game's view need not
         // name it, and before the first fixed step it does not exist yet).
         // Read the live dynamic body's velocity and floor support.
-        ARC_CORE_API BodyMotion2D Motion(Arcane::Entity entity, const RigidBody2D& body) const;
+        ARC_CORE_API BodyMotion2D Motion(Arcane::ECS::Entity entity, const RigidBody2D& body) const;
         // Set both axes on the live body, or the authored mint velocity before it
         // exists. Non-finite input and non-dynamic bodies are ignored.
-        ARC_CORE_API void SetVelocity(Arcane::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
+        ARC_CORE_API void SetVelocity(Arcane::ECS::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
 
         // Transient: Registry::Save never writes it, so a restored registry
         // has no PhysicsResource and the next EnsurePhysics mints a fresh one
@@ -376,9 +376,9 @@ namespace Arcane
     // PhysicsSystem (M6 Physics-v2 T6)
     // -------------------------------------------------------------------------
     struct PhysicsSystem
-        : Arcane::SystemTraits<Arcane::Reads<Collider2D>,
-                               Arcane::Writes<Transform, PhysicsBodyRef, RigidBody2D>,
-                               Arcane::Before<TransformPropagationSystem>>
+        : Arcane::ECS::SystemTraits<Arcane::ECS::Reads<Collider2D>,
+                               Arcane::ECS::Writes<Transform, PhysicsBodyRef, RigidBody2D>,
+                               Arcane::ECS::Before<TransformPropagationSystem>>
     {
         // Scheduled by Runtime::InstallEngineSystems into fixedUpdate (2026-09-11
         // physics wiring, spec s4.1). EXCLUSIVE: this pass advances the registry
@@ -398,7 +398,7 @@ namespace Arcane
         explicit PhysicsSystem(float fixedDt, bool stepWorld = true) noexcept
             : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
 
-        void operator()(Arcane::Registry& reg)
+        void operator()(Arcane::ECS::Registry& reg)
         {
             // ARC_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
             PhysicsResource* res = reg.GetResource<PhysicsResource>();

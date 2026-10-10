@@ -13,7 +13,7 @@
 //
 // WHAT "N WORLDS ON ONE MODULE" DIVIDES, EXACTLY (spec s4/s5):
 //   * COMPONENT TYPES are SHARED -- registered ONCE per DLL load (spec R1). A
-//     module opens its Arcane::ComponentModule on the PRIMARY Runtime's
+//     module opens its Arcane::ECS::ComponentModule on the PRIMARY Runtime's
 //     ComponentRegistry (GameModule.hpp), so every world a PluginHost serves
 //     shares that ONE registry: Runtime's three-argument ctor builds a secondary
 //     on the primary's, and PluginHost::AttachRuntime REFUSES a secondary with a
@@ -38,7 +38,7 @@
 // class, and RoleMaskTest.cpp pins them apart.
 
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/EcsFwd.hpp>   // Arcane::SystemScheduler (declared, aliased)
+#include <Arcane/EcsFwd.hpp>   // Arcane::ECS::SystemScheduler (declared, aliased)
 
 #include <cstddef>
 #include <cstdint>
@@ -96,7 +96,7 @@ namespace Arcane
         std::string  name;      // the system type's name (log + census)
         RoleMask     mask  = RoleMask::Both;
         SystemPhase  phase = SystemPhase::FixedUpdate;
-        std::function<void(Arcane::SystemScheduler&)> instantiate;   // AddSystem<T>(args...) -- lives in the MODULE; cleared before unmap (P8)
+        std::function<void(Arcane::ECS::SystemScheduler&)> instantiate;   // AddSystem<T>(args...) -- lives in the MODULE; cleared before unmap (P8)
         const void*  owner = nullptr;   // the registering image (PluginHost clears by owner)
     };
 

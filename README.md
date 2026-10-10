@@ -210,17 +210,17 @@ engine resources -- and the scheduler orders and parallelises it from that:
 #include <Arcane/Input/GameInput.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 
-struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
+struct Jumper : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::PhysicsSystem>>
 {
     Arcane::ActionRef jump{"Player", "Jump"};
 
-    void operator()(Arcane::View<Arcane::RigidBody2D>& view,
-                    Arcane::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
-                    Arcane::Res<Arcane::GameInput> input,    // actions from the project's input asset
-                    Arcane::ResMut<Arcane::Physics2D> physics)
+    void operator()(Arcane::ECS::View<Arcane::RigidBody2D>& view,
+                    Arcane::ECS::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
+                    Arcane::ECS::Res<Arcane::GameInput> input,    // actions from the project's input asset
+                    Arcane::ECS::ResMut<Arcane::Physics2D> physics)
     {
         if (!input->PressedThisFixedStep(jump)) return;
-        view.ForEach([&](Arcane::Entity e, Arcane::RigidBody2D& body)
+        view.ForEach([&](Arcane::ECS::Entity e, Arcane::RigidBody2D& body)
         {
             const Arcane::BodyMotion2D m = physics->Motion(e, body);
             if (m.supported) physics->SetVelocity(e, body, m.velocityX, 6.0f);

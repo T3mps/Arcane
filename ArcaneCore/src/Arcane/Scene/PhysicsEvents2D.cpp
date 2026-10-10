@@ -35,7 +35,7 @@ namespace Arcane
         }
     }
 
-    void PhysicsResource::RecordBody(Arcane::Entity entity, Guid guid, Phys::BodyHandle handle,
+    void PhysicsResource::RecordBody(Arcane::ECS::Entity entity, Guid guid, Phys::BodyHandle handle,
                                      std::vector<Phys::FixtureHandle> fixtures)
     {
         bodyRecords[PackBody(handle)] = BodyRecord2D{ entity, guid, std::move(fixtures), false };
@@ -99,7 +99,7 @@ namespace Arcane
     PhysicsEvents2D PhysicsResource::FrameEvents() const { return frameEvents.View(); }
     void PhysicsResource::BeginFrame() { frameEvents.Clear(); }
 
-    void PhysicsResource::ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const
+    void PhysicsResource::ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint2D>& out) const
     {
         out.clear();
         const auto it = entityToBody.find(entity);

@@ -29,7 +29,7 @@
 
 namespace Arcane
 {
-    struct SceneRoot { Arcane::Entity entity; };
+    struct SceneRoot { Arcane::ECS::Entity entity; };
 
     // ---- render interpolation (Epic 04.2) -----------------------------------
     // Blend a previous fixed-step pose toward the current one by RunLoop alpha so
@@ -98,7 +98,7 @@ namespace Arcane
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
         // ARC_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
-        Astra::FlatMap<Arcane::Entity, InterpSlot> slotOf;
+        Astra::FlatMap<Arcane::ECS::Entity, InterpSlot> slotOf;
         // ARC_INTERNAL_END
         bool                    captured = false;   // false until the first capture
 

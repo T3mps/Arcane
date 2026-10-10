@@ -18,7 +18,7 @@
 
 namespace Arcane
 {
-    struct ContactSide2D  { Arcane::Entity entity = Arcane::Entity::Invalid(); Guid guid{}; std::uint32_t fixture = 0; };
+    struct ContactSide2D  { Arcane::ECS::Entity entity = Arcane::ECS::Entity::Invalid(); Guid guid{}; std::uint32_t fixture = 0; };
     struct ContactBegin2D { ContactSide2D a, b; };
     struct ContactEnd2D   { ContactSide2D a, b; };
     struct ContactHit2D   { ContactSide2D a, b; glm::vec2 point{ 0.0f }; glm::vec2 normal{ 0.0f }; float approachSpeed = 0.0f; };

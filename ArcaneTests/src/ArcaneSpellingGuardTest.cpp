@@ -149,7 +149,7 @@ namespace
         "// ARC_INTERNAL_BEGIN: test\n"
         "Astra::Registry hidden;\n"
         "// ARC_INTERNAL_END\n"
-        "Arcane::Registry fine;\n"
+        "Arcane::ECS::Registry fine;\n"
         "Astra::Registry leaked;\n";
 }
 

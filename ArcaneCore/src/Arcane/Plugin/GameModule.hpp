@@ -14,7 +14,7 @@
 // The macro emits the eight exports the host resolves (PluginEntry::k*,
 // PluginABI.hpp) and everything a module used to copy: the shared TypeContext
 // pin, the Mosaic log-sink + assert-handler installs, the ImGui context/
-// allocator adoption, this module's Arcane::ComponentModule with the
+// allocator adoption, this module's Arcane::ECS::ComponentModule with the
 // ARC_COMPONENT drain (GameComponents.hpp), and the registry Save/LoadState
 // round-trip for hot reload. Every hook has a default; override what the
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
@@ -22,7 +22,7 @@
 // fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
 // own systems. Default-constructible systems use ARC_SYSTEM in one .cpp;
 // systems needing runtime constructor values use RegisterSystem<T>(mask, phase)
-// in OnInit. Both paths place them with Arcane::Before<...> / Arcane::After<...>
+// in OnInit. Both paths place them with Arcane::ECS::Before<...> / Arcane::ECS::After<...>
 // against the engine's types (Astra keys systems by a hash of the type NAME, so
 // that works across the DLL boundary). Registration declares a FACTORY, not an instance: each of the
 // N Runtimes the host attached instantiates the subset its NetMode matches
@@ -79,8 +79,8 @@ namespace Arcane
         // Context()/Registry()/Components() are still valid here.
         virtual void OnShutdown() {}
         // Runs each fixed step before the fixedUpdate scheduler. Gameplay belongs
-        // in SYSTEMS, which read time and input as resources (Arcane::Res<Arcane::
-        // Time>, Arcane::Res<Arcane::GameInput>) -- never copy values into
+        // in SYSTEMS, which read time and input as resources (Arcane::ECS::Res<Arcane::
+        // Time>, Arcane::ECS::Res<Arcane::GameInput>) -- never copy values into
         // components from here (input-seam spec 2026-10-02).
         virtual void OnFixedUpdate(double dt) { (void)dt; }
         virtual void OnUpdate(double dt, double alpha) { (void)dt; (void)alpha; }
@@ -89,8 +89,8 @@ namespace Arcane
         virtual void OnDrawUI() {}
         // Module extras, written AFTER the registry blob / read AFTER the registry
         // restore. The registry round-trip itself is the macro's (never overridden).
-        virtual void OnSaveState(Arcane::BinaryWriter& w) { (void)w; }
-        virtual bool OnLoadState(Arcane::BinaryReader& r) { (void)r; return true; }
+        virtual void OnSaveState(Arcane::ECS::BinaryWriter& w) { (void)w; }
+        virtual bool OnLoadState(Arcane::ECS::BinaryReader& r) { (void)r; return true; }
 
         // ---- what the prologue established (valid from OnInit to OnShutdown) ----
 
@@ -100,14 +100,14 @@ namespace Arcane
             return *m_ctx;
         }
         [[nodiscard]] Runtime&           Engine()   const noexcept { return *Context().engine; }
-        [[nodiscard]] ::Arcane::Registry& Registry() const noexcept { return Engine().Registry(); }
+        [[nodiscard]] ::Arcane::ECS::Registry& Registry() const noexcept { return Engine().Registry(); }
         // The process object (ABI 30): the shared TypeContext and the system-factory
         // table. Engine() is the PRIMARY world; Process() is what every world shares.
         [[nodiscard]] ProcessContext&  Process()  const noexcept { return *Context().process; }
         // The presentation extension, or NULL on a headless host (ArcaneServer, an
         // embedded server world, a headless test). Always null-check it.
         [[nodiscard]] ClientRuntime*   Client()   const noexcept { return Context().client; }
-        [[nodiscard]] Arcane::ComponentModule& Components() const noexcept
+        [[nodiscard]] Arcane::ECS::ComponentModule& Components() const noexcept
         {
             ARC_ASSERT(m_components != nullptr, "GameModule::Components() outside the OnInit..OnShutdown window");
             return *m_components;
@@ -115,10 +115,10 @@ namespace Arcane
         // The scene's root entity, read from the registry ON DEMAND -- never
         // cached: Init runs before the host loads the boot scene, and File > Open
         // Scene swaps the whole registry. Invalid when no scene is loaded.
-        [[nodiscard]] Arcane::Entity SceneRootEntity() const
+        [[nodiscard]] Arcane::ECS::Entity SceneRootEntity() const
         {
             const SceneRoot* sr = Registry().GetResource<SceneRoot>();
-            return sr ? sr->entity : Arcane::Entity::Invalid();
+            return sr ? sr->entity : Arcane::ECS::Entity::Invalid();
         }
 
         // Register one of this module's systems ONCE per DLL load when it needs
@@ -143,7 +143,7 @@ namespace Arcane
         }
 
         // Bound by ARC_GAME_MODULE's Init before OnInit runs. Not for modules.
-        void BindForMacro_(EngineContext* ctx, Arcane::ComponentModule* components) noexcept
+        void BindForMacro_(EngineContext* ctx, Arcane::ECS::ComponentModule* components) noexcept
         {
             m_ctx        = ctx;
             m_components = components;
@@ -151,7 +151,7 @@ namespace Arcane
 
     private:
         EngineContext*           m_ctx        = nullptr;
-        Arcane::ComponentModule* m_components = nullptr;
+        Arcane::ECS::ComponentModule* m_components = nullptr;
     };
 
     namespace GameModuleDetail
@@ -167,7 +167,7 @@ namespace Arcane
         struct State
         {
             EngineContext*           ctx        = nullptr;
-            Arcane::ComponentModule* components = nullptr;
+            Arcane::ECS::ComponentModule* components = nullptr;
             GameModule*              instance   = nullptr;
 
             template <typename Type>
@@ -200,8 +200,8 @@ namespace Arcane
                 // ARC_COMPONENT registrar into it. Every component added under
                 // Source/ (Assets -> Create -> C++ Class, or one ARC_COMPONENT
                 // line by hand) registers here with no edit to the module.
-                components = new Arcane::ComponentModule(
-                    Arcane::ComponentModule::Open(c->engine->Components(), name));
+                components = new Arcane::ECS::ComponentModule(
+                    Arcane::ECS::ComponentModule::Open(c->engine->Components(), name));
                 if (!*components)
                 {
                     delete components;   // empty handle: safe to destroy here (still mapped)
@@ -248,13 +248,13 @@ namespace Arcane
                 Log::UninstallMosaicLevelTarget();
             }
 
-            void SaveState(Arcane::BinaryWriter& w)
+            void SaveState(Arcane::ECS::BinaryWriter& w)
             {
                 // Persist the scene-root entity id explicitly -- resources are not
                 // part of the registry snapshot, so LoadState must re-set SceneRoot
                 // after the restore. Read live: whatever scene is loaded NOW is the
                 // one a hot reload has to bring back.
-                const Arcane::Entity root = instance ? instance->SceneRootEntity() : Arcane::Entity::Invalid();
+                const Arcane::ECS::Entity root = instance ? instance->SceneRootEntity() : Arcane::ECS::Entity::Invalid();
                 w(static_cast<uint64_t>(root));
 
                 auto snap = ctx->engine->SnapshotRegistry();
@@ -274,10 +274,10 @@ namespace Arcane
                     instance->OnSaveState(w);
             }
 
-            bool LoadState(Arcane::BinaryReader& r)
+            bool LoadState(Arcane::ECS::BinaryReader& r)
             {
                 uint64_t rootRaw = 0; r(rootRaw);
-                const Arcane::Entity savedRoot(static_cast<Arcane::Entity::StorageType>(rootRaw));
+                const Arcane::ECS::Entity savedRoot(static_cast<Arcane::ECS::Entity::StorageType>(rootRaw));
 
                 uint64_t n = 0; r(n);
                 std::vector<std::byte> blob(static_cast<std::size_t>(n));
@@ -322,8 +322,8 @@ namespace Arcane
             auto& s = arcane_game_module_state_;                                                   \
             if (s.instance && s.ctx && s.ctx->imguiContext) s.instance->OnDrawUI();                \
         }                                                                                          \
-        ARC_GAME_MODULE_EXPORT void GamePlugin_SaveState(::Arcane::BinaryWriter& w)             \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_SaveState(::Arcane::ECS::BinaryWriter& w)             \
         { arcane_game_module_state_.SaveState(w); }                                                \
-        ARC_GAME_MODULE_EXPORT bool GamePlugin_LoadState(::Arcane::BinaryReader& r)             \
+        ARC_GAME_MODULE_EXPORT bool GamePlugin_LoadState(::Arcane::ECS::BinaryReader& r)             \
         { return arcane_game_module_state_.LoadState(r); }                                         \
     }
