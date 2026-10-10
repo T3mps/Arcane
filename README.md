@@ -276,5 +276,14 @@ every platform but only **executes** on macOS. `probe` alone needs no SDK.
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). Vendored third-party dependencies retain their
-upstream licenses; see [NOTICE.md](NOTICE.md).
+Arcane is source-available under the **Starworks Source License** (the
+Business Source License 1.1 with Starworks parameters; each version converts to
+MIT four years after release). Make and sell games with it freely; games must
+credit Arcane, and Arcane may not be offered as a competing engine product.
+Read [LICENSING.md](LICENSING.md) for the plain-English terms and
+[LICENSE](LICENSE) for the license itself. Revisions published before the
+commit that added this license remain under the MIT License.
+
+Astra, Manifold2D and Mosaic are MIT. Vendored third-party dependencies retain
+their upstream licenses; see [NOTICE.md](NOTICE.md). Contributing:
+[CONTRIBUTING.md](CONTRIBUTING.md).

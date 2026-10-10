@@ -3,8 +3,8 @@ change them in the Mosaic repo and re-run scripts\sync-vendor.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Mosaic
-commit  : 53078eef856e24d93d816c379b3f7e30d4678e58
-branch  : detached
-subject : fix(simd): the ARM Bits paths compile under Apple Clang (from Astra mac/port)
-synced  : 2026-10-08 18:04:30
+commit  : c63a4b26780be6400aa539e402e0268557713f7a
+branch  : main
+subject : docs(license): copyright to Ethan Temprovich (Starworks); contributions sign off under the DCO (MIT unchanged)
+synced  : 2026-10-10 10:48:53
 scope   : include/ + src/ + LICENSE

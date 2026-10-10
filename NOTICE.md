@@ -7,7 +7,7 @@ file is authoritative. Summary:
 | Component | Path | License |
 |---|---|---|
 | Agility SDK (D3D12 redistributable) | `ThirdParty/AgilitySDK` | Microsoft Software License Terms, **not** MIT/permissive (`LICENSE.txt`) |
-| Astra (ECS) | `ThirdParty/Astra` | see `ThirdParty/Astra/LICENSE` |
+| Astra (ECS) | `ThirdParty/Astra` | MIT (`ThirdParty/Astra/LICENSE`) |
 | bc7enc_rdo | `ThirdParty/bc7enc_rdo` | MIT or public domain, dual-licensed (`LICENSE`) |
 | Catch2 | `ThirdParty/Catch2` | Boost Software License 1.0 (`LICENSE.txt`) |
 | cgltf | `ThirdParty/cgltf` | MIT (`LICENSE`) |
@@ -18,10 +18,10 @@ file is authoritative. Summary:
 | glm | `ThirdParty/glm` | MIT / Happy Bunny (`LICENSE`) |
 | Dear ImGui | `ThirdParty/imgui` | MIT |
 | imgui-node-editor | `ThirdParty/imgui-node-editor` | MIT |
-| Manifold2D (2D physics) | `ThirdParty/Manifold2D` | see `ThirdParty/Manifold2D/LICENSE` |
+| Manifold2D (2D physics) | `ThirdParty/Manifold2D` | MIT (`ThirdParty/Manifold2D/LICENSE`) |
 | meshoptimizer | `ThirdParty/meshoptimizer` | MIT (`LICENSE.md`) |
 | miniaudio | `ThirdParty/miniaudio` | MIT-0 / public domain (`LICENSE`) |
-| Mosaic | `ThirdParty/Mosaic` | see `ThirdParty/Mosaic/LICENSE` |
+| Mosaic | `ThirdParty/Mosaic` | MIT (`ThirdParty/Mosaic/LICENSE`) |
 | msdfgen | `ThirdParty/msdfgen` | MIT (`LICENSE.txt`) |
 | nlohmann/json | `ThirdParty/nlohmann` | MIT |
 | NRI (NVIDIA Render Interface) | `ThirdParty/NRI` | MIT (`LICENSE.txt`) |
