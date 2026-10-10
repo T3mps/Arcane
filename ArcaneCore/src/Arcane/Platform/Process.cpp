@@ -104,25 +104,6 @@ namespace Arcane::Platform
 #endif
     }
 
-    std::filesystem::path UserDataDirectory()
-    {
-#if ARC_PLATFORM_WINDOWS
-        if (const wchar_t* localAppData = ::_wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
-            return std::filesystem::path(localAppData);
-        return {};
-#elif ARC_PLATFORM_MACOS
-        if (const char* home = std::getenv("HOME"); home && *home)
-            return std::filesystem::path(home) / "Library" / "Application Support";
-        return {};
-#else
-        if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
-            return std::filesystem::path(xdg);
-        if (const char* home = std::getenv("HOME"); home && *home)
-            return std::filesystem::path(home) / ".local" / "share";
-        return {};
-#endif
-    }
-
 #if ARC_PLATFORM_POSIX
     ProcessStat QueryProcess(std::uint32_t pid)
     {
