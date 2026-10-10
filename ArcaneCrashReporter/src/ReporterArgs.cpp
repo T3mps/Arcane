@@ -1,4 +1,5 @@
 #include "ReporterArgs.hpp"
+#include <Arcane/Util/CharConv.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -59,7 +60,7 @@ namespace Arcane::Reporter
         [[nodiscard]] bool ParseSeconds(const std::string& v, double& out)
         {
             double d = 0.0;
-            const auto r = std::from_chars(v.data(), v.data() + v.size(), d);
+            const auto r = Arcane::FromChars(v.data(), v.data() + v.size(), d);
             if (r.ec != std::errc{} || r.ptr != v.data() + v.size() || !std::isfinite(d) || d < 0.0) return false;
             out = d;
             return true;

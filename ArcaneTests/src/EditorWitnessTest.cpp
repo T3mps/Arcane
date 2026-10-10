@@ -667,7 +667,7 @@ TEST_CASE("E11: editor.settings.openAtBoot=both opens Editor Preferences and Pro
     inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
     const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "30",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "30",
                  "--report", inv.reportPath.generic_string(), "--dump-layout", dump.generic_string(),
                  "--set", "editor.settings.openAtBoot=both", "--set", "editor.settings.openCategory=Engine" };
     inv.hardCapMs = 120000;

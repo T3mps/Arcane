@@ -32,7 +32,8 @@ namespace
     static_assert(Detail::kIsSettingsFieldType<std::uint32_t>);
     static_assert(Detail::kIsSettingsFieldType<std::int64_t>);
     static_assert(Detail::kIsSettingsFieldType<std::uint64_t>);
-    static_assert(Detail::kIsSettingsFieldType<std::size_t>);   // == std::uint64_t on x64 MSVC
+    static_assert(Detail::kIsSettingsFieldType<std::size_t> ==
+                  (std::is_same_v<std::size_t, std::uint32_t> || std::is_same_v<std::size_t, std::uint64_t>));
     static_assert(Detail::kIsSettingsFieldType<float>);
     static_assert(Detail::kIsSettingsFieldType<double>);
     static_assert(Detail::kIsSettingsFieldType<std::string>);
