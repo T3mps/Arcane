@@ -8,6 +8,7 @@
 #include "Helpers/HostWitness.hpp"
 #include <Arcane/Platform/Platform.hpp>   // ExecutableFileName: .exe on Windows only
 #include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/UserDataDirs.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // E9: the fixture's node id
 #include <Arcane/Material/MaterialGraph.hpp>
@@ -691,35 +692,26 @@ TEST_CASE("E12: a saved shortcut and a --set editor.keys.* reach a declared cvar
     // so main() declares the editor.keys.* table first. Declared later, the
     // --set below was refused as "unknown" (the RED run of this gate).
     WitnessScratch scratch(StagedEditorDir(), "e12-shortcut-boot");
-    const std::filesystem::path lad = scratch.Dir() / "localappdata";
-    std::filesystem::create_directories(lad / "Arcane" / "Editor" / "Config");
+    const std::filesystem::path userData = scratch.Dir() / "user-data";
+    std::filesystem::create_directories(userData);
+    ScopedUserDataBase scopedUserData(userData);
+    REQUIRE(scopedUserData.Ok());
+    Arcane::Paths::Config paths;
+    paths.dist = false;
+    const std::filesystem::path editorConfig = Arcane::Paths::Resolve(Arcane::Paths::Location::EditorUserDir, paths) / "Config";
+    INFO("editor config dir " << editorConfig.string());
+    REQUIRE(IsUnder(editorConfig, userData));   // the child inherits the redirected base, never the real profile
+    std::filesystem::create_directories(editorConfig);
     {
-        std::ofstream out(lad / "Arcane" / "Editor" / "Config" / "editor.json", std::ios::binary);
+        std::ofstream out(editorConfig / "editor.json", std::ios::binary);
         out << R"({ "keys": { "edit.copy": "F" } })";
     }
-    struct ScopedLocalAppData   // RunWitness's child inherits it: Paths' EditorUserDir = <LOCALAPPDATA>/Arcane/Editor
-    {
-        std::wstring saved;
-        bool had = false;
-        explicit ScopedLocalAppData(const std::filesystem::path& value)
-        {
-            if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
-            _wputenv_s(L"LOCALAPPDATA", value.wstring().c_str());
-        }
-        ~ScopedLocalAppData()
-        {
-            if (had)
-                _wputenv_s(L"LOCALAPPDATA", saved.c_str());
-            else   // originally unset: REMOVE it. An empty value is the CRT's removal form
-                _wputenv_s(L"LOCALAPPDATA", L"");   // (_putenv_s docs): it drops the name from the CRT and the OS environment
-        }
-    } scopedLad(lad);
 
     WitnessInvocation inv;
-    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor");
     inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
-    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "5",
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", kNativeBackendCli, "--frames", "5",
                  "--report", inv.reportPath.generic_string(), "--set", "editor.keys.edit.cut=Ctrl+Shift+X" };
     inv.hardCapMs = 120000;
     WitnessRun run = RunWitness(inv);
