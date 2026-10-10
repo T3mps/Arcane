@@ -121,7 +121,7 @@ namespace
                 [&](double dt, double a) { host.UpdateAll(dt, a); });
 
             const auto* t  = client.Registry().GetComponent<Arcane::Transform>(player);
-            const auto* rb = client.Registry().GetComponent<Arcane::RigidBody2D>(player);
+            const auto* rb = client.Registry().GetComponent<Arcane::Physics2D::RigidBody>(player);
             REQUIRE(t);
             REQUIRE(rb);
             out.push_back({ t->position.x, t->position.y, rb->velocity.x, rb->velocity.y });

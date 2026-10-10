@@ -7,6 +7,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Ecs.hpp>
+#include <Arcane/Physics2D.hpp>
+#include <Arcane/Scene/EngineRoster.hpp>
 
 #include <Astra/Astra.hpp>
 
@@ -105,3 +107,27 @@ TEST_CASE("flat Arcane:: ECS prelude names no longer name anything", "[namespace
     CHECK(NSFACADE_NAME_PRESENT(Arcane::ECS::Registry));
 }
 #endif
+
+TEST_CASE("Physics2D game-facing types", "[namespaces]")
+{
+    STATIC_REQUIRE(std::is_class_v<Arcane::Physics2D::World>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::BodyType>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::ShapeKind>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::RigidBody::type), Arcane::Physics2D::BodyType>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::Fixture::kind), Arcane::Physics2D::ShapeKind>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::EngineComponentRoster,
+        Arcane::TypeList<
+            Arcane::Transform,
+            Arcane::WorldTransform,
+            Arcane::SpriteRenderer,
+            Arcane::PostProcess,
+            Arcane::Identity,
+            Arcane::Hidden,
+            Arcane::Camera,
+            Arcane::MeshRenderer,
+            Arcane::Physics2D::SceneSettings,
+            Arcane::WorldBounds,
+            Arcane::Physics2D::RigidBody,
+            Arcane::Physics2D::Collider,
+            Arcane::Physics2D::BodyRef>>);
+}

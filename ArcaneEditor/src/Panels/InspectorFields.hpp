@@ -213,7 +213,7 @@ namespace Arcane::Editor
     // every one takes the CONTAINING component instance, never the vector).
     // ImGui-free so the [editor] units drive them directly; the view brackets
     // each into one ComponentEditCommand (a whole-component snapshot --
-    // Collider2D::Serialize carries the vector) exactly as it brackets an
+    // Arcane::Physics2D::Collider::Serialize carries the vector) exactly as it brackets an
     // AssetRef pick. Null instance or a missing accessor: no-op, never a crash.
     [[nodiscard]] std::size_t VectorSize(const Astra::FieldInfo& f, const void* instance) noexcept;
     // Default-constructed element at `at`; `at >= size` appends (Astra's contract).
@@ -222,7 +222,7 @@ namespace Arcane::Editor
     void ApplyVectorErase (const Astra::FieldInfo& f, void* instance, std::size_t at) noexcept;
     // Exchanges elements a and b BYTEWISE through vectorElement + elementSize.
     // Sound for a trivially copyable element, which every vector element on
-    // the roster is (Fixture, MeshSlot): FieldInfo records no trivially-
+    // the roster is (Arcane::Physics2D::Fixture, MeshSlot): FieldInfo records no trivially-
     // copyable bit and Astra offers no vectorSwap, so a future non-trivial
     // element needs that accessor FIRST (recorded follow-up). Either index
     // past the end, or a == b, is a no-op. Not noexcept: the temp is a heap

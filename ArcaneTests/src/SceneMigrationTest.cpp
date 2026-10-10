@@ -189,7 +189,7 @@ TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::Physics2D::RegisterComponents(reg);
         REQUIRE(Arcane::Scene::ApplySceneDocument(*read, reg));
 
         // The guard runs against the CANDIDATE document, in memory, BEFORE the

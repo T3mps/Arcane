@@ -66,7 +66,7 @@
 #include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
+#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::Physics2D::World (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
 #include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
@@ -1896,15 +1896,15 @@ namespace Arcane::Editor
         // agree to the bit. The decision is PlanPhysicsOverlay (pure, tested).
         {
             Astra::Registry& reg = m_runtime->Registry();
-            const Arcane::PhysicsResource* phys = reg.GetResource<Arcane::PhysicsResource>();
+            const Arcane::Physics2D::World* phys = reg.GetResource<Arcane::Physics2D::World>();
             std::optional<Manifold2D::Physics::BodyHandle> selectedBody;
-            // entityToBody (a plain Arcane-level map), not PhysicsBodyRef +
+            // entityToBody (a plain Arcane-level map), not Arcane::Physics2D::BodyRef +
             // PhysicsWorld::IsValid: ArcaneEditor.exe does not link Manifold2D
             // (physics logic lives inside Arcane.dll only, same boundary the
             // NRI include-only comment above documents) -- a direct call into
             // an out-of-line PhysicsWorld method here is an unresolved symbol.
             if (m_selection.HasSelection() && phys)
-                if (auto it = phys->entityToBody.find(m_selection.Primary()); it != phys->entityToBody.end())
+                if (auto it = Arcane::Physics2D::Detail::Access::Entities(*phys).find(m_selection.Primary()); it != Arcane::Physics2D::Detail::Access::Entities(*phys).end())
                     selectedBody = it->second;
             const Arcane::Editor::PhysicsOverlayPlan plan =
                 Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
@@ -1914,16 +1914,16 @@ namespace Arcane::Editor
             const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
             const std::optional<Arcane::Affine2D> overlayAffine =
                 ctx ? ctx->view.AsAffine2D() : std::nullopt;
-            if (plan.draw && phys && phys->world && overlayAffine)
+            if (plan.draw && phys && Arcane::Physics2D::Detail::Access::Solver(*phys) && overlayAffine)
             {
-                Arcane::PhysicsDebugDrawOptions opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
+                Arcane::Physics2D::DebugDrawOptions opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
                 opts.view   = *overlayAffine;
                 opts.alpha  = ctx->alpha;
-                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
+                opts.interp = reg.GetResource<Arcane::Physics2D::InterpBuffer>();
                 opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
                 opts.contacts   = plan.wholeWorld;
                 if (!plan.wholeWorld) opts.onlyBody = selectedBody;
-                Arcane::DrawPhysicsDebug(*phys->world, b, opts);
+                Arcane::DrawPhysicsDebug(*Arcane::Physics2D::Detail::Access::Solver(*phys), b, opts);
             }
         }
 

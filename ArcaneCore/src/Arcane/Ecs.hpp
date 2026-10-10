@@ -7,7 +7,7 @@
 // alias is added here. Every name is an ALIAS of the library type, so this
 // changes no ABI and no serialized type name.
 //
-//     struct Mover : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::PhysicsSystem>>
+//     struct Mover : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D::System>>
 //     {
 //         void operator()(Arcane::ECS::View<Arcane::Transform>& view, Arcane::ECS::Res<Arcane::Time> time);
 //     };

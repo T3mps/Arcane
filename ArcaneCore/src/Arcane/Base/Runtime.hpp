@@ -136,10 +136,10 @@ namespace Arcane
         SystemSchedulers&         Schedulers()    noexcept;
         RunLoop&                  Loop()          noexcept;
         // Re-rate this Runtime's fixed step (a dedicated server's tick, settings
-        // arc S6-GATE): the loop, the installed PhysicsSystem's step and the
+        // arc S6-GATE): the loop, the installed Arcane::Physics2D::System's step and the
         // rate a ClearSystems reinstall uses all follow `hz`, so physics
         // advances by the step the loop actually runs. Call before a game
-        // module loads (the PhysicsSystem is re-added). Ignores hz <= 0 or
+        // module loads (the Arcane::Physics2D::System is re-added). Ignores hz <= 0 or
         // non-finite.
         void                      SetFixedHz(double hz);
         ::Arcane::ECS::TypeContext*    TypeContext()   noexcept;
@@ -349,9 +349,9 @@ namespace Arcane
         void ClearSystems();
 
         // --- engine-owned physics (2026-09-11, spec docs/specs/2026-09-11-physics-2d-wiring-design.md s4-s5) ---
-        // Manifold2D-free surface: hosts and modules never see PhysicsSystem or
+        // Manifold2D-free surface: hosts and modules never see Arcane::Physics2D::System or
         // PhysicsWorld. InstallEngineSystems adds the engine's HEADLESS pair --
-        // PhysicsSystem then TransformPropagationSystem into fixedUpdate.
+        // Arcane::Physics2D::System then TransformPropagationSystem into fixedUpdate.
         // RenderSubmissionSystem is presentation and is ClientRuntime's to
         // install (it does, at construction and on every OnSystemsCleared), so
         // a Core-only host has exactly the systems it can execute. The ctor
@@ -361,7 +361,7 @@ namespace Arcane
         // places them with Arcane::ECS::Before/After against these types
         // (GameModule.hpp).
         // EnsurePhysics runs once per frame before Loop().Advance
-        // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp
+        // (beside SetRenderContext): it mints Arcane::Physics2D::World + PhysicsInterp
         // Buffer when the current registry lacks them -- scene open,
         // RestoreRegistry (Play -> Stop, structural undo) and hot reload all
         // replace the registry, and the next frame's Ensure is the reset --
@@ -378,17 +378,17 @@ namespace Arcane
         // reconciled is authoring state (the paused reconcile zeroes a body's
         // velocity on every author move, by design), and Play must start the
         // way ArcaneRuntime boots -- bodies at their authored poses WITH their
-        // authored RigidBody2D::velocity, applied by PASS 2's mint. A restore
+        // authored Arcane::Physics2D::RigidBody::velocity, applied by PASS 2's mint. A restore
         // on Stop never carries the pair either (both are transient resources),
         // so Play and Stop are symmetric. Lives here rather than in the editor because destroying
-        // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
+        // Arcane::Physics2D::World destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
-        // The scene-root PhysicsSettings component when present, else the
+        // The scene-root Arcane::Physics2D::SceneSettings component when present, else the
         // `physics.gravity` setting (its project rung, else
         // its default (0, -9.81; +Y up, F4)). Layered on purpose: gravity is
         // authored content, so the built-in default yields to the project and
-        // the project to the per-scene PhysicsSettings component.
+        // the project to the per-scene Arcane::Physics2D::SceneSettings component.
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:

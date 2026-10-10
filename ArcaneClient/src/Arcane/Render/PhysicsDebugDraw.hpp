@@ -45,7 +45,7 @@ namespace Arcane
     // Only referenced here through a pointer (PhysicsDebugDrawOptions::interp), so
     // a forward declaration is sufficient -- keeps this header free of the
     // Astra/Scene include chain (see the boundary note above).
-    struct PhysicsInterpBuffer;
+    namespace Physics2D { struct InterpBuffer; }
 
     // Options for DrawPhysicsDebug.
     //
@@ -72,8 +72,10 @@ namespace Arcane
     // NOT inherited: DebugPhysicsStyleSettings (debug.physics.style.*: arrow
     // heads, sleeping dim, emphasis floor, thickness scales, px radii); both
     // overlays read its published values directly.
-    struct PhysicsDebugDrawOptions : DebugPhysicsSettings, DebugPhysicsDrawSettings,
-                                     DebugPhysicsColorSettings, DebugPhysicsTraceSettings
+namespace Physics2D
+{
+    struct DebugDrawOptions : DebugSettings, DebugDrawSettings,
+                              DebugColorSettings, DebugTraceSettings
     {
         // Camera transform applied to every emitted point + length: the
         // orthographic ViewTransform's Affine2D (F4 plan 1 T3) -- points go
@@ -120,7 +122,7 @@ namespace Arcane
         // The per-body AABB (aabbs), contacts, and the broadphase overlays
         // (drawFixtureTree / drawStaticGrid / drawResidencyGrid / drawManifolds)
         // are NOT interpolated -- they stay at the current step by spec.
-        const PhysicsInterpBuffer* interp = nullptr;
+        const InterpBuffer* interp = nullptr;
         float                      alpha  = 0.0f;   // RunLoop::Alpha() in [0,1)
 
         // ---- one-body filter (2026-09-11 physics wiring, spec s6.3) ---------
@@ -131,10 +133,11 @@ namespace Arcane
         // default) is every existing caller: the whole world, every flag honoured.
         std::optional<Manifold2D::Physics::BodyHandle> onlyBody;
     };
+}
 
     // A fresh options block holding the PUBLISHED debug.physics.* values (the
     // per-call members keep their defaults). Read it once per frame.
-    [[nodiscard]] ARC_API PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions();
+    [[nodiscard]] ARC_API Physics2D::DebugDrawOptions MakePhysicsDebugDrawOptions();
 
     // Submit physics debug geometry to `batcher`.
     //
@@ -164,7 +167,7 @@ namespace Arcane
     ARC_API void DrawPhysicsDebug(
         const Manifold2D::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
-        const PhysicsDebugDrawOptions& opts = {});
+        const Physics2D::DebugDrawOptions& opts = {});
 
     // ---- Slice B: narrowphase-inspector WORLD overlay ----------------------------
     //

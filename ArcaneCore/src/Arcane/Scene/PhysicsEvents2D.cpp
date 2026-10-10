@@ -1,72 +1,75 @@
-// PhysicsEvents2D.cpp -- PhysicsResource's event members (spec 2026-10-08 s7).
-// Translation: Manifold2D handles -> {entity, GUID, fixture index} through the
-// body records PhysicsSystem fills at mint. Order is the world's (already sorted
-// upstream); an event naming a body with no record is dropped.
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/Physics2DDetail.hpp>
+
+#include <Manifold2D/Physics/Events.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include <algorithm>
 
-namespace Arcane
+namespace
 {
-    namespace
+    namespace Phys = Arcane::Physics2D::Detail::Phys;
+
+    bool Side(const std::unordered_map<std::uint64_t, Arcane::Physics2D::BodyRecord>& records,
+              Phys::BodyHandle body, Phys::FixtureHandle fx, Arcane::Physics2D::ContactSide& out)
     {
-        bool Side(const PhysicsResource& res, Phys::BodyHandle body, Phys::FixtureHandle fx, ContactSide2D& out)
+        using Arcane::Physics2D::Detail::PackBody;
+        const auto it = records.find(PackBody(body));
+        if (it == records.end()) return false;
+        const Arcane::Physics2D::BodyRecord& rec = it->second;
+        const auto cur = std::find(rec.fixtures.begin(), rec.fixtures.end(), fx);
+        int idx = cur == rec.fixtures.end() ? -1 : static_cast<int>(cur - rec.fixtures.begin());
+        if (idx < 0)
         {
-            const auto it = res.bodyRecords.find(PackBody(body));
-            if (it == res.bodyRecords.end()) return false;
-            const BodyRecord2D& rec = it->second;
-            // Current handles first, then every generation a paused rescale has
-            // dropped since the last capture. A recycled slot's new generation
-            // does not match a retired handle.
-            const auto cur = std::find(rec.fixtures.begin(), rec.fixtures.end(), fx);
-            int idx = cur == rec.fixtures.end() ? -1 : static_cast<int>(cur - rec.fixtures.begin());
-            if (idx < 0)
+            for (const Arcane::Physics2D::RetiredFixture& old : rec.retiredFixtures)
             {
-                for (const RetiredFixture2D& old : rec.retiredFixtures)
-                {
-                    if (old.handle == fx) { idx = static_cast<int>(old.index); break; }
-                }
+                if (old.handle == fx) { idx = static_cast<int>(old.index); break; }
             }
-            if (idx < 0) return false;
-            out.entity  = rec.entity;
-            out.guid    = rec.guid;
-            out.fixture = static_cast<std::uint32_t>(idx);
-            return true;
         }
+        if (idx < 0) return false;
+        out.entity  = rec.entity;
+        out.guid    = rec.guid;
+        out.fixture = static_cast<std::uint32_t>(idx);
+        return true;
+    }
+}
+
+namespace Arcane::Physics2D
+{
+    void World::RecordBody(Arcane::ECS::Entity entity, Guid guid, Detail::BodyHandle handle,
+                           std::vector<Detail::FixtureHandle> fixtures)
+    {
+        bodyRecords[Detail::PackBody(handle)] = BodyRecord{ entity, guid, std::move(fixtures), false };
     }
 
-    void PhysicsResource::RecordBody(Arcane::ECS::Entity entity, Guid guid, Phys::BodyHandle handle,
-                                     std::vector<Phys::FixtureHandle> fixtures)
+    void World::RetireBody(Detail::BodyHandle handle)
     {
-        bodyRecords[PackBody(handle)] = BodyRecord2D{ entity, guid, std::move(fixtures), false };
-    }
-
-    void PhysicsResource::RetireBody(Phys::BodyHandle handle)
-    {
-        if (const auto it = bodyRecords.find(PackBody(handle)); it != bodyRecords.end())
+        if (const auto it = bodyRecords.find(Detail::PackBody(handle)); it != bodyRecords.end())
             it->second.retired = true;
     }
 
-    void PhysicsResource::CaptureStep()
+    void World::CaptureStep()
     {
+        namespace Phys = Detail::Phys;
         stepEvents.Clear();
         if (world)
         {
             const Phys::ContactEvents c = world->GetContactEvents();
             for (const auto& e : c.begin)
             {
-                ContactBegin2D o;
-                if (Side(*this, e.bodyA, e.a, o.a) && Side(*this, e.bodyB, e.b, o.b)) stepEvents.contactBegin.push_back(o);
+                ContactBegin o;
+                if (Side(bodyRecords, e.bodyA, e.a, o.a) && Side(bodyRecords, e.bodyB, e.b, o.b))
+                    stepEvents.contactBegin.push_back(o);
             }
             for (const auto& e : c.end)
             {
-                ContactEnd2D o;
-                if (Side(*this, e.bodyA, e.a, o.a) && Side(*this, e.bodyB, e.b, o.b)) stepEvents.contactEnd.push_back(o);
+                ContactEnd o;
+                if (Side(bodyRecords, e.bodyA, e.a, o.a) && Side(bodyRecords, e.bodyB, e.b, o.b))
+                    stepEvents.contactEnd.push_back(o);
             }
             for (const auto& e : c.hit)
             {
-                ContactHit2D o;
-                if (!Side(*this, e.bodyA, e.a, o.a) || !Side(*this, e.bodyB, e.b, o.b)) continue;
+                ContactHit o;
+                if (!Side(bodyRecords, e.bodyA, e.a, o.a) || !Side(bodyRecords, e.bodyB, e.b, o.b)) continue;
                 o.point  = glm::vec2(static_cast<float>(e.point.x), static_cast<float>(e.point.y));
                 o.normal = glm::vec2(static_cast<float>(e.normal.x), static_cast<float>(e.normal.y));
                 o.approachSpeed = static_cast<float>(e.approachSpeed);
@@ -75,13 +78,17 @@ namespace Arcane
             const Phys::SensorEvents s = world->GetSensorEvents();
             for (const auto& e : s.begin)
             {
-                SensorBegin2D o;
-                if (Side(*this, e.sensorBody, e.sensor, o.sensor) && Side(*this, e.visitorBody, e.visitor, o.visitor)) stepEvents.sensorBegin.push_back(o);
+                SensorBegin o;
+                if (Side(bodyRecords, e.sensorBody, e.sensor, o.sensor) &&
+                    Side(bodyRecords, e.visitorBody, e.visitor, o.visitor))
+                    stepEvents.sensorBegin.push_back(o);
             }
             for (const auto& e : s.end)
             {
-                SensorEnd2D o;
-                if (Side(*this, e.sensorBody, e.sensor, o.sensor) && Side(*this, e.visitorBody, e.visitor, o.visitor)) stepEvents.sensorEnd.push_back(o);
+                SensorEnd o;
+                if (Side(bodyRecords, e.sensorBody, e.sensor, o.sensor) &&
+                    Side(bodyRecords, e.visitorBody, e.visitor, o.visitor))
+                    stepEvents.sensorEnd.push_back(o);
             }
         }
         const auto append = [](auto& dst, const auto& src) { dst.insert(dst.end(), src.begin(), src.end()); };
@@ -95,12 +102,13 @@ namespace Arcane
         std::erase_if(bodyRecords, [](const auto& kv) { return kv.second.retired; });
     }
 
-    PhysicsEvents2D PhysicsResource::StepEvents() const  { return stepEvents.View(); }
-    PhysicsEvents2D PhysicsResource::FrameEvents() const { return frameEvents.View(); }
-    void PhysicsResource::BeginFrame() { frameEvents.Clear(); }
+    Events World::StepEvents() const  { return stepEvents.View(); }
+    Events World::FrameEvents() const { return frameEvents.View(); }
+    void World::BeginFrame() { frameEvents.Clear(); }
 
-    void PhysicsResource::ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint2D>& out) const
+    void World::ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint>& out) const
     {
+        namespace Phys = Detail::Phys;
         out.clear();
         const auto it = entityToBody.find(entity);
         if (!world || it == entityToBody.end() || !world->IsValid(it->second)) return;
@@ -108,8 +116,9 @@ namespace Arcane
         world->GetBodyContacts(it->second, raw);
         for (const Phys::BodyContact& c : raw)
         {
-            ContactPoint2D p;
-            if (!Side(*this, c.selfBody, c.self, p.self) || !Side(*this, c.otherBody, c.other, p.other)) continue;
+            ContactPoint p;
+            if (!Side(bodyRecords, c.selfBody, c.self, p.self) || !Side(bodyRecords, c.otherBody, c.other, p.other))
+                continue;
             p.normal = glm::vec2(static_cast<float>(c.normal.x), static_cast<float>(c.normal.y));
             p.pointCount = static_cast<std::uint32_t>(c.pointCount);
             out.push_back(p);

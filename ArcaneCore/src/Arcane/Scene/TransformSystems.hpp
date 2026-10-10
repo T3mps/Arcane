@@ -168,7 +168,7 @@ namespace Arcane
         // Serialize below, so a restore brings back an EMPTY cache -- the same
         // as a fresh one. The no-op Serialize satisfies Astra's HasSerializeMethod so the
         // vector members never reach the trivially-copyable path (same reason
-        // PhysicsInterpBuffer carries one).
+        // Arcane::Physics2D::InterpBuffer carries one).
         template<typename Archive> void Serialize(Archive& /*ar*/) {}
     };
 

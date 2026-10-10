@@ -18,7 +18,7 @@
 // ARC_COMPONENT drain (GameComponents.hpp), and the registry Save/LoadState
 // round-trip for hot reload. Every hook has a default; override what the
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
-// InstallEngineSystems: PhysicsSystem -> TransformPropagationSystem in
+// InstallEngineSystems: Arcane::Physics2D::System -> TransformPropagationSystem in
 // fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
 // own systems. Default-constructible systems use ARC_SYSTEM in one .cpp;
 // systems needing runtime constructor values use RegisterSystem<T>(mask, phase)

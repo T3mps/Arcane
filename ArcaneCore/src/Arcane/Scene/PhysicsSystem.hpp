@@ -1,421 +1,48 @@
 #pragma once
 
-// PhysicsSystem (M6 Physics-v2 T6): Astra fixed-update system that drives the
-// PhysicsWorld from the ECS and writes results back to Transform components.
-//
-// Also defines PhysicsResource: the Registry resource (singleton) holding the
-// PhysicsWorld and the entity<->BodyHandle map. PhysicsResource lives here
-// (not in SceneResources.hpp) because it pulls in Core headers that game-plugin
-// consumers (PlaygroundGame.dll, future Game.dll) cannot include directly --
-// they link Arcane.dll and have no Core in their include path. Any code that
-// uses PhysicsSystem already has Core in scope.
-//
-// Pass ordering inside operator() (each invocation = one fixed step):
-//
-//   1. DESTROY PASS -- walk entityToBody; for any entry whose entity is no
-//      longer alive (reg.IsValid returns false) or no longer has RigidBody2D
-//      or Collider2D, call world->RemoveBody(handle) and erase the map entry;
-//      or, paused, changed RigidBody2D/Collider2D (re-mint) -- an author edit
-//      of shape, mass or body type since the last reconcile, so PASS 2 rebuilds
-//      the body from the current components this same pass. Stale handles are
-//      collected first to keep iteration safe.
-//
-//   1.5 ENSURE PhysicsBodyRef -- an editor-authored RigidBody2D + Collider2D
-//      entity can never get one from the Inspector (ComponentCatalog structure-
-//      locks it), so this pass adds it before PASS 2's view would otherwise
-//      skip the entity forever.
-//
-//   2. CREATE/SYNC PASS -- for each entity with RigidBody2D + Collider2D +
-//      PhysicsBodyRef + Transform whose PhysicsBodyRef.handle == kInvalidBody:
-//      - Build a BodyDef from RigidBody2D + fixtures[0] (shape + material).
-//      - Call world->AddBody(def) to create the body with the primary fixture.
-//      - For each subsequent fixture (fixtures[1..N-1]) call world->AddFixture
-//        with a FixtureDef built from the Fixture descriptor (shape, localPos,
-//        localAngle, material, filter, isSensor).
-//      - Store the BodyHandle in PhysicsBodyRef and entityToBody.
-//      Entities with an empty fixtures list are skipped (no body to create).
-//
-//   2.5 CAPTURE PREVIOUS POSES (Epic 04.2, opt-in) -- if PhysicsInterpBuffer is
-//      present as a resource, snapshot every live body's PRE-STEP world pose
-//      into it (indexed by PhysicsWorld body slot). Skipped when paused
-//      (stepWorld=false). Consumed by DrawPhysicsDebug for the debug overlay.
-//
-//   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick, then
-//      CaptureStep translates that step's events into StepEvents / FrameEvents.
-//
-//   4. WRITE-BACK -- STEPPING passes only -- for each tracked entity:
-//        world->Position(handle) -> Transform.position.xy  (z preserved)
-//        world->GetAngle(handle) -> Transform.rotation, as a pure +Z quaternion
-//      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
-//      Task 3 (F1): Transform is 3D but this solver is not -- see the DEGENERATE
-//      CASE banner in the CREATE pass and the write-back's own comment for what
-//      that means for an entity's Z and its out-of-plane orientation.
-//      TransformPropagationSystem (registered after this system) then derives
-//      WorldTransform from the updated Transform.
-//
-// Ordering guarantee: PhysicsSystem is registered in fixedUpdate BEFORE
-// TransformPropagationSystem; the Writes<Transform> trait creates the data
-// dependency that the scheduler respects.
-//
-// Determinism contract: fixed dt, stable view iteration (Astra guarantees
-// archetype-stable order), no wall-clock, /fp:precise (workspace rule). No
-// per-step heap allocation on the entity<->body map (only entity-add/remove
-// touches it); the opt-in PhysicsInterpBuffer's prev.resize(n) in PASS 2.5 is
-// a no-op once its capacity settles at steady-state body count, but it is
-// still called every step when that resource is present.
-//
-// Header-only: the simulation Registry is owned by the host module; systems
-// that touch it must instantiate in that module (see SystemSchedulers.hpp).
+// Physics2D::System's pass body. Header-only: Astra's type id is per module,
+// so the host that owns the simulation registry (and the tests) include this
+// header and instantiate the body there. Physics2D.hpp declares System and
+// does not include this file. A game includes Physics2D.hpp.
 
-#include <Manifold2D/Physics/Events.hpp>
-#include <Manifold2D/Physics/Fixture.hpp>
-#include <Manifold2D/Physics/PhysicsTypes.hpp>
-#include <Manifold2D/Physics/PhysicsWorld.hpp>
-#include <Manifold2D/Physics/Shapes.hpp>
-
-#include <Arcane/Core/Api.hpp>
-#include <Arcane/Ecs.hpp>
-#include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsEvents2D.hpp>
-#include <Arcane/Scene/PhysicsQuerySettings.hpp>
-#include <Arcane/Scene/SceneResources.hpp>
-#include <Arcane/Scene/TransformSystems.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Physics2D.hpp>
+#include <Arcane/Scene/Physics2DDetail.hpp>
 
 #include <glm/vec2.hpp>
 
-#include <algorithm>
-#include <cassert>
 #include <cmath>
-#include <memory>
-#include <unordered_map>
 #include <utility>
 #include <vector>
-#include <Arcane/Core/Constant.hpp>
 
-namespace Arcane
+namespace Arcane::Physics2D
 {
-    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
-    // Alias so the system code below reads Phys:: for the Manifold2D::Physics types
-    // (the same alias PhysicsComponents.hpp declares: the Manifold2D facade).
-    // ARC_INTERNAL_BEGIN: the Manifold2D facade alias names the library once, here
-    namespace Phys = Manifold2D::Physics;
-    // ARC_INTERNAL_END
-
-    // One fixture a paused rescale replaced, with the Collider2D index it had
-    // while it was current. Generations accumulate until CaptureStep.
-    struct RetiredFixture2D
-    {
-        Phys::FixtureHandle handle{};
-        std::uint32_t       index = 0;
-    };
-
-    // One minted body (spec s7.3): who it is and its fixture handles in
-    // Collider2D order. Keyed by the packed Phys handle (index << 32 | generation),
-    // so a recycled slot (new generation) never resolves to a retired record.
-    struct BodyRecord2D
-    {
-        Arcane::ECS::Entity                     entity = Arcane::ECS::Entity::Invalid();
-        Guid                               guid{};
-        std::vector<Phys::FixtureHandle>   fixtures;
-        bool                               retired = false;   // removed; erased after the next capture
-        // Every handle a paused rescale has dropped since the last capture.
-        // Side() falls back to these so each generation's destroy-time End
-        // still translates. CaptureStep clears the list once that step is read.
-        std::vector<RetiredFixture2D>      retiredFixtures;
-    };
-
-    struct PhysicsEventBuffers2D
-    {
-        std::vector<ContactBegin2D> contactBegin;
-        std::vector<ContactEnd2D>   contactEnd;
-        std::vector<ContactHit2D>   contactHit;
-        std::vector<SensorBegin2D>  sensorBegin;
-        std::vector<SensorEnd2D>    sensorEnd;
-        void Clear() noexcept { contactBegin.clear(); contactEnd.clear(); contactHit.clear(); sensorBegin.clear(); sensorEnd.clear(); }
-        [[nodiscard]] PhysicsEvents2D View() const noexcept { return { contactBegin, contactEnd, contactHit, sensorBegin, sensorEnd }; }
-    };
-
-    [[nodiscard]] constexpr std::uint64_t PackBody(Phys::BodyHandle h) noexcept
-    {
-        return (static_cast<std::uint64_t>(h.index) << 32) | h.generation;
-    }
-
-    // What a controller reads back from its body (input-seam spec s5.3).
-    // Before the body is minted, velocity comes from RigidBody2D and
-    // bodyReady is false.
-    struct BodyMotion2D
-    {
-        float velocityX = 0.0f;
-        float velocityY = 0.0f;
-        bool bodyReady = false;
-        bool supported = false;
-    };
-
-    // -------------------------------------------------------------------------
-    // PhysicsResource (M6 P3.3)
-    // -------------------------------------------------------------------------
-    // Transient Registry resource: owns the PhysicsWorld and the entity<->handle
-    // map maintained by PhysicsSystem. Not reflected; not serialized
-    // (AstraTransientResource: Registry::Save skips it, so no snapshot or
-    // restore ever carries a world-less copy -- transient runtime state only).
-    //
-    // WHY unique_ptr<PhysicsWorld>: PhysicsWorld has a deleted copy ctor and no
-    // move ctor. Wrapping it in unique_ptr makes PhysicsResource
-    // nothrow-move-constructible (unique_ptr + unordered_map are both
-    // noexcept-movable), satisfying the Astra Component concept required by
-    // SetResource<T> / EmplaceResource<T>.
-    //
-    // Lives here (not SceneResources.hpp) because it pulls in Core headers that
-    // game-plugin consumers cannot include (PlaygroundGame.dll has no Core in
-    // its include path; it includes SceneResources.hpp directly).
-    struct PhysicsResource
-    {
-        std::unique_ptr<Phys::PhysicsWorld>                  world;
-        std::unordered_map<Arcane::ECS::Entity, Phys::BodyHandle> entityToBody;
-
-        // The paused reconcile's "since" tick (spec 2026-09-11 s6.5): PASS 3.5
-        // visits only bodies whose Transform was written after it. Taken at the
-        // END of every pass and the registry tick advanced, so PASS 4's own
-        // write-back marks land AT lastReconcile (not newer) and an author edit
-        // made between passes lands after it. On the resource, not the system:
-        // the registry that owns the ticks owns this too.
-        Arcane::ECS::Tick  lastReconcile = 0;
-        // Instrumentation: bodies PASS 3.5 actually visited, cumulative. The gate's
-        // whole effect is "an untouched body is not visited"; this is how a test
-        // says so.
-        std::uint32_t reconciled = 0;
-
-        // ---- 2D physics events (spec 2026-10-08 s7) ---------------------------
-        std::unordered_map<std::uint64_t, BodyRecord2D> bodyRecords;
-        PhysicsEventBuffers2D stepEvents;     // replaced at the end of every stepping pass
-        PhysicsEventBuffers2D frameEvents;    // appended per step, cleared by BeginFrame (RunLoop hook)
-
-        ARC_CORE_API void RecordBody(Arcane::ECS::Entity entity, Guid guid, Phys::BodyHandle handle,
-                                     std::vector<Phys::FixtureHandle> fixtures);
-        ARC_CORE_API void RetireBody(Phys::BodyHandle handle);
-        // Translate the world's arrays for the step just taken, replace stepEvents,
-        // append frameEvents, clear retiredFixtures (the step's Ends have been
-        // read), then erase retired records.
-        ARC_CORE_API void CaptureStep();
-        // StepEvents() and FrameEvents() view this resource's own vectors
-        // (PhysicsEventBuffers2D::View). Copy what you need to keep.
-        //   StepEvents: valid until the next stepping pass replaces the step
-        //     buffer (CaptureStep). BeginFrame does not clear it, and a
-        //     zero-step frame leaves it.
-        //   FrameEvents: valid until BeginFrame clears it. The next stepping
-        //     pass appends, and that append may reallocate.
-        //   Either view dies when this PhysicsResource is destroyed: an
-        //     EnsurePhysics re-mint (gravity change), ResetPhysics (Play),
-        //     RestoreRegistry (Stop -- the resource is transient, so a restore
-        //     carries none), or ResetRegistry (scene open, and hot-reload
-        //     teardown).
-        ARC_CORE_API PhysicsEvents2D StepEvents() const;    // the most recent physics step
-        ARC_CORE_API PhysicsEvents2D FrameEvents() const;   // every step since this frame began
-        ARC_CORE_API void BeginFrame();                     // clears frameEvents (RunLoop frame hook)
-        // Touching solver contacts right now, sleepers included. A side whose
-        // body has no record is skipped (Side resolves fixtures, then retiredFixtures).
-        // Copies into out; the caller owns the vector. Not a view of resource storage.
-        ARC_CORE_API void ContactsOf(Arcane::ECS::Entity entity, std::vector<ContactPoint2D>& out) const;
-
-        // ---- The game-facing commands (input-seam spec s5.3) -----------------
-        // Exported: PhysicsWorld is linked inside ArcaneCore, so a game module
-        // must call these rather than link Manifold2D itself. The body handle
-        // comes from entityToBody (never PhysicsBodyRef: a game's view need not
-        // name it, and before the first fixed step it does not exist yet).
-        // Read the live dynamic body's velocity and floor support.
-        ARC_CORE_API BodyMotion2D Motion(Arcane::ECS::Entity entity, const RigidBody2D& body) const;
-        // Set both axes on the live body, or the authored mint velocity before it
-        // exists. Non-finite input and non-dynamic bodies are ignored.
-        ARC_CORE_API void SetVelocity(Arcane::ECS::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
-
-        // Transient: Registry::Save never writes it, so a restored registry
-        // has no PhysicsResource and the next EnsurePhysics mints a fresh one
-        // (this replaced Runtime::RestoreRegistry's hand-strip, IN-8). Body
-        // handles are re-established by PhysicsSystem on the first fixedUpdate
-        // after scene load, just as WorldTransform is re-derived by
-        // TransformPropagationSystem.
-        static constexpr bool AstraTransientResource = true;
-
-        // No-op serialization, still required: Astra's ResourceStorage
-        // auto-calls RegisterComponent<T>, which instantiates the descriptor's
-        // Serialize/Deserialize function pointers whether or not they ever
-        // run; this template method satisfies HasSerializeMethod so the
-        // compiler picks the custom path instead of the trivially-copyable
-        // memcpy path (which would fail to compile here). Being transient, it
-        // never executes.
-        template<typename Archive>
-        void Serialize(Archive& /*ar*/) {}
-    };
-
-    // The game-facing name (input-seam spec s5.3). The SAME type, so a system
-    // taking ResMut<Physics2D> conflicts with PhysicsSystem in the scheduler.
-    using Physics2D = PhysicsResource;
-
-    // -------------------------------------------------------------------------
-    // MakeScaledShape: build a Manifold2D Shape from a Fixture descriptor scaled
-    // by an authored Transform.scale. Aabb scales per-axis exact; Circle uses
-    // max(|sx|,|sy|) (a circle has no distinguished axis; max never shrinks below
-    // the larger authored axis); Capsule scales its length by |sx| and radius by
-    // |sy| (a scalar-radius capsule is approximate under non-uniform scale -- the
-    // round caps stay circular; documented in the design spec). Uniform scale is
-    // exact for every shape.
-    // -------------------------------------------------------------------------
-    inline Phys::Shape MakeScaledShape(const Fixture& f, glm::vec2 scale)
-    {
-        const float sx   = std::abs(scale.x);
-        const float sy   = std::abs(scale.y);
-        const float sMax = std::max(sx, sy);
-        switch (f.kind)
-        {
-        case Phys::ShapeKind::Circle:  return Phys::MakeCircle(f.radius * sMax);
-        case Phys::ShapeKind::Capsule: return Phys::MakeCapsule(f.halfLen * sx, f.radius * sy);
-        case Phys::ShapeKind::Aabb:    return Phys::MakeAabb(f.halfW * sx, f.halfH * sy);
-        case Phys::ShapeKind::Polygon:
-            assert(false && "PhysicsSystem: ShapeKind::Polygon not supported");
-            return Phys::MakeCircle(f.radius * sMax);
-        }
-        return Phys::MakeCircle(f.radius * sMax);
-    }
-
-    // Author-edit detection tolerances. pos in meters, rot in radians. Small: they
-    // only guard against SetAngle->GetAngle normalization round-trip noise, not any
-    // meaningful author nudge (a real gizmo/inspector edit is orders larger).
+    // Author-edit detection. Metres and radians. They only reject a
+    // SetAngle/GetAngle round trip, not a real gizmo edit.
     ARC_CONSTANT("math identity / tolerance: authored-position round-trip noise")
     inline constexpr float kAuthorPosEps = 1e-5f;
     ARC_CONSTANT("math identity / tolerance: authored-rotation round-trip noise")
     inline constexpr float kAuthorRotEps = 1e-5f;
 
-    // Shortest-arc absolute angle difference (radians).
-    inline float AngleDelta(float a, float b)
+    inline void System::operator()(Arcane::ECS::Registry& reg)
     {
-        ARC_CONSTANT("math identity / tolerance: pi")
-        constexpr float kPi  = 3.14159265358979323846f;
-        ARC_CONSTANT("math identity / tolerance: tau = 2 pi")
-        constexpr float kTau = 6.28318530717958647692f;
-        float d = a - b;
-        while (d >  kPi) d -= kTau;
-        while (d < -kPi) d += kTau;
-        return std::abs(d);
-    }
+        namespace Phys = Detail::Phys;
 
-    // -------------------------------------------------------------------------
-    // MakeFixtureDef: build a Core::FixtureDef from a scene-layer Fixture desc,
-    // scaled by the entity's authored Transform.scale (default identity).
-    // -------------------------------------------------------------------------
-    // Helper shared by the body-primary and AddFixture paths. Inline to keep
-    // PhysicsSystem.hpp header-only.
-    inline Phys::FixtureDef MakeFixtureDef(const Fixture& f,
-                                           glm::vec2 scale = glm::vec2(1.0f, 1.0f))
-    {
-        Phys::FixtureDef fd;
-
-        // Shape geometry (scaled).
-        fd.shape = MakeScaledShape(f, scale);
-
-        // Local transform. Offset scales per-axis with the entity's scale (signed,
-        // so a mirrored scale mirrors the offset); localAngle is unaffected.
-        fd.localPos   = Phys::Vec2(f.localPos.x * scale.x, f.localPos.y * scale.y);
-        fd.localAngle = static_cast<Phys::Real>(f.localAngle);
-
-        // Material.
-        fd.density     = static_cast<Phys::Real>(f.density);
-        fd.friction    = static_cast<Phys::Real>(f.friction);
-        fd.restitution = static_cast<Phys::Real>(f.restitution);
-
-        // Collision filter.
-        fd.categoryBits = f.categoryBits;
-        fd.maskBits     = f.maskBits;
-
-        fd.isSensor = f.isSensor;
-        fd.contactEvents = f.contactEvents;
-        fd.sensorEvents  = f.sensorEvents;
-        fd.hitEvents     = f.hitEvents;
-
-        return fd;
-    }
-
-    // -------------------------------------------------------------------------
-    // RebuildScaledFixtures: rebuild every fixture of `bh` at (descriptor x scale),
-    // preserving the body pose. Adds the new scaled fixtures BEFORE dropping the old
-    // ones, so the body never transiently holds zero fixtures (sidesteps any
-    // "body must keep >= 1 fixture" invariant). AddFixture / DropFixture recompute
-    // body mass internally. The body is not moved, so pose is preserved.
-    // Returns the new handles in Collider2D order (R16). The caller parks the
-    // previous record handles in BodyRecord2D::retiredFixtures.
-    // -------------------------------------------------------------------------
-    inline std::vector<Phys::FixtureHandle> RebuildScaledFixtures(Phys::PhysicsWorld& world,
-                                                                  Phys::BodyHandle bh,
-                                                                  const Collider2D& col,
-                                                                  glm::vec2 scale)
-    {
-        // Capture current fixtures BEFORE adding new ones (their indices are stable
-        // until we mutate; the new fixtures append after them).
-        const std::uint32_t n = world.FixtureCount(bh);
-        std::vector<Phys::FixtureHandle> old;
-        old.reserve(n);
-        for (std::uint32_t i = 0; i < n; ++i)
-            old.push_back(world.GetBodyFixture(bh, i));
-
-        // Add authored fixtures at the new scaled dims, Collider2D order.
-        std::vector<Phys::FixtureHandle> neu;
-        neu.reserve(col.fixtures.size());
-        for (const Fixture& f : col.fixtures)
-        {
-            Phys::FixtureDef fd = MakeFixtureDef(f, scale);
-            neu.push_back(world.AddFixture(bh, fd));
-        }
-
-        // Drop the pre-rebuild fixtures.
-        for (Phys::FixtureHandle fh : old)
-            world.DropFixture(fh);
-        return neu;
-    }
-
-    // -------------------------------------------------------------------------
-    // PhysicsSystem (M6 Physics-v2 T6)
-    // -------------------------------------------------------------------------
-    struct PhysicsSystem
-        : Arcane::ECS::SystemTraits<Arcane::ECS::Reads<Collider2D>,
-                               Arcane::ECS::Writes<Transform, PhysicsBodyRef, RigidBody2D>,
-                               Arcane::ECS::Before<TransformPropagationSystem>>
-    {
-        // Scheduled by Runtime::InstallEngineSystems into fixedUpdate (2026-09-11
-        // physics wiring, spec s4.1). EXCLUSIVE: this pass advances the registry
-        // tick and mutates structurally (PASS 1.5 adds PhysicsBodyRef), so it
-        // owns its scheduler segment like TransformPropagationSystem does.
-        // BEFORE propagation: PASS 4's write-back must be what propagation
-        // composes this step, whichever order the module and the engine
-        // inserted their systems.
-        static constexpr bool RequiresExclusive = true;
-
-        // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
-        // Determinism contract: callers MUST pass the same constant every tick.
-        // The 60 Hz RunLoop uses 1.0/60.0; tests use kDt = 1.0f/60.0f.
-        // stepWorld: when false, run the DESTROY/CREATE/WRITE-BACK passes but
-        // SKIP world.Step -- a paused frame mints spawned bodies + reflects poses
-        // without paying the (dt-independent) narrowphase + solve. Default true.
-        explicit PhysicsSystem(float fixedDt, bool stepWorld = true) noexcept
-            : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
-
-        void operator()(Arcane::ECS::Registry& reg)
-        {
-            // ARC_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
-            PhysicsResource* res = reg.GetResource<PhysicsResource>();
+            World* res = reg.GetResource<World>();
             if (!res || !res->world) return;
 
             Phys::PhysicsWorld& world        = *res->world;
             auto&                  entityToBody  = res->entityToBody;
 
-            // Event policy (spec s7.4, s7.5): PhysicsSystem is the single owner. Both
+            // Event policy (spec s7.4, s7.5): System is the single owner. Both
             // fixtures must opt into contact events; the hit threshold is Live.
             world.SetContactEventsRequireBoth(true);
-            world.SetHitEventThreshold(static_cast<Phys::Real>(Settings<PhysicsEventSettings>().hitThreshold));
+            world.SetHitEventThreshold(static_cast<Phys::Real>(Settings<EventSettings>().hitThreshold));
 
             // ------------------------------------------------------------------
             // PASS 1: DESTROY -- remove body rows for dead or un-physicised
             // entities, and (PAUSED passes only, spec s4.1a) for entities whose
-            // RigidBody2D or Collider2D changed since the last reconcile -- an
+            // RigidBody or Collider changed since the last reconcile -- an
             // author edit of shape, mass or body type -- so PASS 2 re-mints them
             // from the current components in this same pass. Stepping passes
             // skip the change criteria: PASS 4 writes velocity every step, which
@@ -428,25 +55,25 @@ namespace Arcane
             // the map entry when it calls AddBody for the same entity.
             // ------------------------------------------------------------------
             {
-                std::vector<Astra::Entity> toRemove;
+                std::vector<Arcane::ECS::Entity> toRemove;
                 if (!m_stepWorld)
                 {
-                    reg.CreateView<const PhysicsBodyRef, const Collider2D, Astra::Changed<Collider2D>, Astra::With<RigidBody2D>>()
+                    reg.CreateView<const BodyRef, const Collider, Arcane::ECS::Changed<Collider>, Arcane::ECS::With<RigidBody>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Astra::Entity entity, const PhysicsBodyRef&, const Collider2D&) { toRemove.push_back(entity); });
-                    reg.CreateView<const PhysicsBodyRef, const RigidBody2D, Astra::Changed<RigidBody2D>, Astra::With<Collider2D>>()
+                        .ForEach([&](Arcane::ECS::Entity entity, const BodyRef&, const Collider&) { toRemove.push_back(entity); });
+                    reg.CreateView<const BodyRef, const RigidBody, Arcane::ECS::Changed<RigidBody>, Arcane::ECS::With<Collider>>()
                         .Since(res->lastReconcile)
-                        .ForEach([&](Astra::Entity entity, const PhysicsBodyRef&, const RigidBody2D&) { toRemove.push_back(entity); });
+                        .ForEach([&](Arcane::ECS::Entity entity, const BodyRef&, const RigidBody&) { toRemove.push_back(entity); });
                 }
                 for (auto& [entity, handle] : entityToBody)
                 {
                     const bool dead       = !reg.IsValid(entity);
-                    const bool noBody     = !dead && !reg.HasComponent<RigidBody2D>(entity);
-                    const bool noCollider = !dead && !reg.HasComponent<Collider2D>(entity);
+                    const bool noBody     = !dead && !reg.HasComponent<RigidBody>(entity);
+                    const bool noCollider = !dead && !reg.HasComponent<Collider>(entity);
                     if (dead || noBody || noCollider)
                         toRemove.push_back(entity);
                 }
-                for (Astra::Entity e : toRemove)
+                for (Arcane::ECS::Entity e : toRemove)
                 {
                     auto it = entityToBody.find(e);
                     if (it == entityToBody.end()) continue;   // listed twice, or never minted
@@ -463,27 +90,27 @@ namespace Arcane
                     // PASS 3.5 / PASS 4 -- which trust world.IsValid alone --
                     // would then move that entity's body on this one's edits.
                     // A dead entity has no component to clear (and nothing to
-                    // alias through); a live one without RigidBody2D/Collider2D
-                    // may have shed PhysicsBodyRef with them.
+                    // alias through); a live one without RigidBody/Collider
+                    // may have shed BodyRef with them.
                     if (!reg.IsValid(e)) continue;
-                    if (PhysicsBodyRef* ref = reg.GetComponent<PhysicsBodyRef>(e))
-                        ref->handle = Phys::kInvalidBody;
+                    if (BodyRef* ref = reg.GetComponent<BodyRef>(e))
+                        ref->handle = Detail::kInvalidBody;
                 }
             }
 
             // ------------------------------------------------------------------
             // PASS 1.5: ENSURE PhysicsBodyRef. The Inspector can never add one
             // (ComponentCatalog structure-locks it), so an editor-authored
-            // RigidBody2D + Collider2D entity would otherwise never match PASS 2's
+            // RigidBody + Collider entity would otherwise never match PASS 2's
             // view. Collected, then added -- AddComponent moves the entity
             // between archetypes, never inside a ForEach.
             // ------------------------------------------------------------------
             {
-                std::vector<Astra::Entity> missing;
-                reg.CreateView<const RigidBody2D, const Collider2D, Astra::Not<PhysicsBodyRef>>()
-                    .ForEach([&](Astra::Entity entity, const RigidBody2D&, const Collider2D&) { missing.push_back(entity); });
-                for (Astra::Entity e : missing)
-                    reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
+                std::vector<Arcane::ECS::Entity> missing;
+                reg.CreateView<const RigidBody, const Collider, Arcane::ECS::Not<BodyRef>>()
+                    .ForEach([&](Arcane::ECS::Entity entity, const RigidBody&, const Collider&) { missing.push_back(entity); });
+                for (Arcane::ECS::Entity e : missing)
+                    reg.AddComponent<BodyRef>(e, BodyRef{});
             }
 
             // ------------------------------------------------------------------
@@ -492,15 +119,15 @@ namespace Arcane
             // not depend on unordered_map hash/bucket layout.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<const RigidBody2D, const Collider2D, PhysicsBodyRef, const Transform>();
-                view.ForEach([&](Astra::Entity   entity,
-                                 const RigidBody2D&    rb,
-                                 const Collider2D&     col,
-                                 PhysicsBodyRef& ref,
+                auto view = reg.CreateView<const RigidBody, const Collider, BodyRef, const Transform>();
+                view.ForEach([&](Arcane::ECS::Entity   entity,
+                                 const RigidBody&    rb,
+                                 const Collider&     col,
+                                 BodyRef& ref,
                                  const Transform& lt)
                 {
                     // Skip entities that already have a tracked live handle.
-                    if (ref.handle != Phys::kInvalidBody &&
+                    if (ref.handle != Detail::kInvalidBody &&
                         entityToBody.count(entity) &&
                         world.IsValid(ref.handle))
                     {
@@ -516,16 +143,16 @@ namespace Arcane
                     // {index, gen} to the next entity it mints.
                     if (col.fixtures.empty())
                     {
-                        ref.handle = Phys::kInvalidBody;
+                        ref.handle = Detail::kInvalidBody;
                         return;
                     }
 
                     // ---- PRIMARY FIXTURE (fixtures[0]) ----
-                    // Build the BodyDef from RigidBody2D dynamics params + fixture[0].
+                    // Build the BodyDef from RigidBody dynamics params + fixture[0].
                     const Fixture& fx0 = col.fixtures[0];
 
                     Phys::BodyDef def;
-                    def.type     = rb.type;
+                    def.type = Detail::ToVendor(rb.type);
                     // THE DEGENERATE CASE, STATED ONCE FOR THE WHOLE FILE
                     // (Task 3, F1): Transform is 3D but Manifold2D is a 2D
                     // solver, so this system reads and writes the XY PLANE and
@@ -539,7 +166,7 @@ namespace Arcane
                     def.position = Phys::Vec2(lt.position.x, lt.position.y);
 
                     // Primary fixture shape, scaled by the authored Transform.scale.
-                    def.shape = MakeScaledShape(fx0, glm::vec2(lt.scale));
+                    def.shape = Detail::MakeScaledShape(fx0, glm::vec2(lt.scale));
 
                     // Material + filter + local transform from fixture[0].
                     // T6 fix: categoryBits / maskBits / localPos / localAngle were
@@ -577,7 +204,7 @@ namespace Arcane
                     // one physics fixture per authored Fixture descriptor.
                     for (std::size_t i = 1; i < col.fixtures.size(); ++i)
                     {
-                        Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
+                        Phys::FixtureDef fd = Detail::MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
                         fxs.push_back(world.AddFixture(handle, fd));
                     }
 
@@ -611,7 +238,7 @@ namespace Arcane
 
             // ------------------------------------------------------------------
             // PASS 2.5: CAPTURE PREVIOUS POSES (Epic 04.2 render interpolation).
-            // Snapshot every live body's PRE-STEP world pose into PhysicsInterpBuffer
+            // Snapshot every live body's PRE-STEP world pose into InterpBuffer
             // (opt-in resource; skipped if absent). Captured before Step so prev ==
             // the step-N-1 pose; multiple steps/frame leave prev = second-to-last.
             // Gated on m_stepWorld: a paused/mint-only pass does not step, so the
@@ -621,7 +248,7 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (m_stepWorld)
             {
-                if (PhysicsInterpBuffer* interp = reg.GetResource<PhysicsInterpBuffer>())
+                if (InterpBuffer* interp = reg.GetResource<InterpBuffer>())
                 {
                     const std::uint32_t n = world.Count();
                     interp->prev.resize(n);
@@ -643,7 +270,7 @@ namespace Arcane
                     }
 
                     // The entity -> slot map the sprite path reads (RenderSystems.hpp
-                    // carries no PhysicsBodyRef term: PhysicsComponents.hpp would drag
+                    // carries no BodyRef term: PhysicsComponents.hpp would drag
                     // Manifold2D into every game module's include surface). Rebuilt
                     // from entityToBody in the SAME capture that filled `prev`, so the
                     // two are exactly as fresh as each other; a body PASS 1 removed
@@ -687,14 +314,14 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<PhysicsBodyRef, const Transform, Astra::Changed<Transform>,
-                                           const Collider2D, Astra::With<RigidBody2D>>();
-                view.Since(res->lastReconcile).ForEach([&](Astra::Entity   /*entity*/,
-                                                            PhysicsBodyRef&  ref,
+                auto view = reg.CreateView<BodyRef, const Transform, Arcane::ECS::Changed<Transform>,
+                                           const Collider, Arcane::ECS::With<RigidBody>>();
+                view.Since(res->lastReconcile).ForEach([&](Arcane::ECS::Entity   /*entity*/,
+                                                            BodyRef&  ref,
                                                             const Transform& lt,
-                                                            const Collider2D& col)
+                                                            const Collider& col)
                 {
-                    if (ref.handle == Phys::kInvalidBody) return;
+                    if (ref.handle == Detail::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))       return;
                     ++res->reconciled;
 
@@ -706,18 +333,18 @@ namespace Arcane
                     if (planarScale != ref.appliedScale)
                     {
                         std::vector<Phys::FixtureHandle> neu =
-                            RebuildScaledFixtures(world, ref.handle, col, planarScale);
+                            Detail::RebuildScaledFixtures(world, ref.handle, col, planarScale);
                         ref.appliedScale = planarScale;
                         // R16: the record follows the new handles. Each dropped
-                        // generation is appended (handle + Collider2D index) and
+                        // generation is appended (handle + Collider index) and
                         // stays resolvable until CaptureStep reads its End.
-                        if (const auto rec = res->bodyRecords.find(PackBody(ref.handle));
+                        if (const auto rec = res->bodyRecords.find(Detail::PackBody(ref.handle));
                             rec != res->bodyRecords.end())
                         {
                             auto& record = rec->second;
                             record.retiredFixtures.reserve(record.retiredFixtures.size() + record.fixtures.size());
                             for (std::uint32_t i = 0; i < record.fixtures.size(); ++i)
-                                record.retiredFixtures.push_back(RetiredFixture2D{ record.fixtures[i], i });
+                                record.retiredFixtures.push_back(RetiredFixture{ record.fixtures[i], i });
                             record.fixtures = std::move(neu);
                         }
                     }
@@ -731,7 +358,7 @@ namespace Arcane
                     const float      ba = static_cast<float>(world.GetAngle(ref.handle));
                     if (std::abs(lt.position.x - static_cast<float>(bp.x)) > kAuthorPosEps ||
                         std::abs(lt.position.y - static_cast<float>(bp.y)) > kAuthorPosEps ||
-                        AngleDelta(RotationZ(lt.rotation), ba) > kAuthorRotEps)
+                        Detail::AngleDelta(RotationZ(lt.rotation), ba) > kAuthorRotEps)
                     {
                         // SetPosition + SetAngle are BOTH load-bearing for a moved STATIC
                         // body: SetPosition updates the pose but NOT the static broadphase
@@ -760,13 +387,13 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (m_stepWorld)
             {
-                auto view = reg.CreateView<const PhysicsBodyRef, Transform, RigidBody2D>();
-                view.ForEach([&](Astra::Entity   /*entity*/,
-                                 const PhysicsBodyRef& ref,
+                auto view = reg.CreateView<const BodyRef, Transform, RigidBody>();
+                view.ForEach([&](Arcane::ECS::Entity   /*entity*/,
+                                 const BodyRef& ref,
                                  Transform& lt,
-                                 RigidBody2D&    rb)
+                                 RigidBody&    rb)
                 {
-                    if (ref.handle == Phys::kInvalidBody) return;
+                    if (ref.handle == Detail::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))          return;
 
                     // THE 2D WRITE-BACK, NAMED DELIBERATELY (Task 3, F1). The
@@ -790,11 +417,11 @@ namespace Arcane
                     lt.position = glm::vec3(pos.x, pos.y, lt.position.z);
                     lt.rotation = RotationAboutZ(static_cast<float>(world.GetAngle(ref.handle)));
 
-                    // Mirror post-step velocity back into RigidBody2D for Dynamic
+                    // Mirror post-step velocity back into RigidBody for Dynamic
                     // bodies so authored velocity field stays consistent with physics.
                     // Kinematic velocity is authored and never written back: the solver
                     // does not modify it, so rb.velocity retains its authored value.
-                    if (rb.type == Phys::BodyType::Dynamic)
+                    if (rb.type == BodyType::Dynamic)
                     {
                         const Phys::Vec2 vel = world.Velocity(ref.handle);
                         rb.velocity = glm::vec2(vel.x, vel.y);
@@ -803,19 +430,13 @@ namespace Arcane
             }
 
             // Time base for the paused reconcile and the re-mint criteria
-            // (PhysicsResource::lastReconcile): AFTER PASS 4, so a stepping
+            // (World::lastReconcile): AFTER PASS 4, so a stepping
             // pass's own write-back marks are never newer than it. Scheduled
             // (Runtime::InstallEngineSystems) or bare (Runtime::PhysicsEditPass,
             // tests) alike -- the advance-after-every-pass contract, spec
             // 2026-09-11-astra-adoption s6.3.
             res->lastReconcile = reg.CurrentTick();
             reg.AdvanceTick();
-        }
-        // ARC_INTERNAL_END
-
-    private:
-        float m_fixedDt;    // fixed 60 Hz timestep; determinism contract: constant per run
-        bool  m_stepWorld;  // false on paused frames -> skip the solve
-    };
-
-} // namespace Arcane
+        
+    }
+}

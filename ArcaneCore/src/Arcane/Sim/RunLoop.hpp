@@ -160,7 +160,7 @@ namespace Arcane
         // re-pausing right after its RestoreRegistry -- and which its scene-open
         // (ResetRegistry, nothing after) and its hot-reload paths did not, so
         // opening a physics scene in Edit mode unpaused the loop, fixedUpdate's
-        // PhysicsSystem stepped it every frame, and the bodies fell before Play was
+        // Arcane::Physics2D::System stepped it every frame, and the bodies fell before Play was
         // pressed and never came back (Play snapshotted the fallen poses). Pinned
         // by RuntimeTest ("keeps the RunLoop object stable") and
         // EditorPlayModeTest ("opening a scene in Edit mode does not simulate it").

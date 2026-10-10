@@ -8,8 +8,8 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>      // PhysicsResource
-#include <Arcane/Scene/SceneResources.hpp>     // SceneRoot / PhysicsInterpBuffer / the four tables
+#include <Arcane/Scene/PhysicsSystem.hpp>      // Arcane::Physics2D::World
+#include <Arcane/Scene/SceneResources.hpp>     // SceneRoot / Arcane::Physics2D::InterpBuffer / the four tables
 #include <Arcane/Scene/TransformSystems.hpp>   // TransformOrder
 
 #include <Astra/Component/Component.hpp>   // INVALID_COMPONENT
@@ -60,12 +60,12 @@ TEST_CASE("ProcessContext::Create leaves every engine resource type resolved and
     };
     // The list must track EngineResourceTypes.cpp's.
     pin(std::type_identity<Arcane::SceneRoot>{});
-    pin(std::type_identity<Arcane::PhysicsInterpBuffer>{});
+    pin(std::type_identity<Arcane::Physics2D::InterpBuffer>{});
     pin(std::type_identity<Arcane::SpriteTable>{});
     pin(std::type_identity<Arcane::SpriteMaterialTable>{});
     pin(std::type_identity<Arcane::MeshTable>{});
     pin(std::type_identity<Arcane::MeshMaterialTable>{});
-    pin(std::type_identity<Arcane::PhysicsResource>{});
+    pin(std::type_identity<Arcane::Physics2D::World>{});
     pin(std::type_identity<Arcane::TransformOrder>{});
 }
 

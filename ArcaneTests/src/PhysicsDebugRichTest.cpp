@@ -7,7 +7,7 @@
 //   * a center-of-mass marker -- a tiny cross/disc at the world COM
 //   * an orientation tick -- a short line along the body's local +x so rotation
 //     is visible even on a circle
-// Each is gated behind a PhysicsDebugDrawOptions bool flag (sane defaults).
+// Each is gated behind a Arcane::Physics2D::DebugDrawOptions bool flag (sane defaults).
 //
 // CPU-only (tag [render], no graphics device): DrawPhysicsDebug takes the
 // Batcher2D interface, so a recording mock captures the emitted Line/Circle
@@ -101,7 +101,7 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
     // Baseline: velocity vector OFF -> outline lines only (4 for the box).
     {
         RecMock off;
-        Arcane::PhysicsDebugDrawOptions opts;
+        Arcane::Physics2D::DebugDrawOptions opts;
         opts.velocities  = false;
         opts.comMarkers  = false;
         opts.orientations = false;
@@ -113,7 +113,7 @@ TEST_CASE("PhysicsDebug rich: velocity vector emitted only when enabled", "[rend
     // Velocity vector ON -> at least one MORE line (the velocity ray).
     {
         RecMock on;
-        Arcane::PhysicsDebugDrawOptions opts;
+        Arcane::Physics2D::DebugDrawOptions opts;
         opts.velocities   = true;
         opts.comMarkers   = false;
         opts.orientations = false;
@@ -135,7 +135,7 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
     // Orientation tick ON (everything else off) -> at least one extra line.
     {
         RecMock on;
-        Arcane::PhysicsDebugDrawOptions opts;
+        Arcane::Physics2D::DebugDrawOptions opts;
         opts.velocities   = false;
         opts.comMarkers   = false;
         opts.orientations = true;
@@ -147,7 +147,7 @@ TEST_CASE("PhysicsDebug rich: orientation tick + COM marker gated by flags", "[r
     // COM marker ON -> at least one extra primitive (line cross or disc).
     {
         RecMock on;
-        Arcane::PhysicsDebugDrawOptions opts;
+        Arcane::Physics2D::DebugDrawOptions opts;
         opts.velocities   = false;
         opts.comMarkers   = true;
         opts.orientations = false;
@@ -173,7 +173,7 @@ TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
     w.AddBody(bd);
 
     RecMock m;
-    Arcane::PhysicsDebugDrawOptions opts;
+    Arcane::Physics2D::DebugDrawOptions opts;
     opts.velocities   = true;
     opts.comMarkers   = false;
     opts.orientations = false;
@@ -217,7 +217,7 @@ TEST_CASE("PhysicsDebug projects an oriented box's WORLD corners through a mirro
     REQUIRE(affine->scale.y < 0.0f);   // the mirror is what this case is about
 
     RecMock rec;
-    Arcane::PhysicsDebugDrawOptions opts;
+    Arcane::Physics2D::DebugDrawOptions opts;
     opts.view = *affine;
     opts.velocities = opts.comMarkers = opts.orientations = opts.contacts = false;
     Arcane::DrawPhysicsDebug(w, rec, opts);
@@ -281,7 +281,7 @@ TEST_CASE("onlyBody draws exactly one outline and no other overlay", "[physics][
     w.AddBody(a);
     const BodyHandle hb = w.AddBody(b);
     RecMock rec;
-    Arcane::PhysicsDebugDrawOptions opts;   // defaults: contacts/velocity/COM/orientation ON
+    Arcane::Physics2D::DebugDrawOptions opts;   // defaults: contacts/velocity/COM/orientation ON
     opts.onlyBody = hb;
     Arcane::DrawPhysicsDebug(w, rec, opts);
     CHECK(rec.circles.size() == 1);

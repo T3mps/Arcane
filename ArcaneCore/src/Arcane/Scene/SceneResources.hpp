@@ -41,6 +41,8 @@ namespace Arcane
     // sprite path (RenderSubmissionSystem) blends through these same two
     // helpers since the Astra adoption (2026-09-11), so overlay and sprite
     // agree to the bit.
+namespace Physics2D
+{
     [[nodiscard]] inline float Lerp(float a, float b, float t) noexcept
     {
         return a + (b - a) * t;
@@ -88,7 +90,7 @@ namespace Arcane
     // RestoreRegistry's hand-strip). The no-op Serialize still satisfies Astra's
     // HasSerializeMethod so the vector member does not hit the
     // trivially-copyable path when the descriptor is built.
-    struct PhysicsInterpBuffer
+    struct InterpBuffer
     {
         static constexpr bool AstraTransientResource = true;
 
@@ -105,6 +107,7 @@ namespace Arcane
         template<typename Archive>
         void Serialize(Archive& /*ar*/) {}
     };
+}
 
     struct RenderContext2D
     {

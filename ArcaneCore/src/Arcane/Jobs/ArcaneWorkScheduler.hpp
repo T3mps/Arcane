@@ -14,7 +14,7 @@
 // single persistent adapter (whose backing executor may be null in a headless
 // host) without a separate null branch at every call site.
 //
-// Consumed by: Scene/PhysicsSystem (engine), the Sandbox physics-world wiring,
+// Consumed by: Scene/Arcane::Physics2D::System (engine), the Sandbox physics-world wiring,
 // and the physics-MT invariance tests (which drive Manifold2D with the engine's
 // enki pool).
 

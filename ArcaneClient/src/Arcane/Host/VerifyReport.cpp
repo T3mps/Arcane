@@ -549,7 +549,7 @@ namespace Arcane
                     // fix round 1, item 4: an agent has no way to tell "Ground"
                     // is a wrong-but-durable answer for a pixel that is
                     // visibly a 3D mesh -- CollectPickables (PickEmit.hpp)
-                    // only walks SpriteRenderer/Collider2D entities and has
+                    // only walks SpriteRenderer/Arcane::Physics2D::Collider entities and has
                     // no knowledge of MeshRenderer ones at all, so a hit
                     // ALWAYS came from one of these two kinds, never a mesh.
                     // Naming that capability explicitly, and flagging when

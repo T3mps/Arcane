@@ -4,9 +4,9 @@
 //
 // Astra assigns ComponentIDs from a first-touch counter, so the ORDER of the
 // list below IS the engine's id numbering. Do not reorder it; append only.
-// (2026-09-11: PhysicsSettings was appended after MeshRenderer, which shifted
+// (2026-09-11: Arcane::Physics2D::SceneSettings was appended after MeshRenderer, which shifted
 // the three physics ids up by one -- in-process only, as ever. 2026-09-18, F3
-// plan 1 T2: WorldBounds appended after PhysicsSettings, the same shift again.)
+// plan 1 T2: WorldBounds appended after Arcane::Physics2D::SceneSettings, the same shift again.)
 //
 // Two places expand this one list, which is the whole point of it existing:
 //   - Runtime.cpp's engineModule->Register<...> (RegisterRoster below) -- the
@@ -19,8 +19,8 @@
 // the editor did: EditorApp's EditModeSchedule member resolved WorldTransform
 // in the exe's private TypeContext before the shared one was installed.
 
-#include <Arcane/Scene/Components.hpp>          // Transform / WorldTransform / ... / MeshRenderer / PhysicsSettings / WorldBounds
-#include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D / Collider2D / PhysicsBodyRef
+#include <Arcane/Scene/Components.hpp>          // Transform / WorldTransform / ... / MeshRenderer / Arcane::Physics2D::SceneSettings / WorldBounds
+#include <Arcane/Scene/PhysicsComponents.hpp>   // Arcane::Physics2D::RigidBody / Arcane::Physics2D::Collider / Arcane::Physics2D::BodyRef
 
 namespace Arcane
 {
@@ -29,10 +29,10 @@ namespace Arcane
     template<typename... Ts>
     struct TypeList {};
 
-    // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
+    // EXACTLY the order RegisterSceneComponents + Arcane::Physics2D::RegisterComponents
     // register in (SceneModule.hpp / PhysicsComponents.hpp).
     using EngineComponentRoster = TypeList<Transform, WorldTransform, SpriteRenderer,
                                            PostProcess, Identity, Hidden, Camera, MeshRenderer,
-                                           PhysicsSettings, WorldBounds,
-                                           RigidBody2D, Collider2D, PhysicsBodyRef>;
+                                           Arcane::Physics2D::SceneSettings, WorldBounds,
+                                           Arcane::Physics2D::RigidBody, Arcane::Physics2D::Collider, Arcane::Physics2D::BodyRef>;
 }

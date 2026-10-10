@@ -19,11 +19,11 @@ using namespace Arcane;
 
 TEST_CASE("sweep: physics query and ortho depth defaults are the pre-sweep literals", "[sweep][physics-query]")
 {
-    CHECK(Test::SameBits(PhysicsGroundSettings{}.minNormalY, 0.5f));
-    CHECK(Test::SameBits(PhysicsGroundSettings{}.probeDistance, 0.05f));
-    CHECK(Test::SameBits(static_cast<float>(Manifold2D::Physics::Real(PhysicsGroundSettings{}.probeDistance)),
+    CHECK(Test::SameBits(Arcane::Physics2D::GroundSettings{}.minNormalY, 0.5f));
+    CHECK(Test::SameBits(Arcane::Physics2D::GroundSettings{}.probeDistance, 0.05f));
+    CHECK(Test::SameBits(static_cast<float>(Manifold2D::Physics::Real(Arcane::Physics2D::GroundSettings{}.probeDistance)),
                          static_cast<float>(Manifold2D::Physics::Real(0.05))));   // Real is float: same bits as before
-    CHECK_FALSE(Physics2DWorldSettings{}.parallelSolver);
+    CHECK_FALSE(Arcane::Physics2D::WorldSettings{}.parallelSolver);
     CHECK(Test::SameBits(RenderOrtho2DSettings{}.depthRange, 1000.0f));
     Test::RequireDefault("physics.ground.minNormalY", CVarValue::Float32(0.5f));
     Test::RequireDefault("physics.parallelSolver", CVarValue::Bool(false));
