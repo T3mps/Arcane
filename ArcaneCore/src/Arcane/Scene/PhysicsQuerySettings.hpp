@@ -31,6 +31,6 @@ namespace Arcane
         ARC_REFLECT_TYPE_ATTR(Settings, "physics.events", SettingScope::Project, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_FIELD(PhysicsEventSettings2D, hitThreshold)
             ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
-            ARC_REFLECT_ATTR(Tooltip, "Approach speed (m/s) an impact must exceed to report a hit event (Fixture::hitEvents).")
+            ARC_REFLECT_ATTR(Tooltip, "Approach speed (m/s) an impact must exceed to report a hit event (Fixture2D::hitEvents).")
     ARC_END_REFLECT_TYPE()
 }

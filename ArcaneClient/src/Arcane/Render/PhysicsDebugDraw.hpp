@@ -2,6 +2,11 @@
 
 // Render module: physics debug-draw overlay (M6, Task P3.6).
 //
+// ENGINE-INTERNAL, NOT GAME API: the engine's hosts (editor, runtime) draw
+// the physics debug overlay; game code never includes this header. Its
+// options and functions name Manifold2D types on purpose (flat-API spec
+// 2026-10-10, FA10), so it is not in the spelling guard's game-facing set.
+//
 // Ports Client/src/physics/PhysicsDebug.lua into the Arcane.dll render side,
 // consuming the PULL API added to PhysicsWorld (ForEachContact /
 // IslandRootOf) and submitting primitives to the Batcher2D.
@@ -55,21 +60,21 @@ namespace Arcane
     // with their defaults (the pre-sweep literals) and
     // MakePhysicsDebugDrawOptions() draws with the published values; a caller
     // may still override any inherited member for one call. Inherited:
-    //   DebugPhysicsSettings      lineThickness (canvas px), contactMarkerSize
+    //   PhysicsDebugSettings2D    lineThickness (canvas px), contactMarkerSize
     //                             (m, through view.Length), velocityScale (s of
     //                             look-ahead), velocityMinSpeed (m/s; slower
     //                             bodies draw no ray), comMarkerSize (m),
     //                             orientationTickLen (m), manifoldNormalLength,
     //                             manifoldPointPx;
-    //   DebugPhysicsDrawSettings  contacts (centre-to-centre line + midpoint
+    //   PhysicsDebugDrawSettings2D contacts (centre-to-centre line + midpoint
     //                             disc per touching pool contact), aabbs (each body's tight
     //                             SlotAabb), velocities (awake dynamic bodies),
     //                             comMarkers (dynamic bodies), orientations
     //                             (local +x tick, so circles show rotation);
-    //   DebugPhysicsColorSettings the palette (per body type, island, overlay
+    //   PhysicsDebugColorSettings2D the palette (per body type, island, overlay
     //                             and NarrowphaseKind);
-    //   DebugPhysicsTraceSettings DrawNarrowphaseWorldOverlay's defaults.
-    // NOT inherited: DebugPhysicsStyleSettings (debug.physics.style.*: arrow
+    //   PhysicsDebugTraceSettings2D DrawNarrowphaseWorldOverlay's defaults.
+    // NOT inherited: PhysicsDebugStyleSettings2D (debug.physics.style.*: arrow
     // heads, sleeping dim, emphasis floor, thickness scales, px radii); both
     // overlays read its published values directly.
     struct PhysicsDebugDrawOptions2D : PhysicsDebugSettings2D, PhysicsDebugDrawSettings2D,

@@ -5,7 +5,7 @@
 //
 // `entity` is valid for the frame it is read in unless that entity was
 // destroyed after the step. Never store `entity` past the frame. `normal`
-// points from a to b. `fixture` is the index into Collider::fixtures.
+// points from a to b. `fixture` is the index into Collider2D::fixtures.
 
 #include <cstdint>
 #include <span>

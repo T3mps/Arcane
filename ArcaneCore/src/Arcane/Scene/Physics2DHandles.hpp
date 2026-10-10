@@ -1,6 +1,6 @@
 #pragma once
 
-// Solver handle aliases. BodyRef::handle and World's private maps name these.
+// Solver handle aliases. PhysicsBodyRef2D::handle and PhysicsWorld2D's private maps name these.
 // The using-declarations sit in an internal fence: a game spells Detail::
 // nowhere (the [facade] scan). Physics2D.hpp may include this header; it does
 // not include the Detail helpers.
