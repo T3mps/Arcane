@@ -23,6 +23,7 @@
 #include <Arcane/Serialization/SceneSerializer.hpp>
 
 #include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Astra/Registry/Registry.hpp>
@@ -336,7 +337,7 @@ TEST_CASE("physics.arcscene round-trips byte-identical under the renamed keys", 
     REQUIRE(Arcane::HostBoot::LoadGameplayInput(client, *project).status ==
             Arcane::HostBoot::GameplayInputLoadResult::Status::Loaded);
     Arcane::PluginHost host(Arcane::Test::Process(),
-                            std::filesystem::path("ReferenceGameUnderTest.dll"));
+                            std::filesystem::path(Arcane::Test::ModuleFile("ReferenceGameUnderTest")));
     REQUIRE(host.AttachRuntime(client.Core()));
     REQUIRE(host.Load());
     client.ResetRegistry();

@@ -4,6 +4,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Reflection.hpp>
+#include <Arcane/Util/CharConv.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -230,7 +231,7 @@ namespace Arcane::Editor
                 const char* first = text.data() + i;
                 const char* last  = text.data() + end;
                 float v = 0.0f;
-                const std::from_chars_result r = std::from_chars(first, last, v);
+                const std::from_chars_result r = Arcane::FromChars(first, last, v);
                 if (r.ec != std::errc{} || r.ptr != last) return false;   // garbage, or trailing garbage
                 if (!std::isfinite(v) || v <= 0.0f) return false;
                 if (!out.empty() && v <= out.back()) return false;         // strictly ascending

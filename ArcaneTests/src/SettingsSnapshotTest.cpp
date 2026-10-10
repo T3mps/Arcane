@@ -100,7 +100,7 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
     std::atomic<int> ready{ 0 };
     bool allApplied = true;
     {
-        std::vector<std::jthread> workers;
+        std::vector<std::thread> workers;
         auto ReadOnce = [&] {
             const std::shared_ptr<const ProbeSettings> s = SettingsShared<ProbeSettings>(reg);
             if (static_cast<std::uint32_t>(s->count) != s->mask) torn.fetch_add(1);
@@ -122,6 +122,8 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
             reg.Publish();
         }
         stop.store(true, std::memory_order_release);
+        for (std::thread& worker : workers)
+            worker.join();
     }
     CHECK(allApplied);
     CHECK(torn.load() == 0);

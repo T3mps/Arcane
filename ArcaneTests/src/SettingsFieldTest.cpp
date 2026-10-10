@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 using namespace Arcane;
@@ -31,7 +32,8 @@ namespace
     static_assert(Detail::kIsSettingsFieldType<std::uint32_t>);
     static_assert(Detail::kIsSettingsFieldType<std::int64_t>);
     static_assert(Detail::kIsSettingsFieldType<std::uint64_t>);
-    static_assert(Detail::kIsSettingsFieldType<std::size_t>);   // == std::uint64_t on x64 MSVC
+    static_assert(Detail::kIsSettingsFieldType<std::size_t> ==
+                  (std::is_same_v<std::size_t, std::uint32_t> || std::is_same_v<std::size_t, std::uint64_t>));
     static_assert(Detail::kIsSettingsFieldType<float>);
     static_assert(Detail::kIsSettingsFieldType<double>);
     static_assert(Detail::kIsSettingsFieldType<std::string>);
@@ -41,7 +43,18 @@ namespace
     static_assert(Detail::kIsSettingsFieldType<CVarVec4>);
     static_assert(Detail::kIsSettingsFieldType<SettingsProbe::Quality>);
     static_assert(!Detail::kIsSettingsFieldType<std::vector<int>>);
-    static_assert(!Detail::kIsSettingsFieldType<long>);           // 32-bit on MSVC, but not std::int32_t
+    // long is distinct from int32_t on MSVC, but aliases int64_t on LP64.
+    static_assert(Detail::kIsSettingsFieldType<long> ==
+                  (std::is_same_v<long, std::int32_t> || std::is_same_v<long, std::int64_t>));
+    // The real intent: the trait matches the exact fixed-width types, never an
+    // integer that merely has the same width. Every platform has one: long on
+    // MSVC (32-bit, not int32_t) and macOS (64-bit, not int64_t), long long on
+    // LP64 Linux (64-bit, not int64_t).
+    using DistinctSameWidthInt = std::conditional_t<
+        std::is_same_v<long, std::int32_t> || std::is_same_v<long, std::int64_t>, long long, long>;
+    static_assert(sizeof(DistinctSameWidthInt) == sizeof(std::int32_t) || sizeof(DistinctSameWidthInt) == sizeof(std::int64_t));
+    static_assert(!std::is_same_v<DistinctSameWidthInt, std::int32_t> && !std::is_same_v<DistinctSameWidthInt, std::int64_t>);
+    static_assert(!Detail::kIsSettingsFieldType<DistinctSameWidthInt>);
     static_assert(!Detail::kIsSettingsFieldType<std::uint8_t>);
     static_assert(!Detail::kIsSettingsFieldType<std::int16_t>);
     static_assert(!Detail::kIsSettingsFieldType<const char*>);
