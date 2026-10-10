@@ -30,6 +30,7 @@ Review: `.superpowers/sdd/2026-10-10-flat-api/spec-review.md` (Grok xhigh).
 - **FA7 (functions; M2).** Function names are unchanged by F2 (`MakePhysicsDebugDrawOptions`, `DrawPhysicsDebug`, `DrawNarrowphaseWorldOverlay` stay); only types take the suffix. Both `RegisterComponents` overloads become `RegisterPhysicsComponents2D`.
 - **FA8 (Detail inventory; M3).** Everything in `Arcane::Physics2D::Detail` moves to `Arcane::Detail::Physics2D` (incl. `kInvalidBody`, `FixtureHandle`, `Adopt`, `ToBroadphaseKind`, `PackBody`, `AngleDelta`); list them in the report.
 - **FA9 (reflection and headers; M4, M5).** `ARC_REFLECT_*` blocks sit inside `namespace Arcane` with unqualified type names (token pasting). `Ecs.hpp` and `EcsFwd.hpp` keep their paths; only the namespace changes. `IWorkScheduler` stays `Arcane::IWorkScheduler`.
+- **FA10 (engine-internal headers; code review).** `ArcaneClient/src/Arcane/Render/PhysicsDebugDraw.hpp` is engine-internal, not game API: the hosts draw the physics debug overlay and games never include it. Its options and functions may name Manifold2D types; the header says so at the top and is not in the spelling guard's game-facing set. Any other header that games do not include follows the same rule only if it states it the same way.
 
 ## 3. ECS vocabulary
 
