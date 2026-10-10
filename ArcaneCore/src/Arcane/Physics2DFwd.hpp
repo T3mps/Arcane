@@ -3,18 +3,18 @@
 // Forward declarations of the 2D physics types engine headers need.
 // No Manifold2D. No Astra.
 
-namespace Arcane::Physics2D
+namespace Arcane
 {
-    struct World;
-    struct System;
-    struct RigidBody;
-    struct Collider;
-    struct Fixture;
-    struct SceneSettings;
-    struct BodyRef;
-    struct Events;
-    struct BodyMotion;
-    struct InterpBuffer;
-    struct InterpPose;
-    struct InterpSlot;
+    struct PhysicsWorld2D;
+    struct PhysicsSystem2D;
+    struct RigidBody2D;
+    struct Collider2D;
+    struct Fixture2D;
+    struct PhysicsSettings2D;
+    struct PhysicsBodyRef2D;
+    struct PhysicsEvents2D;
+    struct BodyMotion2D;
+    struct PhysicsInterpBuffer2D;
+    struct PhysicsInterpPose2D;
+    struct PhysicsInterpSlot2D;
 }

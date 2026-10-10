@@ -210,19 +210,19 @@ engine resources -- and the scheduler orders and parallelises it from that:
 #include <Arcane/Input/GameInput.hpp>
 #include <Arcane/Physics2D.hpp>
 
-struct Jumper : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D::System>>
+struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem2D>>
 {
     Arcane::ActionRef jump{"Player", "Jump"};
 
-    void operator()(Arcane::ECS::View<Arcane::Physics2D::RigidBody>& view,
-                    Arcane::ECS::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
-                    Arcane::ECS::Res<Arcane::GameInput> input,    // actions from the project's input asset
-                    Arcane::ECS::ResMut<Arcane::Physics2D::World> physics)
+    void operator()(Arcane::View<Arcane::RigidBody2D>& view,
+                    Arcane::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
+                    Arcane::Res<Arcane::GameInput> input,    // actions from the project's input asset
+                    Arcane::ResMut<Arcane::PhysicsWorld2D> physics)
     {
         if (!input->PressedThisFixedStep(jump)) return;
-        view.ForEach([&](Arcane::ECS::Entity e, Arcane::Physics2D::RigidBody& body)
+        view.ForEach([&](Arcane::Entity e, Arcane::RigidBody2D& body)
         {
-            const Arcane::Physics2D::BodyMotion m = physics->Motion(e, body);
+            const Arcane::BodyMotion2D m = physics->Motion(e, body);
             if (m.supported) physics->SetVelocity(e, body, m.velocityX, 6.0f);
         });
     }
@@ -232,11 +232,11 @@ struct Jumper : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D:
 and is registered with one line in its `.cpp`:
 `ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
 
-A system reads 2D physics events from that same `Arcane::Physics2D::World` resource.
+A system reads 2D physics events from that same `Arcane::PhysicsWorld2D` resource.
 `StepEvents()` is the most recent physics step, `FrameEvents()` gathers
 every step since this frame began, and `ContactsOf(entity, out)` lists
 what that entity is touching right now, sleepers included. Each side
-carries the entity, its Identity GUID and the `Arcane::Physics2D::Collider` fixture
+carries the entity, its Identity GUID and the `Arcane::Collider2D` fixture
 index. Keep the GUID when the identity has to outlive the frame; the
 entity handle is valid only in the frame it is read (a destroyed
 entity's event still carries the GUID). Spec:

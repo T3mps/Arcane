@@ -2,7 +2,7 @@
 
 // TintOnContact: a component -- when a contact begins on this entity, its
 // SpriteRenderer takes `color`. The 2D physics events witness (spec 2026-10-08
-// s9.3): it proves a game module reads Physics2D::FrameEvents().
+// s9.3): it proves a game module reads PhysicsWorld2D::FrameEvents().
 
 #include <Arcane/Reflection.hpp>
 #include <glm/vec4.hpp>

@@ -139,7 +139,7 @@ namespace
 TEST_CASE("ToWorldDef: the default settings ARE Manifold2D's WorldDef defaults; gravity is left to EnsurePhysics", "[settings]")
 {
     const Manifold2D::Physics::WorldDef lib{};
-    const Manifold2D::Physics::WorldDef ours = Arcane::Physics2D::Detail::ToWorldDef(Arcane::Physics2D::WorldSettings{});
+    const Manifold2D::Physics::WorldDef ours = Arcane::Detail::Physics2D::ToWorldDef(Arcane::PhysicsWorldSettings2D{});
     CHECK(ours.broadphase == lib.broadphase);
     CHECK(ours.hashCellSize == lib.hashCellSize);
     CHECK(ours.passability == nullptr);
@@ -155,13 +155,13 @@ TEST_CASE("ToWorldDef: the default settings ARE Manifold2D's WorldDef defaults; 
     CHECK(ours.contactPushMaxVelocity == lib.contactPushMaxVelocity);
     CHECK(ours.maxLinearVelocity == lib.maxLinearVelocity);
     CHECK(ours.sleepThreshold == lib.sleepThreshold);
-    CHECK_FALSE(Arcane::Physics2D::WorldSettings{}.parallelSolver);
+    CHECK_FALSE(Arcane::PhysicsWorldSettings2D{}.parallelSolver);
 }
 
 TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase maps", "[settings]")
 {
-    Arcane::Physics2D::WorldSettings s;
-    s.broadphase = Arcane::Physics2D::Broadphase::Hash;
+    Arcane::PhysicsWorldSettings2D s;
+    s.broadphase = Arcane::PhysicsBroadphase2D::Hash;
     s.hashCellSize = 2.5f;
     s.substepCount = 8;
     s.contactHertz = 60.0f;
@@ -170,7 +170,7 @@ TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase 
     s.contactPushMaxVelocity = 6.0f;
     s.maxLinearVelocity = 100.0f;
     s.sleepThreshold = 0.1f;
-    const Manifold2D::Physics::WorldDef wd = Arcane::Physics2D::Detail::ToWorldDef(s);
+    const Manifold2D::Physics::WorldDef wd = Arcane::Detail::Physics2D::ToWorldDef(s);
     CHECK(wd.broadphase == Manifold2D::Physics::BroadphaseKind::Hash);
     CHECK(wd.hashCellSize == 2.5f);
     CHECK(wd.substepCount == 8u);
@@ -180,8 +180,8 @@ TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase 
     CHECK(wd.contactPushMaxVelocity == 6.0f);
     CHECK(wd.maxLinearVelocity == 100.0f);
     CHECK(wd.sleepThreshold == 0.1f);
-    CHECK(Arcane::Physics2D::Detail::ToBroadphaseKind(Arcane::Physics2D::Broadphase::Tree) == Manifold2D::Physics::BroadphaseKind::Tree);
-    CHECK(Arcane::Physics2D::Detail::ToBroadphaseKind(Arcane::Physics2D::Broadphase::Sap) == Manifold2D::Physics::BroadphaseKind::Sap);
+    CHECK(Arcane::Detail::Physics2D::ToBroadphaseKind(Arcane::PhysicsBroadphase2D::Tree) == Manifold2D::Physics::BroadphaseKind::Tree);
+    CHECK(Arcane::Detail::Physics2D::ToBroadphaseKind(Arcane::PhysicsBroadphase2D::Sap) == Manifold2D::Physics::BroadphaseKind::Sap);
     const auto e = CVarRegistry::Get().Explain("physics.broadphase");
     REQUIRE(e);
     CHECK(e->type == CVarType::Enum);
@@ -202,20 +202,20 @@ TEST_CASE("physics.parallelSolver: off by default (the serial solver, as before)
     {
         Runtime rt(Test::Process());
         rt.EnsurePhysics();
-        const Arcane::Physics2D::World* res = rt.Registry().GetResource<Arcane::Physics2D::World>();
+        const Arcane::PhysicsWorld2D* res = rt.Registry().GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res);
-        REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res));
-        CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->Executor() != rt.WorkScheduler());
+        REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res));
+        CHECK(Arcane::Detail::Physics2D::Access::Solver(*res)->Executor() != rt.WorkScheduler());
     }
     REQUIRE(reg.Set(h, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
     reg.Publish();
     {
         Runtime rt(Test::Process());
         rt.EnsurePhysics();
-        const Arcane::Physics2D::World* res = rt.Registry().GetResource<Arcane::Physics2D::World>();
+        const Arcane::PhysicsWorld2D* res = rt.Registry().GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res);
-        REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res));
-        CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->Executor() == rt.WorkScheduler());
+        REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res));
+        CHECK(Arcane::Detail::Physics2D::Access::Solver(*res)->Executor() == rt.WorkScheduler());
     }
 }
 

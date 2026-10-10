@@ -2,6 +2,11 @@
 
 // Render module: physics debug-draw overlay (M6, Task P3.6).
 //
+// ENGINE-INTERNAL, NOT GAME API: the engine's hosts (editor, runtime) draw
+// the physics debug overlay; game code never includes this header. Its
+// options and functions name Manifold2D types on purpose (flat-API spec
+// 2026-10-10, FA10), so it is not in the spelling guard's game-facing set.
+//
 // Ports Client/src/physics/PhysicsDebug.lua into the Arcane.dll render side,
 // consuming the PULL API added to PhysicsWorld (ForEachContact /
 // IslandRootOf) and submitting primitives to the Batcher2D.
@@ -45,7 +50,7 @@ namespace Arcane
     // Only referenced here through a pointer (PhysicsDebugDrawOptions::interp), so
     // a forward declaration is sufficient -- keeps this header free of the
     // Astra/Scene include chain (see the boundary note above).
-    namespace Physics2D { struct InterpBuffer; }
+    struct PhysicsInterpBuffer2D;
 
     // Options for DrawPhysicsDebug.
     //
@@ -55,27 +60,25 @@ namespace Arcane
     // with their defaults (the pre-sweep literals) and
     // MakePhysicsDebugDrawOptions() draws with the published values; a caller
     // may still override any inherited member for one call. Inherited:
-    //   DebugPhysicsSettings      lineThickness (canvas px), contactMarkerSize
+    //   PhysicsDebugSettings2D    lineThickness (canvas px), contactMarkerSize
     //                             (m, through view.Length), velocityScale (s of
     //                             look-ahead), velocityMinSpeed (m/s; slower
     //                             bodies draw no ray), comMarkerSize (m),
     //                             orientationTickLen (m), manifoldNormalLength,
     //                             manifoldPointPx;
-    //   DebugPhysicsDrawSettings  contacts (centre-to-centre line + midpoint
+    //   PhysicsDebugDrawSettings2D contacts (centre-to-centre line + midpoint
     //                             disc per touching pool contact), aabbs (each body's tight
     //                             SlotAabb), velocities (awake dynamic bodies),
     //                             comMarkers (dynamic bodies), orientations
     //                             (local +x tick, so circles show rotation);
-    //   DebugPhysicsColorSettings the palette (per body type, island, overlay
+    //   PhysicsDebugColorSettings2D the palette (per body type, island, overlay
     //                             and NarrowphaseKind);
-    //   DebugPhysicsTraceSettings DrawNarrowphaseWorldOverlay's defaults.
-    // NOT inherited: DebugPhysicsStyleSettings (debug.physics.style.*: arrow
+    //   PhysicsDebugTraceSettings2D DrawNarrowphaseWorldOverlay's defaults.
+    // NOT inherited: PhysicsDebugStyleSettings2D (debug.physics.style.*: arrow
     // heads, sleeping dim, emphasis floor, thickness scales, px radii); both
     // overlays read its published values directly.
-namespace Physics2D
-{
-    struct DebugDrawOptions : DebugSettings, DebugDrawSettings,
-                              DebugColorSettings, DebugTraceSettings
+    struct PhysicsDebugDrawOptions2D : PhysicsDebugSettings2D, PhysicsDebugDrawSettings2D,
+                                       PhysicsDebugColorSettings2D, PhysicsDebugTraceSettings2D
     {
         // Camera transform applied to every emitted point + length: the
         // orthographic ViewTransform's Affine2D (F4 plan 1 T3) -- points go
@@ -115,14 +118,14 @@ namespace Physics2D
         bool drawManifolds = false;
 
         // ---- render interpolation (Epic 04.2) -------------------------------
-        // When `interp` is set (per-body previous-step poses from Physics2D::System)
+        // When `interp` is set (per-body previous-step poses from PhysicsSystem2D)
         // each body's outline / COM / orientation / velocity origin is drawn at
         // lerp(prev, current, alpha). Null -> current step pose (unchanged). A
         // per-body generation mismatch (recycled slot) falls back to current.
         // The per-body AABB (aabbs), contacts, and the broadphase overlays
         // (drawFixtureTree / drawStaticGrid / drawResidencyGrid / drawManifolds)
         // are NOT interpolated -- they stay at the current step by spec.
-        const InterpBuffer* interp = nullptr;
+        const PhysicsInterpBuffer2D* interp = nullptr;
         float                      alpha  = 0.0f;   // RunLoop::Alpha() in [0,1)
 
         // ---- one-body filter (2026-09-11 physics wiring, spec s6.3) ---------
@@ -133,11 +136,10 @@ namespace Physics2D
         // default) is every existing caller: the whole world, every flag honoured.
         std::optional<Manifold2D::Physics::BodyHandle> onlyBody;
     };
-}
 
     // A fresh options block holding the PUBLISHED debug.physics.* values (the
     // per-call members keep their defaults). Read it once per frame.
-    [[nodiscard]] ARC_API Physics2D::DebugDrawOptions MakePhysicsDebugDrawOptions();
+    [[nodiscard]] ARC_API PhysicsDebugDrawOptions2D MakePhysicsDebugDrawOptions();
 
     // Submit physics debug geometry to `batcher`.
     //
@@ -167,7 +169,7 @@ namespace Physics2D
     ARC_API void DrawPhysicsDebug(
         const Manifold2D::Physics::PhysicsWorld& world,
         Batcher2D& batcher,
-        const Physics2D::DebugDrawOptions& opts = {});
+        const PhysicsDebugDrawOptions2D& opts = {});
 
     // ---- Slice B: narrowphase-inspector WORLD overlay ----------------------------
     //

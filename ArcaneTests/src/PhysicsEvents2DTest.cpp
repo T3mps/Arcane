@@ -1,5 +1,5 @@
 // PhysicsEvents2DTest.cpp -- [physics][events]: the Arcane event surface (spec
-// 2026-10-08 s7). Bare registry + Arcane::Physics2D::System, +Y DOWN, g = 10 (the
+// 2026-10-08 s7). Bare registry + Arcane::PhysicsSystem2D, +Y DOWN, g = 10 (the
 // PhysicsSystemTest convention).
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
@@ -25,12 +25,12 @@ namespace
         World()
         {
             Arcane::RegisterSceneComponents(reg);
-            Arcane::Physics2D::RegisterComponents(reg);
+            Arcane::RegisterPhysicsComponents2D(reg);
             Manifold2D::Physics::WorldDef wd; wd.gravityY = 10.0f;
-            reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+            reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
         }
-        Astra::Entity Body(const char* name, Arcane::Physics2D::BodyType type, glm::vec2 pos,
-                           std::vector<Arcane::Physics2D::Fixture> fixtures, glm::vec3 scale = glm::vec3(1.0f))
+        Astra::Entity Body(const char* name, Arcane::BodyType2D type, glm::vec2 pos,
+                           std::vector<Arcane::Fixture2D> fixtures, glm::vec3 scale = glm::vec3(1.0f))
         {
             Astra::Entity e = reg.CreateEntity();
             Arcane::Identity id; id.id = Arcane::Guid::Generate(); id.name = name;
@@ -38,41 +38,41 @@ namespace
             Arcane::Transform t; t.position = glm::vec3(pos, 0.0f); t.scale = scale;
             reg.AddComponent<Arcane::Transform>(e, t);
             reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-            Arcane::Physics2D::RigidBody rb; rb.type = type;
+            Arcane::RigidBody2D rb; rb.type = type;
             // R8: a dynamic AABB asserts fixedRotation. Every dynamic body here is an Aabb.
-            if (type == Arcane::Physics2D::BodyType::Dynamic)
+            if (type == Arcane::BodyType2D::Dynamic)
                 rb.fixedRotation = true;
-            reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
-            Arcane::Physics2D::Collider col; col.fixtures = std::move(fixtures);
-            reg.AddComponent<Arcane::Physics2D::Collider>(e, col);
-            reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
+            reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+            Arcane::Collider2D col; col.fixtures = std::move(fixtures);
+            reg.AddComponent<Arcane::Collider2D>(e, col);
+            reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
             return e;
         }
-        Arcane::Physics2D::World& Res() { return *reg.GetResource<Arcane::Physics2D::World>(); }
+        Arcane::PhysicsWorld2D& Res() { return *reg.GetResource<Arcane::PhysicsWorld2D>(); }
         Arcane::Guid GuidOf(Astra::Entity e) { return std::as_const(reg).GetComponent<Arcane::Identity>(e)->id; }
     };
 
-    Arcane::Physics2D::Fixture Box(float hw, float hh)
+    Arcane::Fixture2D Box(float hw, float hh)
     {
-        Arcane::Physics2D::Fixture f; f.kind = Arcane::Physics2D::ShapeKind::Aabb; f.halfW = hw; f.halfH = hh; return f;
+        Arcane::Fixture2D f; f.kind = Arcane::ShapeKind2D::Aabb; f.halfW = hw; f.halfH = hh; return f;
     }
 
     int LandingHits()
     {
         World w;
-        Arcane::Physics2D::Fixture hitty = Box(0.5f, 0.5f); hitty.hitEvents = true;
-        w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-        w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -2.5f }, { hitty });
-        Arcane::Physics2D::System physics(kDt);
+        Arcane::Fixture2D hitty = Box(0.5f, 0.5f); hitty.hitEvents = true;
+        w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+        w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -2.5f }, { hitty });
+        Arcane::PhysicsSystem2D physics(kDt);
         int hits = 0;
         for (int i = 0; i < 90; ++i) { physics(w.reg); hits += static_cast<int>(w.Res().StepEvents().contactHit.size()); }
         return hits;
     }
 }
 
-TEST_CASE("Arcane::Physics2D::Fixture event flags default contact+sensor on, hit off", "[physics][events]")
+TEST_CASE("Arcane::Fixture2D event flags default contact+sensor on, hit off", "[physics][events]")
 {
-    Arcane::Physics2D::Fixture f;
+    Arcane::Fixture2D f;
     CHECK(f.contactEvents);
     CHECK(f.sensorEvents);
     CHECK_FALSE(f.hitEvents);
@@ -81,14 +81,14 @@ TEST_CASE("Arcane::Physics2D::Fixture event flags default contact+sensor on, hit
 TEST_CASE("StepEvents reports a crate landing on static ground, by entity + GUID + fixture", "[physics][events]")
 {
     World w;
-    const Astra::Entity ground = w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity crate  = w.Body("Crate",  Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });
-    Arcane::Physics2D::System physics(kDt);
+    const Astra::Entity ground = w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate  = w.Body("Crate",  Arcane::BodyType2D::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem2D physics(kDt);
     int begins = 0;
     for (int i = 0; i < 120; ++i)
     {
         physics(w.reg);
-        for (const Arcane::Physics2D::ContactBegin& e : w.Res().StepEvents().contactBegin)
+        for (const Arcane::ContactBegin2D& e : w.Res().StepEvents().contactBegin)
         {
             ++begins;
             CHECK(e.a.entity == crate);           // A = the dynamic side
@@ -104,16 +104,16 @@ TEST_CASE("StepEvents reports a crate landing on static ground, by entity + GUID
 TEST_CASE("fixture indices map through the auto-fixture and AddFixture paths", "[physics][events]")
 {
     World w;
-    Arcane::Physics2D::Fixture sensor = Box(2.0f, 2.0f); sensor.isSensor = true;    // fixture 0: the auto-fixture path
-    Arcane::Physics2D::Fixture solid  = Box(0.3f, 0.3f); solid.localPos = { 0.0f, 5.0f };   // fixture 1: AddFixture
-    const Astra::Entity zone = w.Body("Zone", Arcane::Physics2D::BodyType::Static, { 0.0f, -6.0f }, { sensor, solid });
-    const Astra::Entity crate = w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -12.0f }, { Box(0.5f, 0.5f) });
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::Fixture2D sensor = Box(2.0f, 2.0f); sensor.isSensor = true;    // fixture 0: the auto-fixture path
+    Arcane::Fixture2D solid  = Box(0.3f, 0.3f); solid.localPos = { 0.0f, 5.0f };   // fixture 1: AddFixture
+    const Astra::Entity zone = w.Body("Zone", Arcane::BodyType2D::Static, { 0.0f, -6.0f }, { sensor, solid });
+    const Astra::Entity crate = w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -12.0f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem2D physics(kDt);
     int sensorBegins = 0;
     for (int i = 0; i < 90; ++i)
     {
         physics(w.reg);
-        for (const Arcane::Physics2D::SensorBegin& e : w.Res().StepEvents().sensorBegin)
+        for (const Arcane::SensorBegin2D& e : w.Res().StepEvents().sensorBegin)
         {
             ++sensorBegins;
             CHECK(e.sensor.entity == zone);
@@ -127,16 +127,16 @@ TEST_CASE("fixture indices map through the auto-fixture and AddFixture paths", "
 TEST_CASE("an AddFixture surface reports fixture index 1", "[physics][events]")
 {
     World w;
-    Arcane::Physics2D::Fixture away = Box(0.2f, 0.2f); away.localPos = { 30.0f, 0.0f };   // fixture 0: auto-fixture, off the fall
-    Arcane::Physics2D::Fixture surface = Box(10.0f, 0.5f);                                 // fixture 1: AddFixture, the landing
-    const Astra::Entity ground = w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { away, surface });
-    const Astra::Entity crate  = w.Body("Crate",  Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::Fixture2D away = Box(0.2f, 0.2f); away.localPos = { 30.0f, 0.0f };   // fixture 0: auto-fixture, off the fall
+    Arcane::Fixture2D surface = Box(10.0f, 0.5f);                                 // fixture 1: AddFixture, the landing
+    const Astra::Entity ground = w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { away, surface });
+    const Astra::Entity crate  = w.Body("Crate",  Arcane::BodyType2D::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem2D physics(kDt);
     int begins = 0;
     for (int i = 0; i < 120; ++i)
     {
         physics(w.reg);
-        for (const Arcane::Physics2D::ContactBegin& e : w.Res().StepEvents().contactBegin)
+        for (const Arcane::ContactBegin2D& e : w.Res().StepEvents().contactBegin)
         {
             ++begins;
             CHECK(e.a.entity == crate);
@@ -151,10 +151,10 @@ TEST_CASE("an AddFixture surface reports fixture index 1", "[physics][events]")
 TEST_CASE("Opting one fixture out silences the pair (both-fixtures rule)", "[physics][events]")
 {
     World w;
-    Arcane::Physics2D::Fixture quiet = Box(10.0f, 0.5f); quiet.contactEvents = false;
-    w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { quiet });
-    w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });   // default on
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::Fixture2D quiet = Box(10.0f, 0.5f); quiet.contactEvents = false;
+    w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { quiet });
+    w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -2.0f }, { Box(0.5f, 0.5f) });   // default on
+    Arcane::PhysicsSystem2D physics(kDt);
     int begins = 0;
     for (int i = 0; i < 120; ++i) { physics(w.reg); begins += static_cast<int>(w.Res().StepEvents().contactBegin.size()); }
     CHECK(begins == 0);
@@ -163,10 +163,10 @@ TEST_CASE("Opting one fixture out silences the pair (both-fixtures rule)", "[phy
 TEST_CASE("A destroyed entity's End still carries its GUID", "[physics][events]")
 {
     World w;
-    w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity crate = w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate = w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
     const Arcane::Guid guid = w.GuidOf(crate);
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::PhysicsSystem2D physics(kDt);
     for (int i = 0; i < 10; ++i) physics(w.reg);
     w.reg.DestroyEntity(crate);
     physics(w.reg);                                // PASS 1 removes + retires; the step delivers the End
@@ -175,19 +175,19 @@ TEST_CASE("A destroyed entity's End still carries its GUID", "[physics][events]"
     CHECK(ends[0].a.guid == guid);
     CHECK_FALSE(w.reg.IsValid(ends[0].a.entity));
     physics(w.reg);
-    CHECK(Arcane::Physics2D::Detail::Access::Records(w.Res()).size() == 1);        // retired record erased after its delivery
+    CHECK(Arcane::Detail::Physics2D::Access::Records(w.Res()).size() == 1);        // retired record erased after its delivery
 }
 
 TEST_CASE("a recycled body slot never resolves to the retired record", "[physics][events]")
 {
     World w;
-    w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity first = w.Body("First", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
-    Arcane::Physics2D::System physics(kDt);
+    w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity first = w.Body("First", Arcane::BodyType2D::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem2D physics(kDt);
     for (int i = 0; i < 5; ++i) physics(w.reg);
     const Arcane::Guid firstGuid = w.GuidOf(first);
     w.reg.DestroyEntity(first);
-    const Astra::Entity second = w.Body("Second", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    const Astra::Entity second = w.Body("Second", Arcane::BodyType2D::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
     physics(w.reg);                                // PASS 1 retires First, PASS 2 mints Second (same slot)
     bool sawFirstEnd = false, sawSecondBegin = false;
     for (const auto& e : w.Res().StepEvents().contactEnd)   if (e.a.guid == firstGuid) sawFirstEnd = true;
@@ -199,13 +199,13 @@ TEST_CASE("a recycled body slot never resolves to the retired record", "[physics
 TEST_CASE("a paused rescale retires the old fixture until the next capture", "[physics][events]")
 {
     World w;
-    w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity crate = w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate = w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
     const Arcane::Guid guid = w.GuidOf(crate);
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::PhysicsSystem2D physics(kDt);
     for (int i = 0; i < 10; ++i) physics(w.reg);   // resting contact, Begin already delivered
 
-    Arcane::Physics2D::System paused(kDt, /*stepWorld*/ false);
+    Arcane::PhysicsSystem2D paused(kDt, /*stepWorld*/ false);
     w.reg.GetComponent<Arcane::Transform>(crate)->scale = glm::vec3(2.0f, 2.0f, 1.0f);
     paused(w.reg);                                 // rebuild: old handle retired, new handle current
 
@@ -213,9 +213,9 @@ TEST_CASE("a paused rescale retires the old fixture until the next capture", "[p
     for (int i = 0; i < 8; ++i)
     {
         physics(w.reg);
-        for (const Arcane::Physics2D::ContactEnd& e : w.Res().StepEvents().contactEnd)
+        for (const Arcane::ContactEnd2D& e : w.Res().StepEvents().contactEnd)
             if (e.a.entity == crate && e.a.fixture == 0u && e.a.guid == guid) sawEnd = true;
-        for (const Arcane::Physics2D::ContactBegin& e : w.Res().StepEvents().contactBegin)
+        for (const Arcane::ContactBegin2D& e : w.Res().StepEvents().contactBegin)
             if (e.a.entity == crate && e.a.fixture == 0u && e.a.guid == guid) sawBegin = true;
     }
     CHECK(sawEnd);                                 // destroy-time End of the dropped fixture
@@ -225,18 +225,18 @@ TEST_CASE("a paused rescale retires the old fixture until the next capture", "[p
 TEST_CASE("consecutive paused rescales keep every retired fixture resolvable", "[physics][events]")
 {
     World w;
-    w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity crate = w.Body("Crate", Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
+    w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate = w.Body("Crate", Arcane::BodyType2D::Dynamic, { 0.0f, -0.49f }, { Box(0.5f, 0.5f) });
     const Arcane::Guid guid = w.GuidOf(crate);
-    Arcane::Physics2D::System physics(kDt);
+    Arcane::PhysicsSystem2D physics(kDt);
     for (int i = 0; i < 10; ++i) physics(w.reg);
 
-    auto& records = Arcane::Physics2D::Detail::Access::Records(w.Res());
-    const auto key = Arcane::Physics2D::Detail::PackBody(
-        Arcane::Physics2D::Detail::Access::Entities(w.Res()).at(crate));
+    auto& records = Arcane::Detail::Physics2D::Access::Records(w.Res());
+    const auto key = Arcane::Detail::Physics2D::PackBody(
+        Arcane::Detail::Physics2D::Access::Entities(w.Res()).at(crate));
     const auto gen0 = records.at(key).fixtures.at(0);
 
-    Arcane::Physics2D::System paused(kDt, /*stepWorld*/ false);
+    Arcane::PhysicsSystem2D paused(kDt, /*stepWorld*/ false);
     w.reg.GetComponent<Arcane::Transform>(crate)->scale = glm::vec3(2.0f, 2.0f, 1.0f);
     paused(w.reg);
     const auto gen1 = records.at(key).fixtures.at(0);
@@ -261,7 +261,7 @@ TEST_CASE("consecutive paused rescales keep every retired fixture resolvable", "
     for (int i = 0; i < 8; ++i)
     {
         physics(w.reg);
-        const auto* solver = Arcane::Physics2D::Detail::Access::Solver(w.Res());
+        const auto* solver = Arcane::Detail::Physics2D::Access::Solver(w.Res());
         const auto raw = solver->GetContactEvents();
         const auto sen = solver->GetSensorEvents();
         const auto ev  = w.Res().StepEvents();
@@ -308,26 +308,26 @@ TEST_CASE("consecutive paused rescales keep every retired fixture resolvable", "
 TEST_CASE("ContactsOf lists a resting crate's ground contact by entity", "[physics][events]")
 {
     World w;
-    const Astra::Entity ground = w.Body("Ground", Arcane::Physics2D::BodyType::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
-    const Astra::Entity crate  = w.Body("Crate",  Arcane::Physics2D::BodyType::Dynamic, { 0.0f, -0.5f }, { Box(0.5f, 0.5f) });
-    Arcane::Physics2D::System physics(kDt);
+    const Astra::Entity ground = w.Body("Ground", Arcane::BodyType2D::Static, { 0.0f, 0.5f }, { Box(10.0f, 0.5f) });
+    const Astra::Entity crate  = w.Body("Crate",  Arcane::BodyType2D::Dynamic, { 0.0f, -0.5f }, { Box(0.5f, 0.5f) });
+    Arcane::PhysicsSystem2D physics(kDt);
     // kSleepTime is 0.5 s once the crate is idle. 300 steps is the usual rest;
     // keep going up to 1200 (20 s) and require the body actually slept.
-    auto& entities = Arcane::Physics2D::Detail::Access::Entities(w.Res());
+    auto& entities = Arcane::Detail::Physics2D::Access::Entities(w.Res());
     for (int i = 0; i < 1200; ++i)
     {
         physics(w.reg);
-        const auto* solver = Arcane::Physics2D::Detail::Access::Solver(w.Res());
+        const auto* solver = Arcane::Detail::Physics2D::Access::Solver(w.Res());
         const auto it = entities.find(crate);
         if (it != entities.end() && solver && !solver->IsAwake(it->second))
             break;
     }
     const auto slept = entities.find(crate);
     REQUIRE(slept != entities.end());
-    const auto* solver = Arcane::Physics2D::Detail::Access::Solver(w.Res());
+    const auto* solver = Arcane::Detail::Physics2D::Access::Solver(w.Res());
     REQUIRE(solver);
     REQUIRE_FALSE(solver->IsAwake(slept->second));   // sleepers-included path
-    std::vector<Arcane::Physics2D::ContactPoint> out;
+    std::vector<Arcane::ContactPoint2D> out;
     w.Res().ContactsOf(crate, out);
     REQUIRE(out.size() == 1);
     CHECK(out[0].self.entity == crate);
@@ -360,26 +360,26 @@ TEST_CASE("PhysicsEvents2D.hpp includes no Manifold2D header", "[physics][events
         if (line.rfind("#include", 0) == 0) CHECK(line.find("Manifold2D") == std::string::npos);
 }
 
-TEST_CASE("Arcane::Physics2D::Fixture event flags round-trip through scene JSON; absent keys keep the defaults", "[physics][events][json]")
+TEST_CASE("Arcane::Fixture2D event flags round-trip through scene JSON; absent keys keep the defaults", "[physics][events][json]")
 {
     nlohmann::json doc;
     {
         World w;
-        Arcane::Physics2D::Fixture f = Box(0.5f, 0.5f); f.contactEvents = false; f.hitEvents = true;
+        Arcane::Fixture2D f = Box(0.5f, 0.5f); f.contactEvents = false; f.hitEvents = true;
         const Astra::Entity root = w.reg.CreateEntity();
         w.reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
-        Arcane::Physics2D::Collider col; col.fixtures.push_back(f);
-        w.reg.AddComponent<Arcane::Physics2D::Collider>(root, col);
+        Arcane::Collider2D col; col.fixtures.push_back(f);
+        w.reg.AddComponent<Arcane::Collider2D>(root, col);
         w.reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
         doc = Arcane::Scene::SaveJson(w.reg);
     }
-    auto& fx = doc["entities"][0]["components"]["Arcane::Physics2D::Collider"]["fixtures"][0];
+    auto& fx = doc["entities"][0]["components"]["Arcane::Collider2D"]["fixtures"][0];
     CHECK(fx["contactEvents"] == false);
     CHECK(fx["hitEvents"] == true);
     fx.erase("sensorEvents");                      // a pre-spec scene has no key
     World loaded;
     REQUIRE(Arcane::Scene::LoadJson(loaded.reg, doc));
-    loaded.reg.CreateView<Arcane::Physics2D::Collider>().ForEach([&](Astra::Entity, Arcane::Physics2D::Collider& c)
+    loaded.reg.CreateView<Arcane::Collider2D>().ForEach([&](Astra::Entity, Arcane::Collider2D& c)
     {
         REQUIRE(c.fixtures.size() == 1);
         CHECK_FALSE(c.fixtures[0].contactEvents);

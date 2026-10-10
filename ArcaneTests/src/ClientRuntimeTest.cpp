@@ -28,7 +28,7 @@ TEST_CASE("a headless Runtime carries no client and installs only the two headle
     Arcane::Runtime rt(Arcane::Test::Process());
     CHECK(rt.Client() == nullptr);
     CHECK(rt.ClientHooks() == nullptr);
-    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::Physics2D::System>());
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
     CHECK_FALSE(rt.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
     rt.ClearSystems();
@@ -44,7 +44,7 @@ TEST_CASE("ClientRuntime owns a Runtime, attaches as its client, and keeps rende
     CHECK(core.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
     core.ClearSystems();                                   // the hook path PluginHost takes
     CHECK(core.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
-    CHECK(core.Schedulers().fixedUpdate.HasSystem<Arcane::Physics2D::System>());
+    CHECK(core.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     // the aliases (P5) are the same objects
     CHECK(&crt.Registry() == &core.Registry());
     CHECK(&crt.Loop()     == &core.Loop());

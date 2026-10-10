@@ -514,7 +514,7 @@ TEST_CASE("verify: PickPixelInRange refuses the whole out-of-range family -- pas
 
 // ---------------------------------------------------------------------------
 // Fix round 1, item 4: the cheap mesh-pick mitigation. CollectPickables
-// (PickEmit.hpp) only ever walks SpriteRenderer/Arcane::Physics2D::Collider entities -- a
+// (PickEmit.hpp) only ever walks SpriteRenderer/Arcane::Collider2D entities -- a
 // MeshRenderer entity is invisible to it -- so a hit is ALWAYS one of those
 // two kinds, never a mesh. `pickableKinds` names that capability on every
 // non-error pick result; `meshesNotPickable` additionally flags the run

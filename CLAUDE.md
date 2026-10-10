@@ -117,7 +117,7 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   plan 2's `MeshCullNode` is the tenth.
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
-  engine-owned world. Do not teach `Arcane::Physics2D::System` to write 3D poses (it
+  engine-owned world. Do not teach `Arcane::PhysicsSystem2D` to write 3D poses (it
   flattens out-of-plane rotation on purpose). Manifold3D is later and
   treats Box3D as the oracle -- Box3D already *is* Rubikon-Lite + Box2D.
   Binding: `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`.

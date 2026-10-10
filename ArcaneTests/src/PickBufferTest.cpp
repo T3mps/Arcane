@@ -83,7 +83,7 @@ namespace
     };
 
     // Fresh registry with Scene + Physics components registered, a
-    // zero-gravity Arcane::Physics2D::World attached, and a SpriteTable resolving
+    // zero-gravity Arcane::PhysicsWorld2D attached, and a SpriteTable resolving
     // kSpriteId to (`sizeMeters`, `pivot`).
     //
     // Cross-DLL note (mirrors EntityPickTest.cpp's MakeSceneRegistry):
@@ -108,12 +108,12 @@ namespace
         auto components = std::make_shared<Astra::ComponentRegistry>();
         fx.reg = std::make_unique<Astra::Registry>(components);
         Arcane::RegisterSceneComponents(*fx.reg);
-        Arcane::Physics2D::RegisterComponents(*fx.reg);
+        Arcane::RegisterPhysicsComponents2D(*fx.reg);
 
         Manifold2D::Physics::WorldDef wd;
         wd.gravityY = 0.0f;
         wd.gravityX = 0.0f;
-        fx.reg->SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+        fx.reg->SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
 
         Arcane::SpriteEntry entry;
         entry.sizeMeters = sizeMeters;
@@ -158,12 +158,12 @@ namespace
     }
 
     // Mints a kinematic body with a single fixture at `pos`, via the real
-    // Arcane::Physics2D::System create pass (stepWorld=false: registers the body and
+    // Arcane::PhysicsSystem2D create pass (stepWorld=false: registers the body and
     // writes it back without stepping, so it stays exactly at `pos`).
     // `scale` is baked into the body's fixtures by the create pass (it sets
-    // Arcane::Physics2D::BodyRef::appliedScale = lt.scale) -- used to prove CollectPickables
+    // Arcane::PhysicsBodyRef2D::appliedScale = lt.scale) -- used to prove CollectPickables
     // scales the silhouette to match the drawn collider.
-    Astra::Entity AddBody(Astra::Registry& reg, glm::vec2 pos, const Arcane::Physics2D::Fixture& fx,
+    Astra::Entity AddBody(Astra::Registry& reg, glm::vec2 pos, const Arcane::Fixture2D& fx,
                           glm::vec2 scale = glm::vec2(1.0f, 1.0f))
     {
         const Astra::Entity e = reg.CreateEntity();
@@ -173,17 +173,17 @@ namespace
         lt.scale    = glm::vec3(scale, 1.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
 
-        Arcane::Physics2D::RigidBody rb;
-        rb.type = Arcane::Physics2D::BodyType::Kinematic;
-        reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
+        Arcane::RigidBody2D rb;
+        rb.type = Arcane::BodyType2D::Kinematic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
-        Arcane::Physics2D::Collider col;
+        Arcane::Collider2D col;
         col.fixtures.push_back(fx);
-        reg.AddComponent<Arcane::Physics2D::Collider>(e, col);
+        reg.AddComponent<Arcane::Collider2D>(e, col);
 
-        reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
+        reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
 
-        Arcane::Physics2D::System sys(1.0f / 60.0f, /*stepWorld=*/false);
+        Arcane::PhysicsSystem2D sys(1.0f / 60.0f, /*stepWorld=*/false);
         sys(reg);
 
         return e;
@@ -191,8 +191,8 @@ namespace
 
     Astra::Entity AddCircleCollider(Astra::Registry& reg, glm::vec2 pos, float radius)
     {
-        Arcane::Physics2D::Fixture fx;
-        fx.kind   = Arcane::Physics2D::ShapeKind::Circle;
+        Arcane::Fixture2D fx;
+        fx.kind   = Arcane::ShapeKind2D::Circle;
         fx.radius = radius;
         return AddBody(reg, pos, fx);
     }
@@ -200,8 +200,8 @@ namespace
     Astra::Entity AddScaledBoxCollider(Astra::Registry& reg, glm::vec2 pos, float halfW, float halfH,
                                        glm::vec2 scale)
     {
-        Arcane::Physics2D::Fixture fx;
-        fx.kind  = Arcane::Physics2D::ShapeKind::Aabb;
+        Arcane::Fixture2D fx;
+        fx.kind  = Arcane::ShapeKind2D::Aabb;
         fx.halfW = halfW;
         fx.halfH = halfH;
         return AddBody(reg, pos, fx, scale);
@@ -319,10 +319,10 @@ TEST_CASE("id->entity table maps 1-based, 0 is background", "[pick]")
 // The silhouette must match the DRAWN collider, which the physics create pass
 // bakes at lt.scale (MakeScaledShape) -- so a scaled body has to pick at its
 // scaled size, not its authored size. Aabb scales per-axis (halfW*|sx|,
-// halfH*|sy|), mirroring Arcane::Physics2D::System::MakeScaledShape.
+// halfH*|sy|), mirroring Arcane::PhysicsSystem2D::MakeScaledShape.
 TEST_CASE("CollectPickables scales a collider silhouette by the body's baked scale, in metres", "[pick]")
 {
-    // Arcane::Physics2D::BodyRef::appliedScale = (2, 3); the box half-extents come out as
+    // Arcane::PhysicsBodyRef2D::appliedScale = (2, 3); the box half-extents come out as
     // fixture metres times the baked scale -- no pixels anywhere.
     auto reg = MakeRegistryWithSpriteTable({1.0f, 1.0f}, {0.5f, 0.5f});
     const Astra::Entity body = AddScaledBoxCollider(*reg, glm::vec2(0.0f), /*halfW=*/1.0f, /*halfH=*/0.5f, /*scale=*/{2.0f, 3.0f});

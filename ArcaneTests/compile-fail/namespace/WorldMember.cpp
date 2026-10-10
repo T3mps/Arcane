@@ -1,4 +1,4 @@
-// A game TU must not reach World's solver. The member is private.
+// A game TU must not reach PhysicsWorld2D's solver. The member is private.
 #include <Arcane/Physics2D.hpp>
-void Probe(Arcane::Physics2D::World& w) { (void)w.world; }
+void Probe(Arcane::PhysicsWorld2D& w) { (void)w.world; }
 int main() { return 0; }

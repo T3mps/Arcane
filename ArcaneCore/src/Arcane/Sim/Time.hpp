@@ -6,7 +6,7 @@
 // advances and survives every registry swap (Play/Stop, scene open, hot
 // reload) by construction. Systems declare it as a parameter:
 //
-//     void operator()(Arcane::ECS::Res<Arcane::Time> time)   // time->fixedDt, time->fixedStep, ...
+//     void operator()(Arcane::Res<Arcane::Time> time)   // time->fixedDt, time->fixedStep, ...
 //
 // Code outside a system reads Registry().GetResource<Arcane::Time>().
 //

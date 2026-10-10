@@ -94,8 +94,8 @@ TEST_CASE("ClassTemplates::Render System: a registered header/source pair with s
     CHECK(Has(r.header, "struct Movement"));
     CHECK(Has(r.header, "#include <Arcane/Scene/TransformSystems.hpp>"));
     CHECK(Has(r.header, "#include <Arcane/Ecs.hpp>"));
-    CHECK(Has(r.header, "Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::TransformPropagationSystem>>"));
-    CHECK(Has(r.header, "void operator()(Arcane::ECS::Res<Arcane::Time> time)"));
+    CHECK(Has(r.header, "Arcane::SystemTraits<Arcane::Before<Arcane::TransformPropagationSystem>>"));
+    CHECK(Has(r.header, "void operator()(Arcane::Res<Arcane::Time> time)"));
     CHECK_FALSE(Has(r.header, "Astra::"));
     CHECK_FALSE(Has(r.header, "Registry& reg"));
 
@@ -132,7 +132,7 @@ TEST_CASE("ClassTemplates::Render System maps every phase and role choice", "[ed
         const auto rendered = ClassTemplates::Render(
             ClassTemplates::Kind::System, "Movement", "Aphelyon", options);
         CHECK(Has(rendered.source, c.spelling));
-        CHECK(Has(rendered.header, "Arcane::ECS::Before<Arcane::TransformPropagationSystem>")
+        CHECK(Has(rendered.header, "Arcane::Before<Arcane::TransformPropagationSystem>")
               == c.transformAnchor);
         CHECK(Has(rendered.header, "#include <Arcane/Scene/TransformSystems.hpp>")
               == c.transformAnchor);

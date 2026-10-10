@@ -1,6 +1,6 @@
 #pragma once
 
-// Solver handle aliases. BodyRef::handle and World's private maps name these.
+// Solver handle aliases. PhysicsBodyRef2D::handle and PhysicsWorld2D's private maps name these.
 // The using-declarations sit in an internal fence: a game spells Detail::
 // nowhere (the [facade] scan). Physics2D.hpp may include this header; it does
 // not include the Detail helpers.
@@ -14,7 +14,7 @@ namespace Manifold2D::Physics
     class PhysicsWorld;
 }
 
-namespace Arcane::Physics2D::Detail
+namespace Arcane::Detail::Physics2D
 {
     using PhysicsWorld  = ::Manifold2D::Physics::PhysicsWorld;
     using BodyHandle    = ::Manifold2D::Physics::BodyHandle;

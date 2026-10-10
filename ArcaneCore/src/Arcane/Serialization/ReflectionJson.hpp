@@ -509,7 +509,7 @@ namespace Arcane
         }
 
         // std::vector<T> where T is a REFLECTED STRUCT -- the only element kind
-        // any roster field has today (Arcane::Physics2D::Collider::fixtures, MeshAssetData::
+        // any roster field has today (Arcane::Collider2D::fixtures, MeshAssetData::
         // slots): a JSON array, one OBJECT per element, each walked by a
         // sub-writer over the element type's reflected fields exactly as a
         // nested-struct field is (so a guid nested in an element still reaches

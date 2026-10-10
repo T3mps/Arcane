@@ -25,7 +25,7 @@ namespace
 {
     constexpr double kFixed = 1.0 / 60.0;
 
-    void AddBody(Astra::Registry& reg, Arcane::Physics2D::BodyType type, glm::vec2 pos, float hw, float hh,
+    void AddBody(Astra::Registry& reg, Arcane::BodyType2D type, glm::vec2 pos, float hw, float hh,
                  Arcane::Guid guid = {}, bool sensor = false, bool hitEvents = false)
     {
         if (guid.IsNil()) guid = Arcane::Guid::Generate();
@@ -33,24 +33,24 @@ namespace
         Arcane::Identity id; id.id = guid; reg.AddComponent<Arcane::Identity>(e, id);
         Arcane::Transform t; t.position = glm::vec3(pos, 0.0f); reg.AddComponent<Arcane::Transform>(e, t);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-        Arcane::Physics2D::RigidBody rb; rb.type = type;
+        Arcane::RigidBody2D rb; rb.type = type;
         // R8: a dynamic AABB asserts fixedRotation. Every dynamic body here is an Aabb.
-        if (type == Arcane::Physics2D::BodyType::Dynamic)
+        if (type == Arcane::BodyType2D::Dynamic)
             rb.fixedRotation = true;
-        reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
-        Arcane::Physics2D::Fixture f; f.kind = Arcane::Physics2D::ShapeKind::Aabb; f.halfW = hw; f.halfH = hh;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+        Arcane::Fixture2D f; f.kind = Arcane::ShapeKind2D::Aabb; f.halfW = hw; f.halfH = hh;
         f.isSensor = sensor;
         f.hitEvents = hitEvents;
-        Arcane::Physics2D::Collider c; c.fixtures.push_back(f); reg.AddComponent<Arcane::Physics2D::Collider>(e, c);
-        reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
+        Arcane::Collider2D c; c.fixtures.push_back(f); reg.AddComponent<Arcane::Collider2D>(e, c);
+        reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
     }
 
     // Ground top at y = 0; a crate whose bottom face starts 0.01 m above it, so it
     // touches within the first step or two.
     void Scene(Arcane::Runtime& rt)
     {
-        AddBody(rt.Registry(), Arcane::Physics2D::BodyType::Static,  { 0.0f, -0.5f }, 10.0f, 0.5f);
-        AddBody(rt.Registry(), Arcane::Physics2D::BodyType::Dynamic, { 0.0f, 0.51f }, 0.5f, 0.5f);
+        AddBody(rt.Registry(), Arcane::BodyType2D::Static,  { 0.0f, -0.5f }, 10.0f, 0.5f);
+        AddBody(rt.Registry(), Arcane::BodyType2D::Dynamic, { 0.0f, 0.51f }, 0.5f, 0.5f);
         rt.EnsurePhysics();
     }
 
@@ -64,8 +64,8 @@ namespace
     void DropScene(Arcane::Runtime& rt)
     {
         Astra::Registry& reg = rt.Registry();
-        AddBody(reg, Arcane::Physics2D::BodyType::Static, { 0.0f, -0.5f }, 10.0f, 0.5f, Arcane::Guid{ 1, 1 });
-        AddBody(reg, Arcane::Physics2D::BodyType::Static, { 0.0f,  0.65f },  8.0f, 0.10f, Arcane::Guid{ 6, 1 }, true);
+        AddBody(reg, Arcane::BodyType2D::Static, { 0.0f, -0.5f }, 10.0f, 0.5f, Arcane::Guid{ 1, 1 });
+        AddBody(reg, Arcane::BodyType2D::Static, { 0.0f,  0.65f },  8.0f, 0.10f, Arcane::Guid{ 6, 1 }, true);
         const struct { float x; float gap; Arcane::Guid guid; } crates[] = {
             { -4.5f, 1.05f, Arcane::Guid{ 2, 1 } },
             { -1.5f, 1.12f, Arcane::Guid{ 3, 1 } },
@@ -73,7 +73,7 @@ namespace
             {  4.5f, 1.45f, Arcane::Guid{ 5, 1 } },
         };
         for (const auto& c : crates)
-            AddBody(reg, Arcane::Physics2D::BodyType::Dynamic, { c.x, c.gap + 0.25f }, 0.25f, 0.25f,
+            AddBody(reg, Arcane::BodyType2D::Dynamic, { c.x, c.gap + 0.25f }, 0.25f, 0.25f,
                     c.guid, false, true);
         rt.EnsurePhysics();
         rt.Loop().SetMaxStepsPerFrame(8);   // the 2/3-step frames must not hit the spiral cap
@@ -84,23 +84,23 @@ namespace
     void Teleport(Arcane::Runtime& rt, Arcane::Guid guid, glm::vec2 pos)
     {
         Astra::Registry& reg = rt.Registry();
-        Arcane::Physics2D::World* res = reg.GetResource<Arcane::Physics2D::World>();
+        Arcane::PhysicsWorld2D* res = reg.GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res != nullptr);
-        REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res) != nullptr);
+        REQUIRE(Arcane::Detail::Physics2D::Access::Solver(*res) != nullptr);
         bool found = false;
-        reg.CreateView<const Arcane::Identity, const Arcane::Physics2D::BodyRef>().ForEach(
-            [&](Astra::Entity, const Arcane::Identity& id, const Arcane::Physics2D::BodyRef& ref)
+        reg.CreateView<const Arcane::Identity, const Arcane::PhysicsBodyRef2D>().ForEach(
+            [&](Astra::Entity, const Arcane::Identity& id, const Arcane::PhysicsBodyRef2D& ref)
             {
                 if (id.id != guid || found) return;
-                Arcane::Physics2D::Detail::Access::Solver(*res)->SetPosition(ref.handle, Manifold2D::Physics::Vec2(pos.x, pos.y));
-                Arcane::Physics2D::Detail::Access::Solver(*res)->SetVelocity(ref.handle, Manifold2D::Physics::Vec2(0.0f, 0.0f));
-                Arcane::Physics2D::Detail::Access::Solver(*res)->Wake(ref.handle);
+                Arcane::Detail::Physics2D::Access::Solver(*res)->SetPosition(ref.handle, Manifold2D::Physics::Vec2(pos.x, pos.y));
+                Arcane::Detail::Physics2D::Access::Solver(*res)->SetVelocity(ref.handle, Manifold2D::Physics::Vec2(0.0f, 0.0f));
+                Arcane::Detail::Physics2D::Access::Solver(*res)->Wake(ref.handle);
                 found = true;
             });
         REQUIRE(found);
     }
 
-    const Arcane::Physics2D::World& Res(Arcane::Runtime& rt) { return *rt.Registry().GetResource<Arcane::Physics2D::World>(); }
+    const Arcane::PhysicsWorld2D& Res(Arcane::Runtime& rt) { return *rt.Registry().GetResource<Arcane::PhysicsWorld2D>(); }
 
     std::uint64_t FixedStep(Arcane::Runtime& rt)
     {
@@ -108,7 +108,7 @@ namespace
         return 0;
     }
 
-    bool SameSide(const Arcane::Physics2D::ContactSide& a, const Arcane::Physics2D::ContactSide& b)
+    bool SameSide(const Arcane::ContactSide2D& a, const Arcane::ContactSide2D& b)
     {
         return a.entity == b.entity && a.guid == b.guid && a.fixture == b.fixture;
     }
@@ -119,11 +119,11 @@ namespace
     // next step, so a zero-step check has to keep the bytes itself.
     struct EventCopy
     {
-        std::vector<Arcane::Physics2D::ContactBegin> contactBegin;
-        std::vector<Arcane::Physics2D::ContactEnd>   contactEnd;
-        std::vector<Arcane::Physics2D::ContactHit>   contactHit;
-        std::vector<Arcane::Physics2D::SensorBegin>  sensorBegin;
-        std::vector<Arcane::Physics2D::SensorEnd>    sensorEnd;
+        std::vector<Arcane::ContactBegin2D> contactBegin;
+        std::vector<Arcane::ContactEnd2D>   contactEnd;
+        std::vector<Arcane::ContactHit2D>   contactHit;
+        std::vector<Arcane::SensorBegin2D>  sensorBegin;
+        std::vector<Arcane::SensorEnd2D>    sensorEnd;
 
         bool operator==(const EventCopy& o) const
         {
@@ -139,8 +139,8 @@ namespace
                     return false;
             for (std::size_t i = 0; i < contactHit.size(); ++i)
             {
-                const Arcane::Physics2D::ContactHit& x = contactHit[i];
-                const Arcane::Physics2D::ContactHit& y = o.contactHit[i];
+                const Arcane::ContactHit2D& x = contactHit[i];
+                const Arcane::ContactHit2D& y = o.contactHit[i];
                 if (!SameSide(x.a, y.a) || !SameSide(x.b, y.b) || !SameVec(x.point, y.point)
                     || !SameVec(x.normal, y.normal) || x.approachSpeed != y.approachSpeed)
                     return false;
@@ -157,7 +157,7 @@ namespace
         }
     };
 
-    EventCopy CopyEvents(const Arcane::Physics2D::Events& e)
+    EventCopy CopyEvents(const Arcane::PhysicsEvents2D& e)
     {
         return {
             { e.contactBegin.begin(), e.contactBegin.end() },
@@ -168,7 +168,7 @@ namespace
         };
     }
 
-    void RequireFrameEmpty(const Arcane::Physics2D::Events& e)
+    void RequireFrameEmpty(const Arcane::PhysicsEvents2D& e)
     {
         REQUIRE(e.contactBegin.empty());
         REQUIRE(e.contactEnd.empty());
@@ -179,7 +179,7 @@ namespace
 
     void RequireBothWindowsEmpty(Arcane::Runtime& rt)
     {
-        REQUIRE(rt.Registry().GetResource<Arcane::Physics2D::World>() != nullptr);
+        REQUIRE(rt.Registry().GetResource<Arcane::PhysicsWorld2D>() != nullptr);
         RequireFrameEmpty(Res(rt).StepEvents());
         RequireFrameEmpty(Res(rt).FrameEvents());
     }
@@ -217,7 +217,7 @@ namespace
         steps.insert(steps.end(), src.size(), step);
     }
 
-    void AppendStamped(StampedEvents& log, const Arcane::Physics2D::Events& ev, int step)
+    void AppendStamped(StampedEvents& log, const Arcane::PhysicsEvents2D& ev, int step)
     {
         const EventCopy c = CopyEvents(ev);
         Take(log.events.contactBegin, log.beginStep, c.contactBegin, step);
@@ -227,7 +227,7 @@ namespace
         Take(log.events.sensorEnd, log.sensorEndStep, c.sensorEnd, step);
     }
 
-    void RequireSide(const Arcane::Physics2D::ContactSide& a, const Arcane::Physics2D::ContactSide& b)
+    void RequireSide(const Arcane::ContactSide2D& a, const Arcane::ContactSide2D& b)
     {
         REQUIRE(a.entity == b.entity);
         REQUIRE(a.guid == b.guid);
@@ -254,8 +254,8 @@ namespace
         for (std::size_t i = 0; i < got.contactHit.size(); ++i)
         {
             INFO("contactHit[" << i << "]");
-            const Arcane::Physics2D::ContactHit& x = got.contactHit[i];
-            const Arcane::Physics2D::ContactHit& y = oracle.contactHit[i];
+            const Arcane::ContactHit2D& x = got.contactHit[i];
+            const Arcane::ContactHit2D& y = oracle.contactHit[i];
             RequireSide(x.a, y.a);
             RequireSide(x.b, y.b);
             REQUIRE(std::bit_cast<std::uint32_t>(x.point.x) == std::bit_cast<std::uint32_t>(y.point.x));
@@ -384,7 +384,7 @@ TEST_CASE("FrameEvents matches the per-step oracle in order", "[physics][events]
         frameRt.Loop().Advance(expect * frameStep);
         const std::uint64_t after = frameRt.Registry().GetResource<Arcane::Time>()->fixedStep;
         REQUIRE(after - before == static_cast<std::uint64_t>(expect));
-        const Arcane::Physics2D::Events ev = Res(frameRt).FrameEvents();
+        const Arcane::PhysicsEvents2D ev = Res(frameRt).FrameEvents();
         // The slice is the events this frame holds. Each one must name a
         // fixedStep inside [before + 1, after], the steps this Advance took.
         std::vector<int> frameSteps;
@@ -425,7 +425,7 @@ TEST_CASE("Re-minting and restoring clear both windows", "[physics][events]")
     auto bytes = rt.SnapshotRegistry();                          // RuntimeTest's RestoreRegistry path
     REQUIRE(bytes.IsOk());
     REQUIRE(rt.RestoreRegistry(*bytes.GetValue()));
-    CHECK(rt.Registry().GetResource<Arcane::Physics2D::World>() == nullptr);   // windows gone with the world
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);   // windows gone with the world
     rt.EnsurePhysics();
     CHECK(Res(rt).StepEvents().contactBegin.empty());
     CHECK(Res(rt).FrameEvents().contactBegin.empty());
@@ -442,16 +442,16 @@ TEST_CASE("Re-minting and restoring clear both windows", "[physics][events]")
     rt.Loop().Advance(0.0);
     RequireFrameEmpty(Res(rt).FrameEvents());
 
-    // Gravity edit on the scene root re-mints (RuntimeTest's Arcane::Physics2D::SceneSettings
+    // Gravity edit on the scene root re-mints (RuntimeTest's Arcane::PhysicsSettings2D
     // pattern). The replacement resource's windows start empty.
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity root = reg.CreateEntity();
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
-    Arcane::Physics2D::SceneSettings ps; ps.gravity = glm::vec2(0.0f, 2.0f);
-    reg.AddComponent<Arcane::Physics2D::SceneSettings>(root, ps);
-    const Manifold2D::Physics::PhysicsWorld* before = Arcane::Physics2D::Detail::Access::Solver(Res(rt));
+    Arcane::PhysicsSettings2D ps; ps.gravity = glm::vec2(0.0f, 2.0f);
+    reg.AddComponent<Arcane::PhysicsSettings2D>(root, ps);
+    const Manifold2D::Physics::PhysicsWorld* before = Arcane::Detail::Physics2D::Access::Solver(Res(rt));
     rt.EnsurePhysics();
-    CHECK(Arcane::Physics2D::Detail::Access::Solver(Res(rt)) != before);
+    CHECK(Arcane::Detail::Physics2D::Access::Solver(Res(rt)) != before);
     CHECK(Res(rt).StepEvents().contactBegin.empty());
     CHECK(Res(rt).FrameEvents().contactBegin.empty());
 }
@@ -470,13 +470,13 @@ TEST_CASE("Play, Stop and scene open clear both windows", "[physics][events]")
 
         Arcane::Editor::PlaySession play;
         REQUIRE(play.Play(rt));
-        CHECK(rt.Registry().GetResource<Arcane::Physics2D::World>() == nullptr);
+        CHECK(rt.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
         rt.EnsurePhysics();
         RequireBothWindowsEmpty(rt);
 
         RequireContactBegin(rt);
         REQUIRE(play.Stop(rt));
-        CHECK(rt.Registry().GetResource<Arcane::Physics2D::World>() == nullptr);
+        CHECK(rt.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
         rt.EnsurePhysics();
         RequireBothWindowsEmpty(rt);
     }
@@ -485,14 +485,14 @@ TEST_CASE("Play, Stop and scene open clear both windows", "[physics][events]")
     Scene(opened);
     RequireContactBegin(opened);
     opened.ResetRegistry();
-    CHECK(opened.Registry().GetResource<Arcane::Physics2D::World>() == nullptr);
+    CHECK(opened.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
     opened.EnsurePhysics();
     RequireBothWindowsEmpty(opened);
 }
 
 // PluginHost::ForceReload is the headless module-reload seam (ResourceSwapTest,
 // PluginHostTest). Teardown resets every attached registry before LoadState
-// restores one that cannot carry Arcane::Physics2D::World.
+// restores one that cannot carry Arcane::PhysicsWorld2D.
 TEST_CASE("a module hot reload clears both windows", "[physics][events]")
 {
     const std::filesystem::path dll = "PhysicsEventsReload.dll";
@@ -509,7 +509,7 @@ TEST_CASE("a module hot reload clears both windows", "[physics][events]")
     RequireContactBegin(rt);
 
     REQUIRE(host.ForceReload());
-    CHECK(rt.Registry().GetResource<Arcane::Physics2D::World>() == nullptr);
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
     rt.EnsurePhysics();
     RequireBothWindowsEmpty(rt);
 
@@ -517,7 +517,7 @@ TEST_CASE("a module hot reload clears both windows", "[physics][events]")
     std::filesystem::remove(dll, ec);
 }
 
-TEST_CASE("the frame hook tolerates a registry without Arcane::Physics2D::World", "[physics][events]")
+TEST_CASE("the frame hook tolerates a registry without Arcane::PhysicsWorld2D", "[physics][events]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Loop().Advance(kFixed);                        // no EnsurePhysics: the hook finds nothing

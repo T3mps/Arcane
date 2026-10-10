@@ -6,7 +6,7 @@
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>        // VerifySharedTypeContext / GameModule / PluginModules / BootScene
-#include <Arcane/Scene/PhysicsSystem.hpp>        // Arcane::Physics2D::System (systems.hasPhysics)
+#include <Arcane/Scene/PhysicsSystem.hpp>        // Arcane::PhysicsSystem2D (systems.hasPhysics)
 #include <Arcane/Scene/TransformSystems.hpp>     // Arcane::TransformPropagationSystem (systems.hasPropagation)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -225,7 +225,7 @@ namespace Arcane::Server
         rep.fixedUpdate = m_runtime->Schedulers().fixedUpdate.Size();
         rep.update      = m_runtime->Schedulers().update.Size();
         rep.render      = m_runtime->Schedulers().render.Size();
-        rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::Physics2D::System>();
+        rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>();
         rep.hasPropagation = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>();
         rep.hasRenderSubmission = false;   // by construction: no ClientRuntime exists in this process
         rep.clientAttached      = m_runtime->Client() != nullptr;

@@ -12,7 +12,7 @@
 // their behaviour.
 //
 // THE SLACK: WorldBounds is the fixed-step pose; the sprite sweep renders a
-// pose interpolated toward it (Arcane::Physics2D::InterpBuffer), so a fast sprite at the
+// pose interpolated toward it (Arcane::PhysicsInterpBuffer2D), so a fast sprite at the
 // screen edge can sit a fraction of one step outside its box. The frustum is
 // widened by VisibilitySlackMeters() -- render.cull.frustumSlackMeters
 // (RenderLookSettings.hpp; Live, read once per pass) -- before every test.

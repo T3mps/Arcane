@@ -18,7 +18,7 @@
           },
           "name": "PhysicsScene"
         },
-        "Arcane::Physics2D::SceneSettings": {
+        "Arcane::PhysicsSettings2D": {
           "gravity": [
             0.0,
             -9.8100004196167
@@ -48,15 +48,7 @@
     },
     {
       "components": {
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216702,
-            "lo": 13316602907131203922
-          },
-          "name": "Ground"
-        },
-        "Arcane::Physics2D::BodyRef": null,
-        "Arcane::Physics2D::Collider": {
+        "Arcane::Collider2D": {
           "fixtures": [
             {
               "categoryBits": 1,
@@ -81,7 +73,15 @@
             }
           ]
         },
-        "Arcane::Physics2D::RigidBody": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216702,
+            "lo": 13316602907131203922
+          },
+          "name": "Ground"
+        },
+        "Arcane::PhysicsBodyRef2D": null,
+        "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": false,
           "linearDamping": 0.0,
@@ -136,15 +136,7 @@
     },
     {
       "components": {
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216703,
-            "lo": 13316602907131203923
-          },
-          "name": "Crate"
-        },
-        "Arcane::Physics2D::BodyRef": null,
-        "Arcane::Physics2D::Collider": {
+        "Arcane::Collider2D": {
           "fixtures": [
             {
               "categoryBits": 1,
@@ -169,7 +161,15 @@
             }
           ]
         },
-        "Arcane::Physics2D::RigidBody": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216703,
+            "lo": 13316602907131203923
+          },
+          "name": "Crate"
+        },
+        "Arcane::PhysicsBodyRef2D": null,
+        "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": true,
           "linearDamping": 0.0,
@@ -232,15 +232,7 @@
     },
     {
       "components": {
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216704,
-            "lo": 13316602907131203924
-          },
-          "name": "Ball"
-        },
-        "Arcane::Physics2D::BodyRef": null,
-        "Arcane::Physics2D::Collider": {
+        "Arcane::Collider2D": {
           "fixtures": [
             {
               "categoryBits": 1,
@@ -265,7 +257,15 @@
             }
           ]
         },
-        "Arcane::Physics2D::RigidBody": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216704,
+            "lo": 13316602907131203924
+          },
+          "name": "Ball"
+        },
+        "Arcane::PhysicsBodyRef2D": null,
+        "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": false,
           "linearDamping": 0.0,
@@ -320,15 +320,7 @@
     },
     {
       "components": {
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216705,
-            "lo": 13316602907131203925
-          },
-          "name": "Pill"
-        },
-        "Arcane::Physics2D::BodyRef": null,
-        "Arcane::Physics2D::Collider": {
+        "Arcane::Collider2D": {
           "fixtures": [
             {
               "categoryBits": 1,
@@ -353,7 +345,15 @@
             }
           ]
         },
-        "Arcane::Physics2D::RigidBody": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216705,
+            "lo": 13316602907131203925
+          },
+          "name": "Pill"
+        },
+        "Arcane::PhysicsBodyRef2D": null,
+        "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": true,
           "linearDamping": 0.0,

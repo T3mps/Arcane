@@ -16,9 +16,9 @@
 
 #include <Arcane/Config/Settings.hpp>
 
-namespace Arcane::Physics2D
+namespace Arcane
 {
-    struct DebugSettings
+    struct PhysicsDebugSettings2D
     {
         float lineThickness        = 1.0f;    // canvas px, Line primitives
         float contactMarkerSize    = 0.03f;   // m, contact-midpoint disc radius
@@ -30,7 +30,7 @@ namespace Arcane::Physics2D
         float manifoldPointPx      = 3.0f;    // canvas px
     };
 
-    struct DebugDrawSettings
+    struct PhysicsDebugDrawSettings2D
     {
         bool contacts     = true;
         bool aabbs        = false;
@@ -39,7 +39,7 @@ namespace Arcane::Physics2D
         bool orientations = true;
     };
 
-    struct DebugColorSettings
+    struct PhysicsDebugColorSettings2D
     {
         CVarColor kinematic     { 0.2f, 1.0f, 0.4f, 1.0f };
         CVarColor staticBody    { 0.4f, 0.7f, 1.0f, 1.0f };      // cvar debug.physics.color.static
@@ -82,7 +82,7 @@ namespace Arcane::Physics2D
     };
 
     // The narrowphase-inspector world overlay (DrawNarrowphaseWorldOverlay).
-    struct DebugTraceSettings
+    struct PhysicsDebugTraceSettings2D
     {
         float traceLineThickness = 1.5f;   // canvas px; cvar debug.physics.trace.lineThickness (the
                                            // member name keeps it apart from the inherited overlay lineThickness)
@@ -92,7 +92,7 @@ namespace Arcane::Physics2D
 
     // Fine styling shared by both overlays (DrawPhysicsDebug and
     // DrawNarrowphaseWorldOverlay). Px values are canvas px.
-    struct DebugStyleSettings
+    struct PhysicsDebugStyleSettings2D
     {
         float arrowShortLen         = 12.0f;  // px; a shorter shaft gets a head of half its length
         float arrowHeadLen          = 6.0f;   // px, arrow head length along the shaft
@@ -107,137 +107,137 @@ namespace Arcane::Physics2D
         float contactDiscRadius     = 3.0f;   // px, each manifold contact-point disc
     };
 
-    ARC_REFLECT_TYPE(DebugSettings)
+    ARC_REFLECT_TYPE(PhysicsDebugSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
-        ARC_REFLECT_FIELD(DebugSettings, lineThickness)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, lineThickness)
             ARC_REFLECT_ATTR(Range, 0.5, 8.0)
             ARC_REFLECT_ATTR(Tooltip, "Line thickness (px) of the physics debug overlay.")
-        ARC_REFLECT_FIELD(DebugSettings, contactMarkerSize)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, contactMarkerSize)
             ARC_REFLECT_ATTR(Range, 0.001, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "Radius (m) of the disc marking each contact pair's midpoint.")
-        ARC_REFLECT_FIELD(DebugSettings, velocityScale)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, velocityScale)
             ARC_REFLECT_ATTR(Range, 0.0, 5.0)
             ARC_REFLECT_ATTR(Tooltip, "Seconds of look-ahead drawn by the velocity ray (length = speed x this).")
-        ARC_REFLECT_FIELD(DebugSettings, velocityMinSpeed)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, velocityMinSpeed)
             ARC_REFLECT_ATTR(Range, 0.0, 10.0)
             ARC_REFLECT_ATTR(Tooltip, "Slowest speed (m/s) that still draws a velocity ray; slower is treated as jitter.")
-        ARC_REFLECT_FIELD(DebugSettings, comMarkerSize)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, comMarkerSize)
             ARC_REFLECT_ATTR(Range, 0.001, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "Half-length (m) of each arm of the centre-of-mass cross.")
-        ARC_REFLECT_FIELD(DebugSettings, orientationTickLen)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, orientationTickLen)
             ARC_REFLECT_ATTR(Range, 0.01, 5.0)
             ARC_REFLECT_ATTR(Tooltip, "Length (m) of the tick along each body's local +X.")
-        ARC_REFLECT_FIELD(DebugSettings, manifoldNormalLength)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, manifoldNormalLength)
             ARC_REFLECT_ATTR(Range, 0.01, 100.0)
             ARC_REFLECT_ATTR(Tooltip, "Length (world units) of each manifold point's normal arrow.")
-        ARC_REFLECT_FIELD(DebugSettings, manifoldPointPx)
+        ARC_REFLECT_FIELD(PhysicsDebugSettings2D, manifoldPointPx)
             ARC_REFLECT_ATTR(Range, 1.0, 16.0)
             ARC_REFLECT_ATTR(Tooltip, "Radius (px) of the disc drawn at each manifold contact point.")
     ARC_END_REFLECT_TYPE()
 
-    ARC_REFLECT_TYPE(DebugDrawSettings)
+    ARC_REFLECT_TYPE(PhysicsDebugDrawSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics.draw", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
-        ARC_REFLECT_FIELD(DebugDrawSettings, contacts)
+        ARC_REFLECT_FIELD(PhysicsDebugDrawSettings2D, contacts)
             ARC_REFLECT_ATTR(Tooltip, "Draw a line between the centres of every touching body pair.")
-        ARC_REFLECT_FIELD(DebugDrawSettings, aabbs)
+        ARC_REFLECT_FIELD(PhysicsDebugDrawSettings2D, aabbs)
             ARC_REFLECT_ATTR(Tooltip, "Outline every body's bounding box (broadphase debugging).")
-        ARC_REFLECT_FIELD(DebugDrawSettings, velocities)
+        ARC_REFLECT_FIELD(PhysicsDebugDrawSettings2D, velocities)
             ARC_REFLECT_ATTR(Tooltip, "Draw a velocity ray from each awake dynamic body.")
-        ARC_REFLECT_FIELD(DebugDrawSettings, comMarkers)
+        ARC_REFLECT_FIELD(PhysicsDebugDrawSettings2D, comMarkers)
             ARC_REFLECT_ATTR(Tooltip, "Mark each dynamic body's centre of mass with a cross.")
-        ARC_REFLECT_FIELD(DebugDrawSettings, orientations)
+        ARC_REFLECT_FIELD(PhysicsDebugDrawSettings2D, orientations)
             ARC_REFLECT_ATTR(Tooltip, "Draw a tick along each body's local +X so rotation shows, even on circles.")
     ARC_END_REFLECT_TYPE()
 
-    ARC_REFLECT_TYPE(DebugColorSettings)
+    ARC_REFLECT_TYPE(PhysicsDebugColorSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics.color", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
-        ARC_REFLECT_FIELD(DebugColorSettings, kinematic)     ARC_REFLECT_ATTR(Tooltip, "Outline colour of kinematic bodies.")
-        ARC_REFLECT_FIELD_NAMED(DebugColorSettings, staticBody, "static") ARC_REFLECT_ATTR(Tooltip, "Outline colour of static bodies.")
-        ARC_REFLECT_FIELD(DebugColorSettings, sensor)        ARC_REFLECT_ATTR(Tooltip, "Outline colour of sensor bodies.")
-        ARC_REFLECT_FIELD(DebugColorSettings, contact)       ARC_REFLECT_ATTR(Tooltip, "Colour of the contact-pair lines and midpoint discs.")
-        ARC_REFLECT_FIELD(DebugColorSettings, aabb)          ARC_REFLECT_ATTR(Tooltip, "Colour of the per-body bounding-box outlines.")
-        ARC_REFLECT_FIELD(DebugColorSettings, velocity)      ARC_REFLECT_ATTR(Tooltip, "Colour of the velocity rays.")
-        ARC_REFLECT_FIELD(DebugColorSettings, com)           ARC_REFLECT_ATTR(Tooltip, "Colour of the centre-of-mass crosses.")
-        ARC_REFLECT_FIELD(DebugColorSettings, orient)        ARC_REFLECT_ATTR(Tooltip, "Colour of the orientation ticks.")
-        ARC_REFLECT_FIELD(DebugColorSettings, treeTight)     ARC_REFLECT_ATTR(Tooltip, "Colour of the broadphase tree's tight leaf boxes.")
-        ARC_REFLECT_FIELD(DebugColorSettings, treeFat)       ARC_REFLECT_ATTR(Tooltip, "Colour of the broadphase tree's fat (enlarged) leaf boxes.")
-        ARC_REFLECT_FIELD(DebugColorSettings, treePair)      ARC_REFLECT_ATTR(Tooltip, "Colour of the links between broadphase candidate pairs.")
-        ARC_REFLECT_FIELD(DebugColorSettings, staticGrid)    ARC_REFLECT_ATTR(Tooltip, "Colour of the static-body tree overlay.")
-        ARC_REFLECT_FIELD(DebugColorSettings, residencyGrid) ARC_REFLECT_ATTR(Tooltip, "Colour of the occupied residency-grid cells.")
-        ARC_REFLECT_FIELD(DebugColorSettings, traceShapeB)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: outline colour of the contact partner.")
-        ARC_REFLECT_FIELD(DebugColorSettings, traceAxis)     ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the candidate separating axes.")
-        ARC_REFLECT_FIELD(DebugColorSettings, traceAxisHi)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the chosen axis.")
-        ARC_REFLECT_FIELD(DebugColorSettings, traceNormal)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the contact normal arrow.")
-        ARC_REFLECT_FIELD(DebugColorSettings, tracePoint)    ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the support and contact points.")
-        ARC_REFLECT_FIELD(DebugColorSettings, subject)       ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: highlight colour of the inspected shape.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island0)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 0 (dynamic bodies are tinted by island).")
-        ARC_REFLECT_FIELD(DebugColorSettings, island1)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 1.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island2)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 2.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island3)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 3.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island4)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 4.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island5)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 5.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island6)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 6.")
-        ARC_REFLECT_FIELD(DebugColorSettings, island7)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 7.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase0)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for a separated (or unknown) narrowphase kind.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase1)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for circle-circle contacts.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase2)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for circle-polygon contacts.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase3)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for capsule contacts.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase4)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for polygon-polygon (SAT) contacts.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase5)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for deep overlaps resolved by EPA.")
-        ARC_REFLECT_FIELD(DebugColorSettings, narrowphase6)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for deep overlaps resolved by MPR.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, kinematic)     ARC_REFLECT_ATTR(Tooltip, "Outline colour of kinematic bodies.")
+        ARC_REFLECT_FIELD_NAMED(PhysicsDebugColorSettings2D, staticBody, "static") ARC_REFLECT_ATTR(Tooltip, "Outline colour of static bodies.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, sensor)        ARC_REFLECT_ATTR(Tooltip, "Outline colour of sensor bodies.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, contact)       ARC_REFLECT_ATTR(Tooltip, "Colour of the contact-pair lines and midpoint discs.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, aabb)          ARC_REFLECT_ATTR(Tooltip, "Colour of the per-body bounding-box outlines.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, velocity)      ARC_REFLECT_ATTR(Tooltip, "Colour of the velocity rays.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, com)           ARC_REFLECT_ATTR(Tooltip, "Colour of the centre-of-mass crosses.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, orient)        ARC_REFLECT_ATTR(Tooltip, "Colour of the orientation ticks.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, treeTight)     ARC_REFLECT_ATTR(Tooltip, "Colour of the broadphase tree's tight leaf boxes.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, treeFat)       ARC_REFLECT_ATTR(Tooltip, "Colour of the broadphase tree's fat (enlarged) leaf boxes.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, treePair)      ARC_REFLECT_ATTR(Tooltip, "Colour of the links between broadphase candidate pairs.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, staticGrid)    ARC_REFLECT_ATTR(Tooltip, "Colour of the static-body tree overlay.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, residencyGrid) ARC_REFLECT_ATTR(Tooltip, "Colour of the occupied residency-grid cells.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, traceShapeB)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: outline colour of the contact partner.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, traceAxis)     ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the candidate separating axes.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, traceAxisHi)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the chosen axis.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, traceNormal)   ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the contact normal arrow.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, tracePoint)    ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: colour of the support and contact points.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, subject)       ARC_REFLECT_ATTR(Tooltip, "Narrowphase inspector: highlight colour of the inspected shape.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island0)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 0 (dynamic bodies are tinted by island).")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island1)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 1.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island2)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 2.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island3)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 3.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island4)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 4.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island5)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 5.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island6)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 6.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, island7)       ARC_REFLECT_ATTR(Tooltip, "Island palette, entry 7.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase0)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for a separated (or unknown) narrowphase kind.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase1)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for circle-circle contacts.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase2)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for circle-polygon contacts.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase3)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for capsule contacts.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase4)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for polygon-polygon (SAT) contacts.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase5)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for deep overlaps resolved by EPA.")
+        ARC_REFLECT_FIELD(PhysicsDebugColorSettings2D, narrowphase6)  ARC_REFLECT_ATTR(Tooltip, "Manifold colour for deep overlaps resolved by MPR.")
     ARC_END_REFLECT_TYPE()
 
-    ARC_REFLECT_TYPE(DebugTraceSettings)
+    ARC_REFLECT_TYPE(PhysicsDebugTraceSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics.trace", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
-        ARC_REFLECT_FIELD_NAMED(DebugTraceSettings, traceLineThickness, "lineThickness")
+        ARC_REFLECT_FIELD_NAMED(PhysicsDebugTraceSettings2D, traceLineThickness, "lineThickness")
             ARC_REFLECT_ATTR(Range, 0.5, 8.0)
             ARC_REFLECT_ATTR(Tooltip, "Line thickness (px) of the narrowphase inspector's world overlay.")
-        ARC_REFLECT_FIELD(DebugTraceSettings, emphasis)
+        ARC_REFLECT_FIELD(PhysicsDebugTraceSettings2D, emphasis)
             ARC_REFLECT_ATTR(Range, 0.0, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "Opacity of the inspector overlay when no contact is singled out (1 = full).")
-        ARC_REFLECT_FIELD(DebugTraceSettings, normalLength)
+        ARC_REFLECT_FIELD(PhysicsDebugTraceSettings2D, normalLength)
             ARC_REFLECT_ATTR(Range, 0.01, 100.0)
             ARC_REFLECT_ATTR(Tooltip, "Length (world units) of the inspector's contact normal arrow.")
     ARC_END_REFLECT_TYPE()
 
-    ARC_REFLECT_TYPE(DebugStyleSettings)
+    ARC_REFLECT_TYPE(PhysicsDebugStyleSettings2D)
         ARC_REFLECT_TYPE_ATTR(Settings, "debug.physics.style", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
         ARC_REFLECT_TYPE_ATTR(Flags, CVarFlags::Dev)
-        ARC_REFLECT_FIELD(DebugStyleSettings, arrowShortLen)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, arrowShortLen)
             ARC_REFLECT_ATTR(Range, 0.0, 64.0)
             ARC_REFLECT_ATTR(Tooltip, "Arrows shorter than this (px) get a head half their length instead of the full head.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, arrowHeadLen)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, arrowHeadLen)
             ARC_REFLECT_ATTR(Range, 0.0, 32.0)
             ARC_REFLECT_ATTR(Tooltip, "Length (px) of an arrow head along its shaft.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, arrowHeadSpread)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, arrowHeadSpread)
             ARC_REFLECT_ATTR(Range, 0.0, 2.0)
             ARC_REFLECT_ATTR(Tooltip, "Half-width of an arrow head as a fraction of its length.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, sleepingDim)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, sleepingDim)
             ARC_REFLECT_ATTR(Range, 0.0, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "Brightness of sleeping dynamic bodies (1 = same as awake).")
-        ARC_REFLECT_FIELD(DebugStyleSettings, emphasisFloor)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, emphasisFloor)
             ARC_REFLECT_ATTR(Range, 0.0, 1.0)
             ARC_REFLECT_ATTR(Tooltip, "Lowest opacity the narrowphase inspector dims a non-selected contact to.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, subjectThicknessScale)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, subjectThicknessScale)
             ARC_REFLECT_ATTR(Range, 0.5, 4.0)
             ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the inspected shape's outline on the selected contact.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, axisHiThicknessScale)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, axisHiThicknessScale)
             ARC_REFLECT_ATTR(Range, 0.5, 4.0)
             ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the chosen (or stepped) separating axis.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, normalThicknessScale)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, normalThicknessScale)
             ARC_REFLECT_ATTR(Range, 0.5, 4.0)
             ARC_REFLECT_ATTR(Tooltip, "Line-thickness multiplier for the inspector's contact normal arrow.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, axisHalfLenPx)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, axisHalfLenPx)
             ARC_REFLECT_ATTR(Range, 1.0, 500.0)
             ARC_REFLECT_ATTR(Tooltip, "Half-length (px) of each separating-axis segment the inspector draws.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, anchorDiscRadius)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, anchorDiscRadius)
             ARC_REFLECT_ATTR(Range, 0.5, 32.0)
             ARC_REFLECT_ATTR(Tooltip, "Radius (px) of the ring marking the inspected contact's anchor.")
-        ARC_REFLECT_FIELD(DebugStyleSettings, contactDiscRadius)
+        ARC_REFLECT_FIELD(PhysicsDebugStyleSettings2D, contactDiscRadius)
             ARC_REFLECT_ATTR(Range, 0.5, 32.0)
             ARC_REFLECT_ATTR(Tooltip, "Radius (px) of each manifold contact-point disc in the inspector.")
     ARC_END_REFLECT_TYPE()

@@ -1,5 +1,5 @@
-// Namespace facades (spec 2026-10-10): Arcane::ECS is the only spelling of the
-// ECS vocabulary. Each alias is the Astra type. The flat Arcane:: names are gone.
+// Flat gameplay API (spec 2026-10-10): the ECS vocabulary is Arcane:: only.
+// Each alias is the Astra type. Arcane::ECS does not exist.
 //
 // Absence is a compile-time probe. A missing qualified name is not a substitution
 // failure in standard C++, so the probe is MSVC's __if_exists (the gate compiler).
@@ -34,92 +34,92 @@ namespace
 #endif
 }
 
-TEST_CASE("Arcane::ECS aliases are the Astra types", "[namespaces]")
+TEST_CASE("flat Arcane ECS aliases are the Astra types", "[namespaces]")
 {
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Registry, Astra::Registry>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Entity, Astra::Entity>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::View<C>, Astra::View<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Res<C>, Astra::Res<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::ResMut<C>, Astra::ResMut<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Commands, Astra::Commands>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::SystemTraits<Arcane::ECS::Before<S>>, Astra::SystemTraits<Astra::Before<S>>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::After<S>, Astra::After<S>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::AmbiguousWith<S>, Astra::AmbiguousWith<S>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Reads<C>, Astra::Reads<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Writes<C>, Astra::Writes<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Exclusive, Astra::Exclusive>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::ReadsResources<C>, Astra::ReadsResources<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::WritesResources<C>, Astra::WritesResources<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Not<C>, Astra::Not<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::With<C>, Astra::With<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Changed<C>, Astra::Changed<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Added<C>, Astra::Added<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Optional<C>, Astra::Optional<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Any<C>, Astra::Any<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::OneOf<C>, Astra::OneOf<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::IncludeDisabled<C>, Astra::IncludeDisabled<C>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::BinaryWriter, Astra::BinaryWriter>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::BinaryReader, Astra::BinaryReader>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::ComponentModule, Astra::ComponentModule>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::ComponentRegistry, Astra::ComponentRegistry>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::TypeContext, Astra::TypeContext>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::SystemScheduler, Astra::SystemScheduler>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Tick, Astra::Tick>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::Result<int, Arcane::ECS::SerializationError>,
+    STATIC_REQUIRE(std::is_same_v<Arcane::Registry, Astra::Registry>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Entity, Astra::Entity>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::View<C>, Astra::View<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Res<C>, Astra::Res<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::ResMut<C>, Astra::ResMut<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Commands, Astra::Commands>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::SystemTraits<Arcane::Before<S>>, Astra::SystemTraits<Astra::Before<S>>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::After<S>, Astra::After<S>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::AmbiguousWith<S>, Astra::AmbiguousWith<S>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Reads<C>, Astra::Reads<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Writes<C>, Astra::Writes<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Exclusive, Astra::Exclusive>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::ReadsResources<C>, Astra::ReadsResources<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::WritesResources<C>, Astra::WritesResources<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Not<C>, Astra::Not<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::With<C>, Astra::With<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Changed<C>, Astra::Changed<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Added<C>, Astra::Added<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Optional<C>, Astra::Optional<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Any<C>, Astra::Any<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::OneOf<C>, Astra::OneOf<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::IncludeDisabled<C>, Astra::IncludeDisabled<C>>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::BinaryWriter, Astra::BinaryWriter>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::BinaryReader, Astra::BinaryReader>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::ComponentModule, Astra::ComponentModule>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::ComponentRegistry, Astra::ComponentRegistry>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::TypeContext, Astra::TypeContext>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::SystemScheduler, Astra::SystemScheduler>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Tick, Astra::Tick>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::Result<int, Arcane::SerializationError>,
                                   Astra::Result<int, Astra::SerializationError>>);
-    STATIC_REQUIRE(std::is_same_v<Arcane::ECS::SerializationError, Astra::SerializationError>);
+    STATIC_REQUIRE(std::is_same_v<Arcane::SerializationError, Astra::SerializationError>);
     // Mosaic stays at Arcane:: until its own facade (spec s3).
     STATIC_REQUIRE(std::is_same_v<Arcane::IWorkScheduler, Mosaic::IWorkScheduler>);
 }
 
 #if defined(_MSC_VER) && !defined(__clang__)
-TEST_CASE("flat Arcane:: ECS prelude names no longer name anything", "[namespaces]")
+TEST_CASE("flat Arcane:: ECS prelude names are present", "[namespaces]")
 {
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Entity));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::View));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Not));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::With));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Changed));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Added));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Optional));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Any));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::OneOf));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::IncludeDisabled));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Res));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ResMut));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Commands));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::SystemTraits));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Before));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::After));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::AmbiguousWith));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Reads));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Writes));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ReadsResources));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::WritesResources));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Exclusive));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Tick));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Result));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::SerializationError));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::Registry));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ComponentRegistry));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::TypeContext));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::BinaryWriter));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::BinaryReader));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ComponentModule));
-    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::SystemScheduler));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Entity));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::View));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Not));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::With));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Changed));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Added));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Optional));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Any));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::OneOf));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::IncludeDisabled));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Res));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::ResMut));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Commands));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::SystemTraits));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Before));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::After));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::AmbiguousWith));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Reads));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Writes));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::ReadsResources));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::WritesResources));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Exclusive));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Tick));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Result));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::SerializationError));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::Registry));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::ComponentRegistry));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::TypeContext));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::BinaryWriter));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::BinaryReader));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::ComponentModule));
+    CHECK(NSFACADE_NAME_PRESENT(Arcane::SystemScheduler));
     CHECK(NSFACADE_NAME_PRESENT(Arcane::IWorkScheduler));
-    CHECK(NSFACADE_NAME_PRESENT(Arcane::ECS::Entity));
-    CHECK(NSFACADE_NAME_PRESENT(Arcane::ECS::Registry));
+    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ECS::Entity));
+    CHECK_FALSE(NSFACADE_NAME_PRESENT(Arcane::ECS::Registry));
 }
 #endif
 
 TEST_CASE("Physics2D game-facing types", "[namespaces]")
 {
-    STATIC_REQUIRE(std::is_class_v<Arcane::Physics2D::World>);
-    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::BodyType>);
-    STATIC_REQUIRE(std::is_enum_v<Arcane::Physics2D::ShapeKind>);
-    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::RigidBody::type), Arcane::Physics2D::BodyType>);
-    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Physics2D::Fixture::kind), Arcane::Physics2D::ShapeKind>);
+    STATIC_REQUIRE(std::is_class_v<Arcane::PhysicsWorld2D>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::BodyType2D>);
+    STATIC_REQUIRE(std::is_enum_v<Arcane::ShapeKind2D>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::RigidBody2D::type), Arcane::BodyType2D>);
+    STATIC_REQUIRE(std::is_same_v<decltype(Arcane::Fixture2D::kind), Arcane::ShapeKind2D>);
     STATIC_REQUIRE(std::is_same_v<Arcane::EngineComponentRoster,
         Arcane::TypeList<
             Arcane::Transform,
@@ -130,17 +130,18 @@ TEST_CASE("Physics2D game-facing types", "[namespaces]")
             Arcane::Hidden,
             Arcane::Camera,
             Arcane::MeshRenderer,
-            Arcane::Physics2D::SceneSettings,
+            Arcane::PhysicsSettings2D,
             Arcane::WorldBounds,
-            Arcane::Physics2D::RigidBody,
-            Arcane::Physics2D::Collider,
-            Arcane::Physics2D::BodyRef>>);
+            Arcane::RigidBody2D,
+            Arcane::Collider2D,
+            Arcane::PhysicsBodyRef2D>>);
 }
 
-// SA4: the names that must not exist (PhysicsWorld, Body, BodyHandle, Phys,
-// the old flat physics types, and a game-side read of World::world) are one
-// translation unit each. scripts/namespace-compile-fail.ps1 compiles the
-// control and expects each forbidden TU to fail.
+// FA2: the names that must not exist (Arcane::ECS, Arcane::Physics2D,
+// Arcane::Phys, the unsuffixed physics types, and a game-side read of
+// PhysicsWorld2D::world) are one translation unit each.
+// scripts/namespace-compile-fail.ps1 compiles the control and expects each
+// forbidden TU to fail.
 TEST_CASE("forbidden namespace spellings fail to compile", "[namespaces]")
 {
     const auto script = Arcane::Test::FindReferenceProjectDir().parent_path()

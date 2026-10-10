@@ -12,7 +12,7 @@
 // ProcessContext and touches no ComponentRegistry; this class documents that
 // limit rather than enforcing it (there is nothing to enforce against).
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/EcsFwd.hpp>                 // Arcane::ECS::TypeContext (declared, aliased)
+#include <Arcane/EcsFwd.hpp>                 // Arcane::TypeContext (declared, aliased)
 #include <Arcane/Plugin/SystemFactory.hpp>   // SystemFactoryTable (a by-value member)
 #include <memory>
 namespace Arcane
@@ -20,7 +20,7 @@ namespace Arcane
     struct ProcessContextDesc
     {
         bool                 isDedicatedServerProcess = false;
-        Arcane::ECS::TypeContext* externalTypeContext      = nullptr;
+        Arcane::TypeContext* externalTypeContext      = nullptr;
     };
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -40,7 +40,7 @@ namespace Arcane
         ~ProcessContext();
         ProcessContext(const ProcessContext&) = delete;
         ProcessContext& operator=(const ProcessContext&) = delete;
-        ::Arcane::ECS::TypeContext& TypeContext() noexcept { return *m_context; }
+        ::Arcane::TypeContext& TypeContext() noexcept { return *m_context; }
         [[nodiscard]] bool  IsDedicatedServerProcess() const noexcept { return m_dedicated; }
         // The process's ONE system-factory table (spec s4). A game module registers
         // into it from OnInit (GameModule::RegisterSystem); every Runtime built on
@@ -48,8 +48,8 @@ namespace Arcane
         [[nodiscard]] SystemFactoryTable& SystemFactories() noexcept { return m_factories; }
     private:
         explicit ProcessContext(const ProcessContextDesc& desc);
-        std::unique_ptr<::Arcane::ECS::TypeContext> m_owned;    // null when adopting
-        ::Arcane::ECS::TypeContext*                 m_context = nullptr;
+        std::unique_ptr<::Arcane::TypeContext> m_owned;    // null when adopting
+        ::Arcane::TypeContext*                 m_context = nullptr;
         SystemFactoryTable                     m_factories;
         bool                                   m_dedicated = false;
         bool                                   m_slotHeld  = false;

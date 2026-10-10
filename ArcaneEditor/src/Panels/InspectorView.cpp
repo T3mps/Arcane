@@ -194,7 +194,7 @@ namespace Arcane::Editor
 
             // ONE immediate command per list op -- snapshot, mutate, snapshot,
             // push -- the AssetRef pick's exact shape (spec s7.3). The verb
-            // is the undo label's tail: "Edit Arcane::Physics2D::Collider.fixtures.add".
+            // is the undo label's tail: "Edit Arcane::Collider2D.fixtures.add".
             void ApplyListOp(const std::string& rawName, const Astra::FieldInfo& f, void* instance,
                              const PendingListOp& op)
             {

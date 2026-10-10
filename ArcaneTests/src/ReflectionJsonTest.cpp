@@ -214,7 +214,7 @@ namespace
 
 namespace
 {
-    // A vector of REFLECTED STRUCTS -- the shape Arcane::Physics2D::Collider::fixtures and
+    // A vector of REFLECTED STRUCTS -- the shape Arcane::Collider2D::fixtures and
     // MeshAssetData::slots have. Vectors of scalars stay unsupported (the
     // HasVector case below), which is deliberate: no roster field needs them.
     struct Slot { int id = 0; float weight = 1.0f; glm::vec2 offset{0.0f, 0.0f}; };

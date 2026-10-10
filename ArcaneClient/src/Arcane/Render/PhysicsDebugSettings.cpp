@@ -1,7 +1,7 @@
 #include <Arcane/Render/PhysicsDebugSettings.hpp>
 
-ARC_SETTINGS(Arcane::Physics2D::DebugSettings);
-ARC_SETTINGS(Arcane::Physics2D::DebugDrawSettings);
-ARC_SETTINGS(Arcane::Physics2D::DebugColorSettings);
-ARC_SETTINGS(Arcane::Physics2D::DebugTraceSettings);
-ARC_SETTINGS(Arcane::Physics2D::DebugStyleSettings);
+ARC_SETTINGS(Arcane::PhysicsDebugSettings2D);
+ARC_SETTINGS(Arcane::PhysicsDebugDrawSettings2D);
+ARC_SETTINGS(Arcane::PhysicsDebugColorSettings2D);
+ARC_SETTINGS(Arcane::PhysicsDebugTraceSettings2D);
+ARC_SETTINGS(Arcane::PhysicsDebugStyleSettings2D);

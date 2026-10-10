@@ -48,7 +48,7 @@ namespace Arcane::Editor
         // state in the Hierarchy for the same reason.
         return typeName == "Arcane::WorldTransform"
             || typeName == "Arcane::WorldBounds"      // F3 plan 1 T2: BoundsSystem's, never authored
-            || typeName == "Arcane::Physics2D::BodyRef"
+            || typeName == "Arcane::PhysicsBodyRef2D"
             || typeName == "Arcane::Hidden";
     }
 

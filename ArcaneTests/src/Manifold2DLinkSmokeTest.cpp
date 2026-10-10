@@ -30,7 +30,7 @@ TEST_CASE("Manifold2D vendored lib links and a body falls under gravity", "[mani
     // The VENDORED LIB's own default gravity is Box2D's (0, +10), which this
     // case leaves untouched -- so y increases. It is not a statement about the
     // engine's world, which is +Y up since F4 plan 1 T2 (the engine supplies
-    // gravity from Arcane::Physics2D::SceneSettings/physics.gravity, now (0, -9.81)). If the lib
+    // gravity from Arcane::PhysicsSettings2D/physics.gravity, now (0, -9.81)). If the lib
     // linked and stepped, it moved along its own gravity.
     CHECK(world.Position(body).y > y0);
 }

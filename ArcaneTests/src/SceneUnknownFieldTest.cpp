@@ -30,12 +30,12 @@ TEST_CASE("NoteUnknownField is true once per type and key", "[scene][serializati
 
 TEST_CASE("ReflectionJsonReader reports the keys it never consumed", "[scene][serialization]")
 {
-    Arcane::Physics2D::RigidBody body;
+    Arcane::RigidBody2D body;
     const nlohmann::json fields = { { "mass", 2.5 }, { "legacyKey", 1 } };
     Arcane::ReflectionJsonReader reader(fields);
     // The same walk ComponentRegistry's VisitFields<T> does (the descriptor's
     // visitFields slot): every serializable reflected field, in order.
-    const Astra::TypeMeta* meta = Astra::GetMeta(Astra::TypeID<Arcane::Physics2D::RigidBody>::Hash());
+    const Astra::TypeMeta* meta = Astra::GetMeta(Astra::TypeID<Arcane::RigidBody2D>::Hash());
     REQUIRE(meta != nullptr);
     for (const Astra::FieldInfo& field : meta->fields)
         if (field.IsSerializable())
@@ -50,39 +50,39 @@ TEST_CASE("an old-build scene with a removed field loads, keeps its values, and 
 {
     Astra::Registry authored;
     Arcane::RegisterSceneComponents(authored);
-    Arcane::Physics2D::RegisterComponents(authored);
+    Arcane::RegisterPhysicsComponents2D(authored);
     const Astra::Entity e = authored.CreateEntity();
-    Arcane::Physics2D::RigidBody rb;
+    Arcane::RigidBody2D rb;
     rb.mass = 3.25f;
-    authored.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
+    authored.AddComponent<Arcane::RigidBody2D>(e, rb);
     authored.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ e });   // SaveJson walks from the root
     nlohmann::json doc = Arcane::Scene::SaveJson(authored);
 
     // Simulate the OLD build: a key this build no longer reflects.
     bool injected = false;
     for (auto& entity : doc["entities"])
-        if (entity["components"].contains("Arcane::Physics2D::RigidBody"))
+        if (entity["components"].contains("Arcane::RigidBody2D"))
         {
-            entity["components"]["Arcane::Physics2D::RigidBody"]["staleFromOldBuild"] = 0.0;
+            entity["components"]["Arcane::RigidBody2D"]["staleFromOldBuild"] = 0.0;
             injected = true;
         }
     REQUIRE(injected);
 
     Astra::Registry loaded;
     Arcane::RegisterSceneComponents(loaded);
-    Arcane::Physics2D::RegisterComponents(loaded);
+    Arcane::RegisterPhysicsComponents2D(loaded);
     REQUIRE(Arcane::Scene::LoadJson(loaded, doc));
     float mass = 0.0f;
-    loaded.CreateView<Arcane::Physics2D::RigidBody>().ForEach([&](Astra::Entity, Arcane::Physics2D::RigidBody& b) { mass = b.mass; });
+    loaded.CreateView<Arcane::RigidBody2D>().ForEach([&](Astra::Entity, Arcane::RigidBody2D& b) { mass = b.mass; });
     CHECK(mass == 3.25f);
 
     const nlohmann::json resaved = Arcane::Scene::SaveJson(loaded);
     bool found = false;
     for (const auto& entity : resaved["entities"])
-        if (entity["components"].contains("Arcane::Physics2D::RigidBody"))
+        if (entity["components"].contains("Arcane::RigidBody2D"))
         {
             found = true;
-            CHECK_FALSE(entity["components"]["Arcane::Physics2D::RigidBody"].contains("staleFromOldBuild"));
+            CHECK_FALSE(entity["components"]["Arcane::RigidBody2D"].contains("staleFromOldBuild"));
         }
     CHECK(found);
 }

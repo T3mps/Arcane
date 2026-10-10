@@ -83,7 +83,7 @@ namespace Arcane
         // SECONDARY-WORLD ctor: build this world on an EXISTING ComponentRegistry --
         // the PRIMARY Runtime's (spec s4, the N-worlds-on-one-module invariant).
         //
-        // WHY IT EXISTS. A game module opens its Arcane::ECS::ComponentModule on the
+        // WHY IT EXISTS. A game module opens its Arcane::ComponentModule on the
         // primary Runtime's registry and nowhere else (GameModule.hpp), so that is
         // the only registry its component descriptors reach. A secondary world with
         // a registry of its own would resolve NONE of the module's types: scene
@@ -98,7 +98,7 @@ namespace Arcane
         // whose Components() is not the primary's, so the invariant is enforced at
         // the one place it can be.
         Runtime(ProcessContext& process, NetMode mode,
-                std::shared_ptr<::Arcane::ECS::ComponentRegistry> sharedComponents);
+                std::shared_ptr<::Arcane::ComponentRegistry> sharedComponents);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;
@@ -132,17 +132,17 @@ namespace Arcane
         [[nodiscard]] INetDriver*  NetDriver() const noexcept;
 
         // --- substrate the plugin registers into / the host drives ---
-        ::Arcane::ECS::Registry&       Registry()      noexcept;
+        ::Arcane::Registry&       Registry()      noexcept;
         SystemSchedulers&         Schedulers()    noexcept;
         RunLoop&                  Loop()          noexcept;
         // Re-rate this Runtime's fixed step (a dedicated server's tick, settings
-        // arc S6-GATE): the loop, the installed Arcane::Physics2D::System's step and the
+        // arc S6-GATE): the loop, the installed Arcane::PhysicsSystem2D's step and the
         // rate a ClearSystems reinstall uses all follow `hz`, so physics
         // advances by the step the loop actually runs. Call before a game
-        // module loads (the Arcane::Physics2D::System is re-added). Ignores hz <= 0 or
+        // module loads (the Arcane::PhysicsSystem2D is re-added). Ignores hz <= 0 or
         // non-finite.
         void                      SetFixedHz(double hz);
-        ::Arcane::ECS::TypeContext*    TypeContext()   noexcept;
+        ::Arcane::TypeContext*    TypeContext()   noexcept;
         ::Arcane::IWorkScheduler* WorkScheduler() noexcept;
         ITaskExecutor*            TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         // The shared background job queue (F2b Task 12): JobSystem::Submit for
@@ -153,7 +153,7 @@ namespace Arcane
         // not pointer: the JobSystem is a fixed part of this Runtime's
         // substrate and outlives every caller that could hold the reference.
         JobSystem&                Jobs() noexcept;
-        std::shared_ptr<::Arcane::ECS::ComponentRegistry> Components() noexcept;
+        std::shared_ptr<::Arcane::ComponentRegistry> Components() noexcept;
         Assets&                   AssetsFacade() noexcept;
         Config&                   Configuration() noexcept;   // layered engine+project config (Slice 3)
 
@@ -321,7 +321,7 @@ namespace Arcane
         // Registry::Save() -> framed snapshot bytes. Returns a Result so a Save
         // failure surfaces as an actionable error at the call site rather than an
         // empty-but-"ok" vector that masks data loss as a later reload failure.
-        ::Arcane::ECS::Result<std::vector<std::byte>, ::Arcane::ECS::SerializationError> SnapshotRegistry() const;
+        ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const;
 
         // The Save configuration every SnapshotRegistry uses, process-wide
         // (settings arc S6-45). Core's default is Astra's SaveConfig{}. The knob
@@ -329,8 +329,8 @@ namespace Arcane
         // ArcaneEditor declares it (spec s3.2: a shipped game holds no Editor
         // settings) and pushes its choice here from the setting's publish
         // callback; a game keeps the default. Guarded: any thread may read.
-        static void SetSnapshotSaveConfig(const ::Arcane::ECS::Registry::SaveConfig& config);
-        [[nodiscard]] static ::Arcane::ECS::Registry::SaveConfig SnapshotSaveConfig();
+        static void SetSnapshotSaveConfig(const ::Arcane::Registry::SaveConfig& config);
+        [[nodiscard]] static ::Arcane::Registry::SaveConfig SnapshotSaveConfig();
 
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
@@ -349,19 +349,19 @@ namespace Arcane
         void ClearSystems();
 
         // --- engine-owned physics (2026-09-11, spec docs/specs/2026-09-11-physics-2d-wiring-design.md s4-s5) ---
-        // Manifold2D-free surface: hosts and modules never see Arcane::Physics2D::System or
+        // Manifold2D-free surface: hosts and modules never see Arcane::PhysicsSystem2D or
         // PhysicsWorld. InstallEngineSystems adds the engine's HEADLESS pair --
-        // Arcane::Physics2D::System then TransformPropagationSystem into fixedUpdate.
+        // Arcane::PhysicsSystem2D then TransformPropagationSystem into fixedUpdate.
         // RenderSubmissionSystem is presentation and is ClientRuntime's to
         // install (it does, at construction and on every OnSystemsCleared), so
         // a Core-only host has exactly the systems it can execute. The ctor
         // calls this, and ClearSystems calls it again after clearing, so every
         // PluginHost load/reload/unload path keeps them. Idempotent (per-system
         // HasSystem guards). A game module registers ONLY its own systems and
-        // places them with Arcane::ECS::Before/After against these types
+        // places them with Arcane::Before/After against these types
         // (GameModule.hpp).
         // EnsurePhysics runs once per frame before Loop().Advance
-        // (beside SetRenderContext): it mints Arcane::Physics2D::World + PhysicsInterp
+        // (beside SetRenderContext): it mints Arcane::PhysicsWorld2D + PhysicsInterp
         // Buffer when the current registry lacks them -- scene open,
         // RestoreRegistry (Play -> Stop, structural undo) and hot reload all
         // replace the registry, and the next frame's Ensure is the reset --
@@ -378,17 +378,17 @@ namespace Arcane
         // reconciled is authoring state (the paused reconcile zeroes a body's
         // velocity on every author move, by design), and Play must start the
         // way ArcaneRuntime boots -- bodies at their authored poses WITH their
-        // authored Arcane::Physics2D::RigidBody::velocity, applied by PASS 2's mint. A restore
+        // authored Arcane::RigidBody2D::velocity, applied by PASS 2's mint. A restore
         // on Stop never carries the pair either (both are transient resources),
         // so Play and Stop are symmetric. Lives here rather than in the editor because destroying
-        // Arcane::Physics2D::World destroys the PhysicsWorld, and ArcaneEditor.exe does
+        // Arcane::PhysicsWorld2D destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
-        // The scene-root Arcane::Physics2D::SceneSettings component when present, else the
+        // The scene-root Arcane::PhysicsSettings2D component when present, else the
         // `physics.gravity` setting (its project rung, else
         // its default (0, -9.81; +Y up, F4)). Layered on purpose: gravity is
         // authored content, so the built-in default yields to the project and
-        // the project to the per-scene Arcane::Physics2D::SceneSettings component.
+        // the project to the per-scene Arcane::PhysicsSettings2D component.
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:

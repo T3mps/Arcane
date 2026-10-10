@@ -81,7 +81,7 @@ namespace
             ASTRA_REFLECT_ATTR(Serializable, false)
     ASTRA_REFLECT_TYPE_END()
 
-    // The other half of the Arcane::Physics2D::Collider shape: a type whose ONLY reflected field
+    // The other half of the Arcane::Collider2D shape: a type whose ONLY reflected field
     // is outside the serialization contract, so its Inspector section can never
     // be anything but an empty header.
     struct NothingDrawable
@@ -156,8 +156,8 @@ TEST_CASE("FieldIsDrawable is both of the visitor's skips", "[editor]")
     // Astra::Hidden -- dropped by the visitor itself (InspectorView.cpp).
     CHECK_FALSE(FieldIsDrawable(ProbeField("secret")));
     // Serializable(false) -- dropped one frame out, by Astra's VisitFields,
-    // before Visit() is ever called. Arcane::Physics2D::BodyRef's two fields are the
-    // roster's case (Arcane::Physics2D::Collider::fixtures was, until 2D physics wiring Plan 1
+    // before Visit() is ever called. Arcane::PhysicsBodyRef2D's two fields are the
+    // roster's case (Arcane::Collider2D::fixtures was, until 2D physics wiring Plan 1
     // made it serializable again); missing it is what once left a component
     // drawing an empty header.
     CHECK_FALSE(FieldIsDrawable(ProbeField("unwritten")));
@@ -174,7 +174,7 @@ TEST_CASE("AnyFieldDrawable separates an empty section from a populated one", "[
     const Astra::TypeMeta* empty = Astra::GetMeta<NothingDrawable>();
     REQUIRE(empty != nullptr);
     // Every field undrawable: the caller draws the disabled hint row instead of
-    // opening a grid that would visit nothing. (Arcane::Physics2D::Collider's shape once; it
+    // opening a grid that would visit nothing. (Arcane::Collider2D's shape once; it
     // draws a FieldKind::Vector list since 2D physics wiring Plan 2.)
     CHECK_FALSE(AnyFieldDrawable(empty->fields));
 

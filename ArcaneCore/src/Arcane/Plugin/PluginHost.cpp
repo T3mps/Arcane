@@ -1274,7 +1274,7 @@ namespace Arcane
         return m_impl->gen;
     }
 
-    bool PluginHost::SaveStatePrimary(ECS::BinaryWriter& w)
+    bool PluginHost::SaveStatePrimary(BinaryWriter& w)
     {
         const Plugin* p = m_impl->PrimaryPlugin();
         if (!p || !p->VTable().SaveState) return false;
@@ -1282,7 +1282,7 @@ namespace Arcane
         return !w.HasError();
     }
 
-    bool PluginHost::LoadStatePrimary(ECS::BinaryReader& r)
+    bool PluginHost::LoadStatePrimary(BinaryReader& r)
     {
         const Plugin* p = m_impl->PrimaryPlugin();
         if (!p || !p->VTable().LoadState) return false;

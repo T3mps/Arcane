@@ -43,7 +43,7 @@ namespace Arcane::Editor
         // not from the world the Edit passes have been minting and reconciling.
         // That world is authoring state: the paused reconcile zeroes a body's
         // velocity on every author move (by design, "don't fling on resume"),
-        // so carrying it into Play lost an authored Arcane::Physics2D::RigidBody::velocity
+        // so carrying it into Play lost an authored Arcane::RigidBody2D::velocity
         // whenever the entity had been dragged after the velocity was set --
         // editor Play and the standalone host disagreed. Dropping the world
         // here makes the first Play frame's EnsurePhysics mint a fresh one,

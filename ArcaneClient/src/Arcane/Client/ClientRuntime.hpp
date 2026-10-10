@@ -140,14 +140,14 @@ namespace Arcane
         // Pure forwarders so host call sites stay `m_runtime->X()`; the module still
         // gets ctx->engine (Core) separately. Nothing below adds behaviour -- read
         // each one's contract on Arcane::Runtime (Arcane/Base/Runtime.hpp).
-        ::Arcane::ECS::Registry&       Registry()      noexcept { return m_core.Registry(); }
+        ::Arcane::Registry&       Registry()      noexcept { return m_core.Registry(); }
         SystemSchedulers&         Schedulers()    noexcept { return m_core.Schedulers(); }
         RunLoop&                  Loop()          noexcept { return m_core.Loop(); }
-        ::Arcane::ECS::TypeContext*    TypeContext()   noexcept { return m_core.TypeContext(); }
+        ::Arcane::TypeContext*    TypeContext()   noexcept { return m_core.TypeContext(); }
         ::Arcane::IWorkScheduler* WorkScheduler() noexcept { return m_core.WorkScheduler(); }
         ITaskExecutor*            TaskExecutor()  noexcept { return m_core.TaskExecutor(); }
         JobSystem&                Jobs()          noexcept { return m_core.Jobs(); }
-        std::shared_ptr<::Arcane::ECS::ComponentRegistry> Components() noexcept { return m_core.Components(); }
+        std::shared_ptr<::Arcane::ComponentRegistry> Components() noexcept { return m_core.Components(); }
         Assets&                   AssetsFacade()  noexcept { return m_core.AssetsFacade(); }
         Config&                   Configuration() noexcept { return m_core.Configuration(); }
 
@@ -161,7 +161,7 @@ namespace Arcane
         bool SetProjectInputActionsAsset(const Guid& id) { return m_core.SetProjectInputActionsAsset(id); }
         bool RestampProjectEngineAbi(int abi) { return m_core.RestampProjectEngineAbi(abi); }
 
-        ::Arcane::ECS::Result<std::vector<std::byte>, ::Arcane::ECS::SerializationError> SnapshotRegistry() const { return m_core.SnapshotRegistry(); }
+        ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const { return m_core.SnapshotRegistry(); }
         bool RestoreRegistry(std::span<const std::byte> bytes) { return m_core.RestoreRegistry(bytes); }
         void ResetRegistry() { m_core.ResetRegistry(); }
         void ClearSystems() { m_core.ClearSystems(); }

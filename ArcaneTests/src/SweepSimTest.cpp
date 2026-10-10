@@ -169,16 +169,16 @@ namespace
         RegisterSceneComponents(reg);
         const Astra::Entity box = reg.CreateEntity();
         reg.AddComponent<Transform>(box, Transform{ .position = { 0.0f, 10.0f, 0.0f } });
-        Arcane::Physics2D::RigidBody body; body.type = Arcane::Physics2D::BodyType::Dynamic; body.fixedRotation = true;
-        reg.AddComponent<Arcane::Physics2D::RigidBody>(box, body);
-        Arcane::Physics2D::Fixture fx; fx.kind = Arcane::Physics2D::ShapeKind::Aabb; fx.halfW = 0.5f; fx.halfH = 0.5f;
-        Arcane::Physics2D::Collider col; col.fixtures.push_back(fx);
-        reg.AddComponent<Arcane::Physics2D::Collider>(box, col);
+        Arcane::RigidBody2D body; body.type = Arcane::BodyType2D::Dynamic; body.fixedRotation = true;
+        reg.AddComponent<Arcane::RigidBody2D>(box, body);
+        Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Aabb; fx.halfW = 0.5f; fx.halfH = 0.5f;
+        Arcane::Collider2D col; col.fixtures.push_back(fx);
+        reg.AddComponent<Arcane::Collider2D>(box, col);
         rt.EnsurePhysics();
         REQUIRE(rt.Loop().FixedHz() == hz);
         rt.Loop().Advance(1.0 / hz);   // exactly one fixed step
-        Arcane::Physics2D::RigidBody& rb = *reg.GetComponent<Arcane::Physics2D::RigidBody>(box);
-        const Arcane::Physics2D::BodyMotion m = reg.GetResource<Arcane::Physics2D::World>()->Motion(box, rb);
+        Arcane::RigidBody2D& rb = *reg.GetComponent<Arcane::RigidBody2D>(box);
+        const Arcane::BodyMotion2D m = reg.GetResource<Arcane::PhysicsWorld2D>()->Motion(box, rb);
         REQUIRE(m.bodyReady);
         return m.velocityY;
     }
@@ -201,7 +201,7 @@ TEST_CASE("sweep: Runtime::SetFixedHz re-rates the physics step with the loop (s
     Runtime rt(Test::Process());
     rt.SetFixedHz(30.0);
     rt.ClearSystems();
-    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::Physics2D::System>());
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     CHECK(rt.Loop().FixedHz() == 30.0);
     rt.SetFixedHz(0.0);                       // refused
     rt.SetFixedHz(std::nan(""));              // refused
