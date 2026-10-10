@@ -2,7 +2,7 @@
 // (ArcaneCore/src/Arcane/Serialization/SceneAsset.hpp) followed by
 // Scene::ApplySceneDocument -> LoadJson (SceneSerializer.hpp), the reflection
 // driven component reader, into a registry with the engine's scene components
-// registered (RegisterSceneComponents + RegisterPhysicsComponents).
+// registered (RegisterSceneComponents + Arcane::Physics2D::RegisterComponents).
 //
 // The input is the .arcscene file. A scene that fails to load must do so by
 // returning false / nullopt: a C++ exception escaping either call aborts here
@@ -39,7 +39,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 
     Astra::Registry reg;
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::Physics2D::RegisterComponents(reg);
     (void)Arcane::Scene::ApplySceneDocument(*scene, reg);
     return 0;
 }

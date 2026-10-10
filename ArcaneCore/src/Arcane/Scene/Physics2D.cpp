@@ -1,20 +1,25 @@
-// Arcane::Physics2D (input-seam spec 2026-10-02 s5.3): the game-facing physics
-// commands as exported members of the published PhysicsResource. The body
-// handle comes from entityToBody, never PhysicsBodyRef.
-
-#include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/Physics2DDetail.hpp>
 #include <Arcane/Scene/PhysicsQuerySettings.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include <cmath>
+#include <utility>
 
-namespace Arcane
+namespace
 {
+    namespace Phys = Arcane::Physics2D::Detail::Phys;
+}
+
+namespace Arcane::Physics2D
+{
+    World::~World() = default;
+    World::World(World&&) noexcept = default;
+    World& World::operator=(World&&) noexcept = default;
+
     namespace
     {
-        // physics.ground.* (settings arc S6-9): the floor threshold and the probe
-        // reach. The caller reads the settings once per query.
-        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const PhysicsGroundSettings& ground)
+        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const GroundSettings& ground)
         {
             const Phys::Real minY = Phys::Real(ground.minNormalY);
             bool supported = false;
@@ -29,11 +34,6 @@ namespace Arcane
             if (supported)
                 return true;
 
-            // A sleeping body's contacts need not appear in the active solver.
-            // A resting body sits up to the linear slop INSIDE its support, and
-            // a cast that starts overlapped answers t=0 with a zero normal
-            // (Box2D-v3 parity), so the cast starts one slop higher and travels
-            // one slop further: the reach below the feet stays probeDistance.
             Phys::ShapeCastOpts opts;
             opts.movers = true;
             opts.exclude = handle;
@@ -54,10 +54,10 @@ namespace Arcane
         }
     }
 
-    BodyMotion2D PhysicsResource::Motion(Astra::Entity entity, const RigidBody2D& body) const
+    BodyMotion World::Motion(Arcane::ECS::Entity entity, const RigidBody& body) const
     {
-        BodyMotion2D motion;
-        if (body.type != Phys::BodyType::Dynamic)
+        BodyMotion motion;
+        if (body.type != BodyType::Dynamic)
             return motion;
         motion.velocityX = body.velocity.x;
         motion.velocityY = body.velocity.y;
@@ -70,16 +70,16 @@ namespace Arcane
         motion.velocityY = static_cast<float>(velocity.y);
         motion.bodyReady = true;
         if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*world, it->second, Settings<PhysicsGroundSettings>());
+            motion.supported = HasFloorSupport(*world, it->second, Settings<GroundSettings>());
         return motion;
     }
 
-    void PhysicsResource::SetVelocity(Astra::Entity entity, RigidBody2D& body,
-                                      float velocityX, float velocityY)
+    void World::SetVelocity(Arcane::ECS::Entity entity, RigidBody& body,
+                            float velocityX, float velocityY)
     {
         if (!std::isfinite(velocityX) || !std::isfinite(velocityY))
             return;
-        if (body.type != Phys::BodyType::Dynamic)
+        if (body.type != BodyType::Dynamic)
             return;
         body.velocity = glm::vec2(velocityX, velocityY);
 

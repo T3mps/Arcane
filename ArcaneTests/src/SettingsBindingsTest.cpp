@@ -139,7 +139,7 @@ namespace
 TEST_CASE("ToWorldDef: the default settings ARE Manifold2D's WorldDef defaults; gravity is left to EnsurePhysics", "[settings]")
 {
     const Manifold2D::Physics::WorldDef lib{};
-    const Manifold2D::Physics::WorldDef ours = ToWorldDef(Physics2DWorldSettings{});
+    const Manifold2D::Physics::WorldDef ours = Arcane::Physics2D::Detail::ToWorldDef(Arcane::Physics2D::WorldSettings{});
     CHECK(ours.broadphase == lib.broadphase);
     CHECK(ours.hashCellSize == lib.hashCellSize);
     CHECK(ours.passability == nullptr);
@@ -155,13 +155,13 @@ TEST_CASE("ToWorldDef: the default settings ARE Manifold2D's WorldDef defaults; 
     CHECK(ours.contactPushMaxVelocity == lib.contactPushMaxVelocity);
     CHECK(ours.maxLinearVelocity == lib.maxLinearVelocity);
     CHECK(ours.sleepThreshold == lib.sleepThreshold);
-    CHECK_FALSE(Physics2DWorldSettings{}.parallelSolver);
+    CHECK_FALSE(Arcane::Physics2D::WorldSettings{}.parallelSolver);
 }
 
 TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase maps", "[settings]")
 {
-    Physics2DWorldSettings s;
-    s.broadphase = Physics2DBroadphase::Hash;
+    Arcane::Physics2D::WorldSettings s;
+    s.broadphase = Arcane::Physics2D::Broadphase::Hash;
     s.hashCellSize = 2.5f;
     s.substepCount = 8;
     s.contactHertz = 60.0f;
@@ -170,7 +170,7 @@ TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase 
     s.contactPushMaxVelocity = 6.0f;
     s.maxLinearVelocity = 100.0f;
     s.sleepThreshold = 0.1f;
-    const Manifold2D::Physics::WorldDef wd = ToWorldDef(s);
+    const Manifold2D::Physics::WorldDef wd = Arcane::Physics2D::Detail::ToWorldDef(s);
     CHECK(wd.broadphase == Manifold2D::Physics::BroadphaseKind::Hash);
     CHECK(wd.hashCellSize == 2.5f);
     CHECK(wd.substepCount == 8u);
@@ -180,8 +180,8 @@ TEST_CASE("ToWorldDef: every field reaches its WorldDef field; every broadphase 
     CHECK(wd.contactPushMaxVelocity == 6.0f);
     CHECK(wd.maxLinearVelocity == 100.0f);
     CHECK(wd.sleepThreshold == 0.1f);
-    CHECK(ToBroadphaseKind(Physics2DBroadphase::Tree) == Manifold2D::Physics::BroadphaseKind::Tree);
-    CHECK(ToBroadphaseKind(Physics2DBroadphase::Sap) == Manifold2D::Physics::BroadphaseKind::Sap);
+    CHECK(Arcane::Physics2D::Detail::ToBroadphaseKind(Arcane::Physics2D::Broadphase::Tree) == Manifold2D::Physics::BroadphaseKind::Tree);
+    CHECK(Arcane::Physics2D::Detail::ToBroadphaseKind(Arcane::Physics2D::Broadphase::Sap) == Manifold2D::Physics::BroadphaseKind::Sap);
     const auto e = CVarRegistry::Get().Explain("physics.broadphase");
     REQUIRE(e);
     CHECK(e->type == CVarType::Enum);
@@ -202,20 +202,20 @@ TEST_CASE("physics.parallelSolver: off by default (the serial solver, as before)
     {
         Runtime rt(Test::Process());
         rt.EnsurePhysics();
-        const PhysicsResource* res = rt.Registry().GetResource<PhysicsResource>();
+        const Arcane::Physics2D::World* res = rt.Registry().GetResource<Arcane::Physics2D::World>();
         REQUIRE(res);
-        REQUIRE(res->world);
-        CHECK(res->world->Executor() != rt.WorkScheduler());
+        REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res));
+        CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->Executor() != rt.WorkScheduler());
     }
     REQUIRE(reg.Set(h, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
     reg.Publish();
     {
         Runtime rt(Test::Process());
         rt.EnsurePhysics();
-        const PhysicsResource* res = rt.Registry().GetResource<PhysicsResource>();
+        const Arcane::Physics2D::World* res = rt.Registry().GetResource<Arcane::Physics2D::World>();
         REQUIRE(res);
-        REQUIRE(res->world);
-        CHECK(res->world->Executor() == rt.WorkScheduler());
+        REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res));
+        CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->Executor() == rt.WorkScheduler());
     }
 }
 

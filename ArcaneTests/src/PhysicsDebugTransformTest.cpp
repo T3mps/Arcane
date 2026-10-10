@@ -65,7 +65,7 @@ TEST_CASE("PhysicsDebug: aabb outline rotates with the body", "[render]")
     // Kinematic: a box body CAN be rotated via SetAngle (the paused Inspector-
     // edit / script-driven path). A Dynamic Aabb is asserted fixedRotation (a
     // free-rotating dynamic box is disallowed), so Kinematic is the case that
-    // rotates -- and RigidBody2D defaults to Kinematic anyway.
+    // rotates -- and Arcane::Physics2D::RigidBody defaults to Kinematic anyway.
     BodyDef bd;
     bd.type     = BodyType::Kinematic;
     bd.position = Vec2(Real(10), Real(10));

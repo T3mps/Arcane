@@ -20,8 +20,8 @@
 #include <Arcane/Scene/BoundsSystem.hpp>        // BoundsSystem (engine-owned, instantiated IN this module; F3 plan 1 T2)
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/EngineRoster.hpp>        // EngineComponentRoster -- THE roster list (registered below, verified in ProjectHost.hpp)
-#include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
-#include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
+#include <Arcane/Scene/PhysicsComponents.hpp>   // Arcane::Physics2D::RigidBody/Arcane::Physics2D::Collider/Arcane::Physics2D::BodyRef (engine roster types)
+#include <Arcane/Scene/PhysicsSystem.hpp>       // Arcane::Physics2D::System/Arcane::Physics2D::World (instantiated IN this module)
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot (ResolvedGravity's scene-root lookup)
 #include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
@@ -279,7 +279,7 @@ namespace Arcane
             // A plugin's InstallOwned shadows whatever is live for an id,
             // module-owned or not, and its own unload restores the shadow -- the
             // "plugin overrides it, unload restores it" behaviour is unchanged.
-            // RegisterSceneComponents / RegisterPhysicsComponents survive for the
+            // RegisterSceneComponents / Arcane::Physics2D::RegisterComponents survive for the
             // tests that register on bare registries; Runtime no longer calls them.
             //
             // ComponentID NUMBERING (corrected 2026-07-26 -- the previous comment
@@ -366,7 +366,7 @@ namespace Arcane
         // 2026-10-08 s7.2): every reader (Update, OnUpdate, render) ran before.
         m_impl->loop->SetFrameBeginHook([](Astra::Registry& reg)
         {
-            if (PhysicsResource* res = reg.GetResource<PhysicsResource>()) res->BeginFrame();
+            if (Arcane::Physics2D::World* res = reg.GetResource<Arcane::Physics2D::World>()) res->BeginFrame();
         });
         // ...and then whatever the LOADED module already registered, for THIS mode:
         // a Runtime built after the module loaded (the editor's embedded server
@@ -442,9 +442,9 @@ namespace Arcane
         // PhysicsEditPass read, so every later step agrees with the loop.
         m_impl->loopCfg.fixedHz = hz;
         m_impl->loop->SetFixedHz(hz);
-        // PhysicsSystem captured its dt at AddSystem: re-add it at the new
+        // Arcane::Physics2D::System captured its dt at AddSystem: re-add it at the new
         // rate (its Before<TransformPropagationSystem> keeps it ordered).
-        m_impl->schedulers->fixedUpdate.RemoveSystem<PhysicsSystem>();
+        m_impl->schedulers->fixedUpdate.RemoveSystem<Arcane::Physics2D::System>();
         InstallEngineSystems();
     }
 
@@ -543,7 +543,7 @@ namespace Arcane
         if (resources.IsErr())
             return false;
 
-        // No strip needed: PhysicsResource/PhysicsInterpBuffer (like Time and
+        // No strip needed: Arcane::Physics2D::World/Arcane::Physics2D::InterpBuffer (like Time and
         // GameInput) are AstraTransientResource, so the blob never carried them
         // and the loaded registry has none -- the next EnsurePhysics mints both
         // fresh, the way propagation re-derives WorldTransform. (They used to be
@@ -589,7 +589,7 @@ namespace Arcane
         // places them with Astra::Before/After against these types. Each behind
         // its own HasSystem guard: AlreadyRegistered is the only failure and
         // this runs from the ctor AND after every ClearSystems. Order within a
-        // scheduler: PhysicsSystem declares Before<TransformPropagationSystem>,
+        // scheduler: Arcane::Physics2D::System declares Before<TransformPropagationSystem>,
         // BoundsSystem declares After<TransformPropagationSystem> (F3 plan 1 T2:
         // it reads the composed WorldTransform); insertion order carries the
         // rest (Astra's reorder is stable).
@@ -598,10 +598,10 @@ namespace Arcane
         // construction and on every OnSystemsCleared) and a Core-only host has
         // exactly the systems it can execute.
         auto& fixed  = m_impl->schedulers->fixedUpdate;
-        if (!fixed.HasSystem<PhysicsSystem>())
+        if (!fixed.HasSystem<Arcane::Physics2D::System>())
         {
             const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
-            std::ignore = fixed.AddSystem<PhysicsSystem>(fixedDt, /*stepWorld*/ true);
+            std::ignore = fixed.AddSystem<Arcane::Physics2D::System>(fixedDt, /*stepWorld*/ true);
         }
         if (!fixed.HasSystem<TransformPropagationSystem>())
             std::ignore = fixed.AddSystem<TransformPropagationSystem>();
@@ -611,10 +611,10 @@ namespace Arcane
 
     glm::vec2 Runtime::ResolvedGravity() const
     {
-        const CVarVec2 p = Settings<Physics2DWorldSettings>().gravity;
+        const CVarVec2 p = Settings<Arcane::Physics2D::WorldSettings>().gravity;
         glm::vec2 g{p.x, p.y};
         if (const SceneRoot* sr = m_impl->registry->GetResource<SceneRoot>())
-            if (const PhysicsSettings* ps = std::as_const(*m_impl->registry).GetComponent<PhysicsSettings>(sr->entity))
+            if (const Arcane::Physics2D::SceneSettings* ps = std::as_const(*m_impl->registry).GetComponent<Arcane::Physics2D::SceneSettings>(sr->entity))
                 g = ps->gravity;
         return g;
     }
@@ -623,10 +623,10 @@ namespace Arcane
     {
         Astra::Registry& reg = *m_impl->registry;
         const glm::vec2 g = ResolvedGravity();
-        PhysicsResource* res = reg.GetResource<PhysicsResource>();
-        if (res && res->world)
+        Arcane::Physics2D::World* res = reg.GetResource<Arcane::Physics2D::World>();
+        if (res && Arcane::Physics2D::Detail::Access::Solver(*res))
         {
-            const auto cur = res->world->Gravity();
+            const auto cur = Arcane::Physics2D::Detail::Access::Solver(*res)->Gravity();
             if (static_cast<float>(cur.x) == g.x && static_cast<float>(cur.y) == g.y)
                 return;
             // Gravity changed: replace the world. Bodies re-mint from their
@@ -634,8 +634,8 @@ namespace Arcane
             // invalid against the new world; PASS 2 self-heals).
         }
         // physics.* (settings arc S2): NextWorld -- read here, where a world is minted.
-        const Physics2DWorldSettings& settings = Settings<Physics2DWorldSettings>();
-        Manifold2D::Physics::WorldDef wd = ToWorldDef(settings);
+        const Arcane::Physics2D::WorldSettings& settings = Settings<Arcane::Physics2D::WorldSettings>();
+        Manifold2D::Physics::WorldDef wd = Arcane::Physics2D::Detail::ToWorldDef(settings);
         wd.gravityX = g.x;
         wd.gravityY = g.y;
         auto world = std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd);
@@ -644,14 +644,14 @@ namespace Arcane
         // registry (Impl declares it first).
         if (settings.parallelSolver)
             world->SetExecutor(m_impl->sched.get());
-        reg.SetResource(PhysicsResource{ std::move(world), {} });
-        reg.SetResource(PhysicsInterpBuffer{});
+        reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::move(world)));
+        reg.SetResource(Arcane::Physics2D::InterpBuffer{});
     }
 
     void Runtime::PhysicsEditPass()
     {
         const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
-        PhysicsSystem{ fixedDt, /*stepWorld*/ false }(*m_impl->registry);
+        Arcane::Physics2D::System{ fixedDt, /*stepWorld*/ false }(*m_impl->registry);
     }
 
     void Runtime::ResetPhysics()
@@ -659,10 +659,10 @@ namespace Arcane
         // Drop the transient physics pair on the LIVE registry (a restore never
         // carries it either): the next EnsurePhysics sees neither and mints both. PASS 2 then
         // re-mints every body from its components -- and PASS 1/2 clear any
-        // PhysicsBodyRef the fresh world does not track, so nothing here can
+        // Arcane::Physics2D::BodyRef the fresh world does not track, so nothing here can
         // leave a handle behind for the fresh world to reissue to someone else.
-        m_impl->registry->RemoveResource<PhysicsResource>();
-        m_impl->registry->RemoveResource<PhysicsInterpBuffer>();
+        m_impl->registry->RemoveResource<Arcane::Physics2D::World>();
+        m_impl->registry->RemoveResource<Arcane::Physics2D::InterpBuffer>();
     }
 
     namespace

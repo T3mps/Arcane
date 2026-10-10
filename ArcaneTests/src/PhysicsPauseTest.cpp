@@ -1,4 +1,4 @@
-// Pausing must SKIP the solve, not run Step(0): a no-step PhysicsSystem mints +
+// Pausing must SKIP the solve, not run Step(0): a no-step Arcane::Physics2D::System mints +
 // writes back but generates zero contacts (the expensive narrowphase/solve is
 // skipped). Guards the interactive "pause to inspect" path + the perf claim.
 #include <catch2/catch_test_macros.hpp>
@@ -19,44 +19,43 @@ namespace
     void BuildOverlap(Astra::Registry& reg)
     {
         RegisterSceneComponents(reg);
-        RegisterPhysicsComponents(reg);
+        Arcane::Physics2D::RegisterComponents(reg);
 
         Manifold2D::Physics::WorldDef wd;
-        reg.SetResource(PhysicsResource{
-            std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
-        auto add = [&](glm::vec2 pos, glm::vec2 half, Manifold2D::Physics::BodyType t) {
+        reg.SetResource(Arcane::Physics2D::Detail::Adopt(std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+        auto add = [&](glm::vec2 pos, glm::vec2 half, Arcane::Physics2D::BodyType t) {
             Astra::Entity e = reg.CreateEntity();
             Transform lt; lt.position = glm::vec3(pos, 0.0f);
             reg.AddComponent<Transform>(e, lt);
             reg.AddComponent<WorldTransform>(e, WorldTransform{});
-            RigidBody2D rb; rb.type = t; rb.fixedRotation = true;
-            reg.AddComponent<RigidBody2D>(e, rb);
-            Collider2D col; Fixture fx;
-            fx.kind = Manifold2D::Physics::ShapeKind::Aabb; fx.halfW = half.x; fx.halfH = half.y;
+            Arcane::Physics2D::RigidBody rb; rb.type = t; rb.fixedRotation = true;
+            reg.AddComponent<Arcane::Physics2D::RigidBody>(e, rb);
+            Arcane::Physics2D::Collider col; Arcane::Physics2D::Fixture fx;
+            fx.kind = Arcane::Physics2D::ShapeKind::Aabb; fx.halfW = half.x; fx.halfH = half.y;
             col.fixtures.push_back(fx);
-            reg.AddComponent<Collider2D>(e, col);
-            reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
+            reg.AddComponent<Arcane::Physics2D::Collider>(e, col);
+            reg.AddComponent<Arcane::Physics2D::BodyRef>(e, Arcane::Physics2D::BodyRef{});
         };
-        add({0.0f, 10.0f}, {20.0f, 2.0f}, Manifold2D::Physics::BodyType::Static);
-        add({0.0f, 7.9f}, { 2.0f, 2.0f}, Manifold2D::Physics::BodyType::Dynamic); // resting/overlapping
+        add({0.0f, 10.0f}, {20.0f, 2.0f}, Arcane::Physics2D::BodyType::Static);
+        add({0.0f, 7.9f}, { 2.0f, 2.0f}, Arcane::Physics2D::BodyType::Dynamic); // resting/overlapping
     }
 }
 
-TEST_CASE("PhysicsSystem no-step skips contact generation", "[physics][pause]")
+TEST_CASE("Arcane::Physics2D::System no-step skips contact generation", "[physics][pause]")
 {
     Astra::Registry reg;
     BuildOverlap(reg);
 
     // No-step: mint + write-back, but DO NOT solve -> zero contacts generated.
-    PhysicsSystem noStep(1.0f / 60.0f, /*stepWorld=*/false);
+    Arcane::Physics2D::System noStep(1.0f / 60.0f, /*stepWorld=*/false);
     noStep(reg);
-    auto* res = reg.GetResource<PhysicsResource>();
-    REQUIRE(res->world->ActiveContactCount() == 0);
+    auto* res = reg.GetResource<Arcane::Physics2D::World>();
+    REQUIRE(Arcane::Physics2D::Detail::Access::Solver(*res)->ActiveContactCount() == 0);
     // The CREATE/SYNC pass must still have minted both bodies even while paused.
-    REQUIRE(res->entityToBody.size() == 2);
+    REQUIRE(Arcane::Physics2D::Detail::Access::Entities(*res).size() == 2);
 
     // A real step on the same overlap DOES generate at least one contact.
-    PhysicsSystem real(1.0f / 60.0f, /*stepWorld=*/true);
+    Arcane::Physics2D::System real(1.0f / 60.0f, /*stepWorld=*/true);
     real(reg);
-    CHECK(res->world->ActiveContactCount() >= 1);
+    CHECK(Arcane::Physics2D::Detail::Access::Solver(*res)->ActiveContactCount() >= 1);
 }

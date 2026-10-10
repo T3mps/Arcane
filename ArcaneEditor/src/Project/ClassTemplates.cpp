@@ -165,9 +165,9 @@ ARC_COMPONENT({{NS}}::{{CLASS}})
 // PARAMETERS say what it touches, so the scheduler can order and parallelise
 // it: views over components and engine resources such as the sim clock.
 //
-//     void operator()(Arcane::View<Arcane::Transform>& view,
-//                     Arcane::Res<Arcane::Time> time,
-//                     Arcane::Res<Arcane::GameInput> input)   // #include <Arcane/Input/GameInput.hpp>
+//     void operator()(Arcane::ECS::View<Arcane::Transform>& view,
+//                     Arcane::ECS::Res<Arcane::Time> time,
+//                     Arcane::ECS::Res<Arcane::GameInput> input)   // #include <Arcane/Input/GameInput.hpp>
 //
 // Fixed-update systems run before transform propagation by default so gameplay
 // can move local transforms first. Registrar discovery order is irrelevant:
@@ -180,9 +180,9 @@ ARC_COMPONENT({{NS}}::{{CLASS}})
 
 namespace {{NS}}
 {
-    struct {{CLASS}} : Arcane::SystemTraits<Arcane::Before<Arcane::TransformPropagationSystem>>
+    struct {{CLASS}} : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::TransformPropagationSystem>>
     {
-        void operator()(Arcane::Res<Arcane::Time> time)
+        void operator()(Arcane::ECS::Res<Arcane::Time> time)
         {
             (void)time;
         }
@@ -196,12 +196,12 @@ namespace {{NS}}
 // PARAMETERS say what it touches, so the scheduler can order and parallelise
 // it: views over components and engine resources such as the sim clock.
 //
-//     void operator()(Arcane::View<Arcane::Transform>& view,
-//                     Arcane::Res<Arcane::Time> time)
+//     void operator()(Arcane::ECS::View<Arcane::Transform>& view,
+//                     Arcane::ECS::Res<Arcane::Time> time)
 //
 // Fixed-step transform propagation is not installed in the Update or Render
 // scheduler, so this template invents no irrelevant edge. Registrar discovery
-// order is irrelevant: derive Arcane::SystemTraits<Arcane::Before<...>> or
+// order is irrelevant: derive Arcane::ECS::SystemTraits<Arcane::ECS::Before<...>> or
 // After<...> whenever scheduler order matters. The ARC_SYSTEM declaration
 // that selects phase and network role is in {{CLASS}}.cpp.
 
@@ -211,7 +211,7 @@ namespace {{NS}}
 {
     struct {{CLASS}}
     {
-        void operator()(Arcane::Res<Arcane::Time> time)
+        void operator()(Arcane::ECS::Res<Arcane::Time> time)
         {
             (void)time;
         }

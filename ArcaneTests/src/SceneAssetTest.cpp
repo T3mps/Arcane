@@ -490,7 +490,7 @@ TEST_CASE("a v3 scene still loads after the v4 bump", "[scene][json]")
 
 TEST_CASE("a v4 scene still loads after the v5 bump", "[scene][json]")
 {
-    // v5 (2026-09-11) is ADDITIVE like v4: Collider2D::fixtures now writes as
+    // v5 (2026-09-11) is ADDITIVE like v4: Arcane::Physics2D::Collider::fixtures now writes as
     // an array a v4 engine would refuse on read, so the number moved; nothing a
     // v4 file already said changed, so v4 keeps loading. LITERAL 4 -- see the
     // v3 case above for why not the symbolic constant.

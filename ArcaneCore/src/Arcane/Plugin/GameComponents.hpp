@@ -13,7 +13,7 @@
 //
 // Each ARC_COMPONENT line links one registrar node into a MODULE-LOCAL list
 // at DLL load; RegisterComponents drains that list into the module's own
-// Arcane::ComponentModule. This is what lets Assets -> Create -> C++ Class
+// Arcane::ECS::ComponentModule. This is what lets Assets -> Create -> C++ Class
 // produce a component that is live after one Rebuild Game Module with no hand
 // edit to Init -- the same effect UE gets from UHT's generated registration,
 // without a header tool. (UE's IMPLEMENT_PRIMARY_GAME_MODULE is the eventual
@@ -22,7 +22,7 @@
 // Component registration order carries no meaning (ComponentIDs are a per-
 // process counter, nothing persists them), so static-initialisation order is
 // sufficient here. Systems have a parallel registrar in GameSystems.hpp, but
-// their semantic order must be expressed through Arcane::Before/After traits;
+// their semantic order must be expressed through Arcane::ECS::Before/After traits;
 // neither registrar list promises cross-TU order.
 //
 // The ComponentModule contract (ComponentModule.hpp: "NEVER a plugin-side
@@ -38,7 +38,7 @@
 // OWN head -- a game module's list never sees the engine's, a plugin's never
 // sees the game's. Header-only, no ABI surface.
 
-#include <Arcane/Ecs.hpp>   // Arcane::ComponentModule (an alias of the library type)
+#include <Arcane/Ecs.hpp>   // Arcane::ECS::ComponentModule (an alias of the library type)
 
 #include <cstddef>
 
@@ -46,7 +46,7 @@ namespace Arcane::Game
 {
     struct ComponentRegistrar
     {
-        void (*registerFn)(Arcane::ComponentModule&);
+        void (*registerFn)(Arcane::ECS::ComponentModule&);
         const char*         typeName;   // the ARC_COMPONENT argument, stringified
         ComponentRegistrar* next;
     };
@@ -85,7 +85,7 @@ namespace Arcane::Game
     // written Register<T>() would be. Returns how many were registered. Call
     // ONCE per Init; a second call would ask the module to register each type
     // again.
-    inline std::size_t RegisterComponents(Arcane::ComponentModule& module)
+    inline std::size_t RegisterComponents(Arcane::ECS::ComponentModule& module)
     {
         std::size_t n = 0;
         for (const ComponentRegistrar* r = Detail::RegistrarHead(); r; r = r->next)
@@ -108,7 +108,7 @@ namespace Arcane::Game
     namespace                                                                               \
     {                                                                                       \
         ::Arcane::Game::ComponentRegistrar arcaneComponentRegistrar_##N{                    \
-            [](::Arcane::ComponentModule& module) { module.Register<T>(); }, #T, nullptr }; \
+            [](::Arcane::ECS::ComponentModule& module) { module.Register<T>(); }, #T, nullptr }; \
         const bool arcaneComponentRegistrarLinked_##N =                                     \
             ::Arcane::Game::LinkComponentRegistrar(arcaneComponentRegistrar_##N);           \
     }

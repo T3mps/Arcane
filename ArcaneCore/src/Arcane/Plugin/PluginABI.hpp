@@ -5,7 +5,7 @@
 // EngineContext is the C++ facade handed to the plugin (Arcane::Runtime).
 
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/EcsFwd.hpp>   // Arcane::TypeContext/BinaryWriter/BinaryReader/IWorkScheduler (declared, aliased)
+#include <Arcane/EcsFwd.hpp>   // Arcane::ECS::{TypeContext,BinaryWriter,BinaryReader}, Arcane::IWorkScheduler
 #include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (an EngineContext field, ABI 30)
 
 #include <cstdint>
@@ -1138,8 +1138,15 @@ namespace Arcane
     //     Manifold2D moved to <M2D_EVENTS> (PhysicsResource holds its world).
     //     A v54 module was compiled against the old layouts; reject the pairing.
     //     ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    // v56 (2026-10-10, namespace facades): the ECS prelude moved from Arcane::
+    //     into Arcane::ECS, and the 2D physics types moved into
+    //     Arcane::Physics2D under the short names (World, System, RigidBody,
+    //     Collider, Fixture, SceneSettings, BodyRef, the event types, BodyType,
+    //     ShapeKind). World's solver members are private. A v55 module was
+    //     compiled against the old names and the old World layout; reject the
+    //     pairing. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr uint32_t kGamePluginABIVersion = 55;
+    inline constexpr uint32_t kGamePluginABIVersion = 56;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
@@ -1156,7 +1163,7 @@ namespace Arcane
     struct EngineContext
     {
         uint32_t                abiVersion;    // == kGamePluginABIVersion at the host
-        Arcane::TypeContext*    typeContext;   // plugin calls Astra::SetTypeContext(this) FIRST
+        Arcane::ECS::TypeContext*    typeContext;   // plugin calls Astra::SetTypeContext(this) FIRST
         Arcane::IWorkScheduler* workScheduler; // the one engine enkiTS adapter (shared instance)
         Arcane::ITaskExecutor*  taskExecutor;  // SAME enki pool, worker-index ParallelFor (physics/general)
         Arcane::Runtime*        engine;        // registry, schedulers, snapshot/restore, render ctx
@@ -1203,8 +1210,8 @@ namespace Arcane
         void     (*Update)(double dt, double alpha)      = nullptr;
         // SaveState is void because BinaryWriter is error-latching; callers check writer.HasError()
         // after the call, mirroring how LoadState signals failure via its bool return.
-        void     (*SaveState)(Arcane::BinaryWriter&)     = nullptr;
-        bool     (*LoadState)(Arcane::BinaryReader&)     = nullptr;
+        void     (*SaveState)(Arcane::ECS::BinaryWriter&)     = nullptr;
+        bool     (*LoadState)(Arcane::ECS::BinaryReader&)     = nullptr;
         // v2: host calls this between ImGuiLayer BeginFrame and Render (the only valid
         // ImGui draw window). Update is sim-phase -- too early. May be null if a plugin
         // does not export it (resolution is lenient); the host null-checks before calling.

@@ -4,7 +4,7 @@
 // step. Its PARAMETERS say what it touches, so the scheduler can order and
 // parallelise it: the controller + body view, the sim clock, gameplay input and
 // the physics commands. The one trait is ordering: it moves the body before
-// PhysicsSystem steps.
+// Arcane::Physics2D::System steps.
 //
 // PlayerController2DSystem.cpp declares the phase and role with ARC_SYSTEM;
 // the game-module prologue discovers it. It reads locally resolved gameplay
@@ -13,8 +13,7 @@
 
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Input/GameInput.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Physics2D.hpp>
 #include <Arcane/Sim/Time.hpp>
 
 #include "PlayerController2D.hpp"
@@ -23,7 +22,7 @@
 
 namespace ReferenceProject
 {
-    struct PlayerController2DSystem : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
+    struct PlayerController2DSystem : Arcane::ECS::SystemTraits<Arcane::ECS::Before<Arcane::Physics2D::System>>
     {
         Arcane::ActionRef move{"Player", "Move"};
         Arcane::ActionRef jump{"Player", "Jump"};
@@ -37,19 +36,19 @@ namespace ReferenceProject
             return std::max(current - distance, target);
         }
 
-        void operator()(Arcane::View<PlayerController2D, Arcane::RigidBody2D>& view,
-                        Arcane::Res<Arcane::Time> time,
-                        Arcane::Res<Arcane::GameInput> input,
-                        Arcane::ResMut<Arcane::Physics2D> physics)
+        void operator()(Arcane::ECS::View<PlayerController2D, Arcane::Physics2D::RigidBody>& view,
+                        Arcane::ECS::Res<Arcane::Time> time,
+                        Arcane::ECS::Res<Arcane::GameInput> input,
+                        Arcane::ECS::ResMut<Arcane::Physics2D::World> physics)
         {
             const float dt       = std::clamp(static_cast<float>(time->fixedDt), 0.0f, 0.05f);
             const float axis     = input->Value(move).scalar;
             const bool  jumped   = input->PressedThisFixedStep(jump);
             const bool  jumpHeld = input->Down(jump);
 
-            view.ForEach([&](Arcane::Entity entity, PlayerController2D& controller, Arcane::RigidBody2D& body)
+            view.ForEach([&](Arcane::ECS::Entity entity, PlayerController2D& controller, Arcane::Physics2D::RigidBody& body)
             {
-                const Arcane::BodyMotion2D motion = physics->Motion(entity, body);
+                const Arcane::Physics2D::BodyMotion motion = physics->Motion(entity, body);
                 if (motion.supported)
                 {
                     controller.coyoteRemaining = std::max(0.0f, controller.coyoteTime);
@@ -97,7 +96,7 @@ namespace ReferenceProject
                     controller.jumpCutArmed = false;
                 }
 
-                // Physics2D handles both live and not-yet-minted bodies.
+                // Arcane::Physics2D::World handles both live and not-yet-minted bodies.
                 physics->SetVelocity(entity, body, nextX, nextY);
                 if (!motion.supported)
                 {

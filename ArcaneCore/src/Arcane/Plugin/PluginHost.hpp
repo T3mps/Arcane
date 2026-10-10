@@ -115,8 +115,8 @@ namespace Arcane
         // a CVarModuleScope is open, matching every other PluginHost vtable
         // call. False when there is no primary, the entry is missing, or
         // SaveState latched an error / LoadState returned false.
-        bool SaveStatePrimary(BinaryWriter& w);
-        bool LoadStatePrimary(BinaryReader& r);
+        bool SaveStatePrimary(ECS::BinaryWriter& w);
+        bool LoadStatePrimary(ECS::BinaryReader& r);
 
         // READ-ONLY / DIAGNOSTIC. The very EngineContext struct handed to every
         // loaded module's Init -- exposed so a test (or a host's census) can see what

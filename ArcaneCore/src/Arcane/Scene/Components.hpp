@@ -51,7 +51,7 @@ namespace Arcane
     {
         // Astra change tracking (spec 2026-09-11 s6.2): 8 B per entity of
         // {added, changed} ticks so Changed<Transform> is EXACT per entity --
-        // TransformPropagationSystem's pre-pass and PhysicsSystem's paused
+        // TransformPropagationSystem's pre-pass and Arcane::Physics2D::System's paused
         // reconcile both need entity precision, and a coarse chunk stamp would
         // recompose every row of a touched chunk. Three other components are
         // tracked (F3 plan 1 T2): WorldTransform, MeshRenderer and WorldBounds
@@ -197,7 +197,7 @@ namespace Arcane
         float translucencyDepthSortBias = 0.0f;
     };
 
-    // PhysicsSettings (2026-09-11, 2D physics wiring, spec s5): the PER-SCENE
+    // Arcane::Physics2D::SceneSettings (2026-09-11, 2D physics wiring, spec s5): the PER-SCENE
     // override of the project's physics.gravity setting. Read by Runtime::EnsurePhysics
     // from the SCENE-ROOT entity only (SceneRoot resource) -- beside Camera
     // and PostProcess, where scene-level facts already live; on any other
@@ -208,10 +208,13 @@ namespace Arcane
     // gravity points at NEGATIVE Y -- the physics-wiring era's "+Y down,
     // Manifold2D's y-down default" is superseded. The vendored library's own
     // WorldDef default is still Box2D's; the engine supplies this one.
-    struct PhysicsSettings
+namespace Physics2D
+{
+    struct SceneSettings
     {
         glm::vec2 gravity{0.0f, -9.81f};   // m/s^2; +Y UP (F4, spec s2)
     };
+}
 
     // The scene's post-processing stack (post arc): the Guid of a SAVED
     // fullscreen .arcmat whose pass DAG runs between the linear canvas and the
@@ -405,10 +408,13 @@ namespace Arcane
             ARC_REFLECT_ATTR(Tooltip, "Bias added to transparent projected depth, in meters.")
     ARC_END_REFLECT_TYPE()
 
-    ARC_REFLECT_TYPE(PhysicsSettings)
-        ARC_REFLECT_FIELD(PhysicsSettings, gravity)
+namespace Physics2D
+{
+    ARC_REFLECT_TYPE(SceneSettings)
+        ARC_REFLECT_FIELD(SceneSettings, gravity)
             ARC_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics.gravity setting while present.")
     ARC_END_REFLECT_TYPE()
+}
 
     // One field, so no Category -- see Transform above.
     ARC_REFLECT_TYPE(PostProcess)

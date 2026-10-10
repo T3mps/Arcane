@@ -1,14 +1,14 @@
-// M6 Physics-v2 T6: Astra ECS physics component layer, fixture-list Collider2D.
+// M6 Physics-v2 T6: Astra ECS physics component layer, fixture-list Arcane::Physics2D::Collider.
 //
 // Tests:
 //   1. Components register + reflect: MetaRegistry has a non-null TypeMeta for
-//      each of RigidBody2D, Collider2D, PhysicsBodyRef; GetFieldCount() > 0.
-//   2. Binary round-trip (single fixture): a Registry with RigidBody2D +
-//      single-fixture Collider2D authored values survives Save/Load with all
+//      each of Arcane::Physics2D::RigidBody, Arcane::Physics2D::Collider, Arcane::Physics2D::BodyRef; GetFieldCount() > 0.
+//   2. Binary round-trip (single fixture): a Registry with Arcane::Physics2D::RigidBody +
+//      single-fixture Arcane::Physics2D::Collider authored values survives Save/Load with all
 //      per-fixture fields intact.
-//      (PhysicsBodyRef.handle is Serializable(false) on the name-keyed path;
+//      (Arcane::Physics2D::BodyRef.handle is Serializable(false) on the name-keyed path;
 //       it harmlessly round-trips on the binary/trivially-copyable path.)
-//   3. Binary round-trip (two fixtures): a Collider2D with TWO fixtures
+//   3. Binary round-trip (two fixtures): a Arcane::Physics2D::Collider with TWO fixtures
 //      (fixture0 = circle r=4 @ local(0,0) density 1 friction 0.3;
 //       fixture1 = aabb(2,2) @ local(10,0) restitution 0.5, isSensor=true)
 //      survives Save/Load with ALL per-fixture fields intact on both fixtures.
@@ -35,11 +35,11 @@ using Catch::Approx;
 TEST_CASE("physics components are reflected (visitFields slot populated)", "[physics]")
 {
     Astra::ComponentRegistry creg;
-    Arcane::RegisterPhysicsComponents(creg);
+    Arcane::Physics2D::RegisterComponents(creg);
 
-    const auto* rb = creg.GetComponentDescriptor(Astra::TypeID<Arcane::RigidBody2D>::Value());
-    const auto* col = creg.GetComponentDescriptor(Astra::TypeID<Arcane::Collider2D>::Value());
-    const auto* ref = creg.GetComponentDescriptor(Astra::TypeID<Arcane::PhysicsBodyRef>::Value());
+    const auto* rb = creg.GetComponentDescriptor(Astra::TypeID<Arcane::Physics2D::RigidBody>::Value());
+    const auto* col = creg.GetComponentDescriptor(Astra::TypeID<Arcane::Physics2D::Collider>::Value());
+    const auto* ref = creg.GetComponentDescriptor(Astra::TypeID<Arcane::Physics2D::BodyRef>::Value());
 
     REQUIRE(rb  != nullptr);
     REQUIRE(col != nullptr);
@@ -50,9 +50,9 @@ TEST_CASE("physics components are reflected (visitFields slot populated)", "[phy
     CHECK(ref->visitFields != nullptr);
 
     // MetaRegistry must have a non-null TypeMeta with at least one field for each.
-    const auto* rbMeta  = Astra::GetMeta<Arcane::RigidBody2D>();
-    const auto* colMeta = Astra::GetMeta<Arcane::Collider2D>();
-    const auto* refMeta = Astra::GetMeta<Arcane::PhysicsBodyRef>();
+    const auto* rbMeta  = Astra::GetMeta<Arcane::Physics2D::RigidBody>();
+    const auto* colMeta = Astra::GetMeta<Arcane::Physics2D::Collider>();
+    const auto* refMeta = Astra::GetMeta<Arcane::Physics2D::BodyRef>();
 
     REQUIRE(rbMeta  != nullptr);
     REQUIRE(colMeta != nullptr);
@@ -90,24 +90,24 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::Physics2D::RegisterComponents(reg);
 
         savedEntity = reg.CreateEntity();
 
-        Arcane::RigidBody2D rb;
-        rb.type           = Manifold2D::Physics::BodyType::Dynamic;
+        Arcane::Physics2D::RigidBody rb;
+        rb.type           = Arcane::Physics2D::BodyType::Dynamic;
         rb.velocity       = glm::vec2(kVelX, kVelY);
         rb.mass           = kMass;
         rb.linearDamping  = kDamping;
         rb.fixedRotation  = true;
         rb.bullet         = false;
-        reg.AddComponent<Arcane::RigidBody2D>(savedEntity, rb);
+        reg.AddComponent<Arcane::Physics2D::RigidBody>(savedEntity, rb);
 
-        // Single-fixture Collider2D.
-        Arcane::Collider2D col;
+        // Single-fixture Arcane::Physics2D::Collider.
+        Arcane::Physics2D::Collider col;
         {
-            Arcane::Fixture fx;
-            fx.kind         = Manifold2D::Physics::ShapeKind::Circle;
+            Arcane::Physics2D::Fixture fx;
+            fx.kind         = Arcane::Physics2D::ShapeKind::Circle;
             fx.radius       = kRadius;
             fx.restitution  = kRestitution;
             fx.friction     = kFriction;
@@ -117,13 +117,13 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
             fx.isSensor     = true;
             col.fixtures.push_back(fx);
         }
-        reg.AddComponent<Arcane::Collider2D>(savedEntity, col);
+        reg.AddComponent<Arcane::Physics2D::Collider>(savedEntity, col);
 
-        // PhysicsBodyRef holds runtime state; we add it with a non-default
+        // Arcane::Physics2D::BodyRef holds runtime state; we add it with a non-default
         // handle to ensure the binary trivially-copyable path round-trips it.
-        Arcane::PhysicsBodyRef bref;
+        Arcane::Physics2D::BodyRef bref;
         bref.handle = Manifold2D::Physics::BodyHandle{ 7u, 3u };
-        reg.AddComponent<Arcane::PhysicsBodyRef>(savedEntity, bref);
+        reg.AddComponent<Arcane::Physics2D::BodyRef>(savedEntity, bref);
 
         auto saved = reg.Save(path);
         REQUIRE(saved.IsOk());
@@ -132,15 +132,15 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
     // Load into a fresh registry.
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Arcane::RegisterSceneComponents(*components);
-    Arcane::RegisterPhysicsComponents(*components);
+    Arcane::Physics2D::RegisterComponents(*components);
     auto loaded = Astra::Registry::Load(path, components);
     REQUIRE(loaded.IsOk());
     std::unique_ptr<Astra::Registry> reg = std::move(*loaded.GetValue());
 
-    // Assert RigidBody2D values survived.
-    const auto* rb = reg->GetComponent<Arcane::RigidBody2D>(savedEntity);
+    // Assert Arcane::Physics2D::RigidBody values survived.
+    const auto* rb = reg->GetComponent<Arcane::Physics2D::RigidBody>(savedEntity);
     REQUIRE(rb != nullptr);
-    CHECK(rb->type           == Manifold2D::Physics::BodyType::Dynamic);
+    CHECK(rb->type           == Arcane::Physics2D::BodyType::Dynamic);
     CHECK(rb->velocity.x     == Approx(kVelX));
     CHECK(rb->velocity.y     == Approx(kVelY));
     CHECK(rb->mass           == Approx(kMass));
@@ -148,11 +148,11 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
     CHECK(rb->fixedRotation  == true);
     CHECK(rb->bullet         == false);
 
-    // Assert Collider2D: single fixture values survived.
-    const auto* col = reg->GetComponent<Arcane::Collider2D>(savedEntity);
+    // Assert Arcane::Physics2D::Collider: single fixture values survived.
+    const auto* col = reg->GetComponent<Arcane::Physics2D::Collider>(savedEntity);
     REQUIRE(col != nullptr);
     REQUIRE(col->fixtures.size() == 1u);
-    CHECK(col->fixtures[0].kind         == Manifold2D::Physics::ShapeKind::Circle);
+    CHECK(col->fixtures[0].kind         == Arcane::Physics2D::ShapeKind::Circle);
     CHECK(col->fixtures[0].radius       == Approx(kRadius));
     CHECK(col->fixtures[0].restitution  == Approx(kRestitution));
     CHECK(col->fixtures[0].friction     == Approx(kFriction));
@@ -161,8 +161,8 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
     CHECK(col->fixtures[0].maskBits     == kMaskBits);
     CHECK(col->fixtures[0].isSensor     == true);
 
-    // PhysicsBodyRef present on the entity.
-    const auto* bref = reg->GetComponent<Arcane::PhysicsBodyRef>(savedEntity);
+    // Arcane::Physics2D::BodyRef present on the entity.
+    const auto* bref = reg->GetComponent<Arcane::Physics2D::BodyRef>(savedEntity);
     REQUIRE(bref != nullptr);
     // Empirically verify what the binary (trivially-copyable) path does with the
     // Serializable(false) handle field.  We wrote {7u, 3u} before Save -- assert
@@ -178,12 +178,12 @@ TEST_CASE("physics components binary round-trip preserves authored field values 
 // TEST 3 -- two-fixture binary round-trip: all per-fixture fields survive
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Save/Load", "[physics]")
+TEST_CASE("Arcane::Physics2D::Collider two-fixture round-trip: all per-fixture fields survive Save/Load", "[physics]")
 {
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() / "arcane_physics_components_2fixture_roundtrip.bin";
 
-    // Fixture 0: circle r=4 @ local(0,0), density 1, friction 0.3.
+    // Arcane::Physics2D::Fixture 0: circle r=4 @ local(0,0), density 1, friction 0.3.
     constexpr float kF0Radius   = 4.0f;
     constexpr float kF0Density  = 1.0f;
     constexpr float kF0Friction = 0.3f;
@@ -192,7 +192,7 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
     constexpr uint32_t kF0Cat   = 0x01u;
     constexpr uint32_t kF0Mask  = 0xFFFFFFFFu;
 
-    // Fixture 1: capsule(halfLen=1.5, r=0.4) @ local(10,0) localAngle=0.5, isSensor=true.
+    // Arcane::Physics2D::Fixture 1: capsule(halfLen=1.5, r=0.4) @ local(10,0) localAngle=0.5, isSensor=true.
     // Using Capsule (not Aabb) exercises halfLen + localAngle round-trip, which
     // was previously un-gated.  The round-trip test now asserts ALL descriptor
     // fields including halfLen and localAngle on the second fixture.
@@ -211,22 +211,22 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::Physics2D::RegisterComponents(reg);
 
         savedEntity = reg.CreateEntity();
 
-        // Minimal RigidBody2D (only need it present for the overall test).
-        Arcane::RigidBody2D rb;
-        rb.type = Manifold2D::Physics::BodyType::Dynamic;
-        reg.AddComponent<Arcane::RigidBody2D>(savedEntity, rb);
+        // Minimal Arcane::Physics2D::RigidBody (only need it present for the overall test).
+        Arcane::Physics2D::RigidBody rb;
+        rb.type = Arcane::Physics2D::BodyType::Dynamic;
+        reg.AddComponent<Arcane::Physics2D::RigidBody>(savedEntity, rb);
 
-        // Two-fixture Collider2D.
-        Arcane::Collider2D col;
+        // Two-fixture Arcane::Physics2D::Collider.
+        Arcane::Physics2D::Collider col;
 
-        // Fixture 0: circle.
+        // Arcane::Physics2D::Fixture 0: circle.
         {
-            Arcane::Fixture fx;
-            fx.kind         = Manifold2D::Physics::ShapeKind::Circle;
+            Arcane::Physics2D::Fixture fx;
+            fx.kind         = Arcane::Physics2D::ShapeKind::Circle;
             fx.radius       = kF0Radius;
             fx.halfLen      = 0.0f;
             fx.halfW        = 0.0f;
@@ -242,10 +242,10 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
             col.fixtures.push_back(fx);
         }
 
-        // Fixture 1: capsule (halfLen + localAngle round-trip gate).
+        // Arcane::Physics2D::Fixture 1: capsule (halfLen + localAngle round-trip gate).
         {
-            Arcane::Fixture fx;
-            fx.kind         = Manifold2D::Physics::ShapeKind::Capsule;
+            Arcane::Physics2D::Fixture fx;
+            fx.kind         = Arcane::Physics2D::ShapeKind::Capsule;
             fx.radius       = kF1Radius;
             fx.halfLen      = kF1HalfLen;
             fx.halfW        = 0.0f;
@@ -261,8 +261,8 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
             col.fixtures.push_back(fx);
         }
 
-        reg.AddComponent<Arcane::Collider2D>(savedEntity, col);
-        reg.AddComponent<Arcane::PhysicsBodyRef>(savedEntity, Arcane::PhysicsBodyRef{});
+        reg.AddComponent<Arcane::Physics2D::Collider>(savedEntity, col);
+        reg.AddComponent<Arcane::Physics2D::BodyRef>(savedEntity, Arcane::Physics2D::BodyRef{});
 
         auto saved = reg.Save(path);
         REQUIRE(saved.IsOk());
@@ -271,17 +271,17 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
     // Load into a fresh registry.
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Arcane::RegisterSceneComponents(*components);
-    Arcane::RegisterPhysicsComponents(*components);
+    Arcane::Physics2D::RegisterComponents(*components);
     auto loaded = Astra::Registry::Load(path, components);
     REQUIRE(loaded.IsOk());
     std::unique_ptr<Astra::Registry> reg = std::move(*loaded.GetValue());
 
-    const auto* col = reg->GetComponent<Arcane::Collider2D>(savedEntity);
+    const auto* col = reg->GetComponent<Arcane::Physics2D::Collider>(savedEntity);
     REQUIRE(col != nullptr);
     REQUIRE(col->fixtures.size() == 2u);
 
     // Assert fixture 0 (circle).
-    CHECK(col->fixtures[0].kind         == Manifold2D::Physics::ShapeKind::Circle);
+    CHECK(col->fixtures[0].kind         == Arcane::Physics2D::ShapeKind::Circle);
     CHECK(col->fixtures[0].radius       == Approx(kF0Radius));
     CHECK(col->fixtures[0].localPos.x   == Approx(kF0LocalX));
     CHECK(col->fixtures[0].localPos.y   == Approx(kF0LocalY));
@@ -294,7 +294,7 @@ TEST_CASE("Collider2D two-fixture round-trip: all per-fixture fields survive Sav
     // Assert fixture 1 (capsule, sensor) -- all descriptor fields including
     // halfLen and localAngle are now gated here (the previous Aabb variant
     // left both un-exercised).
-    CHECK(col->fixtures[1].kind         == Manifold2D::Physics::ShapeKind::Capsule);
+    CHECK(col->fixtures[1].kind         == Arcane::Physics2D::ShapeKind::Capsule);
     CHECK(col->fixtures[1].halfLen      == Approx(kF1HalfLen));
     CHECK(col->fixtures[1].radius       == Approx(kF1Radius));
     CHECK(col->fixtures[1].localPos.x   == Approx(kF1LocalX));

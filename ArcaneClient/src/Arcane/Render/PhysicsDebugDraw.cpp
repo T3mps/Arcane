@@ -34,19 +34,18 @@
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Manifold2D/Physics/Solver/Solver.hpp>               // ContactConstraint
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Scene/SceneResources.hpp>   // PhysicsInterpBuffer + InterpPose + Lerp/AngleLerp (Epic 04.2)
+#include <Arcane/Scene/SceneResources.hpp>   // Arcane::Physics2D::InterpBuffer + Arcane::Physics2D::InterpPose + Lerp/AngleLerp (Epic 04.2)
 
 namespace Arcane
 {
-    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
-    // Alias so the overlay code below reads Phys:: for the Manifold2D::Physics types.
-    namespace Phys = Manifold2D::Physics;
-
     namespace
     {
+        // Vendor alias for this TU. Block and anonymous scope only, so
+        // the name is not Arcane::Phys.
+        namespace Phys = ::Manifold2D::Physics;
         // ---- palette (settings arc S6-10: debug.physics.color.*) -----------
         //
-        // The colours are cvars now (DebugPhysicsColorSettings, inherited by the
+        // The colours are cvars now (Arcane::Physics2D::DebugColorSettings, inherited by the
         // options block). A CVarColor is linear RGBA floats, the batcher's
         // glm::vec4 (may be HDR, no clamp).
         inline glm::vec4 ToVec4(const CVarColor& c) noexcept
@@ -56,7 +55,7 @@ namespace Arcane
 
         // 8-colour island palette keyed by (islandRoot % 8): distinct hues so
         // different islands are visually separate at a glance.
-        inline glm::vec4 IslandColor(const DebugPhysicsColorSettings& c, std::uint32_t root) noexcept
+        inline glm::vec4 IslandColor(const Arcane::Physics2D::DebugColorSettings& c, std::uint32_t root) noexcept
         {
             const CVarColor* const palette[8] = { &c.island0, &c.island1, &c.island2, &c.island3,
                                                   &c.island4, &c.island5, &c.island6, &c.island7 };
@@ -114,7 +113,7 @@ namespace Arcane
         // so a contact's manifold is coloured by the narrowphase path that produced
         // it. Separated never draws (no points); it and any unknown kind take
         // narrowphase0, so the lookup is total.
-        inline glm::vec4 ManifoldColor(const DebugPhysicsColorSettings& c, Phys::NarrowphaseKind kind) noexcept
+        inline glm::vec4 ManifoldColor(const Arcane::Physics2D::DebugColorSettings& c, Phys::NarrowphaseKind kind) noexcept
         {
             switch (kind)
             {
@@ -146,7 +145,7 @@ namespace Arcane
         inline void DrawArrowHead(Batcher2D& b, const glm::vec2& from,
                                   const glm::vec2& tip, float thickness,
                                   const glm::vec4& color,
-                                  const DebugPhysicsStyleSettings& st)
+                                  const Arcane::Physics2D::DebugStyleSettings& st)
         {
             glm::vec2 dir = tip - from;
             const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
@@ -287,13 +286,13 @@ namespace Arcane
 
     } // anonymous namespace
 
-    PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions()
+    Arcane::Physics2D::DebugDrawOptions MakePhysicsDebugDrawOptions()
     {
-        PhysicsDebugDrawOptions o;
-        static_cast<DebugPhysicsSettings&>(o)      = Settings<DebugPhysicsSettings>();
-        static_cast<DebugPhysicsDrawSettings&>(o)  = Settings<DebugPhysicsDrawSettings>();
-        static_cast<DebugPhysicsColorSettings&>(o) = Settings<DebugPhysicsColorSettings>();
-        static_cast<DebugPhysicsTraceSettings&>(o) = Settings<DebugPhysicsTraceSettings>();
+        Arcane::Physics2D::DebugDrawOptions o;
+        static_cast<Arcane::Physics2D::DebugSettings&>(o)      = Settings<Arcane::Physics2D::DebugSettings>();
+        static_cast<Arcane::Physics2D::DebugDrawSettings&>(o)  = Settings<Arcane::Physics2D::DebugDrawSettings>();
+        static_cast<Arcane::Physics2D::DebugColorSettings&>(o) = Settings<Arcane::Physics2D::DebugColorSettings>();
+        static_cast<Arcane::Physics2D::DebugTraceSettings&>(o) = Settings<Arcane::Physics2D::DebugTraceSettings>();
         return o;
     }
 
@@ -301,10 +300,11 @@ namespace Arcane
     // DrawPhysicsDebug
     // -------------------------------------------------------------------------
 
-    void DrawPhysicsDebug(const Phys::PhysicsWorld& world,
+    void DrawPhysicsDebug(const ::Manifold2D::Physics::PhysicsWorld& world,
                           Batcher2D& batcher,
-                          const PhysicsDebugDrawOptions& opts)
+                          const Arcane::Physics2D::DebugDrawOptions& opts)
     {
+        namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
         const Affine2D&  view    = opts.view;
@@ -314,7 +314,7 @@ namespace Arcane
         const glm::vec4  colOrient   = ToVec4(opts.orient);
         const glm::vec4  colCom      = ToVec4(opts.com);
         const glm::vec4  colContact  = ToVec4(opts.contact);
-        const DebugPhysicsStyleSettings& style = Settings<DebugPhysicsStyleSettings>();
+        const Arcane::Physics2D::DebugStyleSettings& style = Settings<Arcane::Physics2D::DebugStyleSettings>();
 
         // ---- per-body shape outlines ----------------------------------------
         for (std::uint32_t i = 0; i < n; ++i)
@@ -340,10 +340,10 @@ namespace Arcane
                 && i < opts.interp->prev.size()
                 && opts.interp->prev[i].generation == h.generation)
             {
-                const InterpPose& pp = opts.interp->prev[i];
-                wpos = Vec2(static_cast<Real>(Lerp(pp.position.x, static_cast<float>(wpos.x), opts.alpha)),
-                            static_cast<Real>(Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
-                bodyAngle = AngleLerp(pp.angle, bodyAngle, opts.alpha);
+                const Arcane::Physics2D::InterpPose& pp = opts.interp->prev[i];
+                wpos = Vec2(static_cast<Real>(Arcane::Physics2D::Lerp(pp.position.x, static_cast<float>(wpos.x), opts.alpha)),
+                            static_cast<Real>(Arcane::Physics2D::Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
+                bodyAngle = Arcane::Physics2D::AngleLerp(pp.angle, bodyAngle, opts.alpha);
             }
 
             // ---- color selection (port of PhysicsDebug.lua lines 29-34) ----
@@ -409,7 +409,7 @@ namespace Arcane
                     const Shape& fs = world.GetFixtureShape(fh);
                     const Vec2   lp = world.GetFixtureLocalPos(fh);
                     const float  la = static_cast<float>(world.GetFixtureLocalAngle(fh));
-                    // Fixture world center: interp-blended body pose + rotated
+                    // Arcane::Physics2D::Fixture world center: interp-blended body pose + rotated
                     // local offset (world units; DrawShapeOutlineRotated projects
                     // through the view).
                     const Vec2 fwc(static_cast<Real>(wpos.x + bc * lp.x - bs * lp.y),
@@ -624,18 +624,19 @@ namespace Arcane
     // DrawNarrowphaseWorldOverlay (Slice B)
     // -------------------------------------------------------------------------
 
-    void DrawNarrowphaseWorldOverlay(const Phys::NarrowphaseTrace& trace,
+    void DrawNarrowphaseWorldOverlay(const ::Manifold2D::Physics::NarrowphaseTrace& trace,
                                      int stepIndex,
                                      Batcher2D& batcher,
                                      const Affine2D& view,
                                      std::optional<float> lineThickness,
                                      std::optional<float> emphasis)
     {
+        namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
-        const DebugPhysicsTraceSettings& trc = Settings<DebugPhysicsTraceSettings>();
-        const DebugPhysicsColorSettings& pal = Settings<DebugPhysicsColorSettings>();
-        const DebugPhysicsStyleSettings& style = Settings<DebugPhysicsStyleSettings>();
+        const Arcane::Physics2D::DebugTraceSettings& trc = Settings<Arcane::Physics2D::DebugTraceSettings>();
+        const Arcane::Physics2D::DebugColorSettings& pal = Settings<Arcane::Physics2D::DebugColorSettings>();
+        const Arcane::Physics2D::DebugStyleSettings& style = Settings<Arcane::Physics2D::DebugStyleSettings>();
         const float thick = lineThickness.value_or(trc.traceLineThickness);
 
         // Emphasis scales alpha so the SELECTED contact (emphasis 1) reads bold/bright and

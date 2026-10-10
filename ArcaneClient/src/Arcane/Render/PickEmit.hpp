@@ -82,14 +82,14 @@ namespace Arcane
     //      submission does (1x1 m at the centre pivot when unresolved) -- so
     //      the silhouette is the drawn quad under ANY projection, a mirrored
     //      or off-centre pivot included.
-    //   2. Colliders -- one PickDrawable per Fixture, iterated via an
-    //      archetype-stable View<Collider2D, PhysicsBodyRef> (DETERMINISTIC:
+    //   2. Colliders -- one PickDrawable per Arcane::Physics2D::Fixture, iterated via an
+    //      archetype-stable View<Arcane::Physics2D::Collider, Arcane::Physics2D::BodyRef> (DETERMINISTIC:
     //      the id assignment id=index+1 must not depend on unordered_map hash
-    //      order -- the same rule PhysicsSystem's create pass follows). The body
-    //      pose comes from the live PhysicsWorld via PhysicsBodyRef::handle;
-    //      fixture dims + local offset are scaled by PhysicsBodyRef::appliedScale
+    //      order -- the same rule Arcane::Physics2D::System's create pass follows). The body
+    //      pose comes from the live PhysicsWorld via Arcane::Physics2D::BodyRef::handle;
+    //      fixture dims + local offset are scaled by Arcane::Physics2D::BodyRef::appliedScale
     //      so a scaled body's silhouette matches its drawn collider. Physics
-    //      colliders are read via registry.GetResource<PhysicsResource>(); if
+    //      colliders are read via registry.GetResource<Arcane::Physics2D::World>(); if
     //      absent (no physics world on this registry), none are collected --
     //      not an error.
     //   3. Meshes    -- View<WorldTransform, MeshRenderer, Not<Hidden>>, resolved

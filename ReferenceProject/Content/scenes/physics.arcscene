@@ -18,7 +18,7 @@
           },
           "name": "PhysicsScene"
         },
-        "Arcane::PhysicsSettings": {
+        "Arcane::Physics2D::SceneSettings": {
           "gravity": [
             0.0,
             -9.8100004196167
@@ -48,15 +48,25 @@
     },
     {
       "components": {
-        "Arcane::Collider2D": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216702,
+            "lo": 13316602907131203922
+          },
+          "name": "Ground"
+        },
+        "Arcane::Physics2D::BodyRef": null,
+        "Arcane::Physics2D::Collider": {
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Aabb",
               "localAngle": 0.0,
@@ -66,19 +76,12 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216702,
-            "lo": 13316602907131203922
-          },
-          "name": "Ground"
-        },
-        "Arcane::PhysicsBodyRef": null,
-        "Arcane::RigidBody2D": {
+        "Arcane::Physics2D::RigidBody": {
           "bullet": false,
           "fixedRotation": false,
           "linearDamping": 0.0,
@@ -133,15 +136,25 @@
     },
     {
       "components": {
-        "Arcane::Collider2D": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216703,
+            "lo": 13316602907131203923
+          },
+          "name": "Crate"
+        },
+        "Arcane::Physics2D::BodyRef": null,
+        "Arcane::Physics2D::Collider": {
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Aabb",
               "localAngle": 0.0,
@@ -151,19 +164,12 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216703,
-            "lo": 13316602907131203923
-          },
-          "name": "Crate"
-        },
-        "Arcane::PhysicsBodyRef": null,
-        "Arcane::RigidBody2D": {
+        "Arcane::Physics2D::RigidBody": {
           "bullet": false,
           "fixedRotation": true,
           "linearDamping": 0.0,
@@ -226,15 +232,25 @@
     },
     {
       "components": {
-        "Arcane::Collider2D": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216704,
+            "lo": 13316602907131203924
+          },
+          "name": "Ball"
+        },
+        "Arcane::Physics2D::BodyRef": null,
+        "Arcane::Physics2D::Collider": {
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Circle",
               "localAngle": 0.0,
@@ -244,19 +260,12 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.20000000298023224
+              "restitution": 0.20000000298023224,
+              "sensorEvents": true
             }
           ]
         },
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216704,
-            "lo": 13316602907131203924
-          },
-          "name": "Ball"
-        },
-        "Arcane::PhysicsBodyRef": null,
-        "Arcane::RigidBody2D": {
+        "Arcane::Physics2D::RigidBody": {
           "bullet": false,
           "fixedRotation": false,
           "linearDamping": 0.0,
@@ -311,15 +320,25 @@
     },
     {
       "components": {
-        "Arcane::Collider2D": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 4980164511003216705,
+            "lo": 13316602907131203925
+          },
+          "name": "Pill"
+        },
+        "Arcane::Physics2D::BodyRef": null,
+        "Arcane::Physics2D::Collider": {
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.0,
               "halfH": 0.30000001192092896,
               "halfLen": 0.3333333432674408,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Capsule",
               "localAngle": 0.0,
@@ -329,19 +348,12 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
-        "Arcane::Identity": {
-          "id": {
-            "hi": 4980164511003216705,
-            "lo": 13316602907131203925
-          },
-          "name": "Pill"
-        },
-        "Arcane::PhysicsBodyRef": null,
-        "Arcane::RigidBody2D": {
+        "Arcane::Physics2D::RigidBody": {
           "bullet": false,
           "fixedRotation": true,
           "linearDamping": 0.0,
