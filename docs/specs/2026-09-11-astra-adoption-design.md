@@ -77,7 +77,7 @@ Both primitives are forwards to machinery that exists on `b664aa8`:
   "IsChanged does not stamp" (column version unchanged across the call).
 - README §"Change detection" + spec §3.7 API-surface lines gain the three entries.
 - Suite green Debug + Release (`AstraTest.exe --gtest_brief=1`); commit on `feat/change-detection`;
-  fast-forward `dev`; `scripts/sync-astra.ps1` from the `dev` checkout (records the commit in
+  fast-forward `dev`; `scripts/sync-vendor.ps1 -Library Astra` from the `dev` checkout (records the commit in
   `ThirdParty/Astra/VENDORED.txt`).
 
 ## 5. Residency (R2)
@@ -207,7 +207,7 @@ path is live in production; this plan is mechanism + tests.
 - **ABI 26** lands in Plan 1's vendor task (headers move inlined layouts — same class as v10/v24):
   v26 ledger in the v24 style with grep evidence over both game modules, the residency outcome
   (§5), and the tracked-type note; `kGamePluginABIVersion = 26`; `ReferenceProject.arcproj` → 26.
-- **Order after the sync** (map B9): `sync-astra.ps1` (from `dev`) → `GenerateProjects.bat` →
+- **Order after the sync** (map B9): `sync-vendor.ps1 -Library Astra` (from `dev`) → `GenerateProjects.bat` →
   **`ReferenceProject.slnx` first, for every configuration the run targets** (single-slot
   `Binaries\`) → `Arcane.slnx` → full unfiltered suite (only it runs `[witness]`) + `~[gpu]`
   baseline + `scripts/check-baselines.ps1`. Launch hosts with an ABSOLUTE `--project` path.

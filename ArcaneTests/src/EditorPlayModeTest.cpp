@@ -32,6 +32,7 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -41,6 +42,8 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Sim/SimSettings.hpp>   // ApplySimStepCap
+#include <Arcane/Sim/Time.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>   // TransformPropagationSystem -- the engine pair's other half
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
@@ -293,7 +296,7 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
     const Astra::Entity root = reg.CreateEntity();
     reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
     reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
@@ -305,9 +308,9 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     Arcane::Transform lt; lt.position = glm::vec3(0.0f, 1.0f, 0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic;
     reg.AddComponent<Arcane::RigidBody2D>(e, rb);
-    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    Arcane::Collider2D col; Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Circle; fx.radius = 0.5f;
     col.fixtures.push_back(fx);
     reg.AddComponent<Arcane::Collider2D>(e, col);
     reg.SetParent(e, root);
@@ -324,13 +327,13 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
         float y = 1.0f;
         for (Astra::Entity le : live.GetEntityManager())
             if (const auto* rbp = live.GetComponent<Arcane::RigidBody2D>(le))
-                if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+                if (rbp->type == Arcane::BodyType2D::Dynamic)
                     y = live.GetComponent<Arcane::Transform>(le)->position.y;
         CHECK(y < 0.5f);                            // it fell during Play
     }
 
     REQUIRE(play.Stop(runtime));                    // restore: the registry is replaced
-    CHECK(runtime.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    CHECK(runtime.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
     runtime.EnsurePhysics();                        // the next Edit frame
     runtime.PhysicsEditPass();
     // Not proven by comparing world addresses across the restore: the pre-Stop
@@ -338,18 +341,18 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     // same-size allocation right after a free routinely reuses that exact
     // address. REQUIRE(res != nullptr) after the CHECK(...== nullptr) above
     // already proves a fresh mint happened -- that is the invariant this pins.
-    const auto* res = runtime.Registry().GetResource<Arcane::PhysicsResource>();
+    const auto* res = runtime.Registry().GetResource<Arcane::PhysicsWorld2D>();
     REQUIRE(res != nullptr);
-    CHECK_FALSE(runtime.Registry().GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+    CHECK_FALSE(runtime.Registry().GetResource<Arcane::PhysicsInterpBuffer2D>()->captured);
     Astra::Registry& restored = runtime.Registry();
     float y = 0.0f; int dynamic = 0;
     for (Astra::Entity le : restored.GetEntityManager())
         if (const auto* rbp = restored.GetComponent<Arcane::RigidBody2D>(le))
-            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+            if (rbp->type == Arcane::BodyType2D::Dynamic)
             { ++dynamic; y = restored.GetComponent<Arcane::Transform>(le)->position.y; }
     REQUIRE(dynamic == 1);
     CHECK(y == Catch::Approx(1.0f));                // the authored pose
-    CHECK(res->entityToBody.size() == 1);           // re-minted from it
+    CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).size() == 1);           // re-minted from it
 }
 
 TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored velocity survives an earlier drag",
@@ -359,7 +362,7 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
     // Edit passes had been minting and reconciling carried straight into Play.
     // The paused reconcile (PASS 3.5) zeroes a body's velocity on any Transform
     // divergence -- the right call for "don't fling on resume" -- so an author
-    // who set RigidBody2D.velocity and THEN dragged the entity got a body at
+    // who set Arcane::RigidBody2D.velocity and THEN dragged the entity got a body at
     // rest in Play, while ArcaneRuntime (which mints fresh at boot and applies
     // rb.velocity in PASS 2) moved it. Editor Play must equal the standalone
     // host's boot: Play drops the Edit world, and the first Play frame's
@@ -367,21 +370,21 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
     Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
     const Astra::Entity root = reg.CreateEntity();
     reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
     reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
-    Arcane::PhysicsSettings zeroG; zeroG.gravity = glm::vec2(0.0f, 0.0f);   // only the authored velocity moves it
-    reg.AddComponent<Arcane::PhysicsSettings>(root, zeroG);
+    Arcane::PhysicsSettings2D zeroG; zeroG.gravity = glm::vec2(0.0f, 0.0f);   // only the authored velocity moves it
+    reg.AddComponent<Arcane::PhysicsSettings2D>(root, zeroG);
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     const Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic;
     rb.velocity = glm::vec2(5.0f, 0.0f);                                     // the authored velocity
     reg.AddComponent<Arcane::RigidBody2D>(e, rb);
-    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    Arcane::Collider2D col; Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Circle; fx.radius = 0.5f;
     col.fixtures.push_back(fx);
     reg.AddComponent<Arcane::Collider2D>(e, col);
     reg.SetParent(e, root);
@@ -394,9 +397,9 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
     reg.GetComponent<Arcane::Transform>(e)->position.x = 1.0f;   // the drag, stamped by Mut
     runtime.PhysicsEditPass();
     {
-        const auto* res = reg.GetResource<Arcane::PhysicsResource>();
+        const auto* res = reg.GetResource<Arcane::PhysicsWorld2D>();
         REQUIRE(res != nullptr);
-        const auto v = res->world->Velocity(res->entityToBody.at(e));
+        const auto v = Arcane::Detail::Physics2D::Access::Solver(*res)->Velocity(Arcane::Detail::Physics2D::Access::Entities(*res).at(e));
         REQUIRE(static_cast<float>(v.x) == Catch::Approx(0.0f));   // the Edit world's body is at rest
     }
     REQUIRE(reg.GetComponent<Arcane::RigidBody2D>(e)->velocity.x == Catch::Approx(5.0f));   // the AUTHORED value stands
@@ -405,7 +408,7 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
     REQUIRE(play.Play(runtime));
     // The pin on the mechanism, symmetric with Stop's: the Edit world is gone
     // and the first Play frame's Ensure mints a fresh one.
-    CHECK(runtime.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    CHECK(runtime.Registry().GetResource<Arcane::PhysicsWorld2D>() == nullptr);
     for (int i = 0; i < 30; ++i) { runtime.EnsurePhysics(); runtime.Loop().Advance(1.0 / 60.0); }
 
     // The pin on the behaviour: half a second at 5 m/s from x = 1 -- the
@@ -425,7 +428,7 @@ namespace
     {
         Astra::Registry& reg = runtime.Registry();
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::RegisterPhysicsComponents2D(reg);
         const Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
@@ -434,9 +437,9 @@ namespace
         Arcane::Transform lt; lt.position = glm::vec3(0.0f, 1.0f, 0.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-        Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+        Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic;
         reg.AddComponent<Arcane::RigidBody2D>(e, rb);
-        Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+        Arcane::Collider2D col; Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Circle; fx.radius = 0.5f;
         col.fixtures.push_back(fx);
         reg.AddComponent<Arcane::Collider2D>(e, col);
         reg.SetParent(e, root);
@@ -445,7 +448,7 @@ namespace
 
     // One editor frame's sim advance, exactly as EditorApp::AdvanceSim makes
     // it: the per-frame Ensure, then the loop with the plugin callbacks (none
-    // here). Whether fixedUpdate -- and so PhysicsSystem -- runs is the loop's
+    // here). Whether fixedUpdate -- and so Arcane::PhysicsSystem2D -- runs is the loop's
     // paused flag's decision alone, which is the whole point of the case below.
     void EditorFrame(Arcane::Runtime& runtime)
     {
@@ -462,7 +465,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
     // editor opens a scene through Runtime::ResetRegistry (DoOpenScene), and
     // ResetRegistry rebinds the RunLoop, which used to reset `paused` to a
     // fresh loop's default -- RUNNING. The next AdvanceSim ran fixedUpdate's
-    // PhysicsSystem(stepWorld=true) in "Edit" mode, so the bodies fell; Play
+    // Arcane::PhysicsSystem2D(stepWorld=true) in "Edit" mode, so the bodies fell; Play
     // then snapshotted the fallen poses and Stop restored them. The boot scene
     // never showed it because boot pauses AFTER loading it.
     Arcane::Runtime runtime(Arcane::Test::Process());
@@ -499,7 +502,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
     Astra::Registry& restored = runtime.Registry();
     for (Astra::Entity le : restored.GetEntityManager())
         if (const auto* rbp = std::as_const(restored).GetComponent<Arcane::RigidBody2D>(le))
-            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+            if (rbp->type == Arcane::BodyType2D::Dynamic)
             { ++dynamic; yStop = std::as_const(restored).GetComponent<Arcane::Transform>(le)->position.y; }
     REQUIRE(dynamic == 1);
     CHECK(yStop == Catch::Approx(1.0f));
@@ -508,7 +511,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
     yStop = 0.0f;
     for (Astra::Entity le : runtime.Registry().GetEntityManager())
         if (const auto* rbp = std::as_const(runtime.Registry()).GetComponent<Arcane::RigidBody2D>(le))
-            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+            if (rbp->type == Arcane::BodyType2D::Dynamic)
                 yStop = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(le)->position.y;
     CHECK(yStop == Catch::Approx(1.0f));
 }
@@ -555,6 +558,54 @@ TEST_CASE("Play as embedded server stands up a second DedicatedServer world on t
     CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
     CHECK(runtime.Loop().IsPaused());
     CHECK(CountEntities(runtime) == authored);
+}
+
+// Settings arc S6-8 (fix round 1): sim.maxStepsPerFrame is Live, and the
+// editor's primary loop takes it each frame (EditorAppFrame). The embedded
+// server world advances on the SAME clamped dt, so it must take the same cap
+// or a hitch steps the client world N times and the authority M times. The
+// server Runtime's ctor read the cap at Play; a change DURING Play has to
+// reach it on the next TickServer.
+TEST_CASE("Play as embedded server: the server world takes the live sim.maxStepsPerFrame each tick like the primary loop", "[editor][netmode][sim]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::EmbeddedServer));
+    Arcane::Runtime* server = play.ServerWorld();
+    REQUIRE(server != nullptr);
+    REQUIRE(server->Loop().FixedHz() == 60.0);
+    REQUIRE(server->Loop().MaxStepsPerFrame() == 5);   // the published default, read at construction
+
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const Arcane::CVarHandle h = reg.Find("sim.maxStepsPerFrame");
+    struct ClearCodeRung
+    {
+        Arcane::CVarHandle handle;
+        ~ClearCodeRung()
+        {
+            Arcane::CVarRegistry::Get().ClearRung(handle, Arcane::SetBy::Code);
+            Arcane::CVarRegistry::Get().PublishImmediate();
+        }
+    } restore{ h };
+    REQUIRE(reg.Set(h, Arcane::CVarValue::Int32(10), Arcane::SetBy::Code) == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+
+    // What the editor frame does to the primary loop before its Advance.
+    Arcane::ApplySimStepCap(runtime.Loop());
+    CHECK(runtime.Loop().MaxStepsPerFrame() == 10);
+
+    // A 0.2 s hitch owes 12 steps at 60 Hz: both worlds run exactly 10.
+    play.TickServer(0.2);
+    CHECK(server->Loop().MaxStepsPerFrame() == 10);
+    const Arcane::Time* t = server->Registry().GetResource<Arcane::Time>();
+    REQUIRE(t != nullptr);
+    CHECK(t->fixedStep == 10);   // was 5 when the server loop kept its ctor-read cap
+
+    REQUIRE(play.Stop(runtime));
 }
 
 TEST_CASE("Play as listen server flips the ONE world to ListenServer; Stop restores Standalone", "[editor][netmode]")
@@ -609,13 +660,13 @@ TEST_CASE("Play as embedded server with a loaded module: the server world gets t
     REQUIRE(play.Stop(runtime, &host));
     CHECK(host.Runtimes().size() == 1);
     // Back to Standalone, so the editor world's fixedUpdate carries BOTH masks again
-    // -- the module's pair, alongside the engine's own PhysicsSystem and
+    // -- the module's pair, alongside the engine's own Arcane::PhysicsSystem2D and
     // TransformPropagationSystem (Runtime::InstallEngineSystems, ABI 29), which the
     // SetNetMode clear-and-reinstantiate must not have dropped.
     CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
     CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
     CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
-    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     CHECK(runtime.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
     host.Unload();
 }

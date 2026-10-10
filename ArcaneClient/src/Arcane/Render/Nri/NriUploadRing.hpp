@@ -18,7 +18,7 @@
 //     RenderGraphTest.cpp's "[nri]" cases. This is what every test drives
 //     directly.
 //   - NriUploadRing: the thin NRI-facing wrapper. Owns
-//     kSwapchainFramesInFlight RingLayouts plus one persistent-mapped
+//     FramesInFlight() RingLayouts plus one persistent-mapped
 //     UPLOAD-heap nri::Buffer per slot.
 //
 // NONE-backend footgun (plan's constraints): ImplNONE's MapBuffer returns
@@ -42,7 +42,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
-#include <Arcane/Render/FramePacing.hpp>   // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>   // FramesInFlight()
 
 #include <cstdint>
 #include <vector>
@@ -52,11 +52,11 @@ namespace Arcane
     // -----------------------------------------------------------------
     // RingLayout -- pure bump-allocator math for ONE frame slot's byte
     // range. Every method here is deterministic and touches nothing but its
-    // own four counters. NriUploadRing owns kSwapchainFramesInFlight of
+    // own four counters. NriUploadRing owns FramesInFlight() of
     // these; nothing else needs to, but nothing stops a caller from using
     // one standalone (which is exactly what the device-less tests do).
     // -----------------------------------------------------------------
-    class ARCANE_API RingLayout
+    class ARC_API RingLayout
     {
     public:
         struct AllocResult
@@ -114,7 +114,7 @@ namespace Arcane
     // NONE-backend / [gpu] caveat: nothing below has ever executed in this
     // tree -- it is a desk-verify item for Task 8+'s integration.
     // -----------------------------------------------------------------
-    class ARCANE_API NriUploadRing
+    class ARC_API NriUploadRing
     {
     public:
         struct Alloc
@@ -132,7 +132,7 @@ namespace Arcane
         NriUploadRing(const NriUploadRing&)            = delete;
         NriUploadRing& operator=(const NriUploadRing&) = delete;
 
-        // Creates kSwapchainFramesInFlight persistent-mapped UPLOAD-heap
+        // Creates FramesInFlight() persistent-mapped UPLOAD-heap
         // buffers, each `slotBytes` long, and their matching RingLayouts.
         // [gpu]-only (see the file header): fails outright on the NONE
         // backend, because MapBuffer does. Returns false (already logged)
@@ -145,7 +145,7 @@ namespace Arcane
         // makes it the CURRENT slot: every Allocate() until the next
         // BeginFrame() call lands here. Call once per frame, before that
         // frame's first Allocate(). `frameSlot` must be <
-        // kSwapchainFramesInFlight (ARC_ASSERT in debug; a release-mode
+        // FramesInFlight() (ARC_ASSERT in debug; a release-mode
         // out-of-range call is a no-op, matching Allocate()'s never-UB
         // guarantee).
         void BeginFrame(std::uint32_t frameSlot);

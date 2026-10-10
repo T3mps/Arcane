@@ -292,7 +292,7 @@ namespace Arcane
         out.rowCount = m.allocator.HighWater();
         out.visibleIndices.assign(out.rowCount, 0xFFFFFFFFu);
         out.oracleVisibleIndices.assign(out.rowCount, 0xFFFFFFFFu);
-        out.frustum = vis ? vis->frustum : Frustum::From(view).Widened(kVisibilitySlack);
+        out.frustum = vis ? vis->frustum : Frustum::From(view).Widened(VisibilitySlackMeters());
         out.stats   = {};
 
         const std::size_t nb = m.batchKeys.size();

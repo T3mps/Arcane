@@ -13,6 +13,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Platform.hpp>   // module/exe spellings per platform (Diagnostics POSIX port)
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include "Helpers/HostWitness.hpp"
 
@@ -345,10 +346,9 @@ TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs,
     REQUIRE_FALSE(crash.stem.empty());
     const std::string sibling = crash.stem.string() + ".symbolized.txt";
 
-    // Dist builds death-fixture with `symbols "off"` (premake5.lua, the
-    // fixture's Dist filter), so there is no death-fixture.pdb to resolve and
-    // the named half cannot hold there; the symbol-less half below still runs.
-#if !defined(ARCANE_DIST)
+    // death-fixture keeps symbols on in Dist (premake5.lua), so dbgeng resolves
+    // death-fixture.pdb in every configuration. The symbol-less half below
+    // still runs with an empty search path.
     const std::string fixtureDir = std::filesystem::absolute("../death-fixture").string();
     const std::string coreDir    = std::filesystem::absolute("../ArcaneCore").string();
     {
@@ -365,7 +365,6 @@ TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs,
         CHECK(text.find("DeathFixtureMain.cpp") != std::string::npos);
     }
     std::filesystem::remove(sibling);
-#endif
     {
         const auto hidden = std::filesystem::temp_directory_path() / "arcane-no-symbols";
         std::filesystem::remove_all(hidden);
@@ -419,7 +418,7 @@ TEST_CASE("death fixture: an access violation yields a crash report and exit cod
     // "[<ts>] [Arcane] [<level>] "; FatalEcho's WriteFile does not. An echo
     // that regressed to ARC_ERROR fails both of these -- the line would no
     // longer start at a newline, and an [error]-prefixed copy would appear.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     CHECK(logText.find("\nDiagnostics: crash (unhandled exception) -- report written")
           != std::string::npos);
 #else
@@ -450,7 +449,7 @@ TEST_CASE("death fixture: assert, terminate, abort, invalid parameter, pure call
           "and OOM all yield a report with the right kind and exit 10, bounded", "[diag]")
 {
     struct Row { const char* mode; const char* kind; };
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     const Row rows[] = { {"assert","assert"}, {"terminate","terminate"}, {"abort","terminate"},
                          {"invalid-parameter","crash"}, {"purecall","crash"},
                          {"stack-overflow","crash"}, {"oom","out-of-memory"} };
@@ -461,7 +460,7 @@ TEST_CASE("death fixture: assert, terminate, abort, invalid parameter, pure call
     // process actually died of on this platform, not a weaker assertion.
     // macOS libc's fortify check traps instead (brk -> SIGTRAP on Apple
     // silicon), which the crash path files as `crash`.
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     constexpr const char* kFortifyKind = "crash";
 #else
     constexpr const char* kFortifyKind = "terminate";

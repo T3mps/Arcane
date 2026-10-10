@@ -15,6 +15,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>   // NoteGpuDeviceLost -- the host's device-lost latch
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // EnableD3D12Dred -- the F-2 DRED tier, armed before D3D12CreateDevice
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.adapter, render.debug.*, render.d3d12.deviceArmorRefs
 
 #include <d3d12.h>
 #include <d3d12sdklayers.h>   // DXGI_DEBUG_D3D12 -- the D3D12 layer's producer GUID in the DXGI info queue
@@ -150,7 +151,7 @@ namespace Arcane
         // resuming past one lands on the corrupted object as an access
         // violation. That break is protective and stays. What it guarded on
         // this desk is RepairForeignDeviceOverRelease below.
-        void ArmDxgiDebugQueue()
+        void ArmDxgiDebugQueue(BreakSeverity breakOn)
         {
             if (g_dxgiInfoQueueProbed.exchange(true, std::memory_order_acq_rel))
                 return;
@@ -168,9 +169,13 @@ namespace Arcane
             // The DXGI twin of the ID3D12InfoQueue disarm below. DXGI_DEBUG_ALL
             // is every producer the queue knows -- DXGI itself, the D3D12
             // layer's messages that travel through it, and the app's.
-            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, FALSE);
-            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, FALSE);
-            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING, FALSE);
+            // render.debug.breakOnSeverity (default None: never break).
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION,
+                                                BreaksOn(breakOn, BreakSeverity::Corruption) ? TRUE : FALSE);
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR,
+                                                BreaksOn(breakOn, BreakSeverity::Error) ? TRUE : FALSE);
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING,
+                                                BreaksOn(breakOn, BreakSeverity::Warning) ? TRUE : FALSE);
         }
 
         // F-3: the ONE device-removed observation point for this backend.
@@ -277,11 +282,14 @@ namespace Arcane
             case D3D12_MESSAGE_SEVERITY_WARNING:
                 ARC_WARN("[d3d12] {}", text);
                 break;
+            case D3D12_MESSAGE_SEVERITY_INFO:
+                // Reaches here only when render.debug.minSeverity is Info:
+                // the default denies INFO at the storage filter.
+                ARC_INFO("[d3d12] {}", text);
+                break;
             default:
-                // INFO/MESSAGE: the debug layer emits one per resource create
-                // and destroy. The Vulkan messenger subscribes to Error and
-                // Warning only (DeviceCreationVulkan.cpp) -- match it rather
-                // than drown the log.
+                // MESSAGE: the debug layer emits one per resource create and
+                // destroy; it is denied at the storage filter.
                 break;
             }
         }
@@ -389,8 +397,9 @@ namespace Arcane
         // BEFORE the factory: DXGI_CREATE_FACTORY_DEBUG is what switches the
         // DXGI debug layer on, and its queue must already have break-off set
         // when the first DXGI message can arrive.
+        const RenderDebugSettings& debugSettings = Settings<RenderDebugSettings>();
         if (debugLayerActive)
-            ArmDxgiDebugQueue();
+            ArmDxgiDebugQueue(debugSettings.breakOnSeverity);
 
         if (FAILED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&out.factory))))
         {
@@ -398,7 +407,18 @@ namespace Arcane
             return false;
         }
 
-        if (FAILED(out.factory->EnumAdapterByGpuPreference(
+        // render.adapter: -1 (the default) takes the high-performance
+        // preference's first adapter; an index picks that DXGI adapter
+        // (EnumAdapters1 order), falling back to the default when absent.
+        if (const std::int32_t wanted = Settings<RenderSettings>().adapter; wanted >= 0)
+        {
+            ComPtr<IDXGIAdapter1> chosen;
+            if (SUCCEEDED(out.factory->EnumAdapters1(static_cast<UINT>(wanted), &chosen)))
+                out.adapter = chosen;
+            else
+                ARC_WARN("render.adapter {}: no DXGI adapter at that index; using the high-performance default", wanted);
+        }
+        if (!out.adapter && FAILED(out.factory->EnumAdapterByGpuPreference(
                 0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&out.adapter))))
         {
             ARC_ERROR("No DXGI adapter found");
@@ -483,23 +503,34 @@ namespace Arcane
                 // D3D12_MESSAGE_SEVERITY_ERROR or CORRUPTION message. Route all
                 // validation through the callback below (which logs at the
                 // appropriate level and bumps the latch) rather than aborting
-                // the process on first error.
-                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
-                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
-                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+                // the process on first error -- unless
+                // render.debug.breakOnSeverity asks for the break (default
+                // None).
+                const BreakSeverity breakOn = debugSettings.breakOnSeverity;
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION,
+                                              BreaksOn(breakOn, BreakSeverity::Corruption) ? TRUE : FALSE);
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR,
+                                              BreaksOn(breakOn, BreakSeverity::Error) ? TRUE : FALSE);
+                infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING,
+                                              BreaksOn(breakOn, BreakSeverity::Warning) ? TRUE : FALSE);
 
-                // Deny INFO/MESSAGE at the info queue instead of dropping them in
-                // the callback. The debug layer emits one of each per resource
-                // create and destroy; filtering here means they are never
-                // stored and never cross into D3D12DebugLayerCallback at all.
-                // Same subscription as the Vulkan messenger, which takes Error
-                // and Warning only (DeviceCreationVulkan.cpp) -- so "an error
-                // happened" and "the log is quiet" mean one thing on both
-                // backends.
-                D3D12_MESSAGE_SEVERITY denied[]{ D3D12_MESSAGE_SEVERITY_INFO,
-                                                 D3D12_MESSAGE_SEVERITY_MESSAGE };
+                // Deny what render.debug.minSeverity leaves out at the info
+                // queue instead of dropping it in the callback -- by default
+                // INFO and MESSAGE. The debug layer emits one of each per
+                // resource create and destroy; filtering here means they are
+                // never stored and never cross into D3D12DebugLayerCallback at
+                // all. MESSAGE is always denied. The same setting is the
+                // Vulkan messenger's mask (DeviceCreationVulkan.cpp, Error and
+                // Warning by default) -- so "an error happened" and "the log
+                // is quiet" mean one thing on both backends.
+                const MinSeverity minSeverity = debugSettings.minSeverity;
+                D3D12_MESSAGE_SEVERITY denied[3]{};
+                UINT deniedCount = 0;
+                if (!Reports(minSeverity, MinSeverity::Warning)) denied[deniedCount++] = D3D12_MESSAGE_SEVERITY_WARNING;
+                if (!Reports(minSeverity, MinSeverity::Info))    denied[deniedCount++] = D3D12_MESSAGE_SEVERITY_INFO;
+                denied[deniedCount++] = D3D12_MESSAGE_SEVERITY_MESSAGE;
                 D3D12_INFO_QUEUE_FILTER filter{};
-                filter.DenyList.NumSeverities = static_cast<UINT>(std::size(denied));
+                filter.DenyList.NumSeverities = deniedCount;
                 filter.DenyList.pSeverityList = denied;
                 if (FAILED(infoQueue->PushStorageFilter(&filter)))
                 {
@@ -719,19 +750,19 @@ namespace Arcane
     // a desk with such an overlay sees the WARN on every close and knows
     // what to uninstall or blacklist; a clean desk never sees a line.
     //
-    // 65536 references cover ~2M presented frames at the measured rate
-    // (one per 31 frames), i.e. hours; ULONG has room for far more. The
-    // cost is one AddRef loop at creation and one Release loop at teardown,
-    // both through the debug layer's thin wrapper -- milliseconds, once.
+    // 65536 references (render.d3d12.deviceArmorRefs, read once here at
+    // device creation) cover ~2M presented frames at the measured rate (one
+    // per 31 frames), i.e. hours; ULONG has room for far more. The cost is
+    // one AddRef loop at creation and one Release loop at teardown, both
+    // through the debug layer's thin wrapper -- milliseconds, once.
     namespace
     {
-        constexpr ULONG kDeviceArmorRefs = 1u << 16;
-
         void ArmorD3D12Device(D3D12DeviceCreation& out)
         {
-            for (ULONG i = 0; i < kDeviceArmorRefs; ++i)
+            const ULONG refs = Settings<RenderD3d12Settings>().deviceArmorRefs;
+            for (ULONG i = 0; i < refs; ++i)
                 out.device->AddRef();
-            out.deviceArmorRefs = kDeviceArmorRefs;
+            out.deviceArmorRefs = refs;
         }
 
         // The audit + the last releases. The owner's ComPtr reference is
@@ -824,9 +855,12 @@ namespace Arcane
             case D3D12_MESSAGE_SEVERITY_WARNING:
                 ARC_WARN("[d3d12] {}", text);
                 break;
+            case D3D12_MESSAGE_SEVERITY_INFO:
+                ARC_INFO("[d3d12] {}", text);   // stored only when render.debug.minSeverity is Info
+                break;
             default:
-                // INFO/MESSAGE are denied at the storage filter; nothing of
-                // theirs is ever here to drop.
+                // MESSAGE is denied at the storage filter; nothing of it is
+                // ever here to drop.
                 break;
             }
         }

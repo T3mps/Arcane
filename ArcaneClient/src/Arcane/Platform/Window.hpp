@@ -4,6 +4,7 @@
 // input lives in Arcane/Input (snapshot-driven action system).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Platform/RenderWindowSettings.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -16,9 +17,12 @@ namespace Arcane
     struct WindowDesc
     {
         std::string title = "Arcane";
-        uint32_t width    = 1280;
-        uint32_t height   = 720;
-        bool resizable    = true;
+        // render.window.*'s defaults. The host window's live extent comes from
+        // the published settings (GpuContext); RenderWindowSettings.hpp is the
+        // plain struct, free of the settings headers NRI cannot follow.
+        uint32_t width    = RenderWindowSettings{}.width;
+        uint32_t height   = RenderWindowSettings{}.height;
+        bool resizable    = RenderWindowSettings{}.resizable;
         bool hidden       = false;  // tests create hidden windows
         bool vulkan       = false;  // set true for Vulkan windows (SDL_WINDOW_VULKAN)
     };
@@ -31,7 +35,7 @@ namespace Arcane
         uint32_t height    = 0;
     };
 
-    class ARCANE_API Window
+    class ARC_API Window
     {
     public:
         Window() = default;
@@ -45,6 +49,7 @@ namespace Arcane
         WindowEvents PumpEvents();
 
         void SetTitle(const std::string& title);
+        [[nodiscard]] float DisplayScale() const;   // the monitor's content scale (1.0 without a window)
         void SetSize(uint32_t width, uint32_t height);
 
         // Un-hide a window created with WindowDesc::hidden. Hosts create hidden
@@ -86,6 +91,7 @@ namespace Arcane
 
         void GetPixelSize(uint32_t& width, uint32_t& height) const;
         bool IsMinimized() const;
+        bool IsFocused() const;                           // holds keyboard input focus (false for a hidden window)
 
         void* NativeHandle() const;                       // HWND on Windows; wl_surface* or the X11 Window id (as a pointer-sized value) on Linux; CAMetalLayer* on macOS
         // Linux port: the native DISPLAY a swapchain needs alongside the handle --

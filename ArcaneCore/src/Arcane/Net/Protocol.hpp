@@ -1,14 +1,19 @@
 #pragma once
 
+#include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include "Json.hpp"
+#include <Arcane/Config/CVarConfig.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -20,6 +25,7 @@ namespace Arcane
     // store it as a member variable rather than looking it up on every call.
 
     using MsgId = uint16_t;
+    ARC_CONSTANT("wire protocol: message id 0 is the never-sent sentinel")
     inline constexpr MsgId kInvalidMsgId = 0;  // sentinel -- never sent on the wire
 
     // ============================================================================
@@ -87,6 +93,9 @@ namespace Arcane
             bool debugOnly = false;
         };
 
+        // A by-value view over net.* (settings arc S6-12): GetSettings() builds
+        // it from Settings<NetSettings>() plus the file's message_format, which
+        // stays a protocol-file field (the wire format string).
         struct Settings
         {
             int defaultPort = 0;
@@ -97,12 +106,8 @@ namespace Arcane
             int idleTimeoutSeconds = 0;
             int heartbeatIntervalSeconds = 0;
             // Audit M-V5-6 networking (2026-06-04): public-facing TCP
-            // connection caps, formerly compile-time constants in
-            // TcpSocket.hpp::ServerConfig. Configurable so a launch-day
-            // topology change (CGNAT presence, reverse-proxy, etc.)
-            // doesn't require a rebuild. Missing keys in protocol.json
-            // fall back to the ServerConfig defaults at load time, so
-            // pre-existing protocol.json files keep working unchanged.
+            // connection caps (net.maxConnectionsPerIp / net.maxConnectionsTotal).
+            // A protocol.json without the keys leaves the net defaults.
             int maxConnectionsPerIp = 0;
             int maxConnectionsTotal = 0;
         };
@@ -113,7 +118,13 @@ namespace Arcane
             return instance;
         }
 
-        bool Load(const std::string& path = "data/protocol.json")
+        // Loads net.protocolPath (settings arc S6-11; "data/protocol.json" by default).
+        bool Load()
+        {
+            return Load(std::string(::Arcane::Settings<NetSettings>().protocolPath));
+        }
+
+        bool Load(const std::string& path)
         {
             std::ifstream file(path);
             if (!file.is_open())
@@ -164,26 +175,32 @@ namespace Arcane
                     return false;
                 }
 
-                Settings newSettings{};
-                newSettings.defaultPort = settings["default_port"].get<int>();
-                newSettings.maxMessageSize = settings["max_message_size"].get<int>();
-                newSettings.messageFormat = settings["message_format"].get<std::string>();
-                newSettings.tokenLength = settings["token_length"].get<int>();
-                newSettings.sessionLifetimeSeconds = settings["session_lifetime_seconds"].get<int>();
-                newSettings.idleTimeoutSeconds = settings["idle_timeout_seconds"].get<int>();
-                newSettings.heartbeatIntervalSeconds = settings["heartbeat_interval_seconds"].get<int>();
+                // Settings arc S6-12 (inventory R3): protocol.json's settings are a
+                // Project-rung layer over net.* during the migration window. File key
+                // -> net.* key; the two max_connections_* keys are optional.
+                static constexpr std::pair<const char*, const char*> kNetKeys[] = {
+                    { "default_port", "defaultPort" }, { "max_message_size", "maxPayloadBytes" },
+                    { "token_length", "tokenLength" }, { "session_lifetime_seconds", "sessionLifetimeSeconds" },
+                    { "idle_timeout_seconds", "idleTimeoutSeconds" }, { "heartbeat_interval_seconds", "heartbeatIntervalSeconds" },
+                    { "max_connections_per_ip", "maxConnectionsPerIp" }, { "max_connections_total", "maxConnectionsTotal" } };
 
-                // Audit M-V5-6 networking (2026-06-04): optional keys.
-                // Default to the compile-time ServerConfig values when
-                // absent so existing protocol.json files keep working
-                // without modification. Casting through int is safe --
-                // the ServerConfig constants are small (16, 2048).
-                newSettings.maxConnectionsPerIp = settings.value(
-                    "max_connections_per_ip",
-                    static_cast<int>(ServerConfig::MAX_CONNECTIONS_PER_IP));
-                newSettings.maxConnectionsTotal = settings.value(
-                    "max_connections_total",
-                    static_cast<int>(ServerConfig::MAX_CONNECTIONS_TOTAL));
+                // Type validation BEFORE anything is applied: a non-string format
+                // throws, and every numeric key the file carries (optional ones
+                // included) must be a JSON integer -- the predicate ValueFromJson
+                // applies to the net.* Int32/UInt32/UInt64 cvars. A float (65536.0)
+                // or a string ("12") fails the load loudly with the prior definition
+                // and the net.* cvars intact, instead of being skipped by the layer
+                // apply (settings spec s12: a type mismatch is refused AND reported).
+                std::string messageFormat = settings["message_format"].get<std::string>();
+                for (const auto& [fileKey, cvarKey] : kNetKeys)
+                {
+                    if (settings.contains(fileKey) && !settings[fileKey].is_number_integer())
+                    {
+                        LOG_CORE_ERROR("Setting '{}' must be an integer (net.{}); got {}",
+                                       fileKey, cvarKey, settings[fileKey].dump());
+                        return false;
+                    }
+                }
 
                 std::unordered_map<std::string, MessageDef> newMessages;
                 std::unordered_map<int, std::string> newIdToName;
@@ -247,9 +264,30 @@ namespace Arcane
 
                 // Commit -- all validation passed. Replace the definition
                 // wholesale (reload-replace, never merge).
+                //
+                // The protocol.json layer (kNetKeys above) is applied here, after
+                // every check, so a failed load leaves the cvars untouched. An
+                // optional key the file omits (max_connections_*) keeps the net
+                // default, as before the sweep.
+                Json layer = Json::object();
+                for (const auto& [fileKey, cvarKey] : kNetKeys)
+                    if (settings.contains(fileKey)) layer[cvarKey] = settings[fileKey];
+                const CVarApplyReport applied =
+                    ApplyCVarCategory(CVarRegistry::Get(), "net", layer, SetBy::Project, false, "protocol.json");
+                CVarRegistry::Get().PublishImmediate();
+                // The integer check above makes these unreachable for a file
+                // error; a hit here is a programming error (a net.* cvar missing
+                // or retyped). The Sets already happened, so log rather than
+                // fail. NOT PublishCVarConfigDiagnostics: it replaces the whole
+                // "config.cvars" Problems set (the project-config rows).
+                for (const std::string& key : applied.unknownKeys)
+                    LOG_CORE_ERROR("protocol.json: {} is not a registered cvar; value ignored", key);
+                for (const std::string& key : applied.typeMismatches)
+                    LOG_CORE_ERROR("protocol.json: {} refused the value's type; value ignored", key);
+
                 m_version = version;
                 m_name = protoName;
-                m_settings = newSettings;
+                m_messageFormat = std::move(messageFormat);
                 m_messages = std::move(newMessages);
                 m_idToName = std::move(newIdToName);
                 m_enums = std::move(newEnums);
@@ -334,7 +372,16 @@ namespace Arcane
         bool IsLoaded() const { return m_loaded; }
         int GetVersion() const { return m_version; }
         const std::string& GetName() const { return m_name; }
-        const Settings& GetSettings() const { return m_settings; }
+        // By value: a view over net.* (Settings<NetSettings>()) and the file's
+        // message_format. Casting through int is safe -- the net.* ranges top
+        // out at 1048576 (payload), 1e4 and 1e6 (connections).
+        Settings GetSettings() const
+        {
+            const NetSettings& n = ::Arcane::Settings<NetSettings>();
+            return Settings{ n.defaultPort, static_cast<int>(n.maxPayloadBytes), m_messageFormat, n.tokenLength,
+                             n.sessionLifetimeSeconds, n.idleTimeoutSeconds, n.heartbeatIntervalSeconds,
+                             static_cast<int>(n.maxConnectionsPerIp), static_cast<int>(n.maxConnectionsTotal) };
+        }
         const std::unordered_map<std::string, MessageDef>& GetAllMessages() const { return m_messages; }
 
     private:
@@ -345,7 +392,7 @@ namespace Arcane
         bool m_loaded = false;
         int m_version = 0;
         std::string m_name;
-        Settings m_settings;
+        std::string m_messageFormat;   // the wire format string: a protocol-file field, not a cvar
         std::unordered_map<std::string, MessageDef> m_messages;
         std::unordered_map<int, std::string> m_idToName;
         std::unordered_map<std::string, std::unordered_map<std::string, int>> m_enums;
@@ -379,29 +426,44 @@ namespace Arcane
 
             size_t secondPipe = body.find('|', firstPipe + 1);
 
-            try
-            {
-                msg.type = static_cast<MsgId>(std::stoi(body.substr(0, firstPipe)));
+            // Fuzz finding (fuzz/regressions/protocol, 2026-10-07): TYPE used
+            // to go through std::stoi + a cast to uint16, which accepted
+            // leading whitespace, a sign, trailing junk ("2\xC1\xBF" -> 2,
+            // "1abc" -> 1) and wrapped out-of-range ids ("65537" -> 1,
+            // "-65535" -> 1) -- the same partial-parse class M-V4-5 closed
+            // for the LENGTH prefix. TYPE must be plain ASCII decimal that
+            // names an id in [1, 65535]; anything else is kInvalidMsgId with
+            // an empty token/payload, which the dispatcher already refuses.
+            const char* typeBegin = body.data();
+            const char* typeEnd   = body.data() + firstPipe;
+            unsigned long typeValue = 0;
+            const auto [parsedEnd, ec] = std::from_chars(typeBegin, typeEnd, typeValue);
+            if (firstPipe == 0 || ec != std::errc{} || parsedEnd != typeEnd ||
+                typeValue == kInvalidMsgId || typeValue > 0xFFFFu)
+                return msg;
 
-                if (secondPipe != std::string::npos)
-                {
-                    msg.token   = body.substr(firstPipe + 1, secondPipe - firstPipe - 1);
-                    msg.payload = body.substr(secondPipe + 1);
-                }
-                else
-                {
-                    msg.token   = "";
-                    msg.payload = body.substr(firstPipe + 1);
-                }
-            }
-            catch (const std::exception&)
+            msg.type = static_cast<MsgId>(typeValue);
+            if (secondPipe != std::string::npos)
             {
-                msg.type = kInvalidMsgId;
+                msg.token   = body.substr(firstPipe + 1, secondPipe - firstPipe - 1);
+                msg.payload = body.substr(secondPipe + 1);
+            }
+            else
+            {
+                msg.token   = "";
+                msg.payload = body.substr(firstPipe + 1);
             }
 
             return msg;
         }
 
+        // A log-safe one-line summary: name, id, a token PREVIEW and the
+        // payload's SIZE. The payload itself is never printed (settings
+        // inventory R4): Login/Register carry a password, the Login response a
+        // session token, others may carry PII, and a per-message deny-list
+        // fails open for every message nobody remembered to mark. Inspect
+        // payloads in a debugger, not in logs. The 8+4 token preview is a
+        // CONSTANT: widening it leaks tokens.
         std::string ToString() const
         {
             std::string name = ProtocolLoader::Instance().GetMessageName(static_cast<int>(type));
@@ -409,13 +471,14 @@ namespace Arcane
             std::string tokenPreview = token.empty() ? "(no token)" :
                 (token.length() < 12 ? token
                                      : token.substr(0, 8) + "..." + token.substr(token.length() - 4));
-            return name + "(" + std::to_string(static_cast<int>(type)) + ") token=" + tokenPreview + ": " +
-                payload.substr(0, 100) + (payload.length() > 100 ? "..." : "");
+            return name + "(" + std::to_string(static_cast<int>(type)) + ") token=" + tokenPreview +
+                   " payload=" + std::to_string(payload.size()) + " bytes";
         }
 
         bool HasToken() const
         {
-            return !token.empty() && token.length() >= 64;
+            return !token.empty() &&
+                   token.length() >= static_cast<std::size_t>(::Arcane::Settings<NetSettings>().tokenLength);
         }
     };
 

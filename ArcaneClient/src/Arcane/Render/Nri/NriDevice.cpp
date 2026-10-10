@@ -2,9 +2,10 @@
 // include-order rule (nri::Message::ERROR vs wingdi.h's ERROR macro) -- the
 // NRI headers MUST stay first in this file.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 #include <Extensions/NRIDeviceCreation.h>
-#include <Arcane/Platform/Platform.hpp>   // ARCANE_PLATFORM_WINDOWS: std-only, safe after the NRI headers
-#if ARCANE_PLATFORM_WINDOWS
+#include <Arcane/Platform/Platform.hpp>   // ARC_PLATFORM_WINDOWS: std-only, safe after the NRI headers
+#if ARC_PLATFORM_WINDOWS
 #include <Extensions/NRIWrapperD3D12.h>
 #endif
 // NRIWrapperVK.h is not self-contained (uses AccelerationStructureBits from
@@ -19,7 +20,7 @@
 
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Report -- the injected-overlay scan, once, after the native device exists
 #include <Arcane/Base/Log.hpp>
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #else
 // LINUX PORT: D3D12 is a Windows-target backend (its headers need <rpc.h>/
@@ -29,6 +30,7 @@ namespace Arcane { struct D3D12DeviceCreation {}; }
 #endif
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // GpuDeviceLostObserved -- the ONE device-lost latch (~NriDevice's teardown gate)
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // render.d3d12.* -- the D3D12 wrap's NRI knobs
 #include <Arcane/Render/ShaderConventions.hpp>
 
 // wingdi.h (via spdlog -> windows.h, and via vulkan.hpp's WIN32 platform
@@ -56,6 +58,7 @@ namespace Arcane
         // truth, which also feeds the offline compile script) instead of being
         // copied here: edit the shifts there and this either follows or stops
         // compiling.
+        ARC_CONSTANT("sentinel: no register shift")
         constexpr std::uint32_t kNoShift = 0xFFFFFFFFu;
 
         constexpr std::uint32_t ParseShift(std::string_view text)
@@ -121,7 +124,7 @@ namespace Arcane
     {
         if (m_impl->vulkan)
             DestroyVulkanNativeDevice(*m_impl->vulkan);
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         if (m_impl->d3d12)
             DestroyD3D12NativeDevice(*m_impl->d3d12);
 #endif
@@ -152,7 +155,7 @@ namespace Arcane
         }
         else
         {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
             owner->m_impl->d3d12 = std::make_unique<D3D12DeviceCreation>();
             if (!CreateD3D12NativeDevice(desc, *owner->m_impl->d3d12))
                 return nullptr;
@@ -298,7 +301,7 @@ namespace Arcane
 
     std::unique_ptr<NriDevice> NriDevice::WrapD3D12(const D3D12DeviceCreation& creation)
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         if (!creation.device)
         {
             ARC_ERROR("[nri] cannot wrap D3D12: the creation half has no device "
@@ -333,19 +336,21 @@ namespace Arcane
         desc.callbackInterface = MakeNriCallbacks();
         // allocationCallbacks: left zeroed (NRI defaults them).
         // d3dShaderExtRegister / d3dZeroBufferSize: 0 means "NRI's default"
-        // in both cases (NRI_SHADER_EXT_REGISTER, and a 4 MB zero buffer) --
-        // we have no reason to move either yet.
+        // in both cases (NRI_SHADER_EXT_REGISTER, and a 4 MB zero buffer).
+        // The zero buffer is render.d3d12.zeroBufferBytes (default 0).
+        const RenderD3d12Settings& d3d12 = Settings<RenderD3d12Settings>();
         desc.d3dShaderExtRegister = 0;
-        desc.d3dZeroBufferSize    = 0;
+        desc.d3dZeroBufferSize    = static_cast<uint32_t>(d3d12.zeroBufferBytes);   // ranged 0..64 MiB
 
         desc.enableNRIValidation = creation.enableValidation;
         desc.enableMemoryZeroInitialization = false;
 
         // Item 13's desc half: enhanced barriers ON wherever the Agility
-        // runtime reports them (this flag is a DISABLE, so false = on). Task
-        // 3 vendored the redistributable precisely so this is not moot; the
-        // "Using ID3D12Device10+" proof line lands at the desk milestone.
-        desc.disableD3D12EnhancedBarriers = false;
+        // runtime reports them (this flag is a DISABLE, so false = on;
+        // render.d3d12.enhancedBarriers, default on). Task 3 vendored the
+        // redistributable precisely so this is not moot; the "Using
+        // ID3D12Device10+" proof line lands at the desk milestone.
+        desc.disableD3D12EnhancedBarriers = !d3d12.enhancedBarriers;
         // §2.6.2: NRI's wrapper-mode NVAPI logic reads inverted (the default
         // DISABLES NVAPI when wrapping). Moot for us -- NVAPI is out of the
         // vendoring, so NRI_ENABLE_NVAPI is 0 and this flag reaches no code.
@@ -541,7 +546,7 @@ namespace Arcane
         // layers raise while NRI's own objects go out is attributed to THIS
         // step and not to whatever ran before it (the DXGI queue only stores;
         // see DeviceCreationD3D12.cpp).
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         if (m_backend == GraphicsBackend::D3D12)
         {
             if (m_d3d12Creation)
@@ -550,7 +555,7 @@ namespace Arcane
         }
 #endif
         nriDestroyDevice(m_device);
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         if (m_backend == GraphicsBackend::D3D12)
         {
             if (m_d3d12Creation)

@@ -410,9 +410,9 @@ namespace
         } stopWaiterOnUnwind;
         if (!a.unattended)
         {
-            logTail = ReadLogTail(stem, std::filesystem::path(ToWide(envelope->logPath)), 200);
+            logTail = ReadLogTail(stem, std::filesystem::path(ToWide(envelope->logPath)), a.logTailLines);
             const ReportView initial = BuildReportView(*envelope, a, nullptr, logTail);
-            ui = std::make_unique<ReporterWindow>(initial, [&](int id) { OnButton(id, *ui, window, hang.get()); });
+            ui = std::make_unique<ReporterWindow>(initial, [&](int id) { OnButton(id, *ui, window, hang.get()); }, a);
 
             // The hang protocol (spec s5.4): the handles are opened BEFORE the
             // window exists, so a click can never find `hang` half-built; the
@@ -495,6 +495,10 @@ namespace
             // means anything if the PDB path the linker embedded in the image
             // is also ignored. Coupled deliberately -- the two are one seam.
             opt.ignoreCvRecord = !a.symbolPath.empty();
+            opt.maxFramesPerThread      = a.maxFramesPerThread;
+            opt.maxFramesFaultingThread = a.maxFramesFaultingThread;
+            opt.maxThreads              = a.maxThreads;
+            opt.waitForEventMs          = a.dbgengWaitMs;
 
             std::mutex              m;
             std::condition_variable cv;
@@ -545,7 +549,7 @@ namespace
                 partial.engineError = "deadline of " + std::to_string(a.deadlineSeconds) + " s expired";
                 (void)WriteText(sibling, FormatSymbolized(partial, Arcane::BuildInfo(), envelope->cpuThreadSummary));
                 ARC_WARN("reporter: symbolization did not finish within {} s; wrote the portable stack", a.deadlineSeconds);
-                Arcane::Log::FlushFileSinkBounded(1000);
+                Arcane::Log::FlushFileSinkBounded(a.flushTimeoutMs);
 
                 // R79: unreachable BY CONSTRUCTION, not by argument. The
                 // argument -- TerminateProcess on the current process cannot
@@ -579,7 +583,7 @@ namespace
                 {
                     {
                         std::unique_lock<std::mutex> lk(m);
-                        symbolizedInTime = cv.wait_for(lk, std::chrono::milliseconds(250), [&] { return done; });
+                        symbolizedInTime = cv.wait_for(lk, std::chrono::milliseconds(a.uiPollMs), [&] { return done; });
                     }
                     if (symbolizedInTime) break;
                     if (window.IsOpen()) continue;

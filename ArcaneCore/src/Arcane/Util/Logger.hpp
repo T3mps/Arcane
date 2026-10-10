@@ -6,11 +6,21 @@
 // JsonEscape kernel consumers use to build structured JSON log events.
 // Game/service vocabulary (categories, analytics events, log file names)
 // lives with the consumer (e.g. the server-side facade in Server/Common).
+// Levels, patterns, flush level and file rotation are the log.server.*
+// settings (Util/LogServerSettings.hpp; settings arc S6-3), read through
+// ArcaneCore exports so this header needs no Astra include path.
 
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Util/LogServerSettingsData.hpp>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,16 +57,28 @@ namespace Arcane
     class Logger
     {
     public:
-        // Initialize the logging system - call once at startup.
-        // An empty logFilePath skips the rotating-file sink (console only).
-        // Calling Init again with a file path AFTER a console-only (auto)
-        // init upgrades in place: the file sink is installed and attached to
-        // every already-registered logger, so an early LOG_CORE_* cannot
-        // silently lock the process out of its log file.
-        static void Init(Level consoleLevel = Level::Info, Level fileLevel = Level::Trace, const std::string& logFilePath = "")
+        // Initialize the logging system - call once at startup, on the main
+        // thread. An empty logFilePath skips the rotating-file sink (console
+        // only). Calling Init again with a file path AFTER a console-only
+        // (auto) init upgrades in place: the file sink is installed and
+        // attached to every already-registered logger, so an early LOG_CORE_*
+        // cannot silently lock the process out of its log file.
+        //
+        // A level left out is log.server.consoleLevel / fileLevel. The Live
+        // log.server.* rows follow later publishes: the first Init registers
+        // the callbacks (main thread; the auto-init in Get never does, it may
+        // run on any thread). A level passed here holds until its setting
+        // next changes.
+        static void Init(std::optional<Level> consoleLevel = std::nullopt, std::optional<Level> fileLevel = std::nullopt,
+                         const std::string& logFilePath = "")
         {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            InitUnlocked(consoleLevel, fileLevel, logFilePath);
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                const LogServerSettings s = PublishedLogServerSettings();
+                InitUnlocked(consoleLevel.value_or(ToLevel(s.consoleLevel)), fileLevel.value_or(ToLevel(s.fileLevel)),
+                             logFilePath);
+            }
+            FollowSettings();
         }
 
         // Shutdown the logging system - call at exit
@@ -83,7 +105,10 @@ namespace Arcane
 
             std::lock_guard<std::mutex> lock(s_mutex);
             if (!s_initialized)
-                InitUnlocked(Level::Info, Level::Trace, "");
+            {
+                const LogServerSettings s = PublishedLogServerSettings();
+                InitUnlocked(ToLevel(s.consoleLevel), ToLevel(s.fileLevel), "");
+            }
             if (auto existing = spdlog::get(key))  // lost the create race: reuse
                 return existing.get();
             return CreateLogger(key, s_sinks).get();
@@ -156,6 +181,59 @@ namespace Arcane
         }
 
     private:
+        // A log.server.* level (0 trace .. 6 off) as a Level.
+        static Level ToLevel(std::int32_t level) { return static_cast<Level>(std::clamp(level, 0, 6)); }
+        static spdlog::level::level_enum ToSpdLevel(std::int32_t level)
+        {
+            return static_cast<spdlog::level::level_enum>(ToLevel(level));
+        }
+
+        // Re-applies the Live log.server.* rows to the running sinks. These
+        // are THIS module's copies (the class is header-only, so each module
+        // has its own sinks and spdlog registry), which is why Init registers
+        // the callback from the consumer's module rather than ArcaneCore.dll.
+        // `user` is the row (a Row value cast to a pointer).
+        enum class Row : std::uintptr_t { ConsoleLevel = 1, FileLevel, Pattern, FilePattern, FlushLevel };
+        static void OnSettingPublished(CVarHandle, void* user)
+        {
+            const LogServerSettings s = PublishedLogServerSettings();
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (!s_initialized)
+                return;
+            switch (static_cast<Row>(reinterpret_cast<std::uintptr_t>(user)))
+            {
+                case Row::ConsoleLevel: if (!s_sinks.empty())   s_sinks[0]->set_level(ToSpdLevel(s.consoleLevel)); break;
+                case Row::FileLevel:    if (s_sinks.size() > 1) s_sinks[1]->set_level(ToSpdLevel(s.fileLevel));    break;
+                case Row::Pattern:      if (!s_sinks.empty())   s_sinks[0]->set_pattern(s.pattern);                break;
+                case Row::FilePattern:  if (s_sinks.size() > 1) s_sinks[1]->set_pattern(s.filePattern);            break;
+                case Row::FlushLevel:   spdlog::flush_on(ToSpdLevel(s.flushLevel));                                break;
+            }
+        }
+
+        // Once per module. A Dev row that Dist compiles out has no cvar and
+        // keeps its default.
+        static void FollowSettings()
+        {
+            if (s_followingSettings)
+                return;
+            s_followingSettings = true;
+            struct Binding { const char* name; Row row; };
+            static constexpr Binding kBindings[] = {
+                { "log.server.consoleLevel", Row::ConsoleLevel },
+                { "log.server.fileLevel",    Row::FileLevel },
+                { "log.server.pattern",      Row::Pattern },
+                { "log.server.filePattern",  Row::FilePattern },
+                { "log.server.flushLevel",   Row::FlushLevel },
+            };
+            CVarRegistry& reg = CVarRegistry::Get();
+            for (const Binding& b : kBindings)
+            {
+                const CVarHandle h = reg.Find(b.name);
+                if (!h.IsStale())
+                    reg.AddCallback(h, &OnSettingPublished, reinterpret_cast<void*>(static_cast<std::uintptr_t>(b.row)));
+            }
+        }
+
         // Body of Init; caller must hold s_mutex.
         static void InitUnlocked(Level consoleLevel, Level fileLevel, const std::string& logFilePath)
         {
@@ -202,7 +280,7 @@ namespace Arcane
                 // Arcane Hub to parse). See Arcane/Base/Log.cpp for the full note.
                 auto consoleSink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
                 consoleSink->set_level(static_cast<spdlog::level::level_enum>(consoleLevel));
-                consoleSink->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
+                consoleSink->set_pattern(PublishedLogServerSettings().pattern);
 
                 std::vector<spdlog::sink_ptr> sinks = { consoleSink };
 
@@ -218,8 +296,10 @@ namespace Arcane
                 // Set global level to trace (individual sinks control filtering)
                 spdlog::set_level(spdlog::level::trace);
 
-                // Flush on info or higher (ensures JSON events are written immediately)
-                spdlog::flush_on(spdlog::level::info);
+                // Flush at log.server.flushLevel (info: JSON events are written
+                // at once). This reaches loggers that already exist; CreateLogger
+                // gives each later one the same level.
+                spdlog::flush_on(ToSpdLevel(PublishedLogServerSettings().flushLevel));
 
                 s_initialized = true;
             }
@@ -236,13 +316,14 @@ namespace Arcane
             if (!logDir.empty())
                 std::filesystem::create_directories(logDir);
 
+            // log.server.file.* (Restart: read when the sink is made).
+            const LogServerFileSettings rotation = PublishedLogServerFileSettings();
             auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
                 logFilePath,
-                5 * 1024 * 1024,  // 5 MB max file size
-                3                  // Keep 3 rotated files
-            );
+                static_cast<std::size_t>(rotation.maxBytes),
+                static_cast<std::size_t>(std::max(rotation.maxFiles, 1)));
             fileSink->set_level(static_cast<spdlog::level::level_enum>(fileLevel));
-            fileSink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
+            fileSink->set_pattern(PublishedLogServerSettings().filePattern);
             return fileSink;
         }
 
@@ -250,11 +331,16 @@ namespace Arcane
         {
             auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
             logger->set_level(spdlog::level::trace);
+            // register_logger, unlike initialize_logger, does not apply the
+            // registry's flush level: without this a lazily created logger
+            // never flushed early, whatever spdlog::flush_on said.
+            logger->flush_on(ToSpdLevel(PublishedLogServerSettings().flushLevel));
             spdlog::register_logger(logger);
             return logger;
         }
 
         static inline bool s_initialized = false;
+        static inline bool s_followingSettings = false;
         static inline std::mutex s_mutex;
         static inline std::vector<spdlog::sink_ptr> s_sinks;
     };

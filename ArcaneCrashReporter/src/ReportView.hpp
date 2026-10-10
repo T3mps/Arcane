@@ -83,7 +83,7 @@ namespace Arcane::Reporter
     // the only zone a caller can pass is nullptr, and FormatLocalStamp
     // returns "" -- the documented "no zone" result (macOS port, 2026-10-07).
 #if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
-    #define ARCANE_HAS_TZDB 1
+    #define ARC_HAS_TZDB 1
     using TimeZone = std::chrono::time_zone;
 #else
     struct TimeZone;   // never defined: no tzdb in this standard library

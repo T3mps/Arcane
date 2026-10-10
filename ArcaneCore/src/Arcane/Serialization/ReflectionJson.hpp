@@ -58,9 +58,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <unordered_set>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -107,6 +111,53 @@ namespace Arcane
             return false;
         }
 
+        // Reads a JSON number into an INTEGER field, refusing (false) any value
+        // the field cannot hold. Fuzz finding (fuzz/regressions/scene,
+        // 2026-10-07): get<T> narrows with a plain cast, and nlohmann stores an
+        // integer literal past 2^64 (or any literal with a '.'/'e') as a
+        // double -- so "hi": 35089691696507535956 in an Identity id, or 1e10
+        // in an int field, was a float->integer conversion out of range:
+        // undefined behaviour, not a refusal. Out-of-range integer literals
+        // ("-1" into a uint32) used to wrap silently; they are refused too. An
+        // in-range fractional value still truncates, as get<T> always did.
+        template <typename T>
+        inline bool ReadIntegerNumber(const nlohmann::json& in, T& out)
+        {
+            static_assert(std::is_integral_v<T>);
+            if (in.is_number_unsigned())
+            {
+                const std::uint64_t v = in.get<std::uint64_t>();
+                if (!std::in_range<T>(v)) return false;
+                out = static_cast<T>(v);
+                return true;
+            }
+            if (in.is_number_integer())
+            {
+                const std::int64_t v = in.get<std::int64_t>();
+                if (!std::in_range<T>(v)) return false;
+                out = static_cast<T>(v);
+                return true;
+            }
+            if (!in.is_number_float()) return false;
+            // [lo, hi) are exact doubles: lo is 0 or -2^(bits-1), hi is 2^digits.
+            // NaN fails both comparisons.
+            const double d = in.get<double>();
+            const double lo = static_cast<double>(std::numeric_limits<T>::min());
+            const double hi = static_cast<double>(std::numeric_limits<T>::max() / 2 + 1) * 2.0;
+            if (!(d >= lo && d < hi)) return false;
+            out = static_cast<T>(d);
+            return true;
+        }
+
+        template <typename T>
+        inline ReadResult ReadIntegerField(const Astra::FieldInfo& f, void* inst, const nlohmann::json& in)
+        {
+            T v{};
+            if (!ReadIntegerNumber(in, v)) return ReadResult::Malformed;
+            f.Set<T>(inst, v);
+            return ReadResult::Ok;
+        }
+
         // Reads a scalar field from JSON without ever throwing on a malformed
         // document -- nlohmann's get<T> would otherwise throw type_error through
         // the exception-free engine on a hand-edited file. A node of the wrong
@@ -116,11 +167,11 @@ namespace Arcane
         {
             const uint64_t h = f.typeHash;
             if (h == Astra::TypeID<bool>::Hash())        { if (!in.is_boolean()) return ReadResult::Malformed; f.Set<bool>(inst,        in.get<bool>());        return ReadResult::Ok; }
-            if (h == Astra::TypeID<int>::Hash())         { if (!in.is_number())  return ReadResult::Malformed; f.Set<int>(inst,         in.get<int>());         return ReadResult::Ok; }
-            if (h == Astra::TypeID<int32_t>::Hash())     { if (!in.is_number())  return ReadResult::Malformed; f.Set<int32_t>(inst,     in.get<int32_t>());     return ReadResult::Ok; }
-            if (h == Astra::TypeID<uint32_t>::Hash())    { if (!in.is_number())  return ReadResult::Malformed; f.Set<uint32_t>(inst,    in.get<uint32_t>());    return ReadResult::Ok; }
-            if (h == Astra::TypeID<int64_t>::Hash())     { if (!in.is_number())  return ReadResult::Malformed; f.Set<int64_t>(inst,     in.get<int64_t>());     return ReadResult::Ok; }
-            if (h == Astra::TypeID<uint64_t>::Hash())    { if (!in.is_number())  return ReadResult::Malformed; f.Set<uint64_t>(inst,    in.get<uint64_t>());    return ReadResult::Ok; }
+            if (h == Astra::TypeID<int>::Hash())         return ReadIntegerField<int>(f, inst, in);
+            if (h == Astra::TypeID<int32_t>::Hash())     return ReadIntegerField<int32_t>(f, inst, in);
+            if (h == Astra::TypeID<uint32_t>::Hash())    return ReadIntegerField<uint32_t>(f, inst, in);
+            if (h == Astra::TypeID<int64_t>::Hash())     return ReadIntegerField<int64_t>(f, inst, in);
+            if (h == Astra::TypeID<uint64_t>::Hash())    return ReadIntegerField<uint64_t>(f, inst, in);
             if (h == Astra::TypeID<float>::Hash())       { if (!in.is_number())  return ReadResult::Malformed; f.Set<float>(inst,       in.get<float>());       return ReadResult::Ok; }
             if (h == Astra::TypeID<double>::Hash())      { if (!in.is_number())  return ReadResult::Malformed; f.Set<double>(inst,      in.get<double>());      return ReadResult::Ok; }
             if (h == Astra::TypeID<std::string>::Hash()) { if (!in.is_string())  return ReadResult::Malformed; f.Set<std::string>(inst, in.get<std::string>()); return ReadResult::Ok; }
@@ -248,6 +299,7 @@ namespace Arcane
         // normalized before it is stored, so no scale can survive it; the band's
         // only job is to catch values that read as an intent to scale (norm 2 is
         // a 4x basis) or that cannot be normalized at all.
+        ARC_CONSTANT("math identity / tolerance: the squared-norm band a file quaternion must fall in; file acceptance must not vary per machine")
         inline constexpr float kQuatNormTolerance2 = 0.05f;
 
         // Quaternions read back from [x, y, z, w].
@@ -457,7 +509,7 @@ namespace Arcane
         }
 
         // std::vector<T> where T is a REFLECTED STRUCT -- the only element kind
-        // any roster field has today (Collider2D::fixtures, MeshAssetData::
+        // any roster field has today (Arcane::Collider2D::fixtures, MeshAssetData::
         // slots): a JSON array, one OBJECT per element, each walked by a
         // sub-writer over the element type's reflected fields exactly as a
         // nested-struct field is (so a guid nested in an element still reaches

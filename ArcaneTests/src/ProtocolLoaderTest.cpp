@@ -9,9 +9,11 @@
 #include <string>
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Net/Protocol.hpp>
+#include "Helpers/ProtocolLayer.hpp"
 
 using Arcane::ProtocolLoader;
 using Arcane::kInvalidMsgId;
+using Arcane::Test::ProtocolLayerReset;   // drops the file's net.* Project layer at case end (S6-12)
 
 namespace
 {
@@ -52,6 +54,7 @@ namespace
 
 TEST_CASE("ProtocolLoader: valid protocol loads and exposes its contents", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto path = WriteTemp(kValidProtocol);
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(path));
@@ -71,6 +74,7 @@ TEST_CASE("ProtocolLoader: valid protocol loads and exposes its contents", "[pro
 
 TEST_CASE("ProtocolLoader: Id / GetMessageName / GetMessage round-trip", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto path = WriteTemp(kValidProtocol);
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(path));
@@ -91,6 +95,7 @@ TEST_CASE("ProtocolLoader: Id / GetMessageName / GetMessage round-trip", "[proto
 
 TEST_CASE("ProtocolLoader: enum parsing and lookups", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto path = WriteTemp(kValidProtocol);
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(path));
@@ -103,6 +108,7 @@ TEST_CASE("ProtocolLoader: enum parsing and lookups", "[protocol]")
 
 TEST_CASE("ProtocolLoader: IdOrThrow resolves or throws on drift", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto path = WriteTemp(kValidProtocol);
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(path));
@@ -113,6 +119,7 @@ TEST_CASE("ProtocolLoader: IdOrThrow resolves or throws on drift", "[protocol]")
 
 TEST_CASE("ProtocolLoader: reload replaces prior message state", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(WriteTemp(kValidProtocol)));
     REQUIRE(proto.Id("Login") == 1);
@@ -135,6 +142,7 @@ TEST_CASE("ProtocolLoader: reload replaces prior message state", "[protocol]")
 
 TEST_CASE("ProtocolLoader: a failed reload preserves the prior definition", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     auto& proto = ProtocolLoader::Instance();
     REQUIRE(proto.Load(WriteTemp(kValidProtocol)));
     REQUIRE(proto.Id("Login") == 1);
@@ -162,12 +170,14 @@ TEST_CASE("ProtocolLoader: a failed reload preserves the prior definition", "[pr
 
 TEST_CASE("ProtocolLoader: missing settings section is rejected", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     const char* noSettings = R"JSON({ "version": 1, "name": "x", "messages": {} })JSON";
     REQUIRE_FALSE(ProtocolLoader::Instance().Load(WriteTemp(noSettings)));
 }
 
 TEST_CASE("ProtocolLoader: a missing required setting is rejected", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     // token_length is omitted.
     const char* missingKey = R"JSON({
         "version": 1, "name": "x",
@@ -183,11 +193,13 @@ TEST_CASE("ProtocolLoader: a missing required setting is rejected", "[protocol]"
 
 TEST_CASE("ProtocolLoader: malformed JSON is rejected", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     REQUIRE_FALSE(ProtocolLoader::Instance().Load(WriteTemp("{ this is not json")));
 }
 
 TEST_CASE("ProtocolLoader: a missing file is rejected", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     REQUIRE_FALSE(ProtocolLoader::Instance().Load("this/path/does/not/exist_zzz.json"));
 }
 
@@ -195,6 +207,7 @@ TEST_CASE("ProtocolLoader: a missing file is rejected", "[protocol]")
 
 TEST_CASE("ProtocolLoader: duplicate message id is rejected (E01-3c)", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     const char* dup = R"JSON({
         "version": 1, "name": "x",
         "settings": {
@@ -213,6 +226,7 @@ TEST_CASE("ProtocolLoader: duplicate message id is rejected (E01-3c)", "[protoco
 
 TEST_CASE("ProtocolLoader: zero / missing id is rejected (E01-3c)", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     const char* zeroId = R"JSON({
         "version": 1, "name": "x",
         "settings": {
@@ -241,6 +255,7 @@ TEST_CASE("ProtocolLoader: zero / missing id is rejected (E01-3c)", "[protocol]"
 
 TEST_CASE("ProtocolLoader: id above uint16 range is rejected (E01-3c)", "[protocol]")
 {
+    const ProtocolLayerReset layerReset;
     // 70000 > 65535 -- would silently truncate to a uint16 MsgId (70000 & 0xFFFF).
     const char* tooBig = R"JSON({
         "version": 1, "name": "x",

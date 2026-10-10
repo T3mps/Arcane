@@ -24,6 +24,7 @@
 // backend either (GpuCrashReportTest.cpp).
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
 
 #include <cstddef>
@@ -50,14 +51,20 @@ namespace Arcane::Diag
     // Shared rather than per-backend because ReplayMarkerBuffer below reads
     // ANY backend's region with these constants: if a backend's writer and
     // this reader could disagree, the replay would silently produce garbage.
-    inline constexpr std::uint32_t kGpuMarkerSlots =
-        static_cast<std::uint32_t>(GpuBreadcrumbs::kRingCapacity);
+    inline std::uint32_t GpuMarkerSlots(const GpuBreadcrumbs& breadcrumbs)
+    {
+        return static_cast<std::uint32_t>(breadcrumbs.Capacity());
+    }
+    ARC_CONSTANT("record layout: begin + end values per marker slot; every backend writer and ReplayMarkerBuffer share it")
     inline constexpr std::uint32_t kGpuMarkerValuesPerSlot = 2;
-    inline constexpr std::size_t   kGpuMarkerBytes =
-        std::size_t{ kGpuMarkerSlots } * kGpuMarkerValuesPerSlot * sizeof(std::uint32_t);
+    inline std::size_t GpuMarkerBytes(const GpuBreadcrumbs& breadcrumbs)
+    {
+        return std::size_t{ GpuMarkerSlots(breadcrumbs) } * kGpuMarkerValuesPerSlot * sizeof(std::uint32_t);
+    }
 
     // A backend writes `id + 1` so that 0 -- what a region is zeroed to at arm
     // time -- unambiguously means "the GPU never reached this marker".
+    ARC_CONSTANT("record layout: the GPU marker 'unwritten' sentinel every backend writer and the replay share")
     inline constexpr std::uint32_t kGpuMarkerUnwritten = 0;
 
     // ---------------------------------------------------------------------
@@ -103,7 +110,7 @@ namespace Arcane::Diag
     // backend with no marker layer at all can call this unconditionally. A
     // backend that has a DIFFERENT fallback (Vulkan's fence correlation) must
     // instead guard the call and emit its own key.
-    ARCANE_API void ReplayMarkerBuffer(GpuBreadcrumbs& breadcrumbs,
+    ARC_API void ReplayMarkerBuffer(GpuBreadcrumbs& breadcrumbs,
                                        GpuDumpWriter&  raw,
                                        Envelope&       envelope,
                                        const void*     markerMemory,
@@ -113,7 +120,7 @@ namespace Arcane::Diag
     // Envelope::Queue named `queueName` (the machine-readable .arcdiag field)
     // and as the report's human-readable "queue <name>" block appended to
     // `humanText`. Never throws; an empty ring yields "<none>" for both lines.
-    ARCANE_API void EmitQueueSnapshot(const GpuBreadcrumbs& breadcrumbs,
+    ARC_API void EmitQueueSnapshot(const GpuBreadcrumbs& breadcrumbs,
                                       std::string_view      queueName,
                                       Envelope&             envelope,
                                       std::string&          humanText);
@@ -124,7 +131,7 @@ namespace Arcane::Diag
     // backends' FillReport after CollectFault, so the rule lands ONCE (this
     // header's charter). A gpu-stall on a live device must NOT freeze: the
     // device is still executing and the ring should keep recording.
-    ARCANE_API void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs,
+    ARC_API void FreezeBreadcrumbsOnDeviceLoss(GpuBreadcrumbs& breadcrumbs,
                                                   const Envelope& envelope);
 
     // Writes `raw` to `<reportStem>.gpudump` and records the sibling.
@@ -137,7 +144,7 @@ namespace Arcane::Diag
     //
     // `envelope.siblingGpuDump` is set ONLY when the file actually landed: a
     // report must never name a sibling it did not write.
-    ARCANE_API void EmitGpuDumpSibling(const GpuDumpWriter&         raw,
+    ARC_API void EmitGpuDumpSibling(const GpuDumpWriter&         raw,
                                        Envelope&                    envelope,
                                        std::string&                 humanText,
                                        const std::filesystem::path& reportStem);

@@ -62,17 +62,17 @@ namespace Arcane
     // Install (or replace) the backend pass scopes write into. Called by
     // NriDiagnostics::Arm beside its one Diagnostics::SetGpuSectionProvider
     // call.
-    ARCANE_API void SetActiveGpuCrashBackend(IGpuCrashBackend* backend) noexcept;
+    ARC_API void SetActiveGpuCrashBackend(IGpuCrashBackend* backend) noexcept;
 
     // The installed backend, or null. Null is ORDINARY, not an error: a device-less
     // host, a backend that failed to arm, a test.
-    [[nodiscard]] ARCANE_API IGpuCrashBackend* ActiveGpuCrashBackend() noexcept;
+    [[nodiscard]] ARC_API IGpuCrashBackend* ActiveGpuCrashBackend() noexcept;
 
     // Clear the slot ONLY if it still holds `backend`; returns whether it
     // cleared. Same stale-registration hazard as Diagnostics::ClearSinkIfCurrent
     // -- an unconditional clear from an old device's teardown would disconnect a
     // live, unrelated one. Prefer this in any owner's teardown path.
-    [[nodiscard]] ARCANE_API bool ClearActiveGpuCrashBackendIfCurrent(IGpuCrashBackend* backend) noexcept;
+    [[nodiscard]] ARC_API bool ClearActiveGpuCrashBackendIfCurrent(IGpuCrashBackend* backend) noexcept;
 
     // Draw-level marker toggle (`diagnostics.drawMarkers`, default false).
     // Pass scopes ignore it -- those are always on, in every config.
@@ -84,7 +84,7 @@ namespace Arcane
     // there is no draw-granular marker scope to read it yet; it is the seam
     // that scope will use. (The old SetGpuDrawMarkersEnabled setter, also
     // caller-less, published mid-frame and is gone.)
-    [[nodiscard]] ARCANE_API bool GpuDrawMarkersEnabled() noexcept;
+    [[nodiscard]] ARC_API bool GpuDrawMarkersEnabled() noexcept;
 
     // -----------------------------------------------------------------
     // The process-wide device-lost latch
@@ -100,14 +100,14 @@ namespace Arcane
     // resource-creating path (the editor's PickBuffer was the desk repro).
     // Same slot idiom as the backend slot above: one process-wide atomic in
     // Arcane.dll, the render layer writes, hosts read.
-    ARCANE_API void NoteGpuDeviceLost() noexcept;
-    [[nodiscard]] ARCANE_API bool GpuDeviceLostObserved() noexcept;
+    ARC_API void NoteGpuDeviceLost() noexcept;
+    [[nodiscard]] ARC_API bool GpuDeviceLostObserved() noexcept;
 
     // Cleared where the once-per-removal report guard is re-armed: when a
     // NEW device comes up (project switch recreates the device). A latch
     // that outlived the dead device it described would instantly quit the
     // host the moment a healthy replacement started presenting.
-    ARCANE_API void ResetGpuDeviceLost() noexcept;
+    ARC_API void ResetGpuDeviceLost() noexcept;
 
     // -----------------------------------------------------------------
     // GpuPassScope -- one render pass, one marker channel
@@ -121,7 +121,7 @@ namespace Arcane
     // because it holds the device the compact form cannot. This class stays
     // because it is the seam a non-graph recorder would use.
 
-    class ARCANE_API GpuPassScope
+    class ARC_API GpuPassScope
     {
     public:
         // `nativeCommandList` is the BACKEND'S OWN native command list --

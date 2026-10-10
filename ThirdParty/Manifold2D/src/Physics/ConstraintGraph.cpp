@@ -12,6 +12,7 @@
 #include <cmath>
 
 #include <Manifold2D/Physics/Contact.hpp>                    // Contact + ContactPool + kInvalidColor
+#include <Manifold2D/Physics/Events.hpp>                     // kEvContact / kEvHit (captured at create)
 #include <Manifold2D/Physics/PhysicsWorld.hpp>               // the world SoA + island/awake seams (befriended)
 #include <Manifold2D/Physics/Broadphase/DynamicTree.hpp>     // DynamicTree::kMargin + TryGetFatBox (fat-box gates)
 #include <Manifold2D/Physics/Narrowphase/GeometryKernel.hpp> // AabbOverlap
@@ -360,6 +361,15 @@ namespace Manifold2D
             {
                 return;
             }
+            // A pair the collision filter keeps apart never wakes anything (Box2D:
+            // b2ShouldShapesCollide gates the pair before a contact exists, and only
+            // contacts wake islands). Without this, a never-sleeping body of a
+            // non-colliding category standing beside a resting stack re-woke it
+            // every step.
+            if (!w.FixturesCollide(fa, fb))
+            {
+                return;
+            }
             const bool da = static_cast<BodyType>(w.m_btype[a]) == BodyType::Dynamic;
             const bool db = static_cast<BodyType>(w.m_btype[b]) == BodyType::Dynamic;
             if (!da && !db)
@@ -419,10 +429,10 @@ namespace Manifold2D
             {
                 return;
             }
-            // Collision filter (Box2D rule): collide iff each side's category is in the
-            // other's mask. A filtered-out pair never enters the pool -> no solve, no event.
-            if (((w.m_fxFilterCat[fa] & w.m_fxFilterMask[fb]) == 0u) ||
-                ((w.m_fxFilterCat[fb] & w.m_fxFilterMask[fa]) == 0u))
+            // Collision filter (Box2D b2ShouldShapesCollide: the group, then each
+            // side's category in the other's mask). A filtered-out pair never enters
+            // the pool -> no solve, no event.
+            if (!w.FixturesCollide(fa, fb))
             {
                 return;
             }
@@ -460,16 +470,14 @@ namespace Manifold2D
             const bool sensorB = (w.m_sensor[ib] != 0) || (w.m_fxSensor[fib] != 0u);
             const bool solverRelevant = (da || db) && !sensorA && !sensorB;
 
-            // EVENT RELEVANCE (Phase 4, Task 2): events fire for every pooled
-            // body-pair EXCEPT dynamic-vs-static-body (the design's explicit
-            // exclusion -- the solver owns dynamic-vs-static response; events are
-            // gameplay triggers). A static body is `TypeSlot == Static`; the only
-            // created pairs are mover-mover, dynamic-static, kinematic-static (tiles
-            // never reach the pool), so this filter leaves mover-mover (sensors +
-            // kinematic-kinematic included) + kinematic-static event-relevant and
-            // excludes ONLY dynamic-static. Uses the ORIENTED (ia, ib) types so it
-            // reads symmetrically; a/b vs ia/ib is identical (orientation only swaps
-            // the two slots, not their type set).
+            // eventRelevant (Phase 4, Task 2), kept for the pool (spec s6.5).
+            // True for every pooled body-pair except dynamic-vs-static: mover-mover
+            // (sensors and kinematic-kinematic included) and kinematic-static.
+            // Tiles never reach the pool. UpdateOneContact uses it to keep
+            // refreshing event-only pairs while both bodies sleep. Contact-event
+            // reporting is eventFlags below, not this bit. Uses the ORIENTED
+            // (ia, ib) types so it reads symmetrically; a/b vs ia/ib is identical
+            // (orientation only swaps the two slots, not their type set).
             const bool aStatic =
                 static_cast<BodyType>(w.m_btype[ia]) == BodyType::Static;
             const bool bStatic =
@@ -495,6 +503,22 @@ namespace Manifold2D
                 c.bIsBody        = true;
                 c.solverRelevant = solverRelevant;
                 c.eventRelevant  = eventRelevant;
+
+                // Event opt-ins, decided ONCE here (Box2D contact.c:253-256 contact
+                // events, :535-541 hit events). Only solver contacts report -- a
+                // dynamic body present, no sensor -- which is Box2D's contact set
+                // (it makes no kinematic-static contact; sensors go through the
+                // sensor pass). Spec s6.1, amendments A2/A9.
+                c.genA = w.m_gen[ia];
+                c.genB = w.m_gen[ib];
+                if (solverRelevant)
+                {
+                    const bool evA = w.m_fxContactEvents[fia] != 0u;
+                    const bool evB = w.m_fxContactEvents[fib] != 0u;
+                    const bool contactOn = w.m_contactEventsRequireBoth ? (evA && evB) : (evA || evB);
+                    const bool hitOn = (w.m_fxHitEvents[fia] | w.m_fxHitEvents[fib]) != 0u;
+                    c.eventFlags = static_cast<std::uint8_t>((contactOn ? kEvContact : 0u) | (hitOn ? kEvHit : 0u));
+                }
 
                 // Phase C, Task 4: assign a persistent graph color to a NEW
                 // solver-relevant body-body contact (assign-at-create). Sensors,
@@ -585,13 +609,9 @@ namespace Manifold2D
             const bool wasTouching = c.touching;
             c.touching = (c.manifold.pointCount > 0);
 
-            // Classify the dyn-dyn touch transition (island edge) -> flag for the tail.
-            // Gate on c.solverRelevant: sensor dyn-dyn pairs must never trigger a
-            // merge (kNpStarted) or split (kNpStopped) -- they fire events but must
-            // not couple rigid islands.
-            if (c.solverRelevant && c.bIsBody && c.bodyB != kInvalidSlot &&
-                w.TypeSlot(c.bodyA) == BodyType::Dynamic &&
-                w.TypeSlot(c.bodyB) == BodyType::Dynamic)
+            // Touching transitions for EVERY solver contact (events, spec s6.1);
+            // the island consumers in the serial tail re-check dynamic-dynamic.
+            if (c.solverRelevant && c.bIsBody && c.bodyB != kInvalidSlot)
             {
                 if (!wasTouching && c.touching)      { c.npState |= kNpStarted; }
                 else if (wasTouching && !c.touching) { c.npState |= kNpStopped; }
@@ -612,6 +632,16 @@ namespace Manifold2D
                     }
                 }
             }
+        }
+
+        // The island merge/split edge predicate (unchanged semantics): a solver
+        // contact between two DYNAMIC bodies.
+        static bool IsDynDynSolver(const PhysicsWorld& w, const Contact& c) noexcept
+        {
+            return c.solverRelevant && c.bIsBody &&
+                   c.bodyA != kInvalidSlot && c.bodyB != kInvalidSlot &&
+                   w.TypeSlot(c.bodyA) == BodyType::Dynamic &&
+                   w.TypeSlot(c.bodyB) == BodyType::Dynamic;
         }
 
         void ConstraintGraph::UpdateContacts(PhysicsWorld& w, Real dt)
@@ -872,13 +902,56 @@ namespace Manifold2D
                 TryCreateContact(w, rec.fiA, rec.fiB);
             }
 
+            // (b2) FAST mover<->mover: the static path's look-ahead, for movers. The
+            //      broadphase pairs in (a) come from the boxes movers registered at
+            //      their last commit, so a body closing on a KINEMATIC or DYNAMIC body
+            //      faster than the tree margin was paired only once it was inside: it
+            //      sank in (pushed out at contactPushMaxVelocity over several steps)
+            //      or, against a thin one, crossed its middle and came out the far
+            //      side. Here every awake dynamic body whose reach this step (|v| dt)
+            //      exceeds the margin queries the mover broadphase with its box padded
+            //      by that reach -- the pad its static query uses above -- and pairs
+            //      with what it finds, so the speculative margin stops it at a mover
+            //      as it does at a static. (Box2D v2.4 predicts the same motion with
+            //      b2DynamicTree::MoveProxy's displacement.) The stored proxies are
+            //      untouched, so the pair set, contact persistence and the choice of
+            //      broadphase are unaffected (QueryAABB narrows on tight boxes in every
+            //      implementation); serial and in awake order, so creation order is
+            //      deterministic. Slow bodies (the common case) skip it.
+            if (moveDt > Real(0))
+            {
+                IBroadphase* bp = w.m_fixtureBroadphase.get();
+                for (const std::uint32_t i : w.AwakeBodies())
+                {
+                    if (w.m_sensor[i] != 0) { continue; }
+                    if (i >= w.m_bodyFixtures.size() || w.m_bodyFixtures[i].empty()) { continue; }
+                    const Real speedSq = w.m_velX[i] * w.m_velX[i] + w.m_velY[i] * w.m_velY[i];
+                    const Real reach = std::sqrt(speedSq) * moveDt;
+                    if (!(reach > DynamicTree::kMargin)) { continue; }
+                    const Aabb2 box = w.SlotAabb(i);
+                    Aabb2 query;
+                    query.min = Vec2(box.min.x - reach, box.min.y - reach);
+                    query.max = Vec2(box.max.x + reach, box.max.y + reach);
+                    m_fastMoverScratch.clear();
+                    bp->QueryAABB(query, m_fastMoverScratch);
+                    for (const std::uint32_t fj : m_fastMoverScratch)
+                    {
+                        if (fj >= w.m_fxCount || w.m_fxGen[fj] == 0u || w.m_fxBody[fj] == i) { continue; }
+                        for (const std::uint32_t fiA : w.m_bodyFixtures[i])
+                        {
+                            if (fiA >= w.m_fxCount || w.m_fxGen[fiA] == 0u || w.m_fxSensor[fiA] != 0u) { continue; }
+                            TryCreateContact(w, fiA, fj); // filters, orientation, de-duplication
+                        }
+                    }
+                }
+            }
+
             // (c) KINEMATIC<->static-BODY (Phase 4, Task 1): event-relevant but NOT
             //     solver-relevant. Static bodies are NOT in the mover broadphase and
             //     the dynamic-driven static-candidate loop above only covers DYNAMIC
             //     bodies, so kinematic-vs-static pairs are created here by iterating
-            //     StaticList() per alive Kinematic body -- MIRRORING the old
-            //     ContactManager::Step kinematic-static loop (StaticList, AABB-reject)
-            //     so the create order is index-deterministic. TryCreateContact tags
+            //     StaticList() per alive Kinematic body, index-ordered, with an
+            //     AABB reject before the per-fixture pairing. TryCreateContact tags
             //     these solverRelevant == false (no dynamic body), so the solver feed
             //     is unchanged; the touch-state still drives the contact's manifold +
             //     `touching` in the update pass below for the event derivation (Task 2).
@@ -909,8 +982,7 @@ namespace Manifold2D
                         {
                             continue;
                         }
-                        // Cheap body-union AABB reject before the per-fixture pairing
-                        // (mirrors the old ContactManager AABB pre-filter).
+                        // Cheap body-union AABB reject before the per-fixture pairing.
                         if (!AabbOverlap(kinBox, w.SlotAabb(idx)))
                         {
                             continue;
@@ -1007,19 +1079,24 @@ namespace Manifold2D
                     }
                     else if (c.npState & kNpStarted)
                     {
-                        const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
-                        const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
-                        m_pendingMerges.push_back(BroadphasePair{ lo, hi });
+                        if (c.eventFlags & kEvContact) { w.PushContactBegin(c); }
+                        if (IsDynDynSolver(w, c))
+                        {
+                            const std::uint32_t lo = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
+                            const std::uint32_t hi = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
+                            m_pendingMerges.push_back(BroadphasePair{ lo, hi });
+                        }
                     }
                     else if (c.npState & kNpStopped)
                     {
-                        w.MarkSplitCandidate(w.IslandOf(c.bodyA));
+                        if (c.eventFlags & kEvContact) { w.PushContactEnd(c); }
+                        if (IsDynDynSolver(w, c)) { w.MarkSplitCandidate(w.IslandOf(c.bodyA)); }
                     }
                 });
             }
 
             // ---- apply queued island merges in a canonical order ----------------
-            // Sort by (min,max) body slot (mirrors the m_touchedEventPairs sort) so
+            // Sort by (min,max) body slot so
             // the merge sequence is run-twice-identical regardless of pool emission
             // order. Each pair re-resolves its bodies' CURRENT islands (an earlier
             // merge this step may have already united them -> MergeIslands is a
@@ -1303,53 +1380,15 @@ namespace Manifold2D
             }
         }
 
-        void ConstraintGraph::CollectTouchedEventPairs(std::vector<BroadphasePair>& out) const
+        const Contact& ConstraintGraph::PoolContact(std::uint32_t id) const
         {
-            // Events-as-byproduct derivation (Step stage 6). Walk the pool
-            // ascending-id (deterministic), collect {min,max} body-pairs for every
-            // event-relevant EXACTLY-OVERLAPPING contact, then sort + unique so a
-            // compound body's N^2 fixture-pairs collapse to ONE body-pair and the
-            // Begin/Stay order matches the old sorted-body-pair emission order.
-            // clear() keeps capacity.
-            //
-            // EXACT-OVERLAP, NOT speculative `touching`: the old ContactManager
-            // tested overlap via SlotsOverlap with margin 0, which reports a contact
-            // ONLY on STRICT penetration (depth > 0); a speculative gap (the manifold
-            // point a velocity-scaled margin emits at NEGATIVE separation) is NOT an
-            // event overlap. The pool's c.touching is pointCount>0 INCLUDING those
-            // speculative gaps (correct for the SOLVER feed), so event derivation
-            // must instead require a manifold point with separation > 0 -- byte-
-            // identical to the old margin-0 SlotsOverlap (a genuinely penetrating
-            // point reports the SAME positive separation regardless of the margin
-            // used to compute the manifold, and an exact edge-touch at separation==0
-            // is excluded by both, matching the old semantics).
-            auto exactlyOverlapping = [](const Contact& c) noexcept -> bool
-            {
-                for (int p = 0; p < c.manifold.pointCount; ++p)
-                {
-                    if (c.manifold.points[p].separation > Real(0))
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            out.clear();
-            m_contactPool.ForEach(
-                [&](std::uint32_t /*id*/, const Contact& c)
-                {
-                    if (!c.eventRelevant || !exactlyOverlapping(c))
-                    {
-                        return;
-                    }
-                    const std::uint32_t a = c.bodyA < c.bodyB ? c.bodyA : c.bodyB;
-                    const std::uint32_t b = c.bodyA < c.bodyB ? c.bodyB : c.bodyA;
-                    out.push_back(BroadphasePair{ a, b });
-                });
-            std::sort(out.begin(), out.end());
-            out.erase(
-                std::unique(out.begin(), out.end()),
-                out.end());
+            return m_contactPool.Get(id); // asserts the id is alive
+        }
+
+        const Contact* ConstraintGraph::FindContact(FixtureHandle a, FixtureHandle b) const
+        {
+            const std::uint32_t id = m_contactPool.Find(a, b);
+            return id == ContactPool::kNone ? nullptr : &m_contactPool.Get(id);
         }
 
         bool ConstraintGraph::DebugHasContact(const PhysicsWorld& w,
@@ -1453,11 +1492,20 @@ namespace Manifold2D
         // + DebugValidateBodyContacts) lives in IslandManager (decomp step 1 Task 3):
         // it is the split-linkage the island topology owns. ReleaseAndDestroyContact
         // is the graph-level teardown coordinator (decomp step 2 Task 3) -- it
-        // detaches the island adjacency (via w.m_islandMgr), releases the persistent
-        // color, and destroys the pool slot. Order is FROZEN (reads c before the
-        // pool frees it; the RemoveBody color-leak assert gates the pairing).
-        void ConstraintGraph::ReleaseAndDestroyContact(PhysicsWorld& w, std::uint32_t id, const Contact& c) noexcept
+        // emits a touching contact's End, detaches the island adjacency (via
+        // w.m_islandMgr), releases the persistent color, and destroys the pool
+        // slot. Order is FROZEN (the End and the detach read c before the pool
+        // frees it; the RemoveBody color-leak assert gates the pairing).
+        void ConstraintGraph::ReleaseAndDestroyContact(PhysicsWorld& w, std::uint32_t id, Contact& c)
         {
+            // Destroy-time End (Box2D contact.c:354-364, R10): a touching contact
+            // whose Begin was delivered ends here, whatever the gate is now.
+            // PushContactEnd reads and clears c before the pool frees the slot --
+            // the frozen order below still holds.
+            if (c.touching && (c.eventFlags & kEvContact) != 0u)
+            {
+                w.PushContactEnd(c);
+            }
             w.m_islandMgr.DetachContactAdjacency(w, id, c); // reads c before the pool frees the slot
             ReleaseContactColor(w, id); // free the color while c still holds it
             m_contactPool.Destroy(id);

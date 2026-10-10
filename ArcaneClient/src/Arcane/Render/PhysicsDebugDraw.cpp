@@ -7,7 +7,8 @@
 //
 // MODERNIZATION: dynamic bodies are colored by island (IslandRootOf keyed
 // into a small hue palette) instead of the Lua's uniform kinematic green.
-// Sleeping dynamics are drawn at 35% brightness (Lua dim = 0.35 branch).
+// Sleeping dynamics are drawn at 35% brightness (Lua dim = 0.35 branch; now
+// debug.physics.style.sleepingDim).
 //
 // PRESENTATION BOUNDARY (one-way): Core -> never includes Render. This file
 // lives in Arcane.dll and is the only permitted side to couple physics + render.
@@ -33,40 +34,33 @@
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Manifold2D/Physics/Solver/Solver.hpp>               // ContactConstraint
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Scene/SceneResources.hpp>   // PhysicsInterpBuffer + InterpPose + Lerp/AngleLerp (Epic 04.2)
+#include <Arcane/Scene/SceneResources.hpp>   // Arcane::PhysicsInterpBuffer2D + Arcane::PhysicsInterpPose2D + Lerp/AngleLerp (Epic 04.2)
 
 namespace Arcane
 {
-    // Physics types were lifted to the standalone Manifold2D library (Phase 2).
-    // Alias so the overlay code below reads Phys:: for the Manifold2D::Physics types.
-    namespace Phys = Manifold2D::Physics;
-
     namespace
     {
-        // ---- port of PhysicsDebug.lua color constants -----------------------
-
-        // glm::vec4 (r, g, b, a) in linear float; may be HDR (no clamp).
-        constexpr glm::vec4 kColKinematic{ 0.2f, 1.0f, 0.4f, 1.0f };
-        constexpr glm::vec4 kColStatic   { 0.4f, 0.7f, 1.0f, 1.0f };
-        constexpr glm::vec4 kColSensor   { 1.0f, 0.9f, 0.2f, 0.9f };
-        constexpr glm::vec4 kColContact  { 1.0f, 0.2f, 1.0f, 1.0f }; // magenta
-        constexpr glm::vec4 kColAabb     { 1.0f, 1.0f, 1.0f, 0.4f }; // white dim
-
-        // ---- island palette -------------------------------------------------
+        // Vendor alias for this TU. Block and anonymous scope only, so
+        // the name is not Arcane::Phys.
+        namespace Phys = ::Manifold2D::Physics;
+        // ---- palette (settings arc S6-10: debug.physics.color.*) -----------
         //
-        // 8-color palette keyed by (islandRoot % 8).  These are distinct hues so
-        // different islands are visually separate at a glance.
-        constexpr glm::vec4 kIslandPalette[8] =
+        // The colours are cvars now (Arcane::PhysicsDebugColorSettings2D, inherited by the
+        // options block). A CVarColor is linear RGBA floats, the batcher's
+        // glm::vec4 (may be HDR, no clamp).
+        inline glm::vec4 ToVec4(const CVarColor& c) noexcept
         {
-            { 1.0f, 0.35f, 0.35f, 1.0f }, // red
-            { 1.0f, 0.65f, 0.15f, 1.0f }, // orange
-            { 1.0f, 1.00f, 0.20f, 1.0f }, // yellow
-            { 0.2f, 0.95f, 0.35f, 1.0f }, // green
-            { 0.2f, 0.80f, 1.00f, 1.0f }, // cyan
-            { 0.5f, 0.35f, 1.00f, 1.0f }, // blue-violet
-            { 1.0f, 0.30f, 0.90f, 1.0f }, // pink
-            { 0.85f,0.85f, 0.85f, 1.0f }, // light grey (island 7 / fallback)
-        };
+            return glm::vec4(c.r, c.g, c.b, c.a);
+        }
+
+        // 8-colour island palette keyed by (islandRoot % 8): distinct hues so
+        // different islands are visually separate at a glance.
+        inline glm::vec4 IslandColor(const Arcane::PhysicsDebugColorSettings2D& c, std::uint32_t root) noexcept
+        {
+            const CVarColor* const palette[8] = { &c.island0, &c.island1, &c.island2, &c.island3,
+                                                  &c.island4, &c.island5, &c.island6, &c.island7 };
+            return ToVec4(*palette[root % 8u]);
+        }
 
         // ---- helpers --------------------------------------------------------
 
@@ -115,45 +109,22 @@ namespace Arcane
             return glm::vec2(v.x * c - v.y * s, v.x * s + v.y * c);
         }
 
-        // ---- rich-overlay colors (Sandbox outline-unify pivot) --------------
-        constexpr glm::vec4 kColVelocity{ 0.20f, 1.00f, 0.55f, 1.0f }; // green ray
-        constexpr glm::vec4 kColCom     { 1.00f, 1.00f, 1.00f, 1.0f }; // white cross
-        constexpr glm::vec4 kColOrient  { 1.00f, 0.55f, 0.15f, 1.0f }; // orange tick
-
-        // ---- Slice A broadphase + manifold colors ---------------------------
-        //
-        // Distinct hues so the three broadphase overlays read apart from each
-        // other and from the per-body outlines: the DynamicTree leaves are cyan
-        // (tight bright, fat dim/translucent), broadphase candidate-pair links are
-        // a brighter cyan, the static grid is a cool blue, the residency grid is a
-        // warm amber (static vs residency read differently at a glance).
-        constexpr glm::vec4 kColTreeTight{ 0.30f, 0.90f, 1.00f, 0.85f }; // cyan, bright
-        constexpr glm::vec4 kColTreeFat  { 0.30f, 0.90f, 1.00f, 0.25f }; // cyan, dim (fat)
-        constexpr glm::vec4 kColTreePair { 0.20f, 1.00f, 0.90f, 0.80f }; // teal pair link
-        constexpr glm::vec4 kColStaticGrid   { 0.35f, 0.55f, 1.00f, 0.35f }; // cool blue
-        constexpr glm::vec4 kColResidencyGrid{ 1.00f, 0.70f, 0.20f, 0.35f }; // warm amber
-
-        // Manifold normal-arrow length (world units, projected) + contact-point
-        // disc radius (canvas px, view-independent for visibility).
-        constexpr float kManifoldNormalLen = 20.0f; // world units
-        constexpr float kManifoldPointPx   = 3.0f;   // canvas px
-
-        // Fixed debug palette keyed by NarrowphaseKind, so a contact's manifold is
-        // colored by the narrowphase path that produced it (a glance tells you
-        // which collide branch fired). Separated never draws (no points), but it
-        // gets a neutral grey so the lookup is total.
-        inline glm::vec4 ManifoldColor(Phys::NarrowphaseKind kind)
+        // Manifold colour keyed by NarrowphaseKind (debug.physics.color.narrowphase<ordinal>),
+        // so a contact's manifold is coloured by the narrowphase path that produced
+        // it. Separated never draws (no points); it and any unknown kind take
+        // narrowphase0, so the lookup is total.
+        inline glm::vec4 ManifoldColor(const Arcane::PhysicsDebugColorSettings2D& c, Phys::NarrowphaseKind kind) noexcept
         {
             switch (kind)
             {
-                case Phys::NarrowphaseKind::CircleCircle:    return { 1.00f, 0.30f, 0.30f, 1.0f }; // red
-                case Phys::NarrowphaseKind::CircleVsPolygon: return { 1.00f, 0.65f, 0.15f, 1.0f }; // orange
-                case Phys::NarrowphaseKind::Capsule:         return { 1.00f, 1.00f, 0.25f, 1.0f }; // yellow
-                case Phys::NarrowphaseKind::SatPolygon:      return { 0.30f, 1.00f, 0.45f, 1.0f }; // green
-                case Phys::NarrowphaseKind::Epa:             return { 0.40f, 0.70f, 1.00f, 1.0f }; // blue
-                case Phys::NarrowphaseKind::Mpr:             return { 0.80f, 0.45f, 1.00f, 1.0f }; // violet
+                case Phys::NarrowphaseKind::CircleCircle:    return ToVec4(c.narrowphase1);
+                case Phys::NarrowphaseKind::CircleVsPolygon: return ToVec4(c.narrowphase2);
+                case Phys::NarrowphaseKind::Capsule:         return ToVec4(c.narrowphase3);
+                case Phys::NarrowphaseKind::SatPolygon:      return ToVec4(c.narrowphase4);
+                case Phys::NarrowphaseKind::Epa:             return ToVec4(c.narrowphase5);
+                case Phys::NarrowphaseKind::Mpr:             return ToVec4(c.narrowphase6);
                 case Phys::NarrowphaseKind::Separated:
-                default:                                        return { 0.70f, 0.70f, 0.70f, 1.0f }; // grey
+                default:                                        return ToVec4(c.narrowphase0);
             }
         }
 
@@ -173,28 +144,19 @@ namespace Arcane
         // Draw a short arrow head at `tip`, opening back toward `from`.
         inline void DrawArrowHead(Batcher2D& b, const glm::vec2& from,
                                   const glm::vec2& tip, float thickness,
-                                  const glm::vec4& color)
+                                  const glm::vec4& color,
+                                  const Arcane::PhysicsDebugStyleSettings2D& st)
         {
             glm::vec2 dir = tip - from;
             const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
             if (len < 1e-4f) return;
             dir /= len;
             const glm::vec2 perp(-dir.y, dir.x);
-            const float head = (len < 12.0f) ? len * 0.5f : 6.0f; // px
+            const float head = (len < st.arrowShortLen) ? len * 0.5f : st.arrowHeadLen; // px
             const glm::vec2 base = tip - dir * head;
-            b.Line(tip, base + perp * (head * 0.6f), thickness, color);
-            b.Line(tip, base - perp * (head * 0.6f), thickness, color);
+            b.Line(tip, base + perp * (head * st.arrowHeadSpread), thickness, color);
+            b.Line(tip, base - perp * (head * st.arrowHeadSpread), thickness, color);
         }
-
-        // ---- Slice B narrowphase-inspector colors ---------------------------
-        // shapeA is the inspector SUBJECT: drawn at a bright-gold highlight (set inline in
-        // DrawNarrowphaseWorldOverlay so it reads distinctly across all the subject's
-        // contacts). shapeB is the contact PARTNER outline.
-        constexpr glm::vec4 kColTraceShapeB{ 0.40f, 0.70f, 1.00f, 1.0f }; // blue outline (partner)
-        constexpr glm::vec4 kColTraceAxis  { 0.55f, 0.55f, 0.60f, 0.6f }; // dim grey (candidate)
-        constexpr glm::vec4 kColTraceAxisHi{ 1.00f, 0.85f, 0.20f, 1.0f }; // gold (chosen axis)
-        constexpr glm::vec4 kColTraceNormal{ 1.00f, 0.25f, 1.00f, 1.0f }; // magenta normal arrow
-        constexpr glm::vec4 kColTracePoint { 1.00f, 1.00f, 1.00f, 1.0f }; // white contact disc
 
         // Transform a Phys::Vec2 in the shape's LOCAL frame through a
         // Phys::Transform (rotation + position) to world, then to screen.
@@ -324,19 +286,35 @@ namespace Arcane
 
     } // anonymous namespace
 
+    Arcane::PhysicsDebugDrawOptions2D MakePhysicsDebugDrawOptions()
+    {
+        Arcane::PhysicsDebugDrawOptions2D o;
+        static_cast<Arcane::PhysicsDebugSettings2D&>(o)      = Settings<Arcane::PhysicsDebugSettings2D>();
+        static_cast<Arcane::PhysicsDebugDrawSettings2D&>(o)  = Settings<Arcane::PhysicsDebugDrawSettings2D>();
+        static_cast<Arcane::PhysicsDebugColorSettings2D&>(o) = Settings<Arcane::PhysicsDebugColorSettings2D>();
+        static_cast<Arcane::PhysicsDebugTraceSettings2D&>(o) = Settings<Arcane::PhysicsDebugTraceSettings2D>();
+        return o;
+    }
+
     // -------------------------------------------------------------------------
     // DrawPhysicsDebug
     // -------------------------------------------------------------------------
 
-    void DrawPhysicsDebug(const Phys::PhysicsWorld& world,
+    void DrawPhysicsDebug(const ::Manifold2D::Physics::PhysicsWorld& world,
                           Batcher2D& batcher,
-                          const PhysicsDebugDrawOptions& opts)
+                          const Arcane::PhysicsDebugDrawOptions2D& opts)
     {
+        namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
         const Affine2D&  view    = opts.view;
         const float      thick   = opts.lineThickness;
         const std::uint32_t n    = world.Count();
+        const glm::vec4  colVelocity = ToVec4(opts.velocity);
+        const glm::vec4  colOrient   = ToVec4(opts.orient);
+        const glm::vec4  colCom      = ToVec4(opts.com);
+        const glm::vec4  colContact  = ToVec4(opts.contact);
+        const Arcane::PhysicsDebugStyleSettings2D& style = Settings<Arcane::PhysicsDebugStyleSettings2D>();
 
         // ---- per-body shape outlines ----------------------------------------
         for (std::uint32_t i = 0; i < n; ++i)
@@ -362,41 +340,41 @@ namespace Arcane
                 && i < opts.interp->prev.size()
                 && opts.interp->prev[i].generation == h.generation)
             {
-                const InterpPose& pp = opts.interp->prev[i];
-                wpos = Vec2(static_cast<Real>(Lerp(pp.position.x, static_cast<float>(wpos.x), opts.alpha)),
-                            static_cast<Real>(Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
-                bodyAngle = AngleLerp(pp.angle, bodyAngle, opts.alpha);
+                const Arcane::PhysicsInterpPose2D& pp = opts.interp->prev[i];
+                wpos = Vec2(static_cast<Real>(Arcane::Detail::Physics2D::Lerp(pp.position.x, static_cast<float>(wpos.x), opts.alpha)),
+                            static_cast<Real>(Arcane::Detail::Physics2D::Lerp(pp.position.y, static_cast<float>(wpos.y), opts.alpha)));
+                bodyAngle = Arcane::Detail::Physics2D::AngleLerp(pp.angle, bodyAngle, opts.alpha);
             }
 
             // ---- color selection (port of PhysicsDebug.lua lines 29-34) ----
             glm::vec4 col;
             if (sensor)
             {
-                col = kColSensor;
+                col = ToVec4(opts.sensor);
             }
             else if (btype == BodyType::Static)
             {
-                col = kColStatic;
+                col = ToVec4(opts.staticBody);
             }
             else if (btype == BodyType::Dynamic)
             {
                 // Color by island root (the modernization).
                 const std::uint32_t root = world.IslandRootOf(i);
-                col = kIslandPalette[root % 8u];
+                col = IslandColor(opts, root);
 
-                // Sleeping dynamic bodies drawn dim (Lua dim = 0.35).
+                // Sleeping dynamic bodies drawn dim (debug.physics.style.sleepingDim;
+                // Lua dim = 0.35).
                 if (!awake)
                 {
-                    constexpr float kDim = 0.35f;
-                    col.r *= kDim;
-                    col.g *= kDim;
-                    col.b *= kDim;
+                    col.r *= style.sleepingDim;
+                    col.g *= style.sleepingDim;
+                    col.b *= style.sleepingDim;
                 }
             }
             else
             {
                 // Kinematic.
-                col = kColKinematic;
+                col = ToVec4(opts.kinematic);
             }
 
             // ---- per-fixture shape outlines --------------------------------
@@ -431,7 +409,7 @@ namespace Arcane
                     const Shape& fs = world.GetFixtureShape(fh);
                     const Vec2   lp = world.GetFixtureLocalPos(fh);
                     const float  la = static_cast<float>(world.GetFixtureLocalAngle(fh));
-                    // Fixture world center: interp-blended body pose + rotated
+                    // Arcane::Fixture2D world center: interp-blended body pose + rotated
                     // local offset (world units; DrawShapeOutlineRotated projects
                     // through the view).
                     const Vec2 fwc(static_cast<Real>(wpos.x + bc * lp.x - bs * lp.y),
@@ -441,10 +419,10 @@ namespace Arcane
                 }
             }
 
-            // ---- optional AABB outline (opts.drawAabbs) --------------------
-            if (!opts.onlyBody && opts.drawAabbs)
+            // ---- optional AABB outline (opts.aabbs) ------------------------
+            if (!opts.onlyBody && opts.aabbs)
             {
-                DrawAabbOutline(batcher, world.SlotAabb(i), view, thick, kColAabb);
+                DrawAabbOutline(batcher, world.SlotAabb(i), view, thick, ToVec4(opts.aabb));
             }
 
             // ---- rich per-body overlays (outline-unify pivot, Item A) ------
@@ -459,58 +437,60 @@ namespace Arcane
 
             // Velocity ray: COM -> COM + v * scale (DYNAMIC + awake only; a
             // resting/zero-velocity body draws nothing so the overlay stays clean).
-            if (!opts.onlyBody && opts.drawVelocities && btype == BodyType::Dynamic && awake)
+            if (!opts.onlyBody && opts.velocities && btype == BodyType::Dynamic && awake)
             {
                 const Vec2  v   = world.VelSlot(i);
                 const float vx  = static_cast<float>(v.x);
                 const float vy  = static_cast<float>(v.y);
                 const float spd = std::sqrt(vx * vx + vy * vy);
-                if (spd > opts.velocityRayMinSpeed)
+                if (spd > opts.velocityMinSpeed)
                 {
                     const glm::vec2 tip =
                         view.Point(comW + glm::vec2(vx, vy) * opts.velocityScale);
-                    batcher.Line(comS, tip, thick, kColVelocity);
-                    DrawArrowHead(batcher, comS, tip, thick, kColVelocity);
+                    batcher.Line(comS, tip, thick, colVelocity);
+                    DrawArrowHead(batcher, comS, tip, thick, colVelocity, style);
                 }
             }
 
             // Orientation tick: COM along local +x (rotated by the body angle),
             // so rotation is visible even on a rotation-invariant circle outline.
-            if (!opts.onlyBody && opts.drawOrientations)
+            if (!opts.onlyBody && opts.orientations)
             {
                 const glm::vec2 dir = Rotate2D(glm::vec2(1.0f, 0.0f), angle);
                 const glm::vec2 tip = view.Point(comW + dir * opts.orientationTickLen);
-                batcher.Line(comS, tip, thick, kColOrient);
+                batcher.Line(comS, tip, thick, colOrient);
             }
 
             // COM marker: a small axis-aligned cross at the world COM (dynamic
             // bodies; statics/kinematics have COM == origin and add no insight).
             // The cross is symmetric about its centre, so screen-space arms of
             // a projected LENGTH are exact under the mirror.
-            if (!opts.onlyBody && opts.drawComMarkers && btype == BodyType::Dynamic)
+            if (!opts.onlyBody && opts.comMarkers && btype == BodyType::Dynamic)
             {
                 const float r = view.Length(opts.comMarkerSize);
                 batcher.Line(glm::vec2(comS.x - r, comS.y),
-                             glm::vec2(comS.x + r, comS.y), thick, kColCom);
+                             glm::vec2(comS.x + r, comS.y), thick, colCom);
                 batcher.Line(glm::vec2(comS.x, comS.y - r),
-                             glm::vec2(comS.x, comS.y + r), thick, kColCom);
+                             glm::vec2(comS.x, comS.y + r), thick, colCom);
             }
         }
 
         // ---- contact lines (port of PhysicsDebug.lua lines 75-82) ----------
         //
-        // A magenta line links each begun pair's centers; a small disc at the
-        // midpoint makes the contact pop even when the two centers are close
-        // (the ForEachContact pull API exposes the pair, not the manifold point,
-        // so the midpoint is the best available "where" marker).
-        if (!opts.onlyBody && opts.drawContacts)
+        // A magenta line links each touching body-to-body contact's centers
+        // (pool-backed ForEachContact: every touching pair, ascending id,
+        // dynamic-vs-static included, and sensor / kinematic-static pool
+        // contacts too); a small disc at the midpoint makes the contact pop
+        // even when the two centers are close (the pull API exposes the pair,
+        // not the manifold point, so the midpoint is the best available "where").
+        if (!opts.onlyBody && opts.contacts)
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)
             {
                 const glm::vec2 pa = ToScreen(world.PosSlot(a), view);
                 const glm::vec2 pb = ToScreen(world.PosSlot(b), view);
-                batcher.Line(pa, pb, thick, kColContact);
-                batcher.Circle((pa + pb) * 0.5f, view.Length(opts.contactMarkerSize), kColContact);
+                batcher.Line(pa, pb, thick, colContact);
+                batcher.Circle((pa + pb) * 0.5f, view.Length(opts.contactMarkerSize), colContact);
             });
         }
 
@@ -531,8 +511,8 @@ namespace Arcane
                 tree->ForEachLeaf(
                     [&](std::uint32_t id, const Aabb2& tight, const Aabb2& fat)
                     {
-                        DrawAabbOutline(batcher, fat,   view, thick, kColTreeFat);
-                        DrawAabbOutline(batcher, tight, view, thick, kColTreeTight);
+                        DrawAabbOutline(batcher, fat,   view, thick, ToVec4(opts.treeFat));
+                        DrawAabbOutline(batcher, tight, view, thick, ToVec4(opts.treeTight));
                         const glm::vec2 c(
                             (static_cast<float>(tight.min.x) + static_cast<float>(tight.max.x)) * 0.5f,
                             (static_cast<float>(tight.min.y) + static_cast<float>(tight.max.y)) * 0.5f);
@@ -552,7 +532,7 @@ namespace Arcane
                     if (ib == centers.end()) continue;
                     const glm::vec2 sa = view.Point(ia->second);
                     const glm::vec2 sb = view.Point(ib->second);
-                    batcher.Line(sa, sb, thick, kColTreePair);
+                    batcher.Line(sa, sb, thick, ToVec4(opts.treePair));
                 }
             }
         }
@@ -571,7 +551,7 @@ namespace Arcane
             world.StaticTree().ForEachLeaf(
                 [&](std::uint32_t, const Aabb2& /*tight*/, const Aabb2& fat)
                 {
-                    DrawAabbOutline(batcher, fat, view, thick, kColStaticGrid);
+                    DrawAabbOutline(batcher, fat, view, thick, ToVec4(opts.staticGrid));
                 });
         }
 
@@ -591,7 +571,7 @@ namespace Arcane
                     cell.min = Phys::Vec2(gorg.x + static_cast<float>(cx) * ts,
                                              gorg.y + static_cast<float>(cy) * ts);
                     cell.max = Phys::Vec2(cell.min.x + ts, cell.min.y + ts);
-                    DrawAabbOutline(batcher, cell, view, thick, kColResidencyGrid);
+                    DrawAabbOutline(batcher, cell, view, thick, ToVec4(opts.residencyGrid));
                 });
         }
 
@@ -603,7 +583,7 @@ namespace Arcane
         // be kInvalidSlot (a tile-span virtual fixture), so anchorA is the
         // reliable end -- we anchor the marker on body A. The normal points B->A;
         // we draw the arrow from the contact point along it. Colored by the
-        // narrowphase kind that produced the manifold. ADDITIVE to drawContacts.
+        // narrowphase kind that produced the manifold. ADDITIVE to opts.contacts.
         if (!opts.onlyBody && opts.drawManifolds)
         {
             world.ForEachContactConstraint(
@@ -618,7 +598,7 @@ namespace Arcane
                     const glm::vec2 comA = ComWorldF(
                         posA, angA, world.LocalCenterSlot(cc.bodyA));
 
-                    const glm::vec4 col = ManifoldColor(cc.kind);
+                    const glm::vec4 col = ManifoldColor(opts, cc.kind);
                     const glm::vec2 nrm(static_cast<float>(cc.normal.x),
                                         static_cast<float>(cc.normal.y));
 
@@ -630,11 +610,11 @@ namespace Arcane
                             + glm::vec2(static_cast<float>(cp.anchorA.x),
                                         static_cast<float>(cp.anchorA.y));
                         const glm::vec2 spt = view.Point(wpt);
-                        batcher.Circle(spt, kManifoldPointPx, col);
+                        batcher.Circle(spt, opts.manifoldPointPx, col);
                         // Normal arrow: contact point -> point + normal * len.
-                        const glm::vec2 tip = view.Point(wpt + nrm * kManifoldNormalLen);
+                        const glm::vec2 tip = view.Point(wpt + nrm * opts.manifoldNormalLength);
                         batcher.Line(spt, tip, thick, col);
-                        DrawArrowHead(batcher, spt, tip, thick, col);
+                        DrawArrowHead(batcher, spt, tip, thick, col, style);
                     }
                 });
         }
@@ -644,20 +624,25 @@ namespace Arcane
     // DrawNarrowphaseWorldOverlay (Slice B)
     // -------------------------------------------------------------------------
 
-    void DrawNarrowphaseWorldOverlay(const Phys::NarrowphaseTrace& trace,
+    void DrawNarrowphaseWorldOverlay(const ::Manifold2D::Physics::NarrowphaseTrace& trace,
                                      int stepIndex,
                                      Batcher2D& batcher,
                                      const Affine2D& view,
-                                     float lineThickness,
-                                     float emphasis)
+                                     std::optional<float> lineThickness,
+                                     std::optional<float> emphasis)
     {
+        namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
-        const float thick = lineThickness;
+        const Arcane::PhysicsDebugTraceSettings2D& trc = Settings<Arcane::PhysicsDebugTraceSettings2D>();
+        const Arcane::PhysicsDebugColorSettings2D& pal = Settings<Arcane::PhysicsDebugColorSettings2D>();
+        const Arcane::PhysicsDebugStyleSettings2D& style = Settings<Arcane::PhysicsDebugStyleSettings2D>();
+        const float thick = lineThickness.value_or(trc.traceLineThickness);
 
         // Emphasis scales alpha so the SELECTED contact (emphasis 1) reads bold/bright and
-        // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor.
-        const float em = std::clamp(emphasis, 0.15f, 1.0f);
+        // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor
+        // (debug.physics.style.emphasisFloor, range 0..1 so the clamp stays ordered).
+        const float em = std::clamp(emphasis.value_or(trc.emphasis), style.emphasisFloor, 1.0f);
         const auto Dim = [em](glm::vec4 c) noexcept -> glm::vec4
         {
             c.a *= em;
@@ -667,10 +652,10 @@ namespace Arcane
         // The SUBJECT (shapeA) is always drawn at a distinct bright highlight so it is
         // unmistakable across all its contacts; its alpha still rides the emphasis so the
         // focused contact's subject outline is the boldest.
-        const glm::vec4 colSubject{ 1.00f, 0.95f, 0.35f, 1.0f }; // bright gold = subject
+        const glm::vec4 colSubject = ToVec4(pal.subject); // bright gold = subject
         DrawTraceShape(batcher, trace.shapeA, trace.xfA, view,
-                       em >= 1.0f ? thick * 1.3f : thick, Dim(colSubject));
-        DrawTraceShape(batcher, trace.shapeB, trace.xfB, view, thick, Dim(kColTraceShapeB));
+                       em >= 1.0f ? thick * style.subjectThicknessScale : thick, Dim(colSubject));
+        DrawTraceShape(batcher, trace.shapeB, trace.xfB, view, thick, Dim(ToVec4(pal.traceShapeB)));
 
         // Anchor world point for axis/normal drawing: the first manifold contact
         // point (world space) when present, else the midpoint of the two shape
@@ -700,7 +685,6 @@ namespace Arcane
         {
             const int n = static_cast<int>(trace.satAxes.size());
             const int sel = (stepIndex >= 0 && stepIndex < n) ? stepIndex : -1;
-            constexpr float kAxisHalfLenPx = 60.0f;  // half-length of the drawn segment
 
             for (int i = 0; i < n; ++i)
             {
@@ -719,11 +703,11 @@ namespace Arcane
                 const float     alongL = std::sqrt(alongS.x * alongS.x + alongS.y * alongS.y);
                 if (alongL < 1e-6f) continue;
                 const glm::vec2 alongN = alongS / alongL;
-                const glm::vec2 a = anchorS - alongN * kAxisHalfLenPx;
-                const glm::vec2 c = anchorS + alongN * kAxisHalfLenPx;
+                const glm::vec2 a = anchorS - alongN * style.axisHalfLenPx;
+                const glm::vec2 c = anchorS + alongN * style.axisHalfLenPx;
                 const bool hi = ax.chosen || i == sel;
-                batcher.Line(a, c, hi ? thick * 1.8f : thick,
-                             Dim(hi ? kColTraceAxisHi : kColTraceAxis));
+                batcher.Line(a, c, hi ? thick * style.axisHiThicknessScale : thick,
+                             Dim(ToVec4(hi ? pal.traceAxisHi : pal.traceAxis)));
             }
         }
 
@@ -736,7 +720,7 @@ namespace Arcane
         // series is the inset's job. (Drawing MD points in world space would be
         // meaningless.) We mark the support-region anchor with a small ring so
         // the contact is unmistakable in the world view.
-        batcher.Circle(anchorS, 4.0f, Dim(kColTracePoint));
+        batcher.Circle(anchorS, style.anchorDiscRadius, Dim(ToVec4(pal.tracePoint)));
 
         // ---- final representative normal arrow (B -> A) ---------------------
         const glm::vec2 nrm(static_cast<float>(trace.manifold.normal.x),
@@ -744,10 +728,9 @@ namespace Arcane
         const float nlen = std::sqrt(nrm.x * nrm.x + nrm.y * nrm.y);
         if (nlen > 1e-5f)
         {
-            constexpr float kNormalLen = 28.0f;  // world units
-            const glm::vec2 tip = view.Point(anchorW + (nrm / nlen) * kNormalLen);
-            batcher.Line(anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
-            DrawArrowHead(batcher, anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
+            const glm::vec2 tip = view.Point(anchorW + (nrm / nlen) * trc.normalLength);   // "world units"
+            batcher.Line(anchorS, tip, thick * style.normalThicknessScale, Dim(ToVec4(pal.traceNormal)));
+            DrawArrowHead(batcher, anchorS, tip, thick * style.normalThicknessScale, Dim(ToVec4(pal.traceNormal)), style);
         }
 
         // ---- manifold contact points (white discs) -------------------------
@@ -755,7 +738,7 @@ namespace Arcane
         {
             const Vec2& p = trace.manifold.points[pi].point;
             const glm::vec2 sp = ToScreen(p, view);
-            batcher.Circle(sp, 3.0f, Dim(kColTracePoint));
+            batcher.Circle(sp, style.contactDiscRadius, Dim(ToVec4(pal.tracePoint)));
         }
     }
 

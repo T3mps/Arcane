@@ -573,15 +573,15 @@ TEST_CASE("scene JSON load publishes a diagnostic naming the malformed field",
 }
 
 // Final-review, pre-existing landmine (NOT F1's doing, fixed originally by
-// marking Collider2D::fixtures Serializable(false) -- the same mechanism
-// PhysicsBodyRef::handle and WorldTransform::matrix use -- so a Collider2D
+// marking Arcane::Collider2D::fixtures Serializable(false) -- the same mechanism
+// Arcane::PhysicsBodyRef2D::handle and WorldTransform::matrix use -- so a Arcane::Collider2D
 // with no fixtures authored round-tripped as a present-but-empty component
 // rather than permanently refusing to load. Superseded 2026-09-11 (2D physics
 // wiring Plan 1): the reflection->JSON bridge grew a container branch
 // (ReflectionJson.hpp) and fixtures is serializable again, so this now pins
 // the same round trip through the REAL path -- see the fixtures-populated
 // case below for the container branch itself.
-TEST_CASE("a scene carrying Collider2D round-trips with no fixtures authored",
+TEST_CASE("a scene carrying Arcane::Collider2D round-trips with no fixtures authored",
           "[json][scene]")
 {
     nlohmann::json doc;
@@ -589,13 +589,13 @@ TEST_CASE("a scene carrying Collider2D round-trips with no fixtures authored",
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::RegisterPhysicsComponents2D(reg);
 
         Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
 
         // Exactly what the Inspector's Add Component produces: a default
-        // Collider2D, no fixtures authored (there is no vector editor).
+        // Arcane::Collider2D, no fixtures authored (there is no vector editor).
         Arcane::Collider2D col;
         reg.AddComponent<Arcane::Collider2D>(root, col);
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -609,7 +609,7 @@ TEST_CASE("a scene carrying Collider2D round-trips with no fixtures authored",
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
 
     // THE regression: this returned false before the fix, permanently.
     REQUIRE(Arcane::Scene::LoadJson(reg, doc));
@@ -620,25 +620,25 @@ TEST_CASE("a scene carrying Collider2D round-trips with no fixtures authored",
     CHECK(colliders == 1);
 }
 
-TEST_CASE("scene round-trips Collider2D fixtures through JSON", "[json][scene][physics]")
+TEST_CASE("scene round-trips Arcane::Collider2D fixtures through JSON", "[json][scene][physics]")
 {
     // The 2026-09-11 container branch: fixtures were Serializable(false) before
-    // (the bridge had no container branch), so a Collider2D authored in the
+    // (the bridge had no container branch), so a Arcane::Collider2D authored in the
     // Inspector saved as a present-but-empty component. Now it round-trips.
     nlohmann::json doc;
     {
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
-        Arcane::RegisterPhysicsComponents(reg);
+        Arcane::RegisterPhysicsComponents2D(reg);
 
         Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
-        Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic; rb.fixedRotation = true;
+        Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic; rb.fixedRotation = true;
         reg.AddComponent<Arcane::RigidBody2D>(root, rb);
         Arcane::Collider2D col;
-        Arcane::Fixture a; a.kind = Manifold2D::Physics::ShapeKind::Aabb;   a.halfW = 0.5f; a.halfH = 0.25f; a.friction = 0.7f;
-        Arcane::Fixture b; b.kind = Manifold2D::Physics::ShapeKind::Circle; b.radius = 0.3f; b.localPos = glm::vec2(1.0f, 0.0f); b.isSensor = true;
+        Arcane::Fixture2D a; a.kind = Arcane::ShapeKind2D::Aabb;   a.halfW = 0.5f; a.halfH = 0.25f; a.friction = 0.7f;
+        Arcane::Fixture2D b; b.kind = Arcane::ShapeKind2D::Circle; b.radius = 0.3f; b.localPos = glm::vec2(1.0f, 0.0f); b.isSensor = true;
         col.fixtures = { a, b };
         reg.AddComponent<Arcane::Collider2D>(root, col);
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -653,7 +653,7 @@ TEST_CASE("scene round-trips Collider2D fixtures through JSON", "[json][scene][p
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
     REQUIRE(Arcane::Scene::LoadJson(reg, doc));
 
     const Arcane::SceneRoot* sr = reg.GetResource<Arcane::SceneRoot>();
@@ -661,18 +661,18 @@ TEST_CASE("scene round-trips Collider2D fixtures through JSON", "[json][scene][p
     const Arcane::Collider2D* out = reg.GetComponent<Arcane::Collider2D>(sr->entity);
     REQUIRE(out != nullptr);
     REQUIRE(out->fixtures.size() == 2);
-    CHECK(out->fixtures[0].kind == Manifold2D::Physics::ShapeKind::Aabb);
+    CHECK(out->fixtures[0].kind == Arcane::ShapeKind2D::Aabb);
     CHECK(out->fixtures[0].halfH == Approx(0.25f));
     CHECK(out->fixtures[0].friction == Approx(0.7f));
-    CHECK(out->fixtures[1].kind == Manifold2D::Physics::ShapeKind::Circle);
+    CHECK(out->fixtures[1].kind == Arcane::ShapeKind2D::Circle);
     CHECK(out->fixtures[1].localPos.x == Approx(1.0f));
     CHECK(out->fixtures[1].isSensor);
     const Arcane::RigidBody2D* rb = reg.GetComponent<Arcane::RigidBody2D>(sr->entity);
     REQUIRE(rb != nullptr);
-    CHECK(rb->type == Manifold2D::Physics::BodyType::Dynamic);
+    CHECK(rb->type == Arcane::BodyType2D::Dynamic);
 }
 
-TEST_CASE("PhysicsSettings on the scene root round-trips through JSON", "[json][scene][physics]")
+TEST_CASE("Arcane::PhysicsSettings2D on the scene root round-trips through JSON", "[json][scene][physics]")
 {
     nlohmann::json doc;
     {
@@ -681,8 +681,8 @@ TEST_CASE("PhysicsSettings on the scene root round-trips through JSON", "[json][
         Arcane::RegisterSceneComponents(reg);
         Astra::Entity root = reg.CreateEntity();
         reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
-        Arcane::PhysicsSettings ps; ps.gravity = glm::vec2(0.0f, 3.0f);
-        reg.AddComponent<Arcane::PhysicsSettings>(root, ps);
+        Arcane::PhysicsSettings2D ps; ps.gravity = glm::vec2(0.0f, 3.0f);
+        reg.AddComponent<Arcane::PhysicsSettings2D>(root, ps);
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
         doc = Arcane::Scene::SaveJson(reg);
     }
@@ -692,7 +692,7 @@ TEST_CASE("PhysicsSettings on the scene root round-trips through JSON", "[json][
     REQUIRE(Arcane::Scene::LoadJson(reg, doc));
     const Arcane::SceneRoot* sr = reg.GetResource<Arcane::SceneRoot>();
     REQUIRE(sr != nullptr);
-    const Arcane::PhysicsSettings* ps = reg.GetComponent<Arcane::PhysicsSettings>(sr->entity);
+    const Arcane::PhysicsSettings2D* ps = reg.GetComponent<Arcane::PhysicsSettings2D>(sr->entity);
     REQUIRE(ps != nullptr);
     CHECK(ps->gravity.y == Approx(3.0f));
 }

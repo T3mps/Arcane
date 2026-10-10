@@ -252,7 +252,7 @@ namespace Arcane::RuntimeFrame
         // without ever reaching a single byteEqual&&idle attempt.
         bool& compareEvaluated;
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // --crash-gpu N. Same Dist guard as the RuntimeApp member this is
         // bound to -- see RuntimeApp.hpp. The fired-once latch is the only
         // state needed: RenderGraph fires through the stateless

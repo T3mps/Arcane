@@ -64,7 +64,7 @@ namespace Arcane
     class Graveyard;
     class NriDevice;
 
-    class ARCANE_API NriMeshBufferCache
+    class ARC_API NriMeshBufferCache
     {
     public:
         // Guid -> resolved CPU geometry, or a state saying why not. In production this
@@ -132,11 +132,18 @@ namespace Arcane
         // full MISS: the supply is asked again (an in-memory MeshTable lookup in
         // production, not a disk read) and the mesh re-uploads.
         //
-        // `budget` defaults to kMeshResidencyBudgetBytes. Tests pass a smaller value so
-        // a handful of cubes can exercise the LRU without filling 512 MiB.
+        // The three-argument form evicts against Budget() -- render.mesh.residencyBudgetBytes,
+        // latched by Create. Tests pass a smaller `budget` so a handful of cubes can
+        // exercise the LRU without filling 512 MiB.
+        void EvictToBudget(std::uint64_t frameCounter, Graveyard& graveyard, std::uint64_t fence)
+        {
+            EvictToBudget(frameCounter, graveyard, fence, m_budget);
+        }
         void EvictToBudget(std::uint64_t frameCounter, Graveyard& graveyard,
-                           std::uint64_t fence,
-                           std::uint64_t budget = kMeshResidencyBudgetBytes);
+                           std::uint64_t fence, std::uint64_t budget);
+
+        // The residency budget this cache latched at Create (Restart).
+        [[nodiscard]] std::uint64_t Budget() const noexcept { return m_budget; }
 
         // Drops residency for `id` so the NEXT Resolve treats it as brand new --
         // Resident, Pending or Refused, whichever it lands in. The escape hatch a
@@ -189,6 +196,7 @@ namespace Arcane
         nri::HelperInterface m_helper{};
         MeshSupplyFn         m_supply;
         std::unordered_map<Guid, Resident> m_entries;
+        std::uint64_t        m_budget = 0;   // render.mesh.residencyBudgetBytes, latched by Create
         bool m_warnedOverBudget = false;
         bool m_warnedMiss       = false;
         // DebugFailNextUpload's own latch -- see that method's comment. Never read

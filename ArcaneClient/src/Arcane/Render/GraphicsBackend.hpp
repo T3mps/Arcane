@@ -28,13 +28,13 @@ namespace Arcane
         Vulkan,
     };
 
-    ARCANE_API const char* ToString(GraphicsBackend backend);
+    ARC_API const char* ToString(GraphicsBackend backend);
 
     // The backend a host runs on when nothing asks for another one: D3D12 on
     // Windows (unchanged), Vulkan everywhere else -- the only backend a
     // non-Windows build has (Linux port, 2026-10-05). kDefaultBackendCliName
     // is the same choice spelled as the host CLI's --backend value.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     inline constexpr GraphicsBackend kDefaultGraphicsBackend = GraphicsBackend::D3D12;
     inline constexpr const char*     kDefaultBackendCliName  = "dx12";
 #else

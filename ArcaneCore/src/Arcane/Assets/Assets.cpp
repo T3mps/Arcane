@@ -3,6 +3,7 @@
 
 #include <Arcane/Assets/ArtifactReader.hpp>
 #include <Arcane/Assets/AssetCache.hpp>
+#include <Arcane/Assets/AssetsSettings.hpp>   // assets.material.maxParentDepth
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Serialization/IdentityFieldRule.hpp>   // Arcane::IsIdentityGuidFieldName
@@ -1010,13 +1011,15 @@ namespace Arcane
             // ParseJsonUncached -- NOT the cached JsonForResolved -- because spec
             // s3 pins this query parse-on-call; see that helper's own comment for
             // why the cache cannot serve it and why the cache is left alone.
-            // Bounded depth (8), not a visited-set: a two-hop cycle just alternates
-            // for a few iterations and then hits the bound, which is cheaper than
+            // Bounded depth (assets.material.maxParentDepth, read per walk), not
+            // a visited-set: a two-hop cycle just alternates for a few
+            // iterations and then hits the bound, which is cheaper than
             // tracking a chain and gives the same "never hangs" guarantee.
             std::optional<MaterialSurface> MaterialSurfaceFor(const Guid& id) override
             {
                 Guid current = id;
-                for (int depth = 0; depth < 8; ++depth)
+                const int maxDepth = Settings<AssetsMaterialSettings>().maxParentDepth;
+                for (int depth = 0; depth < maxDepth; ++depth)
                 {
                     const auto resolved = ResolveId(AssetId::FromGuid(current));
                     if (!resolved)

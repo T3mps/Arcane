@@ -6,7 +6,7 @@
 // placeholders. Compiles to nothing on Windows (the real definitions win).
 #include <Arcane/Platform/Platform.hpp>
 
-#if !ARCANE_PLATFORM_WINDOWS
+#if !ARC_PLATFORM_WINDOWS
 
 #include <Arcane/Render/DeviceRemovedObservers.hpp>
 

@@ -44,7 +44,7 @@ namespace Arcane
 // calls THROUGH the interface, never constructs one.
 #pragma warning(disable: 4275)
 #endif
-    class ARCANE_API ClientRuntime final : private IClientHooks
+    class ARC_API ClientRuntime final : private IClientHooks
     {
     public:
         // enableAudioDevice: as Runtime's flag was -- false = the null backend; an

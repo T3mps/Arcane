@@ -11,7 +11,7 @@
 
 #include <Arcane/Platform/Platform.hpp>
 
-#if ARCANE_PLATFORM_LINUX
+#if ARC_PLATFORM_LINUX
 
 #include <Arcane/Base/Diagnostics.hpp>
 

@@ -20,11 +20,23 @@
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 
+#include <Settings/EditorGridSettings.hpp>
 #include <Viewport/ViewportGrid.hpp>
 
 using Catch::Approx;
 using namespace Arcane::Editor;
+
+namespace
+{
+    // The oracle: editor.viewport.grid.*'s declared defaults (settings S6-21),
+    // which PlanGrid2D / DrawGrid2D read through the registry.
+    const EditorGridSettings kGridDefaults{};
+    const float     kGridMinorAlpha = kGridDefaults.minorAlpha;
+    const float     kGridMajorAlpha = kGridDefaults.majorAlpha;
+    const glm::vec3 kGridLineRgb{ kGridDefaults.lineColor.r, kGridDefaults.lineColor.g, kGridDefaults.lineColor.b };
+}
 
 namespace
 {
@@ -144,7 +156,7 @@ TEST_CASE("PlanGrid2D picks decade levels by screen spacing and crossfades betwe
 TEST_CASE("PixelsPerMetre reads the orthographic view's scale and is 0 for perspective / no viewport", "[editor][grid]")
 {
     // halfHeight 1.5 m over 300 px = 100 px per metre.
-    const auto ortho = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
+    const auto ortho = Arcane::Ortho2DView(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
     CHECK(PixelsPerMetre(ortho) == Approx(100.0f));
     const auto persp = Arcane::ViewTransform::Perspective(glm::vec3(0, 0, 10), glm::vec3(0), glm::vec3(0, 1, 0),
                                                           60.0f, glm::uvec2(400u, 300u), 0.1f, 100.0f);
@@ -165,7 +177,7 @@ TEST_CASE("DrawGrid2D emits only lines inside the visible world rect, plus the t
     //   grey horizontals -1, 1         -> 2    the rect edge counts, INCLUSIVE)
     //   axes             x = 0 (green), y = 0 (red) -> 2
     //   total 8.
-    const auto view = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
+    const auto view = Arcane::Ortho2DView(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
     Grid2DPlan plan;
     plan.levels[0] = { 1.0f, kGridMinorAlpha };
     plan.count     = 1;
@@ -242,7 +254,7 @@ TEST_CASE("DrawGrid2D: a view away from the origin draws no axes, and off-rect l
     // lines, no coloured ones. The coarsest level's every TENTH line (x = 10,
     // y = 20 -- the decade above the plan) is held at the major strength;
     // the other six are at the level's own alpha.
-    const auto view = Arcane::ViewTransform::Orthographic(glm::vec2(10.5f, 20.5f), 1.5f, glm::uvec2(400u, 300u));
+    const auto view = Arcane::Ortho2DView(glm::vec2(10.5f, 20.5f), 1.5f, glm::uvec2(400u, 300u));
     Grid2DPlan plan;
     plan.levels[0] = { 1.0f, kGridMinorAlpha };
     plan.count     = 1;
@@ -291,7 +303,7 @@ TEST_CASE("DrawGrid2D: the decade above the plan keeps its major strength across
     for (const float ppm : { 79.0f, 80.0f })
     {
         const float halfHeight = 150.0f / ppm;
-        const auto view = Arcane::ViewTransform::Orthographic(glm::vec2(100.0f, 0.0f), halfHeight, glm::uvec2(400u, 300u));
+        const auto view = Arcane::Ortho2DView(glm::vec2(100.0f, 0.0f), halfHeight, glm::uvec2(400u, 300u));
         REQUIRE(PixelsPerMetre(view) == Approx(ppm));
         RecMock b;
         DrawGrid2D(b, view, PlanGrid2D(ppm));
@@ -317,7 +329,7 @@ TEST_CASE("DrawGrid2D: a finer level skips the lines a coarser level in the plan
     // with a 5 m line inside the rect other than the axes, so the count is
     // 8 + 6 + 2 = 16.
     {
-        const auto view = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
+        const auto view = Arcane::Ortho2DView(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
         Grid2DPlan plan;
         plan.levels[0] = { 0.5f, 0.2f };
         plan.levels[1] = { 5.0f, kGridMajorAlpha };
@@ -333,7 +345,7 @@ TEST_CASE("DrawGrid2D: a finer level skips the lines a coarser level in the plan
     // before (6 fine, y = 0 axis). No Y axis (x = 0 is outside). Total
     // 8 + 1 + 6 + 1 = 16, with exactly one line at the major alpha.
     {
-        const auto view = Arcane::ViewTransform::Orthographic(glm::vec2(5.0f, 0.0f), 1.5f, glm::uvec2(400u, 300u));
+        const auto view = Arcane::Ortho2DView(glm::vec2(5.0f, 0.0f), 1.5f, glm::uvec2(400u, 300u));
         Grid2DPlan plan;
         plan.levels[0] = { 0.5f, 0.2f };
         plan.levels[1] = { 5.0f, kGridMajorAlpha };
@@ -375,7 +387,7 @@ TEST_CASE("DrawGrid2D draws nothing for a perspective view, an empty plan, or a 
         DrawGrid2D(b, persp, plan);
         CHECK(b.lines.empty());
     }
-    const auto ortho = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
+    const auto ortho = Arcane::Ortho2DView(glm::vec2(0.0f), 1.5f, glm::uvec2(400u, 300u));
     {
         RecMock b;
         DrawGrid2D(b, ortho, Grid2DPlan{});   // count 0

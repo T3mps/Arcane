@@ -151,6 +151,7 @@ namespace Arcane::Diagnostics
         std::size_t WalkFrameChain(std::uint64_t pc, std::uint64_t sp, std::uint64_t fp,
                                    std::span<StackFrame> out) noexcept
         {
+            ARC_CONSTANT("crash-path: a frame-chain link that jumps farther than this is garbage, not a frame")
             constexpr std::uint64_t kMaxFrameBytes = 16ull * 1024 * 1024;
             std::size_t n = 0;
             if (pc == 0)

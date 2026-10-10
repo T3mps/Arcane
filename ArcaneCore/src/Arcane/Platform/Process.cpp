@@ -4,7 +4,7 @@
 
 #include <cstdlib>
 
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     #include <windows.h>
 #else
     #include <dlfcn.h>
@@ -17,11 +17,11 @@
     #include <vector>
 #endif
 
-#if ARCANE_PLATFORM_LINUX
+#if ARC_PLATFORM_LINUX
     #include <link.h>   // dlinfo(RTLD_DI_LINKMAP)
 #endif
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     #include <libproc.h>
     #include <mach-o/dyld.h>
     #include <mach-o/loader.h>
@@ -35,7 +35,7 @@ namespace Arcane::Platform
 {
     std::filesystem::path ExecutablePath()
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         std::wstring buf(MAX_PATH, L'\0');
         for (;;)
         {
@@ -49,7 +49,7 @@ namespace Arcane::Platform
             }
             buf.resize(buf.size() * 2);
         }
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
         // _NSGetExecutablePath may name the exe through a symlink or with
         // "./" components; realpath gives the one canonical spelling (what
         // /proc/self/exe yields on Linux).
@@ -73,11 +73,11 @@ namespace Arcane::Platform
     {
         if (!handle)
             return {};
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         wchar_t buf[MAX_PATH] = {};
         const DWORD n = ::GetModuleFileNameW(static_cast<HMODULE>(handle), buf, MAX_PATH);
         return n ? std::filesystem::path(std::wstring(buf, n)) : std::filesystem::path();
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
         // dyld has no handle -> path query. A handle for an ALREADY-loaded
         // image is the same handle dlopen returned (refcounted), so match the
         // image list against RTLD_NOLOAD opens of each image's own path.
@@ -106,11 +106,11 @@ namespace Arcane::Platform
 
     std::filesystem::path UserDataDirectory()
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         if (const wchar_t* localAppData = ::_wgetenv(L"LOCALAPPDATA"); localAppData && *localAppData)
             return std::filesystem::path(localAppData);
         return {};
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
         if (const char* home = std::getenv("HOME"); home && *home)
             return std::filesystem::path(home) / "Library" / "Application Support";
         return {};
@@ -123,11 +123,11 @@ namespace Arcane::Platform
 #endif
     }
 
-#if ARCANE_PLATFORM_POSIX
+#if ARC_PLATFORM_POSIX
     ProcessStat QueryProcess(std::uint32_t pid)
     {
         ProcessStat st;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         proc_bsdinfo bsd{};
         if (::proc_pidinfo(static_cast<int>(pid), PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd)) != static_cast<int>(sizeof(bsd)))
             return st;
@@ -176,7 +176,7 @@ namespace Arcane::Platform
     }
 #endif
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     ImageExtent MachImageExtent(const void* machHeader, std::intptr_t slide) noexcept
     {
         const auto* header = static_cast<const mach_header_64*>(machHeader);

@@ -1,7 +1,9 @@
 #include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
+#include <Arcane/Render/RenderShaderSettings.hpp>
 
 #include <charconv>
 #include <cstring>
@@ -158,7 +160,7 @@ namespace Arcane
 
 #include <Arcane/Platform/Platform.hpp>
 
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
 #include <windows.h>
 
 #include <unknwn.h>   // WIN32_LEAN_AND_MEAN strips COM from windows.h; dxcapi.h needs IUnknown
@@ -177,13 +179,17 @@ namespace Arcane
 #endif
 
 #include <Arcane/Base/ServiceThread.hpp>
+#include <Arcane/Config/Bindings/JobsBinding.hpp>   // jobs.shaderCompileThreads (settings arc S6-8)
 
+#include <algorithm>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
 #include <mutex>
-#include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
@@ -191,7 +197,7 @@ namespace Arcane
 {
     namespace
     {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         using Microsoft::WRL::ComPtr;
 #else
         // The slice of WRL's ComPtr this file uses (Get/Reset/Attach, &p for
@@ -228,7 +234,9 @@ namespace Arcane
         }
 #endif
 
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+        ARC_CONSTANT("math: FNV-1a hash parameters")
         constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
         std::uint64_t Fnv64(std::uint64_t h, const void* data, std::size_t size) noexcept
@@ -258,7 +266,7 @@ namespace Arcane
 
         std::filesystem::path ExeDirectory()
         {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
             wchar_t buf[MAX_PATH] = {};
             GetModuleFileNameW(nullptr, buf, MAX_PATH);
             return std::filesystem::path(buf).parent_path();
@@ -287,7 +295,7 @@ namespace Arcane
                            LPCWSTR* argv, UINT32 argc, IDxcResult** outResult,
                            HRESULT* outHr) noexcept
         {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
             __try
             {
                 *outHr = compiler->Compile(source, argv, argc, nullptr, IID_PPV_ARGS(outResult));
@@ -307,7 +315,8 @@ namespace Arcane
 
         // Build the CLI-shaped argv for one target (argv[0] = the virtual source
         // name, exactly how UE feeds IDxcCompiler3 -- DXC uses it for diagnostics).
-        std::vector<std::string> BuildArgs(const ShaderCompileRequest& req, bool spirv)
+        std::vector<std::string> BuildArgs(const ShaderCompileRequest& req, bool spirv,
+                                           const std::vector<std::wstring>& settingsArgs)
         {
             std::vector<std::string> args;
             args.push_back(req.debugName);
@@ -325,6 +334,14 @@ namespace Arcane
                 for (std::size_t i = 0; i < kSpirvArgCount; ++i)
                     args.push_back(kSpirvArgs[i]);
             }
+            for (const std::wstring& arg : settingsArgs)
+            {
+                std::string narrow;
+                narrow.reserve(arg.size());
+                for (wchar_t ch : arg)
+                    narrow.push_back(static_cast<char>(ch)); // DXC switches are ASCII
+                args.push_back(std::move(narrow));
+            }
             return args;
         }
 
@@ -341,10 +358,11 @@ namespace Arcane
 
         ShaderTargetResult CompileTarget(IDxcCompiler3* compiler,
                                          const ShaderCompileRequest& req, bool spirv,
-                                         bool& crashed, bool& environmental)
+                                         bool& crashed, bool& environmental,
+                                         const std::vector<std::wstring>& settingsArgs)
         {
             ShaderTargetResult out;
-            const std::vector<std::string> args = BuildArgs(req, spirv);
+            const std::vector<std::string> args = BuildArgs(req, spirv, settingsArgs);
             out.reproCmdLine = JoinRepro(args);
 
             std::vector<std::wstring> wide;
@@ -438,7 +456,7 @@ namespace Arcane
         };
 
         // Toolchain (set once in Initialize).
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         HMODULE hDxil = nullptr;
         HMODULE hCompiler = nullptr;   // stays loaded for process lifetime (COM DLL unload is unsafe)
 #else
@@ -447,7 +465,8 @@ namespace Arcane
 #endif
         DxcCreateInstanceProc createInstance = nullptr;
         std::uint64_t toolchainHash = 0;
-        double debounce = 0.2;
+        double debounce = 0.0;
+        std::vector<std::wstring> settingsArgs;
 
         // Main-thread state (Submit/Poll/Drain/CompileNow are main-thread-only).
         std::uint64_t nextJobId = 1;
@@ -461,8 +480,13 @@ namespace Arcane
 
         // Worker state. The queue/mutex/cv stay HERE -- they are the debounce
         // and coalescing machinery, not generic plumbing. ServiceThread owns
-        // only the thread's lifetime and the stop flag.
-        std::optional<ServiceThread> worker;
+        // only each thread's lifetime. jobs.shaderCompileThreads (settings arc
+        // S6-8, Restart) workers share the ONE queue; 1, the default, compiles
+        // in submission order as before. `stopping` is the shared stop flag:
+        // any worker's ServiceThread wake sets it (they are only ever
+        // destroyed together, in Shutdown).
+        std::vector<std::unique_ptr<ServiceThread>> workers;
+        bool stopping = false;   // guarded by mx
         std::mutex mx;
         std::condition_variable cv;
         std::deque<Job> queue;
@@ -483,6 +507,10 @@ namespace Arcane
             for (std::size_t i = 0; i < kSpirvArgCount; ++i)
                 h = Fnv64Str(h, kSpirvArgs[i]);
             h = Fnv64(h, &toolchainHash, sizeof(toolchainHash));
+            // Preserve every legacy default key: only an explicit DXC switch
+            // contributes to the hash.
+            for (const std::wstring& arg : settingsArgs)
+                h = Fnv64(h, arg.data(), arg.size() * sizeof(wchar_t));
             return h;
         }
 
@@ -493,7 +521,7 @@ namespace Arcane
             r.coalesceKey = job.req.coalesceKey;
             r.contentHash = job.contentHash;
             r.debugName = job.req.debugName;
-            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed, r.environmental);
+            r.dxil = CompileTarget(compiler, job.req, /*spirv=*/false, r.crashed, r.environmental, settingsArgs);
             if (r.crashed)
             {
                 // The instance may be corrupt after the SEH crash -- never run
@@ -505,7 +533,7 @@ namespace Arcane
                 r.spirv.diags.push_back(std::move(d));
                 return r;
             }
-            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed, r.environmental);
+            r.spirv = CompileTarget(compiler, job.req, /*spirv=*/true, r.crashed, r.environmental, settingsArgs);
             return r;
         }
 
@@ -517,8 +545,8 @@ namespace Arcane
                 Job job;
                 {
                     std::unique_lock lk(mx);
-                    cv.wait(lk, [this] { return worker->StopRequested() || !queue.empty(); });
-                    if (worker->StopRequested())
+                    cv.wait(lk, [this] { return stopping || !queue.empty(); });
+                    if (stopping)
                         return;
                     job = std::move(queue.front());
                     queue.pop_front();
@@ -599,14 +627,20 @@ namespace Arcane
         delete m_impl;
     }
 
-    bool ShaderCompiler::Initialize(double debounceSeconds)
+    bool ShaderCompiler::Initialize()
+    {
+        return InitializeWithDebounce(Settings<RenderShaderSettings>().compileDebounceSeconds);
+    }
+
+    bool ShaderCompiler::InitializeWithDebounce(double debounceSeconds)
     {
         Impl& im = *m_impl;
         if (m_available)
             return true;
         im.debounce = debounceSeconds;
+        im.settingsArgs = DxcArgumentsFor(Settings<RenderShaderSettings>());
 
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         // Vendored trio beside the exe first (the postbuild copies), then the
         // regular search path. dxil.dll loads FIRST so dxcompiler's validator
         // finds it (missing validator = unsigned DXIL, warn but continue).
@@ -665,7 +699,7 @@ namespace Arcane
             im.hDxil = ::dlopen(dxilName.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!im.hDxil)
         {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             ARC_INFO("ShaderCompiler: no {} on macOS -- DXIL output (unused here) will be unsigned", dxilName);
 #else
             ARC_WARN("ShaderCompiler: {} not found -- DXIL output will be unsigned", dxilName);
@@ -696,9 +730,17 @@ namespace Arcane
         im.toolchainHash = th;
 #endif
 
-        im.worker.emplace("shader.compile",
-                          [this] { m_impl->WorkerMain(); },
-                          [this] { std::lock_guard lk(m_impl->mx); m_impl->cv.notify_all(); });
+        im.workers.clear();   // a re-Initialize replaces the workers, as the old optional's emplace did
+        {
+            std::lock_guard lk(im.mx);
+            im.stopping = false;
+        }
+        const std::uint32_t threads = std::max<std::uint32_t>(1u, Settings<JobsSettings>().shaderCompileThreads);
+        for (std::uint32_t i = 0; i < threads; ++i)
+            im.workers.push_back(std::make_unique<ServiceThread>(
+                i == 0 ? std::string("shader.compile") : std::format("shader.compile.{}", i),
+                [this] { m_impl->WorkerMain(); },
+                [this] { { std::lock_guard lk(m_impl->mx); m_impl->stopping = true; } m_impl->cv.notify_all(); }));
         m_available = true;
         ARC_INFO("ShaderCompiler: in-process dxc ready (debounce {:.0f} ms)", debounceSeconds * 1000.0);
         return true;
@@ -707,9 +749,10 @@ namespace Arcane
     void ShaderCompiler::Shutdown()
     {
         Impl& im = *m_impl;
-        // ~ServiceThread requests stop, fires the wake callback (which takes mx
-        // and notifies cv), and joins. Resetting the optional runs it here.
-        im.worker.reset();
+        // ~ServiceThread requests stop, fires the wake callback (which takes mx,
+        // sets the shared stopping flag and notifies cv), and joins. Clearing
+        // the vector runs it for every worker here.
+        im.workers.clear();
         im.mainCompiler.Reset();
         // hCompiler/hDxil stay loaded on purpose: unloading a COM-style DLL that
         // may still own module-static state is a classic shutdown crash; the OS

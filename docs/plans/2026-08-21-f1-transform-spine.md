@@ -122,7 +122,7 @@ semantics, which exist for a real reason (the caches live in a non-pointer-stabl
 `FlatMap`; a reference escaping the lock can dangle after a rehash — IM-5).
 
 **This is Astra work and follows the Astra-first workflow: commit in the Astra
-repo FIRST, then `scripts\sync-astra.ps1` into Arcane.** Vendored Astra must
+repo FIRST, then `scripts\sync-vendor.ps1 -Library Astra` into Arcane.** Vendored Astra must
 always be current.
 
 **Interface produced:**
@@ -142,7 +142,7 @@ always be current.
   the memory ordering already used internally at `:761`. Surface it through
   `Registry`/`Relations` in whatever way matches those headers' existing style.
 - [ ] **Step 4: Run Astra's own suite**, commit in the Astra repo.
-- [ ] **Step 5: `scripts\sync-astra.ps1`**, then build Arcane's three configs.
+- [ ] **Step 5: `scripts\sync-vendor.ps1 -Library Astra`**, then build Arcane's three configs.
   **Gate moves: +0/+0 in Arcane** — this task adds no Arcane test. State the
   Astra-side numbers separately.
 - [ ] **Step 6: Commit (Arcane)** — `chore(astra): sync -- RelationshipGraph exposes its structure version`

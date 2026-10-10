@@ -20,5 +20,5 @@
 
 namespace Arcane
 {
-    ARCANE_CORE_API void PrewarmEngineResourceTypes();
+    ARC_CORE_API void PrewarmEngineResourceTypes();
 }

@@ -34,8 +34,11 @@
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState, DrawAssetGraphPanel, DestroyAssetGraphPanelCanvas
 #include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders (the faked seam below)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
+#include "Widgets/UiMetrics.hpp"         // Ui::ScopedMetrics -- the strip at a non-default UI scale
+#include "Helpers/SettingsSweep.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/Project.hpp>
 
@@ -346,6 +349,39 @@ TEST_CASE("Asset Graph panel survives device-less ImGui frames", "[editor][graph
     // build -- proof the focus actually reached the projection, not just the
     // state field.
     CHECK(state.graph.nodes.size() < everythingNodeCount);
+
+    // editor.assetGraph.* (S6-36) are the guard's last inputs: a published
+    // breadth cap rebuilds once (no more), and a published column pitch
+    // re-lays the projection out WITHOUT a rebuild.
+    {
+        Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+        const Arcane::CVarHandle breadth = reg.Find("editor.assetGraph.breadthCap");
+        const Arcane::CVarHandle pitch   = reg.Find("editor.assetGraph.layoutColumnPitch");
+        CHECK(state.graphBuiltBreadth == 20);
+        CHECK(state.graphLaidOutColumnPitch == 300.0f);
+        const std::uint32_t epochBeforeCaps = state.graph.buildEpoch;
+        REQUIRE(reg.Set(breadth, Arcane::CVarValue::Int32(19), Arcane::SetBy::Code, {}, Arcane::CVarContext::Editor)
+                == Arcane::SetResult::Applied);
+        REQUIRE(reg.Set(pitch, Arcane::CVarValue::Float32(350.0f), Arcane::SetBy::Code, {}, Arcane::CVarContext::Editor)
+                == Arcane::SetResult::Applied);
+        reg.PublishImmediate();
+        for (int frame = 0; frame < 2; ++frame)
+            drawFrame();
+        const std::uint32_t epochAfterCaps = state.graph.buildEpoch;
+        const int builtBreadth = state.graphBuiltBreadth;
+        const float laidOutPitch = state.graphLaidOutColumnPitch;
+        reg.ClearRung(breadth, Arcane::SetBy::Code);
+        reg.ClearRung(pitch, Arcane::SetBy::Code);
+        reg.PublishImmediate();
+        for (int frame = 0; frame < 2; ++frame)
+            drawFrame();
+        CHECK(epochAfterCaps == epochBeforeCaps + 1u);
+        CHECK(builtBreadth == 19);
+        CHECK(laidOutPitch == 350.0f);
+        CHECK(state.graph.buildEpoch == epochBeforeCaps + 2u);   // the restore rebuilds once too
+        CHECK(state.graphBuiltBreadth == 20);
+        CHECK(state.graphLaidOutColumnPitch == 300.0f);
+    }
 
     // ---- Task 4: the selection bridge's stamp handshake -------------------
     // The MODEL is the selection authority and the lens acknowledges its own
@@ -777,6 +813,75 @@ TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts,
     CHECK(rig.state.graphLegendMin.y >= rig.state.graphCanvasMin.y);
     CHECK(rig.state.graphLegendMax.x <= rig.state.graphCanvasMax.x);
     CHECK(rig.state.graphLegendMax.y <= rig.state.graphCanvasMax.y);
+}
+
+// S6-44: editor.assetGraph.node.* reach the canvas (canvas units), and the
+// screen-space chrome -- the selection strip -- is drawn at Ui::Px(base).
+TEST_CASE("Asset Graph (S6-44): a published node width band sizes every node", "[editor][graphcanvas][sweep]")
+{
+    Arcane::Test::SkipIfCompiledOut("editor.assetGraph.node.minWidth");
+    Arcane::Test::SkipIfCompiledOut("editor.assetGraph.node.maxWidth");
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle minW = reg.Find("editor.assetGraph.node.minWidth");
+    const CVarHandle maxW = reg.Find("editor.assetGraph.node.maxWidth");
+    REQUIRE_FALSE(minW.IsStale());
+    REQUIRE_FALSE(maxW.IsStale());
+    struct Reset
+    {
+        CVarHandle a, b;
+        ~Reset()
+        {
+            CVarRegistry& r = CVarRegistry::Get();
+            r.ClearRung(a, SetBy::Code);
+            r.ClearRung(b, SetBy::Code);
+            r.PublishImmediate();
+        }
+    } reset{ minW, maxW };
+
+    const auto nodeWidths = [](StripCanvasRig& rig)
+    {
+        std::vector<float> widths;
+        auto* edCtx = static_cast<ax::NodeEditor::EditorContext*>(rig.state.graphCanvas);
+        ax::NodeEditor::SetCurrentEditor(edCtx);
+        for (std::uint64_t id = 1; id <= 5; ++id)   // a hub + four referencers; ids are index + 1
+            widths.push_back(ax::NodeEditor::GetNodeSize(ax::NodeEditor::NodeId(id)).x);
+        ax::NodeEditor::SetCurrentEditor(nullptr);
+        return widths;
+    };
+    {
+        StripCanvasRig rig("arcane_assets_graph_nodewidth_default");
+        for (int i = 0; i < 4; ++i)
+            rig.hw.Frame();
+        for (float w : nodeWidths(rig))
+        {
+            CHECK(w >= 180.0f);
+            CHECK(w <= 220.0f);
+        }
+    }
+
+    REQUIRE(reg.Set(minW, CVarValue::Float32(300.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+    REQUIRE(reg.Set(maxW, CVarValue::Float32(320.0f), SetBy::Code, {}, CVarContext::Editor) == SetResult::Applied);
+    reg.PublishImmediate();
+    StripCanvasRig rig("arcane_assets_graph_nodewidth_wide");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    for (float w : nodeWidths(rig))
+    {
+        CHECK(w >= 300.0f);
+        CHECK(w <= 320.0f);
+    }
+}
+
+TEST_CASE("Asset Graph (S6-44): the selection strip is Ui::Px(48) at a non-default UI scale", "[editor][graphcanvas][sweep]")
+{
+    const Ui::ScopedMetrics big(Ui::Metrics{ 1.5f, 16.0f });
+    StripCanvasRig rig("arcane_assets_graph_strip_scaled");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    ImGuiWindow* strip = FindWindowContaining("##graphsel");
+    REQUIRE(strip != nullptr);
+    CHECK(strip->Size.y == 72.0f);
+    CHECK(rig.state.graphCanvasMax.y == strip->Pos.y);
 }
 
 // ---------------------------------------------------------------------------

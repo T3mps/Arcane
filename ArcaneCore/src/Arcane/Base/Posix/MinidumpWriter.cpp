@@ -45,6 +45,7 @@
 // signal. No /proc streams exist to copy.
 
 #include <Arcane/Base/Posix/PosixCrashSupport.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <cerrno>
 #include <cstddef>
@@ -57,7 +58,7 @@
 #if defined(__x86_64__)
 #include <cpuid.h>
 #endif
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
 #include <Arcane/Platform/Process.hpp>   // MachImageExtent
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
@@ -71,43 +72,72 @@ namespace Arcane::Diagnostics::Internal::Posix
     namespace
     {
         // ---- format constants ----------------------------------------------
+        ARC_CONSTANT("file format: MDMP signature of a Breakpad minidump")
         constexpr std::uint32_t kSignature = 0x504d444du;   // "MDMP"
+        ARC_CONSTANT("file format: MINIDUMP_VERSION")
         constexpr std::uint32_t kVersion   = 0x0000a793u;   // MINIDUMP_VERSION
 
+        ARC_CONSTANT("file format: ThreadListStream type in a minidump directory")
         constexpr std::uint32_t kThreadListStream = 3;
+        ARC_CONSTANT("file format: ModuleListStream type in a minidump directory")
         constexpr std::uint32_t kModuleListStream = 4;
+        ARC_CONSTANT("file format: MemoryListStream type in a minidump directory")
         constexpr std::uint32_t kMemoryListStream = 5;
+        ARC_CONSTANT("file format: ExceptionStream type in a minidump directory")
         constexpr std::uint32_t kExceptionStream  = 6;
+        ARC_CONSTANT("file format: SystemInfoStream type in a minidump directory")
         constexpr std::uint32_t kSystemInfoStream = 7;
+        ARC_CONSTANT("file format: Breakpad Linux ProcStatus stream type")
         constexpr std::uint32_t kLinuxProcStatus  = 0x47670004u;
+        ARC_CONSTANT("file format: Breakpad Linux LsbRelease stream type")
         constexpr std::uint32_t kLinuxLsbRelease  = 0x47670005u;
+        ARC_CONSTANT("file format: Breakpad Linux CmdLine stream type")
         constexpr std::uint32_t kLinuxCmdLine     = 0x47670006u;
+        ARC_CONSTANT("file format: Breakpad Linux Auxv stream type")
         constexpr std::uint32_t kLinuxAuxv        = 0x47670008u;
+        ARC_CONSTANT("file format: Breakpad Linux Maps stream type")
         constexpr std::uint32_t kLinuxMaps        = 0x47670009u;
 
+        ARC_CONSTANT("file format: MD_OS_LINUX in the minidump SystemInfo stream")
         constexpr std::uint32_t kOsLinux        = 0x8201u;        // MD_OS_LINUX
+        ARC_CONSTANT("file format: MD_OS_MAC_OS_X in the minidump SystemInfo stream")
         constexpr std::uint32_t kOsMac          = 0x8101u;        // MD_OS_MAC_OS_X
+        ARC_CONSTANT("file format: Breakpad ELF CodeView signature BpEL")
         constexpr std::uint32_t kCvSignatureElf = 0x4270454cu;    // "BpEL"
+        ARC_CONSTANT("file format: PDB70 CodeView signature, the Mac LC_UUID record")
         constexpr std::uint32_t kCvSignaturePdb70 = 0x53445352u;  // "RSDS" (Breakpad Mac: LC_UUID as the GUID, age 0)
 
+        ARC_CONSTANT("file format: MDRawContextAMD64 byte size")
         constexpr std::size_t kContextSize    = 1232;   // MDRawContextAMD64 / CONTEXT (x64); the buffer size
+        ARC_CONSTANT("file format: MDRawContextARM64 byte size")
         constexpr std::size_t kContextArm64Size = 912;  // MDRawContextARM64 / ARM64_NT_CONTEXT
-#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+#if ARC_PLATFORM_MACOS && defined(__aarch64__)
         constexpr std::size_t kContextBytes   = kContextArm64Size;
 #else
         constexpr std::size_t kContextBytes   = kContextSize;
 #endif
+        ARC_CONSTANT("file format: MINIDUMP_THREAD byte size")
         constexpr std::size_t kThreadSize     = 48;
+        ARC_CONSTANT("file format: MINIDUMP_MODULE byte size")
         constexpr std::size_t kModuleSize     = 108;
+        ARC_CONSTANT("file format: MINIDUMP_MEMORY_DESCRIPTOR byte size")
         constexpr std::size_t kMemDescSize    = 16;
+        ARC_CONSTANT("file format: MINIDUMP_EXCEPTION_STREAM byte size")
         constexpr std::size_t kExceptionSize  = 168;
+        ARC_CONSTANT("file format: MINIDUMP_SYSTEM_INFO byte size")
         constexpr std::size_t kSystemInfoSize = 56;
 
+        ARC_CONSTANT("crash-path capacity: threads named in one POSIX minidump")
         constexpr std::size_t kMaxThreads  = 512;
+        ARC_CONSTANT("crash-path capacity: modules named in one POSIX minidump")
         constexpr std::size_t kMaxModules  = 1024;
+        ARC_CONSTANT("crash-path capacity: memory ranges in one POSIX minidump, one stack per thread plus the faulting thread")
         constexpr std::size_t kMaxMemory   = kMaxThreads + 1;
+        ARC_CONSTANT("crash-path capacity: streams in one POSIX minidump directory")
         constexpr std::size_t kMaxStreams  = 16;
+        ARC_CONSTANT("crash-path capacity: stack bytes captured per thread in a POSIX minidump")
         constexpr std::uint64_t kStackCap  = 256 * 1024;   // per thread
+        ARC_CONSTANT("crash-path: System V red zone below rsp, still live, included in the stack capture")
         constexpr std::uint64_t kRedZone   = 128;          // System V: below rsp is still live
 
         // ---- little-endian field writers ------------------------------------
@@ -263,7 +293,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         void FindMapping(std::uint64_t address, std::uint64_t& start, std::uint64_t& end) noexcept
         {
             start = end = 0;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             // mach_vm_region: the first region at or above `address`.
             mach_vm_address_t       regionStart = address;
             mach_vm_size_t          regionSize  = 0;
@@ -291,7 +321,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         void BuildContext(const NativeContext& uc, unsigned char (&b)[kContextSize]) noexcept
         {
             std::memset(b, 0, sizeof(b));
-#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+#if ARC_PLATFORM_MACOS && defined(__aarch64__)
             // ARM64_NT_CONTEXT: flags, cpsr, x0..x28, fp, lr, sp, pc, v0..v31,
             // fpcr, fpsr (debug registers left zero).
             Put32(b, 0, 0x00400007u);   // ARM64 | CONTROL | INTEGER | FLOATING_POINT
@@ -305,7 +335,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             std::memcpy(b + 272, &uc.__ns.__v, 512);
             Put32(b, 784, uc.__ns.__fpcr);
             Put32(b, 788, uc.__ns.__fpsr);
-#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+#elif ARC_PLATFORM_MACOS && defined(__x86_64__)
             Put32(b, 48, 0x0010000Fu);   // AMD64 | CONTROL | INTEGER | SEGMENTS | FLOATING_POINT
             const auto& t = uc.__ss;
             Put16(b, 56, static_cast<std::uint16_t>(t.__cs));
@@ -344,7 +374,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
         Location AppendContext(const NativeContext* uc) noexcept
         {
-#if (defined(__linux__) && defined(__x86_64__)) || (ARCANE_PLATFORM_MACOS && (defined(__x86_64__) || defined(__aarch64__)))
+#if (defined(__linux__) && defined(__x86_64__)) || (ARC_PLATFORM_MACOS && (defined(__x86_64__) || defined(__aarch64__)))
             if (!uc) return {};
             static unsigned char s_ctx[kContextSize];
             BuildContext(*uc, s_ctx);
@@ -418,7 +448,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         void CollectModules() noexcept
         {
             g_moduleCount = 0;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             // dyld's own record of every loaded image, read through checked
             // reads and without dyld's lock (dyld clears infoArray while it
             // edits it: a null array is "no modules", never a stale one).
@@ -547,7 +577,7 @@ namespace Arcane::Diagnostics::Internal::Posix
                 s_path[len] = '\0';
                 Put32(row, 20, AppendString(s_path));
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
                 // RSDS: signature, the LC_UUID as the GUID, age 0, then the
                 // file name -- Breakpad's Mac debug identifier.
                 unsigned char uuid[16];
@@ -634,7 +664,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             Put32(b, 8, g_sys.major);
             Put32(b, 12, g_sys.minor);
             Put32(b, 16, g_sys.build);
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             Put32(b, 20, kOsMac);
 #else
             Put32(b, 20, kOsLinux);
@@ -695,7 +725,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         const long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
         g_sys.cpus = static_cast<std::uint8_t>(cpus > 255 ? 255 : (cpus < 1 ? 1 : cpus));
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // Breakpad's Mac SystemInfo: the PRODUCT version (15.6.1) in
         // major/minor/build, the OS build string ("24G90") as the CSD.
         {
@@ -745,7 +775,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         unsigned char header[32] = {};
         Append(header, sizeof(header));
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         g_mapsLen = 0;   // no /proc: FindMapping asks mach_vm_region instead
 #else
         g_mapsLen = ReadFileInto("/proc/self/maps", g_maps, sizeof(g_maps));
@@ -799,7 +829,7 @@ namespace Arcane::Diagnostics::Internal::Posix
             const Location ctx = AppendContext(r.exceptionContext);
             unsigned char ex[kExceptionSize] = {};
             Put32(ex, 0, r.exceptionTid);
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             // A Mac minidump names a MACH exception (Breakpad's
             // MD_EXCEPTION_MAC_*): the signal the BSD layer delivered is
             // mapped back to the exception type it came from; the signal
@@ -835,7 +865,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
         AddStream(kSystemInfoStream, WriteSystemInfo());
 
-#if !ARCANE_PLATFORM_MACOS
+#if !ARC_PLATFORM_MACOS
         // The maps text was edited in place by the parser; re-read it whole.
         AddFileStream(kLinuxMaps,       "/proc/self/maps");
         AddFileStream(kLinuxProcStatus, "/proc/self/status");

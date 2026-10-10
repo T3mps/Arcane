@@ -37,7 +37,7 @@ namespace
     {
         fs::create_directories(p.parent_path());
         std::ofstream(p.string()) << "x";
-#if !ARCANE_PLATFORM_WINDOWS
+#if !ARC_PLATFORM_WINDOWS
         // POSIX FindOnPath only accepts a file with an executable bit (the
         // PATHEXT analogue); a case that needs a NON-executable file sets
         // its permissions explicitly after this.
@@ -170,7 +170,7 @@ TEST_CASE("Toolchain::ResolveNinja returns the concrete PATH hit when ninja IS t
     // (FindOnPath's POSIX contract skips a non-executable file).
     const fs::path ninja = onPath.path / Arcane::Platform::ExecutableFileName("ninja");
     Touch(ninja);
-#if !ARCANE_PLATFORM_WINDOWS
+#if !ARC_PLATFORM_WINDOWS
     fs::permissions(ninja, fs::perms::owner_all, fs::perm_options::replace);
 #endif
     EnvOverride path("PATH", onPath.path.string());

@@ -214,7 +214,7 @@ namespace Arcane::Reporter
 
     std::string FormatLocalStamp(std::string_view s, const TimeZone* zone)
     {
-#if !defined(ARCANE_HAS_TZDB)
+#if !defined(ARC_HAS_TZDB)
         (void)s; (void)zone;
         return {};
 #else

@@ -486,7 +486,7 @@ TEST_CASE("ShaderEditorDocument::ConsumeResult routes only its own job ids", "[e
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     REQUIRE(sources.Get("materials/fullscreen_material.hlsl").has_value());
@@ -550,7 +550,7 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
 
@@ -625,7 +625,7 @@ TEST_CASE("ShaderEditorDocument T3-D6: an instance of a pass-chain material comp
     Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     DocServices services;
@@ -699,7 +699,7 @@ TEST_CASE("ShaderEditorDocument T3-D6 fix 1: a chain INSTANCE publishes a failin
     Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     DocServices services;
@@ -783,7 +783,7 @@ TEST_CASE("ShaderEditorDocument T3-D6 fix 1: an instance publishes its BASE's br
     Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     DocServices services;
@@ -966,7 +966,7 @@ TEST_CASE("A base-only scene-reading material compiles through the chain path",
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
 
@@ -1265,7 +1265,7 @@ TEST_CASE("severance: a DEVICE-LESS fullscreen material publishes its preview as
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     REQUIRE(sources.Get("materials/fullscreen_material.hlsl").has_value());
@@ -1339,7 +1339,7 @@ TEST_CASE("severance: a DEVICE-LESS pass chain publishes every pass and its wiri
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
 
@@ -1396,7 +1396,7 @@ TEST_CASE("severance: a DEVICE-LESS sprite material publishes its blobs, not a c
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     REQUIRE(sources.Get("materials/sprite_material.hlsl").has_value());
@@ -1714,7 +1714,7 @@ TEST_CASE("ShaderEditorDocument status: compiling while jobs are in flight, ok o
     REQUIRE(loaded.has_value());
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     DocServices services;
@@ -1740,7 +1740,7 @@ TEST_CASE("ShaderEditorDocument status: a recompile before the first lands (relo
     REQUIRE(loaded.has_value());
 
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     DocServices services;
@@ -2104,7 +2104,7 @@ TEST_CASE("material page: params are PropertyGrid rows; Esc on a slider drag res
                    "float4 shade(Varyings v) { return Tint * Speed; }\n";
     REQUIRE(Arcane::SaveMaterialAsset(dir / "rows.arcmat", data));
     Arcane::ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
     Arcane::ShaderSourceProvider sources;
     sources.AddRoot("data/shaders");
     Astra::Registry registry;

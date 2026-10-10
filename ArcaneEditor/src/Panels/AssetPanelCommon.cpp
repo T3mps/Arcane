@@ -4,12 +4,15 @@
 #include "Panels/AssetBrowserPanel.hpp"    // AssetBrowserPanelState's full definition (RevealAssetInBrowser)
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelEntry/CookState/KindIcon/KindLabel/GroupParentOf
 #include "Panels/CreateAssetDialog.hpp"    // CreateAssetKind
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.namedTargets (settings S6-38)
 #include "Widgets/EditorFonts.hpp"         // PillWidth measures in AssetPill's own font
 #include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/EditorWidgets.hpp"       // AssetPill
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::FontPx -- PillWidth measures at AssetPill's scaled size
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Project/AssetId.hpp>
@@ -22,6 +25,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 // AssetPanelCommon (panel-split arc): what all three asset panels share --
 // the AssetPanelActions/AssetPanelServices contracts and the band constants
@@ -295,7 +299,7 @@ namespace Arcane::Editor
     // the Graph panel's node chrome budgets the same way.
     float PillWidth(const char* text)
     {
-        ImGui::PushFont(GetEditorFonts().interRegular, 12.0f);
+        ImGui::PushFont(GetEditorFonts().interRegular, Ui::FontPx(12.0f));
         const float w = ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::PopFont();
         return w;
@@ -412,7 +416,9 @@ namespace Arcane::Editor
         // The peek tooltip's own fixed geometry. DrawAssetPeekTooltip below
         // is their only reader, which is why they came here with it rather
         // than to the header's shared-constant block.
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kTooltipWidth     = 210.0f;
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kTooltipThumbSize = 64.0f;
 
         // ---- Plan 3 Task 4: the Graph tooltip's edge-summary lines ---------
@@ -449,9 +455,9 @@ namespace Arcane::Editor
             if (targets.empty())
                 return;
 
-            constexpr std::size_t kNamedTargets = 3;
+            const auto namedTargets = static_cast<std::size_t>(Arcane::Settings<AssetBrowserSettings>().namedTargets);
             std::string line;
-            for (std::size_t i = 0; i < targets.size() && i < kNamedTargets; ++i)
+            for (std::size_t i = 0; i < targets.size() && i < namedTargets; ++i)
             {
                 if (i != 0)
                     line += ", ";
@@ -461,11 +467,11 @@ namespace Arcane::Editor
                 const AssetPanelEntry* t = model.Find(targets[i]);
                 line += t ? t->fileName : targets[i].ToString().substr(0, 8);
             }
-            if (targets.size() > kNamedTargets)
+            if (targets.size() > namedTargets)
             {
                 char more[24];
                 std::snprintf(more, sizeof(more), " +%d more",
-                              static_cast<int>(targets.size() - kNamedTargets));
+                              static_cast<int>(targets.size() - namedTargets));
                 line += more;
             }
             // Wrapped, unlike the fixed-width lines above it: three file names
@@ -513,13 +519,13 @@ namespace Arcane::Editor
         if (!e)
             return;
 
-        ImGui::SetNextWindowSize(ImVec2(kTooltipWidth, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(Ui::Px(kTooltipWidth), 0.0f));
         ImGui::BeginTooltip();
 
         const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(guid) : 0;
         if (thumb != 0)
         {
-            ImGui::Image(static_cast<ImTextureID>(thumb), ImVec2(kTooltipThumbSize, kTooltipThumbSize));
+            ImGui::Image(static_cast<ImTextureID>(thumb), ImVec2(Ui::Px(kTooltipThumbSize), Ui::Px(kTooltipThumbSize)));
         }
         else
         {
@@ -527,10 +533,10 @@ namespace Arcane::Editor
             const char* icon = KindIcon(e->kind);
             const ImVec2 iconSize = ImGui::CalcTextSize(icon);
             ImGui::GetWindowDrawList()->AddText(
-                ImVec2(boxMin.x + (kTooltipThumbSize - iconSize.x) * 0.5f,
-                       boxMin.y + (kTooltipThumbSize - iconSize.y) * 0.5f),
+                ImVec2(boxMin.x + (Ui::Px(kTooltipThumbSize) - iconSize.x) * 0.5f,
+                       boxMin.y + (Ui::Px(kTooltipThumbSize) - iconSize.y) * 0.5f),
                 ImGui::GetColorU32(ImGuiCol_Text), icon);
-            ImGui::Dummy(ImVec2(kTooltipThumbSize, kTooltipThumbSize));
+            ImGui::Dummy(ImVec2(Ui::Px(kTooltipThumbSize), Ui::Px(kTooltipThumbSize)));
         }
 
         ImGui::TextUnformatted(e->fileName.c_str());
@@ -591,7 +597,7 @@ namespace Arcane::Editor
         // invariant here (no columns/tables in play), so it is safe to
         // read once and reuse for a right-aligned slot.
         bar.rightEdgeX = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-        bar.padY = std::max(0.0f, (kAssetPanelBottomBarHeight - ImGui::GetTextLineHeight()) * 0.5f);
+        bar.padY = std::max(0.0f, (Ui::Px(kAssetPanelBottomBarHeight) - ImGui::GetTextLineHeight()) * 0.5f);
 
         ImGui::SetCursorPosY(bar.padY);
         return bar;

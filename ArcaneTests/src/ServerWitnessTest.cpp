@@ -5,6 +5,9 @@
 #include <Arcane/Platform/Platform.hpp>   // ExecutableFileName: .exe on Windows only
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 using namespace Arcane::Test;
 namespace
 {
@@ -14,6 +17,11 @@ namespace
         INFO("staged ArcaneServer not found -- build Arcane.slnx first: " << p.string());
         REQUIRE(std::filesystem::exists(p / Arcane::Platform::ExecutableFileName("ArcaneServer")));
         return p;
+    }
+    std::string SlurpServerLog(const std::filesystem::path& p)
+    {
+        std::ifstream in(p, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
 }
 TEST_CASE("S1: ArcaneServer opens the project, loads the module, ticks N frames headless, and constructs no presentation", "[witness][server]")
@@ -79,4 +87,39 @@ TEST_CASE("S3: ArcaneServer's --fixed-dt is REAL -- the census reports the ACTUA
     CHECK(r.at("fixedDt") == 0.05);
     CHECK(r.at("framesTicked") == 10);
     CHECK(r.at("exitReason") == "frames-complete");
+}
+TEST_CASE("S4: ArcaneServer's stdin admin console answers get/set/list/explain as ServerAdmin, defaults cheats off, and audits the set", "[witness][server]")
+{
+    // Settings arc S7 (spec s9, s3.2). The script is the process's stdin: the
+    // reader thread queues it at once, the tick loop drains it between ticks.
+    WitnessScratch scratch(StagedServerDir(), "s4-admin-console");
+    const std::filesystem::path script = scratch.Dir() / "admin.txt";
+    {
+        std::ofstream f(script, std::ios::binary);
+        f << "get server.cheatsAllowed\n"
+             "set server.allowClientSetServer true\n"
+             "get server.allowClientSetServer\n"
+             "list server.\n"
+             "explain server.allowClientSetServer\n"
+             "bogus.cvar.name\n";
+    }
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneServer.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "server-report.json";
+    inv.args = { "--project", "ReferenceProject", "--frames", "60", "--report", inv.reportPath.generic_string() };
+    inv.stdinPath = script;
+    inv.hardCapMs = 60000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    CHECK(run.exitCode == 0);
+
+    const std::string out = SlurpServerLog(run.stdoutPath);
+    CHECK(out.find("OK server.cheatsAllowed = false") != std::string::npos);      // the dedicated default
+    CHECK(out.find("OK server.allowClientSetServer = true") != std::string::npos); // set, then get
+    CHECK(out.find("server.cheats = ") != std::string::npos);                     // in the list
+    CHECK(out.find("Console") != std::string::npos);                              // explain's history
+    CHECK(out.find("ERR unknown cvar 'bogus.cvar.name'") != std::string::npos);
+    const std::string log = out + SlurpServerLog(run.stderrPath);
+    CHECK(log.find("cvar-audit server.allowClientSetServer false -> true by stdin (applied)") != std::string::npos);
 }

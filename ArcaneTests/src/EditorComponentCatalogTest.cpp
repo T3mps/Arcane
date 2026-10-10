@@ -59,9 +59,9 @@ namespace
             // Edit:: ops would silently report 0 changes).
             Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(*reg);
-            // Registered so the PhysicsBodyRef hide-list assertion is a real
+            // Registered so the Arcane::PhysicsBodyRef2D hide-list assertion is a real
             // check rather than a vacuous one.
-            RegisterPhysicsComponents(*reg);
+            Arcane::RegisterPhysicsComponents2D(*reg);
         }
 
         RegistryStateCommand::SnapshotFn Snapshot()
@@ -99,7 +99,7 @@ TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", 
 {
     CHECK(IsHiddenInInspector("Arcane::WorldTransform"));
     CHECK(IsHiddenInInspector("Arcane::WorldBounds"));   // F3 plan 1 T2: engine-written like WorldTransform
-    CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
+    CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef2D"));
     // 2026-07-29 (user call): Hidden is a MECHANISM marker -- the Outliner
     // eye is its entire interface, so it surfaces nowhere else. Riding the
     // display gate also structure-locks it (next TEST_CASE), which is
@@ -121,7 +121,7 @@ TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", 
 TEST_CASE("IsStructureLocked covers the derived types plus Identity", "[editor][outliner]")
 {
     CHECK(IsStructureLocked("Arcane::WorldTransform"));
-    CHECK(IsStructureLocked("Arcane::PhysicsBodyRef"));
+    CHECK(IsStructureLocked("Arcane::PhysicsBodyRef2D"));
     // Identity joined the list in the 2026-07-26 review fix: Edit::AddComponent
     // default-constructs, so a generic add stamped a NIL Guid on every selected
     // entity and a generic remove wiped the durable cross-save identity. Its
@@ -150,7 +150,7 @@ TEST_CASE("BuildComponentCatalog excludes internal types and sorts by name", "[e
     REQUIRE_FALSE(all.empty());
 
     CHECK(Find(all, "Arcane::WorldTransform") == nullptr);
-    CHECK(Find(all, "Arcane::PhysicsBodyRef") == nullptr);
+    CHECK(Find(all, "Arcane::PhysicsBodyRef2D") == nullptr);
     CHECK(Find(all, "Arcane::Transform") != nullptr);
     CHECK(Find(all, "Arcane::SpriteRenderer") != nullptr);
 
@@ -317,7 +317,7 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
 
     // The hide-list still applies to the engine roster.
     CHECK(Find(cat, "Arcane::WorldTransform") == nullptr);
-    CHECK(Find(cat, "Arcane::PhysicsBodyRef") == nullptr);
+    CHECK(Find(cat, "Arcane::PhysicsBodyRef2D") == nullptr);
     CHECK(Find(cat, "Arcane::Identity") == nullptr);
 
     // Identity is hidden from the CATALOG but must still be REGISTERED -- the

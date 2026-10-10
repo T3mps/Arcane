@@ -88,7 +88,7 @@ namespace ArcaneEditorVectorTest
     struct VectorProbe
     {
         std::vector<int>             ints;        // scalar elements: ReadOnly (bridge parity, A1)
-        std::vector<Arcane::Fixture> fixtures;    // reflected struct, every field classifies: Vector
+        std::vector<Arcane::Fixture2D> fixtures;    // reflected struct, every field classifies: Vector
         std::vector<Opaque>          opaques;     // reflected struct, one field ReadOnly: ReadOnly
         std::vector<HalfHidden>      halfHidden;  // undrawable field is Serializable(false): Vector
         std::vector<Named>           named;       // String field: ReadOnly (bytewise swap)
@@ -120,7 +120,7 @@ TEST_CASE("ClassifyField: Vector arm -- a vector of a fully-classifiable reflect
 {
     using K = Arcane::Editor::FieldKind;
 
-    // The roster's own witness: Collider2D::fixtures, serializable again
+    // The roster's own witness: Arcane::Collider2D::fixtures, serializable again
     // since Plan 1 Task 3 and visited by Astra ever since.
     const Astra::FieldInfo* fixtures = FieldOf(Astra::GetMeta<Arcane::Collider2D>(), "fixtures");
     REQUIRE(fixtures != nullptr);
@@ -159,18 +159,17 @@ TEST_CASE("ClassifyField: Vector arm -- a vector of a fully-classifiable reflect
 TEST_CASE("Vector list ops: insert appends a default element, erase removes, swap exchanges whole elements",
           "[editor][physics]")
 {
-    namespace P = Manifold2D::Physics;
     const Astra::FieldInfo* f = FieldOf(Astra::GetMeta<Arcane::Collider2D>(), "fixtures");
     REQUIRE(f != nullptr);
 
     Arcane::Collider2D col;
     CHECK(Arcane::Editor::VectorSize(*f, &col) == 0);
 
-    // Append on empty: a DEFAULT Fixture (Circle, r 0.5 -- the struct's own
+    // Append on empty: a DEFAULT Arcane::Fixture2D (Circle, r 0.5 -- the struct's own
     // initialisers), nothing copied from anywhere.
     Arcane::Editor::ApplyVectorInsert(*f, &col, 0);
     REQUIRE(col.fixtures.size() == 1);
-    CHECK(col.fixtures[0].kind == P::ShapeKind::Circle);
+    CHECK(col.fixtures[0].kind == Arcane::ShapeKind2D::Circle);
     CHECK(col.fixtures[0].radius == Approx(0.5f));
     CHECK(Arcane::Editor::VectorSize(*f, &col) == 1);
 
@@ -188,14 +187,14 @@ TEST_CASE("Vector list ops: insert appends a default element, erase removes, swa
     CHECK(col.fixtures[1].radius == Approx(2.0f));
 
     // Swap moves WHOLE elements (every field), not just the one looked at.
-    col.fixtures[2].kind  = P::ShapeKind::Aabb;
+    col.fixtures[2].kind  = Arcane::ShapeKind2D::Aabb;
     col.fixtures[2].halfW = 3.0f;
     col.fixtures[2].isSensor = true;
     Arcane::Editor::ApplyVectorSwap(*f, &col, 1, 2);
-    CHECK(col.fixtures[1].kind  == P::ShapeKind::Aabb);
+    CHECK(col.fixtures[1].kind  == Arcane::ShapeKind2D::Aabb);
     CHECK(col.fixtures[1].halfW == Approx(3.0f));
     CHECK(col.fixtures[1].isSensor);
-    CHECK(col.fixtures[2].kind  == P::ShapeKind::Circle);
+    CHECK(col.fixtures[2].kind  == Arcane::ShapeKind2D::Circle);
     CHECK(col.fixtures[2].radius == Approx(2.0f));
     CHECK_FALSE(col.fixtures[2].isSensor);
 
@@ -203,12 +202,12 @@ TEST_CASE("Vector list ops: insert appends a default element, erase removes, swa
     Arcane::Editor::ApplyVectorSwap(*f, &col, 0, 7);
     Arcane::Editor::ApplyVectorSwap(*f, &col, 1, 1);
     CHECK(col.fixtures[0].radius == Approx(0.5f));
-    CHECK(col.fixtures[1].kind == P::ShapeKind::Aabb);
+    CHECK(col.fixtures[1].kind == Arcane::ShapeKind2D::Aabb);
 
     // Erase removes exactly that element; past-the-end is a no-op.
     Arcane::Editor::ApplyVectorErase(*f, &col, 0);
     REQUIRE(col.fixtures.size() == 2);
-    CHECK(col.fixtures[0].kind == P::ShapeKind::Aabb);
+    CHECK(col.fixtures[0].kind == Arcane::ShapeKind2D::Aabb);
     CHECK(col.fixtures[1].radius == Approx(2.0f));
     Arcane::Editor::ApplyVectorErase(*f, &col, 5);
     CHECK(col.fixtures.size() == 2);
@@ -224,7 +223,7 @@ TEST_CASE("Vector list ops: insert appends a default element, erase removes, swa
 // ===========================================================================
 // Part 2 -- the device-less ImGui drive (spec s8, the s7.3 row). The REAL
 // DrawReflectedComponent, inside the REAL FieldGrid, over ONE entity's
-// Collider2D, with the window pinned at a known origin so a recorded item
+// Arcane::Collider2D, with the window pinned at a known origin so a recorded item
 // centre is a mouse target -- the GraphMouseHarness shape
 // (AssetsGraphCanvasTest.cpp), which also reads its targets off a seam the
 // panel exposes on purpose (there, ed::GetNodePosition; here,
@@ -253,7 +252,7 @@ namespace
             // Runtime installs an unshared context and Edit ops then report 0).
             Arcane::Runtime pin(Arcane::Test::Process());
             Arcane::RegisterSceneComponents(reg);
-            Arcane::RegisterPhysicsComponents(reg);
+            Arcane::RegisterPhysicsComponents2D(reg);
             e     = Make(/*radius*/ 0.5f,  /*halfW*/ 1.0f);
             other = Make(/*radius*/ 0.25f, /*halfW*/ 2.0f);
             selection = { e };
@@ -284,17 +283,16 @@ namespace
         // observable, and by a scalar each, so an in-element edit is too.
         Astra::Entity Make(float radius, float halfW)
         {
-            namespace P = Manifold2D::Physics;
             Astra::Entity ent = reg.CreateEntity();
             Arcane::Collider2D col;
-            Arcane::Fixture a; a.kind = P::ShapeKind::Circle; a.radius = radius;
-            Arcane::Fixture b; b.kind = P::ShapeKind::Aabb;   b.halfW  = halfW;
+            Arcane::Fixture2D a; a.kind = Arcane::ShapeKind2D::Circle; a.radius = radius;
+            Arcane::Fixture2D b; b.kind = Arcane::ShapeKind2D::Aabb;   b.halfW  = halfW;
             col.fixtures = { a, b };
             reg.AddComponent<Arcane::Collider2D>(ent, col);
             return ent;
         }
 
-        const std::vector<Arcane::Fixture>& Fixtures()
+        const std::vector<Arcane::Fixture2D>& Fixtures()
         {
             return reg.GetComponent<Arcane::Collider2D>(e)->fixtures;
         }
@@ -304,13 +302,13 @@ namespace
             for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
                 if (ci.meta && ci.meta->typeName == "Arcane::Collider2D")
                     return ci;
-            FAIL("the harness entity carries no Collider2D");
+            FAIL("the harness entity carries no Arcane::Collider2D");
             return {};
         }
 
         // One frame of the REAL row path: the window pinned at the origin, the
         // grid opened the way DrawInspectorBody opens it, one component, the
-        // uncategorised pass (Collider2D's only field has no category).
+        // uncategorised pass (Arcane::Collider2D's only field has no category).
         void Frame()
         {
             ImGuiIO& io = ImGui::GetIO();
@@ -379,7 +377,7 @@ TEST_CASE("Vector row: [+] appends one default element as ONE undo step; undo re
 
     h.Click("fixtures.add");
     REQUIRE(h.Fixtures().size() == 3);
-    CHECK(h.Fixtures()[2].kind == Manifold2D::Physics::ShapeKind::Circle);   // Fixture's defaults
+    CHECK(h.Fixtures()[2].kind == Arcane::ShapeKind2D::Circle);   // Arcane::Fixture2D's defaults
     CHECK(h.Fixtures()[2].radius == Approx(0.5f));
     CHECK(h.Fixtures()[0].radius == Approx(0.5f));                            // the two existing, untouched
     CHECK(h.Fixtures()[1].halfW  == Approx(1.0f));
@@ -416,7 +414,7 @@ TEST_CASE("Vector elements draw their reflected fields as rows through the exist
     VectorHarness h;
     h.Frame();
     h.Frame();
-    // Every Fixture field, for both elements, is a row (and therefore a
+    // Every Arcane::Fixture2D field, for both elements, is a row (and therefore a
     // recorded target): the enum, a float, the vec2, a uint32, the bool.
     for (const char* field : { "kind", "radius", "halfLen", "halfW", "halfH", "localPos",
                                "localAngle", "density", "friction", "restitution",
@@ -436,61 +434,59 @@ TEST_CASE("Vector elements draw their reflected fields as rows through the exist
 TEST_CASE("Vector row: [-] removes exactly that element as ONE undo step; undo restores it in place",
           "[editor][physics]")
 {
-    namespace P = Manifold2D::Physics;
     VectorHarness h;
     h.Frame();
     h.Frame();
 
     h.Click("fixtures[0].remove");
     REQUIRE(h.Fixtures().size() == 1);
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);     // the Circle went, the Aabb stayed
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Aabb);     // the Circle went, the Aabb stayed
     CHECK(h.Fixtures()[0].halfW == Approx(1.0f));
     REQUIRE(h.undo.CanUndo());
     CHECK(std::string(h.undo.UndoLabel()).find("fixtures.remove") != std::string::npos);
 
     h.undo.Undo();
     REQUIRE(h.Fixtures().size() == 2);
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);   // back at index 0, not appended
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Circle);   // back at index 0, not appended
     CHECK(h.Fixtures()[0].radius == Approx(0.5f));
-    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Aabb);
+    CHECK(h.Fixtures()[1].kind == Arcane::ShapeKind2D::Aabb);
     CHECK_FALSE(h.undo.CanUndo());
 }
 
 TEST_CASE("Vector row: down / up reorder as ONE undo step each; the end buttons are inert",
           "[editor][physics]")
 {
-    namespace P = Manifold2D::Physics;
     VectorHarness h;
     h.Frame();
     h.Frame();
 
     h.Click("fixtures[0].down");
     REQUIRE(h.Fixtures().size() == 2);
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Aabb);
     CHECK(h.Fixtures()[0].halfW == Approx(1.0f));          // the WHOLE element moved
-    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Circle);
+    CHECK(h.Fixtures()[1].kind == Arcane::ShapeKind2D::Circle);
     CHECK(h.Fixtures()[1].radius == Approx(0.5f));
     REQUIRE(h.undo.CanUndo());
     CHECK(std::string(h.undo.UndoLabel()).find("fixtures.move") != std::string::npos);
     h.undo.Undo();
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Circle);
     CHECK_FALSE(h.undo.CanUndo());
     h.Frame();   // re-record the targets over the restored list before aiming again
 
     h.Click("fixtures[1].up");
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Aabb);
     REQUIRE(h.undo.CanUndo());
     h.undo.Undo();
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Circle);
     CHECK_FALSE(h.undo.CanUndo());
     h.Frame();
 
     // [0].up and [last].down are disabled: a click is a no-op with no step.
     h.Click("fixtures[0].up");
-    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK(h.Fixtures()[0].kind == Arcane::ShapeKind2D::Circle);
     CHECK_FALSE(h.undo.CanUndo());
     h.Click("fixtures[1].down");
-    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Aabb);
+    CHECK(h.Fixtures()[1].kind == Arcane::ShapeKind2D::Aabb);
     CHECK_FALSE(h.undo.CanUndo());
 }
 

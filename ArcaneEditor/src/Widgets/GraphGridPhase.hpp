@@ -8,11 +8,16 @@
 // IT HAS NO DEVICE DEPENDENCY. That is what lets a device-less test drive the
 // whole grid, and what keeps it out of every TU that merely opens a document.
 
+#include "Settings/GraphCanvasSettings.hpp"   // GraphGridSettings: editor.graph.grid.* (plain struct)
+
 #include <imgui.h>   // DrawGraphGridFallback draws the lattice with ImDrawList
 
+#include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -60,55 +65,64 @@ namespace Arcane::Editor
     // UpdatePhase below; read it there.
     struct GraphGridPhase
     {
-        // THESE FOUR ARE FREE-STANDING -- NO MIRROR OBLIGATION. There is no
+        // THE TUNING: editor.graph.grid.* (settings S6-34, GraphCanvasSettings.hpp),
+        // copied in by the canvas every frame (DrawGraphCanvasBackdrop), so a
+        // device-less test drives the grid with no registry at all. There is no
         // second copy to drift against: DrawGraphGridFallback below is the ONLY
-        // reader, and these are simply its tuning values. Change them freely --
-        // but change them TOGETHER with the band assertions in
+        // reader. The DEFAULTS are held together with the band assertions in
         // GraphGridPhaseTest.cpp, which are what holds the design invariant.
         //
-        // WHY 0.7:
-        // screen period = kBaseSpacingPx * pow(zoom, k). At k = 1 the grid is
+        // WHY zoomExponent = 0.7:
+        // screen period = baseSpacing * pow(zoom, k). At k = 1 the grid is
         // rigidly welded to canvas content; at k = 0 it ignores zoom entirely.
         // k = 0.7 makes the grid track zoom sublinearly, and over the editor's
-        // 0.1-2.0 zoom table (GraphZoomLevels.hpp, kZoomLevels) yields
+        // 0.1-2.0 zoom table (editor.graph.zoomLevels) yields
         // 0.7*log2(20) = 3.0 LOD crossings. MORE CROSSINGS IS NOT A RISK: lines
         // at 2*pm are exactly every other line of pm for any k, so a crossing
         // can only ever fade out lines that are already redundant -- never a
         // pop. Nor does k change density, because the octave snap normalizes the
-        // period at every zoom (see MinorPeriod), which is why kBaseSpacingPx
+        // period at every zoom (see MinorPeriod), which is why baseSpacing
         // needed no compensating adjustment. Worked endpoints at k = 0.7:
         // pm = 16.0 px at zoom 0.100, 20.0 px at 1.000, 16.2 px at 2.000 -- the
         // whole domain sits inside the design band.
-        static constexpr float kZoomExponent  = 0.7f;
-        // Grid spacing in canvas units at zoom = 1, before the octave LOD snap.
-        static constexpr float kBaseSpacingPx = 20.0f;
-        // The on-screen spacing the minor octave is driven TOWARD, so the
-        // backdrop can neither collapse into mush nor dissolve into emptiness.
-        static constexpr float kMinorTargetPx = 22.0f;
+        //
+        // baseSpacing is the grid spacing in canvas units at zoom = 1, before
+        // the octave LOD snap; minorTargetPx is the on-screen spacing the minor
+        // octave is driven TOWARD, so the backdrop can neither collapse into
+        // mush nor dissolve into emptiness; majorEvery is the minor lines per
+        // major (see MajorEvery).
+        GraphGridSettings tuning{};
+
         // Major lines every N minor lines. Powers of two only: the LOD steps by
         // doubling, and a power-of-two ratio keeps majors landing exactly on
-        // minor lines across a step (so majors never "slide" through the field).
-        static constexpr float kMajorEvery    = 8.0f;
+        // minor lines across a step (so majors never "slide" through the
+        // field) -- so a setting that is not one rounds DOWN to one (min 2).
+        float MajorEvery() const noexcept
+        {
+            const auto n = static_cast<std::uint32_t>((std::max)(tuning.majorEvery, std::int32_t{ 2 }));
+            return static_cast<float>(std::bit_floor(n));
+        }
 
         // A view scale change below this (relative) is treated as no change at
         // all, which routes the update through the pure-pan branch. The zoom
         // branch divides by (scaleOld - scaleNew), so this is also what keeps
         // that division away from zero.
+        ARC_CONSTANT("math tolerance: divide-by-zero guard")
         static constexpr float kScaleEpsilon = 1e-4f;
 
         // The grid's own screen scale -- the sublinear answer to view zoom.
-        static float GridScale(float viewScale) noexcept
+        float GridScale(float viewScale) const noexcept
         {
-            return std::pow(viewScale > 1e-4f ? viewScale : 1e-4f, kZoomExponent);
+            return std::pow(viewScale > 1e-4f ? viewScale : 1e-4f, tuning.zoomExponent);
         }
 
         // The snapped minor period, in screen pixels. This IS the LOD block now
         // -- it was a mirror of graph_grid.hlsl's ps_main until that shader was
-        // deleted; always lands in (kMinorTargetPx/2, kMinorTargetPx].
-        static float MinorPeriod(float gridScale) noexcept
+        // deleted; always lands in (minorTargetPx/2, minorTargetPx].
+        float MinorPeriod(float gridScale) const noexcept
         {
-            const float basePeriod = kBaseSpacingPx * gridScale;
-            const float level = std::log2(kMinorTargetPx /
+            const float basePeriod = tuning.baseSpacing * gridScale;
+            const float level = std::log2(tuning.minorTargetPx /
                                           (basePeriod > 1e-4f ? basePeriod : 1e-4f));
             return basePeriod * std::exp2(std::floor(level));
         }
@@ -152,7 +166,7 @@ namespace Arcane::Editor
             {
                 // Seed. Any phase is legal (the lattice is virtual), so pick the
                 // one with a statement attached: at 100% zoom, and only there,
-                // the lines fall on canvas-space multiples of kBaseSpacingPx.
+                // the lines fall on canvas-space multiples of baseSpacing.
                 x = -v.originX * sNew;
                 y = -v.originY * sNew;
                 havePrevView = true;
@@ -185,7 +199,7 @@ namespace Arcane::Editor
             // period divides it, so all four lattices land exactly where they
             // were. Later LOD steps stay continuous regardless, because the
             // octave crossfade's subset argument does not depend on phase.
-            const float wrap = MinorPeriod(sNew) * kMajorEvery * 2.0f;
+            const float wrap = MinorPeriod(sNew) * MajorEvery() * 2.0f;
             if (wrap > 0.0f)
             {
                 x = std::fmod(x, wrap);
@@ -221,7 +235,7 @@ namespace Arcane::Editor
     // WHAT IT DOES, and it is the part that matters -- the MOTION. It runs
     // the phase state machine above, so the grid tracks the nodes 1:1 on a pan
     // and grows out of the editor's own zoom fixed point, answering zoom
-    // sublinearly through the same pow(scale, 0.7) curve. Same two lattices,
+    // sublinearly through the same pow(scale, zoomExponent) curve. Same two lattices,
     // same snapped period.
     //
     // WHAT IT COSTS, stated rather than discovered: no four-octave crossfade
@@ -261,10 +275,10 @@ namespace Arcane::Editor
                           ImGui::ColorConvertFloat4ToU32(
                               ImVec4(colors.canvas[0], colors.canvas[1], colors.canvas[2], 1.0f)));
 
-        const float pm = GraphGridPhase::MinorPeriod(GraphGridPhase::GridScale(view.scale));
+        const float pm = phase.MinorPeriod(phase.GridScale(view.scale));
         if (!(pm > 0.5f))
             return;   // degenerate; a line every half pixel is a fill, not a grid
-        const float pM = pm * GraphGridPhase::kMajorEvery;
+        const float pM = pm * phase.MajorEvery();
 
         const ImU32 minorCol = pack(colors.minor);
         const ImU32 majorCol = pack(colors.major);

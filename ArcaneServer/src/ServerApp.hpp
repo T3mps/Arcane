@@ -15,9 +15,11 @@
 
 #include "ServerConfig.hpp"
 #include "ServerReport.hpp"
+#include "ServerAdminConsole.hpp"
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/RemoteCVarService.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 
 #include <memory>
@@ -66,5 +68,10 @@ namespace Arcane::Server
         std::unique_ptr<Arcane::ProcessContext> m_process;
         std::optional<Arcane::Runtime>          m_runtime;
         std::optional<Arcane::PluginHost>       m_plugin;
+        // The admin console (settings spec s9). Declared after m_plugin, so it is
+        // torn down first; it touches the process registry only, never the module.
+        std::optional<Arcane::RemoteCVarService> m_cvarService;
+        std::optional<AdminConsole>              m_adminConsole;
+        StdinLines                               m_stdin;
     };
 }

@@ -1,9 +1,13 @@
 #include "Documents/SpriteDocument.hpp"
+#include "Input/EditorActions.hpp"
 
 #include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
+#include "Settings/AssetsSpriteSettings.hpp"   // assets.sprite.defaultPixelsPerUnit (NewSpriteData)
+#include "Settings/DocumentSettings.hpp"  // editor.sprite.*: the PPU range and drag speeds
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop, the Whole texture untick)
+#include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/Command.hpp>
 
 #include <Astra/Reflection/Attribute.hpp>   // Astra::Range (the ranged rows)
@@ -200,17 +204,11 @@ namespace Arcane::Editor
             requestClose = !open;
             return;
         }
-        // Answers DocumentHost::FocusedDoc, which is how the APP's scene-level
-        // Ctrl+S learns to stand down while the user is inside a document. The
-        // Shortcut below routes itself and does not need this.
+        // Answers DocumentHost::FocusedDoc and gates this document's save action.
         m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-        // Ctrl+S saves. Shortcut() (not IsKeyChordPressed) so it ROUTES to
-        // whichever window/document currently owns focus (imgui.h:1106-1114,
-        // default ImGuiInputFlags_RouteFocused) -- with several sprite/
-        // material documents open at once, each one's Ctrl+S only fires for
-        // the one on top.
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+        if (m_windowFocused) EditorActions::Get().MarkContextActive(ActionContext::Document);
+        if (m_windowFocused && EditorActions::Get().Pressed("document.save"))
             Save();
 
         if (ImGui::Button("Save"))
@@ -270,6 +268,16 @@ namespace Arcane::Editor
         data.sourcePos = { 0.0f, 0.0f };
         data.sourceSize = { static_cast<float>(texW), static_cast<float>(texH) };
         return true;
+    }
+
+    Arcane::SpriteAssetData SpriteDocument::NewSpriteData(const Arcane::Guid& texture, std::string name)
+    {
+        Arcane::SpriteAssetData data;
+        data.id      = Arcane::Guid::Generate();
+        data.name    = std::move(name);
+        data.texture = texture;
+        data.ppu     = Arcane::Settings<AssetsSpriteSettings>().defaultPixelsPerUnit;
+        return data;
     }
 
     AssetRefArgs SpriteDocument::TextureRefArgs(const Arcane::SpriteAssetData& data)
@@ -378,7 +386,19 @@ namespace Arcane::Editor
         // dirty. m_data still mutates live (the document's crop follows a
         // drag), so dirt is "m_data moved this frame", compared at the end.
         const Arcane::SpriteAssetData shown = m_data;
-        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, 0.5f, Astra::Range(1.0, 4096.0), "%g");
+        // The row clamps to editor.sprite.ppuMin/ppuMax (S6-35; Live, so a
+        // changed bound takes effect at the next Publish), widened ONLY to
+        // include the sprite's current value: a sprite seeded or saved outside
+        // the preference (S6-5: assets.sprite.defaultPixelsPerUnit reaches
+        // 10000) is held as-is -- ImGui never snaps it to the cap -- and can be
+        // dragged back inside, while ppuMax still limits growth (S6-42 fix 1).
+        const SpriteDocSettings& ss = Arcane::Settings<SpriteDocSettings>();
+        const double cur = static_cast<double>(m_data.ppu);
+        const double prefMin = static_cast<double>(ss.ppuMin);
+        const double prefMax = std::max(prefMin, static_cast<double>(ss.ppuMax));   // an inverted pair collapses to the min
+        const double ppuMin = std::min(prefMin, cur);
+        const double ppuMax = std::max(prefMax, cur);
+        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, ss.ppuDragSpeed, Astra::Range(ppuMin, ppuMax), "%g");
         bracket("Edit Pixels Per Meter");
 
         // "Whole texture": a UI view over sourceSize == (0,0) (s5.4). Unticking
@@ -412,7 +432,7 @@ namespace Arcane::Editor
         bracket("Edit Source Pos");
         (void)grid.VecRow("Source Size", &m_data.sourceSize.x, 2, 1.0f, Astra::Range(0.0, FLT_MAX), "%.0f");
         bracket("Edit Source Size");
-        (void)grid.VecRow("Pivot", &m_data.pivot.x, 2, 0.005f, Astra::Range(0.0, 1.0), "%.3f");
+        (void)grid.VecRow("Pivot", &m_data.pivot.x, 2, ss.pivotDragSpeed, Astra::Range(0.0, 1.0), "%.3f");
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             ImGui::SetTooltip("Normalized: (0, 0) = bottom-left, (1, 1) = top-right (+Y up).\n"
                               "Sprites authored before F4 used y = 0 = top; an off-centre pivot\n"

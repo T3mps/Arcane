@@ -61,8 +61,8 @@ namespace Arcane::Editor::ModuleBuild
     // rule. Existence is NOT checked here; ResolveDriver does that.
     std::vector<std::filesystem::path> DriverCandidates(const std::filesystem::path& editorExeDir);
 
-    // The first candidate that is a regular file, else empty (the caller
-    // refuses with a Console error naming both places it looked).
+    // The first candidate that is a launchable file (CheckLaunchPath), else
+    // empty (the caller refuses with a Console error naming both places it looked).
     std::filesystem::path ResolveDriver(const std::filesystem::path& editorExeDir);
 
     struct DriverInputs
@@ -79,7 +79,9 @@ namespace Arcane::Editor::ModuleBuild
     // Parenthesised so the trailing 2>&1 folds the driver's stderr into the
     // captured stdout (and so a quoted exe at the head survives cmd's
     // outer-quote stripping). Plain quotes around paths -- good for spaces,
-    // which real install paths contain; an embedded quote is not defended.
+    // which real install paths contain. EMPTY (the caller refuses) when a path
+    // holds a quote or a line break, or <command>/<cfg> is not one word of
+    // [A-Za-z0-9_-]: cmd.exe would run what follows (settings S7-SEC).
     std::string ComposeDriverCommand(const DriverInputs& in);
 
     // ---- process halves (desk-verify; not unit-tested) ----------------------

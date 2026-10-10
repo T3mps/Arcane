@@ -1,12 +1,13 @@
 #pragma once
 
-// The Arcane:: ECS facade (input-seam spec 2026-10-02 s6.1). Game code spells
-// ONLY Arcane:: names; the standalone libraries (Astra, Mosaic, Manifold2D)
-// keep their own namespaces underneath. Bevy's prelude is the model: one
-// include, one namespace. Every name is an ALIAS of the library type, so this
-// changes no ABI and no serialized type name.
+// The flat ECS vocabulary (flat-gameplay-api spec 2026-10-10 s3, FA9; was
+// Arcane::ECS, namespace-facades spec s3; was the input-seam prelude). Game
+// code spells ONLY Arcane:: names. One alias per Astra type, in namespace
+// Arcane, with no using-directive: a new Astra name reaches game code only
+// when an alias is added here. Every name is an ALIAS of the library type.
+// There is no Arcane::ECS namespace. File path stays Ecs.hpp.
 //
-//     struct Mover : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
+//     struct Mover : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem2D>>
 //     {
 //         void operator()(Arcane::View<Arcane::Transform>& view, Arcane::Res<Arcane::Time> time);
 //     };
@@ -14,7 +15,7 @@
 #include <Arcane/EcsFwd.hpp>
 #include <Arcane/Sim/Time.hpp>
 
-// ARCANE_INTERNAL_BEGIN: the facade's library side
+// ARC_INTERNAL_BEGIN: the facade's library side
 #include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Core/Result.hpp>
 #include <Astra/Core/Tick.hpp>
@@ -63,5 +64,5 @@ namespace Arcane
     using Tick = Astra::Tick;
     template<typename T, typename E> using Result = Astra::Result<T, E>;
     using SerializationError = Astra::SerializationError;
-}
-// ARCANE_INTERNAL_END
+} // namespace Arcane
+// ARC_INTERNAL_END

@@ -24,12 +24,12 @@
 #include <memory>
 #include <string>
 
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <cstdint>
@@ -41,7 +41,7 @@
 
 namespace
 {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     using ModuleId = HMODULE;
 
     HMODULE OwnerOf(const void* addr)
@@ -54,7 +54,7 @@ namespace
 
     HMODULE CoreModule()   { return ::GetModuleHandleW(L"ArcaneCore.dll"); }
     HMODULE ClientModule() { return ::GetModuleHandleW(L"ArcaneClient.dll"); }
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
     using ModuleId = const void*;   // the owning image's mach_header
 
     ModuleId OwnerOf(const void* addr)

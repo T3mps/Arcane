@@ -8,11 +8,14 @@
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- the mountDiagnostics case needs a REAL .arcdiag
 
 #include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include <Json.hpp>
 
 #include <filesystem>
 #include <fstream>
+
+#include "Helpers/UserDataDirs.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -26,6 +29,18 @@
 
 namespace
 {
+    // The editor lock lives in <project>/Saved, which a Dist build does not
+    // have (spec s11.0); Dist ships no editor. There the lock has no file, so
+    // a project never reads as held, and the case stops.
+    void SkipEditorLockInDist(const std::filesystem::path& projectRoot)
+    {
+        if (!Arcane::kDistBuild) return;
+        CHECK(Arcane::EditorLock::FileFor(projectRoot).empty());
+        CHECK_FALSE(Arcane::EditorLock::ReadLive(projectRoot).has_value());
+        CHECK_FALSE(Arcane::EditorLock::RivalPid(projectRoot).has_value());
+        SKIP("Dist has no <project>/Saved, so no editor lock");
+    }
+
     // A unique temp dir for a test, cleaned before use. (Date/random are unavailable
     // in some sandboxes; a fixed per-test name + remove_all is deterministic.)
     std::filesystem::path TempDir(const char* leaf)
@@ -361,14 +376,10 @@ TEST_CASE("Project::Open self-heals a manifest without a guid", "[project]")
     CHECK(doc["engine"]["abi"] == 4);
 }
 
-TEST_CASE("a manifest rewrite upgrades a v1 file to formatVersion 2 and negates its on-disk gravity stamp", "[project]")
+TEST_CASE("Project::Open migrates a v1 gravity stamp and leaves an identity-only manifest", "[project]")
 {
-    // F4 plan 1 final review, F2a: the guid self-heal is a RewriteManifest
-    // edit, and every rewrite upgrades the file it touches. A v1 file that
-    // carries the Hub's +Y-down stamp must come out v2 with the SAME meaning:
-    // gravity (0, -9.81) in memory before AND after, and the file itself now
-    // says [0, -9.81] under formatVersion 2 (a bare stamp change would have
-    // flipped the project's gravity on the next open).
+    // The migration preserves the v1 +Y-down meaning in Config/physics.json,
+    // removes the stray store, and upgrades the identity manifest to v2.
     const auto dir = TempDir("format_upgrade");
     const auto file = dir / "Legacy.arcproj";
     WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 },)"
@@ -376,17 +387,21 @@ TEST_CASE("a manifest rewrite upgrades a v1 file to formatVersion 2 and negates 
 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
-    CHECK(proj->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
     {
         std::ifstream in(file, std::ios::binary);
         const auto doc = nlohmann::json::parse(in);
         CHECK(doc["formatVersion"] == 2);
-        CHECK(doc["physics"]["gravity"][1].get<double>() == Catch::Approx(-9.81));
+        CHECK_FALSE(doc.contains("physics"));
+    }
+    {
+        std::ifstream in(dir / "Config" / "physics.json", std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        CHECK(doc["gravity"][1].get<double>() == Catch::Approx(-9.81));
     }
     auto again = Arcane::Project::Open(dir);
     REQUIRE(again.has_value());
     CHECK(again->Manifest().formatVersion == 2);
-    CHECK(again->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
+    CHECK(again->Manifest().legacySettings.empty());
 }
 
 TEST_CASE("Project::Open keeps an existing guid and is stable across opens", "[project]")
@@ -446,6 +461,7 @@ TEST_CASE("EditorLock JSON round-trips and rejects malformed shapes", "[project]
 TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "[project]")
 {
     const auto dir = TempDir("editor_lock");
+    SkipEditorLockInDist(dir);
 
     // No lock file -> not running.
     CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
@@ -475,6 +491,7 @@ TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "
 TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "[project]")
 {
     const auto dir = TempDir("editor_lock_rival");
+    SkipEditorLockInDist(dir);
 
     // No lock -> no rival.
     CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
@@ -509,6 +526,7 @@ TEST_CASE("EditorLock: a lock held by an exited process is stale, even while a h
     // This spawns exactly that shape: a child that exits immediately, whose
     // handle this test keeps open across the assertions.
     const auto dir = TempDir("editor_lock_zombie");
+    SkipEditorLockInDist(dir);
 
     wchar_t cmdline[] = L"cmd.exe /c exit 0";   // CreateProcessW may write to this buffer
     STARTUPINFOW si{};
@@ -568,8 +586,9 @@ TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
 
     // A REAL report on disk, exactly as Diagnostics::WriteReportImpl leaves one.
     // An empty Saved/Diagnostics would mount but register nothing, and so could
-    // not distinguish the two halves of the branch at all.
-    const std::filesystem::path diagDir = dir / "Saved" / "Diagnostics";
+    // not distinguish the two halves of the branch at all. Dist keeps it in the
+    // per-user <game>/Diagnostics instead (spec s11.0).
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
     std::filesystem::create_directories(diagDir);
     Arcane::Diag::Envelope env;
     env.guid = Arcane::Guid::Generate();
@@ -595,4 +614,47 @@ TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
     // The opt-out is SCOPED to diag:// -- game:// must be unaffected, or the
     // fix has broken asset resolution rather than narrowed it.
     CHECK(without->Mounts().HasMount("game"));
+    std::error_code ec;
+    std::filesystem::remove_all(diagDir, ec);   // Dist: it sits outside the project
+}
+
+// S7-DIST: Open resolves diag:// with the OPENED project's identity. In Dist,
+// DiagnosticsDir is <per-user>/<Company>/<Game>/Diagnostics, and a Runtime
+// opens the project before it configures Paths for it, so Paths::Current()
+// still names the previous project (or none). Simulated in any build: a
+// preset Paths dist naming another game, and a scratch per-user base.
+TEST_CASE("Project::Open mounts diag:// from the opened project's own per-user folder when Paths resolves the Dist way", "[project][paths]")
+{
+    const Arcane::Paths::Config saved = Arcane::Paths::Current();
+    struct RestorePaths
+    {
+        Arcane::Paths::Config config;
+        ~RestorePaths() { Arcane::Paths::Configure(config); }
+    } restore{ saved };
+    const auto base = TempDir("open_diag_dist_base");
+    const Arcane::Test::ScopedUserDataBase userData(base);
+    REQUIRE(userData.Ok());
+    Arcane::Paths::Config previous = saved;
+    previous.dist = true;
+    previous.projectDir.reset();
+    previous.companyName = "Elsewhere";
+    previous.gameName = "PreviousGame";
+    Arcane::Paths::Configure(previous);
+
+    const auto dir = TempDir("open_diag_dist");
+    WriteFile(dir / "DistDiag.arcproj",
+              R"({ "formatVersion": 2, "name": "DistDiag", "company": "Starworks QA", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
+    REQUIRE(diagDir.lexically_normal() == (base / "Starworks QA" / "DistDiag" / "Diagnostics").lexically_normal());
+    std::filesystem::create_directories(diagDir);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    auto opened = Arcane::Project::Open(dir);
+    REQUIRE(opened.has_value());
+    CHECK(opened->Mounts().HasMount("diag"));
+    CHECK(opened->Registry().Resolve(env.guid).has_value());
 }

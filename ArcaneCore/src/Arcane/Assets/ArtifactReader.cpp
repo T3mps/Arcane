@@ -4,14 +4,17 @@
 
 #include <array>
 #include <bit>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
     namespace
     {
+        ARC_CONSTANT("file format: the cooked-artifact version this reader accepts (the pipeline's ArtifactFormat writes it)")
         constexpr std::uint32_t kArtifactVersion = 1;
         constexpr std::array<std::uint8_t, 4> kMagic{
             static_cast<std::uint8_t>('A'), static_cast<std::uint8_t>('R'),
@@ -20,20 +23,25 @@ namespace Arcane
         // On-disk width of one section table entry: tag(u32) + offset(u64) + size(u64).
         // Mirrors ArtifactFormat.cpp's own kSectionEntrySize -- duplicated, not shared,
         // per this file's no-pipeline-code banner (ArtifactReader.hpp).
+        ARC_CONSTANT("file format: a cooked artifact's section-table entry size in bytes")
         constexpr std::uint64_t kSectionEntrySize = 4 + 8 + 8;
         // On-disk width of one MipTable entry: offset(u64) + size(u64) + width(u32) +
         // height(u32). Mirrors ArtifactFormat.cpp's own kMipEntrySize -- same duplication
         // discipline as kSectionEntrySize above.
+        ARC_CONSTANT("file format: a cooked texture's mip-table entry size in bytes")
         constexpr std::uint64_t kMipEntrySize = 8 + 8 + 4 + 4;
         // Minimum on-disk width of one MESH SectionTable entry (a zero-length name):
         // nameLen(u16) + indexOffset(u32) + indexCount(u32) + slotIndex(u32). Mirrors
         // ArtifactFormat.cpp's own kMeshSectionEntrySize -- same duplication discipline as
         // kSectionEntrySize/kMipEntrySize above.
+        ARC_CONSTANT("file format: a cooked mesh's section entry size in bytes")
         constexpr std::uint64_t kMeshSectionEntrySize = 2 + 4 + 4 + 4;
         // Mirrors AssetPipeline::ContentKind's numeric values (ArtifactFormat.hpp) -- kept
         // in lockstep BY HAND, same discipline as ArtifactPixelFormatValue's own mirrored
         // values (ArtifactReader.hpp).
+        ARC_CONSTANT("file format: the artifact content-kind tag of a texture")
         constexpr std::uint8_t kContentKindTexture = 1;
+        ARC_CONSTANT("file format: the artifact content-kind tag of a mesh")
         constexpr std::uint8_t kContentKindMesh = 2;
 
         // Bounds-checked little-endian reader over an in-memory buffer, independently
@@ -215,6 +223,16 @@ namespace Arcane
 
         [[nodiscard]] std::optional<std::vector<std::byte>> ReadWholeFile(const std::filesystem::path& path)
         {
+            // Fuzz finding (fuzz/regressions/artifact/gltf-empty-uri-opens-directory,
+            // 2026-10-07): a .gltf buffer with "uri": "" (or ".", "..", any directory)
+            // resolves to the source's own DIRECTORY. libstdc++ opens a directory as
+            // an ifstream, tellg() then reports LLONG_MAX, and the vector below threw
+            // std::length_error/bad_alloc out of this exception-free path -- a
+            // terminate in the editor/runtime from a one-line asset. Only a regular
+            // file is read; an allocation that still fails is a refusal, not a throw.
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
+
             std::ifstream ifs(path, std::ios::binary);
             if (!ifs) return std::nullopt;
 
@@ -223,7 +241,9 @@ namespace Arcane
             if (len < 0) return std::nullopt;
             ifs.seekg(0, std::ios::beg);
 
-            std::vector<std::byte> raw(static_cast<std::size_t>(len));
+            std::vector<std::byte> raw;
+            try { raw.resize(static_cast<std::size_t>(len)); }
+            catch (const std::exception&) { return std::nullopt; }   // bad_alloc / length_error
             if (!raw.empty())
             {
                 ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
@@ -240,6 +260,7 @@ namespace Arcane
         // start under-reading -- still minuscule next to a real artifact's payload (a
         // single BC7 mip alone is already this size or larger), which is the whole point:
         // ReadCommonPrefixOnly below must never pay for anything past the header.
+        ARC_CONSTANT("file format: the header-only read size, headroom over the artifact header's exact length")
         constexpr std::size_t kHeaderProbeBytes = 256;
 
         // Reads at most `maxBytes` from the START of `path` -- NEVER the whole file. A
@@ -301,6 +322,58 @@ namespace Arcane
             std::vector<std::byte> payload;
             std::vector<std::byte> thumbRgba;
         };
+
+        // Fuzz finding (fuzz/regressions/artifact, 2026-10-07): the header's dims and the
+        // section bodies were never cross-checked, and the consumers trust the dims:
+        // Assets::PixelsFor publishes thumbWidth x thumbHeight next to thumbRgba and the
+        // texture cache uploads width*height*4 bytes from rgba.data(); UploadArtifact
+        // checks each mip against the payload but then uploads slicePitch bytes computed
+        // from the mip's OWN width/height. A file declaring a 64x64 thumbnail over a
+        // 4-byte section, or a 256x256 RGBA8 mip over 16 bytes, was a heap over-read in
+        // the upload. The reader is the one place that sees the file, so it refuses here
+        // (Missing, like any other corrupt artifact) rather than every consumer
+        // re-deriving the rule. The importer writes exactly these sizes
+        // (TextureImporter.cpp), so a cooked artifact always passes.
+        [[nodiscard]] bool SizesAgree(const FullyParsed& f) noexcept
+        {
+            // Thumbnail: uncompressed RGBA8, exactly thumbWidth x thumbHeight. u32*u32
+            // fits u64; the *4 is checked against overflow before it is taken.
+            const std::uint64_t thumbPixels = static_cast<std::uint64_t>(f.header.thumbWidth) * f.header.thumbHeight;
+            if (thumbPixels > f.thumbRgba.size() / 4 || thumbPixels * 4 != f.thumbRgba.size())
+                return false;
+
+            // One MipTable entry per declared mip.
+            if (f.mips.size() != f.header.mipCount)
+                return false;
+
+            for (const MipView& mip : f.mips)
+            {
+                // Inside the payload section (u64 arithmetic, no overflow: subtract first).
+                if (mip.offset > f.payload.size() || mip.size > f.payload.size() - mip.offset)
+                    return false;
+
+                // Exactly the bytes this mip's dims imply, for every format the runtime
+                // can upload. A reserved format byte (BC5/BC6H) is refused by the upload
+                // itself, and its size rule is not written yet -- left to that arc.
+                // Units/unit-bytes per format; units = pixels (RGBA8) or 4x4 blocks (BC7).
+                // A zero dim is never written. u32*u32 fits u64, and the units are
+                // bounded by the payload BEFORE the multiply by the unit size, so a
+                // crafted 2^31 x 2^31 mip cannot wrap its expected size to 0.
+                const std::uint64_t w = mip.width, h = mip.height;
+                if (w == 0 || h == 0)
+                    return false;
+                std::uint64_t units = 0, unitBytes = 0;
+                switch (static_cast<ArtifactPixelFormatValue>(f.header.format))
+                {
+                case ArtifactPixelFormatValue::RGBA8: units = w * h;                       unitBytes = 4;  break;
+                case ArtifactPixelFormatValue::BC7:   units = ((w + 3) / 4) * ((h + 3) / 4); unitBytes = 16; break;
+                default: continue;
+                }
+                if (units > f.payload.size() / unitBytes || units * unitBytes != mip.size)
+                    return false;
+            }
+            return true;
+        }
 
         [[nodiscard]] std::optional<FullyParsed> ReadArtifactFile(const std::filesystem::path& path)
         {
@@ -377,6 +450,9 @@ namespace Arcane
                     break;
                 }
             }
+
+            if (!SizesAgree(out))
+                return std::nullopt;   // header dims disagree with the bytes actually present
 
             return out;
         }
@@ -477,6 +553,7 @@ namespace Arcane
                 entries.push_back(e);
             }
 
+            ARC_CONSTANT("file format: the cooked mesh vertex stride (8 floats)")
             constexpr std::uint64_t kVertexStride = 8 * 4;   // 8 floats, 4 bytes each
 
             ByteReader whole(raw->data(), raw->size());   // Slice() addresses the WHOLE buffer
@@ -611,6 +688,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t HashSourceBytes(std::span<const std::byte> bytes) noexcept
         {
             std::uint64_t h = 14695981039346656037ULL;
+            ARC_CONSTANT("file format: the FNV-1a 64-bit prime of the on-disk source hash (the pipeline's CookKey agrees)")
             constexpr std::uint64_t prime = 1099511628211ULL;
             for (std::byte b : bytes)
             {
@@ -868,9 +946,13 @@ namespace Arcane
             if (!isGlb)
                 return std::span<const char>(text, size);   // a .gltf: the whole file is the document
 
+            ARC_CONSTANT("file format: the glTF binary (GLB) container version")
             constexpr std::uint32_t kGlbVersion   = 2;
+            ARC_CONSTANT("file format: the GLB JSON chunk type tag")
             constexpr std::uint32_t kJsonChunkType = 0x4E4F534A;   // "JSON", little-endian
+            ARC_CONSTANT("file format: the GLB header length (magic + version + totalLength)")
             constexpr std::size_t   kHeaderBytes   = 12;            // magic + version + totalLength
+            ARC_CONSTANT("file format: the GLB chunk header length (chunkLength + chunkType)")
             constexpr std::size_t   kChunkHeaderBytes = 8;          // chunkLength + chunkType
 
             ByteReader r(sourceBytes.data(), size);

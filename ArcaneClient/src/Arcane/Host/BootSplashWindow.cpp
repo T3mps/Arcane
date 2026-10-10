@@ -1,8 +1,10 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8() -- exe-relative image path resolution
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/NativeWindow.hpp>
+#include <Arcane/Project/AppSplashSettings.hpp>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -39,7 +41,9 @@ namespace Arcane
         // thread -- the direct replacement for the old kMsgSetProgress (a raw
         // WM_APP+1) now that thread/class/message-loop ownership lives in
         // NativeWindow.
+        ARC_CONSTANT("in-process protocol: private window-message id (WM_APP range)")
         constexpr unsigned kUserSetProgress = 1;   // wParam = integer percent
+        ARC_CONSTANT("in-process protocol: private window-message id (WM_APP range)")
         constexpr unsigned kUserLoadImage   = 2;   // posted from OnCreate so the decode runs AFTER the first paint
 
         // Height of the status-text strip along the bottom edge, shared by
@@ -47,6 +51,7 @@ namespace Arcane
         // Invalidate) so the two can never drift apart -- both need the EXACT
         // same rect, or a text-only repaint could invalidate a region
         // PaintSplash does not redraw (leaving stale pixels) or vice versa.
+        ARC_CONSTANT("base px: splash layout metric inside the app.splash.width/height window; styling, not a preference (S5-1 L9)")
         constexpr LONG kTextRowHeightPx = 24;
 
         std::wstring Utf8ToWide(const std::string& s)
@@ -123,6 +128,7 @@ namespace Arcane
         std::string       imagePath;
         std::mutex        textMutex;     // statusText: written by any thread, read by OnPaint
         std::string       statusText;
+        std::uint32_t     textRgb = 0xA0A0A0;   // app.splash.textColor (0xRRGGBB), latched at Open
 
         // Gate for BootSplashPresenter::Present's forwarding of status text +
         // taskbar progress -- see SetShowProgress/ShowProgress's own comments
@@ -282,6 +288,7 @@ namespace Arcane
                 const UINT bh = impl.bitmap->GetHeight();
                 if (bw > 0 && bh > 0)
                 {
+                    ARC_CONSTANT("base px: splash layout metric inside the app.splash.width/height window; styling, not a preference (S5-1 L9)")
                     constexpr float kMarginPx = 12.0f;
                     const float availW = clientW - 2.0f * kMarginPx;
                     // kTextRowHeightPx: reserve room so the image never touches the status line.
@@ -329,7 +336,9 @@ namespace Arcane
                 textRect.bottom -= 6;
 
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, RGB(160, 160, 160));   // matches WindowsPlatformSplash.cpp's StartupProgress colour
+                // app.splash.textColor; its default (160,160,160) matches
+                // WindowsPlatformSplash.cpp's StartupProgress colour.
+                SetTextColor(hdc, RGB((impl.textRgb >> 16) & 0xFF, (impl.textRgb >> 8) & 0xFF, impl.textRgb & 0xFF));
                 DrawTextW(hdc, wtext.c_str(), -1, &textRect,
                           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
@@ -366,12 +375,14 @@ namespace Arcane
             // so the window thread's first WM_PAINT is guaranteed to see it.
             // There is no other thread in existence yet to race with.
             m_impl->statusText = "Loading...";
+            const AppSplashSettings& splash = Settings<AppSplashSettings>();   // Restart: the early rungs are applied
+            m_impl->textRgb = ToSrgb8(splash.textColor);
 
             NativeWindowDesc d;
             d.className     = L"ArcaneBootSplash";   // BootSplashPresenterTest finds the window by this name
             d.title         = L"Arcane";
-            d.width         = 480;
-            d.height        = 270;
+            d.width         = static_cast<int>(splash.width);
+            d.height        = static_cast<int>(splash.height);
             d.popup         = true;
             d.topmost       = true;
             // WS_EX_APPWINDOW, not WS_EX_TOOLWINDOW (2026-07-30 review round
@@ -387,7 +398,7 @@ namespace Arcane
             // Consequence, taken deliberately: the splash has a taskbar
             // button and appears in Alt-Tab, matching UE's editor behaviour.
             d.appWindow     = true;
-            d.backgroundRgb = 0x0D0D0F;              // RGB(13, 13, 15), the brush PaintSplash reads back via GCLP_HBRBACKGROUND
+            d.backgroundRgb = ToSrgb8(splash.backgroundColor);
             m_impl->window.Open(d, m_impl.get());
         }
         catch (...) { m_impl.reset(); }   // never fail boot for a splash

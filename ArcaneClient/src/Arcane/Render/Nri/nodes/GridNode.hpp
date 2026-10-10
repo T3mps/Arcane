@@ -69,9 +69,10 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Constant.hpp>          // ARC_CONSTANT
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
 #include <Arcane/Scene/ViewTransform.hpp>     // the editor camera, whole
 
 #include <glm/glm.hpp>
@@ -103,14 +104,27 @@ namespace Arcane
         enum class Plane : std::uint8_t { XZ = 0, XY = 1 };
         Plane plane = Plane::XZ;
 
-        float minorSpacing = 1.0f;     // metres between minor lines
-        float majorEvery   = 10.0f;    // metres between major lines (and the wrap cell)
-        float fadeDistance = 200.0f;   // metres: alpha reaches 0 here (ours; UE relies on extent)
+        // THE TUNABLES ARE SETTINGS (settings S6-21): editor.viewport.grid.*
+        // and editor.viewport.grid3D.*, which the editor turns into this desc
+        // through Arcane::Editor::MakeGridScene every frame. They are
+        // zero-initialised here on purpose -- a desc nobody filled is a bug the
+        // node's clamps make visible, not a second copy of the defaults.
+        float minorSpacing = 0.0f;     // metres between minor lines
+        float majorEvery   = 0.0f;     // metres between major lines (and the wrap cell)
+        float fadeDistance = 0.0f;     // metres: alpha reaches 0 here (ours; UE relies on extent)
+
+        // The quad's MINIMUM half-extent (metres), and how it grows with the
+        // eye's altitude above the plane: UE scales its grid radii with the
+        // camera's height so the grid never ends inside the view when you fly
+        // up. The defaults (2000 m, x100) put the far edge ten times the
+        // default fade distance away, so it is never visible at ground level.
+        float minHalfExtent     = 0.0f;
+        float extentPerAltitude = 0.0f;
 
         // Straight alpha, LINEAR (the canvas is RGBA16F; the tonemap is what
         // makes these display-referred).
-        glm::vec4 minorColor{ 0.5f, 0.5f, 0.5f, 0.35f };
-        glm::vec4 majorColor{ 0.6f, 0.6f, 0.6f, 0.6f };
+        glm::vec4 minorColor{ 0.0f };
+        glm::vec4 majorColor{ 0.0f };
 
         // The two in-plane ORIGIN AXES, drawn in colour over the grid (UE's
         // UAxisColor/VAxisColor in FGridWidget::DrawNewGrid,
@@ -121,8 +135,12 @@ namespace Arcane
         // below does exactly that, and is what the editor wiring calls. The
         // shader never branches on the plane for COLOUR (grid.hlsl's header),
         // so an explicit override of either field after SetPlane stands.
+        // pending axis unification re-bless (S5-2 A): painted 3D-grid values.
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         static constexpr glm::vec4 kAxisXColor{ 0.85f, 0.25f, 0.25f, 0.9f };
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         static constexpr glm::vec4 kAxisYColor{ 0.30f, 0.80f, 0.35f, 0.9f };
+        ARC_CONSTANT("pending axis unification re-bless (S5-2)")
         static constexpr glm::vec4 kAxisZColor{ 0.30f, 0.40f, 0.90f, 0.9f };
         glm::vec4 axisUColor = kAxisXColor;
         glm::vec4 axisVColor = kAxisZColor;
@@ -136,7 +154,7 @@ namespace Arcane
         }
     };
 
-    class ARCANE_API GridNode
+    class ARC_API GridNode
     {
     public:
         // Loads grid_vs/grid_ps through the vehicle, registers the layout,
@@ -172,6 +190,7 @@ namespace Arcane
 
         // The b1 block's region size BEFORE alignment. grid.hlsl's GridFrameCB
         // is 160 bytes; 256 is D3D12's constant-buffer placement alignment.
+        ARC_CONSTANT("layout: constant-buffer placement size; the frame struct must fit")
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
         // The arena's region stride for a device whose constant-buffer offset
@@ -193,7 +212,7 @@ namespace Arcane
             return (std::uint64_t)frameSlot * regionStride;
         }
 
-        // THE DESCRIPTOR POOL'S CAPACITY: kSwapchainFramesInFlight sets, one
+        // THE DESCRIPTOR POOL'S CAPACITY: FramesInFlight() sets, one
         // CONSTANT_BUFFER descriptor each, and nothing else.
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
@@ -217,6 +236,7 @@ namespace Arcane
         // the node id spaces must not overlap: Batch2DNode 0x2000..0x2002,
         // TonemapNode 0x3000, outline 0x4000..0x4002, PickNode 0x4100,
         // MeshNode 0x5000.
+        ARC_CONSTANT("id scheme: the grid shader-pair id")
         static constexpr std::uint64_t kShaderPairId = 0x6000;
 
         NriDevice*        m_device    = nullptr;
@@ -230,12 +250,12 @@ namespace Arcane
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
 
         // The per-frame-slot b1 arena: ONE HOST_UPLOAD buffer, persistently
-        // mapped, carved into kSwapchainFramesInFlight regions.
+        // mapped, carved into FramesInFlight() regions.
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
-        nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_frameCbView[kMaxFramesInFlight]{};
+        nri::DescriptorSet* m_sets[kMaxFramesInFlight]{};
 
         // Resolved by Prepare for the frame being declared; borrowed from the
         // cache. Which of the two PSOs it is (depth-tested or not) is decided
@@ -259,7 +279,7 @@ namespace Arcane
     // declaration time and COPIED into the exec fn (it is small: one
     // ViewTransform and a handful of floats), so the caller's object need
     // only outlive the RenderFrame call -- which FrameDesc already requires.
-    ARCANE_API void AddGridNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API void AddGridNode(RenderGraph& graph, NriGraphContext* context,
                                 RgTexture canvas, nri::Format canvasFormat,
                                 RgTexture depth, const GridSceneDesc& scene,
                                 std::uint32_t width, std::uint32_t height);

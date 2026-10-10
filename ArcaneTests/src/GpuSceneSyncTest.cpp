@@ -11,6 +11,7 @@
 #include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -491,7 +492,7 @@ TEST_CASE("BuildGpuSceneFrame: capacities prefix-sum by batch id; only coarse-vi
     Astra::Entity off  = w.Spawn(glm::vec3(80, 0, -5), other);   // outside
     Astra::Entity gone = w.Spawn(glm::vec3(80, 0, -5), w.Mesh(1));   // its whole batch is off-screen
     w.Frame();
-    const Arcane::ViewTransform view = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
+    const Arcane::ViewTransform view = Arcane::Ortho2DView(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
     Arcane::VisibleSet vis;
     Arcane::BuildVisibleSet(w.reg, view, vis);
     Arcane::GpuSceneFrame frame;
@@ -707,7 +708,7 @@ TEST_CASE("PrepareSceneForRender: fills views[0] from the main view and views[1]
     Astra::Entity e = w.Spawn(glm::vec3(0, 0, -5), w.Mesh());
     Arcane::TransformPropagationSystem{}(w.reg);
     Arcane::BoundsSystem{}(w.reg);
-    const Arcane::ViewTransform main = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
+    const Arcane::ViewTransform main = Arcane::Ortho2DView(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
     const Arcane::ViewTransform mesh = Arcane::ViewTransform::Perspective(glm::vec3(0, 0, 10), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0),
                                                                           60.0f, glm::uvec2{ 800, 600 }, 0.1f, 100.0f);
     Arcane::GpuSceneFrame frame;

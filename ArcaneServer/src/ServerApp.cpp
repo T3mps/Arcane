@@ -2,10 +2,11 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>        // VerifySharedTypeContext / GameModule / PluginModules / BootScene
-#include <Arcane/Scene/PhysicsSystem.hpp>        // Arcane::PhysicsSystem (systems.hasPhysics)
+#include <Arcane/Scene/PhysicsSystem.hpp>        // Arcane::PhysicsSystem2D (systems.hasPhysics)
 #include <Arcane/Scene/TransformSystems.hpp>     // Arcane::TransformPropagationSystem (systems.hasPropagation)
 
 #include <Astra/Core/TypeContext.hpp>
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <thread>
 
@@ -89,21 +91,35 @@ namespace Arcane::Server
         rep.netMode                  = Arcane::ToString(m_runtime->Mode());
         rep.isDedicatedServerProcess = m_process->IsDedicatedServerProcess();
 
+        if (!m_runtime->OpenProject(m_cfg.projectPath))
+            return Finish(rep, "project-open-failed", 1);
+
+        // A dedicated host refuses cheats unless the project or the operator opted
+        // in (settings spec s3.2). After OpenProject, so the Project rung is known.
+        if (ApplyDedicatedServerDefaults(Arcane::CVarRegistry::Get()))
+            Arcane::CVarRegistry::Get().Publish();
+
         // Review round 1: make --fixed-dt REAL. RunLoop's internal accumulator
         // ticks at RunLoop::Config::fixedHz (default 60), independent of the
         // realDt passed to Advance() below -- so without this call, --fixed-dt
         // would only repace the host loop and never the physics step size.
-        // SetFixedHz(1/cfg.fixedDtSeconds) makes the REQUESTED step the loop's
-        // ACTUAL one; the tick loop below still advances by cfg.fixedDtSeconds
-        // of wall time per host frame, i.e. one fixed step per frame, as before.
-        // rep.fixedDt is derived back FROM THE LOOP, not echoed from m_cfg, so a
-        // future refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported
-        // honestly rather than optimistically.
-        m_runtime->Loop().SetFixedHz(1.0 / m_cfg.fixedDtSeconds);
+        // SetFixedHz makes the REQUESTED step the loop's ACTUAL one; the tick
+        // loop below still advances by cfg.fixedDtSeconds of wall time per host
+        // frame, i.e. one fixed step per frame, as before. rep.fixedDt is
+        // derived back FROM THE LOOP, not echoed from m_cfg, so a future
+        // refusal/clamp inside SetFixedHz (RunLoop.hpp) is reported honestly
+        // rather than optimistically.
+        // Settings arc S6-8: with no --fixed-dt the rate is server.tickHz
+        // (Restart), read here, AFTER OpenProject applied the project's
+        // Config rung, and the wall-clock pacing follows it.
+        // Runtime::SetFixedHz, not Loop().SetFixedHz: the physics step
+        // follows the tick too, so a server.tickHz != sim.fixedHz no longer
+        // runs the simulation at the wrong speed (S6-8 deferral, S6-GATE).
+        const double tickHz = m_cfg.FixedHz();
+        m_runtime->SetFixedHz(tickHz);
+        if (!m_cfg.fixedDtSupplied)
+            m_cfg.fixedDtSeconds = 1.0 / tickHz;
         rep.fixedDt = 1.0 / m_runtime->Loop().FixedHz();
-
-        if (!m_runtime->OpenProject(m_cfg.projectPath))
-            return Finish(rep, "project-open-failed", 1);
 
         const Arcane::Project* proj = m_runtime->CurrentProject();
         rep.projectOpened = true;
@@ -135,6 +151,17 @@ namespace Arcane::Server
 
         (void)Arcane::ProjectHost::BootScene(*m_runtime, *proj);
 
+        // The operator's console (settings spec s9): stdin lines are RemoteCVarService
+        // requests in the ServerAdmin context, answered on stdout between ticks;
+        // every set is logged as a cvar-audit line.
+        if (m_cfg.adminConsole)
+        {
+            m_cvarService.emplace(Arcane::CVarRegistry::Get(), &LogAuditRecord, nullptr);
+            m_adminConsole.emplace(*m_cvarService, "stdin");
+            m_stdin.Start();
+            ARC_INFO("ArcaneServer: admin console on stdin (get/set/list/explain; 'help')");
+        }
+
         // Fixed-step tick, forever or --frames N. Wall-clock paced by sleeping the
         // remainder of each step (spec s6: tick rate is a RUNTIME value); the loop
         // is unpaused (fresh).
@@ -165,6 +192,20 @@ namespace Arcane::Server
                                       [&](double dt) { m_plugin->FixedUpdateAll(dt); },
                                       [&](double dt, double a) { m_plugin->UpdateAll(dt, a); });
             m_plugin->Poll();
+            if (m_adminConsole)
+            {
+                for (const std::string& line : m_stdin.Drain())
+                {
+                    const std::string reply = m_adminConsole->Submit(line);
+                    if (reply.empty()) continue;
+                    std::fputs(reply.c_str(), stdout);
+                    std::fputc('\n', stdout);
+                    std::fflush(stdout);
+                }
+            }
+            // One publish per tick, as the client hosts do per frame: a Live Server
+            // setting set by the module or a console is in effect from the next tick.
+            Arcane::CVarRegistry::Get().Publish();
             Arcane::Diagnostics::Heartbeat();
             ++rep.framesTicked;
             std::this_thread::sleep_until(start + std::chrono::duration<double>(m_cfg.fixedDtSeconds));
@@ -184,7 +225,7 @@ namespace Arcane::Server
         rep.fixedUpdate = m_runtime->Schedulers().fixedUpdate.Size();
         rep.update      = m_runtime->Schedulers().update.Size();
         rep.render      = m_runtime->Schedulers().render.Size();
-        rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>();
+        rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>();
         rep.hasPropagation = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>();
         rep.hasRenderSubmission = false;   // by construction: no ClientRuntime exists in this process
         rep.clientAttached      = m_runtime->Client() != nullptr;

@@ -192,6 +192,15 @@ namespace Arcane::Test
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         }
 
+        HANDLE OpenInheritableInputFile(const std::filesystem::path& path)
+        {
+            SECURITY_ATTRIBUTES sa{};
+            sa.nLength        = sizeof(sa);
+            sa.bInheritHandle = TRUE;
+            return ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, &sa,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+
         std::uint64_t FileSizeOrZero(const std::filesystem::path& p)
         {
             std::error_code ec;
@@ -296,8 +305,10 @@ namespace Arcane::Test
 
         HANDLE hOut = CreateInheritableLogFile(stdoutPath);
         HANDLE hErr = CreateInheritableLogFile(stderrPath);
+        HANDLE hIn = inv.stdinPath.empty() ? INVALID_HANDLE_VALUE : OpenInheritableInputFile(inv.stdinPath);
         const bool haveOut = (hOut != INVALID_HANDLE_VALUE);
         const bool haveErr = (hErr != INVALID_HANDLE_VALUE);
+        const bool haveIn = (hIn != INVALID_HANDLE_VALUE);
 
         // cmd.exe (and only cmd.exe, empirically -- other targets don't care)
         // misparses its OWN argv[0] when the command-line TEXT spells it with
@@ -324,7 +335,7 @@ namespace Arcane::Test
         si.dwFlags   |= STARTF_USESTDHANDLES;
         si.hStdOutput = haveOut ? hOut : nullptr;
         si.hStdError  = haveErr ? hErr : nullptr;
-        si.hStdInput  = nullptr;   // the child never reads stdin
+        si.hStdInput  = haveIn ? hIn : nullptr;   // a scripted stdin, or none
 
         PROCESS_INFORMATION pi{};
 
@@ -345,6 +356,7 @@ namespace Arcane::Test
         // Ours to close either way: the child holds its own duplicate.
         if (haveOut) ::CloseHandle(hOut);
         if (haveErr) ::CloseHandle(hErr);
+        if (haveIn) ::CloseHandle(hIn);
 
         if (ok)
         {

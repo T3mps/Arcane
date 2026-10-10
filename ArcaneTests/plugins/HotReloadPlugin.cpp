@@ -9,19 +9,21 @@
 //        module's registrations before the host has to unwind them -- the fixture
 //        for PluginHost's secondary-init-failure teardown (final-review fix wave,
 //        C1: the factories must be ClearOwner'ed before the image unmaps).
-// Built ON the SDK's ARCANE_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
+// Built ON the SDK's ARC_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
 // [hotreload] suite is the macro's plugin test: the prologue (Pulse arrives
-// through the ARCANE_COMPONENT drain), the base Save/LoadState round-trip plus
+// through the ARC_COMPONENT drain), the base Save/LoadState round-trip plus
 // this module's extras, the Shutdown order (the OnShutdown log line below),
 // and the ABI-override seam the Bad build exists to trip.
 
 #include "HotReloadShared.hpp"
 
 #include <Arcane/Plugin/GameModule.hpp>
+#include <Arcane/Config/CVarDecl.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
 #include <cstdint>
+#include <string>
 
 #ifndef HOTRELOAD_STEP
   #define HOTRELOAD_STEP 1
@@ -32,15 +34,48 @@
 
 // One reflected component (shared header), registered through the drain the
 // macro's Init performs -- the same path a wizard-made component takes.
-ARCANE_COMPONENT(Arcane::HotReloadTest::Pulse)
-ARCANE_COMPONENT(Arcane::HotReloadTest::RoleCounters)
+ARC_COMPONENT(Arcane::HotReloadTest::Pulse)
+ARC_COMPONENT(Arcane::HotReloadTest::RoleCounters)
 
 // Deliberately pair the automatic path with ClientOnlyTick's manual OnInit
 // path below. The same DLL therefore proves that both produce owned factories
 // with identical role, reload, and teardown behavior.
-ARCANE_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
+ARC_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
               Arcane::RoleMask::Server,
               Arcane::SystemPhase::FixedUpdate)
+
+// The cvar-lifetime probes (settings spec s4.4; CVarModuleLifetimeTest):
+//   - one Archive cvar whose default is this build's step;
+//   - one command that answers with that step;
+//   - one callback into this image on an ENGINE cvar, added from OnInit;
+//   - a SECOND callback on the same cvar, added from OnFixedUpdate (a tick
+//     entry point, OUTSIDE load/Init -- only PluginHost's scope around the
+//     vtable call can tag it; Review Focus 2).
+// After an unload or a reload, a stale function pointer would answer with the
+// OLD step, or call into unmapped code.
+ARC_CVAR(cvar_hotReloadStep, "hotreload.step", std::int32_t, HOTRELOAD_STEP,
+         .flags = ::Arcane::CVarFlags::Archive,
+         .help = "The hot-reload fixture's build step (1 = V1, 10 = V2).");
+
+namespace
+{
+    ::Arcane::CommandResult PingCommand(std::string_view, void*)
+    {
+        return { true, "step " + std::to_string(HOTRELOAD_STEP) };
+    }
+
+    void OnHistorySizeChanged(::Arcane::CVarHandle, void*)
+    {
+        ARC_INFO("HotReloadPlugin: console.historySize changed (step {})", HOTRELOAD_STEP);
+    }
+
+    void OnSaveStateHistoryChanged(::Arcane::CVarHandle, void*)
+    {
+        ARC_INFO("HotReloadPlugin: SaveState callback");
+    }
+}
+
+ARC_COMMAND("hotreload.ping", ::Arcane::CVarFlags::None, "Answers with the fixture's build step.", &PingCommand);
 
 namespace Arcane::HotReloadTest
 {
@@ -72,9 +107,13 @@ namespace Arcane::HotReloadTest
 #endif
             }
             CacheHandle();
+            // The cross-module callback probe: PluginHost's CVarModuleScope
+            // around Init tags it with this module, and the unload must drop it.
+            ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                      &OnHistorySizeChanged, nullptr);
             // The s4 contract: factories register ONCE per DLL load, with an
             // explicit mask; each Runtime instantiates what its NetMode matches.
-            // ServerOnlyTick arrived through ARCANE_SYSTEM before OnInit;
+            // ServerOnlyTick arrived through ARC_SYSTEM before OnInit;
             // ClientOnlyTick stays manual as the constructor-aware control path.
             RegisterSystem<ClientOnlyTick>(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate);
 #ifdef HOTRELOAD_INIT_FAIL
@@ -88,8 +127,22 @@ namespace Arcane::HotReloadTest
 #endif
         }
 
+        // The tick-time callback probe (CVarModuleLifetimeTest's 4th case): an
+        // AddCallback from a tick entry point carries no module tag of its own,
+        // so only PluginHost's CVarModuleScope around the FixedUpdate vtable
+        // call (ScopedCall) attributes it to this module for the unload to
+        // drop. Once per instance -- and the instance is per image (the macro
+        // news it in Init, deletes it in Shutdown), so once per image.
+        bool tickCallbackAdded = false;
+
         void OnFixedUpdate(double) override
         {
+            if (!tickCallbackAdded)
+            {
+                tickCallbackAdded = true;
+                ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                          &OnHistorySizeChanged, nullptr);
+            }
             if (auto* p = Registry().GetComponent<Pulse>(pulse))
                 p->ticks += (HOTRELOAD_STEP);            // V1: +1, V2: +10 (observably different code)
         }
@@ -110,6 +163,11 @@ namespace Arcane::HotReloadTest
         // OnLoadState can prove the base restored the entity it re-finds by view.
         void OnSaveState(Astra::BinaryWriter& w) override
         {
+            // Pin: PlaySession / SaveStatePrimary must open CVarModuleScope
+            // (or image-address attribution must catch this). An untagged add
+            // would survive Unload as a dangling pointer.
+            ::Arcane::CVarRegistry::Get().AddCallback(::Arcane::CVarRegistry::Get().Find("console.historySize"),
+                                                      &OnSaveStateHistoryChanged, nullptr);
             w(static_cast<uint64_t>(pulse));
         }
         bool OnLoadState(Astra::BinaryReader& r) override
@@ -125,5 +183,5 @@ namespace Arcane::HotReloadTest
     };
 }
 
-ARCANE_GAME_MODULE_ABI(Arcane::HotReloadTest::Module,
+ARC_GAME_MODULE_ABI(Arcane::HotReloadTest::Module,
                        ::Arcane::kGamePluginABIVersion + (HOTRELOAD_ABI_OFFSET))

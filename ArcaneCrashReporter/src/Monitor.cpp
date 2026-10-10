@@ -234,7 +234,7 @@ namespace Arcane::Reporter
         const std::string logPath  = !a.logPath.empty() ? a.logPath : session->logPath;
         const std::string product  = !a.product.empty() ? a.product : (session->product.empty() ? app : session->product);
         const std::string relaunch = !a.relaunch.empty() ? a.relaunch : session->commandLine;
-        const std::string logTail  = logPath.empty() ? std::string{} : LastLines(Slurp(std::filesystem::path(ToWide(logPath))), 512);
+        const std::string logTail  = logPath.empty() ? std::string{} : LastLines(Slurp(std::filesystem::path(ToWide(logPath))), a.hangLogTailLines);
 
         std::filesystem::create_directories(reportDir, ec);
 
@@ -313,10 +313,10 @@ namespace Arcane::Reporter
         view.envelopePath = ToUtf8(envPath.wstring());
         view.product      = product;
         view.relaunch     = relaunch;
-        const ReportView finished = BuildReportView(e, view, nullptr, LastLines(logTail, 200));
+        const ReportView finished = BuildReportView(e, view, nullptr, LastLines(logTail, a.logTailLines));
         std::unique_ptr<ReporterWindow> ui;
         NativeWindow                    window;
-        ui = std::make_unique<ReporterWindow>(finished, [&](int id) { OnButton(id, *ui, window, nullptr); });
+        ui = std::make_unique<ReporterWindow>(finished, [&](int id) { OnButton(id, *ui, window, nullptr); }, a);
         ui->SetView(finished);   // before Show: nothing to symbolize, so the first paint is the final one
         ui->Show(window, product);
         if (window.WasEverOpen()) window.Wait();

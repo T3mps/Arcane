@@ -71,7 +71,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
 #include <Arcane/Platform/Process.hpp>   // QueryProcess: the host's start stamp
 #include <sys/sysctl.h>                  // KERN_PROC: P_TRACED, the debugger check
 #endif
@@ -763,7 +763,7 @@ namespace
 
     // ---- the fatal-signal family (spec S5.1 items 1-4, S5.3) ------------------
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     // Apple silicon traps with brk (EXC_BREAKPOINT -> SIGTRAP): __builtin_trap,
     // libc's fortify (__chk_fail) and Swift/ObjC runtime traps all die by it.
     // A debugger takes EXC_BREAKPOINT as a Mach exception before any signal.
@@ -862,6 +862,7 @@ namespace
     // ---- the console family (spec S5.7) ----------------------------------------
     // CTRL_* numbers, so SimulateConsoleCtrl takes exactly what it takes on
     // Windows.
+    ARC_CONSTANT("wire protocol: CTRL_* values SimulateConsoleCtrl takes, matching the Windows console events")
     constexpr unsigned long kCtrlC = 0, kCtrlBreak = 1, kCtrlClose = 2, kCtrlLogoff = 5, kCtrlShutdown = 6;
 
     constexpr int    kConsoleSignals[] = { SIGINT, SIGTERM, SIGHUP };
@@ -1062,7 +1063,7 @@ namespace
     {
         g_hostStartSnap[0] = '0';
         g_hostStartSnap[1] = '\0';
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // proc_pidinfo's start time (microseconds since the epoch) -- the
         // same per-OS stamp Arcane::Platform::QueryProcess reports.
         std::snprintf(g_hostStartSnap, sizeof(g_hostStartSnap), "%llu",
@@ -1088,7 +1089,7 @@ namespace
     pthread_t g_watchdogOrphan{};
     bool      g_haveWatchdogOrphan = false;
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     // macOS has no pthread_tryjoin_np / pthread_timedjoin_np: each watchdog
     // thread raises its slot's flag as its LAST act, and a join is only
     // attempted once the flag is up (it then returns at once). Two slots:
@@ -1123,7 +1124,7 @@ namespace
     void* WatchdogThreadProc(void* arg)
     {
         g_watchdogBody();
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         g_watchdogExited[reinterpret_cast<std::intptr_t>(arg)].store(true, std::memory_order_release);
 #else
         (void)arg;
@@ -1181,7 +1182,7 @@ void StartWatchdog(void (*body)()) noexcept
     if (g_watchdogRunning) return;
     if (g_haveWatchdogOrphan)
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         if (TryJoinWatchdog(g_watchdogOrphan, g_orphanSlot) != 0)
 #else
         if (::pthread_tryjoin_np(g_watchdogOrphan, nullptr) != 0)
@@ -1200,7 +1201,7 @@ void StartWatchdog(void (*body)()) noexcept
     pthread_attr_t attr;
     ::pthread_attr_init(&attr);
     ::pthread_attr_setstacksize(&attr, 256 * 1024);
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     g_watchdogSlot = g_haveWatchdogOrphan ? 1 - g_orphanSlot : 0;
     g_watchdogExited[g_watchdogSlot].store(false, std::memory_order_release);
     g_watchdogRunning = ::pthread_create(&g_watchdog, &attr, &WatchdogThreadProc,
@@ -1219,14 +1220,14 @@ void StopWatchdog() noexcept
     timespec deadline{};
     ::clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 5;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     if (TimedJoinWatchdog(g_watchdog, g_watchdogSlot, deadline) != 0)
 #else
     if (::pthread_timedjoin_np(g_watchdog, nullptr, &deadline) != 0)
 #endif
     {
         if (g_haveWatchdogOrphan) ::pthread_detach(g_watchdogOrphan);
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         g_orphanSlot         = g_watchdogSlot;
 #endif
         g_watchdogOrphan     = g_watchdog;
@@ -1245,7 +1246,7 @@ void OnWatchdogThreadStart() noexcept
 bool DebuggerAttached() noexcept
 {
     // IsDebuggerPresent's POSIX reading: a ptrace tracer (gdb, lldb, rr).
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     // Apple's documented check (QA1361): P_TRACED in the kinfo_proc.
     kinfo_proc info{};
     std::size_t size = sizeof(info);
@@ -1374,6 +1375,7 @@ void SubmitReport(const ReportRequest& request) noexcept
     // ONE deadline for the lock AND the wait (plan 2, seam 2); R49's 5 s
     // floor for a fatal report's wait.
     const std::uint64_t deadline = MonotonicMs() + timeoutMs;
+    ARC_CONSTANT("crash-path: floor under a fatal report's wait, matching the Windows path")
     constexpr std::uint64_t kMinFatalWaitMs = 5000;
 
     if (fatal)

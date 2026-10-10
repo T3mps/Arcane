@@ -3,6 +3,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ServiceThread.hpp>
+#include <Arcane/Host/HostSettings.hpp>   // boot.splashPumpMs
 
 #include <algorithm>
 #include <chrono>
@@ -273,10 +274,11 @@ namespace Arcane
                     // marks the window "Not Responding" -- the precise
                     // failure this arc exists to prevent.
                     Diagnostics::SetPhase("boot stage '" + workerStageId + "' (worker; main pumping)");
+                    const std::chrono::milliseconds pumpWait(Settings<BootSettings>().splashPumpMs);   // boot.splashPumpMs
                     std::unique_lock lk(wh.mx);
                     for (;;)
                     {
-                        wh.cv.wait_for(lk, std::chrono::milliseconds(8), [&] { return wh.finished >= 0; });
+                        wh.cv.wait_for(lk, pumpWait, [&] { return wh.finished >= 0; });
                         if (wh.finished >= 0) break;
                         lk.unlock();
                         // Main is alive here even though it is waiting, so it

@@ -44,7 +44,7 @@ TEST_CASE("scene components are reflected (visitFields slot populated)", "[scene
     CHECK(sr->visitFields != nullptr);
 }
 
-TEST_CASE("PhysicsSettings is a reflected, roster-registered scene component", "[scene][physics]")
+TEST_CASE("Arcane::PhysicsSettings2D is a reflected, roster-registered scene component", "[scene][physics]")
 {
     // Spec 2026-09-11-physics-2d-wiring s5: the per-scene gravity override
     // rides on the scene-root entity as an ordinary component, so the
@@ -52,13 +52,13 @@ TEST_CASE("PhysicsSettings is a reflected, roster-registered scene component", "
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
-    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::PhysicsSettings>();
+    const Astra::TypeMeta* meta = Astra::GetMeta<Arcane::PhysicsSettings2D>();
     REQUIRE(meta != nullptr);
     REQUIRE(meta->fields.size() == 1);
     CHECK(meta->fields[0].name == "gravity");
     CHECK(meta->fields[0].IsSerializable());
-    REQUIRE(components->GetComponentDescriptor(Astra::TypeID<Arcane::PhysicsSettings>::Value()) != nullptr);
-    Arcane::PhysicsSettings def;
+    REQUIRE(components->GetComponentDescriptor(Astra::TypeID<Arcane::PhysicsSettings2D>::Value()) != nullptr);
+    Arcane::PhysicsSettings2D def;
     CHECK(def.gravity.x == 0.0f);
     CHECK(def.gravity.y == Catch::Approx(-9.81f));   // +Y is UP (F4 plan 1 T2, spec s2)
 }

@@ -23,6 +23,9 @@
 // create dialog is in-editor ImGui and returns its result synchronously.
 
 #include "App/EditorApp.hpp"
+#include "Settings/SettingsHost.hpp"
+#include "Documents/SpriteDocument.hpp"   // SpriteDocument::NewSpriteData (MintOrReuseSpriteForTexture)
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.* polls + EditorOpenOptions (settings S6-38)
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ClassTemplates.hpp"   // Assets -> Create -> C++ Class (MintCppClass)
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
@@ -36,14 +39,17 @@
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>   // F2c Task 15: MintImportMaterials' survey parameter
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Build/Toolchain.hpp>   // DiscoverSolution (OpenInIde's "which .slnx" question; arcbuild arc)
+#include <Arcane/Config/Settings.hpp>   // Settings<AssetBrowserSettings>: the asset-watch / discovery polls (settings S6-38)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
+#include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Intermediate/ and Saved/UndoCache resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Publish/Clear (the Build failure row)
+#include <Arcane/Host/HostSettings.hpp>   // HostBoot::ShouldReportScanProgress (the boot stage's scan throttle)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>   // NriDiagnostics::FireFault (--crash-gpu on the graph arm)
 
@@ -427,7 +433,7 @@ namespace Arcane::Editor
     {
         if (m_editorClock < m_materialWatchNext)
             return;
-        m_materialWatchNext = m_editorClock + 1.0;
+        m_materialWatchNext = m_editorClock + Arcane::Settings<Arcane::Editor::AssetBrowserSettings>().watchPollSeconds;
         const Arcane::Project* project =
             m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
@@ -478,7 +484,7 @@ namespace Arcane::Editor
         // set, both kinds' extensions in one array.
         if (m_editorClock >= m_contentDiscoveryNext)
         {
-            m_contentDiscoveryNext = m_editorClock + 2.0;
+            m_contentDiscoveryNext = m_editorClock + Arcane::Settings<Arcane::Editor::AssetBrowserSettings>().discoveryPollSeconds;
 
             using Arcane::Editor::kDiscoveryExtensions;   // ContentDiscovery.hpp: .png, .gltf, .glb
 
@@ -743,8 +749,12 @@ namespace Arcane::Editor
 
     void EditorApp::PollCookQueue()
     {
-        if (m_cookQueue)
-            m_cookQueue->Pump();   // -> OnCookCompleted, once per finished pass
+        if (!m_cookQueue)
+            return;
+        // S6-6: assets.import.texture.* is Live -- a changed project default re-cooks
+        // (the queue no-ops an unchanged value, so this is a 4-field compare a frame).
+        m_cookQueue->SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());
+        m_cookQueue->Pump();   // -> OnCookCompleted, once per finished pass
     }
 
     void EditorApp::OnCookCompleted(const Arcane::AssetPipeline::CookResult& result)
@@ -1120,6 +1130,7 @@ namespace Arcane::Editor
         }
 
         Arcane::AssetPipeline::CookSession oracle;
+        oracle.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6: the cooker's key
         return !oracle.ResolveCurrentArtifactPath(project->Root(), cookGuid).has_value();
     }
 
@@ -1277,7 +1288,8 @@ namespace Arcane::Editor
         for (const auto& [guid, mountPath] : project->Registry().All())
             liveGuids.insert(guid);
 
-        Arcane::AssetPipeline::ArtifactStore store(project->Root() / "Intermediate");
+        Arcane::AssetPipeline::ArtifactStore store(Arcane::Paths::Resolve(Arcane::Paths::Location::ProjectIntermediate,
+                                                                          Arcane::Paths::ForProject(project->Root())));
         // The in-memory index starts EMPTY every call (a fresh ArtifactStore
         // here) -- SweepOrphans' own header comment: "Call RebuildIndexFromScan
         // first for a sweep grounded in the current disk state."
@@ -1381,10 +1393,7 @@ namespace Arcane::Editor
                           (texPath->stem().string() + "-" + std::to_string(i) + ".arcsprite");
         }
 
-        Arcane::SpriteAssetData data;
-        data.id      = Arcane::Guid::Generate();
-        data.name    = mintPath.stem().string();
-        data.texture = textureGuid;
+        const Arcane::SpriteAssetData data = SpriteDocument::NewSpriteData(textureGuid, mintPath.stem().string());
         if (!Arcane::SaveSpriteAsset(mintPath, data))
         {
             ARC_WARN("Arcane Editor: could not mint a sprite at '{}'", mintPath.generic_string());
@@ -2267,8 +2276,11 @@ namespace Arcane::Editor
         std::error_code ec;
         if (const std::filesystem::path& old = m_undo->SpillDirectory(); !old.empty())
             std::filesystem::remove_all(old, ec);
-        const std::filesystem::path dir = project ? project->Root() / "Saved" / "UndoCache"
-                                                  : std::filesystem::path{};
+        // Joined, so an absent location is EMPTY -- never a relative "UndoCache"
+        // that the remove_all below would delete in the working directory.
+        const std::filesystem::path dir = project
+            ? Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(project->Root()), "UndoCache")
+            : std::filesystem::path{};
         if (!dir.empty())
             std::filesystem::remove_all(dir, ec);   // safe: the stack is empty at open, editor.lock keeps one editor per project
         m_undo->SetSpillDirectory(dir);
@@ -2298,6 +2310,8 @@ namespace Arcane::Editor
                                      "' is already open in another Arcane Editor.\n"
                                      "That editor has been brought to the front.");
                 Arcane::EditorLock::FocusWindowOfProcess(*rival);
+                Arcane::Editor::SettingsHostOnProjectSwitch(
+                    Arcane::Editor::ProjectSwitchPreTeardown::RivalLock);
                 return;
             }
         }
@@ -2312,6 +2326,8 @@ namespace Arcane::Editor
             ARC_ERROR("Open Project: '{}' is not a valid Arcane project", path.generic_string());
             m_modalErrors.Push("Open Project Failed", "'" + path.generic_string() +
                                  "' is not a valid Arcane project (no readable .arcproj).");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::InvalidProject);
             return;
         }
         if (probe->Manifest().engineAbi != static_cast<int>(Arcane::kGamePluginABIVersion))
@@ -2362,6 +2378,8 @@ namespace Arcane::Editor
                       "before switching projects");
             m_modalErrors.Push("Open Project Failed", "There are unsaved material documents.\n"
                                  "Save or close them before switching projects.");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::DirtyDocuments);
             return;
         }
         // The OUTGOING project's root, captured before teardown replaces it:
@@ -2402,7 +2420,7 @@ namespace Arcane::Editor
         // either, or the opt-out would hold only until the first switch.
         // Forwarded explicitly by the project_open body below, which is
         // REPLACED here rather than inherited from CoreStages.
-        ctx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        ctx.openOptions = Arcane::Editor::EditorOpenOptions(Arcane::HostBoot::OpenOptionsFor(m_config));
 
         std::vector<Arcane::BootStage> all = Arcane::HostBoot::EditorStages(ctx);
         if (!PatchHostStages(all))
@@ -2412,6 +2430,8 @@ namespace Arcane::Editor
             m_modalErrors.Push("Open Project Failed",
                 "Internal error: the host stage table no longer matches EditorStages() "
                 "(see Console). The current session is unchanged.");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::StageTableMismatch);
             return;
         }
 
@@ -2448,8 +2468,18 @@ namespace Arcane::Editor
             m_modalErrors.Push("Open Project Failed",
                 "Internal error: the host stage table no longer matches EditorStages() "
                 "(see Console). The current session is unchanged.");
+            Arcane::Editor::SettingsHostOnProjectSwitch(
+                Arcane::Editor::ProjectSwitchPreTeardown::StageTableMismatch);
             return;
         }
+
+        // Settings arc S3-13: pending edits belong to the OUTGOING project's
+        // folders, and their undo stacks to its rungs. Called here -- after
+        // every session-untouched refusal, immediately before switch_teardown
+        // is constructed -- so a stage-table mismatch does not flush or clear
+        // window-local undo.
+        Arcane::Editor::SettingsHostOnProjectSwitch(
+            Arcane::Editor::ProjectSwitchPreTeardown::Accepted);
 
         std::vector<Arcane::BootStage> stages;
 
@@ -2569,8 +2599,7 @@ namespace Arcane::Editor
                 return m_runtime->OpenProject(path,
                     [scanDetail](std::size_t done, std::size_t total)
                     {
-                        constexpr std::size_t kStride = 32;
-                        if (done != 1 && done != total && done % kStride != 0)
+                        if (!Arcane::HostBoot::ShouldReportScanProgress(done, total))
                             return;
                         scanDetail->Set("Scanning content... " + std::to_string(done) +
                                          " / " + std::to_string(total));
@@ -2904,8 +2933,14 @@ namespace Arcane::Editor
         in.command       = "build";
         in.configuration = ModuleBuild::Configuration();
 
-        m_moduleBuildRoot = proj->Root();
         const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
+        if (cmd.empty())
+        {
+            ARC_ERROR("Build: refused -- a path holds a quote or a line break, which the build shell would run: "
+                      "project '{}', SDK '{}', driver '{}'", in.projectRoot.string(), sdkRoot.string(), driver.string());
+            return;
+        }
+        m_moduleBuildRoot = proj->Root();
         ARC_INFO("Build: rebuilding {} ({}) against SDK {}",
                  proj->Manifest().gameModule, in.configuration, sdkRoot.generic_string());
         ARC_INFO("Build: {}", cmd);
@@ -2915,24 +2950,22 @@ namespace Arcane::Editor
 
     // ---- Build -> Open Visual Studio / open source in VS (see EditorApp.hpp) ---
 
-    void EditorApp::ResolveDevenvOnce()
+    void EditorApp::RefreshDevenv()
     {
-        if (m_devenvResolved)
+        if (!m_devenv.Refresh())
             return;
-        m_devenvResolved = true;
-        m_devenv = IdeLaunch::ResolveDevenv();
-        if (m_devenv.empty())
+        if (m_devenv.Path().empty())
             ARC_WARN("IDE: no Visual Studio install found (vswhere found no devenv.exe) -- "
                      "Build > Open Visual Studio stays greyed");
         else
-            ARC_INFO("IDE: Visual Studio at {}", m_devenv.string());
+            ARC_INFO("IDE: Visual Studio at {}", m_devenv.Path().string());
     }
 
     Arcane::Editor::IdeMenuState EditorApp::IdeMenuStateNow() const
     {
         if (!m_runtime->CurrentProject())
             return IdeMenuState::NoProject;
-        if (m_devenv.empty())
+        if (m_devenv.Path().empty())
             return IdeMenuState::NoVisualStudio;
         return IdeMenuState::Available;
     }
@@ -2945,7 +2978,7 @@ namespace Arcane::Editor
             ARC_ERROR("IDE: no open project -- nothing to open");
             return IdeLaunch::Outcome::NoSolution;
         }
-        ResolveDevenvOnce();
+        RefreshDevenv();
 
         // The solution to hand devenv, or to find in a running instance. A
         // project that has never been generated has none yet: run premake
@@ -2959,8 +2992,8 @@ namespace Arcane::Editor
         }
 
         const IdeLaunch::Outcome outcome = file.empty()
-            ? IdeLaunch::OpenSolution(m_devenv, solution)
-            : IdeLaunch::OpenFileAtLine(m_devenv, solution, file, line);
+            ? IdeLaunch::OpenSolution(m_devenv.Path(), solution)
+            : IdeLaunch::OpenFileAtLine(m_devenv.Path(), solution, file, line);
 
         // One Console line per click, its severity by whether the click did
         // what it asked: the three "it worked" outcomes are info, the
@@ -3019,6 +3052,12 @@ namespace Arcane::Editor
         in.command       = "generate";
         in.configuration = ModuleBuild::Configuration();
         const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
+        if (cmd.empty())
+        {
+            ARC_ERROR("Build: refused -- a path holds a quote or a line break, which the build shell would run: "
+                      "project '{}', SDK '{}', driver '{}'", in.projectRoot.string(), in.sdkRoot.string(), driver.string());
+            return false;
+        }
         ARC_INFO("Build: {}", cmd);
         const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
         for (const std::string& line : gen.lines)
@@ -3344,7 +3383,7 @@ namespace Arcane::Editor
             Arcane::Diagnostics::Publish("diagnostics:reports", m_reportDiagnostics);
     }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     // Build -> Diagnostics -> Crash GPU (diagnostics test). Task 11: the desk
     // battery's trigger, and the ONLY thing in this arc that causes a fault
     // rather than reacting to one.

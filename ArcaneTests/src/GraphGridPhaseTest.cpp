@@ -78,7 +78,7 @@ TEST_CASE("graph grid phase: a ZOOM grows the lattice out of the view's own fixe
     // The fixed point's SCREEN position under the old view -- what the phase
     // must scale about.
     const float fixedScreenX = (40.0f - 0.0f) * 1.0f;
-    const float ratio = GraphGridPhase::GridScale(2.0f) / GraphGridPhase::GridScale(1.0f);
+    const float ratio = phase.GridScale(2.0f) / phase.GridScale(1.0f);
     const float expected = fixedScreenX + (before - fixedScreenX) * ratio;
 
     phase.Update(View(20.0f, 0.0f, 2.0f));
@@ -86,7 +86,7 @@ TEST_CASE("graph grid phase: a ZOOM grows the lattice out of the view's own fixe
 
     // The ratio is the GRID's own, not the view's -- sublinear, so a 2x view
     // zoom grows the pattern by 2^0.7 (~1.62), not by 2.
-    CHECK(ratio == Approx(std::pow(2.0f, GraphGridPhase::kZoomExponent)).margin(1e-4));
+    CHECK(ratio == Approx(std::pow(2.0f, phase.tuning.zoomExponent)).margin(1e-4));
     CHECK(ratio < 2.0f);
 }
 
@@ -94,19 +94,20 @@ TEST_CASE("graph grid phase: the snapped minor period always lands in its half-o
           "[editor][material]")
 {
     // THE band invariant, a mirror of nothing: DrawGraphGridFallback is the
-    // only reader of these constants, so THIS ASSERTION is what holds the
-    // design. Whatever the zoom,
-    // the drawn period stays inside (kMinorTargetPx/2, kMinorTargetPx]. That
+    // only reader of the tuning (editor.graph.grid.*), so THIS ASSERTION is
+    // what holds the design at its defaults. Whatever the zoom,
+    // the drawn period stays inside (minorTargetPx/2, minorTargetPx]. That
     // is what keeps the grid legible at every zoom instead of collapsing into
     // a fill or spreading into two lines on screen -- and it is the number the
     // ImGui fallback steps its AddLine loop by, so a period outside the band
     // is either a fill or an empty canvas there.
+    const GraphGridPhase phase{};   // the default tuning
     for (float scale : { 0.05f, 0.2f, 0.5f, 1.0f, 1.7f, 4.0f, 12.0f })
     {
-        const float pm = GraphGridPhase::MinorPeriod(GraphGridPhase::GridScale(scale));
+        const float pm = phase.MinorPeriod(phase.GridScale(scale));
         INFO("scale " << scale << " -> period " << pm);
-        CHECK(pm > GraphGridPhase::kMinorTargetPx * 0.5f);
-        CHECK(pm <= GraphGridPhase::kMinorTargetPx + 1e-3f);
+        CHECK(pm > phase.tuning.minorTargetPx * 0.5f);
+        CHECK(pm <= phase.tuning.minorTargetPx + 1e-3f);
     }
 }
 
@@ -128,8 +129,8 @@ TEST_CASE("graph grid phase: a long pan stays bounded, and the wrap is invisible
         phase.Update(View(originX, 0.0f, 1.0f));
     }
 
-    const float pm = GraphGridPhase::MinorPeriod(GraphGridPhase::GridScale(1.0f));
-    const float wrap = pm * GraphGridPhase::kMajorEvery * 2.0f;
+    const float pm = phase.MinorPeriod(phase.GridScale(1.0f));
+    const float wrap = pm * phase.MajorEvery() * 2.0f;
     CHECK(std::fabs(phase.x) <= wrap);
 
     // Congruence: the total unwrapped slide is -(5000 * 37) from the seed at

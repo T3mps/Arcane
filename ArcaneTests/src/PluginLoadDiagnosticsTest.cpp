@@ -8,6 +8,7 @@
 // Diagnostics seam -- via a raw capture sink, same pattern as
 // DiagnosticSeamTest.cpp's Capture/CaptureSink.
 
+#include <algorithm>
 #include <cstring>
 #include "Helpers/ModuleNames.hpp"   // fixture module file names per platform
 #include <Arcane/Platform/Platform.hpp>
@@ -31,6 +32,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/Plugin.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
@@ -76,6 +78,17 @@ namespace
         ScopedCaptureSink(const ScopedCaptureSink&) = delete;
         ScopedCaptureSink& operator=(const ScopedCaptureSink&) = delete;
     };
+
+    // The sets published under exactly `key`, in order. A module (re)load also
+    // republishes "config.cvars" (settings spec s4.8), so a test that pins
+    // PluginHost's own key reads this, not the whole call list.
+    std::vector<std::vector<Arcane::Diagnostic>> Under(const Capture& c, std::string_view key)
+    {
+        std::vector<std::vector<Arcane::Diagnostic>> out;
+        for (const auto& [k, diags] : c.calls)
+            if (k == key) out.push_back(diags);
+        return out;
+    }
 }
 
 TEST_CASE("A DLL that cannot be loaded reports the OS error", "[plugin][diagnostics]")
@@ -111,7 +124,78 @@ TEST_CASE("A missing required export is named", "[plugin][diagnostics]")
     CHECK_FALSE(plugin.has_value());
     CHECK(error.kind == Arcane::PluginResolveError::Kind::MissingExport);
     CHECK(error.symbol == std::string(Arcane::PluginEntry::kABIVersion));   // the first checked
+
+    // The refusal must not touch the LIVE ArcaneClient.dll's registrations:
+    // that image was already mapped, so this Load ran none of its statics and
+    // has nothing of its own to drop. (The S1 gate caught the by-name
+    // UnregisterModule("ArcaneClient") here wiping render.meshCull, which made
+    // CVarRegistryTest's meshCull case vacuous under one random order.)
+#if !defined(ARC_BUILD_DIST)   // the Dev cvar is compiled out of a Dist registry
+    const Arcane::CVarHandle meshCull = Arcane::CVarRegistry::Get().Find("render.meshCull");
+    CHECK_FALSE(meshCull.IsStale());
+    CHECK(Arcane::CVarRegistry::Get().ModuleOf(meshCull) == "ArcaneClient");
+#endif
 }
+
+TEST_CASE("Module::IsMapped tells an already-mapped image from one this process has not loaded", "[plugin][diagnostics]")
+{
+    // The query Plugin::Load guards its refused-image UnregisterModule with:
+    // ArcaneClient is mapped (this exe links it), the fixture is not until
+    // someone loads it, and a missing file is never mapped. SharedLibraryFileName
+    // / ModuleFileName spell the running platform's image names.
+    const std::filesystem::path client = Arcane::Platform::SharedLibraryFileName("ArcaneClient");
+    const std::filesystem::path bad = Arcane::Platform::ModuleFileName("HotReloadPluginBad");
+    const std::filesystem::path missing = "this-path-does-not-exist-arcane";
+    CHECK(Arcane::Module::IsMapped(client));
+    CHECK(Arcane::Module::MappedImage(client).base != nullptr);
+    CHECK(Arcane::Module::MappedImage(client).size != 0);
+    CHECK_FALSE(Arcane::Module::IsMapped(missing));
+    CHECK(Arcane::Module::MappedImage(missing).base == nullptr);
+
+    auto plugin = Arcane::Plugin::Load(bad);
+    REQUIRE_FALSE(plugin.has_value());   // ABI-refused, then unmapped by Plugin::Load itself
+    CHECK_FALSE(Arcane::Module::IsMapped(bad));
+}
+
+#if defined(_WIN32)
+TEST_CASE("Module::MappedModules lists mapped images and PinMapped takes a reference by base without loading", "[plugin][diagnostics]")
+{
+    // The two primitives PluginHost's dependency rule stands on (S2 gate): a
+    // host diffs MappedModules() around each load and pins every newly mapped
+    // image by its BASE. ArcaneClient.dll stands in for that dependency here --
+    // this exe links it, so the pin is a second reference and dropping it must
+    // leave the image mapped. The end-to-end case (a Core-only host whose game
+    // DLL maps ArcaneClient, then unloads it) is ServerWitnessTest's
+    // [witness][server] S1/S3: ArcaneTests always has Client mapped, so no
+    // in-process host here can make Client a NEWLY mapped dependency.
+    const Arcane::Module::ImageSpan client = Arcane::Module::MappedImage(std::filesystem::path("ArcaneClient.dll"));
+    REQUIRE(client.base != nullptr);
+
+    const std::vector<Arcane::Module::MappedModule> mapped = Arcane::Module::MappedModules();
+    const auto it = std::find_if(mapped.begin(), mapped.end(), [&](const Arcane::Module::MappedModule& m) {
+        return m.image.base == client.base;
+    });
+    REQUIRE(it != mapped.end());
+    CHECK(it->image.size == client.size);
+    CHECK(it->path.filename() == std::filesystem::path("ArcaneClient.dll"));
+
+    {
+        std::optional<Arcane::Module> pin = Arcane::Module::PinMapped(*it);
+        REQUIRE(pin.has_value());
+        CHECK(pin->Image().base == client.base);
+        CHECK(pin->Image().size == client.size);
+    }   // the pin's FreeLibrary drops only its own reference
+    CHECK(Arcane::Module::IsMapped(std::filesystem::path("ArcaneClient.dll")));
+    CHECK(Arcane::Module::MappedImage(std::filesystem::path("ArcaneClient.dll")).base == client.base);
+
+    // An address inside an image but not at its base names no image to pin:
+    // the guard against a base whose range a different module now occupies.
+    Arcane::Module::MappedModule inside = *it;
+    inside.image.base = static_cast<const unsigned char*>(client.base) + 0x1000;
+    CHECK_FALSE(Arcane::Module::PinMapped(inside).has_value());
+    CHECK_FALSE(Arcane::Module::PinMapped(Arcane::Module::MappedModule{}).has_value());
+}
+#endif
 
 TEST_CASE("CRT-flavor scan classifies in-tree binaries without loading them", "[plugin][diagnostics]")
 {
@@ -120,7 +204,7 @@ TEST_CASE("CRT-flavor scan classifies in-tree binaries without loading them", "[
     // compile-time truth in both configurations. (A genuine cross-flavor DLL
     // cannot exist in-tree; the synthetic-image case below covers the other
     // family's detection path.)
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
 #if defined(_DEBUG)
     constexpr auto expected = Arcane::CrtFlavor::Debug;
 #else
@@ -294,10 +378,10 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
     CHECK_FALSE(host.ForceReload());
     CHECK(host.IsLoaded());   // still on last-good
 
-    REQUIRE(cap.calls.size() == 1);
-    CHECK(cap.calls[0].first == "plugin:HotReloadPluginV1");
-    REQUIRE(cap.calls[0].second.size() == 1);
-    CHECK(cap.calls[0].second[0].code == "plugin.abi.mismatch");
+    std::vector<std::vector<Arcane::Diagnostic>> plugin = Under(cap, "plugin:HotReloadPluginV1");
+    REQUIRE(plugin.size() == 1);
+    REQUIRE(plugin[0].size() == 1);
+    CHECK(plugin[0][0].code == "plugin.abi.mismatch");
 
     // Swap the good image back and reload again: succeeds, and retracts the row
     // via Diagnostics::Clear -- a Publish with an empty set for the SAME key.
@@ -305,9 +389,9 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
                                std::filesystem::copy_options::overwrite_existing);
     CHECK(host.ForceReload());
 
-    REQUIRE(cap.calls.size() == 2);
-    CHECK(cap.calls[1].first == "plugin:HotReloadPluginV1");
-    CHECK(cap.calls[1].second.empty());
+    plugin = Under(cap, "plugin:HotReloadPluginV1");
+    REQUIRE(plugin.size() == 2);
+    CHECK(plugin[1].empty());
 
     Arcane::Diagnostics::SetSink(nullptr, nullptr);
     host.Unload();

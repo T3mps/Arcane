@@ -1,4 +1,5 @@
 #include "Arcane/AssetPipeline/CookKey.hpp"
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::AssetPipeline
 {
@@ -7,7 +8,9 @@ namespace Arcane::AssetPipeline
         // FNV-1a 64-bit -- a small, deterministic-across-runs/platforms/toolchains hash. Chosen
         // over std::hash (implementation-defined, MUST NOT be used for anything that lands on
         // disk or is compared cross-process) and over reusing a struct memcpy (padding-RNG).
+        ARC_CONSTANT("math identity: the FNV-1a 64-bit offset basis and prime (cook keys land on disk)")
         constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+        ARC_CONSTANT("math identity: the FNV-1a 64-bit prime (cook keys land on disk)")
         constexpr std::uint64_t kFnvPrime       = 1099511628211ULL;
 
         // Feeds explicit fields one byte at a time, same discipline as ArtifactFormat's

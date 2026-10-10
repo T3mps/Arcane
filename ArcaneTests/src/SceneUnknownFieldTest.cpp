@@ -50,7 +50,7 @@ TEST_CASE("an old-build scene with a removed field loads, keeps its values, and 
 {
     Astra::Registry authored;
     Arcane::RegisterSceneComponents(authored);
-    Arcane::RegisterPhysicsComponents(authored);
+    Arcane::RegisterPhysicsComponents2D(authored);
     const Astra::Entity e = authored.CreateEntity();
     Arcane::RigidBody2D rb;
     rb.mass = 3.25f;
@@ -70,7 +70,7 @@ TEST_CASE("an old-build scene with a removed field loads, keeps its values, and 
 
     Astra::Registry loaded;
     Arcane::RegisterSceneComponents(loaded);
-    Arcane::RegisterPhysicsComponents(loaded);
+    Arcane::RegisterPhysicsComponents2D(loaded);
     REQUIRE(Arcane::Scene::LoadJson(loaded, doc));
     float mass = 0.0f;
     loaded.CreateView<Arcane::RigidBody2D>().ForEach([&](Astra::Entity, Arcane::RigidBody2D& b) { mass = b.mass; });

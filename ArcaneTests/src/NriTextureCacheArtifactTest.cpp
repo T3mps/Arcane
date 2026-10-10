@@ -58,6 +58,8 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Render/Nri/AssetsCookSettings.hpp>   // assets.cook.pendingRepollInterval -- the throttle cadence
 
 #include <stb_image_write.h>
 
@@ -73,6 +75,7 @@
 #include <vector>
 
 #include "Helpers/GpuCapability.hpp"
+#include "Helpers/SettingsSweep.hpp"
 
 // =============================================================================
 // PART 1 -- CPU: the state machine and the pitch arithmetic
@@ -158,7 +161,7 @@ TEST_CASE("nri texture cache: Bc7RowPitch/Bc7SlicePitch match the 5->2->1 NPOT c
 // polling the artifact supply on every ask (the pre-fix behaviour) drove a
 // fresh Assets::ArtifactFor call, and downstream a full Intermediate/
 // Artifacts/** rescan, every single frame for every still-uncooked texture.
-// The cases below pin the THROTTLED cadence: kPendingCookRepollInterval
+// The cases below pin the THROTTLED cadence: assets.cook.pendingRepollInterval
 // asks are absorbed (placeholder only, no supply call) between two actual
 // polls, and promotion still lands within one throttle window of the
 // artifact actually appearing.
@@ -189,10 +192,10 @@ TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is Pending
     CHECK(cache->PlaceholderCount() == 1);
     CHECK(supply.calls == 1);
 
-    // THROTTLED, not memoized and not polled every ask: kPendingCookRepollInterval-1
+    // THROTTLED, not memoized and not polled every ask: pendingRepollInterval-1
     // more Resolve() calls are all absorbed by the placeholder alone -- the
     // supply is not consulted again yet.
-    for (std::uint32_t i = 1; i < NriTextureCache::kPendingCookRepollInterval; ++i)
+    for (std::uint32_t i = 1; i < Arcane::Settings<Arcane::AssetsCookSettings>().pendingRepollInterval; ++i)
     {
         CHECK(cache->Resolve(kIdA) == pending);
         CHECK(supply.calls == 1);
@@ -201,7 +204,7 @@ TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is Pending
 
     // Task 12's (future) cook queue lands the artifact -- but a still-pending
     // ask inside the CURRENT throttle window must not see it early: this is
-    // exactly the kPendingCookRepollInterval-th Resolve since the key was
+    // exactly the pendingRepollInterval-th Resolve since the key was
     // created, which IS the throttle boundary, so it polls and promotes.
     Arcane::LoadedClientArtifact artifact = MakeRgba8Artifact(4, 4);
     supply.answer = &artifact;
@@ -223,11 +226,11 @@ TEST_CASE("nri texture cache: an artifact key with nothing cooked yet is Pending
 }
 
 TEST_CASE("nri texture cache: the PendingCook re-poll cadence matches "
-          "kPendingCookRepollInterval exactly, across several windows",
+          "assets.cook.pendingRepollInterval exactly, across several windows",
           "[nri][artifact][texcache-artifact]")
 {
     using Arcane::NriTextureCache;
-    const std::uint32_t N = NriTextureCache::kPendingCookRepollInterval;
+    const std::uint32_t N = Arcane::Settings<Arcane::AssetsCookSettings>().pendingRepollInterval;
     REQUIRE(N >= 2);   // the test below needs at least one absorbed ask per window
 
     auto device = Arcane::NriDevice::CreateNoneForTests();
@@ -260,6 +263,48 @@ TEST_CASE("nri texture cache: the PendingCook re-poll cadence matches "
         CHECK(supply.calls == expectedPolls);
         CHECK(cache->ResidentCount() == 0);   // still pending -- supply.answer never changed
     }
+
+    cache->Release(device->Graves(), 1);
+    device->Graves().Reap(1);
+}
+
+// S6-5: the cadence is the Live setting assets.cook.pendingRepollInterval,
+// read on every PendingCook ask, so a lowered value shortens the very next
+// window.
+TEST_CASE("nri texture cache: a lowered assets.cook.pendingRepollInterval re-polls sooner",
+          "[nri][artifact][texcache-artifact][sweep][assets]")
+{
+    Arcane::Test::SkipIfCompiledOut("assets.cook.pendingRepollInterval");
+    using Arcane::NriTextureCache;
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const Arcane::CVarHandle h = reg.Find("assets.cook.pendingRepollInterval");
+    REQUIRE_FALSE(h.IsStale());
+    REQUIRE(reg.Set(h, Arcane::CVarValue::UInt32(4u), Arcane::SetBy::Code) == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+    struct Revert
+    {
+        Arcane::CVarRegistry& reg; Arcane::CVarHandle h;
+        ~Revert() { reg.ClearRung(h, Arcane::SetBy::Code); reg.PublishImmediate(); }
+    } revert{ reg, h };
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+    auto cache = NriTextureCache::Create(*device);
+    REQUIRE(cache != nullptr);
+
+    CountingArtifactSupply supply;
+    supply.answer = nullptr;   // stays pending
+    cache->SetArtifactSupply(supply.Fn());
+
+    CHECK(cache->Resolve(kIdA) != nullptr);   // creation polls once
+    CHECK(supply.calls == 1);
+    for (int i = 0; i < 3; ++i)               // three absorbed asks
+    {
+        (void)cache->Resolve(kIdA);
+        CHECK(supply.calls == 1);
+    }
+    (void)cache->Resolve(kIdA);               // the 4th ask is the poll (32 by default)
+    CHECK(supply.calls == 2);
 
     cache->Release(device->Graves(), 1);
     device->Graves().Reap(1);
@@ -514,7 +559,7 @@ namespace
         PixelVehicle v;
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;

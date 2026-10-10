@@ -5,13 +5,16 @@
 #include <cstdint>
 #include <iomanip>
 #include <istream>
-#include <random>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include "picosha2.hpp"
+#include <Arcane/Core/Api.hpp>
+#include <Arcane/Crypto/CryptoSettings.hpp>
 #include <Arcane/Util/Logger.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -34,23 +37,17 @@ namespace Arcane
     public:
         // Configuration
         //
-        // PBKDF2-HMAC-SHA256 iteration count. 200,000 puts us above the OWASP
-        // 2023 floor for PBKDF2-SHA256 (600k is the current rec; 200k is the
-        // lower bound still considered acceptable). Audit C5 (2026-06-02)
-        // raised this from 10,000 -- anything hashed at the old setting is
+        // PBKDF2-HMAC-SHA256 iteration count for new hashes: the published
+        // crypto.pbkdf2Iterations (CryptoSettings.hpp, settings arc S6-13;
+        // default 200000, raise-only). Anything hashed below it is
         // lazy-rehashed on its next successful VerifyPassword via the helpers
         // below (NeedsRehash, IterationsOfStoredHash) -- the caller writes the
         // new hash back to storage and the upgrade happens organically per
-        // user.
-        // DEFER (audit L-V5-1 security, 2026-06-03, multi-cycle carry-forward):
-        // OWASP 2023 PBKDF2-SHA256 recommendation is 600k. 200k is the
-        // documented lower bound -- pre-launch fine; bump before Release
-        // launch (or before 2027, whichever is sooner). The lazy-rehash
-        // pathway above means a bump rolls out organically per user on their
-        // next successful password verification; no migration window required.
-        // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
-        static constexpr int DEFAULT_ITERATIONS = 200000;
+        // user, so raising the cvar needs no migration window.
+        static int DefaultIterations() { return Settings<CryptoSettings>().pbkdf2Iterations; }
+        ARC_CONSTANT("security: the password salt length (128 bits)")
         static constexpr int SALT_LENGTH = 16;  // 128 bits
+        ARC_CONSTANT("security: the SHA-256 digest length (256 bits)")
         static constexpr int HASH_LENGTH = 32;  // 256 bits (SHA-256 output)
 
         // ============================================================================
@@ -59,7 +56,7 @@ namespace Arcane
 
         // Hash a password with a random salt
         // Returns format: "iterations:salt_hex:hash_hex"
-        static std::string HashPassword(const std::string& password, int iterations = DEFAULT_ITERATIONS)
+        static std::string HashPassword(const std::string& password, int iterations = DefaultIterations())
         {
             // Generate random salt
             std::vector<uint8_t> salt = GenerateRandomBytes(SALT_LENGTH);
@@ -95,7 +92,7 @@ namespace Arcane
         // Parse the iteration count embedded in a stored hash. Returns 0 on
         // any parse failure (treat as "needs rehash" since the row is
         // malformed). Used by the lazy-rehash path to decide whether the
-        // existing hash is below DEFAULT_ITERATIONS.
+        // existing hash is below DefaultIterations().
         static int IterationsOfStoredHash(const std::string& storedHash)
         {
             int iterations = 0;
@@ -106,11 +103,11 @@ namespace Arcane
         }
 
         // Returns true when the stored hash should be re-derived because its
-        // iteration count is below the current DEFAULT_ITERATIONS. Call this
+        // iteration count is below the current DefaultIterations(). Call this
         // after a successful VerifyPassword and, if true, rehash + persist.
         static bool NeedsRehash(const std::string& storedHash)
         {
-            return IterationsOfStoredHash(storedHash) < DEFAULT_ITERATIONS;
+            return IterationsOfStoredHash(storedHash) < DefaultIterations();
         }
 
         // Verify a password against a stored hash
@@ -131,11 +128,11 @@ namespace Arcane
                 // any future code path that hands VerifyPassword a hash
                 // it can't decode) doesn't short-circuit and reopen the
                 // username-enumeration timing oracle. The derivation is
-                // against a fixed dummy salt and DEFAULT_ITERATIONS so
+                // against a fixed dummy salt and DefaultIterations() so
                 // the wall time matches the legitimate parse-then-derive
                 // path. Result is intentionally discarded.
                 std::vector<uint8_t> dummySalt(SALT_LENGTH, 0xA5);
-                (void)PBKDF2_HMAC_SHA256(password, dummySalt, DEFAULT_ITERATIONS, HASH_LENGTH);
+                (void)PBKDF2_HMAC_SHA256(password, dummySalt, DefaultIterations(), HASH_LENGTH);
                 return false;
             }
 
@@ -154,31 +151,86 @@ namespace Arcane
         // RNG hardening (E03-3; closes audit DEFER L-V5-2, 2026-06-03,
         // V3-M8 multi-cycle carry-forward).
         //
-        // Every draw goes through a once-per-process entropy self-test
-        // latch: the first crypto RNG use pulls two ENTROPY_SAMPLE_BYTES
-        // samples and throws if they look degenerate (all-zero, stuck at
-        // one byte value, or two "independent" draws colliding). A
-        // service with a broken generator fails loudly on its first
-        // secret instead of minting predictable tokens/salts.
+        // Every non-empty draw goes through a once-per-process entropy
+        // self-test latch: the first crypto RNG use pulls two
+        // ENTROPY_SAMPLE_BYTES samples and throws if they look
+        // degenerate (all-zero, stuck at one byte value, or two
+        // "independent" draws colliding). A service with a broken
+        // generator fails loudly on its first secret instead of
+        // minting predictable tokens/salts. A count of 0 returns
+        // first and does not run the latch.
         //
-        // The POSIX branch is fail-closed: a missing /dev/urandom or a
-        // short read throws instead of silently leaving the buffer tail
-        // zeroed, and the old std::random_device fallback is gone from
-        // that path (historically deterministic on some libstdc++/MinGW
-        // builds). The Windows BCrypt branch is byte-identical to the
-        // pre-E03-3 behavior (incl. its WARN + random_device fallback --
-        // BCryptGenRandom effectively never fails there).
+        // Both branches are fail-closed. Neither falls back to
+        // std::random_device (historically deterministic on some
+        // libstdc++/MinGW builds). A zero-length public request returns
+        // an empty buffer BEFORE EnsureEntropySelfTest. The latch
+        // itself draws two samples through the platform RNG, so running
+        // it for a count of 0 would call the platform fill for a
+        // request that asked for nothing. On Windows a length-0
+        // BCryptGenRandom with a possibly-null buffer is also a
+        // spurious failure, and that used to take the fallback.
         //
-        // The POSIX branch cannot execute on this repo's Windows-only CI,
-        // so its read-validation decision lives in the platform-neutral
-        // ReadExactFromStream helper below, which IS unit-tested on
-        // Windows. Runtime validation on real Linux/ARM is deferred to
+        // POSIX: a missing /dev/urandom or a short read throws instead
+        // of silently leaving the buffer tail zeroed. That decision
+        // lives in ReadExactFromStream, which is unit-tested on
+        // Windows because this repo's CI cannot execute the POSIX
+        // branch. Runtime validation on real Linux/ARM is deferred to
         // the Linux-port milestone.
+        //
+        // Windows: BCryptGenRandom takes a ULONG length, so the draw is
+        // filled in ULONG-sized chunks and a count above ULONG max is
+        // never truncated. Any !BCRYPT_SUCCESS logs CRITICAL and throws
+        // std::runtime_error. The chunking and fail-closed policy live
+        // in FillRandomBytesChunked. Both branches pass PlatformFill
+        // to it. A test seam, Crypto::Detail::ScopedPlatformFillOverride,
+        // can replace that fill. Dist builds define ARC_BUILD_DIST and
+        // compile the seam out.
         // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
+        ARC_CONSTANT("security: the RNG self-test entropy sample size")
         static constexpr size_t ENTROPY_SAMPLE_BYTES = 32;
+
+#if !defined(ARC_BUILD_DIST)
+        // Test-only. Not thread-safe by contract: one process-wide slot,
+        // no lock, restored by ScopedPlatformFillOverride's destructor.
+        // The slot is defined in ArcaneCore.dll (Crypto.cpp) so a caller
+        // in another module and Guid::Generate (inlined into this DLL)
+        // share it. Production draws use the platform RNG while the slot
+        // is empty. Compiled out of Dist.
+        class Detail
+        {
+        public:
+            using PlatformFillFn = bool (*)(std::uint8_t* dst, std::size_t n);
+
+            ARC_CORE_API static PlatformFillFn& PlatformFillOverrideSlot();
+
+            class ScopedPlatformFillOverride
+            {
+            public:
+                explicit ScopedPlatformFillOverride(PlatformFillFn fill)
+                    : previous_(PlatformFillOverrideSlot())
+                {
+                    PlatformFillOverrideSlot() = fill;
+                }
+
+                ~ScopedPlatformFillOverride()
+                {
+                    PlatformFillOverrideSlot() = previous_;
+                }
+
+                ScopedPlatformFillOverride(const ScopedPlatformFillOverride&) = delete;
+                ScopedPlatformFillOverride& operator=(const ScopedPlatformFillOverride&) = delete;
+
+            private:
+                PlatformFillFn previous_;
+            };
+        };
+#endif
 
         static std::vector<uint8_t> GenerateRandomBytes(size_t count)
         {
+            // The latch draws. A count of 0 must return before it runs.
+            if (count == 0)
+                return {};
             EnsureEntropySelfTest();
             return GenerateRandomBytesUnchecked(count);
         }
@@ -196,6 +248,44 @@ namespace Arcane
                 return true;
             source.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(count));
             return source.gcount() == static_cast<std::streamsize>(count);
+        }
+
+        // Platform-neutral chunked fill. `fill(dst, n)` writes exactly
+        // `n` bytes and returns true on success. Each `n` is in
+        // (0, maxChunk]. count == 0 returns an empty vector and does
+        // not call `fill`. A false return logs CRITICAL and throws
+        // std::runtime_error(failureMessage) -- the caller does not
+        // receive a buffer. Public so the fail-closed contract is
+        // unit-testable on Windows. Both platform branches pass
+        // PlatformFill and, on Windows, maxChunk == ULONG max.
+        template <typename FillFn>
+        static std::vector<uint8_t> FillRandomBytesChunked(size_t count,
+                                                            size_t maxChunk,
+                                                            FillFn&& fill,
+                                                            const char* failureMessage)
+        {
+            if (count == 0)
+                return {};
+
+            if (maxChunk == 0 || failureMessage == nullptr)
+            {
+                LOG_CORE_CRITICAL("Crypto: RNG chunked fill is misconfigured -- refusing to generate secrets");
+                throw std::runtime_error("Crypto: RNG chunked fill is misconfigured");
+            }
+
+            std::vector<uint8_t> bytes(count);
+            size_t offset = 0;
+            while (offset < count)
+            {
+                const size_t n = std::min(maxChunk, count - offset);
+                if (!fill(bytes.data() + offset, n))
+                {
+                    LOG_CORE_CRITICAL("{} -- refusing to generate secrets", failureMessage);
+                    throw std::runtime_error(failureMessage);
+                }
+                offset += n;
+            }
+            return bytes;
         }
 
         // Pure degeneracy predicate over two same-size RNG samples.
@@ -291,40 +381,64 @@ namespace Arcane
         // The self-test itself draws through this so it cannot recurse
         // into the EnsureEntropySelfTest latch. Everything else should
         // use the public, latched GenerateRandomBytes.
+        //
+        // One fill for both branches, consulted from inside
+        // FillRandomBytesChunked. The test seam, when this is not a Dist
+        // build, replaces it; an empty slot is the platform RNG.
+        static bool PlatformFill(uint8_t* dst, size_t n)
+        {
+#if !defined(ARC_BUILD_DIST)
+            if (const Detail::PlatformFillFn overrideFill = Detail::PlatformFillOverrideSlot())
+                return overrideFill(dst, n);
+#endif
+#ifdef _WIN32
+            const NTSTATUS status = BCryptGenRandom(
+                nullptr,
+                dst,
+                static_cast<ULONG>(n),
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            return BCRYPT_SUCCESS(status);
+#else
+            std::ifstream urandom("/dev/urandom", std::ios::binary);
+            return ReadExactFromStream(urandom, dst, n);
+#endif
+        }
+
         static std::vector<uint8_t> GenerateRandomBytesUnchecked(size_t count)
         {
-            std::vector<uint8_t> bytes(count);
+            // A zero-length request never touches the platform RNG.
+            // On Windows, BCryptGenRandom(nullptr, data(), 0, ...) passes
+            // a possibly-null buffer (vector::data() on an empty vector)
+            // and that spurious failure used to take the random_device
+            // fallback. Both branches return empty here instead.
+            if (count == 0)
+                return {};
 
 #ifdef _WIN32
-            // Use Windows BCrypt API (CSPRNG)
-            NTSTATUS status = BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(count), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-
-            if (!BCRYPT_SUCCESS(status))
-            {
-                LOG_CORE_WARN("BCryptGenRandom failed, falling back to std::random_device");
-                // Fallback to std::random_device if BCrypt fails
-                std::random_device rd;
-                for (size_t i = 0; i < count; i++)
-                {
-                    bytes[i] = static_cast<uint8_t>(rd() & 0xFF);
-                }
-            }
+            // BCryptGenRandom's length argument is a ULONG. Fill in
+            // ULONG-sized chunks so a count above ULONG max is never
+            // truncated by the cast, and fail closed: any
+            // !BCRYPT_SUCCESS refuses the draw. There is deliberately
+            // NO std::random_device fallback on this path.
+            return FillRandomBytesChunked(
+                count,
+                static_cast<size_t>(std::numeric_limits<ULONG>::max()),
+                &PlatformFill,
+                "Crypto: BCryptGenRandom failed");
 #else
             // /dev/urandom, fail closed (E03-3): a missing device or a
             // short read must never silently yield a zero-tailed buffer,
             // and there is deliberately NO std::random_device fallback
             // on this path -- it has been deterministic on some
             // libstdc++/MinGW implementations, which is worse than
-            // stopping the service.
-            std::ifstream urandom("/dev/urandom", std::ios::binary);
-            if (!ReadExactFromStream(urandom, bytes.data(), count))
-            {
-                LOG_CORE_CRITICAL("Crypto: /dev/urandom unavailable or short read -- refusing to generate secrets");
-                throw std::runtime_error("Crypto: /dev/urandom unavailable or short read");
-            }
+            // stopping the service. One chunk: the read is the whole
+            // request, same as the previous single ReadExactFromStream.
+            return FillRandomBytesChunked(
+                count,
+                std::numeric_limits<size_t>::max(),
+                &PlatformFill,
+                "Crypto: /dev/urandom unavailable or short read");
 #endif
-
-            return bytes;
         }
 
         // ============================================================================
@@ -381,6 +495,7 @@ namespace Arcane
 
         static std::vector<uint8_t> HMAC_SHA256(const std::string& key, const std::vector<uint8_t>& message)
         {
+            ARC_CONSTANT("security: the SHA-256 block size (FIPS 180-4)")
             constexpr size_t BLOCK_SIZE = 64;  // SHA-256 block size
 
             // Prepare key

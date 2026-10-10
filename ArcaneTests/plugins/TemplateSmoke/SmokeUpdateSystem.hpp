@@ -10,7 +10,7 @@
 // Fixed-step transform propagation is not installed in the Update or Render
 // scheduler, so this template invents no irrelevant edge. Registrar discovery
 // order is irrelevant: derive Arcane::SystemTraits<Arcane::Before<...>> or
-// After<...> whenever scheduler order matters. The ARCANE_SYSTEM declaration
+// After<...> whenever scheduler order matters. The ARC_SYSTEM declaration
 // that selects phase and network role is in SmokeUpdateSystem.cpp.
 
 #include <Arcane/Ecs.hpp>

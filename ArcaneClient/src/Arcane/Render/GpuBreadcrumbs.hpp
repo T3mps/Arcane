@@ -10,7 +10,7 @@
 // that marker evidence -- feeds Diag::Envelope::Queue (Task 4; one
 // GpuBreadcrumbs per queue, its name known only to the caller).
 //
-// Bounded ring: the most recent kRingCapacity scopes are kept, oldest
+// Bounded ring: the most recent Capacity() scopes are kept, oldest
 // evicted first. Pure -- no GPU/OS dependency, no allocation beyond the
 // ring/open-stack themselves. Every method is safe to call with a
 // token/id that was never issued or has since been evicted (never
@@ -27,13 +27,15 @@
 
 namespace Arcane
 {
-    class ARCANE_API GpuBreadcrumbs
+    class ARC_API GpuBreadcrumbs
     {
     public:
         // Most recent scopes kept per queue. A BeginScope past this evicts
         // the oldest ring entry (its marker/open state is discarded with
         // it) to make room.
-        static constexpr std::size_t kRingCapacity = 256;
+        // Latched from diagnostics.gpu.breadcrumbSlots on first ring creation.
+        GpuBreadcrumbs();
+        [[nodiscard]] std::size_t Capacity() const noexcept;
 
         // Opens a new scope named `name`, nested inside whatever scope (if
         // any) is currently open on this queue (per prior BeginScope calls

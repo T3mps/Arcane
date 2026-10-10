@@ -23,24 +23,32 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)
 #endif
-    class ARCANE_CORE_API ConsoleModel
+    class ARC_CORE_API ConsoleModel
     {
     public:
-        void Submit(CVarRegistry& registry, Permission permission);
+        void Submit(CVarRegistry& registry, CVarContext ctx);
         void SetInput(std::string text) { m_input = std::move(text); }
+        // Append one output line. Past console.maxLines (> 0) the oldest lines
+        // drop; 0 keeps every line. Reads the global registry's value (Submit
+        // and CompleteInput read the registry they are handed).
+        void AppendLine(std::string text, bool ok = true);
         [[nodiscard]] const std::string& Input() const { return m_input; }
         [[nodiscard]] const std::vector<ConsoleLine>& Lines() const { return m_lines; }
-        // Prefix matches over List() + ListCommands(), sorted, de-duplicated.
-        [[nodiscard]] std::vector<std::string> Complete(const CVarRegistry& registry) const;
+        // Prefix matches over List(ctx) + ListCommands(), sorted, de-duplicated:
+        // only names `ctx` may read (settings spec s3.2), so a client's Tab
+        // never shows an Editor, Hidden or Protected name.
+        [[nodiscard]] std::vector<std::string> Complete(const CVarRegistry& registry, CVarContext ctx) const;
         // Tab: one match -> "name "; several -> their longest common prefix and one
         // reply line listing them. Returns whether the input changed.
-        bool CompleteInput(const CVarRegistry& registry);
+        bool CompleteInput(const CVarRegistry& registry, CVarContext ctx);
         // Up/Down. The draft is stashed on the first Up and restored past the newest.
         bool HistoryPrev();
         bool HistoryNext();
         [[nodiscard]] const std::deque<std::string>& History() const { return m_history; }
 
     private:
+        void Push(const CVarRegistry& registry, ConsoleLine line);
+
         std::string m_input;
         std::vector<ConsoleLine> m_lines;
         std::deque<std::string> m_history;

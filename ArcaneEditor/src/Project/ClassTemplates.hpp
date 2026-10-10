@@ -11,11 +11,11 @@
 // The three kinds and what they emit:
 //   Component  -- a reflected struct (ASTRA_REFLECT_TYPE/FIELD, the shape
 //                 Components.hpp and HotReloadShared.hpp use) in the header,
-//                 and a .cpp carrying the ONE ARCANE_COMPONENT(ns::T) line
+//                 and a .cpp carrying the ONE ARC_COMPONENT(ns::T) line
 //                 (Arcane/Plugin/GameComponents.hpp), so the type is live
 //                 after one Rebuild Game Module with no edit to Init.
 //   System     -- an Astra::SystemTraits functor plus a .cpp containing its
-//                 ARCANE_SYSTEM declaration. The selected phase and role are
+//                 ARC_SYSTEM declaration. The selected phase and role are
 //                 explicit; semantic order stays in Before/After traits.
 //   PlainClass -- a class in the project namespace with its own .cpp.
 //
@@ -28,12 +28,15 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor::ClassTemplates
 {
     enum class Kind : int { Component = 0, System, PlainClass, Count };
 
+    ARC_CONSTANT("enum and array arity: one per system phase choice")
     inline constexpr int kSystemPhaseChoiceCount = 3;
+    ARC_CONSTANT("enum and array arity: one per system role choice")
     inline constexpr int kSystemRoleChoiceCount  = 3;
 
     struct SystemOptions

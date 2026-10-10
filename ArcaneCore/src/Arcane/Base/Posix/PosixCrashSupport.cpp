@@ -15,7 +15,7 @@
 #include <signal.h>
 #include <sys/uio.h>
 #include <unistd.h>
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #else
@@ -28,7 +28,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     std::uint32_t KernelThreadId() noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // The Mach port name: what task_threads lists and thread_suspend /
         // thread_get_state take. pthread_mach_thread_np takes no new port
         // reference (mach_thread_self would leak one per call).
@@ -40,7 +40,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     void NameThisThread(const char* name) noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         ::pthread_setname_np(name);
 #else
         ::pthread_setname_np(::pthread_self(), name);
@@ -49,7 +49,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     bool MakePipe(int fds[2], int flags) noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         if (::pipe(fds) != 0) return false;
         for (int i = 0; i < 2; ++i)
         {
@@ -129,7 +129,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     std::size_t SafeRead(std::uint64_t address, void* out, std::size_t size) noexcept
     {
         if (size == 0) return 0;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // A Mach VM read of our own task fails (KERN_INVALID_ADDRESS /
         // KERN_PROTECTION_FAILURE) instead of faulting. Page by page, so a
         // range that runs into unmapped memory still yields its prefix.
@@ -195,7 +195,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     void CopySignalContext(NativeContext& dst, const void* signalUcontext) noexcept
     {
         if (!signalUcontext) return;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         const auto* uc = static_cast<const ucontext_t*>(signalUcontext);
         if (uc->uc_mcontext)
             std::memcpy(&dst, uc->uc_mcontext, sizeof(NativeContext));
@@ -210,7 +210,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     // folded into it.
     __attribute__((noinline)) bool CaptureOwnContext(NativeContext& out) noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         std::memset(&out, 0, sizeof(NativeContext));
         // This function's frame record: [0] = the caller's fp, [1] = our
         // return address (a pc inside the caller). The caller's sp is just
@@ -235,9 +235,9 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     std::uint64_t ContextPc(const NativeContext& uc) noexcept
     {
-#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+#if ARC_PLATFORM_MACOS && defined(__aarch64__)
         return reinterpret_cast<std::uint64_t>(__darwin_arm_thread_state64_get_pc_fptr(uc.__ss)) & 0x00007FFFFFFFFFFFull;
-#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+#elif ARC_PLATFORM_MACOS && defined(__x86_64__)
         return uc.__ss.__rip;
 #elif defined(__linux__) && defined(__x86_64__)
         return static_cast<std::uint64_t>(uc.uc_mcontext.gregs[REG_RIP]);
@@ -250,9 +250,9 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     std::uint64_t ContextSp(const NativeContext& uc) noexcept
     {
-#if ARCANE_PLATFORM_MACOS && defined(__aarch64__)
+#if ARC_PLATFORM_MACOS && defined(__aarch64__)
         return static_cast<std::uint64_t>(__darwin_arm_thread_state64_get_sp(uc.__ss));
-#elif ARCANE_PLATFORM_MACOS && defined(__x86_64__)
+#elif ARC_PLATFORM_MACOS && defined(__x86_64__)
         return uc.__ss.__rsp;
 #elif defined(__linux__) && defined(__x86_64__)
         return static_cast<std::uint64_t>(uc.uc_mcontext.gregs[REG_RSP]);
@@ -267,7 +267,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     std::size_t ListThreads(std::uint32_t* out, std::size_t cap) noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         thread_act_array_t threads = nullptr;
         mach_msg_type_number_t count = 0;
         if (::task_threads(::mach_task_self(), &threads, &count) != KERN_SUCCESS || !threads)
@@ -386,7 +386,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     bool InstallSnapshotSignal() noexcept
     {
         if (g_snapInstalled) return true;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // No signal on macOS (and no SIGRTMIN): SnapshotThread suspends the
         // target with Mach.
         g_snapInstalled = true;
@@ -409,7 +409,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     void RemoveSnapshotSignal() noexcept
     {
         if (!g_snapInstalled) return;
-#if !ARCANE_PLATFORM_MACOS
+#if !ARC_PLATFORM_MACOS
         ::sigaction(g_snapSignal, &g_snapPrevious, nullptr);
 #endif
         g_snapInstalled = false;
@@ -417,7 +417,7 @@ namespace Arcane::Diagnostics::Internal::Posix
 
     bool SnapshotThread(std::uint32_t tid, std::uint32_t timeoutMs, ParkedFn whileParked, void* user) noexcept
     {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         (void)timeoutMs;   // a Mach suspend is synchronous
         if (!g_snapInstalled || tid == 0 || tid == RawTid()) return false;
         const thread_act_t thread = static_cast<thread_act_t>(tid);

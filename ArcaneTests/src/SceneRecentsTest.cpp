@@ -16,21 +16,21 @@
 using Arcane::Editor::SceneRecents::List;
 namespace SceneRecents = Arcane::Editor::SceneRecents;
 
-TEST_CASE("SceneRecents push dedups to front and caps at kMaxEntries", "[editor]")
+TEST_CASE("SceneRecents push dedups to front and caps at MaxEntries()", "[editor]")
 {
     List list;
     for (int i = 0; i < 12; ++i)
         SceneRecents::Push(list, "D:/proj/scene" + std::to_string(i) + ".arcscene");
 
     // Capped, and the cap keeps the NEWEST entries.
-    REQUIRE(list.paths.size() == SceneRecents::kMaxEntries);
+    REQUIRE(list.paths.size() == SceneRecents::MaxEntries());
     CHECK(list.paths.front() == "D:/proj/scene11.arcscene");
     CHECK(list.paths.back() == "D:/proj/scene2.arcscene");
 
     // Re-pushing an existing entry moves it to the front rather than
     // duplicating it or growing the list past the cap.
     SceneRecents::Push(list, "D:/proj/scene5.arcscene");
-    REQUIRE(list.paths.size() == SceneRecents::kMaxEntries);
+    REQUIRE(list.paths.size() == SceneRecents::MaxEntries());
     CHECK(list.paths.front() == "D:/proj/scene5.arcscene");
     std::size_t count = 0;
     for (const std::string& p : list.paths)
@@ -45,7 +45,7 @@ TEST_CASE("SceneRecents push normalises the path", "[editor]")
     // Backslashes and a redundant "./" segment must collapse to the same
     // generic-string key a second push of the "clean" spelling would produce
     // -- otherwise the same scene shows up as two menu rows.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     SceneRecents::Push(list, "D:\\proj\\.\\Scenes\\Level1.arcscene");
 #else
     // POSIX: '\\' is a file-name byte, not a separator; the redundant

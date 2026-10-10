@@ -1,5 +1,6 @@
 #include <Arcane/Host/ReferenceImages.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Platform/Paths.hpp>   // Paths::Join(ProjectSaved, ...) (DiffArtifactPath; settings spec s11.0)
 
 #include <system_error>
 
@@ -138,6 +139,8 @@ namespace Arcane
         if (!ReferenceNameIsSafe(name) || !ReferenceNameIsSafe(backend))
             return fs::path{};   // refused: nowhere safe to write
 
-        return projectRoot / "Saved" / "Verify" / (name + "-" + backend + "-diff.png");
+        const fs::path verify = Arcane::Paths::Join(Arcane::Paths::Location::ProjectSaved, Arcane::Paths::ForProject(projectRoot), "Verify");
+        if (verify.empty()) return fs::path{};   // refused: nowhere safe to write
+        return verify / (name + "-" + backend + "-diff.png");
     }
 }

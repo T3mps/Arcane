@@ -14,6 +14,7 @@
 #include <Arcane/Host/BootSequence.hpp>  // BootStage/BootThread/BootPolicy (CoreStages)
 #include <Arcane/Host/HostConfig.hpp>     // HostConfig (OpenOptionsFor -- the ONE verify-run diag:// rule)
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Input/InputSettings.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (engine identity probe)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>   // Core-DLL split Task 6: VerifySharedTypeContext/GameModule/
@@ -66,7 +67,7 @@ namespace Arcane::HostBoot
         std::string diagnostic;
     };
 
-    [[nodiscard]] ARCANE_API GameplayInputLoadResult LoadGameplayInput(
+    [[nodiscard]] ARC_API GameplayInputLoadResult LoadGameplayInput(
         ClientRuntime& runtime, const Project& project);
 
     // VerifySharedTypeContext moved to Arcane::ProjectHost (ArcaneCore.dll,
@@ -111,13 +112,13 @@ namespace Arcane::HostBoot
 
     // Load the input action maps from the layered config's "input" category (engine
     // default EngineConfig/input.json, deep-merged with the project's Config/input.json).
-    // Sets the "demo" base context on success. Returns false if the category is
+    // Sets the input.baseContext base context on success. Returns false if the category is
     // absent/malformed (the host logs and continues -- input stays inert).
     inline bool LoadInputConfig(Arcane::InputActions& input, const Arcane::Config& config)
     {
         if (!input.LoadJson(config.Category("input")))
             return false;
-        input.SetBaseContext("demo");
+        input.SetBaseContext(Arcane::Settings<Arcane::InputSettings>().baseContext);
         return true;
     }
 
@@ -131,12 +132,12 @@ namespace Arcane::HostBoot
     // PIX/RenderDoc open. PASS-level scopes are unconditional and are NOT
     // configurable: they are what a crash report is built from, so a config file
     // must never be able to turn the diagnostics off.
-    inline void ApplyDiagnosticsConfig(const Arcane::Config&, Permission permission,
+    inline void ApplyDiagnosticsConfig(const Arcane::Config&, CVarContext ctx,
                                        const std::vector<std::string>& sets)
     {
         // Config layers were applied when the project opened (Runtime::OpenProject).
         // This stage only adds the command line, which outranks those layers.
-        ApplyCVarCommandLine(CVarRegistry::Get(), sets, permission);
+        ApplyCVarCommandLine(CVarRegistry::Get(), sets, ctx);
         CVarRegistry::Get().Publish();
     }
 
@@ -201,10 +202,13 @@ namespace Arcane::HostBoot
         // without one (the parity tests) behaves exactly as before.
         ProjectOpenOptions openOptions{};
 
-        // `--set` permission. The editor sets Editor; the runtime sets Player.
+        // `--set` context (settings spec s3.2). The editor sets Editor; the
+        // runtime passes CommandLineCVarContext() (CVarConfig.hpp): Editor in a
+        // Debug/Release build, the local host of its own session in Dist
+        // (integration ruling I3; spec s8.3).
         // Null hostConfig means there is no command line (parity tests).
         const HostConfig* hostConfig = nullptr;
-        Permission cvarPermission = Permission::Player;
+        CVarContext cvarContext = CVarContext::LocalHost;
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this LIST whole: the ids,
@@ -249,17 +253,17 @@ namespace Arcane::HostBoot
     // BootStageParityTest fails if a host's id list drops one, and the
     // sentinel fails loudly if a host's id list keeps it but never patches
     // (or renames/typos) it.
-    [[nodiscard]] ARCANE_API std::vector<BootStage> CoreStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> CoreStages(BootContext& ctx);
 
     // Ids only -- no context needed, so tests and tooling can ask "what is the
     // canonical list?" without constructing a host.
-    [[nodiscard]] ARCANE_API std::vector<std::string> CoreStageIds();
+    [[nodiscard]] ARC_API std::vector<std::string> CoreStageIds();
 
     // Exactly what each host builds, exposed for BootStageParityTest. These must
     // be the SAME functions the hosts call, not reimplementations -- a parallel
     // copy would test itself and prove nothing.
-    [[nodiscard]] ARCANE_API std::vector<BootStage> EditorStages(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<BootStage> RuntimeStages(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<std::string> EditorStageIdsForTest(BootContext& ctx);
-    [[nodiscard]] ARCANE_API std::vector<std::string> RuntimeStageIdsForTest(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> EditorStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<BootStage> RuntimeStages(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<std::string> EditorStageIdsForTest(BootContext& ctx);
+    [[nodiscard]] ARC_API std::vector<std::string> RuntimeStageIdsForTest(BootContext& ctx);
 }

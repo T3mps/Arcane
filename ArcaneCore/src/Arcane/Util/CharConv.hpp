@@ -21,7 +21,7 @@
 #include <type_traits>
 
 #if !(defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L)
-    #define ARCANE_FROM_CHARS_FLOAT_FALLBACK 1
+    #define ARC_FROM_CHARS_FLOAT_FALLBACK 1
     #include <clocale>
     #include <cstdlib>
     #if defined(__APPLE__)
@@ -36,7 +36,7 @@ namespace Arcane
     template <class T>
     std::from_chars_result FromChars(const char* first, const char* last, T& value) noexcept
     {
-#if defined(ARCANE_FROM_CHARS_FLOAT_FALLBACK)
+#if defined(ARC_FROM_CHARS_FLOAT_FALLBACK)
         if constexpr (std::is_floating_point_v<T>)
         {
             std::from_chars_result r{ first, std::errc::invalid_argument };

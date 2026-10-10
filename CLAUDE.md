@@ -117,12 +117,15 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   plan 2's `MeshCullNode` is the tenth.
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
-  engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it
+  engine-owned world. Do not teach `Arcane::PhysicsSystem2D` to write 3D poses (it
   flattens out-of-plane rotation on purpose). Manifold3D is later and
   treats Box3D as the oracle -- Box3D already *is* Rubikon-Lite + Box2D.
   Binding: `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`.
 - The ECS is **Astra**, vendored at `ThirdParty/Astra` -- keep it current
-  with the standalone repo (commit there first, then sync).
+  with the standalone repo (commit there first, then
+  `scripts/sync-vendor.ps1 -Library Astra`; `scripts/sync-astra.ps1` is a
+  shim that calls that). Manifold2D and Mosaic use the same script
+  (`-Library Manifold2D`, `-Library Mosaic`).
 - **3D visual target is Deadlock / Source 2 the renderer, not Unreal.**
   Feature contract: `docs/research/2026-08-12-deadlock-render-target.md`.
   Ceiling, sequencing, and "weeks not department-years": the 2026-09-14

@@ -63,16 +63,16 @@ TEST_CASE("ClassTemplates::Render Component: a reflected struct in the header, t
     CHECK(Has(r.header, "#include <Arcane/Reflection.hpp>"));
     CHECK(Has(r.header, "namespace Aphelyon"));
     CHECK(Has(r.header, "struct Health"));
-    CHECK(Has(r.header, "ARCANE_REFLECT_TYPE(Health)"));
-    CHECK(Has(r.header, "ARCANE_END_REFLECT_TYPE()"));
+    CHECK(Has(r.header, "ARC_REFLECT_TYPE(Health)"));
+    CHECK(Has(r.header, "ARC_END_REFLECT_TYPE()"));
     CHECK_FALSE(Has(r.header, "ASTRA_"));
 
     // Source: ONE registrar line, in exactly one TU (a header would register
     // once per including TU), qualified with the project namespace.
     CHECK(Has(r.source, "#include \"Health.hpp\""));
     CHECK(Has(r.source, "#include <Arcane/Plugin/GameComponents.hpp>"));
-    CHECK(Has(r.source, "ARCANE_COMPONENT(Aphelyon::Health)"));
-    CHECK(Has(r.source, "ARCANE_GAME_MODULE"));          // the prologue that drains it
+    CHECK(Has(r.source, "ARC_COMPONENT(Aphelyon::Health)"));
+    CHECK(Has(r.source, "ARC_GAME_MODULE"));          // the prologue that drains it
     CHECK_FALSE(Has(r.source, "GamePlugin_Init"));
 
     // No template token survives, and both files end in a newline.
@@ -102,11 +102,11 @@ TEST_CASE("ClassTemplates::Render System: a registered header/source pair with s
 
     CHECK(Has(r.source, "#include \"Movement.hpp\""));
     CHECK(Has(r.source, "#include <Arcane/Plugin/GameSystems.hpp>"));
-    CHECK(Has(r.source, "ARCANE_SYSTEM("));
+    CHECK(Has(r.source, "ARC_SYSTEM("));
     CHECK(Has(r.source, "Aphelyon::Movement"));
     CHECK(Has(r.source, "Arcane::RoleMask::Both"));
     CHECK(Has(r.source, "Arcane::SystemPhase::FixedUpdate"));
-    CHECK(Has(r.source, "ARCANE_GAME_MODULE discovers"));
+    CHECK(Has(r.source, "ARC_GAME_MODULE discovers"));
     CHECK(Has(r.source, "scheduler order belongs in traits"));
     CHECK_FALSE(Has(r.header, "{{"));
     CHECK_FALSE(Has(r.source, "{{"));
@@ -273,7 +273,7 @@ TEST_CASE("the rendered component and parameter-style system load as a module an
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path(Arcane::Test::ModuleFile("TemplateSmokePlugin")));
     REQUIRE(host.AttachRuntime(rt));
     REQUIRE(host.Load());
-    // The rendered system registered through ARCANE_SYSTEM's PARAMETER path...
+    // The rendered system registered through ARC_SYSTEM's PARAMETER path...
     bool registered = false, updateRegistered = false;
     for (const Arcane::SystemFactoryEntry& e : Arcane::Test::Process().SystemFactories().Entries())
     {

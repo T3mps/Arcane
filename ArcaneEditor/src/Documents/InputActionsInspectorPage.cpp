@@ -6,7 +6,8 @@
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
-#include <Arcane/Input/InputActions.hpp>   // KnownControls, DisplayForPath, kDefaultHoldSeconds / kDefaultTapSeconds
+#include <Arcane/Input/InputActions.hpp>   // KnownControls, DisplayForPath
+#include <Arcane/Input/InputSettings.hpp>  // input.holdSeconds / input.tapSeconds
 
 #include <imgui.h>
 
@@ -236,13 +237,14 @@ namespace Arcane::Editor
                     edit_.push_back([m = &model_, id, picked] { (void)m->SetField(id, "type", kTypes[picked]); });
                 // Interaction: the first token decides the combo; Hold/Tap carry a
                 // duration. An undecorated token takes the ENGINE's default
-                // (kDefaultHoldSeconds / kDefaultTapSeconds, InputActions.hpp):
-                // one definition shared with the evaluator's parser.
+                // (input.holdSeconds / input.tapSeconds, InputSettings.hpp):
+                // the same settings the evaluator's parser reads.
+                const InputSettings& inputSettings = ::Arcane::Settings<InputSettings>();
                 const nlohmann::json interactions = action.value("interactions", nlohmann::json::array());
                 std::string first = interactions.is_array() && !interactions.empty() && interactions[0].is_string() ? interactions[0].get<std::string>() : "";
                 const std::string name = first.substr(0, first.find('('));
                 int kind = name == "press" ? 1 : name == "hold" ? 2 : name == "tap" ? 3 : 0;
-                float seconds = kind == 2 ? kDefaultHoldSeconds : kDefaultTapSeconds;
+                float seconds = kind == 2 ? inputSettings.holdSeconds : inputSettings.tapSeconds;
                 if (const auto d = first.find("duration="); d != std::string::npos) seconds = std::strtof(first.c_str() + d + 9, nullptr);
                 auto compose = [](int k, float s) -> nlohmann::json {
                     char buf[48];
@@ -251,7 +253,7 @@ namespace Arcane::Editor
                     if (k == 3) { std::snprintf(buf, sizeof buf, "tap(duration=%.2f)", s); return nlohmann::json::array({ buf }); }
                     return nlohmann::json::array(); };
                 if (const int picked = grid.ComboRow("Interaction", kInteractions, 4, kind); picked >= 0)
-                    edit_.push_back([m = &model_, id, v = compose(picked, picked == 2 ? kDefaultHoldSeconds : kDefaultTapSeconds)]
+                    edit_.push_back([m = &model_, id, v = compose(picked, picked == 2 ? inputSettings.holdSeconds : inputSettings.tapSeconds)]
                             { (void)m->SetField(id, "interactions", v); });
                 if (kind == 2 || kind == 3)
                     if (grid.FloatRow("Seconds", seconds, 0.01f))

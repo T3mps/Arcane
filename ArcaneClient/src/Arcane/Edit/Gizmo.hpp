@@ -1,6 +1,6 @@
 #pragma once
 
-// Arcane/Edit: THE transform gizmo (ARCANE_API, editor-free, STATELESS, ONE
+// Arcane/Edit: THE transform gizmo (ARC_API, editor-free, STATELESS, ONE
 // code path for every view). Pure functions over value inputs: HitTest (which
 // handle is under the cursor -- in PIXELS on the projected handle geometry, so
 // a projection change cannot change what is grabbable), ApplyDrag (new
@@ -12,6 +12,7 @@
 // landed 2026-09-17, ABI 33.)
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Reflection.hpp>            // GizmoMode / GizmoSpace: editor.gizmo.default* enum cvars
 #include <Arcane/Scene/ViewTransform.hpp>   // ViewTransform, Ray
 
 #include <glm/glm.hpp>
@@ -32,7 +33,7 @@ namespace Arcane
     // paints over the finished frame (the editor's viewport chrome), and the
     // gizmo core stays editor-free and device-free. Coordinates are viewport
     // pixels (y down), colours linear RGBA in [0,1].
-    struct ARCANE_API GizmoDrawSink
+    struct ARC_API GizmoDrawSink
     {
         virtual ~GizmoDrawSink() = default;
         virtual void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) = 0;
@@ -53,6 +54,19 @@ namespace Arcane
 
     enum class GizmoMode  { Translate, Rotate, Scale };
     enum class GizmoSpace { World, Local };
+
+    // Reflected for the editor's editor.gizmo.defaultMode / defaultSpace cvars
+    // (settings arc S6-31): stored as the declared ordinal, so append only.
+    ARC_REFLECT_ENUM(GizmoMode)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Translate)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Rotate)
+        ARC_REFLECT_ENUM_VALUE(GizmoMode, Scale)
+    ARC_END_REFLECT_ENUM()
+
+    ARC_REFLECT_ENUM(GizmoSpace)
+        ARC_REFLECT_ENUM_VALUE(GizmoSpace, World)
+        ARC_REFLECT_ENUM_VALUE(GizmoSpace, Local)
+    ARC_END_REFLECT_ENUM()
 
     // Translate: X/Y/Z arrows, XY/YZ/XZ plane squares, Center = camera-plane
     // free move. Rotate: X/Y/Z rings + Screen (the camera-facing ring).
@@ -78,7 +92,7 @@ namespace Arcane
     // component; a plane drag in XY zeroes its normal component explicitly).
     // The user's ruling 2026-09-17: the old 2D path is deleted, not kept as a
     // fast path.
-    struct ARCANE_API GizmoHandleMask   // exported: the members live in Arcane.dll
+    struct ARC_API GizmoHandleMask   // exported: the members live in Arcane.dll
     {
         std::uint16_t bits = 0xFFFF;   // bit i <=> GizmoAxis(i) exists
 
@@ -89,12 +103,34 @@ namespace Arcane
         void Set(GizmoAxis a, bool on) noexcept;
     };
 
+    // The steps a snapped drag rounds to. No literal defaults: the editor fills
+    // the steps from its editor.gizmo.snap.* cvars (MakeGizmoSnap), so the
+    // engine holds no second copy of them. A zero step does not snap.
     struct GizmoSnap
     {
-        bool  enabled = false;   // Ctrl held during the drag
-        float translate = 0.5f;  // metres
-        float rotationDeg = 15.0f;
-        float scale = 0.1f;
+        bool  enabled{};       // Ctrl held during the drag
+        float translate{};     // metres
+        float rotationDeg{};
+        float scale{};         // ratio
+    };
+
+    // The gizmo's pick tolerances, tessellation, drag floor and shading
+    // (settings arc S6-31). Gizmo is engine code and the settings are the
+    // editor's: the editor fills this from its editor.gizmo.* cvars
+    // (MakeGizmoTuning) and passes it to HitTest / Draw / ApplyDrag. No
+    // literal defaults, for the same reason as GizmoSnap.
+    struct GizmoTuning
+    {
+        float        pickRadiusPx{};      // axis segment / screen ring pick radius
+        float        ringPickSlackPx{};   // added to the band half-width for the ring pick radius
+        float        minPlaneAreaPx2{};   // a plane corner with less projected area is not a target
+        float        planeEdgeOnCos{};    // a plane corner closer than this to edge-on is hidden
+        float        minAxisLenPx{};      // an arrow shorter on screen draws no cone head
+        std::int32_t ringSegments{};      // full-ring tessellation (the sweep sector follows it)
+        float        minScale{};          // floor on a scale drag's magnitude
+        float        brighten{};          // lit-side factor of the shaded rods, cones and cubes
+        float        darken{};            // shadow-side factor
+        float        hotFillAlpha{};      // alpha of the hot plane square and the rotate sweep
     };
 
     // Screen-constant sizing, Unreal's rule (UnrealWidget.cpp): the handle
@@ -104,24 +140,41 @@ namespace Arcane
     // grows with distance in perspective, so a handle is always the same size
     // on screen and an axis pointing at the camera foreshortens the way a real
     // object would.
-    ARCANE_API float WorldUnitsPerPixel(const ViewTransform& view, glm::vec3 worldPoint) noexcept;
+    ARC_API float WorldUnitsPerPixel(const ViewTransform& view, glm::vec3 worldPoint) noexcept;
 
     // The parameter t along the LINE (origin + t * dir, dir unit) closest to
     // the ray; the parallel case projects the ray origin onto the line. The
     // axis drag: the difference of this before and after is the slide.
-    ARCANE_API float ClosestLineParam(glm::vec3 lineOrigin, glm::vec3 lineDir, const Ray& ray) noexcept;
+    ARC_API float ClosestLineParam(glm::vec3 lineOrigin, glm::vec3 lineDir, const Ray& ray) noexcept;
 
     // Where the ray meets the plane; nullopt when grazing or when the plane is
     // behind the ray. The plane and rotate drags.
-    ARCANE_API std::optional<glm::vec3> RayPlane(const Ray& ray, glm::vec3 planePoint, glm::vec3 planeNormal) noexcept;
+    ARC_API std::optional<glm::vec3> RayPlane(const Ray& ray, glm::vec3 planePoint, glm::vec3 planeNormal) noexcept;
 
     // Which handle is under mouseScreen (None if off-gizmo), in pixels on the
     // projected geometry. Centre wins on overlap; rings are tried most
     // camera-facing first (an edge-on ring is a line through the pivot).
-    ARCANE_API GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
+    ARC_API GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
                                  const GizmoTransform& t, const ViewTransform& view,
                                  GizmoHandleMask handles, float sizeScale,
-                                 glm::vec2 mouseScreen);
+                                 glm::vec2 mouseScreen, const GizmoTuning& tuning);
+
+    // The colours the gizmo paints. The three axis colours (settings arc S4)
+    // are the gizmo's own display-space cousins of UE's palette; S5-2 option A:
+    // they stay the painted values until a unification re-bless (pending axis
+    // unification re-bless). The hot / screen / screen-arc / centre colours are
+    // the editor's editor.gizmo.color.* settings (inventory "Gizmo.cpp:61-64";
+    // S6-45), filled by Settings/AxisColors. Every default is the legacy value.
+    struct GizmoAxisColors
+    {
+        glm::vec4 x{ 0.96f, 0.28f, 0.22f, 1.0f };
+        glm::vec4 y{ 0.48f, 0.84f, 0.16f, 1.0f };
+        glm::vec4 z{ 0.24f, 0.58f, 0.98f, 1.0f };
+        glm::vec4 hot{ 1.00f, 0.86f, 0.18f, 1.0f };         // the hovered / dragged handle (UE's yellow)
+        glm::vec4 screen{ 0.90f, 0.91f, 0.93f, 1.0f };      // the screen-space handle
+        glm::vec4 screenArc{ 0.96f, 0.90f, 0.42f, 1.0f };   // the rotate mode's screen ring
+        glm::vec4 centre{ 0.97f, 0.97f, 0.98f, 1.0f };      // the centre disc
+    };
 
     // Screen-constant gizmo geometry for the current state, UNREAL'S WIDGET
     // (UnrealWidgetRender.cpp) in pixels: shaded rods with cone heads (cubes
@@ -132,25 +185,27 @@ namespace Arcane
     // (two bars along the two spanning axes, each in that axis's colour);
     // the filled square between them is the hit region and is painted only
     // while hovered/active.
-    ARCANE_API void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space,
+    ARC_API void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space,
                          const GizmoTransform& t, const ViewTransform& view,
                          GizmoHandleMask handles, float sizeScale,
                          GizmoAxis hovered, GizmoAxis active,
-                         const GizmoRotateSweep* sweep = nullptr);   // the active rotate drag, if any
+                         const GizmoTuning& tuning,
+                         const GizmoRotateSweep* sweep = nullptr,   // the active rotate drag, if any
+                         const GizmoAxisColors& colors = GizmoAxisColors{});
 
     // The sweep of an in-progress rotate drag on `axis` (X/Y/Z/Screen) --
     // nullopt for any other axis or when a mouse ray misses the ring's plane.
-    ARCANE_API std::optional<GizmoRotateSweep> RotateSweep(GizmoSpace space, GizmoAxis axis,
+    ARC_API std::optional<GizmoRotateSweep> RotateSweep(GizmoSpace space, GizmoAxis axis,
                                                             const GizmoTransform& start, const ViewTransform& view,
                                                             glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
                                                             const GizmoSnap& snap);
 
     // New transform, computed from `start` (no accumulation drift). Ray-based:
     // the same math in every projection.
-    ARCANE_API GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
+    ARC_API GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
                                         const GizmoTransform& start, const ViewTransform& view,
                                         glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
-                                        const GizmoSnap& snap);
+                                        const GizmoSnap& snap, const GizmoTuning& tuning);
 
     // A drag's effect on the PRIMARY, expressed so it can be replayed onto the
     // rest of a multi-selection. `translate` is a shared world delta;
@@ -167,13 +222,13 @@ namespace Arcane
     // Delta from the primary's pre-drag pose to its post-drag pose. A start
     // scale component under 1e-6 yields a ratio of 1 on that axis instead of
     // infinity.
-    ARCANE_API GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start,
+    ARC_API GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start,
                                               const GizmoTransform& end);
 
     // Replay a group delta onto a member's PRE-drag pose. Replaying onto the
     // primary's own start reproduces ApplyDrag's result, so callers may apply
     // this uniformly across the whole selection without special-casing.
-    ARCANE_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
+    ARC_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
                                               const GizmoGroupDelta& d);
 
     // Scale from the column lengths, rotation from the normalised basis
@@ -192,15 +247,15 @@ namespace Arcane
     // basis, not the authored one -- the X arrow of a Y-mirrored sprite points
     // the "other" way. That is Unreal's own behaviour for a mirrored actor's
     // local gizmo, not a defect here.
-    ARCANE_API GizmoTransform DecomposeTRS(const glm::mat4& m);
+    ARC_API GizmoTransform DecomposeTRS(const glm::mat4& m);
 
     // translate * rotate * scale: identical to Transform::ToMatrix for the
     // equivalent position/rotation/scale (pinned in GizmoTest.cpp).
-    ARCANE_API glm::mat4 ComposeTRS(const GizmoTransform& t);
+    ARC_API glm::mat4 ComposeTRS(const GizmoTransform& t);
 
     // Moves a negative X scale onto `axis` (1 = Y, 2 = Z) WITHOUT changing the
     // matrix: S' = S.D and R' = R.D with D the diagonal flipping X and `axis`
     // -- a proper rotation (a half turn about the third axis), so the pose is
     // identical. Identity when scale.x >= 0 or axis is 0.
-    ARCANE_API GizmoTransform WithMirrorOn(const GizmoTransform& t, int axis);
+    ARC_API GizmoTransform WithMirrorOn(const GizmoTransform& t, int axis);
 }

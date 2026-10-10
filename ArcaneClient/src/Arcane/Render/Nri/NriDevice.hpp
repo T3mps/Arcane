@@ -49,7 +49,7 @@ namespace Arcane
     //
     // NativeDeviceOwner (this class) owns the creation half for EVERY device
     // in the process -- there is no other owner.
-    class ARCANE_API NativeDeviceOwner
+    class ARC_API NativeDeviceOwner
     {
     public:
         // Runs the creation half (DeviceCreation{D3D12,Vulkan}) and wraps
@@ -87,7 +87,7 @@ namespace Arcane
     // -------------------------------------------------------------------
     // NriDevice -- the wrapped device.
     // -------------------------------------------------------------------
-    class ARCANE_API NriDevice
+    class ARC_API NriDevice
     {
     public:
         // Wrapper path only. Each returns null (loudly, naming what failed)

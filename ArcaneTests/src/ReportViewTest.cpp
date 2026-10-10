@@ -209,7 +209,7 @@ TEST_CASE("report view: copy labels and the button order (Close last, Relaunch b
 
 TEST_CASE("report view: FormatLocalStamp converts an ISO UTC stamp to local minutes", "[reporter]")
 {
-#if !defined(ARCANE_HAS_TZDB)
+#if !defined(ARC_HAS_TZDB)
     // Apple libc++ has no tzdb: no zone can be named, and a null one is "".
     CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", nullptr).empty());
     SKIP("this standard library has no IANA time-zone database (std::chrono::locate_zone)");

@@ -18,6 +18,7 @@
 // loop or a clock -- the loop it governs is desk-verified, this part is not.
 
 #include <cstdint>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -29,6 +30,7 @@ namespace Arcane
     // our --settle 30 floor it would cost ~26.9s per lane. A fixed interval
     // keeps 30 attempts inside ~1.6s so the timeout stays the governing bound,
     // which is the entire point of the conjunction.
+    ARC_CONSTANT("test harness: the verification settle interval")
     inline constexpr std::uint64_t kSettleIntervalMs = 50;
 
     enum class SettleBail : std::uint8_t

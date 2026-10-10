@@ -20,15 +20,18 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor::SceneRecents
 {
-    // How many scenes the menu remembers, newest first.
-    inline constexpr std::size_t kMaxEntries = 10;
+    // How many scenes the menu remembers, newest first: editor.recents.maxScenes
+    // (10 by default; settings sweep S6-41).
+    [[nodiscard]] std::size_t MaxEntries();
 
     // Bumped only if the on-disk schema changes shape. A document numbered
     // above this was written by a newer editor build; read as empty rather
     // than misinterpreted.
+    ARC_CONSTANT("file format: the scene recents file version")
     inline constexpr int kFormatVersion = 1;
 
     // Newest-first, lexically-normal generic strings (scenePath.
@@ -55,7 +58,7 @@ namespace Arcane::Editor::SceneRecents
 
     // --- mutate (PURE) ------------------------------------------------------
 
-    // Normalise, move-or-insert at the front, cap at kMaxEntries. A duplicate
+    // Normalise, move-or-insert at the front, cap at MaxEntries(). A duplicate
     // push (reopening/resaving the same scene) moves it to the front rather
     // than growing the list.
     void Push(List& list, const std::filesystem::path& scenePath);

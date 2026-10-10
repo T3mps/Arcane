@@ -9,4 +9,4 @@ namespace TemplateSmoke
     struct Module final : Arcane::GameModule {};
 }
 
-ARCANE_GAME_MODULE(TemplateSmoke::Module)
+ARC_GAME_MODULE(TemplateSmoke::Module)

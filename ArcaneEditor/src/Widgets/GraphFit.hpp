@@ -5,7 +5,7 @@
 // magnifies into the blurred-glyph range (AssetGraphPanel.cpp:1320-1328). This
 // caps the fit at editor.graph.fitMaxZoom (default 1.0 = never magnify) and
 // floors it at editor.graph.fitMinZoom (FIT-MINZOOM, user 2026-10-03; never
-// under the zoom table's first stop, kZoomLevels[0] = 0.1), so a graph too big
+// under the zoom table's first stop, editor.graph.zoomLevels: 0.1), so a graph too big
 // to fit at a readable zoom frames its CENTRE and the user pans for the rest.
 // The floor holds for the zoom the navigation LANDS at, margin included
 // (GraphFitLandedZoom); a floor above the cap wins, and every fit lands on it.
@@ -23,7 +23,7 @@ namespace Arcane::Editor
     struct GraphRect { ImVec2 min, max; };
 
     // The zoom band a fit may land in. The effective floor is
-    // max(kZoomLevels[0], minZoom); the effective cap is max(maxZoom, floor),
+    // max(first zoom stop, minZoom); the effective cap is max(maxZoom, floor),
     // so a min above the max wins (both collapse onto the min).
     struct GraphFitZoomRange
     {
@@ -54,10 +54,10 @@ namespace Arcane::Editor
     // empty bounds, zero-size view) and nothing changed. Duration 0 lands now.
     bool GraphFitToContent(GraphFitZoomRange zoom, float durationSeconds = 0.0f);
 
-    // editor.graph.fitMaxZoom's published value; 1.0 if it is absent.
+    // editor.graph.fitMaxZoom's published value (GraphCanvasSettings).
     [[nodiscard]] float GraphFitMaxZoom();
 
-    // editor.graph.fitMinZoom's published value; its default if it is absent.
+    // editor.graph.fitMinZoom's published value (GraphCanvasSettings).
     [[nodiscard]] float GraphFitMinZoom();
 
     // { GraphFitMinZoom(), GraphFitMaxZoom() }: what every fit-on-open passes.

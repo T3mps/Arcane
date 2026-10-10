@@ -9,18 +9,18 @@
 //   {
 //       void OnDrawUI() override { /* HUD */ }
 //   };
-//   ARCANE_GAME_MODULE(MyGame::Module)
+//   ARC_GAME_MODULE(MyGame::Module)
 //
 // The macro emits the eight exports the host resolves (PluginEntry::k*,
 // PluginABI.hpp) and everything a module used to copy: the shared TypeContext
 // pin, the Mosaic log-sink + assert-handler installs, the ImGui context/
 // allocator adoption, this module's Arcane::ComponentModule with the
-// ARCANE_COMPONENT drain (GameComponents.hpp), and the registry Save/LoadState
+// ARC_COMPONENT drain (GameComponents.hpp), and the registry Save/LoadState
 // round-trip for hot reload. Every hook has a default; override what the
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
-// InstallEngineSystems: PhysicsSystem -> TransformPropagationSystem in
+// InstallEngineSystems: Arcane::PhysicsSystem2D -> TransformPropagationSystem in
 // fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
-// own systems. Default-constructible systems use ARCANE_SYSTEM in one .cpp;
+// own systems. Default-constructible systems use ARC_SYSTEM in one .cpp;
 // systems needing runtime constructor values use RegisterSystem<T>(mask, phase)
 // in OnInit. Both paths place them with Arcane::Before<...> / Arcane::After<...>
 // against the engine's types (Astra keys systems by a hash of the type NAME, so
@@ -56,9 +56,9 @@
 #include <vector>
 
 #if defined(_WIN32)
-  #define ARCANE_GAME_MODULE_EXPORT __declspec(dllexport)
+  #define ARC_GAME_MODULE_EXPORT __declspec(dllexport)
 #else
-  #define ARCANE_GAME_MODULE_EXPORT __attribute__((visibility("default")))
+  #define ARC_GAME_MODULE_EXPORT __attribute__((visibility("default")))
 #endif
 
 namespace Arcane
@@ -123,7 +123,7 @@ namespace Arcane
 
         // Register one of this module's systems ONCE per DLL load when it needs
         // runtime constructor values. Default-constructible systems should use
-        // ARCANE_SYSTEM in their .cpp. Static registration order is unspecified;
+        // ARC_SYSTEM in their .cpp. Static registration order is unspecified;
         // Astra's Before/After traits are the sole semantic ordering contract. Every
         // Runtime whose NetMode matches `mask` instantiates it: the primary right
         // after OnInit, any other attached Runtime at attach, and all of them again
@@ -142,7 +142,7 @@ namespace Arcane
                 Process().SystemFactories(), mask, phase, args...);
         }
 
-        // Bound by ARCANE_GAME_MODULE's Init before OnInit runs. Not for modules.
+        // Bound by ARC_GAME_MODULE's Init before OnInit runs. Not for modules.
         void BindForMacro_(EngineContext* ctx, Arcane::ComponentModule* components) noexcept
         {
             m_ctx        = ctx;
@@ -174,13 +174,13 @@ namespace Arcane
             bool Init(EngineContext* c, const char* name)
             {
                 static_assert(std::is_base_of_v<GameModule, Type>,
-                              "ARCANE_GAME_MODULE(Type): Type must derive from Arcane::GameModule");
+                              "ARC_GAME_MODULE(Type): Type must derive from Arcane::GameModule");
 
                 // 1. The shared reflection context in THIS module, and this
                 // module's Mosaic log/assert routing into the engine's.
-                // ARCANE_INTERNAL_BEGIN: the module-local reflection pin is Astra's own per-image state
+                // ARC_INTERNAL_BEGIN: the module-local reflection pin is Astra's own per-image state
                 Astra::SetTypeContext(c->typeContext);
-                // ARCANE_INTERNAL_END
+                // ARC_INTERNAL_END
                 Log::InstallMosaicSink();
                 Assert::InstallMosaicHandler();
                 ctx = c;
@@ -197,8 +197,8 @@ namespace Arcane
                 }
 
                 // 2. This module's own component types: open the handle, drain the
-                // ARCANE_COMPONENT registrar into it. Every component added under
-                // Source/ (Assets -> Create -> C++ Class, or one ARCANE_COMPONENT
+                // ARC_COMPONENT registrar into it. Every component added under
+                // Source/ (Assets -> Create -> C++ Class, or one ARC_COMPONENT
                 // line by hand) registers here with no edit to the module.
                 components = new Arcane::ComponentModule(
                     Arcane::ComponentModule::Open(c->engine->Components(), name));
@@ -243,6 +243,9 @@ namespace Arcane
                 delete components;
                 components = nullptr;
                 ctx        = nullptr;
+                // This module's Mosaic level setter (Log.hpp, settings arc S2)
+                // must not be called after the image unmaps.
+                Log::UninstallMosaicLevelTarget();
             }
 
             void SaveState(Arcane::BinaryWriter& w)
@@ -295,32 +298,32 @@ namespace Arcane
 }
 
 // The one-argument face: the module reports the SDK's own ABI version.
-#define ARCANE_GAME_MODULE(Type) ARCANE_GAME_MODULE_ABI(Type, ::Arcane::kGamePluginABIVersion)
+#define ARC_GAME_MODULE(Type) ARC_GAME_MODULE_ABI(Type, ::Arcane::kGamePluginABIVersion)
 
 // The two-argument form exists for ONE caller: the HotReloadPluginBad test
 // build, which must report a version the host's gate refuses. A real module
 // never passes anything but the SDK's constant.
-#define ARCANE_GAME_MODULE_ABI(Type, Abi)                                                          \
+#define ARC_GAME_MODULE_ABI(Type, Abi)                                                          \
     namespace { ::Arcane::GameModuleDetail::State arcane_game_module_state_; }                     \
     extern "C"                                                                                     \
     {                                                                                              \
-        ARCANE_GAME_MODULE_EXPORT uint32_t GamePlugin_ABIVersion()                                 \
+        ARC_GAME_MODULE_EXPORT uint32_t GamePlugin_ABIVersion()                                 \
         { return static_cast<uint32_t>(Abi); }                                                     \
-        ARCANE_GAME_MODULE_EXPORT bool GamePlugin_Init(::Arcane::EngineContext* ctx)               \
+        ARC_GAME_MODULE_EXPORT bool GamePlugin_Init(::Arcane::EngineContext* ctx)               \
         { return arcane_game_module_state_.Init<Type>(ctx, #Type); }                               \
-        ARCANE_GAME_MODULE_EXPORT void GamePlugin_Shutdown()                                       \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_Shutdown()                                       \
         { arcane_game_module_state_.Shutdown(); }                                                  \
-        ARCANE_GAME_MODULE_EXPORT void GamePlugin_FixedUpdate(double dt)                           \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_FixedUpdate(double dt)                           \
         { if (auto* m = arcane_game_module_state_.instance) m->OnFixedUpdate(dt); }                \
-        ARCANE_GAME_MODULE_EXPORT void GamePlugin_Update(double dt, double alpha)                  \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_Update(double dt, double alpha)                  \
         { if (auto* m = arcane_game_module_state_.instance) m->OnUpdate(dt, alpha); }              \
-        ARCANE_GAME_MODULE_EXPORT void GamePlugin_DrawUI()                                         \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_DrawUI()                                         \
         {                                                                                          \
             auto& s = arcane_game_module_state_;                                                   \
             if (s.instance && s.ctx && s.ctx->imguiContext) s.instance->OnDrawUI();                \
         }                                                                                          \
-        ARCANE_GAME_MODULE_EXPORT void GamePlugin_SaveState(::Arcane::BinaryWriter& w)             \
+        ARC_GAME_MODULE_EXPORT void GamePlugin_SaveState(::Arcane::BinaryWriter& w)             \
         { arcane_game_module_state_.SaveState(w); }                                                \
-        ARCANE_GAME_MODULE_EXPORT bool GamePlugin_LoadState(::Arcane::BinaryReader& r)             \
+        ARC_GAME_MODULE_EXPORT bool GamePlugin_LoadState(::Arcane::BinaryReader& r)             \
         { return arcane_game_module_state_.LoadState(r); }                                         \
     }

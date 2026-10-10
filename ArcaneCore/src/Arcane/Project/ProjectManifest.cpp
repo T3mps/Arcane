@@ -5,6 +5,9 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 
@@ -41,6 +44,7 @@ namespace Arcane
         // type-mismatched optional field yields nullopt rather than propagating an
         // exception (same contract as the required-field guards above).
         m.description = doc.value("description", std::string{});
+        m.company     = doc.value("company", std::string{});
         m.gameModule  = doc.value("gameModule", std::string{});
         m.bootScene   = doc.value("bootScene", std::string{});
         m.inputActions = doc.value("inputActions", std::string{});
@@ -80,52 +84,53 @@ namespace Arcane
             }
         }
 
-        // Splash block: leniently, exactly like plugins above -- a missing key,
-        // or one present with the wrong TYPE (not an object), yields the
-        // SplashConfig defaults rather than failing the manifest. Once inside a
-        // well-typed object, a wrong-typed FIELD (e.g. "showProgress": "yes")
-        // still throws via .value() below, same as description/gameModule/
-        // plugins[].enabled above -- caught by this function's own try/catch,
-        // so the whole manifest reports nullopt rather than silently defaulting
-        // just that one field (consistent with every other optional field this
-        // function parses).
+        // Legacy splash block -> app.splash.* for the one-time migration. A
+        // non-object block is leniently ignored, as before; inside an object a
+        // wrong-typed scalar still throws via .value() (caught below), so the
+        // whole manifest still fails as it always did. Only the fields the old
+        // parser read are carried, each in its cvar file shape, so migration
+        // never writes an unknown key or a type mismatch into Config/app.json.
         if (doc.contains("splash") && doc["splash"].is_object())
         {
             const auto& sp = doc["splash"];
-            ProjectManifest::SplashConfig cfg;   // defaults
-            cfg.enabled            = sp.value("enabled", cfg.enabled);
-            cfg.image              = sp.value("image", cfg.image);
-            cfg.showProgress       = sp.value("showProgress", cfg.showProgress);
-            cfg.minDurationSeconds = sp.value("minDurationSeconds", cfg.minDurationSeconds);
-            // backgroundColor: an array field with no precedent among the scalar
-            // optionals above. Same lenient spirit as the plugins ARRAY check --
-            // present but malformed (wrong type, too short) leaves the default
-            // rather than failing the manifest -- but each ELEMENT must still be
-            // a number to be accepted, so a partially-numeric array cannot leave
-            // the default and an explicit value mixed across channels.
+            nlohmann::json splash = nlohmann::json::object();
+            if (sp.contains("enabled"))            splash["enabled"]            = sp.value("enabled", true);
+            if (sp.contains("image"))              splash["image"]              = sp.value("image", std::string{});
+            if (sp.contains("showProgress"))       splash["showProgress"]       = sp.value("showProgress", false);
+            if (sp.contains("minDurationSeconds")) splash["minDurationSeconds"] = sp.value("minDurationSeconds", 0.0f);
+            // backgroundColor was [r, g, b] in sRGB-normalised floats ((0.05,
+            // 0.05, 0.06) is 0x0D0D0F, the splash's one colour); the cvar file
+            // shape is "#RRGGBBAA" (sRGB hex), so the bytes carry over exactly.
+            // Malformed (wrong type, too short, a non-number) stays lenient: the
+            // default applies and nothing migrates, as the old parse did.
             if (sp.contains("backgroundColor") && sp["backgroundColor"].is_array()
                 && sp["backgroundColor"].size() >= 3
                 && sp["backgroundColor"][0].is_number() && sp["backgroundColor"][1].is_number()
                 && sp["backgroundColor"][2].is_number())
             {
-                cfg.backgroundColor[0] = sp["backgroundColor"][0].get<float>();
-                cfg.backgroundColor[1] = sp["backgroundColor"][1].get<float>();
-                cfg.backgroundColor[2] = sp["backgroundColor"][2].get<float>();
+                const auto byte = [&](std::size_t i)
+                {
+                    const float v = std::clamp(sp["backgroundColor"][i].get<float>(), 0.0f, 1.0f);
+                    return static_cast<unsigned>(std::lround(v * 255.0f));
+                };
+                char hex[10];
+                std::snprintf(hex, sizeof hex, "#%02X%02X%02XFF", byte(0), byte(1), byte(2));
+                splash["backgroundColor"] = std::string(hex);
             }
-            m.splash = cfg;
+            if (!splash.empty())
+                m.legacySettings["app"]["splash"] = std::move(splash);
         }
 
-        // physics (2026-09-11): optional block; gravity is an array field with
-        // the same lenient rule as splash.backgroundColor -- present but
-        // malformed leaves the default, and BOTH elements must be numbers.
+        // Only a valid legacy gravity becomes a project setting. Malformed
+        // shapes retain the old lenient behavior and contribute no migration.
         if (doc.contains("physics") && doc["physics"].is_object())
         {
             const auto& ph = doc["physics"];
-            ProjectManifest::PhysicsConfig cfg;   // defaults
             if (ph.contains("gravity") && ph["gravity"].is_array() && ph["gravity"].size() >= 2
                 && ph["gravity"][0].is_number() && ph["gravity"][1].is_number())
             {
-                cfg.gravity = glm::vec2(ph["gravity"][0].get<float>(), ph["gravity"][1].get<float>());
+                float x = ph["gravity"][0].get<float>();
+                float y = ph["gravity"][1].get<float>();
                 // v1 -> v2 (F4 plan 1 final review, F2a): a formatVersion 1
                 // manifest authored its gravity +Y DOWN (the Hub stamped
                 // [0, 9.81] from 2026-09-11); the engine is +Y up since F4, so
@@ -133,12 +138,12 @@ namespace Arcane
                 // the block never enters here and takes the v2 default above.
                 if (m.formatVersion < 2)
                 {
-                    cfg.gravity.y = -cfg.gravity.y;
+                    y = -y;
                     ARC_INFO("ProjectManifest: formatVersion 1 physics.gravity was authored +Y down; "
-                             "read as ({}, {}) (+Y up, format 2)", cfg.gravity.x, cfg.gravity.y);
+                             "read as ({}, {}) (+Y up, format 2)", x, y);
                 }
+                m.legacySettings["physics"]["gravity"] = { x, y };
             }
-            m.physics = cfg;
         }
 
         return m;

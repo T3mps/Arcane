@@ -112,9 +112,18 @@ namespace Arcane::Editor
         // the whole project: `@source` in the focus box sets Source, and a
         // plain everything omits Source (include graphs are a focused view).
         std::optional<AssetKind> kindFilter;
+        // A bare GraphBuildInput keeps the pre-sweep 2/20 so a hand-built
+        // input (the [editor] units) stays self-contained; the Graph lens
+        // starts from MakeAssetGraphQuery(), which reads them from
+        // editor.assetGraph.defaultDepth / .breadthCap.
         int depthLimit = 2;                // per direction, from focus
         int breadthCap = 20;               // per node per direction
     };
+
+    // A GraphBuildInput whose depthLimit/breadthCap come from the published
+    // editor.assetGraph.* settings (S6-36). Entries, index, focus and kind
+    // filter are left for the caller.
+    [[nodiscard]] GraphBuildInput MakeAssetGraphQuery();
 
     // Power-user focus box. `everything` / empty -> all content (no Source).
     // `@source` / `@mesh` / ... -> everything of that kind. A bare `@` or

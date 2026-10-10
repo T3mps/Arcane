@@ -43,6 +43,7 @@
 // -- <NRI.h> alone provides all of it. Keep it that way; do not add an
 // Extensions include here without re-reading that comment.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 
@@ -74,6 +75,7 @@ namespace Arcane
     // index == kInvalid never refers to a declared resource. Checked
     // verbatim (before any decode), so it stays unambiguous regardless of
     // the encoding below.
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kInvalid = 0xFFFFFFFFu;
 
     // ---------------------------------------------------------------------
@@ -155,7 +157,7 @@ namespace Arcane
     // storage. SetColorAttachments/SetDepthAttachment live on RenderGraph
     // itself (below), not here: reach them from within Setup by capturing
     // the RenderGraph by reference (see AddNode()'s comment).
-    class ARCANE_API RenderGraphBuilder
+    class ARC_API RenderGraphBuilder
     {
     public:
         RgTexture CreateTexture(const char* name, const RgTextureDesc& desc);               // transient
@@ -213,12 +215,12 @@ namespace Arcane
     // returns: an exec fn must NOT begin/end rendering itself, and must not
     // emit barriers (the executor is the only CmdBarrier call site on the
     // graph path -- see RgCompiled's contract block below).
-    // ARCANE_API: Resolve/ColorView are DEFINED in RenderGraphExec.cpp inside
+    // ARC_API: Resolve/ColorView are DEFINED in RenderGraphExec.cpp inside
     // ArcaneClient.dll and CALLED from node exec fns that live wherever the
     // frame driver does -- the test exe today, a game module tomorrow. An
     // unexported struct here linked fine until a node actually resolved a
     // handle, and then failed at link time in the consumer, not here.
-    struct ARCANE_API RenderGraphNodeContext
+    struct ARC_API RenderGraphNodeContext
     {
         nri::CommandBuffer&       cmd;
         const nri::CoreInterface& core;
@@ -326,7 +328,7 @@ namespace Arcane
 
         NriPipelineCache& pipelines;  // Task 7 (forward-declared; NONE tests pass a stub)
 
-        // Which of the graph's kSwapchainFramesInFlight command-buffer slots
+        // Which of the graph's FramesInFlight() command-buffer slots
         // this frame records into. CALLER CONTRACT, same one NriUploadRing::
         // BeginFrame carries: a slot must not be reused until the submission
         // it last carried has retired, because Execute() resets that slot's
@@ -457,7 +459,9 @@ namespace Arcane
     // pool slot: its Lifetime is {kRgNoNode, kRgNoNode} and its
     // transientPoolSlot entry is kRgNoPoolSlot. Task 6 must not realize it
     // (there is no pool slot to realize it into).
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kRgNoNode     = 0xFFFFFFFFu;
+    ARC_CONSTANT("sentinel: render-graph 'none' marker")
     inline constexpr std::uint32_t kRgNoPoolSlot = 0xFFFFFFFFu;
 
     struct RgCompiled
@@ -488,7 +492,7 @@ namespace Arcane
         std::uint32_t              poolSlotCount = 0;    // distinct pool slots Task 6 must realize
     };
 
-    class ARCANE_API RenderGraph
+    class ARC_API RenderGraph
     {
     public:
         using Setup = std::function<void(RenderGraphBuilder&)>;
@@ -649,7 +653,7 @@ namespace Arcane
         // must therefore call it every frame. Burying there would have made
         // the reuse property unreachable in the actual loop -- N committed
         // render-target creations plus N burials per frame, reaped
-        // kSwapchainFramesInFlight frames later. Intent governs; the pool
+        // FramesInFlight() frames later. Intent governs; the pool
         // persists.
         //
         // Pool resources die through the graveyard on exactly four paths:
@@ -897,15 +901,21 @@ namespace Arcane
         // way: a future task adding a handle-consuming method (e.g. Task
         // 4/6's Resolve()) MUST route through DecodeAndValidateSlot() too.
         // ---------------------------------------------------------------
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kIndexBits      = 24;
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kGenerationBits = 8;
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kIndexMask      = (1u << kIndexBits) - 1u;      // 0x00FFFFFF -- max live slots per generation
+        ARC_CONSTANT("handle encoding: render-graph handle generation/index bit split")
         static constexpr std::uint32_t kGenerationMask = (1u << kGenerationBits) - 1u; // 0xFF -- generation wraps mod 256
+        ARC_CONSTANT("sentinel: render-graph 'none' marker")
         static constexpr std::size_t   kNoSlot         = static_cast<std::size_t>(-1); // decode failure: invalid, stale, or out of range
 
         [[nodiscard]] static std::uint32_t EncodeHandle(std::uint32_t slot, std::uint32_t generation) noexcept;
         [[nodiscard]] std::size_t DecodeAndValidateSlot(std::uint32_t encoded, std::size_t resourceCount) const noexcept;
 
+        ARC_CONSTANT("sentinel: render-graph 'none' marker")
         static constexpr std::size_t kNoCurrentNode = static_cast<std::size_t>(-1);
 
         // ---------------------------------------------------------------
@@ -1098,7 +1108,7 @@ namespace Arcane
         // precisely what this replaced).
         std::vector<CachedView>    m_importedViews;
 
-        std::vector<GpuFrameSlot>  m_frames;            // kSwapchainFramesInFlight entries once realized
+        std::vector<GpuFrameSlot>  m_frames;            // FramesInFlight() entries once realized
         nri::Fence*                m_fence = nullptr;   // this graph's own submission timeline
 
         // Per-execution resolution: which physical resource each declared

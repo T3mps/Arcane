@@ -41,11 +41,11 @@ namespace
 
 TEST_CASE("AssetActivityLog wraps at capacity, oldest 50 of 150 gone", "[editor]")
 {
-    AssetActivityLog log;
+    AssetActivityLog log(100);
     for (int i = 1; i <= 150; ++i)
         log.Push(MakeEntry(i));
 
-    REQUIRE(log.Size() == AssetActivityLog::kCapacity);
+    REQUIRE(log.Size() == log.Capacity());
     CHECK(log.Size() == 100);
 
     std::vector<std::string> namesNewestFirst;

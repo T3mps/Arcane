@@ -2,6 +2,9 @@
 
 #include <Arcane/Base/Assert.hpp>
 
+#include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+
 #include <fstream>
 #include <utility>
 
@@ -280,6 +283,34 @@ namespace Arcane
         m_documents    = std::move(documents);
     }
 
+    void VerifyReport::SetCVarSets(std::vector<CVarSetEcho> sets)
+    {
+        m_cvarSetsSet = true;
+        m_cvarSets    = std::move(sets);
+    }
+
+    std::vector<VerifyReport::CVarSetEcho> VerifyReport::EchoCVarSets(const std::vector<std::string>& sets)
+    {
+        std::vector<CVarSetEcho> out;
+        const CVarRegistry& reg = CVarRegistry::Get();
+        for (const std::string& item : sets)
+        {
+            const std::size_t eq = item.find('=');
+            if (eq == std::string::npos || eq == 0) continue;   // ApplyCVarCommandLine WARNs about it already
+            CVarSetEcho echo;
+            echo.name = item.substr(0, eq);
+            const CVarHandle h = reg.Find(echo.name);
+            if (!h.IsStale())
+                if (const std::optional<CVarValue> v = reg.Get(h))
+                {
+                    const std::optional<CVarDescInfo> desc = reg.Describe(echo.name);
+                    echo.value = FormatCVarValue(*v, desc ? desc->enumNames : std::vector<std::string>{});
+                }
+            out.push_back(std::move(echo));
+        }
+        return out;
+    }
+
     void VerifyReport::SetForeignModules(std::vector<ForeignModules::Match> modules)
     {
         m_foreignModulesSet = true;
@@ -518,7 +549,7 @@ namespace Arcane
                     // fix round 1, item 4: an agent has no way to tell "Ground"
                     // is a wrong-but-durable answer for a pixel that is
                     // visibly a 3D mesh -- CollectPickables (PickEmit.hpp)
-                    // only walks SpriteRenderer/Collider2D entities and has
+                    // only walks SpriteRenderer/Arcane::Collider2D entities and has
                     // no knowledge of MeshRenderer ones at all, so a hit
                     // ALWAYS came from one of these two kinds, never a mesh.
                     // Naming that capability explicitly, and flagging when
@@ -791,6 +822,17 @@ namespace Arcane
                                      { "tier",    m.tier } });
             }
             j["foreignModules"] = std::move(modules);
+        }
+
+        // The --set echo (schemaVersion 14). ABSENT unless SetCVarSets was
+        // called; `value` is null for a name no cvar answers to.
+        if (m_cvarSetsSet)
+        {
+            nlohmann::json sets = nlohmann::json::array();
+            for (const CVarSetEcho& e : m_cvarSets)
+                sets.push_back({ { "name", e.name },
+                                 { "value", e.value ? nlohmann::json(*e.value) : nlohmann::json(nullptr) } });
+            j["cvarSets"] = std::move(sets);
         }
 
         j["probes"] = m_probes;

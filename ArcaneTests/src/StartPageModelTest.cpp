@@ -66,7 +66,7 @@ TEST_CASE("start page: the rows mirror the selection in order, and the hidden li
 TEST_CASE("start page: DialogStartDir is the parent of the first row's project folder", "[editor]")
 {
     CHECK(DialogStartDir(Sel({})).empty());
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     CHECK(DialogStartDir(Sel({ P("C:\\Games\\Alpha", "Alpha", 0) })) == "C:\\Games");                    // folder-shaped
     CHECK(DialogStartDir(Sel({ P("C:\\Games\\Alpha\\", "Alpha", 0) })) == "C:\\Games");                  // trailing separator
     CHECK(DialogStartDir(Sel({ P("C:\\Games\\Beta\\Beta.arcproj", "Beta", 0), P("D:\\x\\y", "y", 0) })) == "C:\\Games");   // .arcproj-shaped, first row wins

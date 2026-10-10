@@ -1160,7 +1160,7 @@ TEST_CASE("ReferenceProject's materials stitch and compile on both targets",
     provider.AddRoot("data/shaders");
 
     Arcane::ShaderCompiler sc;
-    REQUIRE(sc.Initialize(0.0));
+    REQUIRE(sc.InitializeWithDebounce(0.0));
 
     // Both stages, both targets -- the sprite/post caches submit exactly this
     // pair per pass, and a source that compiles as DXIL but not SPIR-V binds on

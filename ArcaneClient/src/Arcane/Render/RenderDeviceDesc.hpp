@@ -14,37 +14,36 @@
 
 namespace Arcane
 {
+    // The members are a PLAIN request: all three validation switches default
+    // off here. An engine host's device comes from MakeRenderDeviceDesc()
+    // (RenderDeviceSettings.hpp), which fills them from render.debug.* --
+    // on in Debug builds, off otherwise, and overridable without a rebuild.
+    // A hand-built desc (the [gpu] test vehicles, the capability probe) sets
+    // what it needs.
     struct RenderDeviceDesc
     {
         GraphicsBackend backend = kDefaultGraphicsBackend;   // D3D12 on Windows, Vulkan elsewhere
-#if defined(ARCANE_DEBUG)
-        bool enableValidation = true;   // NRI validation layer + VK validation
-#else
+
+        // NRI validation layer + Vulkan validation (render.debug.validation).
         bool enableValidation = false;
-#endif
-        // Opt-in: D3D12 CPU debug layer (EnableDebugLayer). Disabled by
-        // default because D3D12SDKLayers.dll raises RaiseFailFastException
-        // (code 0x87D) when third-party window hooks (e.g. Nahimic OSD) are
-        // loaded. NRI's own validation layer covers command-level errors;
-        // enable this only when debugging D3D12 API parameter errors on a
-        // machine without injected window hooks.
+
+        // D3D12 CPU debug layer (EnableDebugLayer; render.debug.d3d12DebugLayer).
+        // D3D12SDKLayers.dll raises RaiseFailFastException (code 0x87D) when
+        // third-party window hooks (e.g. Nahimic OSD) are loaded, and it can
+        // only be armed before the process's first device. NRI's own
+        // validation layer covers command-level errors.
         bool enableD3D12DebugLayer = false;
 
-        // Opt-in: Vulkan SYNCHRONIZATION validation, on top of the ordinary
-        // VK_LAYER_KHRONOS_validation core checks `enableValidation` turns on.
-        // Vulkan-only -- D3D12's debug layer has no separate sync-validation
-        // switch (its closest analogue, GPU-Based Validation, is a different
-        // and far costlier thing), so `enableD3D12DebugLayer` above is the
-        // whole D3D12 story.
-        //
-        // DEFAULT FALSE. Its only caller is the frame-graph vehicle
-        // (Render/Nri/NriGraphContext.cpp), which forces it on in Debug -- the
-        // class of defect sync validation catches (hazards in hand- or
-        // graph-derived barrier placement) is exactly what core validation
-        // does not. Sync validation is expensive and false-positive-prone on
-        // a full engine frame, which is why it is opt-in per device rather
-        // than folded into `enableValidation`: turning it on for Release/Dist
-        // is a separate decision nobody has made yet.
+        // Vulkan SYNCHRONIZATION validation (render.debug.vkSyncValidation),
+        // on top of the ordinary VK_LAYER_KHRONOS_validation core checks
+        // `enableValidation` turns on. Vulkan-only -- D3D12's debug layer has
+        // no separate sync-validation switch (its closest analogue,
+        // GPU-Based Validation, is a different and far costlier thing), so
+        // `enableD3D12DebugLayer` above is the whole D3D12 story. It catches
+        // hazards in hand- or graph-derived barrier placement, which core
+        // validation does not; it is expensive and false-positive-prone on a
+        // full engine frame, which is why it is its own switch rather than
+        // folded into `enableValidation`.
         //
         // Requires `enableValidation` (it configures the validation layer; with
         // no layer loaded there is nothing to configure) and the

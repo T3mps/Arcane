@@ -8,11 +8,10 @@
 // raycast). P1.8 ports ONLY:
 //   * Body SoA storage + handle/free-list/generation + AddBody/RemoveBody/
 //     IsValid (ports PhysicsWorld.lua addBody/removeBody/handleValid).
-//   * Step stages 1 and 5 (P1.8 scope only) for KINEMATIC bodies: prevX/Y
-//     snapshot + kinematic velocity integration + mover-broadphase AABB update
-//     (stage 1), then ContactManager::Step for events (stage 5). (Lua step()
-//     stage 1 kinematic branch + the trailing contacts:step. Stages 2-4 were
-//     added in P2.2/P2.4; see the PORTED IN P2.2 note below.)
+//   * Step stage 1 (P1.8 scope) for KINEMATIC bodies: prevX/Y snapshot +
+//     kinematic velocity integration + mover-broadphase AABB update. Event
+//     arrays are published at the end of Step (spec s6). Stages 2-5 were
+//     added in P2.2/P2.4/P3.1; see the PORTED IN P2.2 note below.
 //   * QueryAABB(rect) -> body handles (linear scan; ports queryAABB).
 //   * Static bodies in a staticList (not the mover broadphase) + an optional
 //     TileGrid for tile statics + _StaticCandidates (ports staticList /
@@ -28,12 +27,13 @@
 //     linearDamping, fixedRotation, bullet.
 //
 // PORTED IN P2.2 (SoftStep solver):
-//   * Step stages restructured to 1-5 (see Step() in PhysicsWorld.cpp):
+//   * Step stages (see Step() in PhysicsWorld.cpp):
 //       stage 1: prev snapshot + kinematic integrate
 //       stage 2: solver contact generation (UpdateContacts + EmitContactConstraints / Part A)
 //       stage 3: Soft Step solve (Part B)
-//       stage 4: island sleep bookkeeping (P2.4)
-//       stage 5: contacts:step (events + gating + deferred flush)
+//       stage 4: bullet CCD clamp (P3.1)
+//       stage 5: island sleep bookkeeping (P2.4)
+//       stage 6: contact / hit / sensor event arrays (spec s6)
 //
 // PORTED IN P2.4 (island sleep):
 //   * IslandManager::UpdateSleep wired at stage 4; sleep-island logic active.
@@ -44,17 +44,14 @@
 //   * raycast / shapeCast / lineOfSight (P1.9).
 // Dynamic bodies are ACCEPTED + stored (BodyType::Dynamic) and are
 // integrated by Step (gravity + damping + position). They are also registered
-// in the mover broadphase so the ContactManager emits mover-mover events.
-// NOTE: dynamic-vs-static-BODY collision RESPONSE still requires the solver
-// (P2.2); only kinematics events fire in P2.1 (faithful to
-// ContactManager.lua:150 -- the solver owns dynamic response).
+// in the mover broadphase. Dynamic response belongs to the solver (P2.2).
 //
 // DETERMINISM (port + modernize): Step iterates slots by INDEX (never map
-// order); the mover broadphase emits SORTED pairs; the ContactManager sorts
-// its End events; no wall-clock; no fast-math (the workspace builds /fp:precise
-// and forbids /fp:fast). Zero steady-state allocation in Step after warmup:
-// the SoA vectors only grow, the broadphase pools its nodes, and the
-// ContactManager reuses its pair map + scratch buffers.
+// order); the mover broadphase emits SORTED pairs; event arrays are sorted
+// before they become readable (spec s6.3); no wall-clock; no fast-math (the
+// workspace builds /fp:precise and forbids /fp:fast). Zero steady-state
+// allocation in Step after warmup: the SoA vectors only grow, the broadphase
+// pools its nodes, and the event buffers reuse their capacity.
 //
 // PRESENTATION-FREE + C++20-clean: Geometry::Vec2 + std + sibling Physics headers only.
 // No SDL3/NVRHI/Batcher2D/ImGui, no iso/Map/world coupling. Compiles both
@@ -72,18 +69,19 @@
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Manifold2D/Physics/Fixture.hpp>
+#include <Manifold2D/Physics/Events.hpp>
 #include <Manifold2D/Physics/Broadphase/Broadphase.hpp>
 #include <Manifold2D/Physics/Broadphase/DynamicTree.hpp> // FixtureBroadphaseTree() debug accessor
 #include <Manifold2D/Physics/Broadphase/Passability.hpp>
 #include <Manifold2D/Physics/Broadphase/TileGrid.hpp>
 #include <Manifold2D/Physics/Broadphase/SpatialGrid.hpp>
-#include <Manifold2D/Physics/ContactManager.hpp>
 #include <Manifold2D/Physics/Contact.hpp>            // ContactPool (collision-rebuild Phase 3)
 #include <Manifold2D/Physics/Solver/Solver.hpp>      // ISolver + ContactConstraint pool type
 #include <Manifold2D/Physics/Joints/Joint.hpp>       // Joint base + JointDef (P2.5)
 #include <Manifold2D/Physics/Island.hpp>             // Island::Island registry struct + constants (Phase A)
 #include <Manifold2D/Physics/IslandManager.hpp>      // island topology collaborator (decomp step 1)
 #include <Manifold2D/Physics/ConstraintGraph.hpp>    // contact subsystem collaborator (decomp step 2)
+#include <Manifold2D/Physics/StepTrace.hpp>          // StepTraced's snapshot record
 
 namespace Manifold2D
 {
@@ -113,7 +111,10 @@ namespace Manifold2D
             Vec2     position{ Real(0), Real(0) };
             Shape    shape{}; // required; stored by value per slot
             bool     isSensor      = false;
-            bool     eventsEnabled = true;
+            // copied onto the auto-fixture, like isSensor
+            bool     contactEvents = false;
+            bool     sensorEvents  = false;
+            bool     hitEvents     = false;
 
             // ---- dynamics (P2.1) -- ignored for Static/Kinematic ------------
             //
@@ -136,6 +137,11 @@ namespace Manifold2D
             Real sleepThreshold = Real(-1);
             bool fixedRotation  = false;       // invInertia forced to 0
             bool bullet         = false;       // CCD clamp (P3); stored now
+            // Continuous collision safety factor (Box2D v3 b2BodyDef::safetyFactor,
+            // default 0.5): a dynamic body is FAST -- and its step is swept against
+            // static geometry -- when it moves more than safetyFactor * minExtent
+            // in a step (minExtent: its shapes' smallest centroid-to-surface distance).
+            Real safetyFactor   = Real(0.5);
 
             // ---- primary fixture filter + local transform (T6 fix) ----------
             //
@@ -156,8 +162,52 @@ namespace Manifold2D
             // Existing dynamics tests therefore stay byte-for-byte green.
             std::uint32_t categoryBits = 1u;           // collision category
             std::uint32_t maskBits     = 0xFFFFFFFFu;  // collision mask
+            std::int32_t  groupIndex   = 0;            // collision group (see FixtureDef)
             Vec2          localPos     { Real(0), Real(0) }; // body-frame offset
             Real          localAngle   = Real(0);            // body-frame rotation
+
+            // Per-body multiplier on BOTH the world gravity and the gravity well
+            // (see GravityWell). 1 = full gravity, 0 = none (a drone, a floating
+            // marker), negative = pulled the other way. Dynamic bodies only.
+            Real          gravityScale = Real(1);
+        };
+
+        // ----------------------------------------------------------------
+        // GravityWell: an optional radial gravity field (a planet), added to
+        // the world gravity for every awake Dynamic body.
+        // ----------------------------------------------------------------
+        //
+        // Evaluated per body INSIDE the per-sub-step velocity integration, at
+        // the body's current in-step position (start-of-step position + the TGS
+        // position delta), the same place and the same way world gravity is
+        // applied. That is semi-implicit Euler at the sub-step, which keeps
+        // orbits bounded. (Pushing bodies once per Step from outside -- an
+        // impulse or a held force -- integrates the field at the start-of-step
+        // position for every sub-step, which pumps energy into orbits and wakes
+        // every body it touches; this is the engine-side alternative.)
+        //
+        // Field magnitude at distance r from `center` (R = surfaceRadius,
+        // g0 = surfaceGravity), always pointing at `center`:
+        //   r <  R                         : g0 * r / R            (interior, uniform-density planet)
+        //   InverseSquare, r >= R          : g0 * (R / r)^2        (real orbits)
+        //   Fade, R <= r <= fadeStart      : g0                    (a flat-feeling surface band)
+        //   Fade, fadeStart < r < fadeEnd  : g0 * (1 - smoothstep) (thins out with altitude)
+        //   Fade, r >= fadeEnd             : 0                     (deep space floats)
+        enum class GravityFalloff : std::uint8_t
+        {
+            InverseSquare = 0,
+            Fade          = 1,
+        };
+
+        struct GravityWell
+        {
+            bool           enabled        = false;
+            Vec2           center         { Real(0), Real(0) };
+            Real           surfaceRadius  = Real(1);  // > 0
+            Real           surfaceGravity = Real(0);  // m/s^2 at the surface (pulls toward center)
+            GravityFalloff falloff        = GravityFalloff::InverseSquare;
+            Real           fadeStart      = Real(0);  // Fade only: fadeStart < fadeEnd
+            Real           fadeEnd        = Real(0);
         };
 
         // ----------------------------------------------------------------
@@ -212,6 +262,9 @@ namespace Manifold2D
             Real          restitutionThreshold = Real(1);
             // Box2D v3 b2DefaultWorldDef.maxContactPushSpeed (types.c:16): 3 m/s.
             Real          contactPushMaxVelocity = Real(3);
+            // Box2D v3 b2WorldDef::enableContinuous (default true): FAST non-bullet
+            // dynamic bodies are swept against static geometry (see BulletSweep).
+            bool          enableContinuous = true;
 
             // Box2D v3 max linear speed clamp (b2WorldDef::maximumLinearSpeed,
             // types.c:21 default 400 * lengthUnitsPerMeter). Bodies faster than
@@ -227,6 +280,13 @@ namespace Manifold2D
             // 0.05 m/s applies directly. Per-body override via BodyDef::sleepThreshold
             // (>= 0). The maxExtent weighting handles body size.
             Real          sleepThreshold = Real(0.05);
+
+            // Approach speed (m/s) a touching point must EXCEED to report a hit
+            // (Box2D b2WorldDef::hitEventThreshold, types.c:14: 1 m/s).
+            Real          hitEventThreshold = Real(1);
+            // false: a contact reports begin/end if EITHER fixture opts in (Box2D
+            // contact.c:253). true: BOTH must (Arcane's policy, spec amendment A2).
+            bool          contactEventsRequireBoth = false;
         };
 
         class Body; // forward decl (Body.hpp); ergonomic view over a handle.
@@ -292,6 +352,41 @@ namespace Manifold2D
             BodyHandle exclude = kInvalidBody;
         };
 
+        // ----------------------------------------------------------------
+        // QueryFilter: which fixtures a world query sees (Box2D v3 b2QueryFilter).
+        // A fixture is a candidate when (its categoryBits & maskBits) != 0 AND
+        // (its maskBits & categoryBits) != 0 -- b2ShouldQueryShape: the query is
+        // a body of category `categoryBits` that collides with `maskBits`, and the
+        // fixture must collide with it too. `exclude` skips one body (Box2D does
+        // that in the query callback; the closest-hit query has no callback).
+        // ----------------------------------------------------------------
+        struct QueryFilter
+        {
+            std::uint32_t categoryBits = 1u;           // B2_DEFAULT_CATEGORY_BITS
+            std::uint32_t maskBits     = 0xFFFFFFFFu;  // B2_DEFAULT_MASK_BITS
+            BodyHandle    exclude      = kInvalidBody;
+            // Manifold2D extension: a NEGATIVE group skips every fixture of that
+            // group -- a ragdoll's own parts, all of them (exclude is one body).
+            // Box2D's b2QueryFilter has no group; its users filter in the callback.
+            std::int32_t  groupIndex   = 0;
+        };
+
+        // ----------------------------------------------------------------
+        // RayResult: CastRayClosest's hit (Box2D v3 b2RayResult). `fixture` is
+        // invalid for a tile span (no fixture) or a fixtureless legacy body;
+        // `body` is kInvalidBody for a tile span. `normal` is the unit surface
+        // normal at `point`, facing back along the ray; `fraction` is the share
+        // of the translation travelled to `point`.
+        // ----------------------------------------------------------------
+        struct RayResult
+        {
+            BodyHandle    body = kInvalidBody;
+            FixtureHandle fixture{};
+            Vec2          point{ Real(0), Real(0) };
+            Vec2          normal{ Real(0), Real(0) };
+            Real          fraction = Real(0);
+        };
+
         // A body slot NOT in the awake-set (static, kinematic, sleeping, or dead).
         // Sentinel stored in m_awakeIndex[slot] when the slot is not a member of
         // m_awakeBodies. Must not collide with any real dense position index.
@@ -312,7 +407,7 @@ namespace Manifold2D
         class PhysicsWorld
         {
             // decomp step 1: IslandManager owns island topology + the sleep pass.
-            // Befriended (not a public accessor seam like ContactManager) because
+            // Befriended because
             // SplitIsland needs intimate world state (contact pool + joint edges) --
             // the same trust boundary this code had when it lived inside the world.
             friend class IslandManager;
@@ -491,6 +586,75 @@ namespace Manifold2D
             [[nodiscard]] Real GetAngle(BodyHandle h) const noexcept;
             void SetAngle(BodyHandle h, Real angle);
 
+            // ---- gravity well + per-body gravity scale ----------------------
+
+            // Install (or, with enabled = false, remove) the world's radial
+            // gravity field. An invalid well (non-finite fields, surfaceRadius
+            // <= 0, or a Fade with fadeEnd <= fadeStart or fadeStart < 0) is
+            // refused with a warning and the previous well is kept. Takes effect
+            // on the next Step for every AWAKE dynamic body; sleeping bodies keep
+            // sleeping until something wakes them (as with world gravity).
+            void SetGravityWell(const GravityWell& well);
+            [[nodiscard]] const GravityWell& GetGravityWell() const noexcept { return m_gravityWell; }
+
+            // The well's acceleration at world point p ((0,0) when disabled).
+            // The solver calls this per body per sub-step; exposed for queries
+            // (e.g. a renderer drawing the field, a controller cancelling it).
+            [[nodiscard]] Vec2 GravityWellAccel(Vec2 p) const noexcept;
+
+            // Per-body gravity multiplier (see BodyDef::gravityScale). Setting it
+            // on a Dynamic body wakes it so the change takes effect; a
+            // non-finite scale is refused.
+            void SetGravityScale(BodyHandle h, Real scale);
+            [[nodiscard]] Real GravityScale(BodyHandle h) const noexcept;
+
+            // Change the collision filter of every fixture on a live body
+            // (b2Shape_SetFilter): each fixture's contacts are destroyed and its
+            // broadphase proxy re-inserted, so pairs the new filter rejects stop
+            // at once and pairs it admits are found on the next Step (static
+            // pairs are re-queried every step for awake bodies). The body and
+            // the bodies it touched are woken. Not for every tick: it costs a
+            // contact teardown, like Box2D's.
+            void SetBodyFilter(BodyHandle h, std::uint32_t categoryBits, std::uint32_t maskBits);
+
+            // Per-fixture event opt-ins. contact and hit apply to contacts created
+            // afterwards; sensor is read every sensor pass (spec s6.1, amendment A3).
+            void SetFixtureEvents(FixtureHandle fh, bool contact, bool sensor, bool hit);
+            void SetHitEventThreshold(Real threshold);
+            void SetContactEventsRequireBoth(bool both) noexcept { m_contactEventsRequireBoth = both; }
+
+            // Begin/hit are this step's arrays; end is the buffer the previous flip
+            // published (Box2D world.c:807-810, :1515). Valid until the next Step.
+            [[nodiscard]] ContactEvents GetContactEvents() const noexcept;
+            // Sensor begin is this step's array; sensor end is the buffer the
+            // previous flip published (same index as contact ends). Valid until
+            // the next Step.
+            [[nodiscard]] SensorEvents GetSensorEvents() const noexcept;
+
+            // Touching solver contacts of this body, ascending pool id, including a
+            // sleeper's persistent contact (b2Body_GetContactData, Box2D body.c:460-499;
+            // touching is body.c:480). Sleepers stay in the pool and drop out of the
+            // solver feed. `out` is cleared first; an invalid handle leaves it empty.
+            // normal points from self outward to the other body.
+            void GetBodyContacts(BodyHandle h, std::vector<BodyContact>& out) const;
+
+            // Test seam: the pool contact's eventFlags, or 0xFF when no contact exists.
+            [[nodiscard]] std::uint8_t DebugContactEventFlags(FixtureHandle a, FixtureHandle b) const;
+
+            // Make a live body a bullet, or stop it being one (b2Body_SetBullet). A
+            // dynamic bullet's step is swept against statics, kinematic bodies and
+            // non-bullet dynamic bodies, and clamped to the earliest time of impact
+            // (a kinematic bullet sweeps statics only). For bodies that move fast
+            // for a while -- a thrown object, a projectile -- not for every body:
+            // each bullet costs a shape cast per fixture per step.
+            void SetBullet(BodyHandle h, bool bullet);
+            [[nodiscard]] bool IsBullet(BodyHandle h) const noexcept;
+
+            // Continuous collision for fast non-bullet bodies vs statics
+            // (b2World_EnableContinuous); on by default (WorldDef::enableContinuous).
+            void EnableContinuous(bool on) noexcept { m_enableContinuous = on; }
+            [[nodiscard]] bool IsContinuousEnabled() const noexcept { return m_enableContinuous; }
+
             // Render-boundary lerp between prev and current step positions
             // (ports Body:drawPosition).
             [[nodiscard]] Vec2 DrawPosition(BodyHandle h, Real alpha) const noexcept;
@@ -501,20 +665,12 @@ namespace Manifold2D
 
             // ---- events ----------------------------------------------------
 
-            // Install / replace the contact listener (ports onContact). Called
-            // AFTER all step state has settled (deferred delivery).
-            void OnContact(ContactManager::Listener fn);
-
-            // Per-body event gate (ports _setBodyEvents). true->false: Disarm
-            // (drop, no synthetic end). false->true: Rearm (fresh begin for
-            // currently-overlapping pairs, level-triggered).
-            void SetBodyEvents(BodyHandle h, bool on);
-
-            // World-level event gate (ports setEventsEnabled). on->off: Disarm
-            // all. off->on: Rearm all overlapping.
+            // World-level event gate (spec s6.2). Off drops new contact Begins,
+            // sensor Begins, and hits. An End is still delivered iff its Begin
+            // was (R10, R12). Turning the gate back on does not emit a burst.
             void SetEventsEnabled(bool on);
 
-            [[nodiscard]] bool EventsEnabled() const noexcept { return m_eventsEnabled; }
+            [[nodiscard]] bool EventsEnabled() const noexcept { return m_eventGate; }
 
             // ---- joints (P2.5; ports PhysicsWorld.lua addJoint/removeJoint) -
             //
@@ -537,12 +693,37 @@ namespace Manifold2D
             // removeJoint drops it). Ports `#w.joints`.
             [[nodiscard]] std::size_t JointCount() const noexcept { return m_joints.size(); }
 
+            // The force (N, world frame) and torque (N m) joint `j` applied to its
+            // body B over the last step it was solved in (b2Joint_GetConstraintForce
+            // / b2Joint_GetConstraintTorque; the definition is on Joint::
+            // ReactionForce). A breakable joint reads these each step and removes
+            // the joint past its threshold. Zero for a joint this world does not
+            // own (nullptr, removed, or never solved).
+            [[nodiscard]] Vec2 JointReactionForce(const Joint* j) const noexcept;
+            [[nodiscard]] Real JointReactionTorque(const Joint* j) const noexcept;
+
             // ---- step (kinematic subset) -----------------------------------
 
-            // Advance the world by dt: prev snapshot + KINEMATIC velocity
-            // integration + mover-broadphase update, then ContactManager::Step
-            // (events + gating + deferred flush). NO dynamics solving.
+            // Advance the world by dt. See StepImpl for the stage order. Contact,
+            // hit, and sensor event arrays are published at the end of the step.
             void Step(Real dt);
+
+            // Step(dt) PLUS one StepTraceSnapshot after every solver stage: the
+            // five in-sub-step stages (IntegrateVelocities / WarmStart / Solve /
+            // IntegratePositions / Relax) with their sub-step index, then
+            // Restitution and StoreImpulses once with substep == substepCount.
+            // At the default substepCount == 4 that is exactly 22 snapshots,
+            // APPENDED to trace.snapshots (clear it yourself to keep one step).
+            //
+            // Shares ONE implementation with Step (StepImpl), so the world it
+            // leaves is BIT-IDENTICAL to the world Step(dt) would have left: the
+            // snapshots are pure reads plus one behaviourally-neutral
+            // lane->constraint impulse copy-out (SimdSolve::StoreImpulses, which
+            // the StoreImpulses stage runs anyway). It ALLOCATES (the snapshot
+            // vectors), so this is an inspection / visualization entry point --
+            // not for a hot loop, and not covered by the zero-steady-state-alloc
+            // contract Step honors.
+            void StepTraced(Real dt, StepTrace& trace);
 
             // Phase D1: inject the task executor the solver parallelizes over.
             // nullptr -> the world's owned SerialWorkScheduler (deterministic default).
@@ -572,6 +753,20 @@ namespace Manifold2D
             [[nodiscard]] std::optional<RaycastHit>
             Raycast(const Vec2& from, const Vec2& to,
                     const RaycastOpts& opts = {}) const;
+
+            // The nearest fixture the ray origin -> origin + translation hits
+            // (Box2D v3 b2World_CastRayClosest). Candidates: tile spans, static
+            // bodies and the mover fixtures (kinematic + dynamic), gathered by the
+            // ray's bounding box from the static index and the mover broadphase
+            // (so it works with any BroadphaseKind; Box2D walks its trees along the
+            // ray instead, which only pays for long rays). Sensors are skipped and
+            // the filter applies to each fixture; tile spans and fixtureless legacy
+            // bodies have no filter. A fixture containing the origin is not
+            // reported (Box2D's shape ray casts miss from inside). std::nullopt for
+            // a miss or a zero translation.
+            [[nodiscard]] std::optional<RayResult>
+            CastRayClosest(const Vec2& origin, const Vec2& translation,
+                           const QueryFilter& filter = {}) const;
 
             // Line-of-sight (PORT of lineOfSight): true iff NO sight-blocking
             // (TALL) cell lies between `from` and `to`. Equivalent to
@@ -620,16 +815,14 @@ namespace Manifold2D
             // while the handle is.
             [[nodiscard]] Body GetBody(BodyHandle h) noexcept;
 
-            // ---- internals consumed by ContactManager (port seam) ----------
+            // ---- slot accessors (SoA stays private) -------------------------
             //
-            // ContactManager reads the SoA directly (the Lua manager reached
-            // into world.shape/posX/.../staticList/moverHash). These mirror that
-            // access without exposing the raw vectors to general callers.
+            // Collaborators read the body columns through these instead of the
+            // raw vectors.
 
             [[nodiscard]] std::uint32_t Count()   const noexcept { return m_count; }
             [[nodiscard]] bool Alive(std::uint32_t i) const noexcept { return m_alive[i] != 0; }
             [[nodiscard]] bool SensorSlot(std::uint32_t i) const noexcept { return m_sensor[i] != 0; }
-            [[nodiscard]] bool EvtOn(std::uint32_t i)  const noexcept { return m_evtOn[i] != 0; }
             [[nodiscard]] BodyType TypeSlot(std::uint32_t i) const noexcept
             {
                 return static_cast<BodyType>(m_btype[i]);
@@ -639,9 +832,8 @@ namespace Manifold2D
             {
                 return Vec2(m_posX[i], m_posY[i]);
             }
-            // Body angle for slot i (T5: ContactManager ShapesOverlap uses it
-            // so the event overlap test is consistent with the rotation-aware
-            // GenerateContacts path).
+            // Body angle for slot i. The narrowphase and the solver both read it,
+            // so overlap tests use the same rotation as contact generation.
             [[nodiscard]] Real AngleSlot(std::uint32_t i) const noexcept
             {
                 return m_angle[i];
@@ -656,22 +848,7 @@ namespace Manifold2D
             {
                 return Vec2(m_localCenterX[i], m_localCenterY[i]);
             }
-            // Rotation + fixture-aware overlap test between two body SLOTS (T7
-            // Part A). Iterates every fixture of body a against every fixture of
-            // body b, composing each fixture's world Transform (bodyPos/angle ∘
-            // fixtureLocal) and running the unified rotation-aware Collide; true
-            // on the FIRST fixture-pair with a contact point. Falls back to the
-            // legacy single shape (m_shape, real m_angle) for a body with no
-            // fixtures (mirrors GenerateContacts' fallback). Sensor fixtures are
-            // NOT skipped here -- event gating must detect sensor overlaps
-            // (sensor-ness is applied later in ContactManager::Emit). The fixture
-            // SoA is PRIVATE, so ContactManager (a separate TU) calls THIS rather
-            // than reaching into the arrays. Replaces the rotation-blind
-            // single-shape CollideShapes path that ContactManager used in T5.
-            [[nodiscard]] bool SlotsOverlap(std::uint32_t a,
-                                            std::uint32_t b) const;
             // Build the BodyHandle for slot i (index + its current generation).
-            // Used by the ContactManager to fill event payloads.
             [[nodiscard]] BodyHandle HandleOf(std::uint32_t i) const noexcept
             {
                 return BodyHandle{ i, m_gen[i] };
@@ -742,11 +919,7 @@ namespace Manifold2D
             }
 
             // Map a fixture slot to its owning body slot (Phase 2, Task 2).
-            // Its sole caller -- ContactManager::Step's fixture-pair -> body-pair
-            // dedup -- was deleted in Phase 4 (events now derive from the pool's
-            // already-body-keyed touch-state), so this is currently UNUSED. Kept
-            // as a public fixture->body map; a candidate for Phase-5 dead-code
-            // removal.
+            // No Step path calls it. Kept as a public fixture->body map.
             [[nodiscard]] std::uint32_t BodyOfFixture(std::uint32_t fi) const noexcept
             {
                 return m_fxBody[fi];
@@ -779,7 +952,7 @@ namespace Manifold2D
             // ---- internals consumed by the Soft Step solver (P2.2 seam) -----
             //
             // The solver reads/writes the dynamics SoA through these slot
-            // accessors (mirroring the ContactManager seam above) so the raw
+            // accessors (mirroring the slot seam above) so the raw
             // vectors stay private. Velocity + angVel are mutated every solve
             // iteration; position + angle are committed once per Step at the
             // solver's FinalizePositions. All are inline -> the per-iteration
@@ -878,6 +1051,7 @@ namespace Manifold2D
             [[nodiscard]] Real RestSlot(std::uint32_t i) const noexcept { return m_rest[i]; }
             [[nodiscard]] Real FricSlot(std::uint32_t i) const noexcept { return m_fric[i]; }
             [[nodiscard]] Real LinDampSlot(std::uint32_t i) const noexcept { return m_linDamp[i]; }
+            [[nodiscard]] Real GravityScaleSlot(std::uint32_t i) const noexcept { return m_gravityScale[i]; }
             [[nodiscard]] Vec2 VelSlot(std::uint32_t i) const noexcept
             {
                 return Vec2(m_velX[i], m_velY[i]);
@@ -897,10 +1071,10 @@ namespace Manifold2D
             // Core.  Both forward to Core-internal members without exposing raw
             // vectors to general callers.
 
-            // Visit each contact pair in the begun state (begun == true) from
-            // the LAST Step, passing the two body SLOT indices.  Read-only;
-            // unordered iteration (unordered_map traversal -- acceptable for a
-            // debug overlay).  Forwards to ContactManager::ForEachBegunPair.
+            // Every touching body-to-body pool contact, ascending id (spec s6.5).
+            // Passes the two body SLOT indices. Read-only. Includes
+            // dynamic-vs-static. Signature unchanged: Arcane's
+            // PhysicsDebugDraw calls this with (slotA, slotB).
             void ForEachContact(
                 Mosaic::FunctionRef<void(std::uint32_t a,
                                  std::uint32_t b)> fn) const;
@@ -977,6 +1151,7 @@ namespace Manifold2D
             {
                 m_prevX[i] = m_posX[i];
                 m_prevY[i] = m_posY[i];
+                m_prevAngle[i] = m_angle[i];
             }
             // Visit each LIVE island's member-slot list (Phase A sleep seam). A live
             // island has a non-empty member list; freed ids (empty) are skipped.
@@ -1099,10 +1274,7 @@ namespace Manifold2D
             // BodyDef::sleepThreshold is < 0 (the inherit sentinel).
             [[nodiscard]] Real SleepThresholdDefault() const noexcept { return m_sleepThresholdDefault; }
 
-            // World-space tight AABB of slot i. Exposed here (not just private)
-            // so ContactManager can use it for the AABB pre-filter on the
-            // kinematic-vs-static loop without an extra round-trip through
-            // GetShape + a separate ComputeAABB call.
+            // World-space tight AABB of slot i.
             [[nodiscard]] Aabb2 SlotAabb(std::uint32_t i) const noexcept;
 
             // Static collision candidates near a box: merged tile spans (into
@@ -1125,6 +1297,53 @@ namespace Manifold2D
             { return m_residencyGrid.QueryAABB(region, out); }
 
         private:
+            // The ONE Step implementation. trace == nullptr -> exactly Step(dt)
+            // (the only added cost is a null check before the solve); non-null ->
+            // record each solver row's start pose and install the per-stage
+            // snapshot hook on SolverContext::traceHook. See StepTraced.
+            void StepImpl(Real dt, StepTrace* trace);
+
+            // Contact begin/end writers (R10: an End is delivered iff its Begin was).
+            // Begin pushes only while the world event gate is set, and sets beginReported.
+            // End pushes iff beginReported, ignoring the gate, then clears the bit.
+            void PushContactBegin(Contact& c);
+            void PushContactEnd(Contact& c);
+
+            // One visitor recorded against a sensor fixture. The handles keep the
+            // generation from the pass that stored them, so a recycled slot
+            // compares unequal (Box2D sensor.c b2ShapeRef: shape id + generation).
+            struct SensorOverlap
+            {
+                FixtureHandle visitor{};
+                BodyHandle    visitorBody{};
+                // Set only when PushSensorBegin actually pushed (R12). An End is
+                // delivered iff this is set, even after the world gate closes.
+                bool          beginReported = false;
+            };
+            // Per fixture slot, aligned with m_fxGen. gen/body name the sensor
+            // that owns `overlaps`. A gen mismatch means the slot was recycled.
+            struct SensorState
+            {
+                std::uint32_t              gen = 0;
+                BodyHandle                 body{};
+                std::vector<SensorOverlap> overlaps;
+            };
+
+            // Sensor begin/end (R12: an End is delivered iff its Begin was).
+            // Begin pushes only while the world event gate is set, and sets beginReported
+            // on the overlap. End pushes iff beginReported, ignoring the gate, then
+            // clears the bit. Overlap membership still updates when the gate is off,
+            // so re-enabling does not burst.
+            void PushSensorBegin(FixtureHandle sensor, BodyHandle sensorBody, SensorOverlap& overlap);
+            void PushSensorEnd(FixtureHandle sensor, BodyHandle sensorBody, SensorOverlap& overlap);
+
+            // End-of-step sensor pass (Box2D 3.1.1 sensor.c b2OverlapSensors, spec s6.1).
+            void RunSensorPass();
+
+            // True when Collide at margin 0 reports any point with separation > 0
+            // (spec s6.1 sensor overlap).
+            [[nodiscard]] bool FixturesOverlapExact(std::uint32_t fa, std::uint32_t fb) const;
+
             // ---- per-fixture broadphase helpers (Phase 2, Task 1) -------------
             //
             // UpdateMoverProxies(b): refreshes residency and all fixture proxies in
@@ -1132,6 +1351,7 @@ namespace Manifold2D
             // every position-commit site so the fixture broadphase stays in lockstep
             // with residency automatically.
             void UpdateMoverProxies(std::uint32_t b);
+
 
             // Add / remove a single fixture proxy in m_fixtureBroadphase.
             // AddFixtureProxy skips Static bodies (they are not mover proxies).
@@ -1159,8 +1379,8 @@ namespace Manifold2D
             //   worldPos   = bodyPos + R(bodyAngle) * localPos
             //   worldAngle = bodyAngle + localAngle
             // The single copy of the rotate+offset formula, shared by SlotAabb,
-            // GenerateContacts' FixtureWorldXf lambda, SlotsOverlap (events),
-            // the fixture-aware queries (Queries.cpp), and BulletSweep (CCD).
+            // the contact narrowphase, the fixture-aware queries (Queries.cpp),
+            // and BulletSweep (CCD).
             // Static so it can be called wherever the SoA values are in hand.
             [[nodiscard]] static Transform ComposeFixtureXf(Vec2 bodyPos,
                                                             Real bodyAngle,
@@ -1186,7 +1406,20 @@ namespace Manifold2D
             std::vector<Real>           m_fxRestitution;
             std::vector<std::uint32_t>  m_fxFilterCat;
             std::vector<std::uint32_t>  m_fxFilterMask;
+            std::vector<std::int32_t>   m_fxFilterGroup;
+        public:
+            // Box2D b2ShouldShapesCollide over two live fixtures: a shared negative
+            // group never collides, a shared positive group always does, otherwise
+            // each side's category must be in the other's mask.
+            [[nodiscard]] bool FixturesCollide(std::uint32_t fa, std::uint32_t fb) const noexcept
+            {
+                const std::int32_t ga = m_fxFilterGroup[fa];
+                if (ga != 0 && ga == m_fxFilterGroup[fb]) { return ga > 0; }
+                return (m_fxFilterCat[fa] & m_fxFilterMask[fb]) != 0u && (m_fxFilterCat[fb] & m_fxFilterMask[fa]) != 0u;
+            }
+        private:
             std::vector<std::uint8_t>   m_fxSensor;
+            std::vector<std::uint8_t>   m_fxContactEvents, m_fxSensorEvents, m_fxHitEvents;
             std::vector<std::uint32_t>  m_fxBody;    // owning body slot
             std::vector<std::uint32_t>  m_fxGen;     // generation per fixture slot
 
@@ -1265,9 +1498,9 @@ namespace Manifold2D
             // ---- SoA (port of the Lua FFI arrays; std::vector here) ---------
             std::vector<Real>          m_posX, m_posY;
             std::vector<Real>          m_prevX, m_prevY;
+            std::vector<Real>          m_prevAngle;           // start-of-step angle (the continuous sweep rotates)
             std::vector<Real>          m_velX, m_velY;
             std::vector<std::uint8_t>  m_btype;   // BodyType
-            std::vector<std::uint8_t>  m_evtOn;   // per-body event gate
             std::vector<std::uint8_t>  m_alive;
             std::vector<std::uint8_t>  m_sensor;
             std::vector<std::uint32_t> m_gen;     // generation per slot
@@ -1283,11 +1516,14 @@ namespace Manifold2D
             std::vector<Real>          m_invMass, m_invInertia;
             std::vector<Real>          m_rest, m_fric;        // solver params (P2.2)
             std::vector<Real>          m_linDamp;             // velocity decay
+            std::vector<Real>          m_gravityScale;        // per-body gravity multiplier (world gravity + well)
             std::vector<Real>          m_sleepTimer;          // island sleep (P2.4)
             std::vector<Real>          m_maxExtent;           // body COM->farthest-point dist (+radius); sleep test
             std::vector<Real>          m_sleepThreshold;      // per-body sleep speed gate (m/s); see WorldDef/BodyDef
             std::vector<std::uint8_t>  m_awake;               // 1 = awake (integrates this step; P2.4 sleep clears to 0)
             std::vector<std::uint8_t>  m_bullet;              // CCD clamp (P3)
+            std::vector<Real>          m_minExtent;           // shapes' min centroid->surface dist (continuous test)
+            std::vector<Real>          m_safetyFactor;        // BodyDef::safetyFactor (continuous test)
 
             // ---- persistent island registry (Phase A) -----------------------
             // MOVED to IslandManager m_islandMgr (decomp step 1): m_islandId +
@@ -1363,12 +1599,37 @@ namespace Manifold2D
             // tile size is wired in (see the TODO).
             SpatialGrid m_residencyGrid{ Real(1) }; // MKS tile; TODO(map-integration): wire to the map's real tile size
 
-            bool m_eventsEnabled = true;
+            bool m_eventGate = true;
+
+            // Contact event arrays (spec 2026-10-08 s6.1). Begins and hits are
+            // cleared at the start of each Step (Box2D world.c:710-712). Ends are
+            // double-buffered: m_endEventIndex names the buffer this step (and a
+            // destroy before the next step) writes; GetContactEvents reads the other.
+            std::vector<ContactBeginEvent> m_contactBeginEvents;
+            std::vector<ContactHitEvent>   m_contactHitEvents;
+            std::vector<ContactEndEvent>   m_contactEndEvents[2];
+            std::uint32_t                  m_endEventIndex = 0;
+
+            // Sensor overlap memory + event arrays (spec s6.1). Begins are cleared
+            // at step start (Box2D world.c:710-712). Ends share m_endEventIndex
+            // with contact ends (world.c:807-810): this step writes
+            // m_sensorEndEvents[m_endEventIndex], and the flip publishes it.
+            // m_sensorState is per fixture slot. A freed fixture keeps a non-zero
+            // m_fxGen (RemoveBody bumps it), so liveness is each alive body's
+            // m_bodyFixtures list, not m_fxGen != 0.
+            std::vector<SensorState>       m_sensorState;
+            std::vector<SensorBeginEvent>  m_sensorBeginEvents;
+            std::vector<SensorEndEvent>    m_sensorEndEvents[2];
+            // Reused RunSensorPass scratch (clear/assign keeps capacity).
+            std::vector<std::uint32_t>     m_sensorSlotScratch;
+            std::vector<std::uint8_t>      m_sensorVisitedScratch;
+            std::vector<BodyHandle>        m_sensorBodyScratch;
 
             // ---- dynamics config (P2.1 + P2.2) -----------------------------
             // Global gravity applied to awake Dynamic bodies in Step.
             Real m_gravityX = Real(0);
             Real m_gravityY = Real(10);   // Box2D v3 default (types.c:13, y-down)
+            GravityWell m_gravityWell{};  // optional radial field (SetGravityWell); disabled by default
 
             // Soft Step config (copied from WorldDef; read by the solver).
             std::uint32_t m_substepCount         = 4u;
@@ -1376,11 +1637,11 @@ namespace Manifold2D
             Real          m_contactDampingRatio  = Real(10);
             Real          m_restitutionThreshold = Real(1);     // Box2D v3 (types.c:15)
             Real          m_contactPushMaxVelocity = Real(3);   // Box2D v3 (types.c:16)
+            bool          m_enableContinuous = true;            // Box2D v3 b2WorldDef::enableContinuous
             Real          m_maxLinearVelocity = Real(400);
             Real          m_sleepThresholdDefault  = Real(0.05); // WorldDef::sleepThreshold (Box2D v3, types.c:34)
-
-            // ---- contacts --------------------------------------------------
-            ContactManager m_contacts;
+            Real          m_hitEventThreshold = Real(1);          // WorldDef::hitEventThreshold (Box2D v3, types.c:14)
+            bool          m_contactEventsRequireBoth = false;     // WorldDef::contactEventsRequireBoth
 
             // ---- islands (topology + sleep pass; decomp step 1) ------------
             IslandManager m_islandMgr;
@@ -1443,7 +1704,11 @@ namespace Manifold2D
             // conservative-advancement cast is fixed-iteration, no wall-clock).
             // Runs AFTER the solver commits dynamic positions and BEFORE events
             // (so contact events + island sleep see the clamped position).
-            void BulletSweep();
+            void BulletSweep(Real dt);
+            // The earliest time of impact in (0, 1] for one fixture of a body swept over
+            // this step -- position AND rotation, start pose to end pose (1 = no hit).
+            // See the definition for the rules.
+            [[nodiscard]] Real CcdFixtureToi(std::uint32_t body, std::uint32_t fi, bool movers);
 
             // ---- query scratch (zero steady-state alloc) -------------------
             //
@@ -1453,15 +1718,16 @@ namespace Manifold2D
             // no per-call heap traffic after warmup).
             //
             // NOT re-entrant. Queries are single-threaded AND must NOT be called
-            // from within a contact callback (OnContact fires inside Step; a
-            // nested query would overwrite these scratch buffers mid-traversal ->
-            // silent wrong results).
+            // from inside a step's narrowphase (a nested query would overwrite
+            // these scratch buffers mid-traversal -> silent wrong results).
             // Safe call sites: the game-update loop, CharacterController, CCD
             // pre-step.
             // If a future system needs a query inside a callback, switch to
             // thread_local or caller-supplied scratch.
             mutable std::vector<Aabb2>         m_scratchSpans;
             mutable std::vector<std::uint32_t> m_scratchStatics;
+            std::vector<std::uint32_t>         m_ccdMoverScratch; // CcdFixtureToi's mover candidates
+            mutable std::vector<std::uint32_t> m_rayMoverScratch; // CastRayClosest's mover candidates
 
             // ---- persistent contact pool (collision-rebuild Phase 3, Task 2/4) --
             //
@@ -1475,18 +1741,6 @@ namespace Manifold2D
             // to ConstraintGraph (decomp step 2 Task 2), reached through the probe
             // forwarders above (ContactColorOf/ValidatePersistentColoring/
             // ColoredContactCount) and the Grow/DebugBodyMaskClear seams.
-
-            // ---- per-step touched EVENT body-pairs (collision-rebuild Phase 4) --
-            //
-            // The deduped, sorted set of body-pairs that are EVENT-RELEVANT AND
-            // TOUCHING this Step, derived from the persistent pool by
-            // ConstraintGraph::CollectTouchedEventPairs (Step stage 6) and consumed
-            // by ContactManager::Step to derive Begin/Stay events. STAYS world-owned
-            // as the stage-output hand-off buffer (like m_contactConstraints ->
-            // solver): the graph fills it, the world hands it to ContactManager.
-            // clear() keeps capacity -> zero steady-state alloc.
-            std::vector<BroadphasePair> m_touchedEventPairs;
-
 
         };
 

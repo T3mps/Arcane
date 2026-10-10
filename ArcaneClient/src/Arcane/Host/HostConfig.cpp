@@ -5,6 +5,7 @@
 #include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
 #include <algorithm>   // std::find -- SanitizeRelaunchLine's strip-set lookups
 #include <cstdio>
+#include <format>
 #include <string_view>
 namespace Arcane
 {
@@ -85,7 +86,7 @@ namespace Arcane
         cli.Option("backend", kDefaultBackendCliName, "graphics backend: dx12|vulkan").Choices({ "dx12", "vulkan" });
         cli.Option("frames",  "0",           "render N frames then exit").Type(CliType::Uint);
         cli.Flag  ("no-vsync",               "present without vsync");
-        cli.Flag  ("perf",                   "log per-phase ms every 60 frames");
+        cli.Flag  ("perf",                   "log per-phase ms (sets diagnostics.perfLog; interval: diagnostics.perfLogIntervalFrames)");
         cli.Option("plugin",  "",            "game DLL to host (empty = the project's gameModule; a runtime with nothing to host refuses boot)");
         cli.Option("project", "", "project folder or .arcproj to open (empty = data/-next-to-exe)");
         cli.Option("scene",   "", "asset Guid to boot instead of the manifest's bootScene (empty = follow the manifest)");
@@ -93,7 +94,8 @@ namespace Arcane
         cli.Flag  ("print-engine-info",       "print engine identity JSON to stdout and exit");
         cli.Flag  ("headless",           "render with no window shown and no swapchain; "
                                          "pairs with --frames/--probe/--report");
-        cli.Option("fixed-dt", "0.0166666666666666666", "seconds per simulated frame "
+        // 17 significant digits round-trip the default step's double exactly.
+        cli.Option("fixed-dt", std::format("{:.17g}", 1.0 / SimSettings{}.fixedHz), "seconds per simulated frame "
                                          "(--headless only)").Type(CliType::Double);
         cli.Option("fixed-time", "", "pin the absolute scene clock to this many seconds, so "
                                      "Time is independent of the frame count (--headless only; "
@@ -170,7 +172,7 @@ namespace Arcane
         cli.Flag  ("nri-graph",      "DEPRECATED, accepted and ignored: the NRI frame graph is "
                                      "the only render path. Kept so existing scripts and saved "
                                      "launch args do not fail to boot.");
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
         cli.Option("hang-main", "0", "DEV: on frame N block the main thread for 15 s without "
@@ -187,6 +189,7 @@ namespace Arcane
 
         HostConfig cfg;
         cfg.backend    = (r.Get("backend") == "vulkan") ? GraphicsBackend::Vulkan : GraphicsBackend::D3D12;
+        cfg.backendSupplied = r.Supplied("backend");
         cfg.maxFrames  = r.GetAs<std::uint64_t>("frames");
         cfg.vsync      = !r.Flag("no-vsync");
         cfg.perf       = r.Flag("perf");
@@ -251,7 +254,7 @@ namespace Arcane
         // above (unconditionally) purely so a command line that still passes
         // it does not fail to parse. There is nothing left to store -- the
         // graph path it used to opt into is now the only one.
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
         cfg.hangMainFrame = r.GetAs<std::uint64_t>("hang-main");
 #endif
@@ -535,7 +538,7 @@ namespace Arcane
             return { std::nullopt, 2 };
         }
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // --pick-probe x,y. Parsed HERE rather than at
         // the use site, and refused rather than clamped, because the whole
         // value of the flag is being scriptable: a probe whose coordinate was

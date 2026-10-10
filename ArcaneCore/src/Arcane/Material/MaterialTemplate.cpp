@@ -5,11 +5,13 @@
 #include <cstring>
 #include <unordered_set>
 #include <utility>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
     namespace
     {
+        ARC_CONSTANT("shader contract: an HLSL cbuffer register is 16 bytes wide")
         constexpr std::uint32_t kRegister = 16;   // HLSL cbuffer register width (bytes)
 
         constexpr std::uint32_t AlignUp(std::uint32_t v, std::uint32_t a) noexcept

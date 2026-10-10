@@ -18,7 +18,7 @@
           },
           "name": "PhysicsScene"
         },
-        "Arcane::PhysicsSettings": {
+        "Arcane::PhysicsSettings2D": {
           "gravity": [
             0.0,
             -9.8100004196167
@@ -52,11 +52,13 @@
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Aabb",
               "localAngle": 0.0,
@@ -66,7 +68,8 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
@@ -77,7 +80,7 @@
           },
           "name": "Ground"
         },
-        "Arcane::PhysicsBodyRef": null,
+        "Arcane::PhysicsBodyRef2D": null,
         "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": false,
@@ -137,11 +140,13 @@
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Aabb",
               "localAngle": 0.0,
@@ -151,7 +156,8 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
@@ -162,7 +168,7 @@
           },
           "name": "Crate"
         },
-        "Arcane::PhysicsBodyRef": null,
+        "Arcane::PhysicsBodyRef2D": null,
         "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": true,
@@ -212,7 +218,15 @@
           ]
         },
         "Arcane::WorldBounds": null,
-        "Arcane::WorldTransform": null
+        "Arcane::WorldTransform": null,
+        "ReferenceProject::TintOnContact": {
+          "color": [
+            1.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
       },
       "parent": 0
     },
@@ -222,11 +236,13 @@
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.6000000238418579,
               "halfH": 0.5,
               "halfLen": 0.0,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Circle",
               "localAngle": 0.0,
@@ -236,7 +252,8 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.20000000298023224
+              "restitution": 0.20000000298023224,
+              "sensorEvents": true
             }
           ]
         },
@@ -247,7 +264,7 @@
           },
           "name": "Ball"
         },
-        "Arcane::PhysicsBodyRef": null,
+        "Arcane::PhysicsBodyRef2D": null,
         "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": false,
@@ -307,11 +324,13 @@
           "fixtures": [
             {
               "categoryBits": 1,
+              "contactEvents": true,
               "density": 1.0,
               "friction": 0.0,
               "halfH": 0.30000001192092896,
               "halfLen": 0.3333333432674408,
               "halfW": 0.5,
+              "hitEvents": false,
               "isSensor": false,
               "kind": "Capsule",
               "localAngle": 0.0,
@@ -321,7 +340,8 @@
               ],
               "maskBits": 4294967295,
               "radius": 0.5,
-              "restitution": 0.0
+              "restitution": 0.0,
+              "sensorEvents": true
             }
           ]
         },
@@ -332,7 +352,7 @@
           },
           "name": "Pill"
         },
-        "Arcane::PhysicsBodyRef": null,
+        "Arcane::PhysicsBodyRef2D": null,
         "Arcane::RigidBody2D": {
           "bullet": false,
           "fixedRotation": true,

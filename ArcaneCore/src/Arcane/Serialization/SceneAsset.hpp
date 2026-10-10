@@ -218,7 +218,7 @@ namespace Arcane::Scene
     // and it matters more here: this file holds the level. Out of line because
     // the Windows replace needs <windows.h>, which does not belong in a header
     // this widely included.
-    ARCANE_CORE_API bool SaveSceneFile(const std::filesystem::path& file, const Astra::Registry& reg,
+    ARC_CORE_API bool SaveSceneFile(const std::filesystem::path& file, const Astra::Registry& reg,
                                   const Arcane::Guid& id, std::string* error);
 
     // The New Scene registry shape: one root entity carrying Transform +

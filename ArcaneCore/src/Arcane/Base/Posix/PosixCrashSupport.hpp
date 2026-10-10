@@ -11,13 +11,14 @@
 // (no stdio streams, no localtime, no dl_iterate_phdr). Raw syscalls, fixed
 // storage, and reads that FAIL instead of faulting.
 
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Platform/Platform.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
 #include <signal.h>   // _STRUCT_MCONTEXT; <ucontext.h> itself needs _XOPEN_SOURCE on Darwin
 #else
 #include <ucontext.h>
@@ -33,7 +34,7 @@ namespace Arcane::Diagnostics::Internal::Posix
     // Thread ids are the kernel's: a Linux tid, or on macOS the thread's Mach
     // port name in this task (what task_threads lists and thread_get_state
     // takes -- the SuspendThread/GetThreadContext handle).
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
     using NativeContext = _STRUCT_MCONTEXT;
 #else
     using NativeContext = ucontext_t;
@@ -152,6 +153,7 @@ namespace Arcane::Diagnostics::Internal::Posix
         std::uint64_t     exceptionAddress = 0;   // si_addr (or the pc)
     };
 
+    ARC_CONSTANT("file format: Breakpad DUMP_REQUESTED, the exception code of a hang or manual report")
     inline constexpr std::uint32_t kDumpRequested = 0xFFFFFFFFu;   // MD_EXCEPTION_CODE_LIN_DUMP_REQUESTED
 
     // Writes a Breakpad-format minidump (the Microsoft MDMP container with

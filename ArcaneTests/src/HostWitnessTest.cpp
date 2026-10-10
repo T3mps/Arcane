@@ -23,7 +23,7 @@ using Arcane::Test::GradeProcessFacts;
 static WitnessInvocation CmdInv(std::string cmdArg, std::filesystem::path reportPath = {})
 {
     WitnessInvocation inv;
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     inv.exePath    = "C:/Windows/System32/cmd.exe";
     inv.args       = { "/c", std::move(cmdArg) };
 #else
@@ -44,7 +44,7 @@ TEST_CASE("witness: exit code is captured", "[witness-unit]")
 
 TEST_CASE("witness: hard cap kills and reports timedOut", "[witness-unit]")
 {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     auto inv = CmdInv("ping -n 30 127.0.0.1 >nul");
 #else
     auto inv = CmdInv("sleep 30");

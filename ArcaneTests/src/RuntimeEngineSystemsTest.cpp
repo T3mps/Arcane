@@ -71,12 +71,12 @@ TEST_CASE("Runtime installs the engine's standard systems and reinstalls them af
     Arcane::Runtime rt(Arcane::Test::Process());
     auto& sch = rt.Schedulers();
 
-    CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     CHECK(sch.fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
     CHECK_FALSE(sch.update.HasSystem<Arcane::TransformPropagationSystem>());
 
     rt.ClearSystems();   // what PluginHost does around a module unload / reload
-    CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>());
     CHECK(sch.fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
 }
 

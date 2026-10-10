@@ -26,6 +26,6 @@ namespace Arcane::ShaderPaths
     //
     // Returns an EMPTY path when that directory does not exist, having
     // already logged why -- callers treat empty as "logged, give up".
-    [[nodiscard]] ARCANE_API std::filesystem::path ResolveFlavorDir(
+    [[nodiscard]] ARC_API std::filesystem::path ResolveFlavorDir(
         GraphicsBackend backend, const std::filesystem::path& shaderDir);
 }

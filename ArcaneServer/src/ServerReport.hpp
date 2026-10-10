@@ -15,12 +15,14 @@
 // compatibility promise, not decoration.
 
 #include <cstdint>
+#include <Arcane/Core/Constant.hpp>
 #include <string>
 
 namespace Arcane::Server
 {
     struct ServerReport
     {
+        ARC_CONSTANT("file format: server report schema version; readers gate on it")
         static constexpr int kSchemaVersion = 1;
 
         // --- run identity ---

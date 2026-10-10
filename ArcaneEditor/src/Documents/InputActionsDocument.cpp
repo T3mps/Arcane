@@ -1,10 +1,14 @@
 #include "Documents/InputActionsDocument.hpp"
+#include "Input/EditorActions.hpp"
+#include "Settings/EditorDocumentUiSettings.hpp"
 
 #include "Documents/InputActionsJson.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/Settings.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,6 +23,9 @@ namespace Arcane::Editor
 {
     namespace
     {
+        ARC_CONSTANT("UI fallback: the frame delta the rebind capture uses when ImGui reports DeltaTime 0; not a tunable and not the sim step")
+        constexpr float kFallbackFrameDelta = 1.0f / 60.0f;
+
         nlohmann::json ReadDraft(const std::filesystem::path& path)
         {
             std::ifstream stream(path, std::ios::binary);
@@ -142,7 +149,7 @@ namespace Arcane::Editor
     {
         if (!target.IsValid() || pending_) return;   // one capture at a time: the page's Rebind... waits for the pending add
         captureTarget_ = target;
-        capture_.Begin(target, std::nullopt, 10.0f, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
+        capture_.Begin(target, std::nullopt, Arcane::Settings<InputEditorSettings>().rebindTimeoutSeconds, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
     }
 
     void InputActionsDocument::BeginRebindFromPage(const Guid& target)
@@ -168,7 +175,7 @@ namespace Arcane::Editor
         // Any non-nil id (InputRebindOperation.cpp:48); never a row's, so no row
         // shows the rebind countdown. InputSwallowed() covers every step.
         captureTarget_ = Guid::Generate();
-        capture_.Begin(captureTarget_, std::nullopt, 10.0f, previewSnapshot_);
+        capture_.Begin(captureTarget_, std::nullopt, Arcane::Settings<InputEditorSettings>().rebindTimeoutSeconds, previewSnapshot_);
     }
 
     void InputActionsDocument::FinishPending()
@@ -226,9 +233,9 @@ namespace Arcane::Editor
             onChrome = onChrome || ImGui::IsAnyItemActive();   // the grip corner sits inside InnerRect; the columns are NoInputs, so an active item here is window decoration
         }
         if (!bodyDrawn || !focused_ || clickedAway) capture_.Cancel();
-        else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
+        else if (EditorActions::Get().Pressed("ui.cancel")) capture_.Cancel();
         else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive(), onChrome),
-                              ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);
+                              ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : kFallbackFrameDelta);
         const auto& result = capture_.Result();
         if (result.state == InputRebindState::Completed)
         {
@@ -265,10 +272,11 @@ namespace Arcane::Editor
         if (focusRequest_) { ImGui::SetNextWindowFocus(); focusRequest_ = false; }   // the page's Rebind... (BeginRebindFromPage)
         const bool bodyDrawn = ImGui::Begin(windowLabel_.c_str(), &open, flags);
         focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);   // valid on both branches
+        if (focused_) EditorActions::Get().MarkContextActive(ActionContext::Document);
         TickCapture(bodyDrawn);                                                      // BEFORE the shortcut: the swallow stamp is written here
         if (bodyDrawn)
         {
-            if (!InputSwallowed() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+            if (!InputSwallowed() && focused_ && EditorActions::Get().Pressed("document.save"))
                 if (!Save()) ARC_WARN("InputActionsDocument: save refused for '{}'", path_.generic_string());
             preview_.Sync(model_);
             if (state_.previewArmed)

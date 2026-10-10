@@ -25,18 +25,18 @@
 // disk read" still holds exactly: the first draw after an eviction costs one table
 // lookup plus one upload, never an artifact read.
 //
-// 512 MiB, a compile-time constant for now. It becomes a cvar when the parked cvar
-// arc lands, and that arc's own trigger discipline decides when -- this constant is
-// NOT a placeholder to be "fixed" ahead of it.
+// THE BUDGET IS render.mesh.residencyBudgetBytes (RenderBudgetSettings.hpp; 512 MiB
+// by default, Restart): NriMeshBufferCache::Create latches it, and
+// EvictToBudget without an explicit budget evicts against that.
 //
 // PER VEHICLE, NOT PER PROCESS (final-review I3). Every NriGraphContext creates its
 // own NriMeshBufferCache (NriGraphContext.cpp's Create), so the editor's viewport
 // vehicle, its thumbnail-harvester vehicle and one vehicle per open Mesh/Shader
-// document EACH get the full budget below -- N x 512 MiB worst case, not 512 MiB
+// document EACH get the full budget -- N x 512 MiB worst case, not 512 MiB
 // shared. That mirrors NriTextureCache's own per-vehicle shape (which has no byte
-// budget at all), so it is not a new divergence, but it IS the real shape the
-// parked cvar arc inherits: a process-wide pool needs a shared allocator above
-// these caches, not a smaller constant here.
+// budget at all), so it is not a new divergence, but it IS the real shape a
+// process-wide pool inherits: it needs a shared allocator above these caches, not
+// a smaller setting here.
 //
 // A DEDICATED MESH BUDGET HAS FIRST-CLASS UE PRECEDENT, and the earlier reading of
 // Decision 7 understated it: alongside r.Streaming.PoolSize
@@ -58,8 +58,6 @@
 
 namespace Arcane
 {
-    inline constexpr std::uint64_t kMeshResidencyBudgetBytes = 512ull * 1024ull * 1024ull;
-
     // What one resident mesh costs, and when it was last DRAWN (not last resolved --
     // a mesh resolved every frame by the scene sweep but never visible must still be
     // evictable, or the budget protects exactly the wrong entries).

@@ -12,15 +12,17 @@
 // their behaviour.
 //
 // THE SLACK: WorldBounds is the fixed-step pose; the sprite sweep renders a
-// pose interpolated toward it (PhysicsInterpBuffer), so a fast sprite at the
+// pose interpolated toward it (Arcane::PhysicsInterpBuffer2D), so a fast sprite at the
 // screen edge can sit a fraction of one step outside its box. The frustum is
-// widened by kVisibilitySlack metres before every test -- conservative, one
-// constant. Plan 2's GPU cull uses the SAME widened planes (VisibleSet::frustum).
+// widened by VisibilitySlackMeters() -- render.cull.frustumSlackMeters
+// (RenderLookSettings.hpp; Live, read once per pass) -- before every test.
+// Plan 2's GPU cull uses the SAME widened planes (VisibleSet::frustum).
 //
 // HEADER-ONLY, device-free (the GpuSceneSync idiom): ArcaneTests
 // drives it under ~[gpu]. No spatial structure -- the trigger is a measured
 // BuildVisibleSet above 0.5 ms (spec s4).
 #include <Arcane/Math/Aabb.hpp>
+#include <Arcane/Render/RenderLookSettings.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/Frustum.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
@@ -36,7 +38,12 @@
 
 namespace Arcane
 {
-    inline constexpr float kVisibilitySlack = 0.25f;
+    // The published render.cull.frustumSlackMeters: how far every view's
+    // frustum is widened before the coarse test.
+    [[nodiscard]] inline float VisibilitySlackMeters()
+    {
+        return Settings<RenderCullSettings>().frustumSlackMeters;
+    }
 
     struct VisibleEntry
     {
@@ -48,7 +55,7 @@ namespace Arcane
     struct VisibleSet
     {
         ViewTransform              view;
-        Frustum                    frustum;   // already Widened(kVisibilitySlack)
+        Frustum                    frustum;   // already Widened(VisibilitySlackMeters())
         std::vector<VisibleEntry>  entries;
         std::vector<std::uint64_t> members;   // bitset by entity index
 
@@ -113,7 +120,7 @@ namespace Arcane
     {
         out.Clear();
         out.view    = view;
-        out.frustum = Frustum::From(view).Widened(kVisibilitySlack);
+        out.frustum = Frustum::From(view).Widened(VisibilitySlackMeters());
         reg.CreateView<const WorldBounds, Astra::Not<Hidden>>().ForEach(
             [&](Astra::Entity e, const WorldBounds& wb)
             {

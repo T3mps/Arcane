@@ -195,7 +195,7 @@ namespace Arcane
     // through RenderErrorLatch::NoteError all land in this one counter.
     // GPU tests assert this stays zero -- the machine-enforced form of the
     // "validation must stay silent" foundation rule.
-    ARCANE_API uint64_t RenderErrorCount();
+    ARC_API uint64_t RenderErrorCount();
 
     // Test support ONLY -- production code must never call this (the count
     // above is documented as "since process start"). Restores the 0/0 gate
@@ -205,7 +205,7 @@ namespace Arcane
     // permanent +1 into every unrelated test case's RenderErrorCount()==0
     // assertion for the rest of the process. Same idiom as
     // ResetGpuDeviceLost() (GpuInstrumentation.hpp).
-    ARCANE_API void ResetRenderErrorCount();
+    ARC_API void ResetRenderErrorCount();
 
     // Test support ONLY -- the two seams a [nri] case needs to prove that
     // RenderErrorLatch::NoteError reaches THIS latch (and that it does
@@ -216,7 +216,7 @@ namespace Arcane
     // from ArcaneClient.dll, kept reading the DLL's. Production code inside
     // the DLL calls RenderErrorLatch::Instance().NoteError directly and
     // must never reach for these.
-    ARCANE_API void NoteRenderErrorForTest(const char* tag, const char* text) noexcept;
+    ARC_API void NoteRenderErrorForTest(const char* tag, const char* text) noexcept;
 
     // Installs (or, with nullptr, clears) the device-removed hook on the
     // DLL-side RenderErrorLatch. Last-writer-wins, exactly like the
@@ -224,7 +224,7 @@ namespace Arcane
     // names goes out of scope, and must not run while a real device holds
     // the slot (no device exists in the ~[gpu] gate, which is where the one
     // caller lives).
-    ARCANE_API void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept;
+    ARC_API void SetRenderDeviceRemovedHookForTest(void (*hook)()) noexcept;
 
     // Reads the same DLL-side slot back, without ever invoking the hook.
     // Test support ONLY, and for the same header-only-singleton reason as the
@@ -235,5 +235,5 @@ namespace Arcane
     // (NriDiagnosticsTest pins both). Production code has no business reading
     // it: the hook exists to be CALLED by RenderErrorLatch, by nobody
     // else.
-    [[nodiscard]] ARCANE_API void (*RenderDeviceRemovedHookForTest() noexcept)();
+    [[nodiscard]] ARC_API void (*RenderDeviceRemovedHookForTest() noexcept)();
 }

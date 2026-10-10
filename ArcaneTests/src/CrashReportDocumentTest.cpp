@@ -269,7 +269,7 @@ TEST_CASE("DocumentHost routes .arcdiag to CrashReportDocument and focuses inste
     // .arcmat routing test) -> the peek resolves the same guid and the open
     // document is focused instead of a second one being constructed.
     const auto upperExtPath = dir / (path.stem().string() + ".ARCDIAG");
-#if !ARCANE_PLATFORM_WINDOWS
+#if !ARC_PLATFORM_WINDOWS
     // A case-SENSITIVE filesystem: on Windows the uppercase spelling names the
     // SAME file; here it is another name, so give it the same bytes (the same
     // guid) -- the routing + focus behaviour under test is unchanged. macOS's

@@ -23,7 +23,7 @@
 
 namespace Arcane
 {
-    class ARCANE_API OffscreenVehicle
+    class ARC_API OffscreenVehicle
     {
     public:
         // Null on any failure, each step logged. Ordered: native device ->

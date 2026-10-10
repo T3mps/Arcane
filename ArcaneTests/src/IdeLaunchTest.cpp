@@ -43,7 +43,7 @@ TEST_CASE("IdeLaunch::SameSolutionPath compares case- and separator-insensitivel
 {
     // DTE hands back a backslash, mixed-case Windows path; DiscoverSolution
     // hands back whatever the directory iterator produced. Same file either way.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     CHECK(IdeLaunch::SameSolutionPath(L"D:\\dev\\Game\\Game.slnx", L"d:/dev/game/game.slnx"));
     CHECK(IdeLaunch::SameSolutionPath(L"D:\\dev\\.\\Game\\Game.slnx", L"D:\\dev\\Game\\Game.slnx"));
     CHECK(IdeLaunch::SameSolutionPath(L"D:\\dev\\Other\\..\\Game\\Game.slnx", L"D:\\dev\\Game\\Game.slnx"));

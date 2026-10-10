@@ -20,6 +20,7 @@
 // slow-mo is a render-interpolation concern (lerp by Alpha()), not a change to the
 // time model.
 
+#include <Arcane/Sim/SimSettingsData.hpp>   // the Config defaults (settings arc S6-8)
 #include <Arcane/Sim/SystemSchedulers.hpp>
 #include <Arcane/Sim/Time.hpp>
 
@@ -36,8 +37,8 @@ namespace Arcane
     public:
         struct Config
         {
-            double fixedHz = 60.0;
-            int    maxStepsPerFrame = 5;   // clamp to avoid the spiral of death
+            double fixedHz = SimSettings{}.fixedHz;
+            int    maxStepsPerFrame = SimSettings{}.maxStepsPerFrame;   // clamp to avoid the spiral of death
         };
 
         // Two constructors rather than one with `Config cfg = {}`: GCC (16)
@@ -92,9 +93,22 @@ namespace Arcane
         void SetFixedHz(double hz) noexcept { if (hz > 0.0) m_cfg.fixedHz = hz; }
         [[nodiscard]] double FixedHz() const noexcept { return m_cfg.fixedHz; }
 
+        // The spiral-of-death cap (sim.maxStepsPerFrame, Live): the hosts set
+        // it each frame through ApplySimStepCap (SimSettings.hpp). Refused for
+        // a non-positive count, which would run no fixed step and drop every
+        // frame's backlog.
+        void SetMaxStepsPerFrame(int steps) noexcept { if (steps > 0) m_cfg.maxStepsPerFrame = steps; }
+        [[nodiscard]] int MaxStepsPerFrame() const noexcept { return m_cfg.maxStepsPerFrame; }
+
+        // Called first in every Advance, before any fixed step (spec 2026-10-08
+        // s7.2, amendment A7). Physics-agnostic: Runtime installs the physics
+        // frame-window clear, so this header never includes PhysicsSystem.hpp.
+        void SetFrameBeginHook(std::function<void(Astra::Registry&)> hook) { m_frameBegin = std::move(hook); }
+
         // Advance one real frame. Returns the render alpha in [0,1) for interpolation.
         double Advance(double realDt)
         {
+            if (m_frameBegin) m_frameBegin(*m_registry);
             StepFixed(realDt, nullptr);
             PublishTime(realDt, /*inFixedStep*/ false);
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
@@ -114,6 +128,7 @@ namespace Arcane
                        const std::function<void(double)>& pluginFixed,
                        const std::function<void(double, double)>& pluginUpdate)
         {
+            if (m_frameBegin) m_frameBegin(*m_registry);
             StepFixed(realDt, &pluginFixed);
             PublishTime(realDt, /*inFixedStep*/ false);
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
@@ -145,10 +160,14 @@ namespace Arcane
         // re-pausing right after its RestoreRegistry -- and which its scene-open
         // (ResetRegistry, nothing after) and its hot-reload paths did not, so
         // opening a physics scene in Edit mode unpaused the loop, fixedUpdate's
-        // PhysicsSystem stepped it every frame, and the bodies fell before Play was
+        // Arcane::PhysicsSystem2D stepped it every frame, and the bodies fell before Play was
         // pressed and never came back (Play snapshotted the fallen poses). Pinned
         // by RuntimeTest ("keeps the RunLoop object stable") and
         // EditorPlayModeTest ("opening a scene in Edit mode does not simulate it").
+        //
+        // The frame-begin hook is kept too. It is host policy (Runtime installs
+        // the physics window clear), not per-registry sim state, and the call
+        // goes through the current m_registry.
         void Rebind(Astra::Registry& registry)
         {
             m_registry    = &registry;
@@ -262,5 +281,9 @@ namespace Arcane
         double        m_elapsedBase     = 0.0;   // elapsed when the current rate took effect
         std::uint64_t m_elapsedBaseStep = 0;     // steps already run when the current rate took effect
         double        m_elapsedDt       = 0.0;   // the rate in effect (0 = none yet)
+
+        // Frame begin (spec 2026-10-08 s7.2). Empty until a host installs one.
+        // Rebind does not clear it.
+        std::function<void(Astra::Registry&)> m_frameBegin;
     };
 }

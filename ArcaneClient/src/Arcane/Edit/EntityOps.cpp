@@ -1,5 +1,6 @@
 #include <Arcane/Edit/EntityOps.hpp>
 
+#include <Arcane/Util/Logger.hpp>         // LOG_CORE_ERROR -- paste failure; before Log.hpp so SPDLOG_ACTIVE_LEVEL is set first
 #include <Arcane/Base/Diagnostics.hpp>    // InstantiateSubtrees mirrors LoadJson's skip reporting
 #include <Arcane/Base/Log.hpp>            // ARC_WARN
 #include <Arcane/Edit/CommandStack.hpp>   // RenameWithUndo brackets its own transaction
@@ -11,6 +12,7 @@
 #include <Astra/Core/TypeID.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include <exception>
 #include <new>
 #include <optional>
 #include <span>
@@ -705,8 +707,24 @@ namespace Arcane::Edit
             }
             return roots;
         }
+        catch (const std::exception& e)
+        {
+            // No locator: destroyPartial() invalidates every entity this
+            // paste created. One-row publish, same as the malformed path.
+            LOG_CORE_ERROR("paste: instantiation failed ({}) -- nothing was pasted", e.what());
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Error;
+            d.scope    = Arcane::DiagScope::Scene;
+            d.code     = "clipboard.instantiate.failed";
+            d.message  = e.what();
+            d.detail   = "Nothing was pasted.";
+            Arcane::Diagnostics::Publish(
+                "clipboard", std::span<const Arcane::Diagnostic>(&d, 1));
+            return destroyPartial();
+        }
         catch (...)
         {
+            LOG_CORE_ERROR("paste: unknown exception during instantiation -- nothing was pasted");
             return destroyPartial();   // exception-free contract at the API edge
         }
     }

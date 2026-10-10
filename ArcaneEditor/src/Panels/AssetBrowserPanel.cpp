@@ -1,12 +1,18 @@
 #include "Panels/AssetBrowserPanel.hpp"
 
 #include "Documents/DocumentHost.hpp"      // the open route a row's double-click hands to OpenAssetRow
+#include "Input/EditorActions.hpp"
+#include "Input/MenuShortcut.hpp"
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry/AssetPanelRow -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateKindForAssetKind -- the rail's per-kind "+" (AssetKind -> CreateAssetKind bridge)
+#include "Settings/AssetBrowserSettings.hpp"   // editor.assets.railWidth (settings S6-38)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/UiMetrics.hpp"   // Ui::Px / FontPx -- the refused badge follows editor.ui.*
+
+#include <Arcane/Config/Settings.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
@@ -18,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 // AssetBrowserPanel (panel-split arc): the "Asset Browser" window. Task 6
 // moved the BODY here as pure motion out of AssetsPanel.cpp's DrawBrowseLens
@@ -47,21 +54,25 @@
 // and AssetStatusPanel.cpp do.
 //
 // kTooltipWidth/kTooltipThumbSize went to AssetPanelCommon.cpp with
-// DrawAssetPeekTooltip, their only reader. kRailWidth/kRailRowHeight/
-// kChildIndent/kGroupIndent live here in full: nothing outside this panel
-// ever read any of them.
+// DrawAssetPeekTooltip, their only reader. RailRowHeight()/kChildIndent/
+// kGroupIndent live here in full: nothing outside this panel ever read any of
+// them. The rail width is editor.assets.railWidth (settings S6-38), base px
+// at editor.ui.scale.
 namespace Arcane::Editor
 {
     namespace
     {
-        constexpr float kRailWidth        = 180.0f;
-        constexpr float kRailRowHeight    = 26.0f;
+        // The rail's row pitch tracks text like the tables' (settings S6-28;
+        // the S4-16 follow-up): 26 px at scale 1 and font 16.
+        float RailRowHeight() { return Ui::TextPx(26.0f); }
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kChildIndent      = 20.0f;
         // 2026-09-07 nested folder groups (spec s6/s11.2): 20px per nesting
         // depth, stacked with kChildIndent above rather than merged into it --
         // the two are independently-motivated 20px units that happen to share
         // a value and COMPOUND (a fold child inside a depth-1 group sits at
         // depth*kGroupIndent + kChildIndent from the row's own base).
+        ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
         constexpr float kGroupIndent      = 20.0f;
 
         // Rail "+" gate (spec s6): only kinds with a Create-menu entry get
@@ -148,14 +159,14 @@ namespace Arcane::Editor
                                          : services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
             // The row drew this frame (its menu is open on it): mark it drawn, or the
             // table's end-of-frame "target row not drawn" check cancels the box at once.
-            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
+            if (MenuVerb("Rename", MenuKey("assets.rename").c_str(), state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
             if (ImGui::IsWindowAppearing())   // T5 s7.7
                 state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = model.selection }) : "unavailable";
-            if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
+            if (MenuVerb("Duplicate", MenuKey("assets.duplicate").c_str(), state.menuRefusal.duplicate))
                 actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
             if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
                 state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
-            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
+            if (MenuVerb("Delete", MenuKey("assets.delete").c_str(), state.menuRefusal.del)) actions.requestDelete = model.selection;
             if (ImGui::IsWindowAppearing())   // T5 s7.8: destination-independent refusals only (MoveVerbRefusal); the modal checks each destination
                 state.menuRefusal.moveTo = services.fileOpRefusal ? MoveVerbRefusal(model.selection, model, services.fileOpRefusal) : "unavailable";
             if (MenuVerb("Move to...", nullptr, state.menuRefusal.moveTo)) actions.requestMoveTo = model.selection;
@@ -201,7 +212,7 @@ namespace Arcane::Editor
         void DrawRail(AssetBrowserPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kChrome);
-            if (ImGui::BeginChild("##assetsrail", ImVec2(kRailWidth, 0.0f), ImGuiChildFlags_None))
+            if (ImGui::BeginChild("##assetsrail", ImVec2(Ui::Px(Arcane::Settings<AssetBrowserSettings>().railWidth), 0.0f), ImGuiChildFlags_None))
             {
                 for (const RailEntry& re : model.Rail())
                 {
@@ -214,7 +225,7 @@ namespace Arcane::Editor
                     const ImVec2 rowMin = ImGui::GetCursorScreenPos();
                     const float rowWidth = ImGui::GetContentRegionAvail().x;
                     const AssetRowResult res = RowWithThumb("##rail", 0, icon, re.label.c_str(),
-                                                            selected, 0.0f, kRailRowHeight);
+                                                            selected, 0.0f, RailRowHeight());
                     if (res.clicked)
                     {
                         state.railKind = re.kind;
@@ -266,7 +277,7 @@ namespace Arcane::Editor
                     std::snprintf(countBuf, sizeof(countBuf), "%d", re.count);
                     const float countW = ImGui::CalcTextSize(countBuf).x;
                     const float padX = ImGui::GetStyle().FramePadding.x;
-                    const float rowCenterY = rowMin.y + kRailRowHeight * 0.5f;
+                    const float rowCenterY = rowMin.y + RailRowHeight() * 0.5f;
 
                     // Count anchors flush to the row's right edge ALWAYS --
                     // never shifted by whether the "+" exists or is
@@ -331,7 +342,7 @@ namespace Arcane::Editor
                     // returns) -- this is what SameLine() used to do for
                     // free when the trailing content was SameLine-chained;
                     // absolute positioning has to restate it explicitly.
-                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + kRailRowHeight));
+                    ImGui::SetCursorScreenPos(ImVec2(rowMin.x, rowMin.y + RailRowHeight()));
 
                     ImGui::PopID();
                 }
@@ -379,7 +390,7 @@ namespace Arcane::Editor
             const bool clicked = ImGui::Selectable("##grouprow", false,
                                                    ImGuiSelectableFlags_SpanAllColumns |
                                                    ImGuiSelectableFlags_NoPadWithHalfSpacing,
-                                                   ImVec2(0.0f, kTableRowHeight));
+                                                   ImVec2(0.0f, TableRowHeight()));
             if (clicked)
             {
                 const bool newOpen = !open;
@@ -430,13 +441,13 @@ namespace Arcane::Editor
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const float padX = ImGui::GetStyle().FramePadding.x;
-            const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+            const float textY = rowMin.y + (TableRowHeight() - ImGui::GetTextLineHeight()) * 0.5f;
 
             // 2026-09-07 nested folder groups: the whole row (chevron, label,
             // count) shifts right by 20px per nesting depth (spec s6/s11.2).
             // Top-level groups keep depth 0 -> groupIndent 0 -> pixel-identical
             // to before this pass.
-            const float groupIndent = static_cast<float>(row.groupDepth) * kGroupIndent;
+            const float groupIndent = static_cast<float>(row.groupDepth) * Ui::Px(kGroupIndent);
 
             const char* chevron = effectiveOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
             dl->AddText(ImVec2(rowMin.x + groupIndent + padX, textY), ImGui::GetColorU32(ImGuiCol_Text), chevron);
@@ -463,18 +474,19 @@ namespace Arcane::Editor
             // plainly is not (the very rows under it prove that). Suppressed
             // for groupCount == 0 only -- a real, populated group's count
             // still always shows, including a single-item "1".
+            ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
             constexpr float kGroupCountGap = 6.0f;
             if (row.groupCount > 0)
             {
                 char countBuf[16];
                 std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
-                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
+                dl->AddText(ImVec2(nameX + nameW + Ui::Px(kGroupCountGap), textY),
                            ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
             }
             // T5 s7.8: an empty folder (no asset beneath it) has no count; it
             // says so, dim, in the count's place.
             if (row.empty)
-                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
+                dl->AddText(ImVec2(nameX + nameW + Ui::Px(kGroupCountGap), textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
 
             ImGui::PopID();
         }
@@ -487,7 +499,7 @@ namespace Arcane::Editor
         // Theme::kChrome) + drawlist text -- rather than ImGui's own
         // TableSetupColumn/TableHeadersRow mechanism, because that mechanism
         // computes its row height from CellPadding/font metrics, not the
-        // pinned kTableRowHeight every other row (and the clipper, and the
+        // pinned TableRowHeight() every other row (and the clipper, and the
         // scroll-position arithmetic in DrawTable) assumes exactly; this way
         // the header shares the identical 24px pitch with zero risk of it
         // drifting from the body rows it sits above. Static and
@@ -508,7 +520,7 @@ namespace Arcane::Editor
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const float rowWidth = ImGui::GetContentRegionAvail().x;
             const float padX = ImGui::GetStyle().FramePadding.x;
-            const float textY = rowMin.y + (kTableRowHeight - ImGui::GetTextLineHeight()) * 0.5f;
+            const float textY = rowMin.y + (TableRowHeight() - ImGui::GetTextLineHeight()) * 0.5f;
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddText(ImVec2(rowMin.x + padX, textY),
@@ -519,10 +531,10 @@ namespace Arcane::Editor
             // Theme::kSeparator IS that exact hex (AssetPill's own comment
             // makes the same mapping for its border), so no new token is
             // needed. Full row width, drawn at the row's own bottom edge
-            // (rowMin.y + kTableRowHeight is already pixel-integral -- same
+            // (rowMin.y + TableRowHeight() is already pixel-integral -- same
             // "no +0.5" convention DrawBottomBar's own hairline divider
             // uses just above this file, and it measures crisp there too).
-            const float lineY = rowMin.y + kTableRowHeight;
+            const float lineY = rowMin.y + TableRowHeight();
             dl->AddLine(ImVec2(rowMin.x, lineY), ImVec2(rowMin.x + rowWidth, lineY),
                        ImGui::GetColorU32(Theme::kSeparator));
         }
@@ -543,24 +555,24 @@ namespace Arcane::Editor
             st.renameDrawn = true; const ImVec2 at = ImGui::GetCursorScreenPos();
             {
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                const float thumbY = at.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                const float thumbY = at.y + (TableRowHeight() - AssetRowThumbSize()) * 0.5f;
                 if (thumbId != 0)
                     dl->AddImage(static_cast<ImTextureID>(thumbId), ImVec2(at.x + indent, thumbY),
-                                 ImVec2(at.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                                 ImVec2(at.x + indent + AssetRowThumbSize(), thumbY + AssetRowThumbSize()));
                 else
                 {
                     const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-                    dl->AddText(ImVec2(at.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
-                                       at.y + (kTableRowHeight - iconSize.y) * 0.5f),
+                    dl->AddText(ImVec2(at.x + indent + (AssetRowThumbSize() - iconSize.x) * 0.5f,
+                                       at.y + (TableRowHeight() - iconSize.y) * 0.5f),
                                 ImGui::GetColorU32(ImGuiCol_Text), icon);
                 }
             }
-            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
+            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + AssetRowThumbSize() + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
             const std::string ext = std::filesystem::path(e.fileName).extension().string();
             ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
             if (st.renameFocusPending) { ImGui::SetKeyboardFocusHere(); st.renameFocusPending = false; }
             const bool enter = ImGui::InputText("##assetrename", st.renameBuf, sizeof(st.renameBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-            const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
+            const bool esc = EditorActions::Get().Pressed("ui.cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
             const bool commit = enter || (ImGui::IsItemDeactivatedAfterEdit() && !esc);
             const AssetOpRequest req{ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = st.renameBuf };
             const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string{};
@@ -625,12 +637,12 @@ namespace Arcane::Editor
             // own indent X (still `groupDepth * kGroupIndent`, DrawGroupRow
             // above -- UNCHANGED) now starts at X+20; this is draw-side
             // geometry only, `groupDepth` itself (the DATA) is untouched.
-            const float groupIndentPx = static_cast<float>(groupDepth + 1) * kGroupIndent;
+            const float groupIndentPx = static_cast<float>(groupDepth + 1) * Ui::Px(kGroupIndent);
             // The expander gutter is reserved only for textures with a
             // folded child -- refused now wears its OWN corner badge on the
             // thumb below (fix round 1, Important 5), so it never competes
             // with the expander for the same slot.
-            const float indent = groupIndentPx + (hasChildren ? kChildIndent : 0.0f);
+            const float indent = groupIndentPx + (hasChildren ? Ui::Px(kChildIndent) : 0.0f);
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
@@ -640,7 +652,7 @@ namespace Arcane::Editor
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
-                                                    e.fileName.c_str(), selected, indent, kTableRowHeight);
+                                                    e.fileName.c_str(), selected, indent, TableRowHeight());
             if (res.clicked)
                 state.msClicked = e.guid;   // T5 s7.9: the primary once DrawTable applies EndMultiSelect's requests
 
@@ -665,7 +677,7 @@ namespace Arcane::Editor
             {
                 ImGui::SetCursorScreenPos(ImVec2(rowMin.x + groupIndentPx, rowMin.y));
                 const std::string expId = "##exp_" + e.guid.ToString();
-                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(kChildIndent, kTableRowHeight)))
+                if (ImGui::InvisibleButton(expId.c_str(), ImVec2(Ui::Px(kChildIndent), TableRowHeight())))
                 {
                     const bool newOpen = !childrenOpen;
                     state.childrenOpen[e.guid] = newOpen;
@@ -674,8 +686,8 @@ namespace Arcane::Editor
                 const char* chevron = effectiveChildrenOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT;
                 const ImVec2 cs = ImGui::CalcTextSize(chevron);
                 ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(rowMin.x + groupIndentPx + (kChildIndent - cs.x) * 0.5f,
-                          rowMin.y + (kTableRowHeight - cs.y) * 0.5f),
+                    ImVec2(rowMin.x + groupIndentPx + (Ui::Px(kChildIndent) - cs.x) * 0.5f,
+                          rowMin.y + (TableRowHeight() - cs.y) * 0.5f),
                     ImGui::GetColorU32(ImGuiCol_Text), chevron);
             }
 
@@ -705,14 +717,14 @@ namespace Arcane::Editor
             // edge lands exactly at the thumb boundary, never past it.
             if (refused || e.cook == CookState::Queued)
             {
-                constexpr float kBadgeFontSize = 10.0f;
-                constexpr float kBadgeMargin    = 3.0f;
+                const float kBadgeFontSize = Ui::FontPx(10.0f);
+                const float kBadgeMargin    = Ui::Px(3.0f);
                 const char* badge = refused ? ICON_LC_TRIANGLE_ALERT : ICON_LC_CLOCK;
                 ImGui::PushFont(GetEditorFonts().interRegular, kBadgeFontSize);
                 const ImVec2 badgeSize = ImGui::CalcTextSize(badge);
-                const float thumbY      = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
-                const float thumbRight  = rowMin.x + indent + kAssetRowThumbSize;
-                const float thumbBottom = thumbY + kAssetRowThumbSize;
+                const float thumbY      = rowMin.y + (TableRowHeight() - AssetRowThumbSize()) * 0.5f;
+                const float thumbRight  = rowMin.x + indent + AssetRowThumbSize();
+                const float thumbBottom = thumbY + AssetRowThumbSize();
                 const ImVec2 badgePos(thumbRight  - badgeSize.x - kBadgeMargin,
                                       thumbBottom - badgeSize.y - kBadgeMargin);
                 ImGui::GetWindowDrawList()->AddText(badgePos,
@@ -773,12 +785,12 @@ namespace Arcane::Editor
             // `groupIndentPx` just got -- the `+ 1` is the entire change. A
             // fold child under a band at indent X now sits at X+40 (X+20 for
             // the level shift, +20 more for its own existing fold indent).
-            const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
+            const float indent = static_cast<float>(groupDepth + 1) * Ui::Px(kGroupIndent) + Ui::Px(kChildIndent);
             if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
-                                                    e.fileName.c_str(), selected, indent, kTableRowHeight);
+                                                    e.fileName.c_str(), selected, indent, TableRowHeight());
             ImGui::PopStyleColor();
             if (res.clicked)
                 state.msClicked = e.guid;   // T5 s7.9
@@ -870,7 +882,7 @@ namespace Arcane::Editor
                 // every asset/child row's alternating RowBg1 tint landed one
                 // row off from where it did before the header existed.
                 ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers, kTableRowHeight);
+                ImGui::TableNextRow(ImGuiTableRowFlags_Headers, TableRowHeight());
                 ImGui::TableSetColumnIndex(0);
                 DrawNameHeaderRow();
 
@@ -911,10 +923,10 @@ namespace Arcane::Editor
                 if (scrollTargetIndex >= 0)
                 {
                     const float scrollY = ImGui::GetScrollY();
-                    const float viewTop = scrollY + kTableRowHeight;
+                    const float viewTop = scrollY + TableRowHeight();
                     const float viewBottom = scrollY + ImGui::GetCurrentWindow()->InnerRect.GetHeight();
-                    const float rowTop = kTableRowHeight * static_cast<float>(scrollTargetIndex + 1);
-                    const float rowBottom = rowTop + kTableRowHeight;
+                    const float rowTop = TableRowHeight() * static_cast<float>(scrollTargetIndex + 1);
+                    const float rowBottom = rowTop + TableRowHeight();
                     targetAlreadyVisible = state.revealPending
                         ? (rowTop >= viewTop && rowBottom <= viewBottom)
                         : (rowBottom > viewTop && rowTop < viewBottom);
@@ -959,7 +971,7 @@ namespace Arcane::Editor
                 storage.ApplyRequests(ms);
 
                 ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(rows.size()), kTableRowHeight);
+                clipper.Begin(static_cast<int>(rows.size()), TableRowHeight());
                 if (scrollTargetIndex >= 0 && !targetAlreadyVisible)
                     clipper.IncludeItemByIndex(scrollTargetIndex);
                 // The Shift-range source must be submitted even when clipped
@@ -972,7 +984,7 @@ namespace Arcane::Editor
                     for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
                     {
                         const AssetPanelRow& row = rows[i];
-                        ImGui::TableNextRow(ImGuiTableRowFlags_None, kTableRowHeight);
+                        ImGui::TableNextRow(ImGuiTableRowFlags_None, TableRowHeight());
                         ImGui::TableSetColumnIndex(0);
 
                         switch (row.type)
@@ -1045,8 +1057,8 @@ namespace Arcane::Editor
 
                 if (!nav.empty())
                 {
-                    const bool up   = ImGui::IsKeyPressed(ImGuiKey_UpArrow);
-                    const bool down = ImGui::IsKeyPressed(ImGuiKey_DownArrow);
+                    const bool up   = EditorActions::Get().PressedRepeat("assets.selectPrev");
+                    const bool down = EditorActions::Get().PressedRepeat("assets.selectNext");
                     if (up || down)
                     {
                         int idx = -1;
@@ -1057,17 +1069,17 @@ namespace Arcane::Editor
                         model.Select(nav[static_cast<std::size_t>(next)]);
                     }
                 }
-                if (ImGui::IsKeyPressed(ImGuiKey_Enter) && model.selected.IsValid())
+                if (EditorActions::Get().PressedRepeat("assets.open") && model.selected.IsValid())
                 {
                     if (const AssetPanelEntry* e = model.Find(model.selected))
                         OpenAssetRow(*e, project, docs, actions);
                 }
                 // T5 s7.9: F2 renames ONE asset; Ctrl+D and Del act on the whole multi-selection.
-                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
+                if (EditorActions::Get().Pressed("assets.rename") && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
                     if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
-                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.SelectionCount() > 0)   // T5 s7.7
+                if (EditorActions::Get().Pressed("assets.duplicate") && model.SelectionCount() > 0)   // T5 s7.7
                     actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
-                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
+                if (EditorActions::Get().Pressed("assets.delete") && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
                     actions.requestDelete = model.selection;
             }
 
@@ -1134,7 +1146,7 @@ namespace Arcane::Editor
         {
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
+                                ImVec2(style.FramePadding.x, Ui::Px(kAssetPanelToolbarFramePadY)));
 
             ImGui::BeginDisabled(project == nullptr);
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
@@ -1180,7 +1192,7 @@ namespace Arcane::Editor
         // own SameLine(0,0) chain established are untouched.
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
-        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
+        ImGui::Dummy(ImVec2(0.0f, Ui::Px(kAssetPanelToolbarBodyGapPx)));
         ImGui::PopStyleVar();
 
         // T5 s7.10: the Browser's key guard, computed ONCE per frame while
@@ -1193,9 +1205,10 @@ namespace Arcane::Editor
         // this one value.
         actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput
                             && !state.renameTarget.IsValid();   // T5 s7.6: an open rename box owns the keys
+        if (actions.ownsEditKeys) EditorActions::Get().MarkContextActive(ActionContext::AssetBrowser);
 
         // ---- body band -----------------------------------------------
-        if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -Ui::Px(kAssetPanelBottomBarHeight))))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();

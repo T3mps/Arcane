@@ -34,6 +34,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -53,7 +54,7 @@ namespace Arcane
     // stitched source verbatim, so diagnostic line numbers match what the
     // designer sees. Duplicate names and names reserved by the template
     // (Time, DeltaTime, ViewportSize, MaterialSampler) are errors.
-    ARCANE_CORE_API MaterialSourceParse ParseMaterialSource(std::string_view snippet);
+    ARC_CORE_API MaterialSourceParse ParseMaterialSource(std::string_view snippet);
 
     // Which engine template a material source stitches into. Each surface owns
     // a register map (GlobalParams.hpp): Fullscreen = material CB b0, textures
@@ -73,8 +74,8 @@ namespace Arcane
     // The engine template file for a surface ("materials/....hlsl", resolved
     // through ShaderSourceProvider) and the surface for a .arcmat "kind" string
     // (unknown kinds fall back to Fullscreen).
-    ARCANE_CORE_API const char* MaterialTemplateFile(MaterialSurface surface);
-    ARCANE_CORE_API MaterialSurface MaterialSurfaceForKind(std::string_view kind);
+    ARC_CORE_API const char* MaterialTemplateFile(MaterialSurface surface);
+    ARC_CORE_API MaterialSurface MaterialSurfaceForKind(std::string_view kind);
 
     // The %{MATERIAL_CBUFFER} payload for a built template: the Material cbuffer
     // (members in declaration order -- HLSL's packing mirrors
@@ -85,12 +86,14 @@ namespace Arcane
     // params.
     // A pass may read up to this many upstream pass outputs (InputTexture,
     // InputTexture1..3 -- the reserved-name list is sized to match).
+    ARC_CONSTANT("shader contract: the reserved InputTexture0..3 pass inputs")
     inline constexpr std::uint32_t kMaxPassInputs = 4;
 
     // Sentinel `inputs` entry: "the EXTERNAL scene color", not a chain index
     // (the post-processing arc). Only valid when the chain builds in post
     // mode; occupies an InputTexture slot like any other input, and the
     // runner binds the caller's external texture there.
+    ARC_CONSTANT("ID space / sentinel: the scene-colour pass input, outside every texture index")
     inline constexpr std::uint32_t kSceneInput = 0xFFFFFFFFu;
 
     // `chainInputs` (fullscreen pass chains only): additionally declare that
@@ -98,7 +101,7 @@ namespace Arcane
     // at the slots after the material's own textures, and always emit
     // MaterialSampler (they need it even when the material declares no
     // textures). 0 = not a chain (the single-material path).
-    ARCANE_CORE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ,
+    ARC_CORE_API std::string GenerateMaterialBindings(const MaterialTemplate& templ,
                                                     MaterialSurface surface = MaterialSurface::Fullscreen,
                                                     std::uint32_t chainInputs = 0);
 
@@ -106,7 +109,7 @@ namespace Arcane
     // not in `slots` are left in place and reported through `unresolved` (when
     // non-null) -- a stitched source with unresolved slots will not compile,
     // by design.
-    ARCANE_CORE_API std::string StitchShaderTemplate(
+    ARC_CORE_API std::string StitchShaderTemplate(
         std::string_view templateText,
         std::span<const std::pair<std::string_view, std::string_view>> slots,
         std::vector<std::string>* unresolved = nullptr);
@@ -136,7 +139,7 @@ namespace Arcane
     // GenerateMaterialBindings) WITHOUT the full chain build -- a single
     // source that samples upstream textures the caller binds directly. The
     // editor's per-node thumbnails of pass graphs stitch through this.
-    ARCANE_CORE_API MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
+    ARC_CORE_API MaterialBuildResult BuildMaterialShaderSource(std::string_view templateText,
                                                              std::string_view snippet,
                                                              std::string materialName,
                                                              MaterialSurface surface = MaterialSurface::Fullscreen,
@@ -190,7 +193,7 @@ namespace Arcane
     // "scene only". Outside post mode a kSceneInput entry is a chain error
     // (the material belongs on the scene post slot, not wherever it was
     // stitched from).
-    ARCANE_CORE_API MaterialChainBuildResult BuildMaterialChainSource(
+    ARC_CORE_API MaterialChainBuildResult BuildMaterialChainSource(
         std::string_view templateText,
         std::span<const MaterialChainPassDesc> passes,
         std::string materialName,

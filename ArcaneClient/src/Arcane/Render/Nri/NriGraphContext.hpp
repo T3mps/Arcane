@@ -78,7 +78,7 @@
 //     RgExecuteDesc::swapChain = nullptr -- no acquire, no present -- and the
 //     graph's own submission fence is the frame's only completion signal;
 //   * PACING is therefore ours: RenderFrameOffscreen waits THIS object's own
-//     timeline fence kSwapchainFramesInFlight deep, signalled by a trailing
+//     timeline fence FramesInFlight() deep, signalled by a trailing
 //     signal-only submit, exactly the shape NriSwapChain::Present uses to
 //     stamp its pacing fence. Without it nothing would bound frames in flight
 //     and the per-frame-slot command buffers, upload-ring arena and node
@@ -234,6 +234,7 @@
 #include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // CanvasFormat, DepthFormat (render.canvasFormat / render.depthFormat)
 #include <Arcane/Scene/ViewTransform.hpp>       // FrameDesc::pickView (held by value)
 // The node types are held BY VALUE-OWNING unique_ptr below, and this class is
 // dllexported -- so every TU that sees this header must see complete node
@@ -267,23 +268,41 @@ namespace Arcane
     struct PostChainDesc;
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
-    // node's canvas, and every post-chain pass's target. RGBA16F -- colours are
-    // LINEAR and may exceed 1.0, and the tonemap node is what turns them
-    // display-referred. It lives HERE, next to the frame's shape, because two
-    // nodes now have to agree on it: a post target that did not match the
-    // canvas would be a pipeline built for one format bound to an attachment
-    // of another.
-    inline constexpr nri::Format kGraphCanvasFormat = nri::Format::RGBA16_SFLOAT;
-
-    // THE FRAME'S DEPTH FORMAT (Task 4 chose it; Task 7 gave it a consumer).
-    // D32_SFLOAT -- depth only, no stencil, and no packed-stencil variant until
-    // something actually needs one. It lives HERE, beside the canvas format,
-    // for exactly the same reason that one does: two places now have to agree
-    // on it -- whoever CREATES the depth transient and whoever keys a PSO on it
-    // (NriPipelineCache::GraphicsKey::depthFormat) -- and a pipeline built for
-    // one format bound to an attachment of another is undefined on both
+    // node's canvas, and every post-chain pass's target. Colours are LINEAR
+    // and may exceed 1.0, and the tonemap node is what turns them
+    // display-referred. render.canvasFormat picks it (RGBA16F by default;
+    // R11G11B10F halves the bandwidth). It lives HERE, next to the frame's
+    // shape, because two nodes have to agree on it: a post target that did
+    // not match the canvas would be a pipeline built for one format bound to
+    // an attachment of another.
+    //
+    // THE FRAME'S DEPTH FORMAT (render.depthFormat; D32_SFLOAT by default,
+    // D24_UNORM_S8_UINT on request). Two places have to agree on it --
+    // whoever CREATES a depth transient and whoever keys a PSO on it
+    // (NriPipelineCache::GraphicsKey::depthFormat) -- and a pipeline built
+    // for one format bound to an attachment of another is undefined on both
     // backends.
-    inline constexpr nri::Format kGraphDepthFormat = nri::Format::D32_SFLOAT;
+    //
+    // BOTH ARE LATCHED ONCE PER PROCESS (settings arc S6-19; Restart), on the
+    // first call, the FramesInFlight() idiom: every graph context, every node
+    // and every pipeline key in the process -- including a node built with no
+    // context -- reads the SAME format, so a value published mid-session can
+    // never split an attachment from the PSOs keyed for it. A host builds no
+    // graph before HostBoot::ApplyEarlyConfigRungs has published the rungs;
+    // that function warns (CheckGraphFormatLatch, RenderDeviceSettings.hpp)
+    // when an earlier read latched a format other than the published one.
+    [[nodiscard]] constexpr nri::Format ToNriFormat(CanvasFormat format) noexcept
+    {
+        return format == CanvasFormat::R11g11b10f ? nri::Format::R11_G11_B10_UFLOAT : nri::Format::RGBA16_SFLOAT;
+    }
+
+    [[nodiscard]] constexpr nri::Format ToNriFormat(DepthFormat format) noexcept
+    {
+        return format == DepthFormat::D24s8 ? nri::Format::D24_UNORM_S8_UINT : nri::Format::D32_SFLOAT;
+    }
+
+    [[nodiscard]] ARC_API nri::Format GraphCanvasFormat() noexcept;
+    [[nodiscard]] ARC_API nri::Format GraphDepthFormat() noexcept;
 
     // THE OFFSCREEN OUTPUT FORMAT. Display-referred: BGRA8_UNORM is exactly
     // the swapchain's own format, and the tonemap already gamma-2.2 encodes,
@@ -296,7 +315,7 @@ namespace Arcane
     // driver hands us: nothing here is free to pick a channel order.
     inline constexpr nri::Format kGraphOffscreenFormat = nri::Format::BGRA8_UNORM;
 
-    class ARCANE_API NriGraphContext
+    class ARC_API NriGraphContext
     {
     public:
         // Which of the two ways this vehicle was created -- see OFFSCREEN MODE
@@ -503,7 +522,7 @@ namespace Arcane
             std::optional<glm::ivec2> hoverPixel;   // the outline seed's cursor
 
             // Rides with THIS frame's readback copy and comes back beside the
-            // id kSwapchainFramesInFlight frames later (PickNode::
+            // id FramesInFlight() frames later (PickNode::
             // LastProbeTicket). The vehicle ascribes no meaning to any value:
             // it is the HOST's label for "which request does this answer",
             // which a host that probes a different pixel every frame cannot do
@@ -1079,7 +1098,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t CurrentPickTicket() const noexcept { return m_currentPickTicket; }
 
         // The entity id read back at the probe pixel, or nullopt when no
-        // readback has landed yet (the first kSwapchainFramesInFlight frames of
+        // readback has landed yet (the first FramesInFlight() frames of
         // a probe run) or the probe pixel was outside the surface. 0 is a
         // legitimate value and means BACKGROUND -- the caller decides that is a
         // miss, not this.
@@ -1141,7 +1160,7 @@ namespace Arcane
 
         // Frames this vehicle has actually PRESENTED. Skipped frames do not
         // count -- it advances in lockstep with the swapchain's own frame
-        // counter, which is what makes `frameIndex % kSwapchainFramesInFlight`
+        // counter, which is what makes `frameIndex % FramesInFlight()`
         // a safe command-buffer slot.
         //
         // OFFSCREEN MODE counts frames RENDERED (nothing is presented), and the
@@ -1160,7 +1179,7 @@ namespace Arcane
         // Stable for the whole of one RenderFrame call.
         [[nodiscard]] std::uint32_t FrameSlot() const noexcept
         {
-            return (std::uint32_t)(m_frameIndex % kSwapchainFramesInFlight);
+            return (std::uint32_t)(m_frameIndex % FramesInFlight());
         }
 
         // Installed once by the frame driver, right after Create(). Without it
@@ -1346,7 +1365,7 @@ namespace Arcane
         void InvalidateMeshAlbedoSlot(const Guid& id) { m_meshAlbedoSlots.erase(id); }
 
     private:
-        NriGraphContext() = default;
+        NriGraphContext();   // latches FramesInFlight() and the upload ring's size before any per-frame resource exists
 
         bool Init(const HostConfig& config, Window& window);
         bool InitOffscreen(const HostConfig& config, NriDevice& shared,
@@ -1427,6 +1446,9 @@ namespace Arcane
         Graveyard                          m_graves;
         std::unique_ptr<NriSwapChain>      m_swap;
         NriUploadRing                      m_ring;
+        // render.uploadRingBytesPerFrame, latched by the constructor (Restart):
+        // the size m_ring is Init()'d with and every log line reports.
+        std::uint64_t                      m_uploadRingBytes = 0;
         NriPipelineCache                   m_pipelines;
         // BEFORE the graph and the nodes in declaration order, so it is
         // destroyed AFTER them: a node holds descriptor SETS naming this
@@ -1560,7 +1582,7 @@ namespace Arcane
         // like every other NRI object here.
         //
         // m_offscreenFence is signalled with m_frameIndex + 1 by a trailing
-        // signal-only QueueSubmit and waited on kSwapchainFramesInFlight deep
+        // signal-only QueueSubmit and waited on FramesInFlight() deep
         // at the top of the next frame -- the same 1-based values, the same
         // depth and the same polling wait NriSwapChain's pacing fence uses.
         // "This offscreen context is its process's ONLY graph context, so it
@@ -1745,12 +1767,12 @@ namespace Arcane
 
         // The pick + outline chain's handles (Task 11). All invalid, and
         // jfaStepCount 0, on a frame that did not declare it.
-        RgTexture     pickIds{};        // the R32_UINT entity-id transient, at kPickSupersample x
+        RgTexture     pickIds{};        // the R32_UINT entity-id transient, at PickSupersample() x
         RgTexture     pickDepth{};      // the id pass's OWN D32 transient (F4 spec s7.1), same extent
         RgBuffer      pickReadback{};   // the imported HOST_READBACK staging buffer
         RgTexture     outlineField{};   // the LAST JFA target -- what the composite sampled
         // Thickness-derived, so it is the SAME on every surface size (D3c) --
-        // OutlineJfaStepCount(kOutlineMaxThicknessPx), clamped to kMaxJfaSteps.
+        // OutlineJfaStepCount(OutlineMaxThicknessPx()), clamped to kMaxJfaSteps.
         std::uint32_t jfaStepCount = 0;
 
         // THE FRAME'S DEPTH TARGET, or an invalid handle on a frame that asked
@@ -1767,6 +1789,6 @@ namespace Arcane
         RgTexture depth{};
     };
 
-    ARCANE_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
+    ARC_API RgFrameHandles DeclareGraphFrame(RenderGraph& graph, const RgFrameShape& shape,
                                                  NriGraphContext* context);
 }

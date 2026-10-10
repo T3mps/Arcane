@@ -1,6 +1,7 @@
 #include "ReporterArgs.hpp"
 
 #include <charconv>
+#include <cmath>
 
 namespace Arcane::Reporter
 {
@@ -19,6 +20,51 @@ namespace Arcane::Reporter
 
         [[nodiscard]] bool IsFlag(const std::string& s) { return s.rfind("--", 0) == 0; }
 
+        // Settings arc S6-4: the settings flags the host appends
+        // (Diagnostics::ReporterSettingsArgs). `floor1` refuses 0 where the
+        // setting's range starts above it: a zero walk depth, thread count,
+        // dbgeng wait, window wait or window side cannot express a real
+        // intent, and a zero UI slice would spin the attended wait. The
+        // log-tail lengths and the flush budget legitimately take 0.
+        struct UnsignedFlag { const char* name; std::uint32_t Args::* field; bool floor1; };
+        constexpr UnsignedFlag kUnsignedFlags[] = {
+            { "--max-frames-thread", &Args::maxFramesPerThread,      true  },
+            { "--max-frames-fault",  &Args::maxFramesFaultingThread, true  },
+            { "--max-threads",       &Args::maxThreads,              true  },
+            { "--dbgeng-wait-ms",    &Args::dbgengWaitMs,            true  },
+            { "--log-tail",          &Args::logTailLines,            false },
+            { "--hang-log-tail",     &Args::hangLogTailLines,        false },
+            { "--flush-ms",          &Args::flushTimeoutMs,          false },
+            { "--ui-poll-ms",        &Args::uiPollMs,                true  },
+            { "--window-ready-ms",   &Args::windowReadyMs,           true  },
+        };
+
+        [[nodiscard]] const UnsignedFlag* FindUnsignedFlag(const std::string& s)
+        {
+            for (const UnsignedFlag& f : kUnsignedFlags)
+                if (s == f.name) return &f;
+            return nullptr;
+        }
+
+        // "<W>x<H>", both decimal and non-zero.
+        [[nodiscard]] bool ParseWindowSize(const std::string& v, std::uint32_t& w, std::uint32_t& h)
+        {
+            const std::size_t x = v.find('x');
+            if (x == std::string::npos) return false;
+            return ParseNumber(v.substr(0, x), w) && ParseNumber(v.substr(x + 1), h) && w != 0 && h != 0;
+        }
+
+        // A finite, non-negative double with nothing after it. from_chars
+        // accepts "nan" and "inf", so finiteness is checked separately.
+        [[nodiscard]] bool ParseSeconds(const std::string& v, double& out)
+        {
+            double d = 0.0;
+            const auto r = std::from_chars(v.data(), v.data() + v.size(), d);
+            if (r.ec != std::errc{} || r.ptr != v.data() + v.size() || !std::isfinite(d) || d < 0.0) return false;
+            out = d;
+            return true;
+        }
+
         // The options that take a following value. This exists so an UNKNOWN
         // flag is named as unknown BEFORE its value is demanded (R68): with
         // the value fetched first, "--bogus" in final position came back as
@@ -35,7 +81,8 @@ namespace Arcane::Reporter
                 || s == "--app" || s == "--recovered-event" || s == "--relaunch"
                 || s == "--host-created" || s == "--host-handle" || s == "--session"
                 || s == "--log" || s == "--report-dir" || s == "--symbol-path"
-                || s == "--deadline";
+                || s == "--deadline" || s == "--window" || s == "--copy-flash"
+                || FindUnsignedFlag(s) != nullptr;
         }
     }
 
@@ -45,6 +92,11 @@ namespace Arcane::Reporter
                "                    [--unattended] [--recovered-event <name>] [--relaunch \"<line>\"]\n"
                "                    [--host-created <u64>] [--host-handle <u64>] [--symbol-path \"<dir;dir>\"]\n"
                "                    [--deadline <s>]\n"
+               "    settings (host-supplied; each defaults to its setting's default):\n"
+               "                    [--max-frames-thread <n>] [--max-frames-fault <n>] [--max-threads <n>]\n"
+               "                    [--dbgeng-wait-ms <ms>] [--log-tail <lines>] [--hang-log-tail <lines>]\n"
+               "                    [--flush-ms <ms>] [--ui-poll-ms <ms>] [--window <W>x<H>]\n"
+               "                    [--window-ready-ms <ms>] [--copy-flash <s>]\n"
                "ArcaneCrashReporter --monitor <pid> --session <file> [--unattended] [--respawned]\n"
                "                    [--product \"<name>\"] [--app <name>] [--log <path>] [--report-dir <dir>]\n"
                "                    [--host-handle <u64>]\n";
@@ -123,6 +175,21 @@ namespace Arcane::Reporter
             {
                 if (!ParseNumber(v, a.deadlineSeconds)) return { std::nullopt, "--deadline is not a number: " + v };
                 if (a.deadlineSeconds == 0) return { std::nullopt, "--deadline 0 is not a deadline (the floor is 1 second)" };
+            }
+            else if (const UnsignedFlag* f = FindUnsignedFlag(s))
+            {
+                if (!ParseNumber(v, a.*(f->field))) return { std::nullopt, s + " is not a number: " + v };
+                if (f->floor1 && a.*(f->field) == 0) return { std::nullopt, s + " 0 is refused (the floor is 1)" };
+            }
+            else if (s == "--window")
+            {
+                if (!ParseWindowSize(v, a.windowWidth, a.windowHeight))
+                    return { std::nullopt, "--window is not <W>x<H> (both non-zero): " + v };
+            }
+            else if (s == "--copy-flash")
+            {
+                if (!ParseSeconds(v, a.copyFlashSeconds))
+                    return { std::nullopt, "--copy-flash is not a finite, non-negative number of seconds: " + v };
             }
             // Unreachable by construction -- TakesValue above is the gate.
             // Kept so an option added to that list without a dispatch arm

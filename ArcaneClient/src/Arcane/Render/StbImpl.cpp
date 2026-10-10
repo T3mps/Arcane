@@ -10,7 +10,7 @@
 // ArcaneAssetPipeline's AssetPipeline/StbImpl.cpp, and the ArcaneTests exe's
 // copy inside VendorSmokeTest.cpp. Separate binaries -- no duplicate-symbol
 // clash, and no ODR question (nothing crosses the boundary; Core's image I/O
-// reaches Client as exported ARCANE_CORE_API functions, not as stb symbols).
+// reaches Client as exported ARC_CORE_API functions, not as stb symbols).
 //
 // Only the DECODER: nothing in ArcaneClient writes a PNG. The writer twin
 // (stb_image_write, behind Arcane::WritePngRgba) lives in Core's copy, where

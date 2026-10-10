@@ -34,11 +34,12 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
+#include <Arcane/Render/RenderDeviceSettings.hpp>   // RenderDebugSettings -- the per-configuration validation default
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Render/ShaderPaths.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>
 
-#include <Arcane/Render/Nri/GpuScene.hpp>   // GpuScene::kScratchRows -- the ad-hoc overflow pin
+#include <Arcane/Render/Nri/GpuScene.hpp>   // GpuScene::ScratchRows() -- the ad-hoc overflow pin
 
 #include <spdlog/sinks/callback_sink.h>
 #include <Arcane/Base/Log.hpp>
@@ -328,7 +329,7 @@ namespace
     {
         Arcane::RenderDeviceDesc desc;
         desc.backend = Arcane::Test::kNativeBackend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;
@@ -355,7 +356,7 @@ namespace
                 m_hadOld = true;
                 m_old = old;
             }
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
             _putenv_s(name, value.c_str());
 #else
             ::setenv(name, value.c_str(), 1);
@@ -364,7 +365,7 @@ namespace
 
         ~ScopedEnvironmentValue()
         {
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
             _putenv_s(m_name, m_hadOld ? m_old.c_str() : "");
 #else
             // _putenv_s(name, "") REMOVES the variable; POSIX spells that unsetenv.
@@ -397,6 +398,7 @@ TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is 
 
     Arcane::RenderDeviceDesc desc;
     desc.backend = Arcane::Test::kNativeBackend;
+    desc.enableValidation = Arcane::RenderDebugSettings{}.validation;   // the per-configuration default (on in Debug)
     auto native = Arcane::NativeDeviceOwner::Create(desc);
     REQUIRE(native != nullptr);
     auto nri = Arcane::NriDevice::Wrap(*native);
@@ -469,14 +471,14 @@ TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pi
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-// F3 plan 1 T7, review round 1: ad-hoc instances past GpuScene::kScratchRows
+// F3 plan 1 T7, review round 1: ad-hoc instances past GpuScene::ScratchRows()
 // are DROPPED by MeshNode::Prepare (the sync node only ever sees the capped
 // span, so GpuScene::Reserve's own overflow guard cannot fire on this path)
 // and Prepare WARNS for it exactly ONCE per node, naming the dropped count.
 // NOT device-free: MeshNode is only constructible through Create(context),
 // so this rides the D3D12 parity vehicle and asserts on the log directly
 // (the AttachLogCapture idiom from BindlessTableTest.cpp).
-TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare with ONE warn",
+TEST_CASE("mesh node: ad-hoc instances past ScratchRows() are dropped by Prepare with ONE warn",
           "[gpu][meshnode][mesh][node]")
 {
     ARC_REQUIRE_BACKEND(Arcane::Test::kNativeBackend);
@@ -493,8 +495,13 @@ TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare 
             return { nullptr, Arcane::MeshResolveState::Failed };
         });
 
+    // The cap is the context's latched render.gpuScene.scratchRowsPerFrame.
+    REQUIRE(ctx->Scene() != nullptr);
+    const std::uint32_t scratchRows = ctx->Scene()->ScratchRows();
+    REQUIRE(scratchRows > 0u);
+
     constexpr std::size_t kOver = 3;
-    std::vector<Arcane::MeshInstance> instances(Arcane::GpuScene::kScratchRows + kOver);
+    std::vector<Arcane::MeshInstance> instances(scratchRows + kOver);
     for (Arcane::MeshInstance& i : instances)
         i.mesh = cubeId;
     // A nil-mesh instance is skipped BEFORE the cap and must not count as dropped.
@@ -527,7 +534,7 @@ TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare 
         fd.mesh = &scene;
         REQUIRE(ctx->RenderFrameOffscreen(fd) == Arcane::NriGraphContext::FrameOutcome::Presented);
         REQUIRE(ctx->Mesh() != nullptr);
-        CHECK(ctx->Mesh()->AdHocRows().size() == Arcane::GpuScene::kScratchRows);   // capped, never more
+        CHECK(ctx->Mesh()->AdHocRows().size() == scratchRows);   // capped, never more
     }
 
     auto& sinks = Arcane::Log::Engine()->sinks();
@@ -535,7 +542,7 @@ TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare 
 
     CHECK(overflowWarns == 1);
     CHECK(lastOverflow.find(std::to_string(kOver) + " ad-hoc instance") != std::string::npos);
-    CHECK(lastOverflow.find(std::to_string(Arcane::GpuScene::kScratchRows) + " scratch rows") != std::string::npos);
+    CHECK(lastOverflow.find(std::to_string(scratchRows) + " scratch rows") != std::string::npos);
     CHECK(Arcane::RenderErrorCount() == before);   // a drop is a WARN, never a latched error
 }
 

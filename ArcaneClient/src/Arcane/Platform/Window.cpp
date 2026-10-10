@@ -6,7 +6,7 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
 #include <SDL3/SDL_metal.h>
 #endif
 
@@ -104,7 +104,7 @@ namespace Arcane
         SDL_WindowFlags flags = 0;
         if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
         if (desc.hidden)    flags |= SDL_WINDOW_HIDDEN;
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
         // macOS: the Vulkan backend (MoltenVK) presents to a CAMetalLayer that
         // NRI wraps with VK_EXT_metal_surface (NativeHandle below), so the
         // window is a METAL window. SDL_WINDOW_VULKAN would make SDL load its
@@ -156,7 +156,7 @@ namespace Arcane
     {
         if (m_window)
         {
-#if ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_MACOS
             if (m_metalView)
             {
                 SDL_Metal_DestroyView(m_metalView);
@@ -226,6 +226,14 @@ namespace Arcane
     {
         if (!m_window) return;
         SDL_SetWindowTitle(m_window, title.c_str());
+    }
+
+    float Window::DisplayScale() const
+    {
+        if (!m_window)
+            return 1.0f;
+        const float s = SDL_GetWindowDisplayScale(m_window);
+        return s > 0.0f ? s : 1.0f;
     }
 
     void Window::SetSize(uint32_t width, uint32_t height)
@@ -411,13 +419,19 @@ namespace Arcane
         return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) != 0;
     }
 
+    bool Window::IsFocused() const
+    {
+        if (!m_window) return false;
+        return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    }
+
     void* Window::NativeHandle() const
     {
         if (!m_window) return nullptr;
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
         return SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),
                                       SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
-#elif ARCANE_PLATFORM_MACOS
+#elif ARC_PLATFORM_MACOS
         // macOS port: the CAMetalLayer of a Metal view SDL attaches to the
         // NSWindow, created on first ask and owned by this Window. The
         // "offscreen" driver (no Cocoa window) has none: nullptr, as on Linux.
@@ -448,7 +462,7 @@ namespace Arcane
 
     void* Window::NativeDisplay() const
     {
-#if ARCANE_PLATFORM_WINDOWS || ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_WINDOWS || ARC_PLATFORM_MACOS
         return nullptr;
 #else
         if (!m_window) return nullptr;
@@ -461,7 +475,7 @@ namespace Arcane
 
     bool Window::IsWaylandWindow() const
     {
-#if ARCANE_PLATFORM_WINDOWS || ARCANE_PLATFORM_MACOS
+#if ARC_PLATFORM_WINDOWS || ARC_PLATFORM_MACOS
         return false;
 #else
         return m_window && SDL_GetPointerProperty(SDL_GetWindowProperties(m_window),

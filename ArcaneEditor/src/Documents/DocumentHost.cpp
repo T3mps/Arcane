@@ -91,6 +91,7 @@ namespace Arcane::Editor
         if (!doc) return;
         if (m_pendingClose == doc) m_pendingClose = nullptr;
         if (m_focusRequest == doc) m_focusRequest = nullptr;
+        if (m_lastActive == doc) m_lastActive = nullptr;
         Close(doc);
     }
 
@@ -118,6 +119,17 @@ namespace Arcane::Editor
             if (d->WindowFocused())
                 return d.get();
         return nullptr;
+    }
+
+    EditorDocument* DocumentHost::CloseTarget() const
+    {
+        if (EditorDocument* focused = FocusedDoc()) return focused;
+        return m_lastActive;
+    }
+
+    void DocumentHost::NoteFocus()
+    {
+        if (EditorDocument* focused = FocusedDoc()) m_lastActive = focused;
     }
 
     void DocumentHost::RequestClose(EditorDocument* doc)
@@ -160,6 +172,7 @@ namespace Arcane::Editor
     void DocumentHost::CloseAll()
     {
         m_pendingClose = nullptr;
+        m_lastActive = nullptr;
         if (m_observer.closing) for (const auto& d : m_docs) m_observer.closing(*d);
         m_docs.clear();
         m_dockPlaced.clear();
@@ -167,6 +180,7 @@ namespace Arcane::Editor
 
     void DocumentHost::Close(EditorDocument* doc)
     {
+        if (m_lastActive == doc) m_lastActive = nullptr;
         m_dockPlaced.erase(doc);   // a reopen docks fresh again
         if (m_observer.closing) m_observer.closing(*doc);
         m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(),
@@ -218,6 +232,7 @@ namespace Arcane::Editor
         }
         for (EditorDocument* d : toClose)
             RequestClose(d);
+        NoteFocus();
 
         // Deliberately NOT folded into EditorApp's ModalErrorQueue -- DocumentHost
         // is self-contained; see the architecture-pass spec sec 7.

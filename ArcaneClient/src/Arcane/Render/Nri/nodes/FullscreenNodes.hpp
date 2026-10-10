@@ -66,12 +66,13 @@
 //
 // Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
 #include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Material/GlobalParams.hpp>   // GlobalParams (16 bytes, held by value)
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
-#include <Arcane/Render/FramePacing.hpp>        // kSwapchainFramesInFlight
+#include <Arcane/Render/FramePacing.hpp>        // kMaxFramesInFlight, FramesInFlight()
 
 #include <cstdint>
 #include <memory>
@@ -85,6 +86,7 @@ namespace Arcane
     class NriGraphContext;
     class NriTextureCache;
     struct PostChainDesc;
+    struct RenderPostSettings;
 
     // A SHADER_RESOURCE view over one graph transient, keyed by the texture it
     // views. Shared by both nodes here because they cache them for the same
@@ -122,7 +124,7 @@ namespace Arcane
     // sampler (the D3D12 table merge), and every range visible to BOTH stages
     // (a template's %{VERTEX_BODY} may read params and sample textures).
     // =====================================================================
-    struct ARCANE_API FullscreenMaterialLayout
+    struct ARC_API FullscreenMaterialLayout
     {
         // Fills everything for a material whose merged template has `cbSize`
         // bytes of numeric params (0 == none, and then there is no b0 range at
@@ -133,6 +135,7 @@ namespace Arcane
 
         // Range indices into `ranges`, for UpdateDescriptorRanges. kNoRange
         // when the material's shape declares no such range.
+        ARC_CONSTANT("sentinel: no constant-buffer range")
         static constexpr std::uint32_t kNoRange = 0xFFFFFFFFu;
         std::uint32_t materialCb = kNoRange;   // b0
         std::uint32_t globalsCb  = kNoRange;   // b1
@@ -163,7 +166,7 @@ namespace Arcane
     //     (a chain input slot with nothing wired into it -- likewise), plus
     //     their views;
     //   * one LINEAR/wrap sampler, matching FullscreenMaterialPass::Init's;
-    //   * one descriptor pool sized for kMaxPasses x kSwapchainFramesInFlight
+    //   * one descriptor pool sized for Caps::maxPasses x FramesInFlight()
     //     sets;
     //   * the per-frame-slot constant-buffer arena the b0/b1 views name.
     // The pipeline LAYOUT and the PSOs come from the vehicle's shared
@@ -196,7 +199,7 @@ namespace Arcane
     // has retired before this frame records into it (the pacing wait inside
     // NriSwapChain::AcquireNextTexture).
     // =====================================================================
-    class ARCANE_API PostChainNode
+    class ARC_API PostChainNode
     {
     public:
         // Builds the fallback texels, the sampler, the pool and the arena.
@@ -243,38 +246,54 @@ namespace Arcane
                     std::span<const RgTexture> sources, RgTexture target,
                     std::uint32_t frameSlot);
 
-        // How many chain passes one frame may record, how many declared
-        // texture params one chain may carry, and the arena's region size
-        // before alignment. Pool/arena sizing constants, not opinions about
-        // content -- the same reasoning as Batch2DNode's caps: a pool's
-        // capacity is fixed at creation and NRI cannot free one descriptor
-        // set, so the alternative to a cap is discovering the limit mid-frame.
-        // Over either cap the chain is refused wholesale (the frame renders
-        // canvas -> tonemap) with one ERROR naming the constant to raise.
-        static constexpr std::uint32_t kMaxPasses   = 8;
-        static constexpr std::uint32_t kMaxTextures = 8;
+        // THE CAPS (settings arc S6-18): render.post.* (Restart), LATCHED ONCE
+        // by the constructor -- how many chain passes one frame may record,
+        // how many declared texture params one chain may carry, and the
+        // arena's region size before alignment (a multiple of 256,
+        // MaterialCbRegionBytes; the constructor rounds down with one WARN).
+        // Pool/arena sizing numbers, not opinions about content -- the same
+        // reasoning as Batch2DNode's caps: a pool's capacity is fixed at
+        // creation and NRI cannot free one descriptor set, so the alternative
+        // to a cap is discovering the limit mid-frame. Over any cap the chain
+        // is refused wholesale (the frame renders canvas -> tonemap) with one
+        // ERROR naming the setting to raise.
+        struct Caps
+        {
+            std::uint32_t maxPasses       = 0;   // render.post.maxPasses
+            std::uint32_t maxTextures     = 0;   // render.post.maxTextures
+            std::uint32_t materialCbBytes = 0;   // render.post.materialCbBytes, rounded to a multiple of 256
+        };
+        // The caps `settings` asks for (materialCbBytes rounded down to a
+        // multiple of 256). PURE, like Batch2DNode::CapsFrom.
+        [[nodiscard]] static Caps CapsFrom(const RenderPostSettings& settings) noexcept;
+        // The caps this node latched at creation.
+        [[nodiscard]] const Caps& GetCaps() const noexcept { return m_caps; }
+
         // kMaxPassInputs (Material/MaterialSource.hpp) is 4; pinned by a
         // static_assert in the .cpp so this cannot silently fall behind.
+        ARC_CONSTANT("file format: equals kMaxPassInputs, the post asset format's input ceiling (static_assert)")
         static constexpr std::uint32_t kMaxInputs   = 4;
-        static constexpr std::uint32_t kCbMaxBytes  = 256;
         // Region 0 of every frame slot is the globals CB, region 1 the ONE
         // material CB the whole chain shares.
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kCbRegionsPerFrame = 2;
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kGlobalsRegion     = 0;
+        ARC_CONSTANT("layout: constant-buffer region layout per frame")
         static constexpr std::uint32_t kMaterialRegion    = 1;
 
         // PURE and public for the same reason Batch2DNode's twins are: they
         // carry invariants whose violation would be silent, and no device can
         // show them. The stride must be BOTH a multiple of the device's
         // constant-buffer alignment (or every view past the first is
-        // misaligned) AND at least kCbMaxBytes (or the packed bytes spill into
-        // the next region).
+        // misaligned) AND at least `regionBytes` (Caps::materialCbBytes; or
+        // the packed bytes spill into the next region).
         [[nodiscard]] static constexpr std::uint64_t CbRegionStride(
-            std::uint64_t constantBufferAlignment) noexcept
+            std::uint32_t regionBytes, std::uint64_t constantBufferAlignment) noexcept
         {
             return constantBufferAlignment <= 1
-                 ? kCbMaxBytes
-                 : ((kCbMaxBytes + constantBufferAlignment - 1) / constantBufferAlignment)
+                 ? regionBytes
+                 : ((regionBytes + constantBufferAlignment - 1) / constantBufferAlignment)
                        * constantBufferAlignment;
         }
 
@@ -306,7 +325,7 @@ namespace Arcane
         void SyncPoolEpoch(const RenderGraph& graph);
 
     private:
-        PostChainNode() = default;
+        PostChainNode();   // latches m_caps from the published render.post.*
 
         bool Init(NriGraphContext& context);
         bool CreateFallbackTexels();
@@ -339,12 +358,13 @@ namespace Arcane
             // outlives the GetGraphics call (its fill contract, rule 2).
             std::shared_ptr<const std::vector<std::uint8_t>> vs, ps;
             nri::Pipeline*      pipeline = nullptr;
-            nri::DescriptorSet* set[kSwapchainFramesInFlight]{};
+            nri::DescriptorSet* set[kMaxFramesInFlight]{};
             // What this pass's set for that frame slot currently has bound in
             // its texture range -- the declared params first, then the chain
-            // inputs. A rebind happens only when one of them changes.
-            nri::Texture* bound[kSwapchainFramesInFlight][kMaxTextures + kMaxInputs]{};
-            bool          written[kSwapchainFramesInFlight]{};
+            // inputs (Caps::maxTextures + kMaxInputs entries, sized by
+            // BuildChain). A rebind happens only when one of them changes.
+            std::vector<nri::Texture*> bound[kMaxFramesInFlight];
+            bool          written[kMaxFramesInFlight]{};
         };
 
         // See Batch2DNode::kShaderPairBase and TonemapNode::kShaderPairId: one
@@ -353,7 +373,13 @@ namespace Arcane
         // the high bit set (like a registered sprite material's) -- and the
         // layout id is part of GraphicsKey anyway, so the two cannot collide
         // even on identical bytecode.
+        ARC_CONSTANT("id scheme: fullscreen shader-pair ids")
         static constexpr std::uint64_t kShaderPairMark = 0x8000000000000000ull;
+
+        // render.post.*, latched by the constructor (Restart): the pool, the
+        // arena and every per-chain array are sized from these, never from
+        // the live settings.
+        Caps m_caps{};
 
         NriDevice*        m_device    = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
@@ -374,8 +400,8 @@ namespace Arcane
         nri::Buffer*     m_arena       = nullptr;
         void*            m_arenaCpu    = nullptr;
         std::uint64_t    m_arenaStride = 0;
-        nri::Descriptor* m_globalsView[kSwapchainFramesInFlight]{};
-        nri::Descriptor* m_materialView[kSwapchainFramesInFlight]{};
+        nri::Descriptor* m_globalsView[kMaxFramesInFlight]{};
+        nri::Descriptor* m_materialView[kMaxFramesInFlight]{};
 
         // The bound chain's shape. Rebuilt only when `m_stamp` changes.
         std::uint64_t m_stamp        = 0;
@@ -396,8 +422,13 @@ namespace Arcane
         // decision and binds VIEWS -- and unlike a chain input's view, one of
         // these is NOT over a graph pool texture, so it must never reach
         // EnsureView (whose cache is buried on every pool-epoch move).
-        nri::Texture*    m_paramTextures[kMaxTextures]{};
-        nri::Descriptor* m_paramViews[kMaxTextures]{};
+        std::vector<nri::Texture*>    m_paramTextures;   // m_textureCount entries
+        std::vector<nri::Descriptor*> m_paramViews;      // m_textureCount entries
+        // Record's per-pass scratch for the texture range (declared params,
+        // then chain inputs), sized once by the constructor to
+        // Caps::maxTextures + kMaxInputs so recording allocates nothing.
+        std::vector<nri::Texture*>          m_wantedScratch;
+        std::vector<const nri::Descriptor*> m_viewScratch;
 
         std::vector<Pass>                 m_passes;
         std::vector<FullscreenSourceView> m_views;
@@ -412,7 +443,7 @@ namespace Arcane
         bool m_warnedViewChurn = false;
     };
 
-    class ARCANE_API TonemapNode
+    class ARC_API TonemapNode
     {
     public:
         // Loads tonemap_vs/ps through the vehicle and builds the sampler,
@@ -472,6 +503,7 @@ namespace Arcane
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the two nodes'
         // opaque shader-pair id spaces must not overlap.
+        ARC_CONSTANT("id scheme: fullscreen shader-pair ids")
         static constexpr std::uint64_t kShaderPairId = 0x3000;
 
         NriDevice*        m_device    = nullptr;
@@ -489,9 +521,9 @@ namespace Arcane
         // shared set, which was correct while nothing in it was per-frame --
         // Task 10's chain makes the source change mid-run, and rewriting a
         // shared set with frames in flight is a real hazard.
-        nri::DescriptorSet*  m_set[kSwapchainFramesInFlight]{};
+        nri::DescriptorSet*  m_set[kMaxFramesInFlight]{};
         // The texture frame slot i's set currently binds at t0.
-        nri::Texture*        m_bound[kSwapchainFramesInFlight]{};
+        nri::Texture*        m_bound[kMaxFramesInFlight]{};
 
         std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
 
@@ -514,7 +546,7 @@ namespace Arcane
     // and values were already consumed by PostChainNode::PrepareChain, which
     // is also what decided `passCount`. `context` may be null -- see
     // AddBatch2DNode's signature note.
-    ARCANE_API RgTexture AddPostChainNodes(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddPostChainNodes(RenderGraph& graph, NriGraphContext* context,
                                            RgTexture scene, const PostChainDesc& desc,
                                            std::uint32_t passCount,
                                            std::uint32_t width, std::uint32_t height);
@@ -538,7 +570,7 @@ namespace Arcane
     //     well as frame N) and a SHADER_RESOURCE exit, so the frame ends with
     //     the texture in a state a sampler can read. NOTHING is presented.
     // The pointer is recorded, never dereferenced here.
-    ARCANE_API RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context,
+    ARC_API RgTexture AddTonemapNode(RenderGraph& graph, NriGraphContext* context,
                                         RgTexture source,
                                         nri::Texture* offscreenOutput = nullptr);
 }

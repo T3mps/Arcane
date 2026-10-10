@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/EcsFwd.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 
 #include <cstdint>
@@ -38,7 +39,7 @@ namespace Arcane
     //
     // A PluginHost must NOT outlive its ProcessContext or any attached Runtime (the
     // dtor calls into them); DetachRuntime is the seam for a world that dies first.
-    class ARCANE_CORE_API PluginHost
+    class ARC_CORE_API PluginHost
     {
     public:
         // sourceDllPath is the PRIMARY game module (watched + hot-reloaded). Pass an EMPTY
@@ -108,6 +109,14 @@ namespace Arcane
         [[nodiscard]] bool                IsLoaded()   const noexcept;
         [[nodiscard]] const PluginVTable* Vtable()     const noexcept;
         [[nodiscard]] std::uint32_t       Generation() const noexcept;
+
+        // PlaySession (and any other caller that would otherwise invoke the
+        // primary vtable's SaveState/LoadState directly) goes through these so
+        // a CVarModuleScope is open, matching every other PluginHost vtable
+        // call. False when there is no primary, the entry is missing, or
+        // SaveState latched an error / LoadState returned false.
+        bool SaveStatePrimary(BinaryWriter& w);
+        bool LoadStatePrimary(BinaryReader& r);
 
         // READ-ONLY / DIAGNOSTIC. The very EngineContext struct handed to every
         // loaded module's Init -- exposed so a test (or a host's census) can see what

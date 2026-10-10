@@ -1,6 +1,6 @@
 // Epic 04.2 render interpolation: pure math (Lerp / shortest-arc AngleLerp for
-// the physics-side 2D InterpPose, PhysicsInterpBuffer's slot poses for the
-// sprite path), PhysicsSystem previous-pose capture, and the two render consumers
+// the physics-side 2D Arcane::PhysicsInterpPose2D, Arcane::PhysicsInterpBuffer2D's slot poses for the
+// sprite path), Arcane::PhysicsSystem2D previous-pose capture, and the two render consumers
 // (DrawPhysicsDebug overlay + RenderSubmissionSystem sprites) driven against a
 // recording mock Batcher2D. CPU-only (tag [interp], never [gpu]).
 
@@ -13,6 +13,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
 #include <memory>
@@ -43,15 +44,15 @@ namespace
     // measure y endpoints through the same submit).
     Arcane::ViewTransform PixelView()
     {
-        return Arcane::ViewTransform::Orthographic({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
+        return Arcane::Ortho2DView({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
     }
 }
 
 TEST_CASE("Lerp is the standard affine blend", "[interp]")
 {
-    CHECK(Arcane::Lerp(0.0f, 10.0f, 0.0f) == Approx(0.0f));
-    CHECK(Arcane::Lerp(0.0f, 10.0f, 1.0f) == Approx(10.0f));
-    CHECK(Arcane::Lerp(2.0f, 6.0f, 0.5f) == Approx(4.0f));
+    CHECK(Arcane::Detail::Physics2D::Lerp(0.0f, 10.0f, 0.0f) == Approx(0.0f));
+    CHECK(Arcane::Detail::Physics2D::Lerp(0.0f, 10.0f, 1.0f) == Approx(10.0f));
+    CHECK(Arcane::Detail::Physics2D::Lerp(2.0f, 6.0f, 0.5f) == Approx(4.0f));
 }
 
 TEST_CASE("AngleLerp takes the shortest arc across the pi wrap", "[interp]")
@@ -59,7 +60,7 @@ TEST_CASE("AngleLerp takes the shortest arc across the pi wrap", "[interp]")
     // 350deg -> 10deg: shortest arc is +20deg through 0, NOT -340deg.
     const float a = 350.0f * kPi / 180.0f;
     const float b =  10.0f * kPi / 180.0f;
-    const float mid = Arcane::AngleLerp(a, b, 0.5f);
+    const float mid = Arcane::Detail::Physics2D::AngleLerp(a, b, 0.5f);
     // Midpoint is 360deg == 0deg (mod 2pi). Compare via sin/cos to dodge the wrap.
     CHECK(std::sin(mid) == Approx(0.0f).margin(1e-5));
     CHECK(std::cos(mid) == Approx(1.0f).margin(1e-5));
@@ -67,55 +68,54 @@ TEST_CASE("AngleLerp takes the shortest arc across the pi wrap", "[interp]")
 
 TEST_CASE("AngleLerp endpoints and non-wrapping case", "[interp]")
 {
-    CHECK(Arcane::AngleLerp(0.3f, 1.1f, 0.0f) == Approx(0.3f));
-    CHECK(Arcane::AngleLerp(0.3f, 1.1f, 1.0f) == Approx(1.1f));
-    CHECK(Arcane::AngleLerp(0.2f, 0.8f, 0.5f) == Approx(0.5f)); // no wrap: plain midpoint
+    CHECK(Arcane::Detail::Physics2D::AngleLerp(0.3f, 1.1f, 0.0f) == Approx(0.3f));
+    CHECK(Arcane::Detail::Physics2D::AngleLerp(0.3f, 1.1f, 1.0f) == Approx(1.1f));
+    CHECK(Arcane::Detail::Physics2D::AngleLerp(0.2f, 0.8f, 0.5f) == Approx(0.5f)); // no wrap: plain midpoint
 }
 
-TEST_CASE("PhysicsInterpBuffer captures the pre-step pose each fixed step", "[interp]")
+TEST_CASE("Arcane::PhysicsInterpBuffer2D captures the pre-step pose each fixed step", "[interp]")
 {
     namespace P = Manifold2D::Physics;
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
 
     P::WorldDef wd; wd.gravityY = 10.0f;
-    reg.SetResource(Arcane::PhysicsResource{
-        std::make_unique<P::PhysicsWorld>(wd), {} });
-    reg.SetResource(Arcane::PhysicsInterpBuffer{});   // opt in to capture
+    reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<P::PhysicsWorld>(wd)));
+    reg.SetResource(Arcane::PhysicsInterpBuffer2D{});   // opt in to capture
 
     // One dynamic circle free-falling from the origin.
     Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt; lt.position = glm::vec3(0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-    Arcane::RigidBody2D rb; rb.type = P::BodyType::Dynamic;
+    Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic;
     reg.AddComponent<Arcane::RigidBody2D>(e, rb);
     Arcane::Collider2D col;
-    { Arcane::Fixture fx; fx.kind = P::ShapeKind::Circle; fx.radius = 0.5f;
+    { Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Circle; fx.radius = 0.5f;
       col.fixtures.push_back(fx); }
     reg.AddComponent<Arcane::Collider2D>(e, col);
-    reg.AddComponent<Arcane::PhysicsBodyRef>(e, Arcane::PhysicsBodyRef{});
+    reg.AddComponent<Arcane::PhysicsBodyRef2D>(e, Arcane::PhysicsBodyRef2D{});
 
     constexpr float kDt = 1.0f / 60.0f;
-    Arcane::PhysicsSystem physics(kDt);
+    Arcane::PhysicsSystem2D physics(kDt);
 
     // Step once: creates the body, captures prev (== the initial pose (0,0)), steps.
     physics(reg);
-    const P::BodyHandle h = reg.GetComponent<Arcane::PhysicsBodyRef>(e)->handle;
-    const P::PhysicsWorld& world = *reg.GetResource<Arcane::PhysicsResource>()->world;
+    const P::BodyHandle h = reg.GetComponent<Arcane::PhysicsBodyRef2D>(e)->handle;
+    const P::PhysicsWorld& world = *Arcane::Detail::Physics2D::Access::Solver(*reg.GetResource<Arcane::PhysicsWorld2D>());
     const P::Vec2 afterStep1 = world.Position(h);   // pose after step 1
 
     // Step again: prev must now hold the post-step-1 pose (the pre-step-2 state).
     physics(reg);
 
-    const auto* buf = reg.GetResource<Arcane::PhysicsInterpBuffer>();
+    const auto* buf = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
     REQUIRE(buf->captured);
     REQUIRE(h.index < buf->prev.size());
-    const Arcane::InterpPose& pp = buf->prev[h.index];
+    const Arcane::PhysicsInterpPose2D& pp = buf->prev[h.index];
     CHECK(pp.generation == h.generation);
-    const Arcane::InterpSlot* slot = buf->slotOf.TryGet(e);
+    const Arcane::PhysicsInterpSlot2D* slot = buf->slotOf.TryGet(e);
     REQUIRE(slot != nullptr);
     CHECK(slot->index == h.index);
     CHECK(slot->generation == h.generation);
@@ -188,14 +188,14 @@ TEST_CASE("DrawPhysicsDebug interpolates the body outline by alpha", "[interp]")
     const P::BodyHandle h = world.AddBody(bd);
 
     // Synthesized previous pose at (0, 0), same generation as the live slot.
-    Arcane::PhysicsInterpBuffer buf;
+    Arcane::PhysicsInterpBuffer2D buf;
     buf.prev.resize(world.Count());
-    buf.prev[h.index] = Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, h.generation };
+    buf.prev[h.index] = Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f, 0.0f), 0.0f, h.generation };
     buf.captured = true;
 
-    Arcane::PhysicsDebugDrawOptions opts;
-    opts.drawContacts = opts.drawAabbs = opts.drawVelocities = false;
-    opts.drawComMarkers = opts.drawOrientations = false;   // isolate the outline
+    Arcane::PhysicsDebugDrawOptions2D opts;
+    opts.contacts = opts.aabbs = opts.velocities = false;
+    opts.comMarkers = opts.orientations = false;   // isolate the outline
     opts.interp = &buf;
     opts.alpha  = 0.5f;                                     // halfway 0 -> 10
 
@@ -215,30 +215,30 @@ TEST_CASE("DrawPhysicsDebug interpolates the body outline by alpha", "[interp]")
 
 namespace
 {
-    // A sprite entity addressed by a hand-built PhysicsInterpBuffer -- the exact
+    // A sprite entity addressed by a hand-built Arcane::PhysicsInterpBuffer2D -- the exact
     // shape PASS 2.5 leaves behind (prev[slot] + slotOf[e]), with no PhysicsWorld
-    // and no PhysicsBodyRef involved: the buffer is world-SLOT indexed and the
+    // and no Arcane::PhysicsBodyRef2D involved: the buffer is world-SLOT indexed and the
     // map IS the entity's address. Current world pose from `lt`; previous `prev`.
     Astra::Entity SpriteWithPrev(Astra::Registry& reg, const Arcane::Transform& lt,
-                                 Arcane::InterpPose prev, std::uint32_t slot, std::uint32_t generation)
+                                 Arcane::PhysicsInterpPose2D prev, std::uint32_t slot, std::uint32_t generation)
     {
         Astra::Entity e = reg.CreateEntity();
         Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
         reg.AddComponent<Arcane::WorldTransform>(e, wt);
         reg.AddComponent<Arcane::SpriteRenderer>(e, Arcane::SpriteRenderer{});
 
-        Arcane::PhysicsInterpBuffer buf;
+        Arcane::PhysicsInterpBuffer2D buf;
         buf.prev.resize(slot + 1);
         prev.generation = generation;
         buf.prev[slot] = prev;
-        buf.slotOf[e] = Arcane::InterpSlot{ slot, generation };
+        buf.slotOf[e] = Arcane::PhysicsInterpSlot2D{ slot, generation };
         buf.captured = true;
-        reg.SetResource<Arcane::PhysicsInterpBuffer>(std::move(buf));
+        reg.SetResource<Arcane::PhysicsInterpBuffer2D>(std::move(buf));
         return e;
     }
 }
 
-TEST_CASE("RenderSubmissionSystem interpolates a sprite by PhysicsInterpBuffer + alpha", "[interp]")
+TEST_CASE("RenderSubmissionSystem interpolates a sprite by Arcane::PhysicsInterpBuffer2D + alpha", "[interp]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
@@ -247,7 +247,7 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PhysicsInterpBuffer +
     // Current world pose at x=10; previous world-slot pose at x=0. Untextured Rect
     // sprite: nil .arcsprite -> a 1x1 m quad, so the scale IS the 4x4 size.
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
-    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 3, /*gen*/ 7);
+    SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 3, /*gen*/ 7);
 
     RecBatcher rec;
     Arcane::RenderContext2D ctx{ &rec, PixelView(), 0.5f };  // alpha 0.5
@@ -275,12 +275,12 @@ TEST_CASE("RenderSubmissionSystem submits sprites as WORLD quads with the interp
 
     // Current pose (10, 4, z=1.5) scaled 4x4; previous world-slot pose (0, 0).
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 4.0f, 1.5f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
-    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 1, /*gen*/ 2);
+    SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 1, /*gen*/ 2);
 
     RecBatcher rec;
     // A deliberately NON-identity view: the corners must not move with it.
     reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{
-        &rec, Arcane::ViewTransform::Orthographic({123.0f, -45.0f}, 7.0f, {640u, 480u}), 0.25f });
+        &rec, Arcane::Ortho2DView({123.0f, -45.0f}, 7.0f, {640u, 480u}), 0.25f });
     Arcane::RenderSubmissionSystem{}(reg);
 
     REQUIRE(rec.quadCalls == 1);
@@ -306,7 +306,7 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     Arcane::Transform lt; lt.position = glm::vec3(0.0f);
     lt.rotation = Arcane::RotationAboutZ(10.0f * kPi / 180.0f);   // current 10deg about +Z
     lt.scale    = glm::vec3(4.0f, 4.0f, 1.0f);
-    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), 350.0f * kPi / 180.0f, 0 }, 0, 1);
+    SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f), 350.0f * kPi / 180.0f, 0 }, 0, 1);
 
     RecBatcher rec;
     reg.SetResource<Arcane::RenderContext2D>(
@@ -340,7 +340,7 @@ TEST_CASE("RenderSubmissionSystem keeps a mirrored sprite's handedness through t
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f);
     lt.rotation = Arcane::RotationAboutZ(theta);
     lt.scale    = glm::vec3(-4.0f, 4.0f, 1.0f);   // X-mirrored
-    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), prevTheta, 0 }, /*slot*/ 0, /*gen*/ 3);
+    SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f), prevTheta, 0 }, /*slot*/ 0, /*gen*/ 3);
 
     reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, PixelView(), 0.5f });
     auto submitAt = [&](float alpha)
@@ -358,7 +358,7 @@ TEST_CASE("RenderSubmissionSystem keeps a mirrored sprite's handedness through t
     const RecBatcher half = submitAt(0.5f);
     const glm::vec3 top = half.lastCorners[1] - half.lastCorners[0];   // TL -> TR = local +x, mirrored
     const glm::vec3 up  = half.lastCorners[0] - half.lastCorners[3];   // BL -> TL = local +y
-    const float blended = Arcane::AngleLerp(prevTheta, theta, 0.5f);
+    const float blended = Arcane::Detail::Physics2D::AngleLerp(prevTheta, theta, 0.5f);
     CHECK(blended == Approx(0.2f));
     CHECK(top.x < 0.0f);                                              // the mirror survives...
     CHECK(top.x == Approx(-4.0f * std::cos(blended)));                // ...at the blended turn, length 4
@@ -371,9 +371,9 @@ TEST_CASE("RenderSubmissionSystem keeps a mirrored sprite's handedness through t
 
     // A hit at alpha 1 from the CURRENT angle must be the miss path's quad,
     // corner for corner: the re-bake is exact, not merely mirror-preserving.
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[0].angle = theta;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev[0].angle = theta;
     const RecBatcher hit = submitAt(1.0f);
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = false;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->captured = false;
     const RecBatcher miss = submitAt(1.0f);
     for (std::size_t i = 0; i < 4; ++i)
     {
@@ -402,7 +402,7 @@ TEST_CASE("RenderSubmissionSystem reads a Y-mirrored basis by the nearer of {t, 
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f);
     lt.rotation = Arcane::RotationAboutZ(theta);
     lt.scale    = glm::vec3(4.0f, -4.0f, 1.0f);   // Y-mirrored
-    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), prevTheta, 0 }, /*slot*/ 0, /*gen*/ 3);
+    SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f), prevTheta, 0 }, /*slot*/ 0, /*gen*/ 3);
 
     reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, PixelView(), 0.5f });
     auto submitAt = [&](float alpha)
@@ -419,7 +419,7 @@ TEST_CASE("RenderSubmissionSystem reads a Y-mirrored basis by the nearer of {t, 
     const RecBatcher half = submitAt(0.5f);
     const glm::vec3 top = half.lastCorners[1] - half.lastCorners[0];   // TL -> TR = local +x
     const glm::vec3 up  = half.lastCorners[0] - half.lastCorners[3];   // BL -> TL = local +y, mirrored
-    const float blended = Arcane::AngleLerp(prevTheta, theta, 0.5f);
+    const float blended = Arcane::Detail::Physics2D::AngleLerp(prevTheta, theta, 0.5f);
     CHECK(blended == Approx(0.2f));
     CHECK(up.y < 0.0f);                                               // the Y mirror survives...
     CHECK(top.x == Approx( 4.0f * std::cos(blended)));                // ...the x axis turns by 0.2, unmirrored
@@ -433,9 +433,9 @@ TEST_CASE("RenderSubmissionSystem reads a Y-mirrored basis by the nearer of {t, 
 
     // A hit at alpha 1 from the CURRENT angle is the miss path's quad, corner
     // for corner -- the Y reading re-bakes exactly, like the X one.
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[0].angle = theta;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev[0].angle = theta;
     const RecBatcher hit = submitAt(1.0f);
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = false;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->captured = false;
     const RecBatcher miss = submitAt(1.0f);
     for (std::size_t i = 0; i < 4; ++i)
     {
@@ -453,7 +453,7 @@ TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss",
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
-    const Astra::Entity e = SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), 0.0f, 0 }, 2, 5);
+    const Astra::Entity e = SpriteWithPrev(reg, lt, Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f), 0.0f, 0 }, 2, 5);
     (void)e;
     reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, PixelView(), 0.5f });
 
@@ -467,17 +467,17 @@ TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss",
     };
     CHECK(submit() == Approx(5.0f));                                              // the hit, for contrast
 
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2].generation = 6;        // recycled slot
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev[2].generation = 6;        // recycled slot
     CHECK(submit() == Approx(10.0f));
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2].generation = 5;
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev.resize(2);               // slot past the end
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev[2].generation = 5;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev.resize(2);               // slot past the end
     CHECK(submit() == Approx(10.0f));
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev.resize(3);
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2] = Arcane::InterpPose{ glm::vec2(0.0f), 0.0f, 5 };
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = false;             // never captured
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev.resize(3);
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->prev[2] = Arcane::PhysicsInterpPose2D{ glm::vec2(0.0f), 0.0f, 5 };
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->captured = false;             // never captured
     CHECK(submit() == Approx(10.0f));
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = true;
-    reg.GetResource<Arcane::PhysicsInterpBuffer>()->slotOf.Clear();               // no entry for the entity
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->captured = true;
+    reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->slotOf.Clear();               // no entry for the entity
     CHECK(submit() == Approx(10.0f));
 }
 
@@ -487,7 +487,7 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     // The owed case (spec 2026-09-11-physics-2d-wiring s8, "Plan 2's owed
     // case"): the two hand-built cases above use alpha 0.5, which is
     // SYMMETRIC -- a reversed Lerp endpoint order would still pass them. This
-    // one runs the REAL chain (PhysicsSystem PASS 2.5 capture -> step -> PASS
+    // one runs the REAL chain (Arcane::PhysicsSystem2D PASS 2.5 capture -> step -> PASS
     // 4 write-back -> propagation) and asks at 0.25 and 0.75, which only the
     // right direction satisfies. The endpoints are MEASURED through the same
     // submit at alpha 0 and 1 rather than computed from world units, so the
@@ -496,16 +496,16 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
-    Arcane::RegisterPhysicsComponents(reg);
+    Arcane::RegisterPhysicsComponents2D(reg);
 
     P::WorldDef wd; wd.gravityY = 10.0f;
-    reg.SetResource(Arcane::PhysicsResource{ std::make_unique<P::PhysicsWorld>(wd), {} });
-    reg.SetResource(Arcane::PhysicsInterpBuffer{});   // opt in to capture
+    reg.SetResource(Arcane::Detail::Physics2D::Adopt(std::make_unique<P::PhysicsWorld>(wd)));
+    reg.SetResource(Arcane::PhysicsInterpBuffer2D{});   // opt in to capture
 
     // A scene root: TransformPropagationSystem is a no-op with no SceneRoot
     // resource (it returns immediately -- TransformSystems.hpp), and composes
     // only entities reachable from it (PhysicsSystemTest.cpp's BuildScene is
-    // the precedent every other real-chain PhysicsSystem test follows).
+    // the precedent every other real-chain Arcane::PhysicsSystem2D test follows).
     Astra::Entity root = reg.CreateEntity();
     Arcane::Transform rootLt; rootLt.position = glm::vec3(0.0f);
     reg.AddComponent<Arcane::Transform>(root, rootLt);
@@ -518,21 +518,21 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     Arcane::Transform lt; lt.position = glm::vec3(0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
-    Arcane::RigidBody2D rb; rb.type = P::BodyType::Dynamic;
+    Arcane::RigidBody2D rb; rb.type = Arcane::BodyType2D::Dynamic;
     reg.AddComponent<Arcane::RigidBody2D>(e, rb);
     Arcane::Collider2D col;
-    { Arcane::Fixture fx; fx.kind = P::ShapeKind::Circle; fx.radius = 0.5f; col.fixtures.push_back(fx); }
+    { Arcane::Fixture2D fx; fx.kind = Arcane::ShapeKind2D::Circle; fx.radius = 0.5f; col.fixtures.push_back(fx); }
     reg.AddComponent<Arcane::Collider2D>(e, col);
     reg.AddComponent<Arcane::SpriteRenderer>(e, Arcane::SpriteRenderer{});
     reg.SetParent(e, root);
-    // No PhysicsBodyRef on purpose: PASS 1.5 adds it (Plan 1 Task 5).
+    // No Arcane::PhysicsBodyRef2D on purpose: PASS 1.5 adds it (Plan 1 Task 5).
 
-    Arcane::PhysicsSystem physics(1.0f / 60.0f);
+    Arcane::PhysicsSystem2D physics(1.0f / 60.0f);
     Arcane::TransformPropagationSystem propagate;
     physics(reg);      // mint, capture prev = the authored pose, step, write back
     propagate(reg);    // WorldTransform = the post-step pose
-    REQUIRE(reg.GetComponent<Arcane::PhysicsBodyRef>(e) != nullptr);
-    REQUIRE(reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+    REQUIRE(reg.GetComponent<Arcane::PhysicsBodyRef2D>(e) != nullptr);
+    REQUIRE(reg.GetResource<Arcane::PhysicsInterpBuffer2D>()->captured);
 
     reg.SetResource<Arcane::RenderContext2D>(
         Arcane::RenderContext2D{ nullptr, PixelView(), 0.0f });

@@ -14,7 +14,7 @@
 //
 // Everything declared here is DEFINED in Diagnostics.cpp except the
 // Posix:: block. Nothing here is exported (ArcaneCore builds with hidden
-// visibility on ELF and these carry no ARCANE_CORE_API).
+// visibility on ELF and these carry no ARC_CORE_API).
 
 #include <Arcane/Base/CrashArena.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>
@@ -32,13 +32,21 @@
 namespace Arcane::Diagnostics::Internal
 {
     // ---- fixed sizes (shared by every backend) ------------------------------
+    ARC_CONSTANT("crash-path capacity: reason text bytes in the static crash arena")
     constexpr std::size_t kReasonMax   = 1024;
+    ARC_CONSTANT("crash-path capacity: path bytes in the static crash arena")
     constexpr std::size_t kPathMax     = 1024;        // UTF-8 bytes, generous vs MAX_PATH / PATH_MAX
+    ARC_CONSTANT("crash-path capacity: walked stack frames kept in the static crash arena")
     constexpr std::size_t kMaxFrames   = 96;
+    ARC_CONSTANT("crash-path capacity: the walked thread's text in the static crash arena")
     constexpr std::size_t kSectionRsv  = 32 * 1024;   // the walked thread's text
+    ARC_CONSTANT("crash-path capacity: the .txt header in the static crash arena")
     constexpr std::size_t kHeaderRsv   = 8 * 1024;    // the .txt header
+    ARC_CONSTANT("crash-path capacity: one envelope's JSON in the static crash arena")
     constexpr std::size_t kEnvRsv      = 64 * 1024;   // one envelope's JSON
+    ARC_CONSTANT("crash-path capacity: one lean envelope in the static crash arena")
     constexpr std::size_t kEnvLeanRsv  = 8 * 1024;    // ...with the unbounded fields elided
+    ARC_CONSTANT("crash-path capacity: injected third-party modules named in one report")
     constexpr std::size_t kInjectedMax = 32;
     // Worst case 8 + 32 + (64 + 8) + (64 + 8) = 184 KiB of
     // CrashArena::kCapacity (256 KiB) -- both envelopes overrunning and
@@ -134,7 +142,7 @@ namespace Arcane::Diagnostics::Internal
 
     [[nodiscard]] bool IsHangProtocolReport(const char* kind, int exitCode) noexcept;
 
-#if ARCANE_PLATFORM_POSIX
+#if ARC_PLATFORM_POSIX
     // ---- the POSIX backend (Base/Posix/DiagnosticsPosix.cpp) ----------------
     // Each is the body of what used to be a no-op `#else` in Diagnostics.cpp.
     namespace Posix

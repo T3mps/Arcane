@@ -3,6 +3,8 @@
 // harness shape: software atlas, window pinned at the origin, probe centres).
 #include <catch2/catch_test_macros.hpp>
 #include <Widgets/PropertyGrid.hpp>
+#include "Input/EditorActions.hpp"
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Widgets/EditorTheme.hpp>   // Theme::kError (the refused-value look)
 #include <Scene/EditGesture.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
@@ -200,6 +202,29 @@ TEST_CASE("PropertyGrid: Escape during a numeric drag restores the seed and comm
     io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
     CHECK(h.scale == 1.0f);
     CHECK(h.scaleCommits == 0);
+}
+
+TEST_CASE("PropertyGrid: a rebound ui.cancel cancels a numeric drag on its own chord", "[editor][inspector][shortcuts]")
+{
+    Arcane::Editor::EditorActions& keys = Arcane::Editor::EditorActions::Get();
+    Arcane::CVarRegistry& reg = keys.Registry();
+    reg.Set(keys.HandleOf("ui.cancel"), Arcane::CVarValue::String("F9"), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
+    GridHarness h; h.Frame();
+    const ImVec2 c = h.Centre("Scale");
+    ImGuiIO& io = ImGui::GetIO();
+    h.Press(c);
+    io.AddMousePosEvent(c.x + 40.0f, c.y); h.Frame(); h.Frame();
+    REQUIRE(h.scale != 1.0f);
+    io.AddKeyEvent(ImGuiKey_F9, true); h.Frame();
+    io.AddKeyEvent(ImGuiKey_F9, false);
+    io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
+    CHECK(h.scale == 1.0f);
+    CHECK(h.scaleCommits == 0);
+    reg.RevertLayer(Arcane::SetBy::EditorUser);
+    reg.PublishImmediate();
+    keys.RefreshBindings();
 }
 
 TEST_CASE("PropertyGrid: a TextRow value refused on Enter keeps the typed text and re-arms; focus loss with a refused value reverts", "[editor][inspector]")

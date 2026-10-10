@@ -1,10 +1,24 @@
 #include <Arcane/Render/GpuBreadcrumbs.hpp>
+#include <Arcane/Render/RenderShaderSettings.hpp>
 
 #include <iterator>
 #include <utility>
 
 namespace Arcane
 {
+    namespace
+    {
+        std::uint32_t RingCapacity()
+        {
+            static const std::uint32_t slots = Settings<DiagnosticsGpuSettings>().breadcrumbSlots;
+            return slots;
+        }
+    }
+
+    GpuBreadcrumbs::GpuBreadcrumbs() { (void)RingCapacity(); }
+
+    std::size_t GpuBreadcrumbs::Capacity() const noexcept { return RingCapacity(); }
+
     std::uint32_t GpuBreadcrumbs::BeginScope(std::string_view name)
     {
         // Frozen: the token contract holds (monotonic, never reused, so the
@@ -27,7 +41,7 @@ namespace Arcane
         m_openStack.push_back(e.id);
 
         const std::uint32_t id = e.id;
-        if (m_ring.size() >= kRingCapacity)
+        if (m_ring.size() >= Capacity())
             m_ring.erase(m_ring.begin()); // evict oldest
         m_ring.push_back(std::move(e));
         return id;

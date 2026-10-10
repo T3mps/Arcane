@@ -28,7 +28,7 @@ namespace Arcane::Editor
     // per-frame caches, plus the eye's marker:
     //   Arcane::WorldTransform    -- recomputed by TransformPropagationSystem
     //                                every frame; an edit would be stomped.
-    //   Arcane::PhysicsBodyRef    -- a live BodyHandle PhysicsSystem owns and
+    //   Arcane::PhysicsBodyRef2D    -- a live BodyHandle Arcane::PhysicsSystem2D owns and
     //                                re-establishes; hand-adding one installs
     //                                a dangling handle.
     //   Arcane::Hidden            -- the Outliner eye's mechanism marker

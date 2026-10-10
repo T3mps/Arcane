@@ -30,7 +30,7 @@ namespace
     { RoleCounters out; rt.Registry().CreateView<RoleCounters>().ForEach([&](Astra::Entity, RoleCounters& c){ out = c; }); return out; }
 }
 
-ARCANE_SYSTEM(AutoUpdateProbe,
+ARC_SYSTEM(AutoUpdateProbe,
               Arcane::RoleMask::Client,
               Arcane::SystemPhase::Update)
 

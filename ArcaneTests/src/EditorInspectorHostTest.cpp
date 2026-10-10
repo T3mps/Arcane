@@ -8,6 +8,10 @@
 #include <Panels/InspectorHost.hpp>
 #include <Panels/InspectorKinds.hpp>     // kInspectorKinds / kInspectorAllIcon (the filter face)
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
+#include <Settings/InspectorSettings.hpp>  // editor.inspector.historyDepth (the ring's cap)
+#include <Input/EditorActions.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/Settings.hpp>
 #include <Widgets/IconsLucide.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
@@ -203,9 +207,10 @@ TEST_CASE("InspectorHost: history is capped at 32 and never grows past it", "[ed
 {
     World w;
     for (int i = 0; i < 40; ++i) w.Select(w.doc, "k" + std::to_string(i));
-    CHECK(w.host.History().size() == InspectorHost::kHistoryDepth);
+    const auto depth = static_cast<std::size_t>(Arcane::Settings<InspectorSettings>().historyDepth);   // 32
+    CHECK(w.host.History().size() == depth);
     CHECK(w.host.History().front().key == "k8");
-    CHECK(w.host.HistoryCursor() == InspectorHost::kHistoryDepth - 1);
+    CHECK(w.host.HistoryCursor() == depth - 1);
 }
 
 TEST_CASE("InspectorHost: ReleaseAll drops every non-fallback source, the history and the pins", "[editor][inspector]")
@@ -311,10 +316,10 @@ TEST_CASE("InspectorHost: instance ids are a reusable pool of 8 slots, never min
     w.host.RemoveInstance(1);
     CHECK(w.host.AddInstance() == 1);                // the freed slot, not 3
     for (int i = 0; i < 8; ++i) (void)w.host.AddInstance();
-    CHECK(w.host.Instances().size() == static_cast<std::size_t>(InspectorHost::kMaxInstances));
+    CHECK(w.host.Instances().size() == static_cast<std::size_t>(w.host.MaxInstances()));
     CHECK(w.host.AddInstance() == -1);
     w.host.RemoveInstance(0);                        // still refused
-    CHECK(w.host.Instances().size() == static_cast<std::size_t>(InspectorHost::kMaxInstances));
+    CHECK(w.host.Instances().size() == static_cast<std::size_t>(w.host.MaxInstances()));
     const int ids[] = { 0, 3, 3, 42, -1 };
     w.host.SetInstanceIds(ids);
     REQUIRE(w.host.Instances().size() == 2);
@@ -1229,17 +1234,17 @@ TEST_CASE("Default layout geometry: the user's ReferenceProject layout in pixels
     // 270 w, the bottom band 350 h (under the Outliner, left of the
     // Inspector). These three splits each have the central node on one side,
     // so ImGui keeps the OTHER side at its pixel size on resize.
-    const DefaultLayoutPixels full = ComputeDefaultLayoutPixels(1920.0f, 954.0f);   // 1920x1080 maximized
+    const DefaultLayoutPixels full = ComputeDefaultLayoutPixels(1920.0f, 954.0f, LayoutFactorySettings{});   // 1920x1080 maximized
     CHECK(full.inspector == 380.0f);
     CHECK(full.outliner == 270.0f);
     CHECK(full.bottomBand == 350.0f);
 
-    const DefaultLayoutPixels boot = ComputeDefaultLayoutPixels(1280.0f, 647.0f);   // the hidden 1280x720 boot window
+    const DefaultLayoutPixels boot = ComputeDefaultLayoutPixels(1280.0f, 647.0f, LayoutFactorySettings{});   // the hidden 1280x720 boot window
     CHECK(boot.inspector == 380.0f);                                  // 650 of 1280: the central node keeps 49%
     CHECK(boot.outliner == 270.0f);
     CHECK(boot.bottomBand == 350.0f);                                 // 297 of 647 left: 46%
 
-    const DefaultLayoutPixels small = ComputeDefaultLayoutPixels(800.0f, 500.0f);
+    const DefaultLayoutPixels small = ComputeDefaultLayoutPixels(800.0f, 500.0f, LayoutFactorySettings{});
     CHECK(small.inspector + small.outliner <= 800.0f * 0.6f + 0.01f);   // central >= 40% of the width
     CHECK(std::abs(small.inspector / small.outliner - 380.0f / 270.0f) < 1e-5f);   // both shrink by one factor
     CHECK(small.bottomBand == 500.0f * 0.6f);                           // central >= 40% of the height
@@ -1254,13 +1259,15 @@ TEST_CASE("Default layout geometry: Inspector 2 splits the band by the user's 19
     // grew Inspector 2 to ~668 px maximized. The split is the user's own
     // saved proportion instead -- browser 1144 : Inspector 2 392 -- the same
     // at every build size, and exactly 392 px on a 1536 px band (1920x1080).
-    CHECK(kDefaultBandBrowserRefPx == 1144.0f);
-    CHECK(kDefaultAssetsInspectorRefPx == 392.0f);
-    CHECK(kDefaultAssetsInspectorBandFraction == 392.0f / 1536.0f);
-    CHECK(std::abs(1536.0f * kDefaultAssetsInspectorBandFraction - 392.0f) < 1e-3f);
+    const LayoutFactorySettings factory{};   // editor.layout.factory.* defaults (settings S6-32)
+    const float fraction = DefaultAssetsInspectorBandFraction(factory);
+    CHECK(factory.browserRefPx == 1144.0f);
+    CHECK(factory.assetsInspectorRefPx == 392.0f);
+    CHECK(fraction == 392.0f / 1536.0f);
+    CHECK(std::abs(1536.0f * fraction - 392.0f) < 1e-3f);
     // Well inside the split clamps at any size (it used to need a 45% cap).
-    CHECK(kDefaultAssetsInspectorBandFraction > 0.05f);
-    CHECK(kDefaultAssetsInspectorBandFraction < 0.45f);
+    CHECK(fraction > 0.05f);
+    CHECK(fraction < 0.45f);
 }
 
 TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New Inspector reuses the slot", "[editor][inspector]")
@@ -1358,6 +1365,28 @@ TEST_CASE("DrawInspectorWindows: the page scrolls in ##page under a pinned heade
         REQUIRE(r.saveRequested.size() == 1);
         CHECK(r.saveRequested[0] == &scene);
         CHECK(r.focusedSource == &scene);
+    }
+    SECTION("a rebound document.save fires on its new chord, and Ctrl+S no longer does")
+    {
+        Arcane::Editor::EditorActions& keys = Arcane::Editor::EditorActions::Get();
+        Arcane::CVarRegistry& reg = keys.Registry();
+        reg.Set(keys.HandleOf("document.save"), Arcane::CVarValue::String("Ctrl+K"), Arcane::SetBy::EditorUser, "editor", Arcane::CVarContext::Editor);
+        reg.PublishImmediate();
+        keys.RefreshBindings();
+        ImGui::FocusWindow(page);
+        frame(); frame();
+        io.AddKeyEvent(ImGuiMod_Ctrl, true); io.AddKeyEvent(ImGuiKey_S, true);
+        const InspectorWindowsResult viaS = frame();
+        io.AddKeyEvent(ImGuiKey_S, false); io.AddKeyEvent(ImGuiKey_K, true);
+        const InspectorWindowsResult viaK = frame();
+        io.AddKeyEvent(ImGuiKey_K, false); io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        CHECK(viaS.saveRequested.empty());
+        REQUIRE(viaK.saveRequested.size() == 1);
+        CHECK(viaK.saveRequested[0] == &scene);
+        reg.RevertLayer(Arcane::SetBy::EditorUser);
+        reg.PublishImmediate();
+        keys.RefreshBindings();
     }
 }
 

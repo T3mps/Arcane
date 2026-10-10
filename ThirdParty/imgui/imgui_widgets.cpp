@@ -2258,6 +2258,21 @@ static const ImU32 GDefaultRgbaColorMarkers[4] =
 {
     IM_COL32(240,20,20,255), IM_COL32(20,240,20,255), IM_COL32(20,20,240,255), IM_COL32(140,140,140,255)
 };
+// ARCANE LOCAL FIX (2026-10-06, settings S6-26 fix round 1): the table the widgets draw from is overridable
+// (ImGui::SetColorMarkerColors, imgui_internal.h) so a theme reaches every marker path; it starts as the stock one.
+static ImU32 GRgbaColorMarkers[4] =
+{
+    IM_COL32(240,20,20,255), IM_COL32(20,240,20,255), IM_COL32(20,20,240,255), IM_COL32(140,140,140,255)
+};
+void ImGui::SetColorMarkerColors(const ImU32* rgba4)
+{
+    for (int n = 0; n < 4; n++)
+        GRgbaColorMarkers[n] = rgba4 ? rgba4[n] : GDefaultRgbaColorMarkers[n];
+}
+const ImU32* ImGui::GetColorMarkerColors()
+{
+    return GRgbaColorMarkers;
+}
 
 static const ImGuiDataTypeInfo GDataTypeInfo[] =
 {
@@ -2829,7 +2844,7 @@ bool ImGui::DragScalarN(const char* label, ImGuiDataType data_type, void* p_data
         if (i > 0)
             SameLine(0, g.Style.ItemInnerSpacing.x);
         if (flags & ImGuiSliderFlags_ColorMarkers)
-            SetNextItemColorMarker(GDefaultRgbaColorMarkers[i]);
+            SetNextItemColorMarker(GRgbaColorMarkers[i]); // ARCANE LOCAL FIX: was GDefaultRgbaColorMarkers (S6-26)
         value_changed |= DragScalar("", data_type, p_data, v_speed, p_min, p_max, format, flags);
         PopID();
         PopItemWidth();
@@ -3428,7 +3443,7 @@ bool ImGui::SliderScalarN(const char* label, ImGuiDataType data_type, void* v, i
         if (i > 0)
             SameLine(0, g.Style.ItemInnerSpacing.x);
         if (flags & ImGuiSliderFlags_ColorMarkers)
-            SetNextItemColorMarker(GDefaultRgbaColorMarkers[i]);
+            SetNextItemColorMarker(GRgbaColorMarkers[i]); // ARCANE LOCAL FIX: was GDefaultRgbaColorMarkers (S6-26)
         value_changed |= SliderScalar("", data_type, v, v_min, v_max, format, flags);
         PopID();
         PopItemWidth();
@@ -5898,7 +5913,7 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
             SetNextItemWidth(ImMax(next_split - prev_split, 1.0f));
             prev_split = next_split;
             if (draw_color_marker)
-                SetNextItemColorMarker(GDefaultRgbaColorMarkers[n]);
+                SetNextItemColorMarker(GRgbaColorMarkers[n]); // ARCANE LOCAL FIX: was GDefaultRgbaColorMarkers (S6-26)
 
             // FIXME: When ImGuiColorEditFlags_HDR flag is passed HS values snap in weird ways when SV values go below 0.
             if (flags & ImGuiColorEditFlags_Float)

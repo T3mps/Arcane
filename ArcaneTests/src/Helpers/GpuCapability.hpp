@@ -37,7 +37,7 @@ namespace Arcane::Test
     // "(d3d12)"/"(vulkan)" title, and keeps skipping where that API is absent.
     // kNativeBackendCli is the same choice in the hosts' --backend spelling,
     // for the witness cases that spawn a host process.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     inline constexpr GraphicsBackend kNativeBackend    = GraphicsBackend::D3D12;
     inline constexpr const char*     kNativeBackendCli = "dx12";
 #else

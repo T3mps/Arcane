@@ -111,7 +111,7 @@ namespace Arcane::Reporter
             // by the caller above) and the module-directory search
             // (ModuleDirectories, just above) are unaffected in every
             // configuration -- only the ambient env var is shut off here.
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
             const DWORD needed = GetEnvironmentVariableW(L"_NT_SYMBOL_PATH", nullptr, 0);
             if (needed > 1)
             {

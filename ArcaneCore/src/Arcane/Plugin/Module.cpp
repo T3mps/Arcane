@@ -20,6 +20,7 @@
     #define NOMINMAX
     #endif
     #include <windows.h>
+    #include <tlhelp32.h>
 #elif defined(__APPLE__)
     #include <dlfcn.h>
     #include <mach-o/dyld.h>     // the dyld image list: the loaded image's header + slide
@@ -213,110 +214,192 @@ namespace Arcane
 #endif
     }
 
+    namespace
+    {
+        // identityPath is the file the handle was opened from. Mach-O has no
+        // handle-to-image query; the dyld name can also disagree with the path
+        // we loaded (/private/var vs /var/folders on the macos-15 runner), so
+        // the Apple walk falls back to filesystem::equivalent against it.
+        Module::ImageSpan ImageFromHandle(void* handle, const std::filesystem::path& identityPath = {}) noexcept
+        {
+            if (!handle)
+                return {};
+#if defined(_WIN32)
+            (void)identityPath;
+            // On Windows an HMODULE IS the image base. SizeOfImage is read straight
+            // out of the mapped PE headers rather than via GetModuleInformation so
+            // this costs no psapi link. Both signatures are checked because a bad
+            // read here would hand back a range that disowns the wrong module's
+            // descriptors -- far worse than returning "unknown".
+            const auto* base = reinterpret_cast<const unsigned char*>(handle);
+            const auto* dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+                return {};
+            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE)
+                return {};
+            return Module::ImageSpan{handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
+#elif defined(__APPLE__)
+            // Mach-O (macOS port, 2026-10-07): dyld has no handle -> image query,
+            // but a handle for an already-loaded image is exactly what dlopen
+            // returns for that image's own path with RTLD_NOLOAD (refcounted, so
+            // closed again). The matching image's LC_SEGMENT_64 commands, slid,
+            // span the mapped image (Platform::MachImageExtent) -- the Mach-O
+            // reading of PE's [base, base + SizeOfImage). No match is "unknown".
+            // equivalent() compares device + inode, which no symlink spelling of
+            // the path can defeat.
+            const std::uint32_t count = ::_dyld_image_count();
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                const char* name = ::_dyld_get_image_name(i);
+                if (!name)
+                    continue;
+                bool match = false;
+                if (void* probe = ::dlopen(name, RTLD_LAZY | RTLD_NOLOAD))
+                {
+                    match = probe == handle;
+                    ::dlclose(probe);
+                }
+                if (!match && !identityPath.empty())
+                {
+                    std::error_code ec;
+                    match = std::filesystem::equivalent(std::filesystem::path(name), identityPath, ec) && !ec;
+                }
+                if (!match)
+                    continue;
+
+                const Arcane::Platform::ImageExtent extent =
+                    Arcane::Platform::MachImageExtent(::_dyld_get_image_header(i), ::_dyld_get_image_vmaddr_slide(i));
+                if (extent.size == 0)
+                    return {};
+                return Module::ImageSpan{ reinterpret_cast<const void*>(extent.base), static_cast<std::size_t>(extent.size) };
+            }
+            return {};
+#else
+            (void)identityPath;
+            // ELF (Linux port, 2026-10-05): the object's link_map names its load
+            // bias (l_addr); dl_iterate_phdr then yields that same object's
+            // program headers, and the PT_LOAD segments' union IS the mapped
+            // image -- the ELF reading of PE's [base, base + SizeOfImage).
+            // Matched on BOTH the load bias and the link_map's name, so a
+            // mismatch is "unknown" (callers skip disowning) rather than a range
+            // that would disown another module's descriptors.
+            link_map* map = nullptr;
+            if (::dlinfo(handle, RTLD_DI_LINKMAP, &map) != 0 || !map)
+                return {};
+
+            struct Query
+            {
+                const link_map*     map = nullptr;
+                Module::ImageSpan   span{};
+            } query{ map, {} };
+
+            ::dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void* user) -> int
+            {
+                auto* q = static_cast<Query*>(user);
+                if (info->dlpi_addr != q->map->l_addr)
+                    return 0;
+                const char* a = info->dlpi_name ? info->dlpi_name : "";
+                const char* b = q->map->l_name ? q->map->l_name : "";
+                if (std::strcmp(a, b) != 0)
+                    return 0;
+
+                ElfW(Addr) lo = ~ElfW(Addr){ 0 };
+                ElfW(Addr) hi = 0;
+                for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i)
+                {
+                    const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+                    if (ph.p_type != PT_LOAD)
+                        continue;
+                    lo = std::min(lo, ph.p_vaddr);
+                    hi = std::max(hi, ph.p_vaddr + ph.p_memsz);
+                }
+                if (hi > lo)
+                {
+                    q->span.base = reinterpret_cast<const void*>(info->dlpi_addr + lo);
+                    q->span.size = static_cast<std::size_t>(hi - lo);
+                }
+                return 1;   // found the object: stop iterating
+            }, &query);
+            return query.span;
+#endif
+        }
+    }
+
     Module::ImageSpan Module::Image() const noexcept
     {
-        if (!m_handle)
-            return {};
+        return ImageFromHandle(m_handle, m_path);
+    }
 
+    Module::ImageSpan Module::MappedImage(const std::filesystem::path& path) noexcept
+    {
 #if defined(_WIN32)
-        // On Windows an HMODULE IS the image base. SizeOfImage is read straight
-        // out of the mapped PE headers rather than via GetModuleInformation so
-        // this costs no psapi link. Both signatures are checked because a bad
-        // read here would hand back a range that disowns the wrong module's
-        // descriptors -- far worse than returning "unknown".
-        const auto* base = reinterpret_cast<const unsigned char*>(m_handle);
-        const auto* dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            return {};
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE)
-            return {};
-        return ImageSpan{m_handle, static_cast<std::size_t>(nt->OptionalHeader.SizeOfImage)};
-#elif defined(__APPLE__)
-        // Mach-O (macOS port, 2026-10-07): dyld has no handle -> image query,
-        // but a handle for an already-loaded image is exactly what dlopen
-        // returns for that image's own path with RTLD_NOLOAD (refcounted, so
-        // closed again). The matching image's LC_SEGMENT_64 commands, slid,
-        // span the mapped image (Platform::MachImageExtent) -- the Mach-O
-        // reading of PE's [base, base + SizeOfImage). No match is "unknown".
-        // The handle probe alone misses on the macos-15 runner (every plugin
-        // copied under /var/folders reported "no image range"; dyld names it
-        // /private/var/...), so the image may also match by file identity:
-        // equivalent() compares device + inode, which no symlink spelling of
-        // the path can defeat.
-        const std::uint32_t count = ::_dyld_image_count();
-        for (std::uint32_t i = 0; i < count; ++i)
-        {
-            const char* name = ::_dyld_get_image_name(i);
-            if (!name)
-                continue;
-            bool match = false;
-            if (void* probe = ::dlopen(name, RTLD_LAZY | RTLD_NOLOAD))
-            {
-                match = probe == m_handle;
-                ::dlclose(probe);
-            }
-            if (!match && !m_path.empty())
-            {
-                std::error_code ec;
-                match = std::filesystem::equivalent(std::filesystem::path(name), m_path, ec) && !ec;
-            }
-            if (!match)
-                continue;
-
-            const Arcane::Platform::ImageExtent extent =
-                Arcane::Platform::MachImageExtent(::_dyld_get_image_header(i), ::_dyld_get_image_vmaddr_slide(i));
-            if (extent.size == 0)
-                return {};
-            return ImageSpan{ reinterpret_cast<const void*>(extent.base), static_cast<std::size_t>(extent.size) };
-        }
-        return {};
+        const HMODULE handle = ::GetModuleHandleW(path.c_str());
+        return ImageFromHandle(handle);
 #else
-        // ELF (Linux port, 2026-10-05): the object's link_map names its load
-        // bias (l_addr); dl_iterate_phdr then yields that same object's
-        // program headers, and the PT_LOAD segments' union IS the mapped
-        // image -- the ELF reading of PE's [base, base + SizeOfImage).
-        // Matched on BOTH the load bias and the link_map's name, so a
-        // mismatch is "unknown" (callers skip disowning) rather than a range
-        // that would disown another module's descriptors.
-        link_map* map = nullptr;
-        if (::dlinfo(m_handle, RTLD_DI_LINKMAP, &map) != 0 || !map)
+        void* handle = ::dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+        if (!handle)
             return {};
+        const ImageSpan span = ImageFromHandle(handle, path);
+        ::dlclose(handle);
+        return span;
+#endif
+    }
 
-        struct Query
+    std::vector<Module::MappedModule> Module::MappedModules() noexcept
+    {
+        std::vector<MappedModule> result;
+#if defined(_WIN32)
+        // ERROR_BAD_LENGTH is the documented transient failure while another
+        // thread is loading or unloading a module; retry it a few times.
+        HANDLE snapshot = INVALID_HANDLE_VALUE;
+        for (int attempt = 0; attempt < 8 && snapshot == INVALID_HANDLE_VALUE; ++attempt)
         {
-            const link_map* map = nullptr;
-            ImageSpan       span{};
-        } query{ map, {} };
+            snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, ::GetCurrentProcessId());
+            if (snapshot == INVALID_HANDLE_VALUE && ::GetLastError() != ERROR_BAD_LENGTH)
+                break;
+        }
+        if (snapshot == INVALID_HANDLE_VALUE)
+            return result;
 
-        ::dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void* user) -> int
+        MODULEENTRY32W entry{};
+        entry.dwSize = sizeof(entry);
+        if (::Module32FirstW(snapshot, &entry))
         {
-            auto* q = static_cast<Query*>(user);
-            if (info->dlpi_addr != q->map->l_addr)
-                return 0;
-            const char* a = info->dlpi_name ? info->dlpi_name : "";
-            const char* b = q->map->l_name ? q->map->l_name : "";
-            if (std::strcmp(a, b) != 0)
-                return 0;
+            do
+            {
+                result.push_back(MappedModule{
+                    std::filesystem::path(entry.szExePath),
+                    ImageSpan{entry.modBaseAddr, static_cast<std::size_t>(entry.modBaseSize)} });
+                entry.dwSize = sizeof(entry);
+            }
+            while (::Module32NextW(snapshot, &entry));
+        }
+        ::CloseHandle(snapshot);
+#endif
+        return result;
+    }
 
-            ElfW(Addr) lo = ~ElfW(Addr){ 0 };
-            ElfW(Addr) hi = 0;
-            for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i)
-            {
-                const ElfW(Phdr)& ph = info->dlpi_phdr[i];
-                if (ph.p_type != PT_LOAD)
-                    continue;
-                lo = std::min(lo, ph.p_vaddr);
-                hi = std::max(hi, ph.p_vaddr + ph.p_memsz);
-            }
-            if (hi > lo)
-            {
-                q->span.base = reinterpret_cast<const void*>(info->dlpi_addr + lo);
-                q->span.size = static_cast<std::size_t>(hi - lo);
-            }
-            return 1;   // found the object: stop iterating
-        }, &query);
-        return query.span;
+    std::optional<Module> Module::PinMapped(const MappedModule& mapped) noexcept
+    {
+#if defined(_WIN32)
+        if (!mapped.image.base)
+            return std::nullopt;
+        HMODULE handle = nullptr;
+        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                  static_cast<LPCWSTR>(mapped.image.base), &handle) || !handle)
+            return std::nullopt;
+        if (static_cast<const void*>(handle) != mapped.image.base)
+        {
+            // The base now lies inside some OTHER image: the one asked about
+            // was unmapped and its range reused. Not ours to pin.
+            ::FreeLibrary(handle);
+            return std::nullopt;
+        }
+        return Module(mapped.path, reinterpret_cast<NativeHandle>(handle));
+#else
+        (void)mapped;
+        return std::nullopt;
 #endif
     }
 
@@ -462,6 +545,22 @@ namespace Arcane
 #else
         (void)path; (void)matchedImport;
         return CrtFlavor::Unknown;
+#endif
+    }
+
+    bool Module::IsMapped(const std::filesystem::path& path) noexcept
+    {
+#if defined(_WIN32)
+        // GetModuleHandle never loads: it only looks the name up among the
+        // modules already mapped (base name for a bare name, full path for a
+        // path) and leaves the reference count alone.
+        return ::GetModuleHandleW(path.c_str()) != nullptr;
+#else
+        void* handle = ::dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);   // NOLOAD: look up, never map
+        if (!handle)
+            return false;
+        ::dlclose(handle);   // RTLD_NOLOAD still took a reference
+        return true;
 #endif
     }
 

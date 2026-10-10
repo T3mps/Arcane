@@ -1,5 +1,9 @@
 #include <Arcane/Build/Toolchain.hpp>
 
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Build/BuildToolSettings.hpp>
+#include <Arcane/Platform/LaunchPath.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -143,6 +147,33 @@ namespace Arcane::Toolchain
             const char* value = std::getenv(name);
             return value ? std::string(value) : std::string();
         }
+
+        // A build.* tool-path preference (BuildToolSettings): a launchable file
+        // (CheckLaunchPath, settings S7-SEC: it exists, is no directory, and
+        // holds no quote or line break; an app-execution alias counts) wins
+        // over discovery, made absolute + normalised like every other answer
+        // here. POSIX also wants an executable bit (IsRunnableCandidate).
+        // Empty when unset, or when the path is not one (which warns, and the
+        // caller discovers instead).
+        std::filesystem::path ToolOverride(std::string_view cvar, const std::string& configured)
+        {
+            if (configured.empty())
+                return {};
+            const std::filesystem::path path(configured);
+            const LaunchPathStatus status = CheckLaunchPath(path);
+#ifndef _WIN32
+            if (status == LaunchPathStatus::Ok && !IsRunnableCandidate(path))
+            {
+                ARC_WARN("{} '{}' is not executable; discovering the tool instead", cvar, configured);
+                return {};
+            }
+#endif
+            if (status == LaunchPathStatus::Ok)
+                if (const std::filesystem::path found = AbsoluteNormal(path); !found.empty())
+                    return found;
+            ARC_WARN("{} '{}' {}; discovering the tool instead", cvar, configured, LaunchPathStatusText(status));
+            return {};
+        }
     }
 
     std::filesystem::path FindOnPath(
@@ -209,6 +240,8 @@ namespace Arcane::Toolchain
 
     std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot)
     {
+        if (std::filesystem::path o = ToolOverride("build.premakePath", Settings<BuildToolSettings>().premakePath); !o.empty())
+            return o;
 #ifdef _WIN32
         const std::filesystem::path bundled =
             sdkRoot / "ThirdParty" / "premake5" / "premake5.exe";
@@ -273,6 +306,8 @@ namespace Arcane::Toolchain
 
     std::filesystem::path ResolveMsBuild()
     {
+        if (std::filesystem::path o = ToolOverride("build.msbuildPath", Settings<BuildToolSettings>().msbuildPath); !o.empty())
+            return o;
         const std::filesystem::path found = VsWhere("-latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe");
         if (!found.empty())
             return found;
@@ -283,6 +318,8 @@ namespace Arcane::Toolchain
 
     std::filesystem::path ResolveMake()
     {
+        if (std::filesystem::path o = ToolOverride("build.makePath", Settings<BuildToolSettings>().makePath); !o.empty())
+            return o;
 #ifdef _WIN32
         const std::string path    = EnvOrEmpty("PATH");
         const std::string pathExt = EnvOrEmpty("PATHEXT");
@@ -299,6 +336,8 @@ namespace Arcane::Toolchain
 
     std::filesystem::path ResolveNinja()
     {
+        if (std::filesystem::path o = ToolOverride("build.ninjaPath", Settings<BuildToolSettings>().ninjaPath); !o.empty())
+            return o;
 #ifdef _WIN32
         return FindOnPath("ninja", EnvOrEmpty("PATH"), EnvOrEmpty("PATHEXT"));
 #else
@@ -324,6 +363,8 @@ namespace Arcane::Toolchain
 
     std::filesystem::path ResolveDevenv()
     {
+        if (std::filesystem::path o = ToolOverride("build.ideExecutable", Settings<BuildToolSettings>().ideExecutable); !o.empty())
+            return o;
         return VsWhere("-latest -find Common7\\IDE\\devenv.exe");
     }
 }

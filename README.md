@@ -246,10 +246,10 @@ A **component** is reflected plain data:
 #include <Arcane/Reflection.hpp>
 
 struct Health { float current = 100.0f; };
-ARCANE_REFLECT_TYPE(Health)
-    ARCANE_REFLECT_FIELD(Health, current)
-        ARCANE_REFLECT_ATTR(Range, 0.0f, 100.0f)
-ARCANE_END_REFLECT_TYPE()
+ARC_REFLECT_TYPE(Health)
+    ARC_REFLECT_FIELD(Health, current)
+        ARC_REFLECT_ATTR(Range, 0.0f, 100.0f)
+ARC_END_REFLECT_TYPE()
 ```
 
 A **system** declares what it touches as parameters -- component views and
@@ -258,16 +258,16 @@ engine resources -- and the scheduler orders and parallelises it from that:
 ```cpp
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Input/GameInput.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Physics2D.hpp>
 
-struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
+struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem2D>>
 {
     Arcane::ActionRef jump{"Player", "Jump"};
 
     void operator()(Arcane::View<Arcane::RigidBody2D>& view,
                     Arcane::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
                     Arcane::Res<Arcane::GameInput> input,    // actions from the project's input asset
-                    Arcane::ResMut<Arcane::Physics2D> physics)
+                    Arcane::ResMut<Arcane::PhysicsWorld2D> physics)
     {
         if (!input->PressedThisFixedStep(jump)) return;
         view.ForEach([&](Arcane::Entity e, Arcane::RigidBody2D& body)
@@ -280,7 +280,17 @@ struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
 ```
 
 and is registered with one line in its `.cpp`:
-`ARCANE_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
+`ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
+
+A system reads 2D physics events from that same `Arcane::PhysicsWorld2D` resource.
+`StepEvents()` is the most recent physics step, `FrameEvents()` gathers
+every step since this frame began, and `ContactsOf(entity, out)` lists
+what that entity is touching right now, sleepers included. Each side
+carries the entity, its Identity GUID and the `Arcane::Collider2D` fixture
+index. Keep the GUID when the identity has to outlive the frame; the
+entity handle is valid only in the frame it is read (a destroyed
+entity's event still carries the GUID). Spec:
+`docs/specs/2026-10-08-physics-2d-events-design.md`.
 
 - **Resources:** `Time` is present in every world. `GameInput` is present in every client world, and a server world has none. A system whose resource is missing is skipped with one log line.
 - **Code outside a system** (a module's `OnUpdate`/`OnDrawUI`) reads the same data with `Registry().GetResource<Arcane::Time>()`. There are no global accessors: one process can hold several worlds (edit, Play, an embedded server, tests).
@@ -317,5 +327,14 @@ every platform but only **executes** on macOS. `probe` alone needs no SDK.
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). Vendored third-party dependencies retain their
-upstream licenses; see [NOTICE.md](NOTICE.md).
+Arcane is source-available under the **Starworks Source License** (the
+Business Source License 1.1 with Starworks parameters; each version converts to
+MIT four years after release). Make and sell games with it freely; games must
+credit Arcane, and Arcane may not be offered as a competing engine product.
+Read [LICENSING.md](LICENSING.md) for the plain-English terms and
+[LICENSE](LICENSE) for the license itself. Revisions published before the
+commit that added this license remain under the MIT License.
+
+Astra, Manifold2D and Mosaic are MIT. Vendored third-party dependencies retain
+their upstream licenses; see [NOTICE.md](NOTICE.md). Contributing:
+[CONTRIBUTING.md](CONTRIBUTING.md).

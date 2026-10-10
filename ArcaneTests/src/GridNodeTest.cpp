@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "Helpers/GpuCapability.hpp"
+#include "Settings/EditorGridSettings.hpp"   // MakeGridScene -- the grid desc the editor builds
 
 namespace
 {
@@ -67,7 +68,7 @@ namespace
         GridVehicle v;
         Arcane::RenderDeviceDesc desc;
         desc.backend = backend;
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
         desc.enableValidation      = true;
         desc.enableD3D12DebugLayer = true;
         desc.enableSyncValidation  = true;
@@ -142,7 +143,10 @@ namespace
         ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
-        Arcane::GridSceneDesc grid;
+        // The editor's own defaults (settings S6-21): the desc's tunables are
+        // zero until MakeGridScene fills them.
+        Arcane::GridSceneDesc grid = Arcane::Editor::MakeGridScene(Arcane::Editor::EditorGridSettings{},
+                                                                   Arcane::Editor::EditorGrid3DSettings{});
         grid.view = GridView();
         grid.SetPlane(Arcane::GridSceneDesc::Plane::XZ);
 
@@ -194,7 +198,10 @@ namespace
         ARC_REQUIRE_BACKEND(backend);
         const std::uint64_t before = Arcane::RenderErrorCount();
 
-        Arcane::GridSceneDesc grid;
+        // The editor's own defaults (settings S6-21): the desc's tunables are
+        // zero until MakeGridScene fills them.
+        Arcane::GridSceneDesc grid = Arcane::Editor::MakeGridScene(Arcane::Editor::EditorGridSettings{},
+                                                                   Arcane::Editor::EditorGrid3DSettings{});
         grid.view = GridView();
         grid.SetPlane(Arcane::GridSceneDesc::Plane::XZ);
 

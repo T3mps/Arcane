@@ -31,6 +31,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane { class Project; }
 
@@ -41,6 +42,7 @@ namespace Arcane::Editor
 
     // The Graph window's selection strip height (node page phase s6.9): the
     // strip draws it and the canvas is shrunk by it, so neither covers the other.
+    ARC_CONSTANT("base px; drawn as Ui::Px(base) (s16.11)")
     inline constexpr float kAssetGraphSelectionStripH = 48.0f;
 
     // The Asset Graph window's session-only UI state (spec s6). Panel-split
@@ -155,7 +157,8 @@ namespace Arcane::Editor
         // The built projection plus the two inputs it was built from. The
         // dirty trigger is a stamp comparison, never a per-frame rebuild:
         // `graph` is re-Built only when AssetPanelModel::entriesStamp moved
-        // (its entries/index changed) or the focus changed. See
+        // (its entries/index changed), the focus changed, or the published
+        // editor.assetGraph.defaultDepth / .breadthCap moved (S6-36). See
         // AssetPanelModel::entriesStamp's own declaration for why that
         // counter -- and not RebuildIfDirty's return value -- is the honest
         // trigger.
@@ -163,6 +166,8 @@ namespace Arcane::Editor
         std::uint32_t graphBuiltStamp = 0;
         Arcane::Guid  graphBuiltFocus;
         std::optional<AssetKind> graphBuiltKindFilter;
+        int           graphBuiltDepth   = 0;   // the GraphBuildInput caps `graph` was built with
+        int           graphBuiltBreadth = 0;
         bool          graphBuilt = false;
         // Set whenever `graph` was rebuilt (or the canvas context was just
         // created) and consumed by the next canvas frame's
@@ -172,6 +177,10 @@ namespace Arcane::Editor
         // contract that a reposition is TRANSIENT (the next rebuild snaps it
         // back). That is intended behavior, not a bug.
         bool          graphLayoutDirty = false;
+        // The editor.assetGraph.layoutColumnPitch / .layoutRowPitch the last
+        // layout pass used; a published change sets graphLayoutDirty (S6-36).
+        float         graphLaidOutColumnPitch = 0.0f;
+        float         graphLaidOutRowPitch    = 0.0f;
         // Frame-to-fit (node page phase s6.9). ARMED by canvas creation and by a
         // rebuild whose focus or kind filter moved (never an entriesStamp-only
         // rebuild: cook churn must not yank the view); ISSUED on the first

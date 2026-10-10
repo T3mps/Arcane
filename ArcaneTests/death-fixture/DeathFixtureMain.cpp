@@ -59,8 +59,17 @@ namespace
     // this accumulator recursion into a loop -- Clang's tail-recursion
     // elimination does exactly that to the non-escaping form at -O2, and the
     // "overflow" then spins forever instead of faulting.
+    // The stack-overflow death is the point: C4717 ("recursive on all control
+    // paths") describes exactly that, so it is silenced for this function only.
     volatile char* volatile g_escape = nullptr;
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4717)
+#endif
     int Recurse(int depth) { volatile char pad[4096]; pad[0] = static_cast<char>(depth); g_escape = pad; g_sink += pad[0]; return Recurse(depth + 1) + 1; }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
 
 int main(int argc, char** argv)

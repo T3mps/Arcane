@@ -132,7 +132,7 @@ namespace Arcane::Editor::ClassTemplates
 // {{CLASS}}: a component -- plain data on an entity. Reflected so the editor's
 // Inspector can show and edit it, scenes can save it, and the Add Component
 // catalog can offer it. Registered with the game module by the
-// ARCANE_COMPONENT line in {{CLASS}}.cpp; nothing else to wire.
+// ARC_COMPONENT line in {{CLASS}}.cpp; nothing else to wire.
 
 #include <Arcane/Reflection.hpp>
 
@@ -143,9 +143,9 @@ namespace {{NS}}
         float value = 0.0f;
     };
 
-    ARCANE_REFLECT_TYPE({{CLASS}})
-        ARCANE_REFLECT_FIELD({{CLASS}}, value)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE({{CLASS}})
+        ARC_REFLECT_FIELD({{CLASS}}, value)
+    ARC_END_REFLECT_TYPE()
 }
 )";
 
@@ -153,10 +153,10 @@ namespace {{NS}}
 
 #include <Arcane/Plugin/GameComponents.hpp>
 
-// The one registration line: the ARCANE_GAME_MODULE prologue (Arcane/Plugin/
-// GameModule.hpp) drains every ARCANE_COMPONENT of the module into its
+// The one registration line: the ARC_GAME_MODULE prologue (Arcane/Plugin/
+// GameModule.hpp) drains every ARC_COMPONENT of the module into its
 // ComponentModule (Arcane::Game::RegisterComponents). One .cpp per type.
-ARCANE_COMPONENT({{NS}}::{{CLASS}})
+ARC_COMPONENT({{NS}}::{{CLASS}})
 )";
 
         constexpr std::string_view kFixedUpdateSystemHeader = R"(#pragma once
@@ -172,7 +172,7 @@ ARCANE_COMPONENT({{NS}}::{{CLASS}})
 // Fixed-update systems run before transform propagation by default so gameplay
 // can move local transforms first. Registrar discovery order is irrelevant:
 // scheduler order is expressed only through Before<> and After<> traits.
-// The ARCANE_SYSTEM declaration that selects phase and network role is in
+// The ARC_SYSTEM declaration that selects phase and network role is in
 // {{CLASS}}.cpp.
 
 #include <Arcane/Ecs.hpp>
@@ -202,7 +202,7 @@ namespace {{NS}}
 // Fixed-step transform propagation is not installed in the Update or Render
 // scheduler, so this template invents no irrelevant edge. Registrar discovery
 // order is irrelevant: derive Arcane::SystemTraits<Arcane::Before<...>> or
-// After<...> whenever scheduler order matters. The ARCANE_SYSTEM declaration
+// After<...> whenever scheduler order matters. The ARC_SYSTEM declaration
 // that selects phase and network role is in {{CLASS}}.cpp.
 
 #include <Arcane/Ecs.hpp>
@@ -223,9 +223,9 @@ namespace {{NS}}
 
 #include <Arcane/Plugin/GameSystems.hpp>
 
-// ARCANE_GAME_MODULE discovers this declaration while its DLL-owner bracket
+// ARC_GAME_MODULE discovers this declaration while its DLL-owner bracket
 // is open. Phase and role are explicit; scheduler order belongs in traits.
-ARCANE_SYSTEM(
+ARC_SYSTEM(
     {{NS}}::{{CLASS}},
     {{ROLE}},
     {{PHASE}})

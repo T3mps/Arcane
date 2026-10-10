@@ -1,35 +1,39 @@
-// Arcane::Physics2D (input-seam spec 2026-10-02 s5.3): the game-facing physics
-// commands as exported members of the published PhysicsResource. The body
-// handle comes from entityToBody, never PhysicsBodyRef.
+#include <Arcane/Scene/Physics2DDetail.hpp>
+#include <Arcane/Scene/PhysicsQuerySettings.hpp>
 
-#include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include <cmath>
+#include <utility>
+
+namespace
+{
+    namespace Phys = Arcane::Detail::Physics2D::Phys;
+}
 
 namespace Arcane
 {
+    PhysicsWorld2D::~PhysicsWorld2D() = default;
+    PhysicsWorld2D::PhysicsWorld2D(PhysicsWorld2D&&) noexcept = default;
+    PhysicsWorld2D& PhysicsWorld2D::operator=(PhysicsWorld2D&&) noexcept = default;
+
     namespace
     {
-        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle)
+        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle, const PhysicsGroundSettings2D& ground)
         {
+            const Phys::Real minY = Phys::Real(ground.minNormalY);
             bool supported = false;
             world.ForEachContactConstraint([&](const Phys::ContactConstraint& contact)
             {
-                if (contact.bodyA == handle.index && contact.normal.y > Phys::Real(0.5))
+                if (contact.bodyA == handle.index && contact.normal.y > minY)
                     supported = true;
                 if (contact.bodyBIsBody && contact.bodyB == handle.index &&
-                    contact.normal.y < Phys::Real(-0.5))
+                    contact.normal.y < -minY)
                     supported = true;
             });
             if (supported)
                 return true;
 
-            // A sleeping body's contacts need not appear in the active solver.
-            // A resting body sits up to the linear slop INSIDE its support, and
-            // a cast that starts overlapped answers t=0 with a zero normal
-            // (Box2D-v3 parity), so the cast starts one slop higher and travels
-            // one slop further: the reach below the feet stays 0.05 m.
             Phys::ShapeCastOpts opts;
             opts.movers = true;
             opts.exclude = handle;
@@ -41,19 +45,19 @@ namespace Arcane
                 const Phys::Vec2 origin = world.GetFixtureWorldPos(fixture);
                 const auto hit = world.ShapeCast(world.GetFixtureShape(fixture),
                                                  Phys::Vec2(origin.x, origin.y + Phys::kLinearSlop),
-                                                 Phys::Vec2(0, -(Phys::Real(0.05) + Phys::kLinearSlop)), opts,
+                                                 Phys::Vec2(0, -(Phys::Real(ground.probeDistance) + Phys::kLinearSlop)), opts,
                                                  world.GetFixtureWorldAngle(fixture));
-                if (hit && hit->normal.y > Phys::Real(0.5))
+                if (hit && hit->normal.y > minY)
                     return true;
             }
             return false;
         }
     }
 
-    BodyMotion2D PhysicsResource::Motion(Astra::Entity entity, const RigidBody2D& body) const
+    BodyMotion2D PhysicsWorld2D::Motion(Arcane::Entity entity, const RigidBody2D& body) const
     {
         BodyMotion2D motion;
-        if (body.type != Phys::BodyType::Dynamic)
+        if (body.type != BodyType2D::Dynamic)
             return motion;
         motion.velocityX = body.velocity.x;
         motion.velocityY = body.velocity.y;
@@ -66,16 +70,16 @@ namespace Arcane
         motion.velocityY = static_cast<float>(velocity.y);
         motion.bodyReady = true;
         if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*world, it->second);
+            motion.supported = HasFloorSupport(*world, it->second, Settings<PhysicsGroundSettings2D>());
         return motion;
     }
 
-    void PhysicsResource::SetVelocity(Astra::Entity entity, RigidBody2D& body,
-                                      float velocityX, float velocityY)
+    void PhysicsWorld2D::SetVelocity(Arcane::Entity entity, RigidBody2D& body,
+                            float velocityX, float velocityY)
     {
         if (!std::isfinite(velocityX) || !std::isfinite(velocityY))
             return;
-        if (body.type != Phys::BodyType::Dynamic)
+        if (body.type != BodyType2D::Dynamic)
             return;
         body.velocity = glm::vec2(velocityX, velocityY);
 

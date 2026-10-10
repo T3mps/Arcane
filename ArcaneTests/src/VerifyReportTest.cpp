@@ -6,6 +6,7 @@
 #include <Arcane/Host/VerifyReport.hpp>
 
 #include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Match -- what SetForeignModules takes (schemaVersion 10)
+#include <Arcane/Config/CVarRegistry.hpp>     // schema 14: the cvarSets echo reads the published value
 
 #include <Json.hpp>
 
@@ -72,7 +73,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 13);
+    CHECK(doc["schemaVersion"] == 14);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
@@ -513,7 +514,7 @@ TEST_CASE("verify: PickPixelInRange refuses the whole out-of-range family -- pas
 
 // ---------------------------------------------------------------------------
 // Fix round 1, item 4: the cheap mesh-pick mitigation. CollectPickables
-// (PickEmit.hpp) only ever walks SpriteRenderer/Collider2D entities -- a
+// (PickEmit.hpp) only ever walks SpriteRenderer/Arcane::Collider2D entities -- a
 // MeshRenderer entity is invisible to it -- so a hit is ALWAYS one of those
 // two kinds, never a mesh. `pickableKinds` names that capability on every
 // non-error pick result; `meshesNotPickable` additionally flags the run
@@ -733,7 +734,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 13);
+    CHECK(doc["schemaVersion"] == 14);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -757,7 +758,7 @@ TEST_CASE("verify: the report schema is version 6 once settle facts exist", "[ve
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 13);
+    CHECK(doc["schemaVersion"] == 14);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -854,7 +855,7 @@ TEST_CASE("verify report: schemaVersion 9 carries settle facts and the headless 
                 /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
 
-    CHECK(doc["schemaVersion"] == 13);
+    CHECK(doc["schemaVersion"] == 14);
     // The MODE's machine-readable name, in the mode's own word. Changed on this
     // bump because a schemaVersion bump is exactly when a wire value may change.
     CHECK(doc["mode"] == "headless");
@@ -959,12 +960,12 @@ TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
     CHECK_FALSE(doc.contains("settleBailReason"));
 }
 
-TEST_CASE("verify report: schemaVersion is 13 and declares a supported range", "[host][verify]")
+TEST_CASE("verify report: schemaVersion is 14 and declares a supported range", "[host][verify]")
 {
     // A RANGE plus a predicate, not a bare number: a consumer across the
     // Servitor boundary can then say "I understand 3..10" rather than "I
     // understand 10", and an unreadable result can be marked deliberately.
-    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 13);
+    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 14);
     STATIC_REQUIRE(Arcane::VerifyReport::kOldestSupportedSchemaVersion == 3);
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(3));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(4));
@@ -977,14 +978,15 @@ TEST_CASE("verify report: schemaVersion is 13 and declares a supported range", "
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(11));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(12));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(13));
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(14));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(2));
-    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(14));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(15));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(0));
 
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
     const auto j = nlohmann::json::parse(r.ToJson());
-    CHECK(j.at("schemaVersion").get<int>() == 13);
+    CHECK(j.at("schemaVersion").get<int>() == 14);
 }
 
 TEST_CASE("verify report: compare carries maxLocalDifference", "[host][verify]")
@@ -1020,7 +1022,7 @@ TEST_CASE("schema 5: compare block carries triedPaths in try order", "[host][ver
                  { "Verify/References/vulkan/runtime-scene.png",
                    "Verify/References/runtime-scene.png" });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j["compare"]["triedPaths"].size() == 2);
     REQUIRE(j["compare"]["triedPaths"][0].get<std::string>()
             == "Verify/References/vulkan/runtime-scene.png");
@@ -1041,7 +1043,7 @@ TEST_CASE("schema 6: worlds carries one entry per live world, in host order", "[
     r.SetRun("vulkan", 60, "frames-complete");
     r.SetWorlds({ { "Client", false, 3, 2 }, { "DedicatedServer", true, 3, 3 } });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("worlds"));
     REQUIRE(j["worlds"].size() == 2);
     CHECK(j["worlds"][0].at("role") == "Client");
@@ -1069,7 +1071,7 @@ TEST_CASE("schema 7: viewMode carries the editor camera's resolved mode, absent 
     r.SetRun("D3D12", 60, "frames-complete");
     r.SetViewMode("perspective");
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("viewMode"));
     CHECK(j.at("viewMode") == "perspective");
 
@@ -1111,7 +1113,7 @@ TEST_CASE("schema 10: foreignModules carries the process's matched overlay modul
     r.SetForeignModules(found);
 
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("foreignModules"));
     REQUIRE(j["foreignModules"].is_array());
     REQUIRE(j["foreignModules"].size() == 3);
@@ -1157,7 +1159,7 @@ TEST_CASE("schema 11: inspector carries the source and breadcrumb the editor's I
     r.SetRun("dx12", 1, "frames-complete");
     r.SetInspector("Player.arcinput", "Player.arcinput > Player > Jump");
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("inspector"));
     CHECK(j["inspector"].at("source") == "Player.arcinput");
     CHECK(j["inspector"].at("breadcrumb") == "Player.arcinput > Player > Jump");
@@ -1176,7 +1178,7 @@ TEST_CASE("schema 12: inspector.instances carries each instance's id, exclusions
                      { 1, { "scene", "input-actions", "material", "sprite", "mesh" }, "Assets", "Assets > uv_marker.png" },
                      { 2, {}, "", "" } });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("inspector"));
     CHECK(j["inspector"].at("source") == "Assets");
     REQUIRE(j["inspector"].contains("instances"));
@@ -1218,7 +1220,7 @@ TEST_CASE("schema 13: documents carries each preview document's guid, kind, name
         { "7e5a0010-0010-4010-8010-000000000010", "material", "ReferenceCubeMaterial", "not-compiled-here", "no-device", false },
     });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 13);
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
     REQUIRE(j.contains("documents"));
     const auto& d = j["documents"];
     REQUIRE(d.is_array());
@@ -1244,4 +1246,43 @@ TEST_CASE("schema 13: documents carries each preview document's guid, kind, name
     const auto n = nlohmann::json::parse(none.ToJson());
     REQUIRE(n.contains("documents"));
     CHECK(n["documents"].empty());
+}
+
+// ---- Settings arc S6-GATE: schemaVersion 14 -- `cvarSets` ----
+TEST_CASE("schema 14: cvarSets echoes each --set name with the PUBLISHED value, null for an unknown name, absent when never set", "[host][verify]")
+{
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("s6gate-report-test"); Arcane::CVarRegistry::Get().PublishImmediate(); }
+    } unregister;
+    const Arcane::CVarHandle h = reg.Register(Arcane::CVarDesc{ "s6gatereport.count", Arcane::CVarType::Int32,
+        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::None, "test cvar", "s6gate-report-test" });
+    REQUIRE_FALSE(h.IsStale());
+    // What --set did at boot: the CommandLine rung, published.
+    REQUIRE(reg.Set(h, Arcane::CVarValue::Int32(7), Arcane::SetBy::CommandLine, "", Arcane::CVarContext::Editor)
+            == Arcane::SetResult::Applied);
+    reg.PublishImmediate();
+
+    Arcane::VerifyReport r;
+    r.SetRun("dx12", 1, "frames-complete");
+    r.SetCVarSets(Arcane::VerifyReport::EchoCVarSets({ "s6gatereport.count=7", "s6gatereport.missing=1", "no-equals-sign" }));
+    const auto j = nlohmann::json::parse(r.ToJson());
+    REQUIRE(j["schemaVersion"].get<int>() == 14);
+    REQUIRE(j.contains("cvarSets"));
+    REQUIRE(j["cvarSets"].size() == 2);   // the malformed item is skipped
+    CHECK(j["cvarSets"][0].at("name") == "s6gatereport.count");
+    CHECK(j["cvarSets"][0].at("value") == "7");
+    CHECK(j["cvarSets"][1].at("name") == "s6gatereport.missing");
+    CHECK(j["cvarSets"][1].at("value").is_null());
+
+    Arcane::VerifyReport none;
+    none.SetRun("dx12", 1, "frames-complete");
+    none.SetCVarSets({});
+    CHECK(nlohmann::json::parse(none.ToJson()).at("cvarSets").empty());
+    Arcane::VerifyReport silent;
+    silent.SetRun("dx12", 1, "frames-complete");
+    CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("cvarSets"));
+
+    reg.ClearRung(h, Arcane::SetBy::CommandLine);
 }

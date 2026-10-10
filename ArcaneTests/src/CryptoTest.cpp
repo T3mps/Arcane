@@ -8,7 +8,7 @@
 // via VerifyPassword and via the public HexEquals contract), and
 // GenerateSecureToken / GenerateRandomBytes basics.
 //
-// Runtime budget: a single PBKDF2 derivation at DEFAULT_ITERATIONS
+// Runtime budget: a single PBKDF2 derivation at DefaultIterations()
 // (200k) costs ~17s in Debug, so only two cases pay it -- the
 // production-config round-trip (kept from the smoke) and ONE malformed
 // VerifyPassword case (whose M-V3-3 dummy burn is intentionally a full
@@ -16,8 +16,10 @@
 // hashes, and the malformed-format matrix goes through
 // IterationsOfStoredHash, which parses without deriving.
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
@@ -50,7 +52,7 @@ namespace
 TEST_CASE("crypto: password hash round-trips", "[crypto]")
 {
     // Kept from the original smoke: proves the production configuration
-    // (DEFAULT_ITERATIONS) end to end. ~3 x 200k derivations.
+    // (DefaultIterations()) end to end. ~3 x 200k derivations.
     const std::string hash = Crypto::HashPassword("correct horse battery staple");
     REQUIRE(Crypto::VerifyPassword("correct horse battery staple", hash));
     REQUIRE_FALSE(Crypto::VerifyPassword("wrong password", hash));
@@ -146,7 +148,7 @@ TEST_CASE("crypto: HexEquals compares equal-length strings byte-wise", "[crypto]
 
 TEST_CASE("crypto: NeedsRehash / IterationsOfStoredHash drive the lazy-rehash decision", "[crypto]")
 {
-    REQUIRE(Crypto::DEFAULT_ITERATIONS == 200000);
+    REQUIRE(Crypto::DefaultIterations() == 200000);
 
     // A real below-default hash wants a rehash.
     const std::string low = Crypto::HashPassword("pw", 1000);
@@ -192,7 +194,7 @@ TEST_CASE("crypto: IterationsOfStoredHash rejects malformed stored hashes", "[cr
 TEST_CASE("crypto: VerifyPassword fails closed on a malformed stored hash", "[crypto]")
 {
     // One representative case (~17s in Debug): the M-V3-3 path burns a
-    // full DEFAULT_ITERATIONS dummy derivation on parse failure so a
+    // full DefaultIterations() dummy derivation on parse failure so a
     // malformed row is as slow as a real verify (no username-enumeration
     // timing oracle). The full malformed-format matrix is asserted
     // cheaply through IterationsOfStoredHash above.
@@ -258,6 +260,13 @@ TEST_CASE("crypto: GenerateRandomBytes returns the requested count with variatio
 // ReadExactFromStream and the pure EntropySamplesDegenerate predicate,
 // both fully unit-tested here. Runtime validation of the POSIX branch
 // on real ARM/Linux hardware is deferred to the Linux-port milestone.
+//
+// The Windows chunking + fail-closed policy lives in the
+// platform-neutral FillRandomBytesChunked helper (an injected fill, so
+// a generator that refuses a chunk is unit-tested here without waiting
+// for BCryptGenRandom to actually fail). A zero-length request must
+// not call the fill. A false fill throws and must not hand back a
+// buffer. Chunks tile the request exactly once per byte.
 
 TEST_CASE("crypto: ReadExactFromStream fails closed on short or bad sources", "[crypto]")
 {
@@ -299,6 +308,272 @@ TEST_CASE("crypto: ReadExactFromStream fails closed on short or bad sources", "[
         REQUIRE(Crypto::ReadExactFromStream(src, buf.data(), 0));
     }
 }
+
+TEST_CASE("crypto: FillRandomBytesChunked fails closed and covers every byte once", "[crypto]")
+{
+    const char* const kFailure = "Crypto: test fill failed";
+
+    // count 0 returns empty and never calls the fill, even when the
+    // injected chunk size would be unusable for a real draw.
+    {
+        int calls = 0;
+        const auto out = Crypto::FillRandomBytesChunked(
+            0, 0,
+            [&](uint8_t*, size_t) {
+                ++calls;
+                return true;
+            },
+            kFailure);
+        REQUIRE(out.empty());
+        REQUIRE(calls == 0);
+    }
+
+    // A fill that fails on the first chunk throws. The caller's buffer
+    // is left untouched -- the helper must not return a buffer.
+    {
+        int calls = 0;
+        std::vector<uint8_t> returned(1, 0xFF);
+        bool threw = false;
+        try
+        {
+            returned = Crypto::FillRandomBytesChunked(
+                8, 3,
+                [&](uint8_t*, size_t) {
+                    ++calls;
+                    return false;
+                },
+                kFailure);
+        }
+        catch (const std::runtime_error& ex)
+        {
+            threw = true;
+            REQUIRE(std::string(ex.what()) == kFailure);
+        }
+        REQUIRE(threw);
+        REQUIRE(calls == 1);
+        REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+    }
+
+    // A fill that succeeds once and then fails must still throw, and
+    // must not return the bytes already written.
+    {
+        int calls = 0;
+        std::vector<uint8_t> returned(1, 0xFF);
+        bool threw = false;
+        try
+        {
+            returned = Crypto::FillRandomBytesChunked(
+                8, 3,
+                [&](uint8_t* dst, size_t n) {
+                    ++calls;
+                    REQUIRE(n > 0);
+                    for (size_t i = 0; i < n; ++i)
+                        dst[i] = 0x11;
+                    return calls < 2;
+                },
+                kFailure);
+        }
+        catch (const std::runtime_error& ex)
+        {
+            threw = true;
+            REQUIRE(std::string(ex.what()) == kFailure);
+        }
+        REQUIRE(threw);
+        REQUIRE(calls == 2);
+        REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+    }
+
+    // Success fills every byte. One chunk larger than the request is a
+    // single fill of the whole buffer.
+    {
+        int calls = 0;
+        const auto out = Crypto::FillRandomBytesChunked(
+            7, 64,
+            [&](uint8_t* dst, size_t n) {
+                ++calls;
+                REQUIRE(n == 7);
+                for (size_t i = 0; i < n; ++i)
+                    dst[i] = 0x5A;
+                return true;
+            },
+            kFailure);
+        REQUIRE(calls == 1);
+        REQUIRE(out == std::vector<uint8_t>(7, 0x5A));
+    }
+
+    // Chunking: a count larger than the injected chunk size is covered
+    // exactly once per byte (10 bytes, 3-byte chunks -> 3,3,3,1).
+    {
+        struct ChunkNote
+        {
+            uint8_t stamp;
+            size_t n;
+        };
+        std::vector<ChunkNote> notes;
+        uint8_t stamp = 1;
+        constexpr size_t kCount = 10;
+        constexpr size_t kChunk = 3;
+        const auto out = Crypto::FillRandomBytesChunked(
+            kCount, kChunk,
+            [&](uint8_t* dst, size_t n) {
+                REQUIRE(n > 0);
+                REQUIRE(n <= kChunk);
+                for (size_t i = 0; i < n; ++i)
+                    dst[i] = stamp;
+                notes.push_back(ChunkNote{ stamp, n });
+                ++stamp;
+                return true;
+            },
+            kFailure);
+
+        REQUIRE(out.size() == kCount);
+        REQUIRE(notes.size() == 4);
+        REQUIRE(notes[0].n == 3);
+        REQUIRE(notes[1].n == 3);
+        REQUIRE(notes[2].n == 3);
+        REQUIRE(notes[3].n == 1);
+
+        size_t offset = 0;
+        for (const ChunkNote& note : notes)
+        {
+            REQUIRE(offset + note.n <= out.size());
+            for (size_t i = 0; i < note.n; ++i)
+                REQUIRE(out[offset + i] == note.stamp);
+            offset += note.n;
+        }
+        REQUIRE(offset == out.size());
+    }
+}
+
+#if !defined(ARC_BUILD_DIST)
+namespace
+{
+    // Shared by the public-API seam cases. A stuck stamp would latch a
+    // degenerate self-test if a cold latch ever drew through this fill;
+    // bytes vary, and successive calls do not repeat the same sample.
+    int g_platformFillCalls = 0;
+    size_t g_platformFillBytes = 0;
+    size_t g_platformFillLastN = 0;
+    uint8_t g_platformFillStamp = 0;
+
+    void ResetPlatformFillCounts()
+    {
+        g_platformFillCalls = 0;
+        g_platformFillBytes = 0;
+        g_platformFillLastN = 0;
+    }
+
+    bool CountingPlatformFill(uint8_t* dst, size_t n)
+    {
+        ++g_platformFillCalls;
+        g_platformFillBytes += n;
+        g_platformFillLastN = n;
+        for (size_t i = 0; i < n; ++i)
+            dst[i] = static_cast<uint8_t>(g_platformFillStamp + static_cast<uint8_t>(i));
+        g_platformFillStamp = static_cast<uint8_t>(g_platformFillStamp + static_cast<uint8_t>(n) + 1);
+        return true;
+    }
+
+    bool FailingPlatformFill(uint8_t*, size_t)
+    {
+        return false;
+    }
+
+#ifdef _WIN32
+    const char* const kPlatformFillFailure = "Crypto: BCryptGenRandom failed";
+#else
+    const char* const kPlatformFillFailure = "Crypto: /dev/urandom unavailable or short read";
+#endif
+}
+
+TEST_CASE("crypto: a zero-length public draw returns empty and does not fill", "[crypto]")
+{
+    // EnsureEntropySelfTest's verdict is a function-local static. It
+    // cannot be reset, and Catch2's random order means this case almost
+    // never observes a cold latch. The assertion below therefore proves
+    // that count 0 does not reach the platform fill. The ordering against
+    // the latch is the early return in GenerateRandomBytes, ahead of
+    // EnsureEntropySelfTest; the fill itself is only reached from
+    // GenerateRandomBytesUnchecked after that function's own count == 0
+    // return, via FillRandomBytesChunked.
+    g_platformFillStamp = 1;
+    ResetPlatformFillCounts();
+    Crypto::Detail::ScopedPlatformFillOverride guard(&CountingPlatformFill);
+
+    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(0);
+    REQUIRE(out.empty());
+    REQUIRE(g_platformFillCalls == 0);
+    REQUIRE(g_platformFillBytes == 0);
+}
+
+TEST_CASE("crypto: the public RNG fails closed when the platform fill fails", "[crypto]")
+{
+    // Warm the latch on the real platform RNG first. A failing fill
+    // during the once-per-process self-test throws out of the latch's
+    // initializer (it retries next time) and would make this case's
+    // call count depend on order.
+    (void)Crypto::GenerateRandomBytes(1);
+
+    Crypto::Detail::ScopedPlatformFillOverride guard(&FailingPlatformFill);
+
+    std::vector<uint8_t> returned(1, 0xFF);
+    bool bytesThrew = false;
+    try
+    {
+        returned = Crypto::GenerateRandomBytes(16);
+    }
+    catch (const std::runtime_error& ex)
+    {
+        bytesThrew = true;
+        REQUIRE(std::string(ex.what()) == kPlatformFillFailure);
+    }
+    REQUIRE(bytesThrew);
+    REQUIRE(returned == std::vector<uint8_t>(1, 0xFF));
+
+    std::string token = "sentinel";
+    bool tokenThrew = false;
+    try
+    {
+        token = Crypto::GenerateSecureToken(16);
+    }
+    catch (const std::runtime_error& ex)
+    {
+        tokenThrew = true;
+        REQUIRE(std::string(ex.what()) == kPlatformFillFailure);
+    }
+    REQUIRE(tokenThrew);
+    REQUIRE(token == "sentinel");
+}
+
+TEST_CASE("crypto: the public RNG draws through the chunked platform fill", "[crypto]")
+{
+    (void)Crypto::GenerateRandomBytes(1);
+
+    g_platformFillStamp = 3;
+    ResetPlatformFillCounts();
+    Crypto::Detail::ScopedPlatformFillOverride guard(&CountingPlatformFill);
+
+    // 16 bytes is one chunk: the Windows cap is ULONG max, the POSIX
+    // cap is size_t max, and the helper asks the fill for
+    // min(maxChunk, remaining). A random_device fallback, or a draw
+    // that never calls PlatformFill, cannot reproduce this stamp.
+    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(16);
+    REQUIRE(g_platformFillCalls == 1);
+    REQUIRE(g_platformFillLastN == 16);
+    REQUIRE(g_platformFillBytes == 16);
+    REQUIRE(out.size() == 16);
+    for (size_t i = 0; i < out.size(); ++i)
+        REQUIRE(out[i] == static_cast<uint8_t>(3 + i));
+
+    g_platformFillStamp = 1;
+    ResetPlatformFillCounts();
+    const std::string token = Crypto::GenerateSecureToken(4);
+    REQUIRE(g_platformFillCalls == 1);
+    REQUIRE(g_platformFillLastN == 4);
+    REQUIRE(g_platformFillBytes == 4);
+    REQUIRE(token == "01020304");
+}
+#endif
 
 TEST_CASE("crypto: EntropySamplesDegenerate rejects stuck or echoing RNG output", "[crypto]")
 {

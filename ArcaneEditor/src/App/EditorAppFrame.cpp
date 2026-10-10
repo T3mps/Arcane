@@ -13,6 +13,8 @@
 
 #include "App/EditorApp.hpp"
 #include "App/HarnessRules.hpp"   // UnderVerifyHarness: badges + chip stay out of goldens (s8.2)
+#include "Settings/SettingsHost.hpp"
+#include "Settings/SettingsWindow.hpp"
 #include "Panels/ConsoleModel.hpp"   // ProblemsChip (s8.2)
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
@@ -20,8 +22,23 @@
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
+#include "Settings/AxisColors.hpp"
+#include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
+#include "Settings/EditorGridSettings.hpp" // editor.viewport.grid.* / grid3D.* (MakeGridScene, settings S6-21)
+#include "Settings/EditorPlaySettings.hpp"     // editor.play.launchMode (settings S6-32)
+#include "Settings/EditorViewportSettings.hpp" // editor.viewport.* / camera.* / gizmo.* (settings S6-29..32)
+#include "Settings/EditorThemeSettings.hpp" // editor.theme.viewport.cameraFrame (settings S6-26)
+#include "Settings/EditorUiSettings.hpp"   // editor.ui.* (ApplyAppearanceSettings, settings S4-15)
+#include "Settings/EditorUiStyleSettings.hpp"   // editor.ui.* style metrics (settings S6-28)
+#include "Settings/LayoutSettings.hpp"     // editor.layout.openPanelsAtStart (Reset Layout, S4-18)
+#include "Settings/LayoutPage.hpp"
+#include "Panels/LayoutLibrary.hpp"       // ParseOpenPanels
+#include "Project/ModuleBuild.hpp"          // ModuleBuild::ExeDir: the bundled font families
+#include "Widgets/EditorFonts.hpp"         // the deferred font-atlas rebuild
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
+#include "Input/EditorActions.hpp"
+#include "Viewport/ViewportActions.hpp"
 
 #include <Arcane/AssetPipeline/CookSession.hpp>   // F2b Task 12: MainLoop's pre-loop cook gate
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
@@ -31,6 +48,9 @@
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
 #include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/Settings.hpp>
+#include <Arcane/Platform/Paths.hpp>   // EditorUserDir/Fonts: the user font families
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -41,10 +61,15 @@
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
+#include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
+#include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
+#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsWorld2D (physics overlay)
+#include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
+#include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
+#include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -53,8 +78,10 @@
 #include <glm/glm.hpp>
 
 #include "Widgets/EditorTheme.hpp"   // Theme::kTextDim (the start page's dim path / time)
+#include "Widgets/UiMetrics.hpp"   // Ui::Px -- the modal button widths follow editor.ui.scale
 #include "Widgets/IconsLucide.h"   // the start page's Open Project... / Open Folder... icons
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cctype>
@@ -69,6 +96,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::Editor
 {
@@ -90,51 +118,21 @@ namespace Arcane::Editor
             return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
         }
 
-        // Undo/redo keybind scancodes (see FrameInput's shortcut phase). Hoisted to
-        // file scope -- pure cleanup, values unchanged (verified against SDL_scancode.h).
+        // Modifier scancodes still read here for camera orbit (Alt) and the
+        // gizmo snap / fly-boost (Ctrl / Shift). Letter keys go through
+        // EditorActions (settings S4, spec s7.2).
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScLCtrl  = 224;  // SDL_SCANCODE_LCTRL
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScRCtrl  = 228;  // SDL_SCANCODE_RCTRL
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScLShift = 225;  // SDL_SCANCODE_LSHIFT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
         constexpr uint32_t kScRShift = 229;  // SDL_SCANCODE_RSHIFT
-        constexpr uint32_t kScY      = 28;   // SDL_SCANCODE_Y
-        constexpr uint32_t kScZ      = 29;   // SDL_SCANCODE_Z
-
-        // Gizmo mode-switch keybind scancodes (see HandleGizmoModeKeys). No
-        // conflict with the Sandbox plugin's camera (RMB-pan + wheel-zoom only).
-        constexpr uint32_t kScW = 26;   // SDL_SCANCODE_W
-        constexpr uint32_t kScE = 8;    // SDL_SCANCODE_E
-        constexpr uint32_t kScR = 21;   // SDL_SCANCODE_R
-        constexpr uint32_t kScQ = 20;   // SDL_SCANCODE_Q
-
-        // File-menu scene shortcuts: Ctrl+N / Ctrl+O / Ctrl+S (see
-        // HandleUndoRedoAndSceneShortcuts). The menu advertises these, so they are
-        // handled rather than drawn.
-        constexpr uint32_t kScN = 17;   // SDL_SCANCODE_N
-        constexpr uint32_t kScO = 18;   // SDL_SCANCODE_O
-        constexpr uint32_t kScS = 22;   // SDL_SCANCODE_S
-
-        // Edit-menu clipboard shortcuts: Ctrl+X/C/V/D (see
-        // HandleUndoRedoAndSceneShortcuts). Same table as kScY/kScZ above.
-        constexpr uint32_t kScX = 27;   // SDL_SCANCODE_X
-        constexpr uint32_t kScC = 6;    // SDL_SCANCODE_C
-        constexpr uint32_t kScV = 25;   // SDL_SCANCODE_V
-        constexpr uint32_t kScD = 7;    // SDL_SCANCODE_D
-
-        // Viewport camera framing keys (see UpdateEditorCamera): F frames
-        // the selection, Home frames the whole scene.
-        constexpr uint32_t kScF    = 9;    // SDL_SCANCODE_F
-        constexpr uint32_t kScHome = 74;   // SDL_SCANCODE_HOME
-
-        // Perspective navigation (F4 plan 1 T7, UpdateEditorCamera): WASD/QE
-        // fly while the right button is held (W/E/Q/S/D are the same keys the
-        // gizmo/scene shortcuts above name -- the same scancode constants are
-        // reused; only A is new), Alt is the orbit modifier, Alt+G / Alt+J
-        // switch the view mode (Perspective / 2D).
-        constexpr uint32_t kScA    = 4;    // SDL_SCANCODE_A
-        constexpr uint32_t kScG    = 10;   // SDL_SCANCODE_G
-        constexpr uint32_t kScJ    = 13;   // SDL_SCANCODE_J
-        constexpr uint32_t kScLAlt = 226;  // SDL_SCANCODE_LALT
-        constexpr uint32_t kScRAlt = 230;  // SDL_SCANCODE_RALT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
+        constexpr uint32_t kScLAlt   = 226;  // SDL_SCANCODE_LALT
+        ARC_CONSTANT("vendored-library constant: SDL's scancode table; the bindings are editor.keys.* cvars, the codes are not")
+        constexpr uint32_t kScRAlt   = 230;  // SDL_SCANCODE_RALT
 
         // ASCII-lowercased extension, for a case-insensitive suffix check: a
         // hand-typed "MyScene.ARCSCENE" already names an .arcscene, and stapling a
@@ -203,23 +201,8 @@ namespace Arcane::Editor
         }
     }
 
-    // The shared file-dialog completion trampoline (declared in EditorApp.hpp),
-    // replacing the six per-dialog thunks the old pending-string scheme used.
-    // SDL's dialog backend fires the callback exactly once per ShowXFileDialog
-    // (null path on cancel -- see the early return below), so the heap-allocated
-    // request is single-owner and freed here. If a future backend ever skipped
-    // the callback the request would leak (bounded, one small struct per
-    // un-fired dialog) -- acceptable, noted.
-    //
-    // Task 12 retired its twin, InstancePickedThunk: the instance save dialog
-    // it served is gone with every other OS-picker creation path (spec s7's
-    // invariant -- see DialogInbox in EditorApp.hpp).
-    void EditorApp::PathPickedThunk(const char* path, void* user)
-    {
-        std::unique_ptr<PathDialogRequest> req(static_cast<PathDialogRequest*>(user));
-        if (path)
-            req->slot->Stash(req->epoch, path);
-    }
+    // PathPickedThunk lives in DialogSlot.hpp -- the OS picker trampoline
+    // ShowOpen*Dialog registers. Tests fire the same function.
 
     // The frame. Every line here is a phase call, and the ORDER IS THE
     // BEHAVIOUR -- see this file's header comment and each phase's own note.
@@ -260,6 +243,7 @@ namespace Arcane::Editor
             if (!cookProjectRoot.empty())
             {
                 Arcane::AssetPipeline::CookSession cookGate;
+                cookGate.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6
                 const Arcane::AssetPipeline::CookResult cookResult =
                     cookGate.CookProject(cookProjectRoot);
                 if (cookResult.failed > 0)
@@ -389,6 +373,7 @@ namespace Arcane::Editor
             ConsumeSceneDialogResults(ls);
             ConsumeProjectDialogResult();
             ConsumeMaterialDialogResults();
+            ConsumeSettingsDialogResults();
             // Worker -> main-thread drain of the module rebuild, at the same
             // safe point the dialog results land at: its finish path can run
             // effects (plugin re-engage, scene reload) that must never land
@@ -400,7 +385,7 @@ namespace Arcane::Editor
             // EditorApp.hpp's Report-written notify section.
             PollDiagnosticReports();
 
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
             // --crash-gpu N: the same deliberate fault Build -> Diagnostics ->
             // Crash GPU fires, on a schedule, so the desk battery's editor items
             // can be SCRIPTED rather than clicked -- and so a flag both hosts
@@ -431,11 +416,51 @@ namespace Arcane::Editor
 #endif
 
             FrameState fs;
+            // An old [EditorViewport][Camera] block's preference lines, read by
+            // the ini handler since the last frame (boot, RetargetLayoutIni, a
+            // windowed project switch's reload): imported ONCE into the User
+            // rung where the user has not chosen (settings S6-29), BEFORE the
+            // barrier below so this frame already reads them, and queued for
+            // the debounced archive write.
+            if (m_legacyViewport.Any())
+            {
+                Arcane::Editor::ImportLegacyViewportPrefs(Arcane::CVarRegistry::Get(), m_legacyViewport);
+                Arcane::Editor::ForEachLegacyViewportPref(m_legacyViewport, [](std::string_view name)
+                    { Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, std::string(name)); });
+                m_legacyViewport = {};
+            }
+            // Likewise an old [EditorPlayMode][State] section's mode (settings
+            // S6-32): imported once, never written back to the ini.
+            if (m_legacyPlayMode)
+            {
+                if (Arcane::Editor::ImportLegacyPlayMode(Arcane::CVarRegistry::Get(), *m_legacyPlayMode))
+                    Arcane::Editor::NoteSettingEdited(Arcane::SetBy::User, "editor.play.launchMode");
+                m_legacyPlayMode.reset();
+            }
             // THE CVAR PUBLISH BARRIER, once per frame: every Set a console
             // line, a callback or a plugin made since the last one becomes
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            // editor.camera.* -> the camera's runtime copies, before any input
+            // reads them (the wheel and the view-settings popup write the cvar;
+            // the camera picks it up here, next frame).
+            {
+                const auto& camPrefs = Arcane::Settings<Arcane::Editor::EditorCameraSettings>();
+                m_camera.orbit.fovYDeg = camPrefs.fovYDeg;
+                m_camera.speedScalar   = camPrefs.speedScalar;
+            }
+            // editor.viewport.physicsOverlay (settings S6-32): the View-menu
+            // toggle stays session state (spec s6.3); the cvar is where a
+            // session starts, and a change to it (the settings window, a
+            // project switch's Pref-P value) moves the toggle to it.
+            if (const bool overlayPref = Arcane::Settings<Arcane::Editor::EditorViewportSettings>().physicsOverlay;
+                overlayPref != m_physicsOverlayPref)
+            {
+                m_physicsOverlay     = overlayPref;
+                m_physicsOverlayPref = overlayPref;
+            }
+            Arcane::Editor::TickSettingsHost();   // the settings windows' debounced writes (editor.settings.saveDebounceMs)
             // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
             if (m_undo)
                 if (const Arcane::UndoLimits limits = Arcane::Editor::ReadUndoLimits();
@@ -444,6 +469,10 @@ namespace Arcane::Editor
                     m_undo->SetLimits(limits);
                     m_undoLimitsApplied = limits;
                 }
+            // editor.theme.* / editor.ui.* -> the editor style (settings S4).
+            // After the barrier, before the ImGui frame opens.
+            ApplyAppearanceSettings();
+            ApplyPendingLayoutRequest();
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();
@@ -544,9 +573,20 @@ namespace Arcane::Editor
         }
         if (m_gpu->Win().IsMinimized())
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return FramePump::SkipFrame;
         }
+        // editor.perf.backgroundFps (0 = off, the default): an unfocused
+        // editor sleeps out the rest of its 1000 / fps ms frame. Never under
+        // --headless, whose never-shown window has no input focus.
+        const std::uint32_t backgroundFps = Arcane::Settings<Arcane::Editor::EditorPerfSettings>().backgroundFps;
+        if (backgroundFps != 0 && !m_config.headless && !m_gpu->Win().IsFocused())
+        {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - m_lastFramePump);
+            std::this_thread::sleep_for(Arcane::Editor::BackgroundFrameWait(backgroundFps, elapsed));
+        }
+        m_lastFramePump = std::chrono::steady_clock::now();
         return FramePump::Continue;
     }
 
@@ -675,6 +715,71 @@ namespace Arcane::Editor
         }
     }
 
+    // Settings arc S4: the OS pickers the settings pages opened.
+    void EditorApp::ConsumeSettingsDialogResults()
+    {
+        if (const auto path = m_dialogs.themeImport.Take()) (void)Arcane::Editor::ImportThemeFrom(m_themePage, *path);
+        if (const auto path = m_dialogs.themeExport.Take()) (void)Arcane::Editor::ExportThemeTo(m_themePage, *path);
+    }
+
+    // Load a named layout at the frame boundary, after the settings publish.
+    void EditorApp::ApplyPendingLayoutRequest()
+    {
+        if (!m_layoutPage.loadRequest) return;
+        const std::string name = *std::exchange(m_layoutPage.loadRequest, std::nullopt);
+        if (m_config.headless || !m_editorImguiContext)
+        {
+            ARC_WARN("layout: Load '{}' refused -- the layout is pinned under --headless", name);
+            return;
+        }
+        const Arcane::Editor::LayoutLibrary lib(m_layoutPage.dir.empty() ? Arcane::Editor::NamedLayoutDir() : m_layoutPage.dir);
+        const std::optional<std::string> text = lib.Load(name);
+        if (!text)
+        {
+            m_layoutPage.status = "Could not read layout '" + name + "'";
+            return;
+        }
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(m_editorImguiContext);
+        ImGui::ClearIniSettings();
+        ImGui::LoadIniSettingsFromMemory(text->data(), text->size());
+        ImGui::MarkIniSettingsDirty();
+        ImGui::SetCurrentContext(prev);
+        m_layoutPage.status = "Loaded '" + name + "'";
+        ARC_INFO("layout: loaded named layout '{}'", name);
+    }
+
+    void EditorApp::ApplyAppearanceSettings()
+    {
+        if (!m_editorImguiContext)
+            return;
+        // The game context may be current here (the offscreen layer); the
+        // editor's style and font atlas are the ones this writes, and the
+        // atlas calls below act on the CURRENT context.
+        ImGuiContext* const prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(m_editorImguiContext);
+        ImGuiStyle& style = ImGui::GetStyle();
+        // A font change queued LAST frame lands now, between frames (spec s7.3: deferred one frame).
+        if (const std::optional<Arcane::Editor::EditorUiSettings> fonts = m_appearance.TakeFontRebuild())
+        {
+            const std::filesystem::path exe = Arcane::Editor::ModuleBuild::ExeDir();
+            const auto families = Arcane::Editor::ListEditorFontFamilies(
+                exe, Arcane::Paths::Get(Arcane::Paths::Location::EditorUserDir) / "Fonts");
+            Arcane::Editor::EditorFontRequest req;
+            req.uiFace   = Arcane::Editor::ResolveEditorFontFamily(families, fonts->fontFamily, "Inter");
+            req.monoFace = Arcane::Editor::ResolveEditorFontFamily(families, fonts->monoFontFamily, "JetBrains Mono");
+            req.altFace  = Arcane::Editor::ResolveEditorFontFamily(families, fonts->altFontFamily, "Roboto");
+            req.sizePx   = fonts->fontSize;
+            Arcane::Editor::ReinstallEditorFonts(req);
+            style.FontSizeBase = fonts->fontSize;
+        }
+        m_appearance.UpdateTheme(Arcane::Settings<Arcane::Editor::EditorThemeSettings>(), style);
+        m_appearance.UpdateStyle(Arcane::Settings<Arcane::Editor::EditorUiStyleSettings>(), style);   // before UpdateUi: recomposes at the applied scale
+        m_appearance.UpdateUi(Arcane::Settings<Arcane::Editor::EditorUiSettings>(),
+                              m_gpu ? m_gpu->Win().DisplayScale() : 1.0f, style);
+        ImGui::SetCurrentContext(prev);
+    }
+
     // Phase 6: input sample + the editor's own keybinds + gizmo interaction.
     // Input sample (before ImGui BeginFrame so capture flags are set).
     // Runs before the sim advance, and the camera push at its tail is the FIRST
@@ -761,6 +866,25 @@ namespace Arcane::Editor
                 m_rebindCaptureLive = m_rebindCaptureLive || input->InputSwallowed();
             }
         });
+
+        // Settings arc S4: the action map's frame. The Global/Viewport actions
+        // below read this snapshot; the panels' actions read ImGui's events.
+        {
+            Arcane::Editor::ActionFrameInput keys;
+            keys.snap = &snap;
+            keys.playMode = InPlayMode();
+            keys.wantCaptureKeyboard = snap.wantCaptureKeyboard;
+            keys.wantTextInput = m_editorImguiContext && m_editorImguiContext->IO.WantTextInput;
+            keys.captureLive = m_rebindCaptureLive;
+            keys.viewportActive = m_viewportActive;
+            keys.dt = frameDt;
+            if (m_editorImguiContext)
+            {
+                keys.repeatDelay = m_editorImguiContext->IO.KeyRepeatDelay;
+                keys.repeatRate = m_editorImguiContext->IO.KeyRepeatRate;
+            }
+            Arcane::Editor::EditorActions::Get().BeginFrame(keys);
+        }
 
         // The plugin only sees scene-relevant input when the Viewport panel
         // is active (hovered/focused), with the cursor remapped into
@@ -860,55 +984,19 @@ namespace Arcane::Editor
         m_runtime->UpdateGameInput(frameDt, gameplaySnap);
         m_gpu->Input().Update(frameDt, snap);
 
-        HandleUndoRedoAndSceneShortcuts(snap, fs);
+        HandleUndoRedoAndSceneShortcuts(fs);
         HandleGizmoModeKeys(snap);
         UpdateEditorCamera(snap, inViewport, lx, ly, static_cast<float>(frameDt));
         UpdateGizmoInteraction(snap, inViewport, lx, ly, fs.gameUiClaims);
     }
 
-    // The one "may editor shortcuts fire" predicate (architecture pass sec 1):
-    // collapses the three near-identical gates the phase methods below used to
-    // hand-roll (undo/redo+scene shortcuts, gizmo mode keys, camera framing).
-    //
-    // An armed rebind capture (Input Actions document) owns the keyboard: its
-    // completing chord may be F, Alt+G, W or Ctrl+Z, and ImGui's
-    // WantCaptureKeyboard is false during a capture (no item is active), so
-    // without the m_rebindCaptureLive term the shortcut would fire alongside
-    // the bind. Computed at the top of FrameInput from the capture armed on an
-    // earlier frame -- the one this frame's keys complete.
-    bool EditorApp::ShortcutsLive(const Arcane::InputSnapshot& snap,
-                                  bool requireViewportFocus) const
-    {
-        return Arcane::Editor::EditorShortcutsLive(InPlayMode(), snap.wantCaptureKeyboard, m_rebindCaptureLive,
-                                                   requireViewportFocus, m_viewportActive);
-    }
-
     // Phase 6a: undo/redo + the Ctrl+N/O/S scene shortcuts. Runs EARLIER in the
     // frame than the gizmo phase below, which is why the open-transaction guard
     // is here rather than there.
-    void EditorApp::HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs)
+    void EditorApp::HandleUndoRedoAndSceneShortcuts(FrameState& fs)
     {
-        // Undo/redo keybinds: Ctrl+Z undo, Ctrl+Shift+Z / Ctrl+Y redo.
-        // Edge-triggered off the raw hardware snapshot (InputSnapshot has
-        // no built-in press-edge tracking -- InputActions.Pressed() layers
-        // that on named/JSON-configured actions, which would need a
-        // separate "undo"/"redo" chord binding; hand-rolled here instead
-        // to avoid a same-frame double-fire: an InputActions chord match
-        // is a pure AND of its keys, so a bare "ctrl+z" binding would also
-        // match while Shift is held, firing Undo alongside Redo).
-        // snap.wantCaptureKeyboard is already baked from
-        // m_gpu->Imgui().WantCaptureKeyboard() above, so this naturally
-        // suppresses the keybind while typing in an ImGui text field --
-        // the same suppression point InputActions::ResolveControl uses.
-        // Edit-mode only: Play routes all input to the plugin.
-        const bool ctrl  = snap.ScancodeDown(kScLCtrl) || snap.ScancodeDown(kScRCtrl);
-        const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
-        const bool undoKeyDown = ctrl && !shift && snap.ScancodeDown(kScZ);
-        const bool redoKeyDown = ctrl && ((shift && snap.ScancodeDown(kScZ)) || (!shift && snap.ScancodeDown(kScY)));
-        m_edges.undo.Update(undoKeyDown);
-        m_edges.redo.Update(redoKeyDown);
-
-        const bool active = ShortcutsLive(snap, false);
+        const Arcane::Editor::GlobalShortcutPresses keys =
+            Arcane::Editor::ReadGlobalShortcuts(Arcane::Editor::EditorActions::Get());
         // Also refuse while a transaction is open (e.g. a live gizmo drag):
         // CommandStack::Undo()/Redo() have no open-transaction guard, and this
         // keybind block runs earlier in the frame than the gizmo block below,
@@ -917,92 +1005,39 @@ namespace Arcane::Editor
         // later Commit then pushes a transaction whose `before` predates the
         // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
+        // Settings arc S3-13: a focused settings window owns Ctrl+Z / Ctrl+Y for
+        // its window-local undo (spec s6.3); the scene stack stands down.
+        // SceneConsumesUndoKeys folds Play (UndoBarred), the open-txn guard,
+        // and the settings-window yield into one predicate. keys.undo/redo
+        // already apply EditorShortcutsLive (Play, capture, rebind).
         const bool noOpenTxn = !m_undo->InTransaction();
         const bool barred    = Arcane::Editor::UndoBarred(InPlayMode());   // the ONE Play barrier (s3.3b)
-        if (active && !barred && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
-        if (active && !barred && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
-
-        // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
-        // beside New Scene / Open Scene / Save Scene. Raised as requests
-        // rather than acted on here so both routes share ONE handler: the
-        // menu-request site (below, after BeginDockSpace) owns the
-        // unsaved-changes guard and the dialog launches.
-        // It owns NO Play gate. These edges are Play-gated by `active`
-        // above and the menu items by their own !playing enable flag
-        // inside BeginDockSpace (EditorPanels.cpp) -- but neither
-        // covers the routes that reach a save without passing through
-        // them (the confirm modal's Save button, the Save As dialog
-        // result). The gate that holds for all of them is DoSaveScene's
-        // own refusal while playing.
-        const bool nDown = ctrl && !shift && snap.ScancodeDown(kScN);
-        const bool oDown = ctrl && !shift && snap.ScancodeDown(kScO);
-        const bool sDown = ctrl && !shift && snap.ScancodeDown(kScS);
-        m_edges.n.Update(nDown);
-        m_edges.o.Update(oDown);
-        m_edges.s.Update(sDown);
-        fs.scNewScene  = active && m_edges.n.pressed;
-        fs.scOpenScene = active && m_edges.o.pressed;
-        fs.scSaveScene = active && m_edges.s.pressed;
-
-        // Ctrl+X/C/V/D -- the Edit menu's clipboard items. Same raised-as-
-        // request shape as Ctrl+N/O/S above: ONE handler at the menu-request
-        // site. `active` already suppresses these while ImGui captures the
-        // keyboard (text fields keep their own clipboard) and during Play.
-        const bool xDown = ctrl && !shift && snap.ScancodeDown(kScX);
-        const bool cDown = ctrl && !shift && snap.ScancodeDown(kScC);
-        const bool vDown = ctrl && !shift && snap.ScancodeDown(kScV);
-        const bool dDown = ctrl && !shift && snap.ScancodeDown(kScD);
-        m_edges.x.Update(xDown);
-        m_edges.c.Update(cDown);
-        m_edges.v.Update(vDown);
-        m_edges.d.Update(dDown);
-        fs.scCut       = active && m_edges.x.pressed;
-        fs.scCopy      = active && m_edges.c.pressed;
-        fs.scPaste     = active && m_edges.v.pressed;
-        fs.scDuplicate = active && m_edges.d.pressed;
+        Arcane::Editor::DispatchSceneUndoKeys(*m_undo, !barred && noOpenTxn, InPlayMode(),
+            m_undo->InTransaction(), Arcane::Editor::SettingsWindowFocused(), keys.undo, keys.redo);
+        fs.scNewScene      = keys.newScene;
+        fs.scOpenScene     = keys.openScene;
+        fs.scSaveScene     = keys.saveScene;
+        fs.scCut           = keys.cut;
+        fs.scCopy          = keys.copy;
+        fs.scPaste         = keys.paste;
+        fs.scDuplicate     = keys.duplicate;
+        fs.scCloseDocument = keys.closeDocument;
     }
 
     // Phase 6b: gizmo mode keys. Pure state, but it runs before the gizmo
     // interaction phase so a mode change takes effect on the same frame.
     void EditorApp::HandleGizmoModeKeys(const Arcane::InputSnapshot& snap)
     {
-        // Gizmo mode keys: W=Translate, E=Rotate, R=Scale (SDL_SCANCODE_W/E/R --
-        // no conflict with the Sandbox plugin's camera, which uses RMB-pan +
-        // wheel-zoom only). Edge-triggered off the raw hardware snapshot, same
-        // pattern as the undo/redo keybinds above. Edit-mode + viewport-focus
-        // only, so typing/clicking in another panel never changes the gizmo mode.
-        const bool wDown = snap.ScancodeDown(kScW);
-        const bool eDown = snap.ScancodeDown(kScE);
-        const bool rDown = snap.ScancodeDown(kScR);
-        const bool qDown = snap.ScancodeDown(kScQ);
-        m_edges.w.Update(wDown);
-        m_edges.e.Update(eDown);
-        m_edges.r.Update(rDown);
-        m_edges.q.Update(qDown);
-        // NOT while the right mouse button is held: W/E/Q are then the flight
-        // keys of a Look gesture (UpdateEditorCamera, F4 plan 1 T7 -- UE's
-        // WASD_RMBOnly), and a fly-forward must not also switch the tool to
-        // Translate. Tested on the raw button rather than the gesture state
-        // because this phase runs BEFORE the camera phase starts the gesture,
-        // and an RMB+W press on the same frame would otherwise slip through.
-        const bool rmbHeld    = (snap.mouseButtons & 0x2u) != 0;
-        const bool keysActive = ShortcutsLive(snap, true) && !rmbHeld;
-        // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
-        if (keysActive && m_edges.q.pressed)
+        // RMB held: W/E/Q are the Look gesture's fly keys (UE's WASD_RMBOnly);
+        // the raw button, because the camera phase starts the gesture later.
+        const bool rmbHeld = (snap.mouseButtons & 0x2u) != 0;
+        switch (Arcane::Editor::ReadViewportTool(Arcane::Editor::EditorActions::Get(), rmbHeld))
         {
-            m_gizmoEnabled = false;
-        }
-        if (keysActive && m_edges.w.pressed)
-        {
-            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate;
-        }
-        if (keysActive && m_edges.e.pressed)
-        {
-            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate;
-        }
-        if (keysActive && m_edges.r.pressed)
-        {
-            m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale;
+        case Arcane::Editor::ViewportTool::Select:    m_gizmoEnabled = false; break;
+        case Arcane::Editor::ViewportTool::Translate: m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Translate; break;
+        case Arcane::Editor::ViewportTool::Rotate:    m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Rotate;    break;
+        case Arcane::Editor::ViewportTool::Scale:     m_gizmoEnabled = true; m_gizmoMode = Arcane::GizmoMode::Scale;     break;
+        case Arcane::Editor::ViewportTool::None:      break;
         }
     }
 
@@ -1106,20 +1141,18 @@ namespace Arcane::Editor
             // so flight speed is in m/s regardless of frame rate.
             if (m_camGesture.kind == Gesture::Look)
             {
-                glm::vec3 axis(0.0f);
-                if (snap.ScancodeDown(kScW)) axis.z += 1.0f;
-                if (snap.ScancodeDown(kScS)) axis.z -= 1.0f;
-                if (snap.ScancodeDown(kScD)) axis.x += 1.0f;
-                if (snap.ScancodeDown(kScA)) axis.x -= 1.0f;
-                if (snap.ScancodeDown(kScE)) axis.y += 1.0f;
-                if (snap.ScancodeDown(kScQ)) axis.y -= 1.0f;
+                const glm::vec3 axis = Arcane::Editor::ReadFlyAxis(Arcane::Editor::EditorActions::Get());
                 if (axis != glm::vec3(0.0f))
                     m_camera.Fly(glm::normalize(axis), dt, shift);
                 // The wheel WHILE looking steps the speed scalar (UE's
                 // CameraSpeedScalar via the wheel during RMB flight), never
                 // the zoom/dolly.
                 if (snap.wheelY != 0.0f)
-                    m_camera.AdjustSpeed(snap.wheelY);
+                {
+                    m_camera.AdjustSpeed(snap.wheelY);   // live this frame; the cvar carries it on
+                    Arcane::Editor::SetViewportPref("editor.camera.speedScalar",
+                                                    Arcane::CVarValue::Float32(m_camera.speedScalar));
+                }
             }
             // The wheel otherwise: 2D zoom anchored on the viewport-local
             // cursor (the pixel space the resolved view maps to), or the
@@ -1151,28 +1184,12 @@ namespace Arcane::Editor
         // live gesture is not cut short here: the next frame's `held` test
         // ends it when its button lifts, and its deltas keep going to the
         // op of the kind that started it, which is still meaningful.
-        m_edges.g.Update(alt && snap.ScancodeDown(kScG));
-        m_edges.j.Update(alt && snap.ScancodeDown(kScJ));
-        const bool modeKeysActive = ShortcutsLive(snap, false);
-        if (modeKeysActive && m_edges.g.pressed) m_camera.mode = ViewMode::Perspective;
-        if (modeKeysActive && m_edges.j.pressed) m_camera.mode = ViewMode::TwoD;
-
-        // F / Home framing. Gated on wantCaptureKeyboard exactly like
-        // the Ctrl+N/O/S shortcuts above, so F does not fire while a
-        // text field or the Outliner rename box has focus. Unlike the
-        // W/E/R gizmo keys this does NOT require viewport focus:
-        // those switch a viewport TOOL, while framing acts on the
-        // selection, and picking an entity in the Outliner and
-        // pressing F is the point of the shortcut.
-        const bool fDown    = snap.ScancodeDown(kScF);
-        const bool homeDown = snap.ScancodeDown(kScHome);
-        m_edges.f.Update(fDown);
-        m_edges.home.Update(homeDown);
-        const bool framingActive = ShortcutsLive(snap, false);
-        if (framingActive && m_edges.f.pressed)
-            FrameCamera(m_selection.HasSelection());
-        if (framingActive && m_edges.home.pressed)
-            FrameCamera(false);
+        const Arcane::Editor::GlobalShortcutPresses keys =
+            Arcane::Editor::ReadGlobalShortcuts(Arcane::Editor::EditorActions::Get());
+        if (keys.perspective) m_camera.mode = ViewMode::Perspective;
+        if (keys.ortho2D)     m_camera.mode = ViewMode::TwoD;
+        if (keys.frameSelected) FrameCamera(m_selection.HasSelection());
+        if (keys.frameAll)      FrameCamera(false);
 
         // Push the editor camera BEFORE the gizmo block below reads
         // ClientRuntime::View(). Those reads happen earlier
@@ -1240,14 +1257,15 @@ namespace Arcane::Editor
             const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
             const Arcane::ViewTransform& view = m_runtime->View();
             const Arcane::GizmoHandleMask handles = GizmoHandles();
-            const float gizmoSize = m_viewSettings.gizmoSize;
+            const float gizmoSize = Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size;
+            const Arcane::GizmoTuning gizmoTuning = Arcane::Editor::MakeGizmoTuning();   // editor.gizmo.* (settings S6-31)
 
             if (!m_gizmoDrag.active)
             {
                 // Hover + drag-start only when the cursor is over the viewport.
                 if (inViewport)
                 {
-                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen);
+                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen, gizmoTuning);
                     if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
                     {
                         // A press on a handle owns the click regardless of
@@ -1309,11 +1327,10 @@ namespace Arcane::Editor
                 Arcane::Editor::ToViewportLocal(m_viewportRect, snap.mouseX, snap.mouseY, dragLx, dragLy);
                 const glm::vec2 dragMouse(dragLx, dragLy);
 
-                Arcane::GizmoSnap gsnap;
-                gsnap.enabled = ctrlHeld;
+                const Arcane::GizmoSnap gsnap = Arcane::Editor::MakeGizmoSnap(ctrlHeld);   // editor.gizmo.snap.*
                 const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                     m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
-                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
+                    m_gizmoDrag.mouseStartScreen, dragMouse, gsnap, gizmoTuning);
                 // The sector Draw paints for a rotate drag -- the same inputs.
                 m_gizmoDrag.sweep = m_gizmoMode == Arcane::GizmoMode::Rotate
                     ? Arcane::RotateSweep(m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
@@ -1377,7 +1394,7 @@ namespace Arcane::Editor
         // reaches RunLoop::Advance -- FixedUpdateAll/UpdateAll, gameplay -- so a
         // wall-clock simDt means `--frames N` advances a --play-as run's sim by
         // however long N frames happened to take on THIS machine, and no two
-        // runs agree. The 0.25 s spiral-of-death clamp stays wall-clock-only:
+        // runs agree. The sim.maxFrameDeltaSeconds spiral-of-death clamp stays wall-clock-only:
         // fixedDtSeconds is refused at parse time unless positive (HostConfig.
         // cpp) and is a deliberate per-run choice, not a stall to guard against.
         // Edit mode steps no physics either way (EditModeSchedule owns the
@@ -1397,9 +1414,10 @@ namespace Arcane::Editor
             const auto now = std::chrono::steady_clock::now();
             simDt = std::chrono::duration<double>(now - ls.simPrev).count();
             ls.simPrev = now;
-            if (simDt > 0.25) simDt = 0.25;
+            simDt = Arcane::ClampFrameDelta(simDt);   // sim.maxFrameDeltaSeconds: the one clamp ArcaneRuntime shares
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
+        Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
@@ -1610,32 +1628,24 @@ namespace Arcane::Editor
     // panels and viewport, the picture --headless captures offscreen -- so an
     // automated desk pass can judge the WINDOWED editor (works-headless/
     // broken-windowed is a bug class) without driving the desktop. Dev (never
-    // in Dist) and UserSettable (the command line's door), NOT Archive: an
-    // automation switch must never persist into a user's settings.
+    // in Dist), NOT Archive: an automation switch must never persist into a
+    // user's settings. The editor's --set runs in the Editor context, which
+    // writes any setting (UserSettable is derived from the audience now, so a
+    // declaration no longer passes it -- settings spec s3.2).
     namespace
     {
-        constexpr const char* kWindowedFrameCaptureCvar = "editor.automation.windowedFrameCapture";
-        const ::Arcane::CVarHandle kWindowedFrameCaptureHandle = []
-        {
-            ::Arcane::CVarDesc desc;
-            desc.name = kWindowedFrameCaptureCvar;
-            desc.type = ::Arcane::CVarType::Bool;
-            desc.defaultValue = ::Arcane::CVarValue::Bool(false);
-            desc.flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable;
-            desc.help = "Windowed --screenshot captures the composited editor frame (the presented "
-                        "backbuffer: chrome, panels, viewport) instead of the viewport texture";
-            desc.module = "editor";
-            return ::Arcane::CVarRegistry::Get().Register(desc);
-        }();
+        ARC_CVAR(cvar_windowedFrameCapture, "editor.automation.windowedFrameCapture", bool, false,
+                 .flags = ::Arcane::CVarFlags::Dev,
+                 .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesProject,
+                 .help = "Windowed --screenshot captures the composited editor frame (the presented "
+                         "backbuffer: chrome, panels, viewport) instead of the viewport texture");
     }
 
     static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
     {
         if (cfg.headless)
             return false;   // --headless already captures the composited frame, offscreen
-        const ::Arcane::CVarRegistry& reg = ::Arcane::CVarRegistry::Get();
-        const auto v = reg.Get(reg.Find(kWindowedFrameCaptureCvar));
-        return v && v->type == ::Arcane::CVarType::Bool && v->AsBool();
+        return cvar_windowedFrameCapture.Get();
     }
 
     void EditorApp::RenderSceneToViewport()
@@ -1748,6 +1758,11 @@ namespace Arcane::Editor
                                             !WindowedFrameCapture(m_config);
             vp.capture = isCaptureLastFrame;
 
+            if (Arcane::OutlineNode* outline = m_viewportTargets.graph->Outline())
+            {
+                const Arcane::Editor::AxisRoleColors roles = Arcane::Editor::DeriveAxisRoles(Arcane::Editor::Theme::Live());
+                outline->SetColors(roles.outlineSelect, roles.outlineHover);
+            }
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Any outcome but Presented means GpuSceneSyncNode did not run, so
@@ -1874,7 +1889,8 @@ namespace Arcane::Editor
         // grid is Task 10's depth-tested GridNode, not these lines. In Play
         // the view is the scene camera's and the grid is an editor affordance,
         // so it stays off.
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD && m_viewSettings.showGrid)
+        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
             const Arcane::ViewTransform& view = m_runtime->View();
             Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
@@ -1889,15 +1905,15 @@ namespace Arcane::Editor
         // agree to the bit. The decision is PlanPhysicsOverlay (pure, tested).
         {
             Astra::Registry& reg = m_runtime->Registry();
-            const Arcane::PhysicsResource* phys = reg.GetResource<Arcane::PhysicsResource>();
+            const Arcane::PhysicsWorld2D* phys = reg.GetResource<Arcane::PhysicsWorld2D>();
             std::optional<Manifold2D::Physics::BodyHandle> selectedBody;
-            // entityToBody (a plain Arcane-level map), not PhysicsBodyRef +
+            // entityToBody (a plain Arcane-level map), not Arcane::PhysicsBodyRef2D +
             // PhysicsWorld::IsValid: ArcaneEditor.exe does not link Manifold2D
             // (physics logic lives inside Arcane.dll only, same boundary the
             // NRI include-only comment above documents) -- a direct call into
             // an out-of-line PhysicsWorld method here is an unresolved symbol.
             if (m_selection.HasSelection() && phys)
-                if (auto it = phys->entityToBody.find(m_selection.Primary()); it != phys->entityToBody.end())
+                if (auto it = Arcane::Detail::Physics2D::Access::Entities(*phys).find(m_selection.Primary()); it != Arcane::Detail::Physics2D::Access::Entities(*phys).end())
                     selectedBody = it->second;
             const Arcane::Editor::PhysicsOverlayPlan plan =
                 Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
@@ -1907,16 +1923,16 @@ namespace Arcane::Editor
             const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
             const std::optional<Arcane::Affine2D> overlayAffine =
                 ctx ? ctx->view.AsAffine2D() : std::nullopt;
-            if (plan.draw && phys && phys->world && overlayAffine)
+            if (plan.draw && phys && Arcane::Detail::Physics2D::Access::Solver(*phys) && overlayAffine)
             {
-                Arcane::PhysicsDebugDrawOptions opts;
+                Arcane::PhysicsDebugDrawOptions2D opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
                 opts.view   = *overlayAffine;
                 opts.alpha  = ctx->alpha;
-                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
-                opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = false;   // outlines + contacts (spec)
-                opts.drawContacts   = plan.wholeWorld;
+                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
+                opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
+                opts.contacts   = plan.wholeWorld;
                 if (!plan.wholeWorld) opts.onlyBody = selectedBody;
-                Arcane::DrawPhysicsDebug(*phys->world, b, opts);
+                Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), b, opts);
             }
         }
 
@@ -1965,7 +1981,11 @@ namespace Arcane::Editor
                     // dark scene content without competing with the selection
                     // outline or the gizmo axes. (Dashed would read better still,
                     // but the batcher has no dash primitive.)
-                    const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                    // editor.theme.viewport.cameraFrame (settings S6-26).
+                    static const EditorThemeViewportSettings kVpDefaults{};
+                    const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
+                                                            kVpDefaults.cameraFrame, kCameraFrameColor);
+                    const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
                     for (int i = 0; i < 4; ++i)
                         b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
                 }
@@ -2070,14 +2090,13 @@ namespace Arcane::Editor
             m_meshScene.view       = m_meshView->view;
             m_meshScene.projection = m_meshView->projection;
         }
-        // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
-        // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
-        // registers none -- so lightDirection/lightColor/ambient are left at
-        // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
-        // component is future work; inventing one here would land an
-        // unreviewed scene-schema change in a host .cpp with zero test
-        // coverage rather than in a reviewed, tested component.
-        //
+        // NO LIGHT COMPONENT YET: this engine has none anywhere --
+        // Scene/Components.hpp declares none and SceneModule.hpp registers
+        // none -- so the scene's one light is render.mesh.defaultLight.*
+        // (RenderLookSettings.hpp; Live, read once per frame). A light
+        // component is future work and a reviewed scene-schema change.
+        Arcane::ApplyDefaultLight(m_meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
         // the field null" mechanism vp.gameUi just used above.
@@ -2096,10 +2115,14 @@ namespace Arcane::Editor
         // Nothing here reaches the pick chain below: the grid is canvas
         // content only (GridNode.hpp).
         if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
-            && m_viewSettings.showGrid)
+            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
+            // The tunables are editor.viewport.grid.* / grid3D.* (settings
+            // S6-21), rebuilt every frame so a Live edit lands next frame.
+            m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
+                                                        Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
             m_gridScene.view = m_runtime->View();
-            m_gridScene.SetPlane(m_viewSettings.gridPlane == Arcane::Editor::GridPlane::XY
+            m_gridScene.SetPlane(Arcane::Settings<Arcane::Editor::EditorViewportSettings>().gridPlane == Arcane::Editor::GridPlane::XY
                                      ? Arcane::GridSceneDesc::Plane::XY
                                      : Arcane::GridSceneDesc::Plane::XZ);
             vp.grid = &m_gridScene;
@@ -2292,6 +2315,7 @@ namespace Arcane::Editor
         // with no gameModule (content-only, or none open).
         const Arcane::Project* menuProj = m_runtime->CurrentProject();
         const bool hasGameModule = menuProj && !menuProj->Manifest().gameModule.empty();
+        if (menuProj) RefreshDevenv();   // build.ideExecutable is Live: one string compare unless it changed
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        InPlayMode(),
                                        m_moduleBuild.Running(), hasGameModule,
@@ -2302,7 +2326,8 @@ namespace Arcane::Editor
                                        m_assetModel.selected.IsValid(),
                                        m_physicsOverlay,
                                        &m_recents.projects,
-                                       &m_recents.scenes);
+                                       &m_recents.scenes,
+                                       m_documents.CloseTarget() != nullptr);
         if (menuReq.togglePhysicsOverlay) m_physicsOverlay = !m_physicsOverlay;
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
@@ -2326,11 +2351,19 @@ namespace Arcane::Editor
                 stripStatus.problems = Arcane::Editor::StripChip{ chip->label,
                     nErr > 0 ? Arcane::Editor::Theme::kError : Arcane::Editor::Theme::kWarning, chip->tooltip };
         }
+        // editor.play.launchMode (settings S6-32; NextWorld: the next Play):
+        // the toolbar reads the published value, and its mode menu's choice
+        // writes the cvar (User rung, archived).
+        const Arcane::Editor::PlayLaunchMode publishedPlayMode =
+            Arcane::Settings<Arcane::Editor::EditorPlaySettings>().launchMode;
+        Arcane::Editor::PlayLaunchMode playMode = publishedPlayMode;
         const Arcane::Editor::ToolbarResult toolbar =
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
-                                               m_plugin ? &*m_plugin : nullptr, m_playMode,
+                                               m_plugin ? &*m_plugin : nullptr, playMode,
                                                ToolbarLogoTextureId(), stripStatus,
                                                [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+        if (playMode != publishedPlayMode)
+            Arcane::Editor::SetPlayLaunchMode(playMode);
         if (toolbar.launchStandalone)
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
@@ -2354,6 +2387,8 @@ namespace Arcane::Editor
         // A no-op on every topology that never spawned one.
         if (wasPlaying && !InPlayMode())
             m_serverProcess.Stop();
+        if (!wasPlaying && InPlayMode())
+            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
         // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
         // (sec 1's rule): re-derive so this frame's consume blocks and panels see
         // the true state, not last frame's.
@@ -2380,6 +2415,7 @@ namespace Arcane::Editor
         // -- the build wins, which is correct: the default layout just docked
         // instance 1, not the upgrade's id.
         const bool pendingLegacy = m_inspectorHost.TakeLegacyLayoutUpgrade();
+        menuReq.resetLayout |= std::exchange(m_layoutPage.resetRequested, false);
         const bool legacy = pendingLegacy && !menuReq.resetLayout;
         const int legacyAssetsId = legacy ? m_inspectorHost.UpgradeLegacyInspectorLayout() : -1;
         const Arcane::Editor::DockSpaceResult dock = Arcane::Editor::EndDockSpace(menuReq.resetLayout, legacyAssetsId);
@@ -2392,7 +2428,7 @@ namespace Arcane::Editor
                           { return m_inspectorHost.Find(kv.first) == nullptr; });
         }
         if (menuReq.resetLayout)
-            m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
+            m_panelVis = Arcane::Editor::ParseOpenPanels(Arcane::Editor::cvar_layoutOpenPanelsAtStart.Get());   // reset shows the configured panels ("*" = all)
 
         ConsumeMenuRequests(menuReq, fs, ls);
 
@@ -2534,8 +2570,9 @@ namespace Arcane::Editor
                 if (const auto req = Arcane::Editor::DrawNewFolderModal(m_newFolder, *proj)) (void)RunAssetOp(*req);
         }
 
-        if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
-            m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
+        if (const auto lineCap = static_cast<std::size_t>(Arcane::Settings<Arcane::Editor::EditorConsoleSettings>().displayLineCap);
+            lineCap != m_consoleDiag.console.Capacity())
+            m_consoleDiag.console.SetCapacity(lineCap);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
             Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
                 Arcane::Editor::UnderVerifyHarness(m_config),
@@ -2554,52 +2591,20 @@ namespace Arcane::Editor
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
-        if (m_projectSettingsOpen)
+        // Settings arc S3: editor.settings.openAtBoot (automation) is read once,
+        // on the first UI frame -- --set has applied by then.
+        if (!m_settingsBootOpenConsumed)
         {
-            Arcane::Editor::ProjectSettingsRequests settings;
-            Arcane::Editor::DrawProjectSettings(m_runtime->CurrentProject(),
-                                                &m_projectSettingsOpen, settings);
-            if (settings.create)
-            {
-                Arcane::Editor::CreateAssetRequest request;
-                request.kind = Arcane::Editor::CreateAssetKind::InputActions;
-                BeginCreateAsset(request);
-            }
-            if (settings.open)
-            {
-                if (const auto* project = m_runtime->CurrentProject())
-                {
-                    const auto id = Arcane::Guid::FromString(project->Manifest().inputActions);
-                    if (id && id->IsValid())
-                        if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(*id)))
-                            m_documents.OpenPath(*path);
-                }
-            }
-            if (settings.clear || settings.select)
-            {
-                const auto id = settings.clear ? Arcane::Guid::Nil() : settings.selection;
-                if (m_runtime->SetProjectInputActionsAsset(id))
-                {
-                    m_runtime->GameInput().Clear();
-                    if (id.IsValid())
-                    {
-                        if (const auto* project = m_runtime->CurrentProject())
-                        {
-                            if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(id)))
-                            {
-                                std::ifstream file(*path, std::ios::binary);
-                                const std::string raw(std::istreambuf_iterator<char>{file}, {});
-                                const auto json = nlohmann::json::parse(raw, nullptr, false);
-                                const auto asset = Arcane::InputActionAsset::FromJson(json);
-                                const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
-                                if (asset && projectId)
-                                    (void)m_runtime->ConfigureGameInput(*asset, *projectId);
-                            }
-                        }
-                    }
-                }
-            }
+            m_settingsBootOpenConsumed = true;
+            const Arcane::Editor::SettingsBootOpen boot = Arcane::Editor::ConsumeSettingsOpenAtBoot();
+            m_preferencesOpen = m_preferencesOpen || boot.preferences;
+            m_projectSettingsOpen = m_projectSettingsOpen || boot.project;
         }
+        Arcane::Editor::ConsumeSettingsPathPick(m_settingsPathCvar, m_dialogs.settingsPath);
+        // Always called: a closed window is a no-op that flushes its archive on its close frame.
+        Arcane::Editor::DrawEditorPreferences(&m_preferencesOpen);
+        Arcane::Editor::EndListenIfPageHidden(Arcane::Editor::EditorActions::Get(), m_shortcutsPage, ImGui::GetFrameCount());
+        Arcane::Editor::DrawProjectSettings(&m_projectSettingsOpen);
 
         // --open-asset: keep re-requesting focus for the scripted document
         // over its first frames (the member's comment says why); OpenPath on
@@ -2659,6 +2664,18 @@ namespace Arcane::Editor
                                         const FrameState& fs, LoopState& ls)
     {
         if (menuReq.showProjectSettings) m_projectSettingsOpen = true;
+        if (menuReq.showPreferences) m_preferencesOpen = true;
+        // The Restart bar is enabled only when Play is stopped and edits are
+        // saved. Exit after capturing the project; Shutdown relaunches it.
+        if (m_restartRequested)
+        {
+            m_restartRequested = false;
+            if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            {
+                m_relaunchRoot = proj->Root();
+                ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
+            }
+        }
         // Window > New Inspector -- reopen before create (UE's summon-details
         // rule: reuse an open view, else the first CLOSED slot; never a copy
         // beside a closed one). Instance 0 is the standing follower (spec
@@ -2697,7 +2714,7 @@ namespace Arcane::Editor
         // fire-and-forget.
         if (menuReq.openIde)
             OpenInIde({});
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
         // Build -> Diagnostics -> Crash GPU: fired RIGHT HERE, mid-ImGui-pass,
         // rather than deferred to a frame boundary the way the scene/project
         // requests above are. It needs no teardown and no dialog, and this
@@ -2828,7 +2845,7 @@ namespace Arcane::Editor
             const Arcane::Project* proj = m_runtime->CurrentProject();
             const std::string contentDir =
                 proj ? (proj->Root() / "Content").string() : std::string();
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.materialOpen, m_dialogs.materialOpen.Arm() },
                 "Arcane Material", "arcmat",
                 contentDir.empty() ? nullptr : contentDir.c_str());
@@ -2859,6 +2876,12 @@ namespace Arcane::Editor
                                InspectorSaveTarget(m_inspectorFocusedSource) != nullptr);
         menuReq.saveScene |= (fs.scSaveScene && !docOwnsSave);
 
+        // Both the shortcut and menu use the normal document close flow.
+        menuReq.closeDocument |= fs.scCloseDocument;
+        if (menuReq.closeDocument)
+            if (Arcane::Editor::EditorDocument* doc = m_documents.CloseTarget())
+                m_documents.RequestClose(doc);
+
         if (menuReq.newScene &&
             m_scene.Request(Arcane::Editor::SceneIntent::NewScene, {}, *m_undo))
         {
@@ -2869,7 +2892,7 @@ namespace Arcane::Editor
         if (menuReq.openScene)
         {
             const std::string dir = SceneDialogDir();
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.sceneOpen, m_dialogs.sceneOpen.Arm() },
                 "Arcane Scene", "arcscene",
                 dir.empty() ? nullptr : dir.c_str());
@@ -2888,20 +2911,79 @@ namespace Arcane::Editor
         {
             // Start beside the most recent project; null = the OS default.
             const std::string start = Arcane::Editor::DialogStartDir(m_recents.projects);
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFileDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
                 "Arcane Project", "arcproj", start.empty() ? nullptr : start.c_str());
         }
         // Same slot, same thunk: FolderPickedCallback and FilePickedCallback share
         // a signature (Window.hpp:93, 103).
         if (req.openProjectFolder)
-            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
+            m_gpu->Win().ShowOpenFolderDialog(&PathPickedThunk,
                 new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() });
         // Open Recent lands in the SAME slot the dialogs' callback fills, so it
         // flows through ConsumeProjectDialogResult and inherits every guard (the
         // unsaved-scene confirm, the rival-editor lock, the ABI gate, the failure modal).
         if (!req.openRecentPath.empty())
             m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), req.openRecentPath);
+    }
+
+    void EditorApp::ProjectPageThunk(void* user)
+    {
+        static_cast<EditorApp*>(user)->DrawProjectPage();
+    }
+
+    void EditorApp::DrawProjectPage()
+    {
+        Arcane::Editor::ProjectSettingsRequests requests;
+        Arcane::Editor::DrawProjectIdentityPage(m_runtime->CurrentProject(), Arcane::Editor::CurrentSettingsGrid(),
+                                                &m_assetRefServices, requests);
+        ApplyProjectSettingsRequests(requests);
+    }
+
+    void EditorApp::ApplyProjectSettingsRequests(const Arcane::Editor::ProjectSettingsRequests& settings)
+    {
+        if (settings.create)
+        {
+            Arcane::Editor::CreateAssetRequest request;
+            request.kind = Arcane::Editor::CreateAssetKind::InputActions;
+            BeginCreateAsset(request);
+        }
+        if (settings.open)
+        {
+            if (const auto* project = m_runtime->CurrentProject())
+            {
+                const auto id = Arcane::Guid::FromString(project->Manifest().inputActions);
+                if (id && id->IsValid())
+                    if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(*id)))
+                        m_documents.OpenPath(*path);
+            }
+        }
+        if (settings.clear || settings.select)
+        {
+            const auto id = settings.clear ? Arcane::Guid::Nil() : settings.selection;
+            if (m_runtime->SetProjectInputActionsAsset(id))
+            {
+                m_runtime->GameInput().Clear();
+                if (id.IsValid())
+                {
+                    if (const auto* project = m_runtime->CurrentProject())
+                    {
+                        if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(id)))
+                        {
+                            std::ifstream file(*path, std::ios::binary);
+                            const std::string raw(std::istreambuf_iterator<char>{file}, {});
+                            const auto json = nlohmann::json::parse(raw, nullptr, false);
+                            const auto asset = Arcane::InputActionAsset::FromJson(json);
+                            const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
+                            if (asset && projectId)
+                                (void)m_runtime->ConfigureGameInput(*asset, *projectId);
+                        }
+                    }
+                }
+            }
+        }
+        if (settings.bootScene && !m_runtime->SetProjectBootScene(*settings.bootScene))
+            ARC_WARN("Project Settings: the boot scene could not be written to the .arcproj (see the line above)");
     }
 
     void EditorApp::DrawStartPage(Arcane::Editor::MenuRequests& req)
@@ -2928,17 +3010,17 @@ namespace Arcane::Editor
                 std::chrono::system_clock::now().time_since_epoch()).count());
             const Arcane::Editor::StartPageModel page = Arcane::Editor::BuildStartPage(m_recents.projects, now);
             const float avail = ImGui::GetContentRegionAvail().x;
-            const float width = std::min(640.0f, avail);
+            const float width = std::min(Ui::Px(640.0f), avail);   // start page column (settings S6-28: px follow editor.ui.scale)
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - width) * 0.5f));
             ImGui::BeginChild("##startcol", ImVec2(width, 0.0f));
             // ---- section 1: heading + actions ---------------------------------
-            ImGui::Dummy(ImVec2(0.0f, 24.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(24.0f)));
             ImGui::TextUnformatted("No project open");
             ImGui::Spacing();
             if (ImGui::Button(ICON_LC_FOLDER_OPEN " Open Project...")) req.openProject = true;
             ImGui::SameLine();
             if (ImGui::Button(ICON_LC_FOLDER " Open Folder...")) req.openProjectFolder = true;
-            ImGui::Dummy(ImVec2(0.0f, 16.0f));
+            ImGui::Dummy(ImVec2(0.0f, Ui::Px(16.0f)));
             // ---- (crash-window plan 3's "Recover" section slots in HERE) ------
             // ---- section 2: recent projects -------------------------------------
             ImGui::TextDisabled("Recent projects");
@@ -3452,8 +3534,8 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(err->message.c_str());
                 ImGui::PopTextWrapPos();
                 ImGui::Separator();
-                if (ImGui::Button("OK", ImVec2(120, 0)) ||
-                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
+                if (ImGui::Button("OK", ImVec2(Ui::Px(120.0f), 0)) ||
+                    Arcane::Editor::EditorActions::Get().Pressed("ui.cancel") || Arcane::Editor::EditorActions::Get().Pressed("ui.confirm"))
                 {
                     m_modalErrors.Pop();
                     ImGui::CloseCurrentPopup();
@@ -3542,7 +3624,7 @@ namespace Arcane::Editor
                     : "'" + m_scene.DisplayName() + "' has unsaved changes.").c_str());
                 ImGui::Separator();
                 if (ImGui::Button(isLaunch ? "Save and Play" : "Save",
-                                  ImVec2(isLaunch ? 140.f : 90.f, 0)))
+                                  ImVec2(Ui::Px(isLaunch ? 140.f : 90.f), 0)))
                 {
                     // Stop Play BEFORE saving, in both branches below. Stop
                     // restores the pre-Play snapshot, which IS the authored
@@ -3586,15 +3668,15 @@ namespace Arcane::Editor
                 if (!isLaunch)
                 {
                     ImGui::SameLine();
-                    if (ImGui::Button("Discard", ImVec2(90, 0)))
+                    if (ImGui::Button("Discard", ImVec2(Ui::Px(90.0f), 0)))
                     {
                         ls.sceneAction = m_scene.TakePending();
                         ImGui::CloseCurrentPopup();
                     }
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(90, 0)) ||
-                    ImGui::IsKeyPressed(ImGuiKey_Escape))
+                if (ImGui::Button("Cancel", ImVec2(Ui::Px(90.0f), 0)) ||
+                    Arcane::Editor::EditorActions::Get().Pressed("ui.cancel"))
                 {
                     m_scene.ClearPending();
                     ImGui::CloseCurrentPopup();
@@ -3625,13 +3707,12 @@ namespace Arcane::Editor
                                           : 0;
         // The overlay's state, by reference (F4 plan 1 T8): the 2D | Persp
         // segments assign m_camera.mode exactly as Alt+J / Alt+G do (Resolve
-        // reads it next frame); the settings popup edits m_viewSettings, the
-        // orbit fov and the speed scalar in place, and the camera reads them
-        // per frame.
+        // reads it next frame); the settings popup writes the editor.viewport.*
+        // / editor.camera.* / editor.gizmo.* cvars (settings S6-29), which the
+        // camera and the grids read from the next published snapshot.
         Arcane::Editor::ViewportToolState tools{
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
-            m_camera.mode, m_viewSettings,
-            m_camera.orbit.fovYDeg, m_camera.speedScalar,
+            m_camera.mode,
         };
         // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
         // SDPG_Foreground for its widget): drawn by the panel right after the
@@ -3654,8 +3735,9 @@ namespace Arcane::Editor
                     Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
                 Arcane::Editor::ImGuiGizmoSink sink(list, origin);
                 Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             m_viewSettings.gizmoSize, m_gizmoHovered,
+                             Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
                              m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                             Arcane::Editor::MakeGizmoTuning(),
                              m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
@@ -3691,7 +3773,7 @@ namespace Arcane::Editor
         //
         // ============ THE PICK IS DEFERRED, NOT SYNCHRONOUS ============
         // The readback is a graph COPY node whose value lands
-        // kSwapchainFramesInFlight frames later, so the click is ARMED here
+        // FramesInFlight() frames later, so the click is ARMED here
         // and the resulting Select/Toggle/Clear is APPLIED here on a LATER
         // frame. That latency is inherent to reading a GPU-rasterised id back
         // without stalling the device, and it is the only pick path there is.
@@ -3742,17 +3824,19 @@ namespace Arcane::Editor
                 }
             }
             // Bounded, and loud if it ever fires: the readback is
-            // guaranteed to drain after kSwapchainFramesInFlight RENDERED
+            // guaranteed to drain after FramesInFlight() RENDERED
             // frames, and ArmGraphViewportFrame keeps the chain declared
             // for exactly as long as this is Busy() -- so the only way to
             // exhaust the budget is a very long run of Skipped frames (a
             // collapsed Viewport panel). Giving up beats a state machine
             // that never returns to Idle.
-            if (m_deferredPick.TickAndMaybeAbandon())
+            const std::uint32_t pickBudget =
+                Arcane::Settings<Arcane::Editor::EditorViewportSettings>().pickMaxFramesInFlight;
+            if (m_deferredPick.TickAndMaybeAbandon(pickBudget))
             {
                 ARC_WARN("Viewport pick: no readback landed within {} frames -- the click was "
                          "dropped (was the Viewport panel collapsed?)",
-                         Arcane::Editor::DeferredPick::kMaxFramesInFlight);
+                         pickBudget);
             }
         }
 
@@ -3839,6 +3923,8 @@ namespace Arcane::Editor
                 m_inspectorWindows.grids.erase(id);
             }
             m_inspectorFocusedSource = res.focusedSource;
+            if (InspectorSaveTarget(m_inspectorFocusedSource) != nullptr)
+                Arcane::Editor::EditorActions::Get().MarkContextActive(Arcane::Editor::ActionContext::Document);
             // The document's save GESTURE (RequestSave), never the raw Save:
             // the material's save-with-errors confirm must hold here too. A
             // REFUSED save is reported (a deferred confirm is not a refusal).
@@ -4039,8 +4125,8 @@ namespace Arcane::Editor
             // presented, so nothing downstream should count one. The sleep
             // matches RuntimeFrame::RenderGraph's: without a presented frame
             // there is no pacing wait, and a zero-sized window would
-            // otherwise spin.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // otherwise spin. Both read app.window.minimizedSleepMs.
+            std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return false;
         }
 

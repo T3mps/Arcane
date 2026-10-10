@@ -356,7 +356,7 @@ TEST_CASE("MakeCreateDialogState: an instance request from a material picks the 
         CreateAssetRequest mesh{ CreateAssetKind::Material, {} };
         mesh.prefillSurface = static_cast<int>(Arcane::MaterialSurface::Mesh);
         CHECK(MakeCreateDialogState(mesh, model, dir).surface == MaterialSurfaceComboIndex(Arcane::MaterialSurface::Mesh));
-        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model, dir).surface == kMaterialSurfaceDefaultIndex);
+        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model, dir).surface == MaterialSurfaceDefaultIndex());
     }
 }
 

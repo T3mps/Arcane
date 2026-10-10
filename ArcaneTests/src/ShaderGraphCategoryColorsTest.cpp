@@ -3,6 +3,7 @@
 // Output sink must stand out. Pure: no ImGui context.
 #include <catch2/catch_test_macros.hpp>
 #include <Documents/ShaderGraphCategoryColors.hpp>
+#include <Settings/GraphThemeSettings.hpp>
 #include <Widgets/EditorTheme.hpp>
 #include <cmath>
 
@@ -10,7 +11,11 @@ using namespace Arcane::Editor;
 
 TEST_CASE("Graph category colours: every category reads its title text at >= 4.5:1 and Output stands out", "[editor][graphcanvas][nodepage]")
 {
-    constexpr ImVec4 kTitleText(0.808f, 0.808f, 0.831f, 1.0f);   // kNodeTitleText, ShaderEditorDocument.cpp (#cecfd4)
+    // The default title text and bands (GraphThemeSettings{} /
+    // GraphCategoryThemeSettings{}): the theme page's contrast report checks a
+    // re-toned or preset set the same way.
+    const ImVec4 kTitleText = ToDisplayColor(GraphThemeSettings{}.nodeTitleText);   // #cecfd4
+    CHECK(ImGui::ColorConvertFloat4ToU32(kTitleText) == IM_COL32(0xce, 0xce, 0xd4, 0xff));
     using C = Arcane::GraphNodeCategory;
     const C all[] = { C::Uncategorized, C::Input, C::Math, C::Vector, C::Procedural, C::Output, C::Utility };
     for (const C c : all)
@@ -26,9 +31,11 @@ TEST_CASE("Graph category colours: every category reads its title text at >= 4.5
         INFO(Arcane::GraphNodeCategoryName(c));
         CHECK_FALSE((o.x == out.x && o.y == out.y && o.z == out.z));
     }
-    // Uncategorized is today's kNodeTitleColor (#232326), so an unset row looks unchanged.
+    // Uncategorized is today's node title band (#232326), so an unset row looks unchanged.
     CHECK(GraphCategoryHeaderColor(C::Uncategorized).x == 0x23 / 255.0f);
     CHECK(GraphCategoryHeaderColor(C::Uncategorized).z == 0x26 / 255.0f);
+    CHECK(ImGui::ColorConvertFloat4ToU32(ToDisplayColor(GraphCategoryThemeSettings{}.uncategorized))
+          == IM_COL32(0x23, 0x23, 0x26, 0xff));
 }
 
 TEST_CASE("Theme::ContrastRatio is the WCAG ratio: 21 for black on white, 1 for a colour on itself, symmetric", "[editor][theme]")

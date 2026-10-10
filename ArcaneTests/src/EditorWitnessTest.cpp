@@ -11,7 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // E9: the fixture's node id
 #include <Arcane/Material/MaterialGraph.hpp>
-#include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7)
+#include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7): editor.layout.factory.* defaults
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -467,7 +467,7 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* insp = FindRow(rows, WindowDockId(ini, "Inspector"));
     REQUIRE(insp != nullptr);
     CHECK(insp->parent == root.id);
-    CHECK(std::abs(insp->w - Arcane::Editor::kDefaultInspectorWidthPx) <= kTol);
+    CHECK(std::abs(insp->w - Arcane::Editor::LayoutFactorySettings{}.inspectorWidth) <= kTol);
     // Left of it: the block split top/bottom.
     const DockRow* leftBlock = nullptr;
     for (const DockRow& r : rows) if (r.parent == root.id && r.id != insp->id) leftBlock = &r;
@@ -478,7 +478,7 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* viewport = FindRow(rows, WindowDockId(ini, "Viewport"));
     REQUIRE(outliner != nullptr);
     REQUIRE(viewport != nullptr);
-    CHECK(std::abs(outliner->w - Arcane::Editor::kDefaultOutlinerWidthPx) <= kTol);
+    CHECK(std::abs(outliner->w - Arcane::Editor::LayoutFactorySettings{}.outlinerWidth) <= kTol);
     CHECK(viewport->central);
     CHECK(outliner->parent == viewport->parent);
     const DockRow* top = FindRow(rows, outliner->parent);
@@ -499,14 +499,14 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     const DockRow* band = FindRow(rows, browser->parent);
     REQUIRE(band != nullptr);
     CHECK(band->parent == leftBlock->id);                       // under the Outliner, left of the Inspector
-    CHECK(std::abs(band->h - Arcane::Editor::kDefaultBottomBandPx) <= kTol);
+    CHECK(std::abs(band->h - Arcane::Editor::LayoutFactorySettings{}.bottomBand) <= kTol);
     // The band's browser | Inspector 2 split has no central node, so ImGui
     // re-divides it by the children's SizeRef RATIO on resize: the SizeRefs
     // must carry the user's 1920-scale proportion (1144 : 392), not a pixel
     // target taken at this 1280x720 build (integration residual 2a).
     const float bandShare = assetsInsp->w / (browser->w + assetsInsp->w);
     INFO("band SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
-    CHECK(std::abs(bandShare - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
+    CHECK(std::abs(bandShare - Arcane::Editor::DefaultAssetsInspectorBandFraction(Arcane::Editor::LayoutFactorySettings{})) <= 0.005f);
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);          // the seed IS this default
 }
@@ -606,7 +606,7 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     // default's band: the default's proportion, not a pixel target.
     const float share = assetsInsp->w / (browser->w + assetsInsp->w);
     INFO("SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
-    CHECK(std::abs(share - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
+    CHECK(std::abs(share - Arcane::Editor::DefaultAssetsInspectorBandFraction(Arcane::Editor::LayoutFactorySettings{})) <= 0.005f);
 }
 
 // E8: THE LATE-BOUND PREVIEW SEAM (node page + editor upgrades s3.2). A mesh
@@ -656,4 +656,85 @@ TEST_CASE("E10: a scripted launch with no project exits 2 and names the reason o
     CHECK(run.exitCode == 2);
     CHECK_FALSE(run.reportFound);
     CHECK(ReadAllBytes(run.stderrPath).find("no project selected") != std::string::npos);
+}
+
+TEST_CASE("E11: editor.settings.openAtBoot=both opens Editor Preferences and Project Settings through the real editor", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e11-settings-windows");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "30",
+                 "--report", inv.reportPath.generic_string(), "--dump-layout", dump.generic_string(),
+                 "--set", "editor.settings.openAtBoot=both", "--set", "editor.settings.openCategory=Engine" };
+    inv.hardCapMs = 120000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    CHECK(run.report.at("exitReason") == "frames-complete");
+    REQUIRE(std::filesystem::exists(dump));
+    const std::string ini = ReadAllBytes(dump);
+    INFO("dumped layout:\n" << ini);
+    CHECK(ini.find("[Window][Editor Preferences]") != std::string::npos);   // drawn: the menu's window exists
+    CHECK(ini.find("[Window][Project Settings]") != std::string::npos);
+}
+
+TEST_CASE("E12: a saved shortcut and a --set editor.keys.* reach a declared cvar at boot -- the editor declares its shortcut cvars before the early config rungs", "[witness][gpu]")
+{
+    // S4-GATE: HostBoot::ApplyEarlyConfigRungs layers the EditorUser rung (the
+    // Keyboard page's saved shortcuts) and the --set list before EditorApp
+    // exists. The registry layers a rung only onto cvars that already exist,
+    // so main() declares the editor.keys.* table first. Declared later, the
+    // --set below was refused as "unknown" (the RED run of this gate).
+    WitnessScratch scratch(StagedEditorDir(), "e12-shortcut-boot");
+    const std::filesystem::path lad = scratch.Dir() / "localappdata";
+    std::filesystem::create_directories(lad / "Arcane" / "Editor" / "Config");
+    {
+        std::ofstream out(lad / "Arcane" / "Editor" / "Config" / "editor.json", std::ios::binary);
+        out << R"({ "keys": { "edit.copy": "F" } })";
+    }
+    struct ScopedLocalAppData   // RunWitness's child inherits it: Paths' EditorUserDir = <LOCALAPPDATA>/Arcane/Editor
+    {
+        std::wstring saved;
+        bool had = false;
+        explicit ScopedLocalAppData(const std::filesystem::path& value)
+        {
+            if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA")) { saved = v; had = true; }
+            _wputenv_s(L"LOCALAPPDATA", value.wstring().c_str());
+        }
+        ~ScopedLocalAppData()
+        {
+            if (had)
+                _wputenv_s(L"LOCALAPPDATA", saved.c_str());
+            else   // originally unset: REMOVE it. An empty value is the CRT's removal form
+                _wputenv_s(L"LOCALAPPDATA", L"");   // (_putenv_s docs): it drops the name from the CRT and the OS environment
+        }
+    } scopedLad(lad);
+
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "5",
+                 "--report", inv.reportPath.generic_string(), "--set", "editor.keys.edit.cut=Ctrl+Shift+X" };
+    inv.hardCapMs = 120000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    const std::string out = ReadAllBytes(run.stdoutPath) + ReadAllBytes(run.stderrPath);
+    CHECK(out.find("unknown 'editor.keys.") == std::string::npos);    // the --set landed on a declared cvar
+    CHECK(out.find("unknown-key 'keys.") == std::string::npos);       // so did the saved editor.json key
+    // The positive marker (S6-GATE): the report echoes the --set with the
+    // value the registry PUBLISHED, so a reworded warning cannot turn this
+    // test vacuous.
+    REQUIRE(run.report.contains("cvarSets"));
+    REQUIRE(run.report["cvarSets"].size() == 1);
+    CHECK(run.report["cvarSets"][0].at("name") == "editor.keys.edit.cut");
+    CHECK(run.report["cvarSets"][0].at("value") == "Ctrl+Shift+X");
 }

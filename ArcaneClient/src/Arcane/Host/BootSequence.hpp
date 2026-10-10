@@ -46,7 +46,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::string member on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API BootStageDetail
+    class ARC_API BootStageDetail
     {
     public:
         void        Set(std::string text);
@@ -107,7 +107,7 @@ namespace Arcane
     // (see BootSequence.cpp) instead of the main thread blocking silently
     // for the whole overlap -- implementations must stay cheap and must not
     // block, the same expectation as a window message pump.
-    struct ARCANE_API IBootPresenter
+    struct ARC_API IBootPresenter
     {
         virtual ~IBootPresenter() = default;
         virtual bool Present(const BootProgress& progress) = 0;
@@ -124,7 +124,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::unique_ptr<Impl> on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API BootSequence
+    class ARC_API BootSequence
     {
     public:
         explicit BootSequence(std::vector<BootStage> stages);

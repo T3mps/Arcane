@@ -35,51 +35,27 @@ using SocketType = int;
 #define CloseSocket close
 #endif
 
+#include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <string>
+
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Net/NetSettings.hpp>
 
 namespace Arcane
 {
     // ============================================================================
-    // Configuration Constants
+    // Configuration
     // ============================================================================
 
+    // The payload / buffer / timeout / connection-cap / backlog tunables are
+    // net.* settings (NetSettings.hpp, settings arc S6-11); keepalive timing is
+    // net.keepalive.*. Only the capacity hint below stays a compile-time value.
     namespace ServerConfig
     {
-        constexpr size_t MAX_PAYLOAD_SIZE = 8192;
-        constexpr size_t MAX_RECEIVE_BUFFER_SIZE = 65536;
+        ARC_CONSTANT("capacity hint: a stack recv buffer bound (Aphelyon ServiceClient/ServiceEndpoint/TcpServerBase)")
         constexpr size_t RECV_CHUNK_SIZE = 4096;
-        constexpr int RECV_TIMEOUT_MS = 100;
-
-        // Audit H-V4-10 (2026-06-03): connection caps for the public-facing
-        // TcpServerBase accept loop. One thread per connection at ~1.1MB
-        // stack means 1000 slow-loris IPs cost ~1.1GB + 1000 OS threads.
-        // Defaults sized for our DAU target with headroom; trip an error
-        // log when the cap fires so ops can spot the attack signature.
-        //
-        // Audit M-V5-6 networking (2026-06-04): these are now the fallback
-        // defaults. The runtime values live in TcpServerBase's
-        // m_maxConnPerIp / m_maxConnTotal, populated from
-        // protocol.json's settings.max_connections_per_ip /
-        // settings.max_connections_total at startup (see each consuming
-        // service's main.cpp). A protocol.json without the keys uses these
-        // constants -- no behavior change at default values.
-        //
-        // Topology assumptions baked into the per-IP cap:
-        //   - No reverse proxy or TLS-terminating front (Nginx, Envoy,
-        //     CloudFront). All 100% of accept calls would otherwise
-        //     return the proxy's IP and the cap would immediately fire
-        //     for every user.
-        //   - No CDN edge in front of the TCP listener.
-        //   - No PROXY-protocol v1/v2 framing on the inbound connection.
-        // Upgrade path when a TLS-terminating front lands: parse
-        // PROXY-protocol v1 in the accept handshake BEFORE perIpCount
-        // is incremented; the `clientIP` variable in TcpServerBase
-        // becomes the X-Forwarded-For / PROXY-protocol src address,
-        // not the immediate peer. Deferred until the launch topology
-        // is chosen (per spec 2026-06-04, Scope 1 out-of-scope notes).
-        constexpr size_t MAX_CONNECTIONS_TOTAL  = 2048;
-        constexpr size_t MAX_CONNECTIONS_PER_IP = 16;
     }
 
     // ============================================================================
@@ -110,12 +86,12 @@ namespace Arcane
     //
     // Parameters: probe after `idleSeconds` of no traffic, retry every
     // `intervalSeconds`, drop the connection after `probeCount` failures.
-    // Defaults sized for "tolerate flaky mobile/wifi (occasional 30s
-    // dropouts are normal) but catch a true dead peer within ~5min."
+    // The one-argument overload below reads them from net.keepalive.*
+    // (NetKeepaliveSettings); this explicit form stays for tests.
     inline void EnableTcpKeepAlive(SocketType socket,
-                                   int idleSeconds     = 120,
-                                   int intervalSeconds = 30,
-                                   int probeCount      = 8)
+                                   int idleSeconds,
+                                   int intervalSeconds,
+                                   int probeCount)
     {
 #ifdef _WIN32
         BOOL on = TRUE;
@@ -146,6 +122,12 @@ namespace Arcane
         setsockopt(socket, IPPROTO_TCP, TCP_KEEPCNT, &probeCount, sizeof(probeCount));
     #endif
 #endif
+    }
+
+    inline void EnableTcpKeepAlive(SocketType socket)
+    {
+        const NetKeepaliveSettings& ka = ::Arcane::Settings<NetKeepaliveSettings>();
+        EnableTcpKeepAlive(socket, ka.idleSeconds, ka.intervalSeconds, ka.probeCount);
     }
 
     inline bool IsSocketTimeoutError()
@@ -232,7 +214,7 @@ namespace Arcane
             return INVALID_SOCK;
         }
 
-        if (listen(sock, 10) < 0)
+        if (listen(sock, ::Arcane::Settings<NetSettings>().listenBacklog) < 0)
         {
             CloseSocket(sock);
             return INVALID_SOCK;
@@ -429,32 +411,50 @@ namespace Arcane
 
     // Parse one LENGTH:BODY\n frame from buffer without modifying it.
     // On success, body contains the raw payload and consumed is the total bytes to discard.
+    // maxBodySize: the caller's bound, normally net.maxReceiveBufferBytes
+    // (Settings<NetSettings>().maxReceiveBufferBytes).
     inline LengthFrameResult ExtractLengthFramed(const std::string& buffer,
-                                                  size_t maxBodySize = ServerConfig::MAX_RECEIVE_BUFFER_SIZE)
+                                                  size_t maxBodySize)
     {
         LengthFrameResult r;
         if (buffer.empty()) { r.needMoreData = true; return r; }
 
-        size_t colonPos = buffer.find(':');
-        if (colonPos == std::string::npos)
+        // Fuzz finding (fuzz/regressions/protocol, 2026-10-07): the LENGTH
+        // prefix is 1..kMaxLengthDigits ASCII digits, decided from the
+        // prefix bytes ALONE. The colon used to be searched for in the whole
+        // buffer while "no colon yet" only waited up to 10 bytes, so a
+        // prefix like "000000000000065:" was accepted when it arrived in
+        // one recv() and refused when TCP split it -- the framing verdict
+        // depended on segmentation. std::stoull also let a leading space,
+        // '+' or '-' through (M-V4-5 only closed trailing junk). Now: any
+        // non-digit before the colon, an empty prefix, or more than
+        // kMaxLengthDigits digits is an error however the bytes arrive.
+        ARC_CONSTANT("wire protocol: a LENGTH prefix is at most 10 ASCII digits; an 11th digit is a framing error however the bytes arrive")
+        constexpr size_t kMaxLengthDigits = 10;
+        const size_t scan = (std::min)(buffer.size(), kMaxLengthDigits + 1);   // parenthesized: windows.h min()
+        size_t colonPos = 0;
+        while (colonPos < scan && buffer[colonPos] >= '0' && buffer[colonPos] <= '9')
+            ++colonPos;
+        if (colonPos == buffer.size())
         {
-            r.needMoreData = (buffer.size() <= 10);
+            // Digits only so far: wait for the colon, unless the prefix is
+            // already longer than any legal length.
+            r.needMoreData = (colonPos <= kMaxLengthDigits);
             r.error        = !r.needMoreData;
             return r;
         }
+        if (colonPos == 0 || colonPos > kMaxLengthDigits || buffer[colonPos] != ':')
+        {
+            r.error = true;
+            return r;
+        }
 
-        // Audit M-V4-5 networking (2026-06-03): std::stoull is a partial
-        // parse -- it would happily return 12 from "12abc" and leave "abc"
-        // unconsumed. With the colon search above, that means a prefix
-        // like "12abc:body" would be treated as length 12 with no error.
-        // Capture the parsed-char count via the `pos` out-param and
-        // require it to consume the entire pre-colon substring so the
-        // length prefix must be all-numeric.
+        // Audit M-V4-5 networking (2026-06-03): the length prefix must be
+        // all-numeric -- guaranteed by the digit scan above; from_chars over
+        // exactly those digits cannot partial-parse.
         size_t expectedLen = 0;
-        std::size_t parsedChars = 0;
-        try { expectedLen = std::stoull(buffer.substr(0, colonPos), &parsedChars); }
-        catch (...) { r.error = true; return r; }
-        if (parsedChars != colonPos) { r.error = true; return r; }
+        const auto [lenEnd, lenEc] = std::from_chars(buffer.data(), buffer.data() + colonPos, expectedLen);
+        if (lenEc != std::errc{} || lenEnd != buffer.data() + colonPos) { r.error = true; return r; }
 
         if (expectedLen > maxBodySize) { r.error = true; return r; }
 

@@ -749,7 +749,7 @@ TEST_CASE("arcbuild::SolutionPath: a discovered workspace file wins over the <na
     const ProjectLayout project = AphelyonProject();
     // An ABSOLUTE discovery is used as-is. "D:/..." is absolute only on
     // Windows; POSIX spells an absolute path with a leading '/'.
-#if ARCANE_PLATFORM_WINDOWS
+#if ARC_PLATFORM_WINDOWS
     const fs::path discovered = "D:/dev/starworks/Gacha/Game/Other.sln";
 #else
     const fs::path discovered = "/dev/starworks/Gacha/Game/Other.sln";

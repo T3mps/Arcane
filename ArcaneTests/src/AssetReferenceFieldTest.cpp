@@ -8,12 +8,14 @@
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetReferenceField.hpp"
 #include "Panels/InspectorView.hpp"     // DrawReflectedComponent, ReflectedComponentArgs, InspectorServices
-#include "Widgets/EditorWidgets.hpp"    // FieldGrid
+#include "Widgets/EditorWidgets.hpp"    // FieldGrid, TableRowHeight
+#include "Widgets/UiMetrics.hpp"        // Ui::ScopedMetrics
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -68,6 +70,7 @@ namespace
         AssetPanelModel model;
         Arcane::Guid gBrick, gWall, gSubWall;
         std::unordered_map<Arcane::Guid, Arcane::MaterialSurface> surfaces;
+        AssetPanelProviders providers;   // kept: a case that edits `surfaces` rebuilds the model with them
         AssetRefServices services;
 
         explicit RefFixture(const char* name) : root(fs::temp_directory_path() / name)
@@ -91,7 +94,7 @@ namespace
             REQUIRE(gWall.IsValid());
             REQUIRE(gSubWall.IsValid());
             surfaces[gWall] = Arcane::MaterialSurface::Mesh;   // sub/wall stays unknown (nullopt)
-            AssetPanelProviders p;
+            AssetPanelProviders& p = providers;
             p.surfaceFor = [this](const Arcane::Guid& g) -> std::optional<Arcane::MaterialSurface>
             {
                 const auto it = surfaces.find(g);
@@ -377,6 +380,69 @@ TEST_CASE("AssetReferenceValue: the chevron opens the picker below the cell; a c
     h.Frames(3);
     REQUIRE(h.editableEdits.size() == 2);
     CHECK(h.editableEdits[1].op == AssetRefEdit::Op::Clear);
+}
+
+TEST_CASE("AssetReferenceValue: a pill-bearing picker row pitches TableRowHeight() + ItemSpacing.y at a non-default editor.ui.tableRowHeight", "[editor][assetref][ui-style]")
+{
+    // Settings S6-28 fix round 1: RowWithThumb draws at TableRowHeight(), so
+    // the picker's pill-row cursor jump must read it too; a literal 24 made
+    // the next row overlap the pill row at any other pitch.
+    using Arcane::CVarRegistry;
+    struct Revert
+    {
+        ~Revert()
+        {
+            CVarRegistry& reg = CVarRegistry::Get();
+            reg.RevertLayer(Arcane::SetBy::EditorUser);
+            reg.PublishImmediate();
+        }
+    } revert;
+    {
+        CVarRegistry& reg = CVarRegistry::Get();
+        REQUIRE(reg.Set(reg.Find("editor.ui.tableRowHeight"), Arcane::CVarValue::Float32(30.0f), Arcane::SetBy::EditorUser,
+                        "editor", Arcane::CVarContext::Editor) == Arcane::SetResult::Applied);
+        reg.PublishImmediate();
+    }
+    const Ui::ScopedMetrics at1(Ui::Metrics{});
+    REQUIRE(TableRowHeight() == 30.0f);
+
+    RefFixture fx("arcane_assetref_pill_pitch_test");
+    fx.surfaces[fx.gSubWall] = Arcane::MaterialSurface::Fullscreen;   // sub/wall carries a pill too, and wall follows it
+    fx.model.MarkAllDirty();
+    REQUIRE(fx.model.RebuildIfDirty(&fx.project->Registry(), fx.providers));
+    REQUIRE(fx.model.Find(fx.gSubWall)->surface.has_value());
+
+    CellHarness h(fx);
+    h.editable.kindFilter = -1;   // brick (no pill), sub/wall (pill), wall (pill), in that order
+    h.Frames(2);
+    h.activate = CellHarness::CellItem("Material", ICON_LC_CHEVRON_DOWN "##pick");
+    h.Frames(3);
+    ImGuiWindow* popup = PopupWindow(CellHarness::CellItem("Material", "##assetpick"));
+    REQUIRE(popup != nullptr);
+    REQUIRE(popup->Active);
+
+    // A row's Selectable rect, read back through nav: focus the row, draw a
+    // frame, and NavProcessItem stores its rect in NavRectRel (imgui.cpp).
+    const auto rowTop = [&](const char* mountPath)
+    {
+        const ImGuiID id = ImHashStr("##row", 0, ImHashStr(mountPath, 0, popup->ID));
+        ImGui::SetFocusID(id, popup);
+        h.Frames(1);
+        REQUIRE(ImGui::GetCurrentContext()->NavId == id);
+        const ImRect r = popup->NavRectRel[0];
+        CHECK(r.GetHeight() == TableRowHeight());   // the row draws at the setting
+        return r.Min.y;
+    };
+    const float brick = rowTop("game://brick.png");
+    const float subWall = rowTop("game://sub/wall.arcmat");
+    const float wall = rowTop("game://wall.arcmat");
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    INFO("pill-less pitch " << (subWall - brick) << ", pill pitch " << (wall - subWall));
+    CHECK(wall - subWall == TableRowHeight() + spacing);   // the pill row's jump (the old literal gave 24 + spacing)
+    // A pill-less row pitches TableRowHeight() alone: RowWithThumb parks the
+    // cursor at its own bottom. Pinned so the pre-existing ItemSpacing.y
+    // difference between the two stays visible (fix round 1 report).
+    CHECK(subWall - brick == TableRowHeight());
 }
 
 TEST_CASE("AssetReferenceValue: clear returns Clear once; a read-only cell submits neither chevron nor clear", "[editor][assetref]")

@@ -264,7 +264,7 @@ TEST_CASE("severance: SpriteMaterialCache binds with a NULL device and publishes
           "[render][severance]")
 {
     ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
 
     ShaderSourceProvider provider;
     provider.AddRoot("data/shaders");
@@ -317,7 +317,7 @@ TEST_CASE("severance: PostChainCache publishes a PostChainDesc with a NULL devic
           "[render][severance]")
 {
     ShaderCompiler compiler;
-    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    REQUIRE(compiler.InitializeWithDebounce(/*debounceSeconds=*/0.0));
 
     ShaderSourceProvider provider;
     provider.AddRoot("data/shaders");

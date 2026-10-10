@@ -34,13 +34,13 @@ namespace Arcane
 
     // Decode a PNG (or any stb-supported image) from disk into tight RGBA8.
     // False on missing/corrupt file (WARN-logged, never ERROR). Pure CPU.
-    ARCANE_CORE_API bool LoadPngRgba(const std::filesystem::path& path,
+    ARC_CORE_API bool LoadPngRgba(const std::filesystem::path& path,
                                 std::uint32_t& width, std::uint32_t& height,
                                 std::vector<unsigned char>& rgba);
 
     // Encode tight RGBA8 to a PNG on disk. Parent directories are created.
     // False on IO failure (WARN-logged). Pure CPU.
-    ARCANE_CORE_API bool WritePngRgba(const std::filesystem::path& path,
+    ARC_CORE_API bool WritePngRgba(const std::filesystem::path& path,
                                  std::uint32_t width, std::uint32_t height,
                                  const unsigned char* rgba);
 }

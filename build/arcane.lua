@@ -259,9 +259,10 @@ function arcane_game_module(name)
         links   { "ArcaneCore", "ArcaneClient" }
 
         defines {
-            "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARCANE_GAME_MODULE needs no define
-            -- adopt ArcaneClient.dll's single GImGui. __declspec is PE/COFF-only;
-            -- ELF has no import decoration (default visibility exports it).
+            "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARC_GAME_MODULE needs no define
+            "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3)
+            -- adopt ArcaneClient's single GImGui. __declspec is PE/COFF-only;
+            -- ELF and Mach-O have no import decoration (default visibility exports it).
             "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
@@ -300,16 +301,16 @@ function arcane_game_module(name)
         -- Per-config: runtime + NDEBUG must match ArcaneClient.dll's flavor (the vulkan.hpp
         -- dispatcher layout + inline header layouts are NDEBUG-conditional).
         filter "configurations:Debug"
-            defines { "ARCANE_DEBUG" }
+            defines { "ARC_BUILD_DEBUG" }
             runtime "Debug"
             symbols "on"
         filter "configurations:Release"
-            defines { "ARCANE_RELEASE", "NDEBUG" }
+            defines { "ARC_BUILD_RELEASE", "NDEBUG" }
             runtime "Release"
             optimize "speed"
             symbols "on"
         filter "configurations:Dist"
-            defines { "ARCANE_DIST", "NDEBUG" }
+            defines { "ARC_BUILD_DIST", "NDEBUG" }
             runtime "Release"
             optimize "speed"
             symbols "off"
@@ -344,7 +345,7 @@ end
 --     carries: /utf-8, /arch:AVX2 (ArcaneCore.dll is built AVX2 workspace-wide,
 --     so the process already requires it -- matching keeps inline header
 --     codegen identical across the boundary), and per-config runtime +
---     ARCANE_DEBUG / ARCANE_RELEASE+NDEBUG / ARCANE_DIST+NDEBUG so inline
+--     ARC_BUILD_DEBUG / ARC_BUILD_RELEASE+NDEBUG / ARC_BUILD_DIST+NDEBUG so inline
 --     header layouts under #ifndef NDEBUG agree with the DLL's.
 -- It ends with `filter {}` so the caller's following lines are unfiltered.
 --
@@ -381,6 +382,10 @@ function arcane_core_consumer()
         ARCANE_TP .. "/Mosaic/include",
     }
 
+    -- The cvar module a consumer's ARC_CVAR/ARC_COMMAND declarations name
+    -- (Arcane/Config/CVarModule.hpp; settings spec s4.3): its own project.
+    defines { "ARC_MODULE_NAME=%{prj.name}" }
+
     libdirs { ARCANE_BIN .. "/ArcaneCore" }
     links   { "ArcaneCore" }
 
@@ -395,13 +400,13 @@ function arcane_core_consumer()
         buildoptions { "-mavx2", "-mfma" }
 
     filter "configurations:Debug"
-        defines { "ARCANE_DEBUG" }
+        defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
     filter "configurations:Release"
-        defines { "ARCANE_RELEASE", "NDEBUG" }
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
     filter "configurations:Dist"
-        defines { "ARCANE_DIST", "NDEBUG" }
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
     filter {}
 end

@@ -40,7 +40,7 @@ namespace Arcane
 {
     class Assets;
 
-    class ARCANE_API SpriteCache
+    class ARC_API SpriteCache
     {
     public:
         // Guid-shaped, matching SpriteMaterialCache/PostChainCache exactly, so

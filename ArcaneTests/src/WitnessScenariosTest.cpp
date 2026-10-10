@@ -286,8 +286,8 @@ TEST_CASE("W3: a reference missing at EVERY level reports the ordered search spa
 TEST_CASE("W4: a dynamic body authored in physics.arcscene falls under the runtime host",
           "[witness][gpu]")
 {
-    // The whole chain, observed from OUTSIDE: the v5 scene with Collider2D
-    // fixtures loads, Runtime installs PhysicsSystem and mints the world,
+    // The whole chain, observed from OUTSIDE: the v5 scene with Arcane::Collider2D
+    // fixtures loads, Runtime installs Arcane::PhysicsSystem2D and mints the world,
     // fixedUpdate steps it 60 times at 1/60 s (--headless pins the sim dt),
     // PASS 4 writes the pose back, propagation composes it, the sprite
     // draws where the body ended. Geometry (physics.arcscene, +Y down,
@@ -338,6 +338,31 @@ TEST_CASE("W4: a dynamic body authored in physics.arcscene falls under the runti
     REQUIRE(resting.contains("entity"));
     REQUIRE(resting["entity"].is_string());
     CHECK(resting["entity"].get<std::string>() == "Crate");       // and landed here
+}
+
+TEST_CASE("W7: a game system sees the Crate land (a dynamic-vs-static contact event) and tints it",
+          "[witness][gpu]")
+{
+    // physics.arcscene: the Crate carries ReferenceProject::TintOnContact (red).
+    // TintOnContactSystem (Update phase) reads PhysicsWorld2D::FrameEvents() and sets the
+    // tint on the Arcane::ContactBegin2D that names it. The Crate rests centred at pixel
+    // (640, 405) after 60 frames (W4's resting pick). Authored tint is orange
+    // (0.9, 0.6, 0.2); after the event it is red (1, 0, 0). Asserting red-dominant
+    // with a crushed green keeps the check robust to the post chain's tone mapping.
+    WitnessScratch scratch(StagedRuntimeDir(), "w5-physics-event-tint");
+    WitnessRun run = RunWitness(HostInv(scratch,
+        { "--scene", "4f6a1c2e-7b3d-4e8a-9c1f-2d5b6e7a8f90", "--probe", "rgba@640,405" }));
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report["exitReason"].get<std::string>() == "frames-complete");
+    REQUIRE(run.report["probes"].size() == 1);
+    const nlohmann::json& v = run.report["probes"][0]["value"];
+    const int r = v["r"].get<int>(), g = v["g"].get<int>();
+    INFO("rgba " << r << "," << g << "," << v["b"].get<int>());
+    CHECK(r > 2 * g);          // orange (0.9 vs 0.6) fails this; red passes
+    CHECK(g < 100);
 }
 
 TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports the "

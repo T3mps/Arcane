@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane
 {
@@ -20,30 +21,52 @@ namespace Arcane
         // Pin arrays live at namespace scope so the info table's spans stay
         // valid for the process lifetime. PIN ORDER IS APPEND-ONLY (header
         // contract): GraphLink pins index into these arrays.
+        ARC_CONSTANT("file format: the empty pin table (span'd with count 0); saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kNoPins[]      = { { "", 0 } };   // span'd with count 0
+        ARC_CONSTANT("file format: the Output node's pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kOutputIn[]    = { { "color", 4 } };
+        ARC_CONSTANT("file format: a 1-lane output pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kOut1[]        = { { "out", 1 } };
+        ARC_CONSTANT("file format: a 2-lane output pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kOut2[]        = { { "out", 2 } };
+        ARC_CONSTANT("file format: a 4-lane output pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kOut4[]        = { { "out", 4 } };
+        ARC_CONSTANT("file format: a dynamic-lane output pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kOutDyn[]      = { { "out", 0 } };
+        ARC_CONSTANT("file format: the uv input pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kUvIn[]        = { { "uv", 2 } };
+        ARC_CONSTANT("file format: the texture sample's output pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kSampleOut[]   = { { "rgba", 4 }, { "a", 1 } };
+        ARC_CONSTANT("file format: a binary op's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kBinaryIn[]    = { { "a", 0 }, { "b", 0 } };
+        ARC_CONSTANT("file format: Lerp's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kLerpIn[]      = { { "a", 0 }, { "b", 0 }, { "t", 0 } };
+        ARC_CONSTANT("file format: a unary op's input pin; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kUnaryIn[]     = { { "x", 0 } };
+        ARC_CONSTANT("file format: Split's output pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kSplitOut[]    = { { "r", 1 }, { "g", 1 }, { "b", 1 }, { "a", 1 } };
+        ARC_CONSTANT("file format: Combine's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kCombineIn[]   = { { "r", 1 }, { "g", 1 }, { "b", 1 }, { "a", 1 } };
+        ARC_CONSTANT("file format: Clamp's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kClampIn[]     = { { "x", 0 }, { "min", 0 }, { "max", 0 } };
+        ARC_CONSTANT("file format: SmoothStep's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kSmoothIn[]    = { { "edge0", 0 }, { "edge1", 0 }, { "x", 0 } };
+        ARC_CONSTANT("file format: Step's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kStepIn[]      = { { "edge", 0 }, { "x", 0 } };
+        ARC_CONSTANT("file format: Remap's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kRemapIn[]     = { { "x", 0 }, { "inRange", 2 }, { "outRange", 2 } };
+        ARC_CONSTANT("file format: Tiling's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kTileIn[]      = { { "uv", 2 }, { "tiling", 2 }, { "offset", 2 } };
+        ARC_CONSTANT("file format: Noise's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kNoiseIn[]     = { { "uv", 2 }, { "scale", 1 } };
+        ARC_CONSTANT("file format: Panner's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kPannerIn[]    = { { "uv", 2 }, { "speed", 2 } };
         // bias/scale are FIXED width 1 beside a DYNAMIC x -- the SimpleNoise
         // row's { uv, scale } shape (fixed operand next to the value pin), so
         // an affine pair collapses into one node carrying two pin literals.
+        ARC_CONSTANT("file format: BiasScale's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kBiasScaleIn[] = { { "x", 0 }, { "bias", 1 }, { "scale", 1 } };
+        ARC_CONSTANT("file format: the vertex output's input pins; saved material graphs address pins by index and lane count")
         constexpr GraphPinDesc kVertexOutIn[] = { { "posOffset", 2 }, { "uvOffset", 2 },
                                                   { "color", 4 } };
 
@@ -1464,7 +1487,9 @@ namespace Arcane
         // MaterialGraphTest's truth table is the tripwire.
         using K = GraphPinNeutralKind;
         constexpr GraphPinNeutral kZero{};
+        ARC_CONSTANT("shader contract: the neutral of an unwired 1.0 pin; saved graphs with unwired pins compile against it")
         constexpr GraphPinNeutral kOne{ K::Constant, 1, { 1.0f, 0.0f, 0.0f, 0.0f }, "1.0" };
+        ARC_CONSTANT("shader contract: the neutral of an unwired uv pin; saved graphs with unwired pins compile against it")
         constexpr GraphPinNeutral kUv{ K::Expression, 2, {}, "v.uv" };
         switch (n.type)
         {

@@ -69,7 +69,7 @@ namespace Arcane
         nlohmann::json sourceJson = nlohmann::json::object();
     };
 
-    class ARCANE_API InputActionAsset
+    class ARC_API InputActionAsset
     {
     public:
         Guid id;

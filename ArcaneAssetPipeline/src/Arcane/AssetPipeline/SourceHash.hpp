@@ -30,12 +30,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <Arcane/Core/Constant.hpp>
 
 namespace Arcane::AssetPipeline
 {
     [[nodiscard]] inline std::uint64_t HashSourceBytes(std::span<const std::byte> bytes) noexcept
     {
         std::uint64_t h = 14695981039346656037ULL;
+        ARC_CONSTANT("math identity: the FNV-1a 64-bit prime (source hashes land on disk)")
         constexpr std::uint64_t prime = 1099511628211ULL;
         for (std::byte b : bytes)
         {

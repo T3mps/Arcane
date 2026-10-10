@@ -1,4 +1,5 @@
 #include <Arcane/Render/PickEmit.hpp>
+#include <Arcane/Core/Constant.hpp>
 
 #include <Arcane/Render/SpriteGeometry.hpp>   // SpriteWorldQuad -- THE sprite corner rule
 #include <Arcane/Render/VisibilitySystem.hpp>
@@ -30,6 +31,7 @@ namespace Arcane
 
     void CollectPickables(Astra::Registry& registry, std::vector<PickDrawable>& out)
     {
+        namespace Phys = ::Manifold2D::Physics;
         // ---- PASS 1: sprites -------------------------------------------------
         // The DRAWN set, through the DRAWN corner rule. The view filter is
         // RenderSystems.hpp's own (a Hidden sprite is not drawn, so it is not
@@ -67,15 +69,15 @@ namespace Arcane
         }
 
         // ---- PASS 2: physics colliders ---------------------------------------
-        // One PickDrawable per Fixture on every live tracked body, iterated via
-        // an archetype-stable View<Collider2D, PhysicsBodyRef> -- NOT the
-        // PhysicsResource::entityToBody unordered_map. The drawable index IS the
+        // One PickDrawable per Arcane::Fixture2D on every live tracked body, iterated via
+        // an archetype-stable View<Arcane::Collider2D, Arcane::PhysicsBodyRef2D> -- NOT the
+        // Arcane::PhysicsWorld2D::entityToBody unordered_map. The drawable index IS the
         // hit-proxy id (id = index+1), so the order must be DETERMINISTIC: the
-        // same rule PhysicsSystem's create pass follows ("order must not depend on
+        // same rule Arcane::PhysicsSystem2D's create pass follows ("order must not depend on
         // unordered_map hash/bucket layout"). The body pose is read from the live
-        // PhysicsWorld via PhysicsBodyRef::handle so the silhouette registers with
+        // PhysicsWorld via Arcane::PhysicsBodyRef2D::handle so the silhouette registers with
         // the physics-debug overlay; fixture dims + local offset are scaled by
-        // PhysicsBodyRef::appliedScale (the scale the create pass baked into the
+        // Arcane::PhysicsBodyRef2D::appliedScale (the scale the create pass baked into the
         // body's fixtures, mirroring MakeScaledShape / MakeFixtureDef) so a scaled
         // body picks at its drawn size. Polygon fixtures carry no authored vertex
         // array (see PhysicsComponents.hpp) -- v1 approximates with the fixture's
@@ -83,12 +85,12 @@ namespace Arcane
         //
         // No physics world on this registry means no colliders -- NOT an early
         // return: the meshes below are collected regardless.
-        if (PhysicsResource* res = registry.GetResource<PhysicsResource>(); res && res->world)
+        if (Arcane::PhysicsWorld2D* res = registry.GetResource<Arcane::PhysicsWorld2D>(); res && Arcane::Detail::Physics2D::Access::Solver(*res))
         {
-            Phys::PhysicsWorld& world = *res->world;
+            Phys::PhysicsWorld& world = *Arcane::Detail::Physics2D::Access::Solver(*res);
 
-            auto colliderView = registry.CreateView<const Collider2D, const PhysicsBodyRef>();
-            colliderView.ForEach([&](Astra::Entity entity, const Collider2D& col, const PhysicsBodyRef& ref)
+            auto colliderView = registry.CreateView<const Arcane::Collider2D, const Arcane::PhysicsBodyRef2D>();
+            colliderView.ForEach([&](Astra::Entity entity, const Arcane::Collider2D& col, const Arcane::PhysicsBodyRef2D& ref)
             {
                 if (ref.handle == Phys::kInvalidBody) return;
                 if (!world.IsValid(ref.handle))       return;
@@ -106,16 +108,16 @@ namespace Arcane
 
                 // Scale the create pass baked into this body's fixtures (identity
                 // unless the entity carries an authored Transform.scale). Mirrors
-                // PhysicsSystem::MakeScaledShape: per-axis for Aabb, |sx| length /
+                // Arcane::PhysicsSystem2D::MakeScaledShape: per-axis for Aabb, |sx| length /
                 // |sy| radius for Capsule, max(|sx|,|sy|) for Circle.
                 const glm::vec2 scale = ref.appliedScale;
                 const float     sx    = std::abs(scale.x);
                 const float     sy    = std::abs(scale.y);
                 const float     sMax  = std::max(sx, sy);
 
-                for (const Fixture& fx : col.fixtures)
+                for (const Arcane::Fixture2D& fx : col.fixtures)
                 {
-                    // Fixture local offset scales per-axis with the body's baked scale
+                    // Arcane::Fixture2D local offset scales per-axis with the body's baked scale
                     // (signed, matching MakeFixtureDef), then rotates into world space.
                     const glm::vec2 localScaled(fx.localPos.x * scale.x, fx.localPos.y * scale.y);
                     const glm::vec2 worldCenter  = bodyPos + RotateVec(localScaled, bodyAngle);
@@ -130,20 +132,20 @@ namespace Arcane
 
                     switch (fx.kind)
                     {
-                    case Phys::ShapeKind::Circle:
+                    case Arcane::ShapeKind2D::Circle:
                         d.kind   = PickDrawable::Kind::Circle;
                         d.radius = fx.radius * sMax;
                         break;
-                    case Phys::ShapeKind::Capsule:
+                    case Arcane::ShapeKind2D::Capsule:
                         d.kind    = PickDrawable::Kind::Capsule;
                         d.halfLen = fx.halfLen * sx;
                         d.radius  = fx.radius  * sy;
                         break;
-                    case Phys::ShapeKind::Aabb:
+                    case Arcane::ShapeKind2D::Aabb:
                         d.kind        = PickDrawable::Kind::Box;
                         d.halfExtents = glm::vec2(fx.halfW * sx, fx.halfH * sy);
                         break;
-                    case Phys::ShapeKind::Polygon:
+                    case Arcane::ShapeKind2D::Polygon:
                         // v1: no vertex data available -- fall back to the fixture's
                         // halfW/halfH box fields (scaled) as its AABB stand-in.
                         d.kind        = PickDrawable::Kind::Box;
@@ -250,6 +252,7 @@ namespace Arcane
         // around the bound, (-,-) (+,-) (+,+) (-,+), so the same two-triangle
         // index pattern a sprite Quad's TL,TR,BR,BL corners use serves both.
         // Winding is irrelevant: the 2D id pipeline culls nothing.
+        ARC_CONSTANT("math: unit-quad corner signs")
         static const glm::vec2 kSigns[4] = {
             { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
 
