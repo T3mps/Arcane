@@ -234,14 +234,16 @@ TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
 
 TEST_CASE("a v6 scene with the old physics keys skips those components", "[scene][namespaces]")
 {
-    // N7: no loader alias table. The old keys are unknown names after the
-    // rename, so LoadJson warns and leaves the components off the entity.
+    // No loader alias table. Facade-era keys and the pre-facade
+    // Arcane::PhysicsSettings name are unknown after the flat rename, so
+    // LoadJson warns and leaves those components off the entity.
     nlohmann::json doc = nlohmann::json::parse(R"({
       "version": 6, "assets": [], "entities": [
         { "components": {
             "Arcane::Transform": { "position": [0.0, 1.0, 0.0], "rotation": [0,0,0,1], "scale": [1,1,1] },
-            "Arcane::Collider2D": { "fixtures": [ { "kind": "Aabb", "halfW": 0.5, "halfH": 0.5 } ] },
-            "Arcane::RigidBody2D": { "type": "Dynamic" },
+            "Arcane::Physics2D::Collider": { "fixtures": [ { "kind": "Aabb", "halfW": 0.5, "halfH": 0.5 } ] },
+            "Arcane::Physics2D::RigidBody": { "type": "Dynamic" },
+            "Arcane::Physics2D::SceneSettings": { "gravity": [0.0, -9.81] },
             "Arcane::PhysicsSettings": { "gravity": [0.0, -9.81] }
         }, "parent": -1 } ] })");
 
@@ -266,12 +268,17 @@ TEST_CASE("a v6 scene with the old physics keys skips those components", "[scene
     CHECK(transforms == 1);
 }
 
-TEST_CASE("a v5 scene with the old physics keys still flips Y and does not alias them", "[scene][namespaces]")
+TEST_CASE("a v5 scene with the flat physics keys flips Y and then loads", "[scene][namespaces]")
 {
+    // MigrateV5ToYUp rewrites the pre-facade strings, which are the live keys
+    // again. Arcane::PhysicsSettings is flipped and still does not load: the
+    // live settings component is Arcane::PhysicsSettings2D.
     nlohmann::json doc = nlohmann::json::parse(R"({
       "version": 5, "assets": [], "entities": [
         { "components": {
             "Arcane::Transform": { "position": [0.0, 2.0, 0.0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+            "Arcane::Collider2D": { "fixtures": [ { "localPos": [0.5, -0.25], "localAngle": 0.4, "kind": "Aabb" } ] },
+            "Arcane::RigidBody2D": { "velocity": [3.0, 4.0], "type": "Dynamic" },
             "Arcane::PhysicsSettings": { "gravity": [0.0, 9.81] }
         }, "parent": -1 } ] })");
 
@@ -286,9 +293,25 @@ TEST_CASE("a v5 scene with the old physics keys still flips Y and does not alias
         [&](Astra::Entity, Arcane::Transform& t) { y = t.position.y; });
     CHECK(y == Approx(-2.0f));
 
-    int settings = 0;
+    int colliders = 0, bodies = 0, settings = 0;
+    reg.CreateView<Arcane::Collider2D>().ForEach(
+        [&](Astra::Entity, Arcane::Collider2D& col)
+        {
+            ++colliders;
+            REQUIRE(col.fixtures.size() == 1);
+            CHECK(col.fixtures[0].localPos.y == Approx(0.25f));
+            CHECK(col.fixtures[0].localAngle == Approx(-0.4f));
+        });
+    reg.CreateView<Arcane::RigidBody2D>().ForEach(
+        [&](Astra::Entity, Arcane::RigidBody2D& body)
+        {
+            ++bodies;
+            CHECK(body.velocity.y == Approx(-4.0f));
+        });
     reg.CreateView<Arcane::PhysicsSettings2D>().ForEach(
         [&](Astra::Entity, Arcane::PhysicsSettings2D&) { ++settings; });
+    CHECK(colliders == 1);
+    CHECK(bodies == 1);
     CHECK(settings == 0);
 }
 

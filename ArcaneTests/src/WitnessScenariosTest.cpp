@@ -308,7 +308,7 @@ TEST_CASE("W7: a game system sees the Crate land (a dynamic-vs-static contact ev
           "[witness][gpu]")
 {
     // physics.arcscene: the Crate carries ReferenceProject::TintOnContact (red).
-    // TintOnContactSystem (Update phase) reads Physics2D::FrameEvents() and sets the
+    // TintOnContactSystem (Update phase) reads PhysicsWorld2D::FrameEvents() and sets the
     // tint on the Arcane::ContactBegin2D that names it. The Crate rests centred at pixel
     // (640, 405) after 60 frames (W4's resting pick). Authored tint is orange
     // (0.9, 0.6, 0.2); after the event it is red (1, 0, 0). Asserting red-dominant
