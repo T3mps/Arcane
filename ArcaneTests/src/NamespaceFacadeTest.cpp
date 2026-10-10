@@ -12,7 +12,12 @@
 
 #include <Astra/Astra.hpp>
 
+#include <cstdio>
+#include <filesystem>
+#include <string>
 #include <type_traits>
+
+#include "Helpers/ReferenceProjectDir.hpp"
 
 namespace
 {
@@ -130,4 +135,28 @@ TEST_CASE("Physics2D game-facing types", "[namespaces]")
             Arcane::Physics2D::RigidBody,
             Arcane::Physics2D::Collider,
             Arcane::Physics2D::BodyRef>>);
+}
+
+// SA4: the names that must not exist (PhysicsWorld, Body, BodyHandle, Phys,
+// the old flat physics types, and a game-side read of World::world) are one
+// translation unit each. scripts/namespace-compile-fail.ps1 compiles the
+// control and expects each forbidden TU to fail.
+TEST_CASE("forbidden namespace spellings fail to compile", "[namespaces]")
+{
+    const auto script = Arcane::Test::FindReferenceProjectDir().parent_path()
+        / "scripts" / "namespace-compile-fail.ps1";
+    REQUIRE(std::filesystem::exists(script));
+
+    const std::string command =
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script.string() + "\"";
+    FILE* pipe = _popen(command.c_str(), "r");
+    REQUIRE(pipe != nullptr);
+
+    std::string output;
+    char buf[4096];
+    while (std::fgets(buf, static_cast<int>(sizeof(buf)), pipe) != nullptr)
+        output += buf;
+    const int code = _pclose(pipe);
+    INFO(output);
+    CHECK(code == 0);
 }

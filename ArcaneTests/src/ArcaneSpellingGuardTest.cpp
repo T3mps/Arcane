@@ -62,10 +62,11 @@ namespace
     // strips string literals, preprocessor directives (+ continuations) and
     // ARC_INTERNAL fences. CommentsOnly still parses string literals (so a
     // "//" inside one is not read as a comment) but keeps their contents.
-    std::vector<Hit> Scan(const std::string& where, const std::string& text, ScanMode mode)
+    std::vector<Hit> Scan(const std::string& where, const std::string& text, ScanMode mode,
+                          const char* pattern = R"((\bAstra::|\bASTRA_[A-Z_]+|\bManifold2D\b|\bMosaic::))")
     {
         const bool decl = mode == ScanMode::PublicDeclarations;
-        static const std::regex library(R"((\bAstra::|\bASTRA_[A-Z_]+|\bManifold2D\b|\bMosaic::))");
+        const std::regex library(pattern);
         std::vector<Hit> hits;
         std::istringstream in(text);
         std::string raw;
@@ -222,5 +223,28 @@ TEST_CASE("guard: the 16 game-facing engine headers spell Arcane:: outside comme
         auto h = Scan(rel, Slurp(path), ScanMode::PublicDeclarations);
         hits.insert(hits.end(), h.begin(), h.end());
     }
+    Report(hits);
+}
+
+// Namespace-facades spec s6 / SA6. Comments stripped, string literals kept,
+// whole token. Phys:: must not match Physics::. Detail:: is engine-internal.
+TEST_CASE("facade: game sources and class templates spell only Arcane names", "[facade]")
+{
+    constexpr const char* kTokens = R"((\bAstra::|\bManifold2D::|\bPhys::|\bMosaic::|\bDetail::))";
+    const auto root = Arcane::Test::FindReferenceProjectDir().parent_path();
+    std::vector<Hit> hits;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             Arcane::Test::FindReferenceProjectDir() / "Source"))
+    {
+        const auto ext = entry.path().extension();
+        if (ext != ".hpp" && ext != ".cpp") continue;
+        auto found = Scan(entry.path().generic_string(), Slurp(entry.path()),
+                          ScanMode::CommentsOnly, kTokens);
+        hits.insert(hits.end(), found.begin(), found.end());
+    }
+    const auto templates = root / "ArcaneEditor" / "src" / "Project" / "ClassTemplates.cpp";
+    REQUIRE(std::filesystem::exists(templates));
+    auto found = Scan(templates.generic_string(), Slurp(templates), ScanMode::CommentsOnly, kTokens);
+    hits.insert(hits.end(), found.begin(), found.end());
     Report(hits);
 }
