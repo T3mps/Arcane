@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-09-f5-unified-world-pipeline-design.md`. This plan implements section 8.1 and every ruling that lands in plan 1 (sections 3.1–3.4, 3.7, 4.1–4.4, 7.1). Where this plan and the spec disagree, the spec wins; stop and report.
 
-**Revision:** rev 4, 2026-10-10. Grok review GX1–GX5, on top of rev 3.1. The cache and debug-draw records move into `SceneCacheRecords.hpp` so `MeshCache`, `MeshMaterialCache`, `SpriteCache`, and `PhysicsDebugDraw` preprocess without `Ecs.hpp` or `Registry.hpp`. `PickEmit.cpp` also drops `PhysicsComponents.hpp` and `SceneResources.hpp`. The overlay pass reads the bound packet (2D grid, 3D grid, physics debug, gizmo) through its own `b0`/`t0`/`s0` layout and a `TextureView::TEXTURE` depth SRV. The host-gate scanner strips comments and matches whole words. The editor selection loop writes `packet.selectedIds` and the outline reads that field. PL1, PL2, the camera type, the ImGui snapshot, and `RendererHasTextures` stay as the earlier rounds closed them.
+**Revision:** rev 4.1 (Task 9 DrawGrid2D call fixed after the Codex verify), 2026-10-10. Grok review GX1–GX5, on top of rev 3.1. The cache and debug-draw records move into `SceneCacheRecords.hpp` so `MeshCache`, `MeshMaterialCache`, `SpriteCache`, and `PhysicsDebugDraw` preprocess without `Ecs.hpp` or `Registry.hpp`. `PickEmit.cpp` also drops `PhysicsComponents.hpp` and `SceneResources.hpp`. The overlay pass reads the bound packet (2D grid, 3D grid, physics debug, gizmo) through its own `b0`/`t0`/`s0` layout and a `TextureView::TEXTURE` depth SRV. The host-gate scanner strips comments and matches whole words. The editor selection loop writes `packet.selectedIds` and the outline reads that field. PL1, PL2, the camera type, the ImGui snapshot, and `RendererHasTextures` stay as the earlier rounds closed them.
 
 ## Global Constraints
 
@@ -3478,7 +3478,7 @@ if (line.thickness > 0.0f)
     out.push_back(line);
 ```
 
-Axis lines use `style.axisX` and `style.axisY` and the same tags. Delete `b.SetLayer`. `Editor::DrawGrid2D` calls `EmitGrid2D`, then for each stored line calls `b.SetLayer(0, 0)` once and `b.Line(WorldToScreen(line.a), WorldToScreen(line.b), line.thickness * PixelsPerMetre(view), line.color)`. That keeps `ViewportGridTest.cpp` on screen pixels.
+Axis lines use `style.axisX` and `style.axisY` and the same tags. Delete `b.SetLayer`. `Editor::DrawGrid2D` calls `EmitGrid2D`, then for each stored line calls `b.SetLayer(0, 0)` once and `b.Line(glm::vec2(view.WorldToScreen(line.a)), glm::vec2(view.WorldToScreen(line.b)), line.thickness * PixelsPerMetre(view), line.color)` (`WorldToScreen` is the `ViewTransform` member, `ViewTransform.hpp:67`, and returns `glm::vec3`; `Batcher2D::Line` takes `glm::vec2`, the same conversion `ViewportGrid.cpp:169-172` makes, including its `Finite2` skip of a non-finite endpoint). That keeps `ViewportGridTest.cpp` on screen pixels.
 
 `PixelsPerMetre` moves to `Arcane::` as well. `Editor::PixelsPerMetre` forwards to it.
 
