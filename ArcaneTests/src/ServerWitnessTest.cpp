@@ -104,7 +104,7 @@ TEST_CASE("S4: ArcaneServer's stdin admin console answers get/set/list/explain a
              "bogus.cvar.name\n";
     }
     WitnessInvocation inv;
-    inv.exePath = scratch.Dir() / "ArcaneServer.exe"; inv.workingDir = scratch.Dir();
+    inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneServer"); inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "server-report.json";
     inv.args = { "--project", "ReferenceProject", "--frames", "60", "--report", inv.reportPath.generic_string() };
     inv.stdinPath = script;

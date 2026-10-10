@@ -3,6 +3,7 @@
 // Spawn is desk/automation-verified only (it starts a windowed editor).
 #include <catch2/catch_test_macros.hpp>
 #include <Settings/EditorRestart.hpp>
+#include <Arcane/Platform/Platform.hpp>   // ExecutableFileName: .exe on Windows only
 
 #include <filesystem>
 
@@ -13,5 +14,5 @@ TEST_CASE("EditorRestart::Args reopens the same project and nothing else", "[set
     CHECK(args[0] == L"--project");
     CHECK(std::filesystem::path(args[1]) == std::filesystem::path("D:/work/My Game"));
     CHECK(Arcane::Editor::EditorRestart::Args({}).empty());
-    CHECK(Arcane::Editor::EditorRestart::CurrentExe().filename() == "ArcaneTests.exe");
+    CHECK(Arcane::Editor::EditorRestart::CurrentExe().filename() == Arcane::Platform::ExecutableFileName("ArcaneTests"));
 }

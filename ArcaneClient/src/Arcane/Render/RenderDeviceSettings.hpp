@@ -72,7 +72,7 @@ namespace Arcane
 
     struct RenderSettings
     {
-        GraphicsBackend backend      = GraphicsBackend::D3D12;
+        GraphicsBackend backend      = kDefaultGraphicsBackend;   // D3D12 on Windows, Vulkan elsewhere (HostConfig's parsed default)
         bool            vsync        = true;
         std::int32_t    adapter      = -1;   // -1 = auto (D3D12: high-performance index 0; Vulkan: first discrete, else [0])
         bool            allowTearing = false;

@@ -663,7 +663,7 @@ TEST_CASE("E11: editor.settings.openAtBoot=both opens Editor Preferences and Pro
 {
     WitnessScratch scratch(StagedEditorDir(), "e11-settings-windows");
     WitnessInvocation inv;
-    inv.exePath = scratch.Dir() / "ArcaneEditor.exe";
+    inv.exePath = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneEditor");
     inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
     const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";

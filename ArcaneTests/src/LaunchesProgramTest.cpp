@@ -132,6 +132,11 @@ namespace
     {
         const fs::path exe = dir / name;
         Write(exe, "MZ");
+#if !defined(_WIN32)
+        // POSIX launchability is the executable bit (Toolchain's
+        // IsRunnableCandidate); Windows needs only a regular file.
+        fs::permissions(exe, fs::perms::owner_exec, fs::perm_options::add);
+#endif
         return exe;
     }
 

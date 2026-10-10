@@ -10,6 +10,19 @@
 #include <string>
 #include <vector>
 using namespace Arcane;
+
+namespace
+{
+    // POSIX: an override must carry an executable bit to be a launchable
+    // program (Toolchain's IsRunnableCandidate); Windows needs a regular file.
+    void MakeLaunchable([[maybe_unused]] const std::filesystem::path& fake)
+    {
+#if !defined(_WIN32)
+        std::filesystem::permissions(fake, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+#endif
+    }
+}
+
 TEST_CASE("sweep: an explicit build.premakePath wins over discovery; empty discovers", "[sweep][build]")
 {
     const Test::ScopedCodeLayer codeLayer;   // reverts the Code rung + publishes even when a REQUIRE fails mid-case
@@ -18,6 +31,7 @@ TEST_CASE("sweep: an explicit build.premakePath wins over discovery; empty disco
     Test::RequireDefault("build.premakePath", CVarValue::String(""));
     const auto fake = std::filesystem::temp_directory_path() / "fake-premake5.exe";
     std::ofstream(fake) << "x";
+    MakeLaunchable(fake);
     CVarRegistry& reg = CVarRegistry::Get();
     reg.Set(reg.Find("build.premakePath"), CVarValue::String(fake.string()), SetBy::Code);
     reg.PublishImmediate();
@@ -45,6 +59,7 @@ TEST_CASE("sweep: build.msbuildPath/makePath/ninjaPath/ideExecutable win over di
 
     const auto fake = std::filesystem::temp_directory_path() / "fake-build-tool.exe";
     std::ofstream(fake) << "x";
+    MakeLaunchable(fake);
     CVarRegistry& reg = CVarRegistry::Get();
     for (const char* name : { "build.msbuildPath", "build.makePath", "build.ninjaPath", "build.ideExecutable" })
         if (devRows || std::string_view(name) == "build.msbuildPath")
@@ -72,6 +87,8 @@ TEST_CASE("sweep: a changed build.ideExecutable is what the next IDE launch reso
     const auto second = std::filesystem::temp_directory_path() / "fake-devenv-b.exe";
     std::ofstream(first) << "x";
     std::ofstream(second) << "x";
+    MakeLaunchable(first);
+    MakeLaunchable(second);
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("build.ideExecutable");
     reg.Set(h, CVarValue::String(first.string()), SetBy::Code);

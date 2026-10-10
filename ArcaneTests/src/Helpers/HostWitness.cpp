@@ -467,14 +467,17 @@ namespace Arcane::Test
 
         const int outFd = ::open(stdoutPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         const int errFd = ::open(stderrPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-        const int nullFd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+        // stdin: the invocation's script file when it names one (read-only, as
+        // the Windows branch opens it), else /dev/null.
+        const std::string stdinFile = inv.stdinPath.empty() ? std::string("/dev/null") : inv.stdinPath.string();
+        const int nullFd = ::open(stdinFile.c_str(), O_RDONLY | O_CLOEXEC);
 
         const auto start = std::chrono::steady_clock::now();
         const pid_t pid = ::fork();
         if (pid == 0)
         {
             // dup2 clears FD_CLOEXEC on the target descriptor.
-            if (nullFd >= 0) ::dup2(nullFd, STDIN_FILENO);   // the child never reads stdin
+            if (nullFd >= 0) ::dup2(nullFd, STDIN_FILENO);   // the script file, else /dev/null
             if (outFd >= 0)  ::dup2(outFd, STDOUT_FILENO);
             if (errFd >= 0)  ::dup2(errFd, STDERR_FILENO);
             if (!cwd.empty() && ::chdir(cwd.c_str()) != 0)
