@@ -477,10 +477,12 @@ namespace Arcane
 
         // ---- contact lines (port of PhysicsDebug.lua lines 75-82) ----------
         //
-        // A magenta line links each begun pair's centers; a small disc at the
-        // midpoint makes the contact pop even when the two centers are close
-        // (the ForEachContact pull API exposes the pair, not the manifold point,
-        // so the midpoint is the best available "where" marker).
+        // A magenta line links each touching body-to-body contact's centers
+        // (pool-backed ForEachContact: every touching pair, ascending id,
+        // dynamic-vs-static included, and sensor / kinematic-static pool
+        // contacts too); a small disc at the midpoint makes the contact pop
+        // even when the two centers are close (the pull API exposes the pair,
+        // not the manifold point, so the midpoint is the best available "where").
         if (!opts.onlyBody && opts.contacts)
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)

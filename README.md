@@ -232,6 +232,16 @@ struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
 and is registered with one line in its `.cpp`:
 `ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
 
+A system reads 2D physics events from that same `Physics2D` resource.
+`StepEvents()` is the most recent physics step, `FrameEvents()` gathers
+every step since this frame began, and `ContactsOf(entity, out)` lists
+what that entity is touching right now, sleepers included. Each side
+carries the entity, its Identity GUID and the `Collider2D` fixture
+index. Keep the GUID when the identity has to outlive the frame; the
+entity handle is valid only in the frame it is read (a destroyed
+entity's event still carries the GUID). Spec:
+`docs/specs/2026-10-08-physics-2d-events-design.md`.
+
 - **Resources:** `Time` is present in every world. `GameInput` is present in every client world, and a server world has none. A system whose resource is missing is skipped with one log line.
 - **Code outside a system** (a module's `OnUpdate`/`OnDrawUI`) reads the same data with `Registry().GetResource<Arcane::Time>()`. There are no global accessors: one process can hold several worlds (edit, Play, an embedded server, tests).
 - **Templates:** the editor's *Create -> C++ Class* templates emit this shape.

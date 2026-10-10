@@ -211,7 +211,7 @@ the lower layer rather than worked around above it (Mosaic / Astra / Manifold2D 
 Arcane → editor). So **Astra** should expose the structure version and a build
 path that does not copy; the topological order, the dirty policy, and the
 definition of "spatial" are **Arcane's** and stay here. The Astra-first vendoring
-workflow applies: commit in the Astra repo, then `scripts\sync-astra.ps1`.
+workflow applies: commit in the Astra repo, then `scripts\sync-vendor.ps1 -Library Astra`.
 
 ---
 

@@ -62,7 +62,7 @@ namespace Arcane
     //                             orientationTickLen (m), manifoldNormalLength,
     //                             manifoldPointPx;
     //   DebugPhysicsDrawSettings  contacts (centre-to-centre line + midpoint
-    //                             disc per begun pair), aabbs (each body's tight
+    //                             disc per touching pool contact), aabbs (each body's tight
     //                             SlotAabb), velocities (awake dynamic bodies),
     //                             comMarkers (dynamic bodies), orientations
     //                             (local +x tick, so circles show rotation);
@@ -153,7 +153,7 @@ namespace Arcane
     //                    sleeping dynamics are drawn at 35% brightness.
     //
     // If opts.contacts, a magenta line connects the centers of each
-    // currently-begun contact pair (ForEachContact) with a midpoint disc.
+    // touching pool contact (ForEachContact) with a midpoint disc.
     // If opts.aabbs, a white outline is drawn for each body's tight AABB
     // (SlotAabb).
     //

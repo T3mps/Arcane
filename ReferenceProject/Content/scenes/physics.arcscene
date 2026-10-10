@@ -212,7 +212,15 @@
           ]
         },
         "Arcane::WorldBounds": null,
-        "Arcane::WorldTransform": null
+        "Arcane::WorldTransform": null,
+        "ReferenceProject::TintOnContact": {
+          "color": [
+            1.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
       },
       "parent": 0
     },

@@ -1,0 +1,10 @@
+Mosaic vendored from the standalone repo. DO NOT EDIT THESE FILES IN PLACE --
+change them in the Mosaic repo and re-run scripts\sync-vendor.ps1, or the next
+sync silently reverts your edit.
+
+source  : D:\dev\starworks\Mosaic
+commit  : 53078eef856e24d93d816c379b3f7e30d4678e58
+branch  : detached
+subject : fix(simd): the ARM Bits paths compile under Apple Clang (from Astra mac/port)
+synced  : 2026-10-08 18:04:30
+scope   : include/ + src/ + LICENSE

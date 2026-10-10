@@ -362,6 +362,12 @@ namespace Arcane
         Arcane::Log::InstallMosaicSink();
         Arcane::Assert::InstallMosaicHandler();
         InstallEngineSystems();
+        // The 2D physics per-frame event window clears at frame begin (spec
+        // 2026-10-08 s7.2): every reader (Update, OnUpdate, render) ran before.
+        m_impl->loop->SetFrameBeginHook([](Astra::Registry& reg)
+        {
+            if (PhysicsResource* res = reg.GetResource<PhysicsResource>()) res->BeginFrame();
+        });
         // ...and then whatever the LOADED module already registered, for THIS mode:
         // a Runtime built after the module loaded (the editor's embedded server
         // world, a second PIE world) must not come up system-less. Empty table when

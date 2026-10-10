@@ -128,7 +128,7 @@ Amendment (2026-10-02, IN-8 ruling): Time and GameInput are transient resources 
 
 ## 5. One system style: parameter systems with ordering
 
-### 5.1 Astra (committed in the Astra repo FIRST, then `sync-astra.ps1`)
+### 5.1 Astra (committed in the Astra repo FIRST, then `sync-vendor.ps1 -Library Astra`)
 
 - **Ordering traits on parameter-style systems.** A parameter-style functor may derive `SystemTraits<...>` containing ONLY ordering traits: `Before<...>`, `After<...>` and `AmbiguousWith<...>`. Astra's parameter wrapper (`FunctionSystemWrapper`, `SystemScheduler.hpp:1148-1160`) forwards these to the scheduler's ordering graph.
 - **Access traits are rejected.** `Reads<>`, `Writes<>`, `ReadsResources<>`, `WritesResources<>` or `Exclusive` in a parameter-style system's traits is a compile error (`static_assert`): the parameters already state access, and two sources would disagree.

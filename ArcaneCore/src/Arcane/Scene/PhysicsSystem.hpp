@@ -40,7 +40,8 @@
 //      into it (indexed by PhysicsWorld body slot). Skipped when paused
 //      (stepWorld=false). Consumed by DrawPhysicsDebug for the debug overlay.
 //
-//   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick.
+//   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick, then
+//      CaptureStep translates that step's events into StepEvents / FrameEvents.
 //
 //   4. WRITE-BACK -- STEPPING passes only -- for each tracked entity:
 //        world->Position(handle) -> Transform.position.xy  (z preserved)
@@ -66,6 +67,7 @@
 // Header-only: the simulation Registry is owned by the host module; systems
 // that touch it must instantiate in that module (see SystemSchedulers.hpp).
 
+#include <Manifold2D/Physics/Events.hpp>
 #include <Manifold2D/Physics/Fixture.hpp>
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
@@ -75,6 +77,8 @@
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/PhysicsEvents2D.hpp>
+#include <Arcane/Scene/PhysicsQuerySettings.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
@@ -85,6 +89,7 @@
 #include <cmath>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <Arcane/Core/Constant.hpp>
 
@@ -96,6 +101,45 @@ namespace Arcane
     // ARC_INTERNAL_BEGIN: the Manifold2D facade alias names the library once, here
     namespace Phys = Manifold2D::Physics;
     // ARC_INTERNAL_END
+
+    // One fixture a paused rescale replaced, with the Collider2D index it had
+    // while it was current. Generations accumulate until CaptureStep.
+    struct RetiredFixture2D
+    {
+        Phys::FixtureHandle handle{};
+        std::uint32_t       index = 0;
+    };
+
+    // One minted body (spec s7.3): who it is and its fixture handles in
+    // Collider2D order. Keyed by the packed Phys handle (index << 32 | generation),
+    // so a recycled slot (new generation) never resolves to a retired record.
+    struct BodyRecord2D
+    {
+        Arcane::Entity                     entity = Arcane::Entity::Invalid();
+        Guid                               guid{};
+        std::vector<Phys::FixtureHandle>   fixtures;
+        bool                               retired = false;   // removed; erased after the next capture
+        // Every handle a paused rescale has dropped since the last capture.
+        // Side() falls back to these so each generation's destroy-time End
+        // still translates. CaptureStep clears the list once that step is read.
+        std::vector<RetiredFixture2D>      retiredFixtures;
+    };
+
+    struct PhysicsEventBuffers2D
+    {
+        std::vector<ContactBegin2D> contactBegin;
+        std::vector<ContactEnd2D>   contactEnd;
+        std::vector<ContactHit2D>   contactHit;
+        std::vector<SensorBegin2D>  sensorBegin;
+        std::vector<SensorEnd2D>    sensorEnd;
+        void Clear() noexcept { contactBegin.clear(); contactEnd.clear(); contactHit.clear(); sensorBegin.clear(); sensorEnd.clear(); }
+        [[nodiscard]] PhysicsEvents2D View() const noexcept { return { contactBegin, contactEnd, contactHit, sensorBegin, sensorEnd }; }
+    };
+
+    [[nodiscard]] constexpr std::uint64_t PackBody(Phys::BodyHandle h) noexcept
+    {
+        return (static_cast<std::uint64_t>(h.index) << 32) | h.generation;
+    }
 
     // What a controller reads back from its body (input-seam spec s5.3).
     // Before the body is minted, velocity comes from RigidBody2D and
@@ -141,6 +185,38 @@ namespace Arcane
         // whole effect is "an untouched body is not visited"; this is how a test
         // says so.
         std::uint32_t reconciled = 0;
+
+        // ---- 2D physics events (spec 2026-10-08 s7) ---------------------------
+        std::unordered_map<std::uint64_t, BodyRecord2D> bodyRecords;
+        PhysicsEventBuffers2D stepEvents;     // replaced at the end of every stepping pass
+        PhysicsEventBuffers2D frameEvents;    // appended per step, cleared by BeginFrame (RunLoop hook)
+
+        ARC_CORE_API void RecordBody(Arcane::Entity entity, Guid guid, Phys::BodyHandle handle,
+                                     std::vector<Phys::FixtureHandle> fixtures);
+        ARC_CORE_API void RetireBody(Phys::BodyHandle handle);
+        // Translate the world's arrays for the step just taken, replace stepEvents,
+        // append frameEvents, clear retiredFixtures (the step's Ends have been
+        // read), then erase retired records.
+        ARC_CORE_API void CaptureStep();
+        // StepEvents() and FrameEvents() view this resource's own vectors
+        // (PhysicsEventBuffers2D::View). Copy what you need to keep.
+        //   StepEvents: valid until the next stepping pass replaces the step
+        //     buffer (CaptureStep). BeginFrame does not clear it, and a
+        //     zero-step frame leaves it.
+        //   FrameEvents: valid until BeginFrame clears it. The next stepping
+        //     pass appends, and that append may reallocate.
+        //   Either view dies when this PhysicsResource is destroyed: an
+        //     EnsurePhysics re-mint (gravity change), ResetPhysics (Play),
+        //     RestoreRegistry (Stop -- the resource is transient, so a restore
+        //     carries none), or ResetRegistry (scene open, and hot-reload
+        //     teardown).
+        ARC_CORE_API PhysicsEvents2D StepEvents() const;    // the most recent physics step
+        ARC_CORE_API PhysicsEvents2D FrameEvents() const;   // every step since this frame began
+        ARC_CORE_API void BeginFrame();                     // clears frameEvents (RunLoop frame hook)
+        // Touching solver contacts right now, sleepers included. A side whose
+        // body has no record is skipped (Side resolves fixtures, then retiredFixtures).
+        // Copies into out; the caller owns the vector. Not a view of resource storage.
+        ARC_CORE_API void ContactsOf(Arcane::Entity entity, std::vector<ContactPoint2D>& out) const;
 
         // ---- The game-facing commands (input-seam spec s5.3) -----------------
         // Exported: PhysicsWorld is linked inside ArcaneCore, so a game module
@@ -252,6 +328,9 @@ namespace Arcane
         fd.maskBits     = f.maskBits;
 
         fd.isSensor = f.isSensor;
+        fd.contactEvents = f.contactEvents;
+        fd.sensorEvents  = f.sensorEvents;
+        fd.hitEvents     = f.hitEvents;
 
         return fd;
     }
@@ -262,9 +341,13 @@ namespace Arcane
     // ones, so the body never transiently holds zero fixtures (sidesteps any
     // "body must keep >= 1 fixture" invariant). AddFixture / DropFixture recompute
     // body mass internally. The body is not moved, so pose is preserved.
+    // Returns the new handles in Collider2D order (R16). The caller parks the
+    // previous record handles in BodyRecord2D::retiredFixtures.
     // -------------------------------------------------------------------------
-    inline void RebuildScaledFixtures(Phys::PhysicsWorld& world, Phys::BodyHandle bh,
-                                      const Collider2D& col, glm::vec2 scale)
+    inline std::vector<Phys::FixtureHandle> RebuildScaledFixtures(Phys::PhysicsWorld& world,
+                                                                  Phys::BodyHandle bh,
+                                                                  const Collider2D& col,
+                                                                  glm::vec2 scale)
     {
         // Capture current fixtures BEFORE adding new ones (their indices are stable
         // until we mutate; the new fixtures append after them).
@@ -274,16 +357,19 @@ namespace Arcane
         for (std::uint32_t i = 0; i < n; ++i)
             old.push_back(world.GetBodyFixture(bh, i));
 
-        // Add authored fixtures at the new scaled dims.
+        // Add authored fixtures at the new scaled dims, Collider2D order.
+        std::vector<Phys::FixtureHandle> neu;
+        neu.reserve(col.fixtures.size());
         for (const Fixture& f : col.fixtures)
         {
             Phys::FixtureDef fd = MakeFixtureDef(f, scale);
-            world.AddFixture(bh, fd);
+            neu.push_back(world.AddFixture(bh, fd));
         }
 
         // Drop the pre-rebuild fixtures.
         for (Phys::FixtureHandle fh : old)
             world.DropFixture(fh);
+        return neu;
     }
 
     // -------------------------------------------------------------------------
@@ -320,6 +406,11 @@ namespace Arcane
 
             Phys::PhysicsWorld& world        = *res->world;
             auto&                  entityToBody  = res->entityToBody;
+
+            // Event policy (spec s7.4, s7.5): PhysicsSystem is the single owner. Both
+            // fixtures must opt into contact events; the hit threshold is Live.
+            world.SetContactEventsRequireBoth(true);
+            world.SetHitEventThreshold(static_cast<Phys::Real>(Settings<PhysicsEventSettings>().hitThreshold));
 
             // ------------------------------------------------------------------
             // PASS 1: DESTROY -- remove body rows for dead or un-physicised
@@ -360,7 +451,10 @@ namespace Arcane
                     auto it = entityToBody.find(e);
                     if (it == entityToBody.end()) continue;   // listed twice, or never minted
                     if (world.IsValid(it->second))
+                    {
+                        res->RetireBody(it->second);
                         world.RemoveBody(it->second);
+                    }
                     entityToBody.erase(it);
                     // Clear the ref too, never leave it at the dead {index, gen}:
                     // a FRESH world (gravity re-mint, Play->Stop restore, a
@@ -453,6 +547,9 @@ namespace Arcane
                     // used hardcoded defaults.  BodyDef now carries these fields
                     // and AddBody's auto-fixture reads them (see PhysicsWorld.cpp).
                     def.isSensor      = fx0.isSensor;
+                    def.contactEvents = fx0.contactEvents;
+                    def.sensorEvents  = fx0.sensorEvents;
+                    def.hitEvents     = fx0.hitEvents;
                     def.restitution   = static_cast<Phys::Real>(fx0.restitution);
                     def.friction      = static_cast<Phys::Real>(fx0.friction);
                     def.density       = static_cast<Phys::Real>(fx0.density);
@@ -472,6 +569,7 @@ namespace Arcane
                         def.mass = rb.mass;
 
                     Phys::BodyHandle handle = world.AddBody(def);
+                    std::vector<Phys::FixtureHandle> fxs{ world.GetBodyFixture(handle, 0) };
 
                     // ---- ADDITIONAL FIXTURES (fixtures[1..N-1]) ----
                     // AddBody already installed fixture[0] as the primary shape.
@@ -480,7 +578,7 @@ namespace Arcane
                     for (std::size_t i = 1; i < col.fixtures.size(); ++i)
                     {
                         Phys::FixtureDef fd = MakeFixtureDef(col.fixtures[i], glm::vec2(lt.scale));
-                        world.AddFixture(handle, fd);
+                        fxs.push_back(world.AddFixture(handle, fd));
                     }
 
                     // Authored Z rotation, applied on the live handle after every
@@ -506,6 +604,8 @@ namespace Arcane
                     ref.handle           = handle;
                     ref.appliedScale     = glm::vec2(lt.scale);   // 2D solver: scale.z is not a fixture dimension
                     entityToBody[entity] = handle;
+                    const Identity* identity = std::as_const(reg).GetComponent<Identity>(entity);
+                    res->RecordBody(entity, identity ? identity->id : Guid{}, handle, std::move(fxs));
                 });
             }
 
@@ -566,7 +666,10 @@ namespace Arcane
             // Skipped when paused (stepWorld=false): no narrowphase, no solve.
             // ------------------------------------------------------------------
             if (m_stepWorld)
+            {
                 world.Step(m_fixedDt);
+                res->CaptureStep();   // spec s7.2: replace StepEvents, append FrameEvents
+            }
 
             // ------------------------------------------------------------------
             // PASS 3.5: AUTHOR RECONCILE (paused only). When the sim is frozen the
@@ -602,8 +705,21 @@ namespace Arcane
                     const glm::vec2 planarScale(lt.scale);   // 2D solver: see the CREATE pass banner
                     if (planarScale != ref.appliedScale)
                     {
-                        RebuildScaledFixtures(world, ref.handle, col, planarScale);
+                        std::vector<Phys::FixtureHandle> neu =
+                            RebuildScaledFixtures(world, ref.handle, col, planarScale);
                         ref.appliedScale = planarScale;
+                        // R16: the record follows the new handles. Each dropped
+                        // generation is appended (handle + Collider2D index) and
+                        // stays resolvable until CaptureStep reads its End.
+                        if (const auto rec = res->bodyRecords.find(PackBody(ref.handle));
+                            rec != res->bodyRecords.end())
+                        {
+                            auto& record = rec->second;
+                            record.retiredFixtures.reserve(record.retiredFixtures.size() + record.fixtures.size());
+                            for (std::uint32_t i = 0; i < record.fixtures.size(); ++i)
+                                record.retiredFixtures.push_back(RetiredFixture2D{ record.fixtures[i], i });
+                            record.fixtures = std::move(neu);
+                        }
                     }
 
                     // POS/ROT: stateless author reconcile. Only the Z-axis turn

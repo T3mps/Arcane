@@ -1127,8 +1127,19 @@ namespace Arcane
     //     Project::ManifestFile().
     //   A v53 module was compiled against the old layouts; reject the pairing.
     //   ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    // v55 (2026-10-08, 2D physics events, spec docs/specs/2026-10-08-physics-2d-
+    //     events-design.md): Fixture gained contactEvents/sensorEvents/hitEvents
+    //     (an exported Core struct a module embeds through Collider2D -- its layout
+    //     moved). PhysicsResource gained bodyRecords/stepEvents/frameEvents and the
+    //     exported RecordBody/RetireBody/CaptureStep/StepEvents/FrameEvents/
+    //     BeginFrame/ContactsOf; new SDK header Scene/PhysicsEvents2D.hpp; new
+    //     settings block PhysicsEventSettings (physics.events); RunLoop gained the
+    //     frame-begin hook member (Runtime.hpp includes RunLoop.hpp). The vendored
+    //     Manifold2D moved to <M2D_EVENTS> (PhysicsResource holds its world).
+    //     A v54 module was compiled against the old layouts; reject the pairing.
+    //     ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr uint32_t kGamePluginABIVersion = 54;
+    inline constexpr uint32_t kGamePluginABIVersion = 55;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
