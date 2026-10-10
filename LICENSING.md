@@ -43,8 +43,9 @@ restrictions beyond MIT's.
 ## Older versions stay MIT
 
 Arcane was published under the MIT License before this license took effect.
-Every revision before the commit that added this license remains available
-under MIT; this license applies from that commit onward.
+Every revision before the commit that added this license (`5c120859`,
+2026-10-10) remains available under MIT; this license applies from that commit
+onward.
 
 ## Arcane's libraries are MIT
 
