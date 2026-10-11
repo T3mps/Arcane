@@ -5,7 +5,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>

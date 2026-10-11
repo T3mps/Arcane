@@ -6,7 +6,7 @@
 // new project skeleton on disk.
 
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Project/MountTable.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>

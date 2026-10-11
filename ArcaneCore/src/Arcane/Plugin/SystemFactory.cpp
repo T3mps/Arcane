@@ -23,18 +23,6 @@ namespace Arcane
         }
     }
 
-    const char* ToString(NetMode m) noexcept
-    {
-        switch (m)
-        {
-            case NetMode::Standalone:      return "Standalone";
-            case NetMode::DedicatedServer: return "DedicatedServer";
-            case NetMode::ListenServer:    return "ListenServer";
-            case NetMode::Client:          return "Client";
-        }
-        return "Unknown";
-    }
-
     void SystemFactoryTable::Add(SystemFactoryEntry e)
     {
         // THE OWNER KEY IS NOT OPTIONAL. `instantiate` is a std::function compiled

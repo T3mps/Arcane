@@ -2287,7 +2287,7 @@ local function test_plugin(name, defs)
         -- IMGUI_API=dllimport: adopt ArcaneClient.dll's single GImGui, exactly as
         -- arcane.lua does for a real module.
         defines (defs)
-        defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
+        defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "ARC_GAME_HAS_IMGUI" }
         filter "system:windows"
             systemversion "latest"
             buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }   -- /utf-8: spdlog/fmt via Log.hpp, as arcane.lua sets
@@ -2352,6 +2352,7 @@ project "ReferenceGameUnderTest"
     links { "ArcaneCore", "ArcaneClient" }
     defines {
         "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
+        "ARC_GAME_HAS_IMGUI",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }
@@ -2416,6 +2417,7 @@ project "TemplateSmokePlugin"
     links { "ArcaneCore", "ArcaneClient" }
     defines {
         "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
+        "ARC_GAME_HAS_IMGUI",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }

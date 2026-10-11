@@ -47,7 +47,9 @@
 
 #include <Arcane/Ecs.hpp>   // the Arcane:: names (aliases) this header's declarations spell
 
-#include <imgui.h>   // ABI v2: adopt the host's ImGui context/allocators (imported from ArcaneClient.dll)
+#if defined(ARC_GAME_HAS_IMGUI)
+#include <imgui.h>   // ABI v2: adopt the host's ImGui context/allocators
+#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -187,6 +189,7 @@ namespace Arcane
 
                 // ABI v2: adopt the host's ImGui context + allocators so OnDrawUI
                 // draws into the host's single GImGui. Null in a headless host.
+                #if defined(ARC_GAME_HAS_IMGUI)
                 if (c->imguiContext)
                 {
                     ImGui::SetCurrentContext(static_cast<ImGuiContext*>(c->imguiContext));
@@ -195,6 +198,7 @@ namespace Arcane
                         reinterpret_cast<ImGuiMemFreeFunc>(c->imguiFree),
                         c->imguiUserData);
                 }
+                #endif
 
                 // 2. This module's own component types: open the handle, drain the
                 // ARC_COMPONENT registrar into it. Every component added under

@@ -38,7 +38,7 @@
 
 #include <Arcane/AssetPipeline/CookSession.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 
 #include <Panels/AssetPanelModel.hpp>

@@ -15,20 +15,8 @@
 #include <Arcane/Crypto/CryptoSettings.hpp>
 #include <Arcane/Util/Logger.hpp>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/Platform/SecureRandom.hpp>
 
-#ifdef _WIN32
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
-    #include <windows.h>
-    #include <bcrypt.h>
-    #pragma comment(lib, "bcrypt.lib")
-#else
-    #include <fstream>
-#endif
 
 namespace Arcane
 {
@@ -59,7 +47,7 @@ namespace Arcane
         static std::string HashPassword(const std::string& password, int iterations = DefaultIterations())
         {
             // Generate random salt
-            std::vector<uint8_t> salt = GenerateRandomBytes(SALT_LENGTH);
+            std::vector<uint8_t> salt = SecureRandomBytes(SALT_LENGTH);
 
             // Derive key using PBKDF2
             std::vector<uint8_t> hash = PBKDF2_HMAC_SHA256(password, salt, iterations, HASH_LENGTH);
@@ -76,7 +64,7 @@ namespace Arcane
         {
             static const char hexChars[] = "0123456789abcdef";
 
-            std::vector<uint8_t> bytes = GenerateRandomBytes(byteCount);
+            std::vector<uint8_t> bytes = SecureRandomBytes(byteCount);
             std::string token;
             token.reserve(byteCount * 2);
 
@@ -148,53 +136,18 @@ namespace Arcane
             return result;
         }
 
-        // RNG hardening (E03-3; closes audit DEFER L-V5-2, 2026-06-03,
-        // V3-M8 multi-cycle carry-forward).
-        //
-        // Every non-empty draw goes through a once-per-process entropy
-        // self-test latch: the first crypto RNG use pulls two
-        // ENTROPY_SAMPLE_BYTES samples and throws if they look
-        // degenerate (all-zero, stuck at one byte value, or two
-        // "independent" draws colliding). A service with a broken
-        // generator fails loudly on its first secret instead of
-        // minting predictable tokens/salts. A count of 0 returns
-        // first and does not run the latch.
-        //
-        // Both branches are fail-closed. Neither falls back to
-        // std::random_device (historically deterministic on some
-        // libstdc++/MinGW builds). A zero-length public request returns
-        // an empty buffer BEFORE EnsureEntropySelfTest. The latch
-        // itself draws two samples through the platform RNG, so running
-        // it for a count of 0 would call the platform fill for a
-        // request that asked for nothing. On Windows a length-0
-        // BCryptGenRandom with a possibly-null buffer is also a
-        // spurious failure, and that used to take the fallback.
-        //
-        // POSIX: a missing /dev/urandom or a short read throws instead
-        // of silently leaving the buffer tail zeroed. That decision
-        // lives in ReadExactFromStream, which is unit-tested on
-        // Windows because this repo's CI cannot execute the POSIX
-        // branch. Runtime validation on real Linux/ARM is deferred to
-        // the Linux-port milestone.
-        //
-        // Windows: BCryptGenRandom takes a ULONG length, so the draw is
-        // filled in ULONG-sized chunks and a count above ULONG max is
-        // never truncated. Any !BCRYPT_SUCCESS logs CRITICAL and throws
-        // std::runtime_error. The chunking and fail-closed policy live
-        // in FillRandomBytesChunked. Both branches pass PlatformFill
-        // to it. A test seam, Crypto::Detail::ScopedPlatformFillOverride,
-        // can replace that fill. Dist builds define ARC_BUILD_DIST and
-        // compile the seam out.
-        // Audit ref: docs/superpowers/audits/2026-06-03-v5-followup-security.md
+        // The OS draw and once-per-process entropy latch live in Core's
+        // SecureRandomBytes. These compatibility helpers keep the crypto test
+        // seam and the password/token API on the same process-wide generator.
         ARC_CONSTANT("security: the RNG self-test entropy sample size")
         static constexpr size_t ENTROPY_SAMPLE_BYTES = 32;
 
 #if !defined(ARC_BUILD_DIST)
         // Test-only. Not thread-safe by contract: one process-wide slot,
         // no lock, restored by ScopedPlatformFillOverride's destructor.
-        // The slot is defined in ArcaneCore.dll (Crypto.cpp) so a caller
-        // in another module and Guid::Generate (inlined into this DLL)
-        // share it. Production draws use the platform RNG while the slot
+        // The slot is defined in ArcaneCore.dll (SecureRandom.cpp), so a caller
+        // in another module and Guid::Generate share it. Production draws
+        // use the platform RNG while the slot
         // is empty. Compiled out of Dist.
         class Detail
         {
@@ -228,11 +181,7 @@ namespace Arcane
 
         static std::vector<uint8_t> GenerateRandomBytes(size_t count)
         {
-            // The latch draws. A count of 0 must return before it runs.
-            if (count == 0)
-                return {};
-            EnsureEntropySelfTest();
-            return GenerateRandomBytesUnchecked(count);
+            return SecureRandomBytes(count);
         }
 
         // Platform-neutral core of the POSIX read path: pull exactly
@@ -242,12 +191,7 @@ namespace Arcane
         // fail-closed contract is unit-testable on Windows builds.
         static bool ReadExactFromStream(std::istream& source, uint8_t* out, size_t count)
         {
-            if (!source)
-                return false;
-            if (count == 0)
-                return true;
-            source.read(reinterpret_cast<char*>(out), static_cast<std::streamsize>(count));
-            return source.gcount() == static_cast<std::streamsize>(count);
+            return SecureRandomDetail::ReadExactFromStream(source, out, count);
         }
 
         // Platform-neutral chunked fill. `fill(dst, n)` writes exactly
@@ -322,9 +266,7 @@ namespace Arcane
         // enforcement is the EnsureEntropySelfTest latch below.
         static bool EntropySelfTest()
         {
-            const auto a = GenerateRandomBytesUnchecked(ENTROPY_SAMPLE_BYTES);
-            const auto b = GenerateRandomBytesUnchecked(ENTROPY_SAMPLE_BYTES);
-            return !EntropySamplesDegenerate(a, b);
+            return SecureRandomDetail::EntropySelfTest();
         }
 
         // Once-per-process startup latch: the first RNG use runs the
@@ -333,12 +275,7 @@ namespace Arcane
         // mint predictable secrets.
         static void EnsureEntropySelfTest()
         {
-            static const bool passed = EntropySelfTest();
-            if (!passed)
-            {
-                LOG_CORE_CRITICAL("Crypto: RNG entropy self-test failed -- refusing to generate secrets");
-                throw std::runtime_error("Crypto: RNG entropy self-test failed");
-            }
+            SecureRandomDetail::EnsureEntropySelfTest();
         }
 
         // ============================================================================
@@ -374,73 +311,6 @@ namespace Arcane
         }
 
     private:
-        // ============================================================================
-        // Platform RNG (raw draw -- no self-test latch)
-        // ============================================================================
-
-        // The self-test itself draws through this so it cannot recurse
-        // into the EnsureEntropySelfTest latch. Everything else should
-        // use the public, latched GenerateRandomBytes.
-        //
-        // One fill for both branches, consulted from inside
-        // FillRandomBytesChunked. The test seam, when this is not a Dist
-        // build, replaces it; an empty slot is the platform RNG.
-        static bool PlatformFill(uint8_t* dst, size_t n)
-        {
-#if !defined(ARC_BUILD_DIST)
-            if (const Detail::PlatformFillFn overrideFill = Detail::PlatformFillOverrideSlot())
-                return overrideFill(dst, n);
-#endif
-#ifdef _WIN32
-            const NTSTATUS status = BCryptGenRandom(
-                nullptr,
-                dst,
-                static_cast<ULONG>(n),
-                BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-            return BCRYPT_SUCCESS(status);
-#else
-            std::ifstream urandom("/dev/urandom", std::ios::binary);
-            return ReadExactFromStream(urandom, dst, n);
-#endif
-        }
-
-        static std::vector<uint8_t> GenerateRandomBytesUnchecked(size_t count)
-        {
-            // A zero-length request never touches the platform RNG.
-            // On Windows, BCryptGenRandom(nullptr, data(), 0, ...) passes
-            // a possibly-null buffer (vector::data() on an empty vector)
-            // and that spurious failure used to take the random_device
-            // fallback. Both branches return empty here instead.
-            if (count == 0)
-                return {};
-
-#ifdef _WIN32
-            // BCryptGenRandom's length argument is a ULONG. Fill in
-            // ULONG-sized chunks so a count above ULONG max is never
-            // truncated by the cast, and fail closed: any
-            // !BCRYPT_SUCCESS refuses the draw. There is deliberately
-            // NO std::random_device fallback on this path.
-            return FillRandomBytesChunked(
-                count,
-                static_cast<size_t>(std::numeric_limits<ULONG>::max()),
-                &PlatformFill,
-                "Crypto: BCryptGenRandom failed");
-#else
-            // /dev/urandom, fail closed (E03-3): a missing device or a
-            // short read must never silently yield a zero-tailed buffer,
-            // and there is deliberately NO std::random_device fallback
-            // on this path -- it has been deterministic on some
-            // libstdc++/MinGW implementations, which is worse than
-            // stopping the service. One chunk: the read is the whole
-            // request, same as the previous single ReadExactFromStream.
-            return FillRandomBytesChunked(
-                count,
-                std::numeric_limits<size_t>::max(),
-                &PlatformFill,
-                "Crypto: /dev/urandom unavailable or short read");
-#endif
-        }
-
         // ============================================================================
         // PBKDF2 Implementation
         // ============================================================================

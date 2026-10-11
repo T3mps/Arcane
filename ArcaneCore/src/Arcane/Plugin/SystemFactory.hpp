@@ -38,6 +38,7 @@
 // class, and RoleMaskTest.cpp pins them apart.
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Core/NetMode.hpp>
 #include <Arcane/EcsFwd.hpp>   // Arcane::SystemScheduler (declared, aliased)
 
 #include <cstddef>
@@ -54,7 +55,6 @@ namespace Arcane
     // and reaches PluginABI.hpp, so it stays cheap.
     struct SystemSchedulers;
 
-    enum class NetMode  : std::uint8_t { Standalone, DedicatedServer, ListenServer, Client };
     enum class RoleMask : std::uint8_t { Server = 1, Client = 2, Both = 3 };
     enum class SystemPhase : std::uint8_t { FixedUpdate, Update, Render };
 
@@ -89,7 +89,6 @@ namespace Arcane
         return (mask & RolesOf(m)) != 0;
     }
 
-    [[nodiscard]] ARC_CORE_API const char* ToString(NetMode m) noexcept;
 
     struct SystemFactoryEntry
     {

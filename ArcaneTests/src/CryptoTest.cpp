@@ -1,3 +1,4 @@
+#include <Arcane/Platform/SecureRandom.hpp>
 // Crypto behavioral coverage (E03-2), grown from the original 12-line
 // smoke (this file was CryptoSmokeTest.cpp). Covers HmacSha256Hex
 // against the RFC 4231 known-answer vectors, HexEquals, the lazy-rehash
@@ -243,12 +244,12 @@ TEST_CASE("crypto: GenerateSecureToken emits lowercase hex of the requested size
 
 TEST_CASE("crypto: GenerateRandomBytes returns the requested count with variation", "[crypto]")
 {
-    REQUIRE(Crypto::GenerateRandomBytes(0).empty());
-    REQUIRE(Crypto::GenerateRandomBytes(1).size() == 1);
-    REQUIRE(Crypto::GenerateRandomBytes(33).size() == 33);
+    REQUIRE(Arcane::SecureRandomBytes(0).empty());
+    REQUIRE(Arcane::SecureRandomBytes(1).size() == 1);
+    REQUIRE(Arcane::SecureRandomBytes(33).size() == 33);
 
-    const auto a = Crypto::GenerateRandomBytes(32);
-    const auto b = Crypto::GenerateRandomBytes(32);
+    const auto a = Arcane::SecureRandomBytes(32);
+    const auto b = Arcane::SecureRandomBytes(32);
     REQUIRE(a.size() == 32);
     REQUIRE(a != b);
 }
@@ -500,7 +501,7 @@ TEST_CASE("crypto: a zero-length public draw returns empty and does not fill", "
     ResetPlatformFillCounts();
     Crypto::Detail::ScopedPlatformFillOverride guard(&CountingPlatformFill);
 
-    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(0);
+    const std::vector<uint8_t> out = Arcane::SecureRandomBytes(0);
     REQUIRE(out.empty());
     REQUIRE(g_platformFillCalls == 0);
     REQUIRE(g_platformFillBytes == 0);
@@ -512,7 +513,7 @@ TEST_CASE("crypto: the public RNG fails closed when the platform fill fails", "[
     // during the once-per-process self-test throws out of the latch's
     // initializer (it retries next time) and would make this case's
     // call count depend on order.
-    (void)Crypto::GenerateRandomBytes(1);
+    (void)Arcane::SecureRandomBytes(1);
 
     Crypto::Detail::ScopedPlatformFillOverride guard(&FailingPlatformFill);
 
@@ -520,7 +521,7 @@ TEST_CASE("crypto: the public RNG fails closed when the platform fill fails", "[
     bool bytesThrew = false;
     try
     {
-        returned = Crypto::GenerateRandomBytes(16);
+        returned = Arcane::SecureRandomBytes(16);
     }
     catch (const std::runtime_error& ex)
     {
@@ -547,7 +548,7 @@ TEST_CASE("crypto: the public RNG fails closed when the platform fill fails", "[
 
 TEST_CASE("crypto: the public RNG draws through the chunked platform fill", "[crypto]")
 {
-    (void)Crypto::GenerateRandomBytes(1);
+    (void)Arcane::SecureRandomBytes(1);
 
     g_platformFillStamp = 3;
     ResetPlatformFillCounts();
@@ -557,7 +558,7 @@ TEST_CASE("crypto: the public RNG draws through the chunked platform fill", "[cr
     // cap is size_t max, and the helper asks the fill for
     // min(maxChunk, remaining). A random_device fallback, or a draw
     // that never calls PlatformFill, cannot reproduce this stamp.
-    const std::vector<uint8_t> out = Crypto::GenerateRandomBytes(16);
+    const std::vector<uint8_t> out = Arcane::SecureRandomBytes(16);
     REQUIRE(g_platformFillCalls == 1);
     REQUIRE(g_platformFillLastN == 16);
     REQUIRE(g_platformFillBytes == 16);
@@ -614,5 +615,5 @@ TEST_CASE("crypto: the live RNG passes the startup entropy self-test", "[crypto]
     // must keep serving bytes afterwards.
     REQUIRE(Crypto::EntropySelfTest());
     REQUIRE_NOTHROW(Crypto::EnsureEntropySelfTest());
-    REQUIRE(Crypto::GenerateRandomBytes(16).size() == 16);
+    REQUIRE(Arcane::SecureRandomBytes(16).size() == 16);
 }

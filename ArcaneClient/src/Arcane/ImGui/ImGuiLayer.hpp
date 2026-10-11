@@ -17,6 +17,7 @@
 // frame.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Host/HostOverlay.hpp>
 
 #include <memory>
 
@@ -26,7 +27,7 @@ namespace Arcane
 {
     class Window;
 
-    class ARC_API ImGuiLayer
+    class ARC_API ImGuiLayer : public HostOverlay
     {
     public:
         // Window must outlive the layer (the layer taps its events, and the

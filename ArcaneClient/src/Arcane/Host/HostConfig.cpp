@@ -1,7 +1,6 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Cli/Cli.hpp>
-#include <Arcane/Host/VerifyReport.hpp>   // Arcane::ParseProbe -- reused for the --probe parse-time refusal below
-#include <Arcane/Host/ReferenceImages.hpp>   // Arcane::ReferenceNameIsSafe -- reused for --compare's parse-time refusal (Task 8, Finding 2)
+#include <Arcane/Host/HostVerifyHooks.hpp>
 #include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
 #include <algorithm>   // std::find -- SanitizeRelaunchLine's strip-set lookups
 #include <cstdio>
@@ -206,6 +205,14 @@ namespace Arcane
         cfg.probes         = r.GetMany("probe");
         cfg.cvarSets       = r.GetMany("set");
         cfg.reportPath     = r.Get("report");
+        if (!GetHostVerifyHooks().parseProbe &&
+            (!cfg.probes.empty() || !cfg.reportPath.empty() || r.Supplied("settle") ||
+             r.Supplied("compare") || r.Flag("bless") ||
+             r.Supplied("max-diff-pixels") || r.Supplied("max-diff-pixel-ratio")))
+        {
+            std::fprintf(stderr, "error: verify harness not linked\n");
+            return { std::nullopt, 2 };
+        }
         cfg.dumpLayoutPath = r.Get("dump-layout");
         cfg.playAs         = r.Get("play-as");
         cfg.viewMode       = r.Get("view-mode");   // Choices() already refused every other spelling
@@ -228,7 +235,13 @@ namespace Arcane
         for (const std::string& rawProbe : cfg.probes)
         {
             std::string probeError;
-            if (!ParseProbe(rawProbe, probeError))
+            const HostVerifyHooks hooks = GetHostVerifyHooks();
+            if (!hooks.parseProbe)
+            {
+                std::fprintf(stderr, "error: verify harness not linked\n");
+                return { std::nullopt, 2 };
+            }
+            if (!hooks.parseProbe(rawProbe, probeError))
             {
                 std::fprintf(stderr, "error: --probe '%s': %s\n", rawProbe.c_str(), probeError.c_str());
                 return { std::nullopt, 2 };
@@ -451,7 +464,12 @@ namespace Arcane
         // for an agent to chase. Reuses ReferenceImages' own predicate
         // (Arcane::ReferenceNameIsSafe) rather than a second copy of the
         // same five checks -- see that function's header comment for why.
-        if (!cfg.compareReference.empty() && !Arcane::ReferenceNameIsSafe(cfg.compareReference))
+        if (!cfg.compareReference.empty() && !GetHostVerifyHooks().referenceNameIsSafe)
+        {
+            std::fprintf(stderr, "error: verify harness not linked\n");
+            return { std::nullopt, 2 };
+        }
+        if (!cfg.compareReference.empty() && !GetHostVerifyHooks().referenceNameIsSafe(cfg.compareReference))
         {
             std::fprintf(stderr, "error: --compare '%s' is not a safe reference name (no '/', "
                                  "'\\', \"..\", or a leading '.' -- it is resolved into a file path "

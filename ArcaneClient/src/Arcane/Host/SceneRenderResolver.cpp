@@ -7,7 +7,7 @@
                                        // complete type.
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/MeshCache.hpp>

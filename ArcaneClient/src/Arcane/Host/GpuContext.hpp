@@ -24,7 +24,7 @@
 // predicate to select between.
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/ImGui/ImGuiLayer.hpp>
+#include <Arcane/Host/HostOverlay.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputDevices.hpp>
 #include <Arcane/Platform/Window.hpp>
@@ -57,7 +57,7 @@ namespace Arcane
 
         Window&        Win()       { return m_window; }
         Batcher2D&     Batch()     { return *m_batcher; }
-        ImGuiLayer&    Imgui()     { return *m_imgui; }
+        HostOverlay&  Imgui()     { return *m_imgui; }
         InputDevices&  InDevices() { return *m_inputDevices; }
         InputActions&  Input()     { return *m_input; }
 
@@ -73,7 +73,7 @@ namespace Arcane
         Window m_window;
 
         std::unique_ptr<Batcher2D>     m_batcher;
-        std::unique_ptr<ImGuiLayer>    m_imgui;
+        std::unique_ptr<HostOverlay>    m_imgui;
         std::unique_ptr<InputDevices>  m_inputDevices;
         std::unique_ptr<InputActions>  m_input;
     };

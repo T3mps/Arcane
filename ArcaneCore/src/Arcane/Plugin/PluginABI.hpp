@@ -5,6 +5,7 @@
 // EngineContext is the C++ facade handed to the plugin (Arcane::Runtime).
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Core/AbiVersion.hpp>
 #include <Arcane/EcsFwd.hpp>   // Arcane::{TypeContext,BinaryWriter,BinaryReader}, Arcane::IWorkScheduler
 #include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (an EngineContext field, ABI 30)
 
@@ -1167,20 +1168,17 @@ namespace Arcane
     //     its next engine sync). Main already consumed v52 through v57
     //     (settings, physics events, namespace facades, the flat API), so
     //     this layout change is v58.
-    ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr uint32_t kGamePluginABIVersion = 58;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
     //
-    // kGamePluginABIVersion above is a header constant, so every module bakes in
+    // kGamePluginABIVersion in Core/AbiVersion.hpp is a header constant, so every module bakes in
     // its OWN copy at compile time. A host exe reporting that constant reports
     // what IT was built against, which is not necessarily what the DLL beside it
     // enforces: a partially-updated install (fresh Arcane.dll, stale
     // ArcaneEditor.exe, or the reverse) stamps a number the runtime will reject.
     // Anything PUBLISHING the ABI -- the `--print-engine-info` probe the Arcane
     // Hub stamps into new .arcproj files -- must ask the DLL, not itself.
-    ARC_CORE_API uint32_t PluginABIVersion();
 
     struct EngineContext
     {

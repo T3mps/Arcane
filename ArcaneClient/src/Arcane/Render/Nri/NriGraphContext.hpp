@@ -223,7 +223,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Host/HostConfig.hpp>          // HostConfig
+#include <Arcane/Render/RenderGraphConfig.hpp>
 #include <Arcane/Material/GlobalParams.hpp>    // GlobalParams (held by value)
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
@@ -244,7 +244,7 @@
 // forward-declare NriGraphContext.
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
-#include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>
+#include <Arcane/Render/Nri/RenderOverlayNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
@@ -619,7 +619,7 @@ namespace Arcane
         // is the dev-loop gate for the whole phase (NRI validation alone
         // cannot catch barrier bugs). Since Task 6 this device is the FIRST in
         // the process, so the D3D12 debug-layer request is no longer declined.
-        static std::unique_ptr<NriGraphContext> Create(const HostConfig& config, Window& window);
+        static std::unique_ptr<NriGraphContext> Create(const RenderGraphConfig& config, Window& window);
 
         // THE OFFSCREEN FLAVOR -- see OFFSCREEN MODE in the file header for
         // the full contract.
@@ -666,7 +666,7 @@ namespace Arcane
         // ~NriGraphContext.
         // `nodes` names the OPTIONAL nodes this context may declare -- see
         // NodeSet. Defaulted to none.
-        static std::unique_ptr<NriGraphContext> CreateOffscreen(const HostConfig& config,
+        static std::unique_ptr<NriGraphContext> CreateOffscreen(const RenderGraphConfig& config,
                                                                 NriDevice& shared,
                                                                 std::uint32_t width,
                                                                 std::uint32_t height,
@@ -677,7 +677,7 @@ namespace Arcane
         // complete -- GCC rejects that ("could not convert '{}'", the
         // long-standing NSDMI-in-nested-class rule); MSVC accepts it. The
         // inline body is a complete-class context, so this spelling is portable.
-        static std::unique_ptr<NriGraphContext> CreateOffscreen(const HostConfig& config,
+        static std::unique_ptr<NriGraphContext> CreateOffscreen(const RenderGraphConfig& config,
                                                                 NriDevice& shared,
                                                                 std::uint32_t width,
                                                                 std::uint32_t height)
@@ -1037,7 +1037,7 @@ namespace Arcane
         // is whether the driver handed this frame draw data. Named ImGuiHud()
         // rather than ImGui() because `ImGui` is a namespace this header's
         // consumers use.
-        [[nodiscard]] ImGuiNriNode* ImGuiHud() noexcept { return m_imguiHud.get(); }
+        [[nodiscard]] RenderOverlayNode* ImGuiHud() noexcept { return m_imguiHud.get(); }
 
         // The GAME HUD's node (Task 9) -- a SECOND backend over a SECOND ImGui
         // context, built only when NodeSet::gameUi asked for it and null
@@ -1045,7 +1045,7 @@ namespace Arcane
         // ImGuiNriNode::AdoptImGuiContext, with the context whose draw data it
         // will be handed (see ImGuiNri::AdoptContext for why this class cannot
         // make that call itself -- it never sees an ImGui context).
-        [[nodiscard]] ImGuiNriNode* ImGuiGame() noexcept { return m_imguiGame.get(); }
+        [[nodiscard]] RenderOverlayNode* ImGuiGame() noexcept { return m_imguiGame.get(); }
 
         // FrameDesc::gameUi for the frame currently being declared AND
         // recorded, with exactly CurrentImGuiDrawData()'s lifetime rules.
@@ -1367,14 +1367,14 @@ namespace Arcane
     private:
         NriGraphContext();   // latches FramesInFlight() and the upload ring's size before any per-frame resource exists
 
-        bool Init(const HostConfig& config, Window& window);
-        bool InitOffscreen(const HostConfig& config, NriDevice& shared,
+        bool Init(const RenderGraphConfig& config, Window& window);
+        bool InitOffscreen(const RenderGraphConfig& config, NriDevice& shared,
                            std::uint32_t width, std::uint32_t height, const NodeSet& nodes);
         // The half both Init flavors share, in the order the teardown contract
         // below reverses: ring, pipeline cache, texture cache, graph, shader
         // dir, nodes. Everything above it (device, swapchain / output texture)
         // is the flavor's own.
-        bool InitCommon(const HostConfig& config, const NodeSet& nodes);
+        bool InitCommon(const RenderGraphConfig& config, const NodeSet& nodes);
 
         // Creates the persistent offscreen output at `width` x `height` and
         // publishes it as m_offscreen. False (already logged + latched) on
@@ -1492,8 +1492,8 @@ namespace Arcane
         //
         // AT MOST ONE OF THESE MAY ADOPT ANY GIVEN ImGui CONTEXT -- NodeSet's
         // invariant block says why, and the gating is what enforces it.
-        std::unique_ptr<ImGuiNriNode>      m_imguiHud;
-        std::unique_ptr<ImGuiNriNode>      m_imguiGame;
+        std::unique_ptr<RenderOverlayNode>      m_imguiHud;
+        std::unique_ptr<RenderOverlayNode>      m_imguiGame;
 
         // Raw offline shader artifacts, keyed by artifact stem. unordered_map
         // and not vector: the node authors hold SPANS into these vectors for

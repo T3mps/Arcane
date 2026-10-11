@@ -270,6 +270,7 @@ function arcane_game_module(name)
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARC_GAME_MODULE needs no define
             "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3)
+            "ARC_GAME_HAS_IMGUI",
             -- adopt ArcaneClient's single GImGui. __declspec is PE/COFF-only;
             -- ELF and Mach-O have no import decoration (default visibility exports it).
             "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),

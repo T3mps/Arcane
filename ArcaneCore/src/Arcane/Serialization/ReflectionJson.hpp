@@ -43,7 +43,7 @@
 // node still has to BE a string.
 
 #include <Arcane/Guid.hpp>
-#include <Arcane/Serialization/IdentityFieldRule.hpp>
+#include <Arcane/Assets/IdentityFieldRule.hpp>
 
 #include <Astra/Reflection/FieldVisitor.hpp>
 #include <Astra/Reflection/FieldInfo.hpp>
@@ -485,7 +485,7 @@ namespace Arcane
         // The test is STRUCTURAL, on the JSON just written, and it is the SAME
         // FUNCTION the scene structural scan applies to a parsed document
         // (Assets.cpp's ScanSceneJson): Arcane::IsGuidShapedJson, in
-        // Serialization/IdentityFieldRule.hpp, whose own doc comment carries
+        // Assets/IdentityFieldRule.hpp, whose own doc comment carries
         // the why. ONE function rather than two hand-synced copies is what lets
         // a v4 manifest and a pre-v4 scan agree on WHICH GUIDS COUNT as
         // references (the scan additionally drops unresolvable targets; the

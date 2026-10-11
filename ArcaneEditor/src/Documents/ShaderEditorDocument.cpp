@@ -34,7 +34,7 @@
 // sits here (rather than first) because it is what EditorApp.hpp already does
 // and the same TUs already compile that way.
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
-#include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>   // InvalidateUserTextureNow
+#include <Arcane/Render/Nri/RenderOverlayNode.hpp>   // InvalidateUserTextureNow
 #include <Arcane/Host/HostConfig.hpp>                 // CreateOffscreen's knobs
 
 #include <Arcane/Assets/Assets.hpp>
@@ -46,7 +46,7 @@
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -1817,7 +1817,7 @@ namespace Arcane::Editor
         m_graphSpriteStamp = nullptr;
         m_meshPreviewPresented = false;
         m_graphBatch.reset();
-        Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
+        Arcane::RenderOverlayNode* hud = std::exchange(m_previewHud, nullptr);
 
         // ===== THE VEHICLE IS RETIRED, NOT DESTROYED (see DocServices::
         // retireGraphPreview for the full reasoning) =====

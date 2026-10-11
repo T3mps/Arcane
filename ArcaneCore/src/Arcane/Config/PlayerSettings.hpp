@@ -21,7 +21,7 @@
 
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/Plugin/SystemFactory.hpp>   // NetMode
+#include <Arcane/Core/NetMode.hpp>
 
 #include <string_view>
 #include <vector>

@@ -21,7 +21,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths::Resolve(DiagnosticsDir) -- the "finalize" dump-dir retarget (settings spec s11.0)
-#include <Arcane/Project/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
+#include <Arcane/Assets/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)

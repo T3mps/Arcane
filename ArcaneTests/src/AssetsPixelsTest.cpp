@@ -22,7 +22,7 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 
 // F2b Task 6: TextureInfoFor/PixelsFor's artifact-backed contract, and the header-dims-vs-
 // thumb-dims pin, exercised against a REAL cooked artifact (TextureImporter + WriteTextureArtifact,

@@ -44,7 +44,7 @@
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths -- Intermediate/ and Saved/UndoCache resolve through it (settings spec s11.0)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
-#include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
+#include <Arcane/Assets/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>   // Save/LoadSpriteAsset (MintOrReuseSpriteForTexture)
 

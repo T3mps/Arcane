@@ -15,7 +15,7 @@
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 
 #include <imgui.h>

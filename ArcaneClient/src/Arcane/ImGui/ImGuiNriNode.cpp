@@ -79,7 +79,7 @@ namespace Arcane
         // upload on this path goes through a helper that submits and waits.
         if (context)
         {
-            if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
+            if (RenderOverlayNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
             {
                 // THE CONTEXT'S LANE (Task 8-pre), not the device's: an atlas
                 // rebuild destroys a texture keyed to THIS graph's fence, and
@@ -106,7 +106,7 @@ namespace Arcane
             {
                 if (!context)
                     return;   // device-less declaration-shape drive
-                if (ImGuiNriNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
+                if (RenderOverlayNode* node = gameUi ? context->ImGuiGame() : context->ImGuiHud())
                     node->Record(nodeContext,
                                  gameUi ? context->CurrentGameUiDrawData()
                                         : context->CurrentImGuiDrawData(),

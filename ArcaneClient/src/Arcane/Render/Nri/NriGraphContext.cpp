@@ -148,7 +148,7 @@ namespace Arcane
         LatchFramesInFlight();
     }
 
-    std::unique_ptr<NriGraphContext> NriGraphContext::Create(const HostConfig& config, Window& window)
+    std::unique_ptr<NriGraphContext> NriGraphContext::Create(const RenderGraphConfig& config, Window& window)
     {
         std::unique_ptr<NriGraphContext> context(new NriGraphContext());
         if (!context->Init(config, window))
@@ -156,7 +156,7 @@ namespace Arcane
         return context;
     }
 
-    bool NriGraphContext::Init(const HostConfig& config, Window& window)
+    bool NriGraphContext::Init(const RenderGraphConfig& config, Window& window)
     {
         m_mode           = Mode::HostWindow;
         m_vsync          = config.vsync;
@@ -288,7 +288,7 @@ namespace Arcane
     // for what a second live context on one device owes.
     // =====================================================================
 
-    std::unique_ptr<NriGraphContext> NriGraphContext::CreateOffscreen(const HostConfig& config,
+    std::unique_ptr<NriGraphContext> NriGraphContext::CreateOffscreen(const RenderGraphConfig& config,
                                                                       NriDevice& shared,
                                                                       std::uint32_t width,
                                                                       std::uint32_t height,
@@ -300,7 +300,7 @@ namespace Arcane
         return context;
     }
 
-    bool NriGraphContext::InitOffscreen(const HostConfig& config, NriDevice& shared,
+    bool NriGraphContext::InitOffscreen(const RenderGraphConfig& config, NriDevice& shared,
                                         std::uint32_t width, std::uint32_t height,
                                         const NodeSet& nodes)
     {
@@ -403,7 +403,7 @@ namespace Arcane
         return true;
     }
 
-    bool NriGraphContext::InitCommon(const HostConfig& config, const NodeSet& nodes)
+    bool NriGraphContext::InitCommon(const RenderGraphConfig& config, const NodeSet& nodes)
     {
         // Everything from here down is MODE-AGNOSTIC and is the same object
         // graph in the same order in both flavors -- which is what makes the
@@ -493,18 +493,19 @@ namespace Arcane
         // and -- created while the editor context was current -- adopted it.
         // See NodeSet's invariant block.
         // ---------------------------------------------------------------
-        if (nodes.hostHud)
+        const RenderOverlayHooks overlay = GetRenderOverlayHooks();
+        if (nodes.hostHud && overlay.create)
         {
-            m_imguiHud = ImGuiNriNode::Create(*this);
+            m_imguiHud = overlay.create(*this);
             if (!m_imguiHud)
                 return false;   // already logged
         }
         // The GAME node's caller owes it one AdoptImGuiContext call. The host
         // HUD's needs none only because a host builds its vehicle with its own
         // ImGui context current, which is what ImGuiNri::Init records.
-        if (nodes.gameUi)
+        if (nodes.gameUi && overlay.create)
         {
-            m_imguiGame = ImGuiNriNode::Create(*this);
+            m_imguiGame = overlay.create(*this);
             if (!m_imguiGame)
                 return false;   // already logged
         }
@@ -1472,7 +1473,8 @@ namespace Arcane
         // RgFrameShape::gameUi and FrameDesc::gameUi for the full account.
         // ---------------------------------------------------------------
         if (shape.gameUi)
-            AddImGuiNode(graph, context, handles.backbuffer, ImGuiNodeSlot::GameUi);
+            if (auto addNode = GetRenderOverlayHooks().addNode)
+                addNode(graph, context, handles.backbuffer, true);
 
         // ---------------------------------------------------------------
         // THE PICK + OUTLINE CHAIN, declared BETWEEN the tonemap and
@@ -1519,7 +1521,8 @@ namespace Arcane
         // step with the pointer.
         // ---------------------------------------------------------------
         if (shape.imgui)
-            AddImGuiNode(graph, context, handles.backbuffer);
+            if (auto addNode = GetRenderOverlayHooks().addNode)
+                addNode(graph, context, handles.backbuffer, false);
 
         if (!shape.capture)
             return handles;

@@ -98,7 +98,9 @@ namespace Arcane
 
         // ImGuiLayer has ONE flavor: context + SDL3 platform backend + event
         // tap, and no renderer -- a graph node is the renderer.
-        ctx->m_imgui = ImGuiLayer::Create(ctx->m_window);
+        const HostOverlayHooks overlayHooks = GetHostOverlayHooks();
+        ctx->m_imgui = overlayHooks.create ? overlayHooks.create(ctx->m_window)
+                                           : CreateNullHostOverlay();
         if (!ctx->m_imgui) { ARC_ERROR("GpuContext: imgui create failed"); return nullptr; }
 
         ctx->m_inputDevices = InputDevices::Create();

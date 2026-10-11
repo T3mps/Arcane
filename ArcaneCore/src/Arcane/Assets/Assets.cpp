@@ -6,7 +6,7 @@
 #include <Arcane/Assets/AssetsSettings.hpp>   // assets.material.maxParentDepth
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Serialization/IdentityFieldRule.hpp>   // Arcane::IsIdentityGuidFieldName
+#include <Arcane/Assets/IdentityFieldRule.hpp>   // Arcane::IsIdentityGuidFieldName
 
 #include <Json.hpp>
 #include <stb_image.h>
@@ -164,7 +164,7 @@ namespace Arcane
         // Task 3 (asset-manager arc): recursive structural walk of a parsed
         // .arcscene document, collecting every guid-shaped field except an
         // identity field. BOTH questions are answered by the shared engine
-        // rules in Serialization/IdentityFieldRule.hpp -- IsGuidShapedJson for
+        // rules in Assets/IdentityFieldRule.hpp -- IsGuidShapedJson for
         // the {"hi":u64,"lo":u64} value shape, IsIdentityGuidFieldName for the
         // field name -- and the v4 save-time manifest collector
         // (ReflectionJson.hpp) calls the SAME FUNCTIONS, which is what makes

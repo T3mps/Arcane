@@ -1,4 +1,7 @@
 #include <Arcane/Host/VerifyReport.hpp>
+#include <Arcane/Host/HostVerifyHooks.hpp>
+#include <Arcane/Host/VerifyHooks.hpp>
+#include <Arcane/Host/ReferenceImages.hpp>
 
 #include <Arcane/Base/Assert.hpp>
 
@@ -10,6 +13,14 @@
 
 namespace Arcane
 {
+    void InstallVerifyHooks() noexcept
+    {
+        SetHostVerifyHooks({
+            [](std::string_view text, std::string& error) { return ParseProbe(text, error).has_value(); },
+            [](const std::string& name) { return ReferenceNameIsSafe(name); }
+        });
+    }
+
     namespace
     {
         // One entry per ProbeKind, shared between ParseProbe (grammar) and

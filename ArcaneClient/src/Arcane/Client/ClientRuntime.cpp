@@ -11,11 +11,11 @@ ARC_MODULE(ArcaneClient)
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem -- instantiated IN this module
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Host/HostOverlay.hpp>
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>
 
-#include <imgui.h>
 
 #include <tuple>
 
@@ -53,8 +53,15 @@ namespace Arcane
     }
 
     // --- IClientHooks ------------------------------------------------------------
-    void* ClientRuntime::SaveUiContext() noexcept              { return ImGui::GetCurrentContext(); }
-    void  ClientRuntime::RestoreUiContext(void* s) noexcept    { ImGui::SetCurrentContext(static_cast<::ImGuiContext*>(s)); }
+    void* ClientRuntime::SaveUiContext() noexcept
+    {
+        const auto save = GetHostOverlayHooks().saveUiContext;
+        return save ? save() : nullptr;
+    }
+    void ClientRuntime::RestoreUiContext(void* s) noexcept
+    {
+        if (const auto restore = GetHostOverlayHooks().restoreUiContext) restore(s);
+    }
     void  ClientRuntime::OnModuleTeardown() noexcept           { ResetAudio(); }
     void  ClientRuntime::OnSystemsCleared() noexcept           { InstallRenderSystems(); }
     void  ClientRuntime::FillEngineContext(EngineContext& ctx) noexcept

@@ -11,6 +11,7 @@
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>   // kHangMainSeconds derives from hangSeconds
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend
+#include <Arcane/Render/RenderGraphConfig.hpp>
 #include <Arcane/Sim/SimSettingsData.hpp>   // fixedDtSeconds' default is one sim.fixedHz step
 namespace Arcane
 {
@@ -388,6 +389,11 @@ namespace Arcane
         // Builds the Cli spec, parses argv, maps Result -> HostConfig.
         // --help / bad args -> { nullopt, exitCode }; success -> { config, 0 }.
         static ParseOutcome Parse(int argc, char** argv);
+
+        [[nodiscard]] operator RenderGraphConfig() const noexcept
+        {
+            return { backend, vsync, maxFrames, pickProbe, pickProbeX, pickProbeY };
+        }
     };
 
     struct HostConfig::ParseOutcome { std::optional<HostConfig> config; int exitCode = 0; };

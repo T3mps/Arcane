@@ -31,7 +31,7 @@
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
 
 #include <Astra/Component/ComponentRegistry.hpp>

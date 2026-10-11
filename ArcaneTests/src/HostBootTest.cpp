@@ -9,7 +9,7 @@
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (the probe tripwire)
-#include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (ReferenceProject material resolution)
+#include <Arcane/Assets/AssetId.hpp>    // AssetId::FromGuid (ReferenceProject material resolution)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>      // LoadMeshAsset (Task 11 -- ReferenceProject's mesh content)

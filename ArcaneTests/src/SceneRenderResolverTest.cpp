@@ -31,7 +31,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // MaterialAssetData -- mesh-material fixtures ([3] below)
 #include <Arcane/Material/MaterialTypes.hpp>   // MatParamValue::MakeColor
 #include <Arcane/Mesh/MeshAsset.hpp>            // MeshAssetData/SaveMeshAsset -- mesh fixtures
-#include <Arcane/Project/AssetId.hpp>       // AssetId::FromGuid -- driving the fake's eviction by hand
+#include <Arcane/Assets/AssetId.hpp>       // AssetId::FromGuid -- driving the fake's eviction by hand
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/SpriteCache.hpp>
 #include <Arcane/Scene/Components.hpp>

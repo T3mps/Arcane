@@ -12,6 +12,8 @@
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/EarlyConfig.hpp>
 #include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/VerifyHooks.hpp>
+#include <Arcane/ImGui/ImGuiHostHooks.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
 #include "RuntimeApp.hpp"
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
@@ -52,6 +54,8 @@ int main(int argc, char** argv)
     Arcane::Log::Init();
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
+    Arcane::InstallVerifyHooks();
+    Arcane::InstallImGuiHostHooks();
     Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);   // non-const: the early rungs fill backend/vsync
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 

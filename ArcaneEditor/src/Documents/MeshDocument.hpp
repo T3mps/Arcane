@@ -91,7 +91,7 @@ namespace Arcane
     // unique_ptr member below is legal against an incomplete type because
     // ~MeshDocument is out of line (MeshDocument.cpp).
     struct HostConfig;
-    class ImGuiNriNode;
+    class RenderOverlayNode;
     class NriGraphContext;
 }
 
@@ -437,7 +437,7 @@ namespace Arcane::Editor
         // ===== The late-bound seam's state (s3.2) =====
         // The chrome ImGuiNriNode this vehicle's image was bound through,
         // captured at creation -- the no-sink destroy invalidates against IT.
-        Arcane::ImGuiNriNode* m_previewHud = nullptr;
+        Arcane::RenderOverlayNode* m_previewHud = nullptr;
         bool          m_previewVehicleFailed = false;   // CreateOffscreen returned null: Tick stops retrying
         bool          m_previewFrameFailed   = false;   // a frame failed and dropped the vehicle (today's permanent drop)
         bool          m_previewPresented     = false;   // a frame has landed in THIS vehicle's texture

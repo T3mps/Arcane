@@ -9,7 +9,7 @@
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Config/Settings.hpp>
-#include <Arcane/Project/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
+#include <Arcane/Assets/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
 #include <Arcane/Project/Project.hpp>
 #include <imgui.h>
 

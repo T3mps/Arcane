@@ -1,6 +1,6 @@
 #include <Arcane/Guid.hpp>
 
-#include <Arcane/Crypto/Crypto.hpp>   // Crypto::GenerateRandomBytes (Core CSPRNG)
+#include <Arcane/Platform/SecureRandom.hpp>
 
 #include "picosha2.hpp"
 
@@ -94,7 +94,7 @@ namespace Arcane
 
     Guid Guid::Generate()
     {
-        const std::vector<std::uint8_t> r = Crypto::GenerateRandomBytes(16);
+        const std::vector<std::uint8_t> r = SecureRandomBytes(16);
         std::array<std::uint8_t, 16> b{};
         std::copy(r.begin(), r.end(), b.begin());
         StampVersionVariant(b, 4);   // RFC-4122 v4 (random)

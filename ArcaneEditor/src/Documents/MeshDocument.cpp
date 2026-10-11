@@ -15,7 +15,7 @@
 // this block where it is rather than first.
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>        // MeshSceneDesc / MeshInstance
-#include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>    // InvalidateUserTextureNow
+#include <Arcane/Render/Nri/RenderOverlayNode.hpp>    // InvalidateUserTextureNow
 #include <Arcane/Host/HostConfig.hpp>                  // CreateOffscreen's knobs
 
 #include <Arcane/Base/Log.hpp>
@@ -485,7 +485,7 @@ namespace Arcane::Editor
         if (!m_preview)
             return;
         m_previewPresented = false;
-        Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
+        Arcane::RenderOverlayNode* hud = std::exchange(m_previewHud, nullptr);
 
         // ===== THE VEHICLE IS RETIRED, NOT DESTROYED (see Services::
         // retireGraphPreview / DocServices' identical field for the full

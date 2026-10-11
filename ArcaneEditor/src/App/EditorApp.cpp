@@ -64,7 +64,7 @@
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
 #include "App/PluginLoadFailure.hpp"   // DescribePluginLoadFailure (StagePluginLoad's failure banner)
 #include "Documents/InputActionsDocument.hpp"
-#include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
+#include <Arcane/Assets/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (HUD)
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
@@ -2453,7 +2453,7 @@ namespace Arcane::Editor
         // it has not moved, so this is a restatement rather than a fix.
         // Idempotent by construction (AdoptContext pins, re-ORs two flags,
         // restores) and null-safe.
-        if (Arcane::ImGuiNriNode* chromeNode = ChromeGraph()->ImGuiHud())
+        if (Arcane::RenderOverlayNode* chromeNode = ChromeGraph()->ImGuiHud())
             chromeNode->AdoptImGuiContext(m_editorImguiContext);
 
         // ===== THE TOOLBAR MARK ==============================================
@@ -2607,7 +2607,7 @@ namespace Arcane::Editor
         // context whose draw data it will be handed. Miss this on the switch
         // path and the plugin HUD is blank from the first switch onward, with
         // nothing in the log. Stated at m_gameImgui's declaration too.
-        if (Arcane::ImGuiNriNode* gameNode = m_viewportTargets.graph->ImGuiGame())
+        if (Arcane::RenderOverlayNode* gameNode = m_viewportTargets.graph->ImGuiGame())
             gameNode->AdoptImGuiContext(m_gameImgui ? m_gameImgui->Context() : nullptr);
 
         // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed ONLY on a
@@ -2754,7 +2754,7 @@ namespace Arcane::Editor
     {
         if (m_retiredDocPreviews.empty())
             return;
-        Arcane::ImGuiNriNode* chrome = ChromeGraph() ? ChromeGraph()->ImGuiHud() : nullptr;
+        Arcane::RenderOverlayNode* chrome = ChromeGraph() ? ChromeGraph()->ImGuiHud() : nullptr;
         for (std::unique_ptr<Arcane::NriGraphContext>& vehicle : m_retiredDocPreviews)
         {
             if (!vehicle)

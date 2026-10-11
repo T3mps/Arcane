@@ -4,7 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Guid.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 
 #include <unordered_set>
 

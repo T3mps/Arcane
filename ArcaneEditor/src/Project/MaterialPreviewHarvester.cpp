@@ -444,7 +444,7 @@ namespace Arcane::Editor
             return;
         if (Arcane::NriGraphContext* chrome = Chrome())
         {
-            if (Arcane::ImGuiNriNode* hud = chrome->ImGuiHud())
+            if (Arcane::RenderOverlayNode* hud = chrome->ImGuiHud())
                 hud->InvalidateUserTextureNow(
                     reinterpret_cast<nri::Texture*>(static_cast<std::intptr_t>(e.texture)));
             chrome->InvalidateContentTexture(e.thumbId);

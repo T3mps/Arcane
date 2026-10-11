@@ -68,7 +68,7 @@
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Host/ReferenceImages.hpp>
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>

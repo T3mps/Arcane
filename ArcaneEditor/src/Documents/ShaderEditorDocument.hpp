@@ -78,7 +78,7 @@ namespace Arcane
     // against an incomplete type because ~ShaderEditorDocument is out of line.
     class Batcher2D;
     struct HostConfig;
-    class ImGuiNriNode;
+    class RenderOverlayNode;
     class NriGraphContext;
 }
 
@@ -1016,7 +1016,7 @@ namespace Arcane::Editor
             static_cast<std::uint32_t>(Arcane::Settings<ShaderEditorSettings>().previewResolution);
         std::unique_ptr<Arcane::NriGraphContext> m_graphPreview;
         // ===== The late-bound seam's state (s3.2) =====
-        Arcane::ImGuiNriNode* m_previewHud = nullptr;     // the chrome node captured at vehicle creation
+        Arcane::RenderOverlayNode* m_previewHud = nullptr;     // the chrome node captured at vehicle creation
         bool          m_previewVehicleFailed = false;     // CreateOffscreen returned null: Tick stops retrying
         bool          m_previewFrameFailed   = false;     // a frame failed (vehicle dropped); the next Presented frame clears it
         std::uint32_t m_previewVehicleAttempts = 0;

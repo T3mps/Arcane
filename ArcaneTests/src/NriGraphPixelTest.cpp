@@ -1,3 +1,4 @@
+#include <Arcane/ImGui/ImGuiNriNode.hpp>
 // NODE-LEVEL PIXEL CORRECTNESS for the NRI frame graph -- [gpu], outside the
 // ~[gpu] baseline set.
 //
@@ -2461,7 +2462,7 @@ namespace
         Arcane::NriGraphContext::NodeSet nodes;
         nodes.hostHud = true;
         PixelVehicle v = MakeVehicle(backend, nodes);
-        Arcane::ImGuiNriNode* const hud = v.ctx->ImGuiHud();
+        Arcane::ImGuiNriNode* const hud = dynamic_cast<Arcane::ImGuiNriNode*>(v.ctx->ImGuiHud());
         REQUIRE(hud != nullptr);
         hud->AdoptImGuiContext(imgui);
         Arcane::ImGuiNri& renderer = hud->Renderer();

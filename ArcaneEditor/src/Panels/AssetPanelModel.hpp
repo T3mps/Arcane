@@ -25,7 +25,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (surfaceFor, MaterialSurfaceFilterForComponent)
 #include <Arcane/Project/AssetRegistry.hpp>
-#include <Arcane/Serialization/IdentityFieldRule.hpp>   // the shared identity-field rule
+#include <Arcane/Assets/IdentityFieldRule.hpp>   // the shared identity-field rule
 
 #include <algorithm>
 #include <cctype>
@@ -238,7 +238,7 @@ namespace Arcane::Editor
     // entities. Exact match on purpose: substring would eat "textureId",
     // which the kind heuristic correctly claims as a texture reference.
     //
-    // The RULE moved to the engine (Serialization/IdentityFieldRule.hpp) when
+    // The RULE moved to the engine (Assets/IdentityFieldRule.hpp) when
     // the scene serializer's v4 manifest collector became its third consumer;
     // this stays as the editor-side spelling the panels already call, and
     // delegates, so there is exactly one definition to change.

@@ -1,5 +1,5 @@
 #include <Arcane/Base/Engine.hpp>
-#include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Core/AbiVersion.hpp>
 #include <Arcane/Version.hpp>
 #include <Arcane/Platform/Process.hpp>   // Platform::ExecutablePath (POSIX)
 

@@ -44,6 +44,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/ImGui/ImGuiNri.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/Nri/RenderOverlayNode.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -55,7 +56,7 @@ namespace Arcane
     class Graveyard;
     class NriGraphContext;
 
-    class ARC_API ImGuiNriNode
+    class ARC_API ImGuiNriNode : public RenderOverlayNode
     {
     public:
         // Loads imgui_vs/imgui_ps through the vehicle and builds the backend's
@@ -73,21 +74,21 @@ namespace Arcane
 
         // Buries every NRI object the backend owns at `fence` and empties it.
         // Idempotent.
-        void Release(Graveyard& graveyard, std::uint64_t fence);
+        void Release(Graveyard& graveyard, std::uint64_t fence) override;
 
         // Point this backend at the ImGui context whose draw data it will be
         // handed -- see ImGuiNri::AdoptContext for why Create() cannot always
         // work it out for itself. Call once, right after Create, for any node
         // that serves a context OTHER than the one current at Create time (the
         // editor's game-UI node). Idempotent and null-safe.
-        void AdoptImGuiContext(void* imguiContext) { m_renderer.AdoptContext(imguiContext); }
+        void AdoptImGuiContext(void* imguiContext) override { m_renderer.AdoptContext(imguiContext); }
 
         // DECLARATION-time half: the 1.92 texture protocol. See the header
         // block -- this submits and waits, so it must not be reached from an
         // exec fn. `graveyard`/`fence` are where and at what value destroyed
         // textures are buried: the OWNING CONTEXT's lane
         // (NriGraphContext::Graves()) and its graph's own last submitted value.
-        void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence);
+        void PrepareFrame(ImDrawData* drawData, Graveyard& graveyard, std::uint64_t fence) override;
 
         // THE USER-TEXTURE INVALIDATION HOOK, both variants forwarded. Call
         // one whenever a texture this backend may
@@ -108,12 +109,12 @@ namespace Arcane
         // offscreen context that owns it. They are different objects with
         // different lanes -- which is the whole reason `Now` exists.
         bool InvalidateUserTexture(nri::Texture* texture, Graveyard& graveyard,
-                                   std::uint64_t fence);
-        bool InvalidateUserTextureNow(nri::Texture* texture);
+                                   std::uint64_t fence) override;
+        bool InvalidateUserTextureNow(nri::Texture* texture) override;
 
         // RECORD-time half: records `drawData` into an ALREADY-OPEN raster
         // pass whose single colour attachment is `target`. Emits no barrier.
-        void Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target);
+        void Record(RenderGraphNodeContext& context, ImDrawData* drawData, RgTexture target) override;
 
         // The backend itself, for the [nri] cases' introspection
         // (LiveTextureCount/HasEntryFor/RetiredSetCount) and for a host that

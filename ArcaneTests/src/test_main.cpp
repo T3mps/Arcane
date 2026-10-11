@@ -9,6 +9,8 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Platform/Platform.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Host/VerifyHooks.hpp>
+#include <Arcane/ImGui/ImGuiHostHooks.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
@@ -19,6 +21,8 @@
 ARC_AGILITY_SDK_EXPORTS();
 
 int main(int argc, char* argv[]) {
+    Arcane::InstallVerifyHooks();
+    Arcane::InstallImGuiHostHooks();
     // A Dist build resolves game user data under the OS per-user dir (settings
     // S7). Point it at a private folder under TEMP before anything resolves a
     // path -- the pin below included -- so no case writes the real profile.

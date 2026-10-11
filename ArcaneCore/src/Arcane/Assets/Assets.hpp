@@ -11,7 +11,7 @@
 #include <Arcane/Assets/AssetsSettings.hpp>   // AssetsCacheSettings -- AssetsDesc's default
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface -- MaterialSurfaceFor's payload
-#include <Arcane/Project/AssetId.hpp>
+#include <Arcane/Assets/AssetId.hpp>
 
 #include <Json.hpp>
 
