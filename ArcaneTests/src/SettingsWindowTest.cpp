@@ -199,8 +199,8 @@ TEST_CASE("Settings window: its undo/redo keys are the editor's edit.undo / edit
         Arcane::Test::PressChord(ImGuiMod_Ctrl, ImGuiKey_Z, [&] { h.Frame(); });
         CHECK_FALSE(edited());
         ImGuiIO& io = ImGui::GetIO();   // Ctrl+Shift+Z: one AddKeyEvent per modifier (PressChord takes one)
-        io.AddKeyEvent(ImGuiMod_Ctrl, true); io.AddKeyEvent(ImGuiMod_Shift, true); io.AddKeyEvent(ImGuiKey_Z, true); h.Frame();
-        io.AddKeyEvent(ImGuiKey_Z, false); io.AddKeyEvent(ImGuiMod_Shift, false); io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+        Arcane::TestKeys::AddKeyEvent(io, ImGuiMod_Ctrl, true); io.AddKeyEvent(ImGuiMod_Shift, true); io.AddKeyEvent(ImGuiKey_Z, true); h.Frame();
+        io.AddKeyEvent(ImGuiKey_Z, false); io.AddKeyEvent(ImGuiMod_Shift, false); Arcane::TestKeys::AddKeyEvent(io, ImGuiMod_Ctrl, false); h.Frame();
         CHECK(edited());
     }
     SECTION("rebound: Ctrl+U undoes and Ctrl+R redoes; the old chords do nothing here")

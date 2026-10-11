@@ -2201,6 +2201,25 @@ project "ArcaneTests"
 -- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
 -- Built ON Arcane/Plugin/GameModule.hpp (ARC_GAME_MODULE_ABI) -- the macro's plugin test vehicle.
 -- ============================================================================
+-- macOS: dyld never unloads an image that holds thread-local variables (a TLV
+-- has no per-image teardown), so dlclose left every loaded module mapped and
+-- its static registrations alive -- the Mach-O twin of GCC's STB_GNU_UNIQUE
+-- (see -fno-gnu-unique below). spdlog is header-only here, and its thread_id()
+-- caches the id in a function-local static thread_local that every module
+-- that logs instantiates; SPDLOG_NO_TLS asks the OS each call instead (the
+-- same id, uncached). The post-build check turns any TLV that remains into a
+-- build error naming its symbols, rather than a module that silently never
+-- leaves. Call inside a project, with no filter active.
+local function macos_unloadable_module()
+    filter "system:macosx"
+        defines { "SPDLOG_NO_TLS" }
+        postbuildcommands {
+            'if nm -m "%{cfg.buildtarget.abspath}" | grep -E "__thread_(vars|data|bss)"; then ' ..
+            'echo "error: %{prj.name}: thread-local storage in a loaded module (symbols above) -- dyld never unloads such an image, so hot reload cannot replace it" >&2; exit 1; fi'
+        }
+    filter {}
+end
+
 local function test_plugin(name, defs)
     project(name)
         location "ArcaneTests/plugins"
@@ -2229,6 +2248,7 @@ local function test_plugin(name, defs)
             -- is gone after FreeLibrary, and hot reload is built on that.
             buildoptions { "-fno-gnu-unique" }
         filter {}
+        macos_unloadable_module()
         targetdir ("bin/" .. outputdir .. "/" .. name)
         objdir ("bin-int/" .. outputdir .. "/" .. name)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/HotReloadShared.hpp" }
@@ -2291,6 +2311,7 @@ project "ReferenceGameUnderTest"
         -- is gone after FreeLibrary, and hot reload is built on that.
         buildoptions { "-fno-gnu-unique" }
     filter {}
+    macos_unloadable_module()
     targetdir ("bin/" .. outputdir .. "/ReferenceGameUnderTest")
     objdir ("bin-int/" .. outputdir .. "/ReferenceGameUnderTest")
     files {
@@ -2354,6 +2375,7 @@ project "TemplateSmokePlugin"
         -- is gone after FreeLibrary, and hot reload is built on that.
         buildoptions { "-fno-gnu-unique" }
     filter {}
+    macos_unloadable_module()
     targetdir ("bin/" .. outputdir .. "/TemplateSmokePlugin")
     objdir ("bin-int/" .. outputdir .. "/TemplateSmokePlugin")
     files {

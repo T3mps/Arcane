@@ -179,6 +179,14 @@ function arcane_game_module(name)
             -- is gone after FreeLibrary, and hot reload is built on that.
             buildoptions { "-fno-gnu-unique" }
         end
+        filter "system:macosx"
+            -- The Mach-O twin: dyld never unloads an image holding thread-local
+            -- variables, and header-only spdlog's thread_id() caches the id in
+            -- a static thread_local in every module that logs. SPDLOG_NO_TLS
+            -- asks the OS each call (the same id, uncached), so a hot-reloaded
+            -- module leaves on dlclose. (A game's OWN thread_local still pins
+            -- its image; the engine's test modules fail their build on one.)
+            defines { "SPDLOG_NO_TLS" }
         filter {}
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.

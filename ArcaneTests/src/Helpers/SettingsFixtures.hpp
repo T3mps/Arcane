@@ -8,6 +8,8 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <imgui.h>
 
+#include "../ImGuiTestKeys.hpp"   // TestKeys::AddKeyEvent: Ctrl as this platform's user presses it
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -110,8 +112,8 @@ namespace Arcane::Test
     template <class FrameFn> void PressChord(ImGuiKey mod, ImGuiKey key, FrameFn&& frame)
     {
         ImGuiIO& io = ImGui::GetIO();
-        io.AddKeyEvent(mod, true); io.AddKeyEvent(key, true); frame();
-        io.AddKeyEvent(key, false); io.AddKeyEvent(mod, false); frame();
+        TestKeys::AddKeyEvent(io, mod, true); TestKeys::AddKeyEvent(io, key, true); frame();
+        TestKeys::AddKeyEvent(io, key, false); TestKeys::AddKeyEvent(io, mod, false); frame();
     }
     template <class FrameFn> void PressKey(ImGuiKey key, FrameFn&& frame)
     {
