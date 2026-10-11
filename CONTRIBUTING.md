@@ -5,9 +5,10 @@ Thank you for considering a contribution.
 ## Contributor License Agreement
 
 Before your first pull request can be merged, you sign the Arcane
-[Contributor License Agreement](CLA.md) once. A bot comments on your first pull
-request with a link; signing takes one click and covers every later
-contribution.
+[Contributor License Agreement](CLA.md) once; it covers every later
+contribution. Signing will be handled on the pull request by CLA Assistant
+(being set up). Until it is live, a maintainer asks you in the pull request
+to confirm that you agree to the CLA.
 
 **Why:** Arcane is source-available under the Starworks Source License, and its
 versions convert to MIT over time. The CLA lets Starworks license your

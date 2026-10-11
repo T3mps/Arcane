@@ -1,309 +1,686 @@
 # Arcane
 
-A C++23 game engine for Windows: NRI renderer on D3D12 + Vulkan,
-game-as-DLL hot reload, an ImGui editor, a data-driven runtime host, and a
-project launcher.
+Arcane is a C++23 game engine. A game is a hot-reloaded shared library
+loaded by an editor, a runtime host, or a dedicated server. The renderer
+is NRI on D3D12 and Vulkan (MoltenVK on macOS). Gameplay code uses a flat
+`Arcane::` API over the Astra ECS and Manifold2D. The editor is ImGui on
+the same renderer. Units are metres, kilograms, and seconds. The world is
+right-handed, +Y up, and the camera looks down -Z.
 
-https://starworks.dev/arcane
+This tree is the engine and its SDK. External projects set `ARCANE_SDK` to
+the repo root and consume `build/arcane.lua`. The in-repo sample is
+[ReferenceProject](ReferenceProject).
 
-## Modules
+## Status
 
-| Project | What it is |
+Windows is the desk the editor, the runtime, and the real-GPU image gate
+are used on. Linux and macOS build, and they run the test suite in GitHub
+Actions. The Linux GPU lane uses Mesa lavapipe (a software Vulkan
+device). The macOS GPU lane uses MoltenVK on the runner's Apple
+paravirtual device. Interactive use, and play on a real GPU, have not
+been hand-verified on Linux or macOS.
+
+| Area | Where it stands |
 |---|---|
-| `ArcaneCore` | Static lib: networking, types, logging, shared header-only utilities. Namespaced include root (`#include <Arcane/...>`), zero game references -- liftable into any project. |
-| `ArcaneClient` | The engine DLL: SDL3 window/input, NRI device (D3D12 + Vulkan, 2 frames in flight), linear-HDR Canvas -> sort-keyed Batcher2D -> ACES tonemap, MSDF text, asset cache, ImGui integration, enkiTS job system, ECS runtime (Astra), exposed to game code as the `Arcane::` facade, 2D physics (Manifold2D), scene save/load, plugin host. |
-| `ArcaneRuntime` | Standalone runtime host: opens an `.arcproj` and runs its game module. `--frames N` is the scripted GPU-verify; F5 = reload with state, F6 = fresh reload. |
-| `ArcaneEditor` | The ImGui-on-NRI editor host (`ArcaneEditor.exe`). |
-| `ArcaneHub` | Tauri-based project launcher; owns the `.arcproj` file association and recents. |
-| `ArcaneServer` | Server-side engine tooling (scaffold). |
-| `ArcaneTests` | Catch2 test suite (plus hot-reload fixture plugin DLLs). |
-| `ReferenceProject` | The in-repo sample game, built exactly like an external project through the SDK (`build/arcane.lua`) -> `Binaries/ReferenceGame.dll`. |
+| Editor, runtime, hot reload, 2D physics, sprites, meshes, cooking | In the tree and used on Windows. |
+| Hosted CI on Windows, Linux, and macOS | In the tree. Build and the Catch2 suite run on all three. See [docs/ci.md](docs/ci.md). |
+| Real-GPU golden images | Defined in the [Jenkinsfile](Jenkinsfile) for a Windows GPU agent, and run on the Windows desk. |
+| Unified 2D and 3D world rendering | In progress on a separate branch. Sprites still draw through the 2D batcher. |
+| Entity replication, 3D physics, 64-bit worlds, game UI, VFX, skeletal animation | Specified or planned. Not in this tree. |
+| `arc` automation CLI | Designed. The checked-in note is still a draft, and the tool is not in this tree. |
+
+## Feature overview
+
+### ECS
+
+The ECS is [Astra](ThirdParty/Astra), vendored under `ThirdParty/Astra`.
+Game code never includes `Astra::`. [`Arcane/Ecs.hpp`](ArcaneCore/src/Arcane/Ecs.hpp)
+is the facade: `Arcane::View`, `Arcane::Res`, `Arcane::ResMut`,
+`Arcane::Commands`, `Arcane::Entity`, `Arcane::SystemTraits`,
+`Arcane::Before`, and `Arcane::After`. `Arcane::Registry` is the Astra
+registry.
+
+Entities are 32-bit by default (`ASTRA_ENTITY_BITS`). Systems declare the
+components and resources they touch. The scheduler orders them from those
+parameters and from `Before` / `After` traits. Phases are
+`FixedUpdate`, `Update`, and `Render`. A missing resource skips that
+system and logs one line.
+
+`Arcane::Time` is in every world: `realDt`, `dt`, `fixedDt`, `alpha`,
+`elapsed`, `fixedStep`, `timeScale`, `paused`, `inFixedStep`.
+`Arcane::GameInput` is in client worlds. A server world has none. Code
+outside a system, such as a module's `OnUpdate`, reads the same resources
+with `Registry().GetResource<Arcane::Time>()`. There is no process-global
+world: one process can hold an edit world, a Play world, an embedded
+server, and test worlds at the same time.
+
+The flat-API contract is
+[docs/superpowers/specs/2026-10-10-arcane-flat-gameplay-api-design.md](docs/superpowers/specs/2026-10-10-arcane-flat-gameplay-api-design.md).
+
+### 2D physics
+
+2D physics is [Manifold2D](ThirdParty/Manifold2D). Game code includes
+[`Arcane/Physics2D.hpp`](ArcaneCore/src/Arcane/Physics2D.hpp) and talks to
+`Arcane::PhysicsWorld2D`, `Arcane::PhysicsSystem2D`, `Arcane::RigidBody2D`,
+and `Arcane::Collider2D`.
+
+`RigidBody2D` defaults to `BodyType2D::Kinematic`. Body types are
+`Static`, `Kinematic`, and `Dynamic`. Fixture shapes reflected in the
+inspector are `Circle`, `Capsule`, and `Aabb`. `Polygon` is a legal value
+and is not an inspector option, because a fixture stores no vertex list.
+
+Project gravity defaults to `{0, -9.81}` metres per second squared (+Y up).
+A scene can override it with `PhysicsSettings2D`. The parallel solver
+exists and stays off unless `physics.parallelSolver` is enabled. The
+executor seam is wired: when the solver is on, it runs on the engine job
+pool (enkiTS) through Mosaic's `IWorkScheduler`.
+
+Events are pull-model. `StepEvents()` is the latest physics step.
+`FrameEvents()` is every step since the frame began. `ContactsOf(entity, out)`
+lists what that entity is touching, including sleepers. Each side carries
+the entity, a `Guid` (the entity's `Identity` when it has one, otherwise
+empty), and a fixture index into `Collider2D`. The entity handle is valid
+in the frame it is read. Keep the `Guid` if the identity has to outlive
+that frame. Design:
+[docs/specs/2026-10-08-physics-2d-events-design.md](docs/specs/2026-10-08-physics-2d-events-design.md).
+
+3D physics is not in the tree. The planned library is Box3D. See the
+roadmap.
+
+### Rendering
+
+The device is NRI, with D3D12 and Vulkan backends. macOS uses Vulkan
+through MoltenVK. There is no Metal backend. Linux and macOS are
+Vulkan-only. The default is 2 frames in flight
+(`render.framesInFlight`).
+
+The scene renders linear into an RGBA16F canvas. `TonemapNode` applies a
+Narkowicz ACES fit and a true sRGB encode, and it is the pass that writes
+the backbuffer. HLSL sources live in `data/shaders/` and compile to DXIL
+and SPIR-V (SPIR-V only on macOS). Vulkan register shifts match NRI's
+binding offsets. `ARCANE_SHADER_DIR` overrides the shader directory for
+the hot-reload dev loop.
+
+What draws today:
+
+- **Batcher2D:** sprites, circles, capsules, and MSDF text. Draws sort by
+  a 64-bit key of sorting layer then order in layer. Equal keys have no
+  guaranteed order.
+- **Meshes:** a persistent GPU instance scene, dirty-tracked uploads, and
+  indirect draws. Compute mesh culling runs per view and is on by default.
+  Materials are bindless.
+- **Other passes:** ground grid, an id pass for picking (sprites and
+  meshes in every view mode), selection outlines, a post chain, ImGui,
+  and the GPU-scene upload.
+
+World-space sprites still go through Batcher2D. Moving them onto the mesh
+path is the unified-world pipeline (F5), which is in progress and not in
+this tree. Clustered lighting, shadows, TAA, and global illumination are
+roadmap work. The public renderer target is described in
+[docs/research/2026-08-12-deadlock-render-target.md](docs/research/2026-08-12-deadlock-render-target.md).
+
+One `ViewTransform` feeds every consumer. A 2D view is an orthographic
+camera in metres (`Ortho2DView`). Sprite assets default to 100 pixels per
+metre (`SpriteAsset::ppu`). Author content in metres.
+
+### Materials, shaders, and text
+
+The editor has a shader graph and a material graph. Saved materials are
+`.arcmat`. Sprites can reference a material; a nil material uses the
+plain sprite pipeline. Mesh materials participate in the GPU scene.
+MSDF text is a Batcher2D path (`msdf.hlsl` and the text system share
+atlas constants). It is the text rasterizer, not a game UI toolkit.
+
+### Editor
+
+`ArcaneEditor` is an ImGui application on the engine renderer. The default
+dock layout is a full-height Inspector, an Outliner, a central viewport
+with document tabs, and a bottom band: Asset Browser (selected), Asset
+Graph, Asset Status, Console, and Problems, plus a second Inspector that
+shows assets only.
+
+The viewport toggles 2D and perspective over one editor camera. The
+transform gizmo is 3D and draws as viewport chrome (an ImGui overlay on
+the image). The 2D view masks its Z handles. Meshes and sprites are
+click-selectable in both modes.
+
+Documents include the shader graph, materials, sprites (`.arcsprite`),
+meshes (`.arcmesh`), input actions, and crash reports. Play mode can run
+standalone, listen-server, embedded-server, or client-only. **Build,
+Rebuild Game Module** spawns `arcbuild`. **Create, C++ Class** emits a
+component, a system, or a plain class in the flat-API shape.
+
+### Settings and cvars
+
+Cvars are typed values with a `SetBy` history, a frame publish barrier,
+and default-deny permissions. Value types are `Bool`, `Int32`, `UInt32`,
+`Int64`, `UInt64`, `Float32`, `Float64`, `String`, `Color`, `Vec2`,
+`Vec3`, `Vec4`, and `Enum`.
+
+Declare one in a `.cpp` at namespace scope. `.help` is required unless
+the cvar is hidden:
+
+```cpp
+#include <Arcane/Config/CVarDecl.hpp>
+
+ARC_CVAR(cvar_undoMaxSteps, "editor.undo.maxSteps", std::int32_t, 100,
+         .min = 1, .max = 10000, .audience = Arcane::Audience::Editor,
+         .scope = Arcane::SettingScope::PreferencesProject,
+         .help = "Undo history depth in steps.");
+```
+
+`--set name=value` is the command-line door. The editor has Preferences,
+Project Settings, and a Console tab. The runtime has an overlay. The
+dedicated server reads `get`, `set`, `list`, and `explain` on stdin
+through the same remote-cvar service. Config layers and `ARC_SETTINGS`
+structs are part of the same system. Design (implemented):
+[docs/superpowers/specs/2026-10-03-settings-and-cvar-completion-design.md](docs/superpowers/specs/2026-10-03-settings-and-cvar-completion-design.md).
+
+### Game modules and hot reload
+
+A game module subclasses `Arcane::GameModule` and exports its entry
+points with `ARC_GAME_MODULE`. The host checks `kGamePluginABIVersion`
+and refuses a mismatch. The current version lives in
+[`PluginABI.hpp`](ArcaneCore/src/Arcane/Plugin/PluginABI.hpp). Bumping it
+is normal during engine development.
+
+```cpp
+#include <Arcane/Plugin/GameModule.hpp>
+
+namespace MyGame
+{
+struct Module final : Arcane::GameModule
+{
+    void OnDrawUI() override {}
+};
+}
+
+ARC_GAME_MODULE(MyGame::Module)
+```
+
+Hooks include `OnInit`, `OnShutdown`, `OnFixedUpdate`, `OnUpdate`,
+`OnDrawUI`, and save/load state for hot reload. The engine installs its
+own systems (`PhysicsSystem2D`, transform propagation, render
+submission). A module registers only its own, with `ARC_SYSTEM` or
+`RegisterSystem` in `OnInit`.
+
+The plugin host watches the module file and reloads it (debounced, state
+kept). In the runtime, F5 is `reload_plugin` (state kept) and F6 is
+`reload_plugin_fresh`. Hot reload is refused while a net driver reports
+itself active. On macOS a module unloads only if it holds no thread-local
+variables, so game modules build with spdlog's thread-local storage off
+(`SPDLOG_NO_TLS`); a `thread_local` in your own game code keeps the module
+loaded and blocks hot reload there. Secondary plugins load once and do not hot-reload on
+their own.
+
+The manifest may name the module `MyGame.dll`. Off Windows the loader
+maps that stem to `MyGame.so` or `MyGame.dylib`.
+
+### Assets and cooking
+
+`arccook` cooks textures (BC7) and meshes (cgltf and meshoptimizer) into
+`.arcart` artifacts. The common prefix carries an artifact version,
+content kind, source guid, source hash, and importer version. Content
+kinds today are texture and mesh. The client reads artifacts with its
+own reader. It does not link `ArcaneAssetPipeline` (that static library
+is the cook side, used by `arccook` and the editor cook queue).
+
+```bat
+bin\Debug-windows-x86_64-md\arccook\arccook.exe --project ReferenceProject --check
+```
+
+`--check` exits 0 when nothing is stale and 2 when something is.
+`--dump-dds` cooks, then writes a DDS for one texture guid.
+
+Scenes are JSON (`.arcscene`), `kSceneJsonVersion` 6, and files back to
+version 3 still load. Projects are `.arcproj`. Sprites are `.arcsprite`.
+Materials are `.arcmat`. Meshes in the editor are `.arcmesh`.
+
+### Networking today
+
+`NetMode` is `Standalone`, `DedicatedServer`, `ListenServer`, or
+`Client`. `RoleMask` is `Server`, `Client`, or `Both`. Play topologies
+are `Standalone`, `ListenServer`, `EmbeddedServer`, and `ClientOnly`.
+They choose which systems run. They do not replicate entities.
+
+`INetDriver` is the transport seam (`IsActive()`). No production driver
+ships. A length-framed JSON protocol over TCP
+([`Net/Protocol.hpp`](ArcaneCore/src/Arcane/Net/Protocol.hpp)) is what
+the protocol fuzzer exercises.
+
+`ArcaneServer` is a dedicated-server host. It links `ArcaneCore` and not
+`ArcaneClient`. It opens an `.arcproj`, loads the game module, and ticks
+a fixed step. It does not replicate.
+
+Replication with snapshots, prediction, and relevance is specified and
+not implemented. See the roadmap.
+
+### Diagnostics
+
+A crash or a hang writes a text report and a minidump under
+`<exe dir>/diagnostics/`. Tests and hosts should be diagnosed from that
+text before theorizing.
+
+On Windows, `ArcaneCrashReporter` is a separate process: a window, a
+symbolizer, and a hang monitor launched beside the host.
+
+On Linux and macOS the same reports are written in-process. Fatal
+signals run on an alternate stack. Stacks are frame-pointer walks. The
+dump is Breakpad format. macOS reads suspended threads through Mach.
+There is no `ArcaneCrashReporter` on those platforms, so the hand-off to
+a reporter process reports failure, and `launchMonitor` is ignored.
+The hang witness (H1) and the reporter/monitor cases stay excluded there
+for that reason. GPU fault breadcrumbs are a Windows D3D12 path.
+
+### Audio
+
+`Arcane::Audio::AudioDevice` plays sounds through miniaudio: buses,
+voices, volume, pitch, and pan. Mutators run on the main thread. Hosts
+can force the null backend (the usual choice for `--frames` and CI).
+A mixer graph, spatialization, streaming cues, and an audio editor are
+planned and not built.
+
+## Platforms and requirements
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| CI host | `windows-2025`, MSVC (VS 2026) | `ubuntu-24.04`, GCC 14 and Clang 19 on libstdc++ 14 | `macos-15`, Apple silicon, Xcode 16.4, Apple Clang, libc++ |
+| Graphics in CI | The CPU suite. Real GPU is the Jenkins agent. | `[gpu]` on lavapipe, GCC 14 Debug only | `[gpu]` on MoltenVK, Debug only |
+| Renderer you can select | D3D12 and Vulkan | Vulkan | Vulkan (MoltenVK) |
+| Default `arcbuild` action | `vs2026` | `gmake` | `gmake` (`xcode4` remains available) |
+| Output directory | `bin\Debug-windows-x86_64-md` | `bin/Debug-linux-x86_64-md` | `bin/Debug-macosx-AARCH64-md` |
+
+Toolchains below the CI pins do not build the engine. GCC 13 lacks the
+C++23 feature set the code uses. Clang needs libstdc++ from GCC 14.
+Intel Macs are not tested. `ARCANE_MAC_ARCH=arm64|x86_64` exists for a
+Mac target, and the fetched premake binary for macOS is arm64.
+
+Three configurations: **Debug**, **Release**, and **Dist**. Dist ships
+without symbols. Every module uses the dynamic CRT (`/MD` on Windows) so
+the engine and the game module share one heap. Engine builds do not use
+fast-math.
+
+SDL3 comes from vcpkg on Windows. Linux and macOS build it from source
+with [`scripts/build-sdl3.sh`](scripts/build-sdl3.sh) (SDL 3.2.22, the
+version the script pins). Neither Ubuntu 24.04 nor a stock Mac packages
+it.
+
+The macOS port notes, including MoltenVK gaps measured on the runner,
+are [docs/research/2026-10-07-macos-moltenvk-port.md](docs/research/2026-10-07-macos-moltenvk-port.md).
+Apple libc++ has no IANA time-zone database. Crash-report timestamps
+fall back when a named zone is unavailable.
+
+## Repository layout
+
+The repo root is the Premake workspace. `GenerateProjects.bat` writes
+`Arcane.slnx` here. `ReferenceProject` is a second workspace that
+consumes the SDK the way an external game does. `ArcaneHub` is not in
+the C++ solution.
+
+| Path | What it is |
+|---|---|
+| `ArcaneCore/` | Shared library. Headless engine: ECS facade, scene, 2D physics, reflection, cvars, assets reader, the net seam, logging. Include root `#include <Arcane/...>`. No game references. |
+| `ArcaneClient/` | Shared library. SDL3, NRI, the render graph, Batcher2D, audio, ImGui, input, the plugin host's client side. |
+| `ArcaneAssetPipeline/` | Static library. Cook importers. Used by `arccook` and the editor. |
+| `arccook/` | Command-line cooker. |
+| `arcbuild/` | Game-project build driver (Premake, then MSBuild, Make, Ninja, or xcodebuild). |
+| `ArcaneRuntime/` | Windowed runtime host. Opens an `.arcproj` and runs its module. |
+| `ArcaneEditor/` | Editor host. |
+| `ArcaneServer/` | Dedicated server host. Links `ArcaneCore` only. |
+| `ArcaneCrashReporter/` | Windows-only crash and hang reporter. |
+| `ArcaneTests/` | Catch2 suite and hot-reload fixture modules. |
+| `ArcaneHub/` | Tauri and Svelte launcher. Recents, and on Windows the `.arcproj` file association. |
+| `ReferenceProject/` | Sample game. Builds to `Binaries/ReferenceGame.dll` (`.so` / `.dylib` off Windows). |
+| `ThirdParty/` | Vendored dependencies. See [NOTICE.md](NOTICE.md). |
+| `build/arcane.lua` | SDK Premake module. |
+| `data/` | Shader sources, fonts, engine input config. Generated shaders are gitignored. |
+| `docs/` | Specs, research, and [docs/ci.md](docs/ci.md). |
+| `scripts/` | Setup, test runners, the golden gate, fuzz, tool fetches. |
+| `fuzz/` | libFuzzer harnesses. See [docs/fuzzing.md](docs/fuzzing.md). |
+
+Off Windows the engine libraries are `libArcaneCore.so` /
+`libArcaneClient.so` and `libArcaneCore.dylib` /
+`libArcaneClient.dylib`. Executables have no `.exe` suffix.
+`scripts/arcane-bin-dir.sh Debug` prints the bin directory for a
+configuration.
 
 ## Building
 
-Prerequisites: Visual Studio 2026 with "Desktop development with C++",
-[vcpkg](https://vcpkg.io) (`VCPKG_ROOT` set). premake5 ships bundled at
-`ThirdParty/premake5/`.
+Authoritative detail, pins, and the CI matrix:
+[docs/ci.md](docs/ci.md). Premake is 5.0.0-beta8.
+[`scripts/fetch-premake.sh`](scripts/fetch-premake.sh) downloads the
+pinned binary. A copy also ships at `ThirdParty/premake5/` for Windows.
+
+Re-run Premake when `premake5.lua`, a vendored `premake5.lua`, or a
+file list changes. Build the sample module before a host that loads it.
+The hosts stage `ReferenceProject` beside themselves.
+
+### Windows
+
+Visual Studio 2026, "Desktop development with C++", and
+[vcpkg](https://vcpkg.io) with `VCPKG_ROOT` set.
 
 ```bat
-scripts\setup-vcpkg-deps.bat   # once: SDL3 via the bundled overlay triplet
-GenerateProjects.bat            # premake5 -> Arcane.slnx
+scripts\setup-vcpkg-deps.bat
+GenerateProjects.bat
 msbuild Arcane.slnx /p:Configuration=Debug /m
 ```
 
-Run the tests (from the exe dir; `~[gpu]` skips GPU-touching cases on
-machines without a capable GPU):
+`setup-vcpkg-deps.bat` installs SDL3 with the overlay triplet in
+`vcpkg-triplets/` (dynamic CRT).
+
+CPU tests, from the exe directory, two equivalent doors:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-tests.ps1 Debug --rng-seed 1
+```
 
 ```bat
 cd bin\Debug-windows-x86_64-md\ArcaneTests
-ArcaneTests.exe ~[gpu]
+ArcaneTests.exe ~[gpu] --rng-seed 1
 ```
 
-Build and run the sample:
+`scripts\run-tests.ps1` always applies `~[gpu]`. It has no GPU switch.
+The unfiltered suite, including `[gpu]`, is what the Jenkins job runs.
+You can also run `ArcaneTests.exe` with no tag filter from that
+directory.
+
+The sample, as its own workspace (`ARCANE_SDK` is optional here; the
+Premake file locates the engine one directory up):
 
 ```bat
 cd ReferenceProject
 ..\ThirdParty\premake5\premake5.exe vs2026
 msbuild ReferenceProject.slnx /p:Configuration=Debug /m
-cd ..
+```
+
+### Linux
+
+GCC 14 or Clang 19, plus the pinned SDL3 prefix. The snippet uses GCC,
+matching the `linux-gcc-14` CI leg. Clang is the same commands with
+`CC=clang-19`, `CXX=clang++-19`, and `--cc=clang`.
+
+```bash
+scripts/fetch-premake.sh
+scripts/fetch-dxc-linux.sh
+scripts/build-sdl3.sh "$HOME/sdl3-prefix"
+export SDL3_ROOT="$HOME/sdl3-prefix"
+export CC=gcc-14 CXX=g++-14
+ThirdParty/premake5/premake5 --cc=gcc gmake
+make -j3 config=debug ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient
+"$(scripts/arcane-bin-dir.sh Debug)/arcbuild/arcbuild" build --project ReferenceProject --config Debug --sdk "$PWD"
+make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
+scripts/run-tests.sh Debug --rng-seed 1
+```
+
+Keep `-j` low. Linking Debug `ArcaneTests` peaks around 500 MB per
+link, and several links at once will thrash a small machine. CI uses
+`-j3`.
+
+The game module is built before the hosts because their post-build step
+stages `ReferenceProject`. `config=debug`, `config=release`, and
+`config=dist` are the three gmake configurations.
+
+`scripts/run-tests.sh` runs `~[gpu]` unless you pass `--gpu`. With
+`SDL_VIDEODRIVER` unset it uses SDL's offscreen driver. Cases that
+cannot pass on Linux are listed, each with a reason, in
+[`scripts/linux-test-exclusions.txt`](scripts/linux-test-exclusions.txt).
+
+The GPU lane (lavapipe plus the pinned Vulkan validation layers):
+
+```bash
+# Build the pinned layers into a user-owned prefix, then install them into
+# /usr/local (the loader search root the script expects), as CI does.
+# Needs git, cmake, ninja and a C++ toolchain.
+scripts/build-vvl-linux.sh "$HOME/vvl-prefix"
+sudo cp -a "$HOME/vvl-prefix/." /usr/local/
+sudo ldconfig
+export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+export SDL_VIDEODRIVER=x11
+xvfb-run -a -s "-screen 0 1920x1080x24" scripts/run-tests.sh --gpu Debug --rng-seed 1
+```
+
+Install those validation layers only through
+`scripts/build-vvl-linux.sh`. Leave Ubuntu's
+`vulkan-validationlayers` package off that machine: it is an older
+layer set, and the suite expects the pin in the script.
+[`scripts/linux-windowed-smoke.sh`](scripts/linux-windowed-smoke.sh)
+opens a real window under Xvfb on both X11 and Wayland. CI runs that
+smoke on the GCC 14 Debug leg.
+
+Shader compilation on Linux is `data/shaders/compile-shaders.sh`
+(DXIL and SPIR-V), invoked by the Premake prebuild step.
+`scripts/fetch-dxc-linux.sh` fetches the compiler.
+
+### macOS
+
+Apple silicon, Xcode 16.4, and the same SDL3 build. CI selects that
+Xcode on purpose:
+
+```bash
+sudo xcode-select -s /Applications/Xcode_16.4.app
+scripts/fetch-premake.sh
+scripts/fetch-vulkan-sdk-macos.sh --system
+scripts/build-sdl3.sh "$HOME/sdl3-prefix"
+export SDL3_ROOT="$HOME/sdl3-prefix"
+ThirdParty/premake5/premake5 --cc=clang gmake
+make -j3 config=debug ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient
+"$(scripts/arcane-bin-dir.sh Debug)/arcbuild/arcbuild" build --project ReferenceProject --config Debug --sdk "$PWD"
+make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
+scripts/run-tests.sh Debug --rng-seed 1
+```
+
+`scripts/fetch-vulkan-sdk-macos.sh --system` installs MoltenVK, the
+Vulkan loader, validation layers, and DXC under `/usr/local`. The GPU
+lane:
+
+```bash
+export VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json
+export SDL_VIDEODRIVER=cocoa
+scripts/run-tests.sh --gpu Debug --rng-seed 1
+```
+
+Exclusions:
+[`scripts/macos-test-exclusions.txt`](scripts/macos-test-exclusions.txt).
+Editor golden witnesses E2 through E6 are excluded on this lane because
+text and edges rasterize differently from the Windows references, and
+that device has no blessed golden slot. The runtime golden witnesses
+W1 through W6, and `f3-cull-blend`, match. Shaders compile to SPIR-V
+only (`data/shaders/compile-shaders.sh`).
+
+A desk Mac and a real discrete GPU have not been part of the
+verification. The results above are the GitHub `macos-15` runner.
+
+## Running
+
+Paths below are the Windows Debug layout. On Linux and macOS drop
+`.exe` and use the bin directory from the table above (or
+`scripts/arcane-bin-dir.sh`).
+
+### Editor
+
+```bat
+bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject
+```
+
+Headless captures used by the golden gate add `--headless`, `--backend`
+(`dx12` or `vulkan`), `--frames`, `--settle`, `--report`, and
+`--compare`. `--settle` is refused unless `--report` or `--screenshot`
+is also set.
+
+### Runtime
+
+```bat
 bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
 ```
 
-### Linux (GCC 14 / Clang 19)
+`--frames N` runs N frames and exits. That is the scripted GPU check.
+F5 reloads the game module and keeps state. F6 reloads it fresh
+(engine input config included). `--scene <guid>` opens a scene other
+than the project boot scene.
 
-The hosted `.github/workflows/linux.yml` lane is the reference recipe. The
-minimum toolchains are GCC 14 or Clang 19 with libstdc++ 14 (GCC 13 lacks
-C++23 deducing-this; Clang 18 cannot use libstdc++'s `<expected>`). SDL3
-comes from the system (`pkg-config sdl3`, or `SDL3_ROOT`), so no vcpkg is
-needed. Ubuntu 24.04 does not package SDL3, so build 3.2.x from source into
-`/usr/local`. The Vulkan backend is the only one; D3D12 is Windows-only.
-
-```sh
-scripts/fetch-premake-linux.sh   # once: ThirdParty/premake5/premake5 (gitignored)
-scripts/fetch-dxc-linux.sh       # once: ThirdParty/tools/dxc-linux (shaders + runtime compiles)
-ThirdParty/premake5/premake5 gmake          # --cc=clang for Clang
-make -j3 config=debug ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient
-bin/Debug-linux-x86_64-md/arcbuild/arcbuild build --project ReferenceProject --config Debug --sdk "$PWD"
-make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
-xvfb-run -a env SDL_VIDEODRIVER=x11 scripts/run-linux-tests.sh Debug   # ~[gpu] minus scripts/linux-test-exclusions.txt
-```
-
-**GPU lane and windowed hosts (Mesa lavapipe).** `[gpu]` cases and real
-windows run on a GPU-less box through lavapipe, under Xvfb (X11) or a headless
-weston (Wayland). Build the validation layer once with
-`scripts/build-vvl-linux.sh` (installs to `/usr/local`; do NOT also install
-Ubuntu's `vulkan-validationlayers` -- its 1.3.275 sync validation ignores host
-timeline-semaphore waits and fails every frame-slot reuse as a hazard):
-
-```sh
-xvfb-run -a -s "-screen 0 1920x1080x24" env SDL_VIDEODRIVER=x11 scripts/run-linux-tests.sh --gpu Debug
-xvfb-run -a -s "-screen 0 1920x1080x24" scripts/linux-windowed-smoke.sh Debug logs/windowed x11 wayland
-```
-
-lavapipe is a software adapter, so a `--compare` resolves its own reference
-set first, `ReferenceProject/Verify/References/vulkan-lavapipe/`, then the
-usual `vulkan/` and shared levels; a `--bless` on lavapipe writes only that
-set (`Arcane::ReferenceAdapterSet`, `ReferenceImages.hpp`).
-
-Keep `-j` low on small machines: the Debug ArcaneTests link alone writes
-about 500 MB. The game module is built before the hosts because their
-postbuild stages `ReferenceProject/` (`Binaries/` included) beside them.
-Off-Windows, a module is `Name.so` (an authored `Name.dll` resolves to it),
-and engine libraries are `libArcaneCore.so`/`libArcaneClient.so`.
-
-Crash and hang reports work on Linux too (`Base/Posix/`): fatal signals on a
-sigaltstack hand off to the same crash thread, stacks are walked by frame
-pointer (every ELF target builds with `-fno-omit-frame-pointer`), and the
-`.dmp` beside each `.txt`/`.arcdiag` is a Breakpad-format minidump --
-`minidump-stackwalk` (rust-minidump) reads it, and `minidump-2-core` turns it
-into a core for gdb. There is no Linux `ArcaneCrashReporter` or crash monitor
-yet, so the reporter hand-off reports "failed" and `launchMonitor` is ignored.
-
-## Automation
-
-Two layers, both owned by the engine and both in `scripts/`, plus the agent-facing layer on top of
-them (see [Agent skills and the knowledge graph](#agent-skills-and-the-knowledge-graph)).
-
-**`ArcaneTests`** is the unit/integration suite. Run it **from its own directory** -- it resolves
-data relative to the working directory and runs in random order:
+### Server
 
 ```bat
-cd bin\Debug-windows-x86_64-md\ArcaneTests
-.\ArcaneTests.exe ~[gpu]
+bin\Debug-windows-x86_64-md\ArcaneServer\ArcaneServer.exe --project ReferenceProject --frames 300 --report server.json
 ```
 
-`~[gpu]` is the standing dev-loop filter: it excludes the 25 GPU-touching cases. It does **not**
-exclude `[golden]` or `[mesh]`, which carry no `[gpu]` tag, are CPU-side, and are part of the
-baseline.
+The process ticks until `--frames` completes, or until Ctrl-C when
+`--frames` is 0. Stdin is an admin console (`get`, `set`, `list`,
+`explain`, `help`) unless `--no-admin-console` is set.
+`--report` is written when the loop ends. A server started with
+`--frames 0` and then killed does not write that file.
+`--print-engine-info` prints identity JSON and exits.
 
-**`scripts/golden-gate.ps1`** is the golden-image gate, and it is what covers what the suite
-cannot: that the engine still *renders* the same picture. It runs eight lanes -- four references
-(`runtime-scene`, `f3-cull-blend`, `editor-ui`, `editor-ui-perspective`), each on D3D12 and Vulkan --
-launching the real hosts headless against `ReferenceProject` and comparing each capture against a
-blessed reference.
+### Hub
 
-```bat
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
-type bin\Debug-windows-x86_64-md\golden-gate-summary.json
-```
+`ArcaneHub` is the launcher: recent projects, and on Windows the
+`.arcproj` association. It is a Tauri application (Rust and Svelte),
+built with Node and Cargo, not with `Arcane.slnx`. The installer
+workflow is
+[`.github/workflows/build-arcane-hub.yml`](.github/workflows/build-arcane-hub.yml)
+(Windows, NSIS). No Hub binary is committed.
 
-It runs in CI from the `Jenkinsfile` on a GPU agent (job setup: `ci/README.md`); GitHub Actions builds and runs `ArcaneTests`
-only.
+## Making a game
 
-`golden-gate.ps1 -SelfTest` proves the gate is capable of failing: it deliberately breaks
-`ReferenceProject`'s boot scene, asserts every lane that renders it goes red, and restores in a `try/finally` that
-covers the whole mutation-to-restore window, not just its tail. The Jenkins pipeline runs it on
-`main`/`milestone/*` only, immediately after the ordinary "Golden gate" stage on the same agent --
-the property it proves belongs to the gate itself, which changes rarely, so it does not need to run
-on every branch.
+### Consume the SDK
 
-**The machine-readable contract is `golden-gate-summary.json`. Assert on `gatePassed` and the
-per-lane `verdict` -- never on the exit code.** `-SelfTest` writes a SEPARATE
-`golden-gate-selftest-summary.json` in the same directory (also carrying `"selfTest": true`), so a
-self-test run never overwrites a green build's `gatePassed: true` artifact.
-
-The gate deletes that file at start-up and writes it again on the way out -- including on the paths
-where it *refuses to run at all* (a failed `ReferenceProject` rebuild, a malformed
-`automation-exclusions.json`, a dirty tree under `-SelfTest`). A refusal is `schemaVersion: 3`,
-`gatePassed: false`, a non-empty `refusalReason` and no lanes, so following the rule above never
-reads a previous run's green as this run's answer.
-
-### Blessing a reference
-
-When a rendering change is intentional, re-bless. `--bless` accepts the converged capture as the
-reference `--compare` names, writing to the level it resolved from
-(`Verify\References\<backend>\<name>.png` if that override exists, else the shared
-`Verify\References\<name>.png`).
-
-**`--project` resolves against the working directory**, so where a bless lands depends on where you
-run it. From the repo root it writes the SOURCE `ReferenceProject\`; from the host's exe directory
-(which is how the gate runs) it writes the STAGED copy under `bin\<config>\<Host>\ReferenceProject\`.
-The source tree is the one that matters: the next ReferenceProject build restages the whole project
-beside the hosts and overwrites a staged-only bless. So either bless from the repo root:
-
-```bat
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
-  --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
-```
-
-or, if you blessed from the exe directory, immediately copy the blessed PNG back into the source
-`ReferenceProject\Verify\References\`. Either way `git status` must show the reference modified.
-`scripts\desk-verify-golden-gate.ps1` handles the restaging for its own round-trip.
-
-Also easy to get wrong:
-
-- **`--report` (or `--screenshot`) is required.** `--settle` is refused without one, because it
-  compares captured frames and otherwise has nowhere to land the result.
-- **Per-reference levels.** `runtime-scene` and `f3-cull-blend` are backend-split (a Vulkan
-  override; D3D12 uses the shared file and reports `PassedOnFallback`), so bless each backend.
-  `editor-ui` and `editor-ui-perspective` are shared, so bless them once. `f3-cull-blend` renders a
-  fixture scene (`--scene 7e5a0030-0030-4030-8030-000000000030`) and `editor-ui-perspective` adds
-  `--view-mode perspective`.
-
-The full procedure, including the mesh-thumbnail goldens and what to do when a diff will not go
-away, is the `arcane-verify` agent skill below.
-
-### `scripts/desk-verify-golden-gate.ps1`
-
-The desk half. CI now proves the gate **can fail** too (`golden-gate.ps1 -SelfTest`, above, on
-`main`/`milestone/*`) -- this script's Phase A covers the same ground locally, with eyes on it, on
-ANY branch. What only this script still covers: that blessing is **cheap** (Phase B times a full
-break -> fail -> bless -> pass round-trip). Needs a display and a real GPU. Every mutation is
-inside `try/finally` and restored with `git checkout --`, so Ctrl-C is safe.
-
-### Agent skills and the knowledge graph
-
-AI agents (Claude Code) drive the same CLIs as everyone else: `arcbuild`, `arccook`, the hosts'
-`--frames`/`--settle`/`--compare`/`--probe` flags, `golden-gate.ps1` and the JSON reports. Two
-additions make that reliable:
-
-- **Project skills in `.claude/skills/`**, checked in and loaded on demand: `arcane-build`,
-  `arcane-tests`, `arcane-verify` and `arcane-graph`. Each carries the repo-specific traps for its
-  area (the single-slot game DLL, source-vs-staged `--project` resolution, seeds and CI lanes, where
-  a bless writes). They are plain Markdown and double as human runbooks.
-- **A knowledge graph of the engine** in `graphify-out/` (gitignored), built with
-  [graphify](https://github.com/Graphify-Labs/graphify) over every first-party module, the Starworks
-  libraries under `ThirdParty/` (Astra, Manifold2D, Mosaic) and all of `docs/`. Scope is set by the
-  root `.graphifyignore`. Build it with `/graphify .` in Claude Code, refresh with
-  `/graphify . --update`, and list everything connected to a symbol, code and governing docs alike,
-  with:
-
-  ```bat
-  python .claude\skills\arcane-graph\neighbors.py ViewTransform
-  ```
-
-Agent tooling is deliberately CLI-first rather than MCP. Asking a *running* host a new question is
-the remaining gap; it is planned as a CLI client to an in-host listener, alongside the cvar/console
-work.
-
-## Using the engine as an SDK
-
-External game projects consume the engine in place through the `ARCANE_SDK`
-environment variable (pointing at this repo root) and the premake module at
-`build/arcane.lua`:
+Point `ARCANE_SDK` at this repo. A game workspace is a Premake file next
+to the `.arcproj`:
 
 ```lua
 workspace "MyGame"
     architecture "x64"
     configurations { "Debug", "Release", "Dist" }
+
 include(os.getenv("ARCANE_SDK") .. "/build/arcane.lua")
-arcane_game_module("MyGame")   -- SharedLib game module -> Binaries/MyGame.dll
+arcane_game_module("MyGame")
 ```
 
-The host hot-reloads the module on rebuild (debounced mtime watcher, state
-preserved), with an ABI gate refusing cross-build mismatches.
+`arcane_game_module` reads `sourceDir` from that `.arcproj` (default
+`Source/`) and declares a C++23 shared library into `Binaries/`. On
+macOS the helper selects the host architecture, so the workspace can
+keep `architecture "x64"`. The built file is `MyGame.dll`, `MyGame.so`,
+or `MyGame.dylib`. The manifest may still say `MyGame.dll`.
 
-### Writing gameplay code
+`ReferenceProject/premake5.lua` is the worked example. Inside this repo
+it locates the SDK itself when `ARCANE_SDK` is unset.
 
-Game code spells only `Arcane::` names. The ECS (Astra), the 2D physics
-(Manifold2D) and the core library (Mosaic) are standalone libraries with
-their own namespaces underneath; `<Arcane/Ecs.hpp>` and
-`<Arcane/Reflection.hpp>` re-export everything a game module needs.
+### A module, a component, a system
 
-A **component** is reflected plain data:
+Game code spells `Arcane::` names. The samples below match
+`ReferenceProject/Source/Game` and the headers they include.
+
+A component is reflected plain data. `ARC_REFLECT_ATTR` looks attributes
+up in `Arcane::Attr` (`Range` is one of them). Register it with one
+`ARC_COMPONENT` line in a `.cpp`:
 
 ```cpp
 #include <Arcane/Reflection.hpp>
 
 struct Health { float current = 100.0f; };
+
 ARC_REFLECT_TYPE(Health)
     ARC_REFLECT_FIELD(Health, current)
         ARC_REFLECT_ATTR(Range, 0.0f, 100.0f)
 ARC_END_REFLECT_TYPE()
 ```
 
-A **system** declares what it touches as parameters -- component views and
-engine resources -- and the scheduler orders and parallelises it from that:
+```cpp
+#include "Health.hpp"
+#include <Arcane/Plugin/GameComponents.hpp>
+
+ARC_COMPONENT(Health)
+```
+
+A system lists the views and resources it uses. This one runs on the
+client, in the fixed step, before `PhysicsSystem2D`. `ActionRef` is
+default-constructible, which `ARC_SYSTEM` requires. `Time` is available
+the same way (`Arcane::Res<Arcane::Time>`) when the system needs
+`fixedDt` or `alpha`.
 
 ```cpp
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Input/GameInput.hpp>
 #include <Arcane/Physics2D.hpp>
 
+namespace MyGame
+{
 struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem2D>>
 {
     Arcane::ActionRef jump{"Player", "Jump"};
 
     void operator()(Arcane::View<Arcane::RigidBody2D>& view,
-                    Arcane::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
-                    Arcane::Res<Arcane::GameInput> input,    // actions from the project's input asset
+                    Arcane::Res<Arcane::GameInput> input,
                     Arcane::ResMut<Arcane::PhysicsWorld2D> physics)
     {
-        if (!input->PressedThisFixedStep(jump)) return;
+        if (!input->PressedThisFixedStep(jump))
+            return;
         view.ForEach([&](Arcane::Entity e, Arcane::RigidBody2D& body)
         {
             const Arcane::BodyMotion2D m = physics->Motion(e, body);
-            if (m.supported) physics->SetVelocity(e, body, m.velocityX, 6.0f);
+            if (m.supported)
+                physics->SetVelocity(e, body, m.velocityX, 6.0f);
+        });
+    }
+};
+}
+```
+
+```cpp
+#include "Jumper.hpp"
+#include <Arcane/Plugin/GameSystems.hpp>
+
+ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)
+```
+
+`GameInput` methods used by gameplay include `Value`, `Down`, `Pressed`,
+`Released`, `PressedThisFixedStep`, and `ReleasedThisFixedStep`. The
+reference controller
+([`PlayerController2DSystem.hpp`](ReferenceProject/Source/Game/PlayerController2DSystem.hpp))
+is the full version of this pattern: move, jump buffer, coyote time.
+
+Physics events are the same resource. This follows
+[`TintOnContactSystem.hpp`](ReferenceProject/Source/Game/TintOnContactSystem.hpp):
+
+```cpp
+#include <Arcane/Ecs.hpp>
+#include <Arcane/Physics2D.hpp>
+#include <Arcane/Scene/Components.hpp>
+
+#include <glm/vec4.hpp>
+
+struct TintOnHit
+{
+    void operator()(Arcane::View<Arcane::SpriteRenderer>& view,
+                    Arcane::Res<Arcane::PhysicsWorld2D> physics)
+    {
+        const Arcane::PhysicsEvents2D events = physics->FrameEvents();
+        view.ForEach([&](Arcane::Entity entity, Arcane::SpriteRenderer& sprite)
+        {
+            for (const Arcane::ContactBegin2D& hit : events.contactBegin)
+            {
+                if (hit.a.entity == entity || hit.b.entity == entity)
+                {
+                    sprite.tint = glm::vec4{1.0f, 0.25f, 0.25f, 1.0f};
+                    return;
+                }
+            }
         });
     }
 };
 ```
 
-and is registered with one line in its `.cpp`:
-`ARC_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
+`sprite.tint` is a linear `glm::vec4`. Register `TintOnHit` with
+`ARC_SYSTEM` in the `Update` phase: `FrameEvents()` gathers every fixed
+step of the frame.
 
-A system reads 2D physics events from that same `Arcane::PhysicsWorld2D` resource.
-`StepEvents()` is the most recent physics step, `FrameEvents()` gathers
-every step since this frame began, and `ContactsOf(entity, out)` lists
-what that entity is touching right now, sleepers included. Each side
-carries the entity, its Identity GUID and the `Arcane::Collider2D` fixture
-index. Keep the GUID when the identity has to outlive the frame; the
-entity handle is valid only in the frame it is read (a destroyed
-entity's event still carries the GUID). Spec:
-`docs/specs/2026-10-08-physics-2d-events-design.md`.
+### arcbuild
 
-- **Resources:** `Time` is present in every world. `GameInput` is present in every client world, and a server world has none. A system whose resource is missing is skipped with one log line.
-- **Code outside a system** (a module's `OnUpdate`/`OnDrawUI`) reads the same data with `Registry().GetResource<Arcane::Time>()`. There are no global accessors: one process can hold several worlds (edit, Play, an embedded server, tests).
-- **Templates:** the editor's *Create -> C++ Class* templates emit this shape.
-
-### Driving it with `arcbuild`
-
-Generating and building by hand (`premake5 <action>` then the matching build
-tool) is what `arcbuild.exe` automates -- it is the one entry point the
-editor's Build -> Rebuild Game Module, CI, and scripts all call instead of
-re-implementing that composition. Specs:
-`docs/specs/2026-09-13-arcbuild-driver-design.md` +
-`docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`.
+`arcbuild` is the entry point the editor, CI, and scripts use to
+generate and build a game module. Specs:
+[docs/specs/2026-09-13-arcbuild-driver-design.md](docs/specs/2026-09-13-arcbuild-driver-design.md),
+[docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md](docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md).
 
 ```bat
 bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
@@ -311,30 +688,371 @@ bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --co
 bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 ```
 
-`--action` picks the Premake generator/backend pair, defaulting per host
-(`vs2026` on Windows, `gmake` on Linux, `xcode4` on macOS). MSBuild is the
-only backend guaranteed to "just work" from a plain `Visual Studio + vcpkg`
-setup. Ninja needs a Visual Studio developer environment on Windows (beta8's
-`ninja` action defaults to the MSVC toolset there) and then builds the module
-completely -- arcbuild stages the linked DLL into `Binaries/` itself, since
-beta8's ninja action cannot run a post-build step on Windows. Make needs a
-GCC/G++ toolchain (Premake beta8's `gmake` action defaults to GCC everywhere,
-including Windows -- never `cl.exe`); on Windows that compiles the module but
-cannot link it against the MSVC-built engine DLLs. On Linux, Make is the
-default backend and builds a module against the GCC/Clang-built engine
-(ReferenceProject is built this way in the Linux CI lane). Xcode resolves and composes on
-every platform but only **executes** on macOS. `probe` alone needs no SDK.
+Commands are `generate`, `build`, `rebuild`, `clean`, and `probe`.
+`probe` only inspects the manifest and the `Binaries/` slot. It needs
+no SDK. Other flags: `--action`, `--force-rebuild`, `--quiet`, `--set`.
+
+| `--action` | Backend | Notes |
+|---|---|---|
+| `vs2026`, `vs2022` | MSBuild | Windows default is `vs2026`. |
+| `gmake`, `gmakelegacy` | Make | Linux and macOS default. Premake's `gmake` action uses GCC on every host, including Windows. A GCC object cannot link the MSVC-built engine import libraries, so a Make-built module on Windows needs a GCC-built engine. |
+| `ninja` | Ninja | On Windows, a VS developer environment. `arcbuild` copies the linked module into `Binaries/` itself, because this Premake version cannot run a post-build step on the Windows Ninja generator. |
+| `xcode4` | xcodebuild | Available on macOS (`-target`, the module stem). The hosted macOS job uses `gmake`. |
+
+The process is spawned directly (`CreateProcessW` on Windows,
+`fork`/`exec` on POSIX). There is no shell in the middle.
+
+## Testing and verification
+
+### Catch2
+
+`ArcaneTests` is the unit and integration suite. Run it from its own
+directory. Data paths are relative to that directory, and the suite
+order is random. The banner prints the seed. Reproduce a failure with
+`--rng-seed N`.
+
+`~[gpu]` drops device cases. It keeps `[golden]` and `[mesh]` cases
+that are not tagged `[gpu]`. Those are part of the CPU baseline. GPU
+cases assert `Arcane::RenderErrorCount() == 0`, which latches NRI
+diagnostics and raw D3D12 and Vulkan validation messages. A validation
+message fails the test.
+
+Hosted CI runs the CPU filter twice per leg, on
+`github.run_number` and on that number with `50021` appended.
+
+### Golden gate
+
+[`scripts/golden-gate.ps1`](scripts/golden-gate.ps1) launches the real
+runtime and editor, headless, against `ReferenceProject`, and compares
+each capture to a blessed PNG. It is fourteen lanes: seven references,
+each on D3D12 and Vulkan. The [Jenkinsfile](Jenkinsfile) defines it for a
+Windows GPU agent, and it runs on the Windows desk. Hosted GitHub Actions
+does not run it.
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
+type bin\Debug-windows-x86_64-md\golden-gate-summary.json
+```
+
+Assert `gatePassed` and each lane's `verdict`. Ignore the process exit
+code. The summary is schema version 3. If the gate refuses to run (the
+sample failed to build, `automation-exclusions.json` is malformed, or
+`-SelfTest` sees a dirty tree), the file is still rewritten:
+`gatePassed` false, `refusalReason` set, and no lanes. A missing file
+is not a green result. The script deletes the summary at start.
+
+| Reference | Host | Level | Extra arguments | Self-test |
+|---|---|---|---|---|
+| `runtime-scene` | Runtime | backend | | Failed |
+| `editor-ui` | Editor | shared | | Failed |
+| `editor-ui-perspective` | Editor | shared | `--view-mode perspective` | Failed |
+| `editor-input-doc` | Editor | shared | `--open-asset 97260310-8b35-4b29-b12f-1fd6f8e99071 --select-in-document Player/Jump` | Green |
+| `editor-asset-page` | Editor | shared | `--select-asset d7f389fd-f687-407d-b9d7-9753eb6b0258` | Failed |
+| `editor-material-page` | Editor | shared | `--open-asset 7e5a0010-0010-4010-8010-000000000010` | Green |
+| `f3-cull-blend` | Runtime | backend | `--scene 7e5a0030-0030-4030-8030-000000000030` | Green |
+
+`runtime-scene` and `f3-cull-blend` are backend-split: Vulkan has its
+own PNG, and D3D12 uses the shared file and reports `PassedOnFallback`.
+The five editor references are shared. Bless a backend-split reference
+on each backend. Bless a shared reference once.
+
+`-SelfTest` mutates the sample's boot scene and expects the verdict in
+the table. Lanes that show that scene go red. Lanes on another scene,
+or a document that covers the viewport, stay green. Restoration is in
+`try/finally`. The self-test writes
+`golden-gate-selftest-summary.json` beside the normal summary, so it
+does not replace a green `gatePassed` artifact. Jenkins runs the
+self-test on `main` and `milestone/*` only, after the ordinary gate.
+The gate itself runs Release, then Debug. Debug has to finish second:
+the next Jenkins stage builds Debug into the single
+`ReferenceProject/Binaries` slot.
+
+When the device is a software adapter, compare looks in an adapter
+directory first (`vulkan-lavapipe`, `dx12-warp`, or
+`<backend>-software`), then `References/<backend>/`, then the shared
+file. A bless on a named software adapter writes that adapter
+directory. Hardware devices get no adapter directory. MoltenVK on the
+Apple paravirtual device is treated as hardware, which is why the
+macOS editor goldens are exclusions rather than a new slot.
+
+### Blessing a reference
+
+`--bless` writes the capture to the level compare resolved. `--project`
+is relative to the working directory. From the repo root the write
+lands in source `ReferenceProject/Verify/References`. From the host's
+exe directory (how the gate runs) it lands in the staged copy under
+`bin/<config>/<Host>/ReferenceProject`, and the next sample build
+overwrites that copy. Bless from the repo root, or copy the PNG back
+into source. `git status` should show the reference.
+
+```bat
+bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
+  --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
+```
+
+`--report` or `--screenshot` is required with `--settle`.
+`editor-ui-perspective` needs `--view-mode perspective`.
+`f3-cull-blend` needs
+`--scene 7e5a0030-0030-4030-8030-000000000030`.
+
+### Desk round-trip
+
+[`scripts/desk-verify-golden-gate.ps1`](scripts/desk-verify-golden-gate.ps1)
+is the local version: a deliberate break, then a bless, then a pass.
+It needs a display and a real GPU. Mutations sit in `try/finally` and
+are restored with `git checkout`. It is safe to interrupt.
+
+### Witness harness
+
+The witness cases launch the real runtime, editor, and server and
+assert reports and, where tagged, golden images. Runtime and editor
+cases carry `[witness]`. Many editor cases also carry `[gpu]`. Server
+cases carry `[server]`. H1 (a scripted hang) and G1 (a scripted GPU
+fault) need a Windows host with `ArcaneCrashReporter` beside it. The
+design note is
+[docs/specs/2026-09-03-host-witness-harness-design.md](docs/specs/2026-09-03-host-witness-harness-design.md).
+Later cases extend it. The test names are the list.
+
+### Fuzzing
+
+Five libFuzzer targets, built standalone with Clang on Linux:
+`protocol`, `artifact`, `scene`, `sprite`, and `cli`. They cover the
+TCP framing and JSON protocol, `.arcart` reads, scene JSON, sprite
+files, and command-line parsing (including `ArcaneServer`'s).
+[docs/fuzzing.md](docs/fuzzing.md) has the invariants and the corpus.
+
+```bash
+scripts/run-fuzz.sh regress all
+scripts/run-fuzz.sh protocol 3600
+```
+
+`regress` replays the checked-in corpus and regressions. A CI smoke
+job for that command is described in the doc and is not wired into
+the workflow yet.
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the hosted
+matrix: `windows-msvc`, `linux-gcc-14`, `linux-clang-19`, and
+`macos-appleclang`, each for Debug, Release, and Dist. Every leg runs
+the CPU suite on two seeds. Extra Debug lanes: lavapipe `[gpu]` and
+the windowed smoke on `linux-gcc-14`, and MoltenVK `[gpu]` on
+`macos-appleclang`. There is no ASan or TSan leg.
+
+The [Jenkinsfile](Jenkinsfile) defines the Windows real-GPU gate:
+all three configurations, the unfiltered suite (including `[gpu]`),
+`arccook --check`, the golden gate (Release then Debug), the self-test
+on `main` and `milestone/*`, the sample built through the SDK, and
+`ArcaneRuntime --frames 180`. Its "Linux lane" step only prints
+toolchain versions when a Linux agent is online. It does not build.
+Retiring Jenkins in favor of one GitHub Actions setup is still
+planned. Standing the Jenkins job up once is [ci/README.md](ci/README.md).
+
+### For agents
+
+Agents use the same command lines as everyone else: `arcbuild`,
+`arccook`, host flags (`--frames`, `--settle`, `--compare`,
+`--probe`), `golden-gate.ps1`, and the JSON reports.
+
+Checked-in skills under [`.claude/skills/`](.claude/skills):
+
+| Skill | Use it for |
+|---|---|
+| `arcane-build` | Generate and build order, the single game-module slot, `arcbuild`. |
+| `arcane-tests` | Running `ArcaneTests`, seeds, which lane ran what. |
+| `arcane-verify` | The golden gate, bless rules, copying a bless back to source. |
+| `arcane-graph` | What connects to a symbol, via the knowledge graph. |
+
+`graphify-out/` is gitignored. Build it with `/graphify .` and refresh
+with `/graphify . --update`. Scope is the root `.graphifyignore`.
+Neighbors of a symbol, source and docs together:
+
+```bat
+python .claude\skills\arcane-graph\neighbors.py ViewTransform
+```
+
+Tooling is CLI-first. Asking a running host a new question is the job
+of the `arc` CLI, described under the roadmap. The draft is
+[docs/superpowers/specs/2026-10-05-arc-cli-design.md](docs/superpowers/specs/2026-10-05-arc-cli-design.md).
+
+Layout, build rules, and the engine-as-SDK contract are also in
+[CLAUDE.md](CLAUDE.md).
+
+## Roadmap
+
+Engine milestones only. Dates below are the ones recorded for this
+body of work: the end of January 2027, with February an acceptable
+slip. The order is the current one.
+
+### Shipped
+
+- Editor shell: docking, inspector, outliner, asset browser, undo,
+  shader and material graphs, project format, and the Hub.
+- Hot reload, the ABI gate, and `arcbuild`.
+- NRI, the render graph, bindless materials, the GPU scene, compute
+  mesh culling, and GPU crash diagnostics on Windows.
+- Astra as the ECS, with 32-bit entity ids by default.
+- Manifold2D, including pull-model contact events. The parallel solver
+  is off unless `physics.parallelSolver` is set.
+- Texture and mesh cooking, scene load/save, headless hosts.
+- The witness harness and the fourteen-lane golden gate.
+- Settings and cvars, including editor preferences, project settings,
+  the console, and the server admin console.
+- The flat gameplay API.
+- Visibility and the GPU scene (F3), and 3D editor authoring (F4):
+  perspective, one view transform, a 3D gizmo.
+- Hosted CI that builds and tests on Windows, Linux, and macOS.
+  Interactive and real-GPU use on Linux and macOS is still unverified.
+  The Windows Jenkins gate is still the real-GPU golden gate.
+
+### In progress
+
+**Unified world rendering (F5).** World-space 2D moves onto the mesh
+path (the same cull and draw path as meshes). UI and overlays stay on
+Batcher2D. The work reserves an extract boundary between game state and
+the renderer, one Surface material domain, multiple views, world-space
+UI as a quad, and slots for TAA jitter and per-object motion vectors,
+including a per-camera option with no jitter. This is underway on a
+separate branch and is not in this tree. Sprites in this tree still
+draw with Batcher2D.
+
+**`arc` CLI.** A local command-line client that attaches to a running
+editor, runtime, or headless host (or launches one). The planned first
+slice is query, act, screenshots, and JSON, local-only, with a session
+token. The checked-in design is still marked draft. The tool is not
+implemented in this tree.
+
+### Next
+
+1. **Finish F5**, as scoped above.
+2. **64-bit large-world coordinates (D17).** Positions become 64-bit.
+   Rendering is camera-relative. The world origin can rebase. This is
+   end to end: physics, render, assets, editor, and (once it exists)
+   replication. Alongside it, in Astra (the Astra 1.0 work): 64-bit
+   entity ids (32-bit index, 32-bit version), component ids that use
+   dense arrays for a hot range and a lookup past it, so the component
+   count stops being a hard limit (today's default limit is 128), and
+   a pass that exposes real runtime tunables. Transforms in this tree are still 32-bit floats.
+3. **Box3D, the minimum.** Vendor Box3D with large-world double
+   positions, rigid bodies, spatial queries, and the threading seam.
+   The engine does not ship a character controller: games build their
+   own movers on the spatial queries. The near-term slice is bodies,
+   queries, and the seam.
+4. **Replication v1.** Per-entity authority, snapshots, interpolation,
+   client prediction and reconciliation, and relevance. `INetDriver`
+   starts as loopback and TCP, then GameNetworkingSockets. The target
+   is a high player count with no fixed player cap. Snapshot positions
+   are 64-bit, so this follows D17. Design:
+   [docs/specs/2026-09-17-replication-v1-design.md](docs/specs/2026-09-17-replication-v1-design.md).
+
+### Later
+
+These are the remaining engine rows. They are planned. They are not
+scheduled ahead of the list above.
+
+- **Retained game UI.** Layout, styling, MSDF text, localization,
+  gamepad and keyboard navigation, data binding, and a UI editor.
+  ImGui stays the editor and the engine overlays.
+- **Audio.** A mixer and bus graph on miniaudio, spatialization,
+  streaming, cues, and a small editor.
+- **VFX.** GPU particles: an emitter graph, sprite, ribbon, and mesh
+  renderers, depth collision, and a preview.
+- **Skeletal animation.** Import, GPU skinning, clips, blend spaces, a
+  state machine, root motion, and IK.
+- **Deadlock-class renderer.**
+  - Foundation: clustered deferred lighting, PBR metal/roughness,
+    cascaded sun shadows and local-light shadows, GTAO, TAA, one
+    upscaler interface with FSR 3 first, bloom, exposure, and tonemap,
+    on the single Surface domain. The recorded budget is 1080p, a
+    144 fps floor with 256 dynamic lights and 5k draws, and 240 fps
+    as the stretch goal.
+  - World-scale look: baked GI, reflections, LOD and HLOD, sky,
+    atmosphere, and fog.
+  - A render thread and parallel command recording.
+  - The feature contract is
+    [docs/research/2026-08-12-deadlock-render-target.md](docs/research/2026-08-12-deadlock-render-target.md).
+- **World and streaming.** Async asset loading and level/cell streaming.
+- **Terrain provider seam.** One terrain-provider interface (heightfield,
+  cube-sphere quadtree, or authored) with streaming and LOD hooks,
+  collision, and an atmosphere-scattering pass; 1.0 targets a
+  demo-quality cube-sphere planet.
+- **Gameplay frameworks (engine-level, game-agnostic).** An
+  inventory/item and stat-modifier framework, a building and
+  snap-socket framework with stability and damage, and seeded
+  procedural-generation utilities. Game-specific rules stay in each
+  game.
+- **Performance gates.** Job-pool utilization made visible, an async I/O
+  lane, and per-system frame budgets enforced as gates.
+- **Also planned, after the items above have room:**
+  a Recast/Detour navmesh, Tracy wired through the engine (it is
+  vendored and not called from engine code today), packaging beyond
+  CI, a persistence seam, moving entity authority between server
+  processes, server-authoritative hit validation with lag
+  compensation, and a first-person animation rig. Astra's longer
+  hardening (entity remap, per-entity snapshot and restore, moving
+  entities between registries, relationship storage, replication change
+  ticks) belongs to the same
+  Astra track as the 64-bit entity work.
+
+One CI system, with the Windows GPU desk as a self-hosted runner and
+Jenkins retired, is planned and not done.
+
+## Libraries
+
+[Astra](ThirdParty/Astra) (ECS), [Manifold2D](ThirdParty/Manifold2D)
+(2D physics), and [Mosaic](ThirdParty/Mosaic) are MIT. Mosaic is the
+zero-dependency foundation the other two sit on: the job-scheduler
+seam (`IWorkScheduler`; Mosaic creates no threads), SIMD helpers, and
+the log and assert seams. The engine injects its enkiTS pool through
+that seam.
+
+Their upstream repositories are the place to change them. This repo
+vendors copies. Sync with `scripts/sync-vendor.ps1 -Library Astra`
+(the same script takes `Manifold2D` and `Mosaic`).
+
+Other vendored code keeps its own licenses. [NOTICE.md](NOTICE.md)
+lists them. [ThirdParty/README.md](ThirdParty/README.md) covers the
+Premake wrappers (`THIRDPARTY_STATICRUNTIME`,
+`THIRDPARTY_PROJECT_LOCATION`).
+
+## Contributing
+
+Contributions need a Contributor License Agreement, signed once before
+the first pull request is merged; see [CONTRIBUTING.md](CONTRIBUTING.md)
+for how to sign. It covers later contributions. You keep the copyright. The agreement licenses
+the contribution to Starworks so it can ship under the Starworks
+Source License, offer commercial licenses, and relicense a version as
+MIT on that version's change date.
+
+[CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md).
 
 ## License
 
-Arcane is source-available under the **Starworks Source License** (the
-Business Source License 1.1 with Starworks parameters; each version converts to
-MIT four years after release). Make and sell games with it freely; games must
-credit Arcane, and Arcane may not be offered as a competing engine product.
-Read [LICENSING.md](LICENSING.md) for the plain-English terms and
-[LICENSE](LICENSE) for the license itself. Revisions published before the
-commit that added this license remain under the MIT License.
+Arcane is source-available under the **Starworks Source License**: the
+Business Source License 1.1 with the parameters in [LICENSE](LICENSE).
+[LICENSING.md](LICENSING.md) is the plain-English summary. If the two
+disagree, `LICENSE` wins.
 
-Astra, Manifold2D and Mosaic are MIT. Vendored third-party dependencies retain
-their upstream licenses; see [NOTICE.md](NOTICE.md). Contributing:
-[CONTRIBUTING.md](CONTRIBUTING.md).
+You may read, modify, and fork the source. You may make and sell games
+and other interactive applications, with no royalty. You may ship the
+compiled engine inside a game and run servers for that game. Plugins
+and modules may be free or paid.
+
+Distributed games carry this credit where players can find it:
+
+> Made with the Arcane Engine. Arcane (c) Ethan Temprovich / Starworks.
+
+Copies of the source keep `LICENSE` with them.
+
+You may not offer Arcane, or a modified version of it, as an engine
+product: an engine, editor, SDK, toolset, or runtime that other people
+use to build or run their own games. A separate commercial license is
+the door for that. Write to licensing@starworks.dev.
+
+Each version converts to the MIT License four years after that version
+is first publicly distributed. Revisions before commit `5c120859`
+(2026-10-10) stay MIT.
+
+Astra, Manifold2D, and Mosaic are MIT, including the copies under
+`ThirdParty/`. Everything else vendored here is under the license
+named in [NOTICE.md](NOTICE.md).
