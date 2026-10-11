@@ -133,10 +133,19 @@ function arcane_mac_architecture()
 end
 ARCANE_ARCH = (os.target() == "macosx") and arcane_mac_architecture() or "x64"
 
+newoption {
+    trigger = "layout",
+    value = "LAYOUT",
+    description = "Engine link layout",
+    allowed = { { "modular" }, { "monolithic" } },
+    default = "modular",
+}
+
 workspace "Arcane"
     architecture(ARCANE_ARCH)
     startproject "ArcaneTests"
     configurations { "Debug", "Release", "Dist" }
+    if _OPTIONS.layout == "monolithic" then defines { "ARC_MONOLITHIC" } end
     multiprocessorcompile "On"
 
     -- MSVC: /utf-8 ensures source + execution charsets are UTF-8.
@@ -198,7 +207,8 @@ workspace "Arcane"
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
     -- bin/ under its own dir) separate from the static-CRT flavors the
     -- Server workspace builds from the same wrapper scripts.
-    outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
+    outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" ..
+        (_OPTIONS.layout == "monolithic" and "mono" or "md")
 
     -- Shared ThirdParty wrappers read these; their defaults preserve the
     -- Server/Tools behavior (static CRT, vcxproj in the dep root).
@@ -248,6 +258,11 @@ workspace "Arcane"
     IncludeDir["cgltf"]            = "%{wks.location}/ThirdParty/cgltf"
     IncludeDir["meshoptimizer"]    = "%{wks.location}/ThirdParty/meshoptimizer/src"
 
+    include "build/modules.lua"
+    local engine_modules = arc_modules_load {
+        "ArcaneCore/ArcaneCore.arcmodule", "ArcaneClient/ArcaneClient.arcmodule"
+    }
+
 group "Dependencies"
     include "ThirdParty/Catch2"
     include "ThirdParty/rapidcheck"
@@ -275,9 +290,9 @@ group "Engine"
 -- exactly ONE copy per process BY CONSTRUCTION. Also consumed FROM SOURCE by
 -- the Server workspace with an explicit file list (Plan 2 retires that).
 -- ============================================================================
-project "ArcaneCore"
+arc_module_project(engine_modules, "ArcaneCore", true)
     location "ArcaneCore"
-    kind "SharedLib"
+    -- P2: fully descriptor-driven; preserve today's files, includes, links and postbuild.
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
@@ -319,7 +334,6 @@ project "ArcaneCore"
     links { "enkiTS", "Manifold2D" }
 
     defines {
-        "ARC_CORE_API_EXPORTS",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         "NOMINMAX",
@@ -846,9 +860,9 @@ end   -- ArcaneCrashReporter: Windows target only
 -- relative paths are disjoint from ArcaneCore's root (Net/Crypto/Types/Util),
 -- so <Arcane/...> resolves unambiguously across both.
 -- ============================================================================
-project "ArcaneClient"
+arc_module_project(engine_modules, "ArcaneClient", true)
     location "ArcaneClient"
-    kind "SharedLib"
+    -- P2: fully descriptor-driven; preserve today's files, includes, links and postbuild.
     language "C++"
     cppdialect "C++23"
     staticruntime "off"

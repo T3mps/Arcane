@@ -38,6 +38,7 @@ if not ARCANE_SDK then
           "then restart the terminal and re-generate.")
 end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
+include(ARCANE_SDK .. "/build/modules.lua") -- shared descriptor reader for P4 consumers
 local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
 
 -- macOS port (2026-10-07): a Mac target builds for the host architecture

@@ -2100,6 +2100,102 @@ namespace
         UniqueTempDir(const UniqueTempDir&)            = delete;
         UniqueTempDir& operator=(const UniqueTempDir&) = delete;
     };
+
+    void CheckModuleGeneratorFailure(std::string_view fixtureName,
+                                     std::string_view firstDescriptor,
+                                     std::string_view secondDescriptor,
+                                     std::string_view expectedCheck,
+                                     bool wrongFolder = false)
+    {
+        UniqueTempDir tempDir(fixtureName);
+        const fs::path repoRoot =
+            Arcane::Editor::ModuleBuild::SdkRootFromExeDir(
+                Arcane::Editor::ModuleBuild::ExeDir());
+        const fs::path premake = repoRoot / "ThirdParty" / "premake5" / "premake5.exe";
+        REQUIRE(fs::is_regular_file(premake));
+
+        auto writeDescriptor = [&](std::string_view moduleName, std::string_view body,
+                                   std::string_view typeFolder)
+        {
+            const fs::path directory = tempDir.path / "Source" / typeFolder /
+                                       moduleName;
+            fs::create_directories(directory);
+            std::ofstream out(directory / (std::string(moduleName) + ".arcmodule"),
+                              std::ios::binary);
+            out << body;
+            REQUIRE(out.good());
+        };
+        writeDescriptor("ArcaneFoo", firstDescriptor,
+                        wrongFolder ? "Client" : "Runtime");
+        if (!secondDescriptor.empty())
+            writeDescriptor("ArcaneBar", secondDescriptor,
+                            secondDescriptor.find("\"type\":\"Developer\"") !=
+                                    std::string_view::npos
+                                ? "Developer" : "Runtime");
+
+        const fs::path moduleScript = repoRoot / "build" / "modules.lua";
+        std::ofstream script(tempDir.path / "premake5.lua", std::ios::binary);
+        script << "include \"" << moduleScript.generic_string() << "\"\n"
+               << "arc_modules_load({ \"Source\" })\n"
+               << "workspace \"ModuleFixture\"\n"
+               << "project \"ModuleFixture\"\n"
+               << "kind \"ConsoleApp\"\n";
+        script.close();
+        REQUIRE(fs::is_regular_file(moduleScript));
+
+        RecordingOutput output;
+        ProcessRunner runner(output);
+        ProcessSpec spec;
+        spec.executable = premake;
+        spec.arguments = { "vs2026" };
+        spec.workingDirectory = tempDir.path;
+        const ProcessResult result = runner.Run(spec, "[premake]");
+        REQUIRE(result.has_value());
+        CHECK(*result != 0);
+        std::string allMessages;
+        for (const std::string& message : output.messages)
+            allMessages += message + '\n';
+        INFO(allMessages);
+        CHECK(allMessages.find("[arcmodule] " + std::string(expectedCheck) + ":") !=
+              std::string::npos);
+    }
+}
+
+TEST_CASE("module descriptors reject dependency cycles", "[build-generator]")
+{
+    CheckModuleGeneratorFailure("module_cycle",
+        R"({"name":"ArcaneFoo","type":"Runtime","dependencies":{"public":["ArcaneBar"],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        R"({"name":"ArcaneBar","type":"Runtime","dependencies":{"public":["ArcaneFoo"],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        "cycle");
+}
+
+TEST_CASE("module descriptors reject type-rule violations", "[build-generator]")
+{
+    CheckModuleGeneratorFailure("module_type_rule",
+        R"({"name":"ArcaneFoo","type":"Runtime","dependencies":{"public":["ArcaneBar"],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        R"({"name":"ArcaneBar","type":"Developer","dependencies":{"public":[],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        "type-rule");
+}
+
+TEST_CASE("module descriptors reject folder mismatches", "[build-generator]")
+{
+    CheckModuleGeneratorFailure("module_folder",
+        R"({"name":"ArcaneFoo","type":"Runtime","dependencies":{"public":[],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        {}, "folder", true);
+}
+
+TEST_CASE("module descriptors require one declaration", "[build-generator]")
+{
+    CheckModuleGeneratorFailure("module_declaration",
+        R"({"name":"ArcaneFoo","type":"Runtime","dependencies":{"public":[],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        {}, "declaration");
+}
+
+TEST_CASE("module descriptors reject unknown keys", "[build-generator]")
+{
+    CheckModuleGeneratorFailure("module_unknown_key",
+        R"({"name":"ArcaneFoo","type":"Runtime","unknownKey":true,"dependencies":{"public":[],"private":[]},"thirdParty":{"public":[],"private":[]}})",
+        {}, "schema");
 }
 
 TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 output from the fixture",

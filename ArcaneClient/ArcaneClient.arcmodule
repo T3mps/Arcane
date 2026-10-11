@@ -1,0 +1,10 @@
+{
+  "name": "ArcaneClient",
+  "type": "Client",
+  "dependencies": { "public": ["ArcaneCore"], "private": [] },
+  "thirdParty": {
+    "public": ["imgui", "glm", "Astra", "Mosaic"],
+    "private": ["nlohmann", "picosha2", "spdlog", "NRI", "VulkanHeaders", "DirectXHeaders", "SDL3", "stb", "miniaudio", "msdfgen", "freetype", "enkiTS", "Manifold2D"]
+  },
+  "platforms": {}
+}

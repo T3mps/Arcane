@@ -8,6 +8,8 @@
 // file does is force the header-only exported surfaces below to be INSTANTIATED
 // and emitted into the DLL, so the matching import lib carries them.
 #include <Arcane/Version.hpp>
+#include <Arcane/Core/ModuleApi.hpp>
+ARC_MODULE(ArcaneCore)
 #include <Arcane/Crypto/Crypto.hpp>
 #include <Arcane/Net/Protocol.hpp>
 #include <Arcane/Net/RateLimiter.hpp>

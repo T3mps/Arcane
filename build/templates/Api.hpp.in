@@ -1,0 +1,10 @@
+#pragma once
+#include <Arcane/Core/ModuleApi.hpp>
+
+#if defined(ARC_MONOLITHIC) || defined(ARC_@MODULE@_STATIC)
+    #define @API_MACRO@
+#elif defined(ARC_@MODULE@_EXPORTS) || defined(ARC_CORE_API_EXPORTS)
+    #define @API_MACRO@ ARC_DLL_EXPORT
+#else
+    #define @API_MACRO@ ARC_DLL_IMPORT
+#endif

@@ -1,0 +1,8 @@
+{
+  "name": "ArcaneCore",
+  "type": "Runtime",
+  "apiMacro": "ARC_CORE_API",
+  "dependencies": { "public": [], "private": [] },
+  "thirdParty": { "public": ["Astra", "glm", "spdlog", "nlohmann", "Mosaic"], "private": ["picosha2", "stb", "enkiTS", "Manifold2D"] },
+  "platforms": {}
+}

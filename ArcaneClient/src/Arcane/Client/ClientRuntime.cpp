@@ -1,4 +1,7 @@
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Core/ModuleApi.hpp>
+
+ARC_MODULE(ArcaneClient)
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/Assert.hpp>
