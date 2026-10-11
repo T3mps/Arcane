@@ -93,7 +93,7 @@ The "Base hub" cycle is three misfiled files; every other cycle is one edge.
 |---|---|
 | `Base/Runtime.*`, `Base/Engine.cpp`, `Base/ProcessContext.*` include Scene/Plugin/Project/Sim/Assets/Serialization | move to `ArcaneEngine` |
 | `Assets/*` includes `Project/AssetId.hpp` | `AssetId` moves to `ArcaneAssets` |
-| `Assets/*` includes `Serialization/IdentityFieldRule.hpp` | resolve in P1: the rule moves to Assets, or Assets stops needing it (whichever the code supports; no new dependency Assets -> Scene) |
+| `Assets/Assets.cpp` includes `Serialization/IdentityFieldRule.hpp` | the header (header-only, depends only on `Json.hpp`) moves to `ArcaneAssets` as `Arcane/Assets/IdentityFieldRule.hpp`; `Serialization/ReflectionJson.hpp` and the editor's `AssetPanelModel.hpp` include it from there |
 | `Scene/PhysicsSystem.hpp` includes `Physics2D.hpp` | `PhysicsSystem` moves to `ArcanePhysics2D` |
 | `Config/PlayerSettings.hpp` includes `Plugin/SystemFactory.hpp` (for `NetMode` only) | `NetMode` moves into `ArcaneCore` (a Core-level enum header); `SystemFactory` re-exports nothing |
 | `Render/Nri/NriGraphContext.hpp` includes `Host/HostConfig.hpp` | the render graph takes the values it needs as a Render-owned struct; Host fills it |
@@ -181,7 +181,7 @@ Moves use `git mv` so history follows.
   #endif
   ```
   A header (not command-line defines as UE does) so consumers outside our build -- Aphelyon's Server, IDE indexers, a future Rust arcbuild -- need only `ARC_MONOLITHIC` or nothing. Checked in (the preprocessor cannot mint macro names); check 5 keeps them honest. `ARC_CORE_API` keeps its name; today's `ARC_API` (ArcaneClient) is retired, each symbol taking its new module's macro. Hidden default visibility stays (Linux/macOS), as today.
-- **Declaration.** `ARC_MODULE(ArcaneNet)` in one `.cpp` defines `extern "C" void ArcModule_ArcaneNet()`. Every program and package links a forced reference for each module it uses (`/INCLUDE:` MSVC; `-u` GNU ld / ld64 with the leading underscore). A missing or undeclared module fails the link.
+- **Declaration.** `ARC_MODULE(ArcaneNet)` in one `.cpp` defines `extern "C" void ArcModule_ArcaneNet()` (the symbol is `ArcModule_<Name>`; `_ArcModule_<Name>` on ld64, which is what `-u` must spell). Every program and package links a forced reference for each module it uses (`/INCLUDE:` MSVC; `-u` GNU ld / ld64 with the leading underscore). A missing or undeclared module fails the link.
 - **Staging.** Each program stages the transitive closure of module DLLs from the graph (plus vendor runtime DLLs, s3.4). The hand-written postbuild copy blocks are deleted.
 - **Solution folders** from type: `Runtime`, `Client`, `Developer`, `Editor`, `Programs`, `ThirdParty`, `Tests`, `Tests/Fixtures`. A project cannot be filed by hand.
 
@@ -212,6 +212,9 @@ Every call after obtaining the table is one code path in both layouts.
 2. Generate a `<Game>` executable project (name from `.arcproj`): the Runtime host's code (moved from `ArcaneRuntime/src` into a small shared library both `ArcaneRuntime.exe` and packages link), a generated `main.cpp`, the game as a static library.
 3. Link every module the game transitively needs, each whole-archived (`/WHOLEARCHIVE:` / `--whole-archive` / `-force_load`) so static registrars survive, with one forced reference per module. Dead-code stripping (`/OPT:REF`, `--gc-sections`, `-dead_strip`) still drops unreferenced functions.
 4. Stage `Packages/<Game>-<platform>-<cfg>/`: the exe, the `.arcproj`, content **copied raw** (D15 replaces the copy with a cook).
+5. The generated `main.cpp` carries the list of linked modules and logs it at boot (`[package] modules: ...`), so a packaged run states what it contains.
+
+**Why registrars survive** (review ruling, 2026-10-11). Whole-archive puts every object in the link; a static registrar's dynamic initializer is then listed in the platform's init table (`.CRT$XCU` MSVC, `.init_array` ELF, `__mod_init_func` Mach-O), which each linker's dead-code stripping keeps as a root -- no reachability from `ArcModule_*` is needed. Only game code uses `ARC_COMPONENT`/`ARC_SYSTEM` (emitted by `ArcaneEditor/src/Project/ClassTemplates.cpp`); their list head is a function-local static private to each image (`Plugin/GameSystems.hpp:21`, `GameComponents.hpp:56`), which in a package is one list for one game: the intended semantics.
 
 ### 3.4 Vendor runtime libraries that stay separate files
 
@@ -259,7 +262,7 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 | P2 | Carve the 19 modules into `Source/<Type>/<Module>/` (`git mv`), descriptors, `ImGui` vendor module, every export re-tagged to its module's macro |
 | P3 | Programs, tests, fixtures move; automatic staging; postbuild copy blocks deleted |
 | P4 | Game contract: `GameModuleTable`, game descriptors, `arcane.lua` rewrite, ABI 59, ReferenceProject + fixtures |
-| P5 | Monolithic layout + `arcbuild package` (shared Runtime-host lib, generated main, whole-archive + forced refs, staging) |
+| P5 | Monolithic layout + `arcbuild package` (shared Runtime-host lib, generated main, whole-archive + forced refs, staging). Includes one WSL2 link probe on this desk (GNU ld: whole-archive + `-u` + a static registrar survives `--gc-sections`); macOS is discovered in CI |
 | P6 | Linux/macOS plumbing (rpath, visibility, GNU/ld64 whole-archive and forced refs) + CI workflow matrix |
 | P7 | Aphelyon migration (Game descriptor + abi 59; Server -> `arcane_module_consumer`) |
 
@@ -268,12 +271,13 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 **New tests.**
 1. `[build-generator]`: a cycle, a type-rule violation, a folder mismatch, a missing `ARC_MODULE`, and a malformed descriptor (unknown key) each fail generation with their named error.
 2. Link-fail fixture: a module without its declaration fails the link (the flat API compile-fail guard style).
-3. Registrar survival: the packaged ReferenceProject boots with the same component and system roster the modular Runtime reports.
+3. Registrar survival: the packaged ReferenceProject boots with the **full** component and system roster -- names and count -- equal to the modular Runtime's.
 4. Host isolation: the server program's binary imports no Client module; a packaged game contains no Developer/Editor module -- checked by inspecting the built binaries' dependencies/symbols.
 
 **Full run.**
 - Modular, 3 platforms x Debug/Release/Dist: full suite, golden gate, witness (today's 12 CI legs).
-- Monolithic, 3 platforms: `arcbuild package` ReferenceProject Release + boot smoke of the packaged exe (3 new CI legs; lavapipe on Linux, no-GPU boot checks on macOS).
+- Monolithic, 3 platforms: `arcbuild package` ReferenceProject Release + boot smoke of the packaged exe **run in place from `Packages/`, with no SDK or `bin/` on PATH** (3 new CI legs; WARP on Windows, lavapipe on Linux, no-GPU boot checks on macOS).
+- Measurement (reported, not gated): frame time modular vs monolithic on the ReferenceProject physics scene, Release, same machine.
 - Aphelyon: Game builds and loads in the editor; Server suites green.
 - Then adjust the shape from the results, and merge.
 
@@ -282,6 +286,7 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 - **arcbuild in Rust** (user direction 2026-10-11): replaces premake; phase 1 generates ninja + IDE projects (VS, `compile_commands.json`, Xcode; never force tooling), phase 2 an own executor/cache only if a measured build-time breakdown justifies it; absorbs "arcbuild II". Reads the same `.arcmodule` files.
 - **Live updates:** (1) data hotfixes, (2) server code hot reload, (3) client native-code hotfix (PC only; signed, anti-cheat aware). Tier 3 needs a game shipped in the modular layout -- the shipping layout is a per-project choice.
 - **Server packages** with the replication arc (s3.5); **WASM/console** reuse the monolithic layout.
+- **A further `ArcaneCore` split** (e.g. Math/Guid/Jobs or Cli/Build out) only if measured rebuild triggers point at it.
 
 ## 8. Costs, stated plainly
 
@@ -304,3 +309,4 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 | R8 | Packaging = link half of D15; client games only. |
 | R9 | Game descriptor of type `Game`; `arcane_core_consumer()` removed; ABI 59. |
 | R10 | No green-throughout; build-only per phase, one commit per phase, test wholesale at the end. |
+| R11 | Grok Bot review (2026-10-11): registrar-reachability concern rejected with the init-table reasoning (s3.3), test strengthened to full roster; mid-arc test runs declined per R10; accepted: in-place package boot (WARP), modular-vs-mono frame-time report, WSL2 link probe in P5, module list logged at boot, forced-ref symbol spelled, IdentityFieldRule -> ArcaneAssets. |
