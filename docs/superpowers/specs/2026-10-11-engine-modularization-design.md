@@ -45,14 +45,14 @@ actually linked; nothing links it today).
 
 | Module | Contents (from today's tree) | Depends on (*private vendor*) |
 |---|---|---|
-| `ArcaneCore` (name kept) | `Core/`, `Base/` minus `Runtime.*`, `Engine.*`, `ProcessContext.*`; `Config/`, `Platform/` (OS), `Util/`, `Math/`, `Guid.*`, `Jobs/`, `Reflection.hpp`, `Cli/`, `Build/`, `Version.hpp` | *enkiTS*; Astra, glm (header-only, **public**: Core headers include them) |
-| `ArcaneNet` | `Net/` | Core |
-| `ArcaneCrypto` | `Crypto/` | Core |
+| `ArcaneCore` (name kept) | `ArcaneCore.cpp`, `Core/`, `Base/` minus `Runtime.*`, `ProcessContext.*` (`Engine.*` STAYS: it is BuildInfo/ExecutablePathUtf8/PluginABIVersion, used by Diagnostics, Assets, Input, Render); `kGamePluginABIVersion` (moved out of `PluginABI.hpp` into a Core header PluginABI includes); `NetMode` + `ToString(NetMode)`; the OS CSPRNG (`SecureRandomBytes`, moved out of Crypto); `Config/`, `Platform/` (OS), `Util/`, `Math/`, `Guid.*`, `Jobs/`, `Reflection.hpp`, `Cli/`, `Build/`, `Version.hpp` | *enkiTS*; Astra, glm (header-only, **public**: Core headers include them) |
+| `ArcaneNet` | `Net/` (+ the Net instantiation includes moved out of `ArcaneCore.cpp`) | Core |
+| `ArcaneCrypto` | `Crypto/` (+ its instantiation include from `ArcaneCore.cpp`); calls Core's `SecureRandomBytes` | Core |
 | `ArcaneAssets` | `Assets/`, `Material/`, `Mesh/`, `Sprite/`, plus `Project/AssetId.hpp` | Core |
-| `ArcaneScene` | `Scene/` minus physics, `Serialization/`, `Ecs.hpp`/`EcsFwd.hpp` (Astra facade) | Core, Assets |
-| `ArcanePhysics2D` | `Scene/Physics2D*`, `Scene/PhysicsEvents2D*`, `Scene/PhysicsComponents.hpp`, `Scene/PhysicsSystem.hpp`, `Scene/PhysicsQuerySettings*`, `Physics2D.hpp`/`Physics2DFwd.hpp` | Scene, *Manifold2D* |
+| `ArcaneScene` | `Scene/` minus physics, `EngineRoster.hpp`, `EngineResourceTypes.*`; `Serialization/`, `Ecs.hpp`/`EcsFwd.hpp` (Astra facade) | Core, Assets, Sim (public: `Ecs.hpp` exposes `Arcane::Time`) |
+| `ArcanePhysics2D` | `Scene/Physics2D*`, `Scene/PhysicsEvents2D*`, `Scene/PhysicsComponents.hpp`, `Scene/PhysicsSystem.hpp`, `Scene/PhysicsQuerySettings*`, `Physics2D.hpp`/`Physics2DFwd.hpp` | Core, Scene, *Manifold2D* |
 | `ArcaneSim` | `Sim/` | Core (+ Astra headers via Core) |
-| `ArcaneEngine` | `Base/Runtime.*`, `Base/Engine.*`, `Base/ProcessContext.*`, `Plugin/`, `Project/` | Scene, Physics2D, Sim, Assets, Net |
+| `ArcaneEngine` | `Base/Runtime.*`, `Base/ProcessContext.*`, `Plugin/`, `Project/`, `Scene/EngineRoster.hpp`, `Scene/EngineResourceTypes.*` (the roster composes Scene + Physics2D components; all includers are Engine) | Core, Scene, Physics2D, Sim, Assets, Net |
 
 ### 1.2 Client (windowed hosts only)
 
@@ -61,18 +61,18 @@ actually linked; nothing links it today).
 | `ArcaneWindow` | Client `Platform/` (Window, RenderWindowSettings; SDL3 on Linux/macOS) | Core |
 | `ArcaneInput` | `Input/` | Core, Window |
 | `ArcaneAudio` | `Audio/` | Core, Assets |
-| `ArcaneRender` | `Render/` incl. `Nri/` minus `nodes/ImGuiNriNode.hpp` | Scene, Assets, Window, *NRI, freetype, msdfgen* |
+| `ArcaneRender` | `Render/` incl. `Nri/` minus `nodes/ImGuiNriNode.*`; `PhysicsDebugDraw` keeps only its DRAW half | Core, Scene, Assets, Window, Physics2D (picking, debug draw), *NRI, freetype, msdfgen, DXC, Vulkan-Headers* |
 | `ImGui` (vendor) | imgui + backends; the one `GImGui` | -- |
-| `ArcaneImGui` | `ImGui/` + `ImGuiNriNode.hpp` | Render, ImGui, Input |
-| `ArcaneClient` | `Client/`, `Host/` minus the verify files | Engine, Render, Input, Audio, Window |
+| `ArcaneImGui` | `ImGui/` + `ImGuiNriNode.*`; implements ArcaneClient's overlay hook | Core, Render, ImGui, Input, Sim, Window |
+| `ArcaneClient` | `Client/`, `Host/` minus the verify files; owns the overlay hook (no imgui include) | Core, Engine, Render, Input, Audio, Window, Assets, Scene, Sim |
 
 ### 1.3 Developer, Editor, Programs
 
 | Module | Type | Contents |
 |---|---|---|
-| `ArcaneVerify` | Developer | `Host/Verdict.*`, `VerifyReport.*`, `ReferenceImages.*`, `OffscreenVehicle.*` |
+| `ArcaneVerify` | Developer | `Host/Verdict.*`, `VerifyReport.*`, `ReferenceImages.*`, `OffscreenVehicle.*` (depends on Core, Assets, Client, Render) |
 | `ArcaneAssetPipeline` | Developer | today's static lib (*bc7enc_rdo, meshoptimizer*) |
-| `ArcaneEdit` | Editor | `Edit/` (only ArcaneEditor uses it) |
+| `ArcaneEdit` | Editor | `Edit/` (only ArcaneEditor uses it; depends on Core, Scene) |
 | `ImGuiNodeEditor` (vendor) | Editor | imgui-node-editor |
 
 Programs (executables, never modules): `ArcaneEditor`, `ArcaneRuntime`,
@@ -87,18 +87,25 @@ Tauri, outside this build.
 
 ### 1.5 The untangle (measured 2026-10-11 by `#include` edges)
 
-The "Base hub" cycle is three misfiled files; every other cycle is one edge.
+Verified exhaustively by the Codex sweep (`.superpowers/sdd/2026-10-11-modularization/sweep.py`, 415 engine files) and re-run with every row below applied (`recheck.py` -> `sweep-r2.md`): **0 unassigned files, 0 undeclared dependencies, 0 type-rule violations, 0 cycles.** Every module lists `ArcaneCore` explicitly when it includes it. Vendor headers a module's own public headers include are public `thirdParty` of that module (Core: Astra, glm, spdlog, nlohmann, Mosaic), and flow to consumers through public dependencies.
 
 | Edge today | Fix |
 |---|---|
-| `Base/Runtime.*`, `Base/Engine.cpp`, `Base/ProcessContext.*` include Scene/Plugin/Project/Sim/Assets/Serialization | move to `ArcaneEngine` |
+| `Base/Runtime.*`, `Base/ProcessContext.*` include Scene/Plugin/Project/Sim/Assets/Serialization | move to `ArcaneEngine` |
+| `Base/Engine.cpp:2` includes `Plugin/PluginABI.hpp` for `kGamePluginABIVersion` | the constant moves to a Core header that `PluginABI.hpp` includes; `Engine.*` stays in Core |
+| `Guid.cpp:3` includes `Crypto/Crypto.hpp` for the CSPRNG | the OS CSPRNG moves to Core (`Arcane/Platform/SecureRandom.hpp`, `Arcane::SecureRandomBytes`); Guid and Crypto call it |
+| `ArcaneCore.cpp:11-14` includes Crypto/Net headers (instantiation TU) | those includes move to `ArcaneCrypto`'s and `ArcaneNet`'s own `ARC_MODULE` TUs |
+| `Scene/EngineRoster.hpp:23`, `Scene/EngineResourceTypes.cpp:3` include physics headers | both move to `ArcaneEngine` (their includers -- `Runtime.cpp`, `ProcessContext.cpp`, `Project/ProjectHost.hpp` -- are all Engine) |
 | `Assets/*` includes `Project/AssetId.hpp` | `AssetId` moves to `ArcaneAssets` |
 | `Assets/Assets.cpp` includes `Serialization/IdentityFieldRule.hpp` | the header (header-only, depends only on `Json.hpp`) moves to `ArcaneAssets` as `Arcane/Assets/IdentityFieldRule.hpp`; `Serialization/ReflectionJson.hpp` and the editor's `AssetPanelModel.hpp` include it from there |
 | `Scene/PhysicsSystem.hpp` includes `Physics2D.hpp` | `PhysicsSystem` moves to `ArcanePhysics2D` |
 | `Config/PlayerSettings.hpp` includes `Plugin/SystemFactory.hpp` (for `NetMode` only) | `NetMode` moves into `ArcaneCore` (a Core-level enum header); `SystemFactory` re-exports nothing |
 | `Render/Nri/NriGraphContext.hpp` includes `Host/HostConfig.hpp` | the render graph takes the values it needs as a Render-owned struct; Host fills it |
-| `Render/Nri/nodes/ImGuiNriNode.hpp` | moves to `ArcaneImGui` |
-| `Host/*` (6 files) uses the verify harness | `ArcaneClient` exposes hooks; `ArcaneVerify` plugs in. A Client module may not depend on a Developer module (s2.3) |
+| `Render/Nri/nodes/ImGuiNriNode.*`, `NriGraphContext.hpp:247`, `Host/GpuContext.hpp:27` (ImGuiLayer), `Client/ClientRuntime.cpp:15` (imgui.h) | **overlay hook**: ArcaneClient owns a small overlay interface (per-frame begin/draw + a render-graph node factory); ArcaneImGui implements it; hosts (Runtime, Editor, packages whose game names ImGui) install it. ImGui stays optional per host |
+| `Plugin/GameModule.hpp:50` includes `imgui.h` (context adoption in Init) | gated by `ARC_GAME_HAS_IMGUI`, which `arcane.lua` defines when `ImGui` is in the game's closure |
+| `Render/PhysicsDebugDraw.*` includes Manifold2D internals (`:28-35`) | split: the GATHER half (reads solver/broadphase, emits primitive lists) moves to `ArcanePhysics2D`; the DRAW half (Batcher2D, `PhysicsDebugSettings`) stays in Render. Manifold2D stays private to Physics2D |
+| `Host/HostConfig.cpp:3-4` (VerifyReport, ReferenceImages) and the other Host users of the verify harness | `ArcaneClient` exposes hooks; `ArcaneVerify` plugs in. A Client module may not depend on a Developer module (s2.3) |
+| `ArcaneClient/src/Arcane/Base/Api.hpp` (`ARC_API`) | retired in P2; each Client module includes its own `Api.hpp` |
 
 ## 2. Descriptors and build machinery
 
@@ -309,4 +316,5 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 | R8 | Packaging = link half of D15; client games only. |
 | R9 | Game descriptor of type `Game`; `arcane_core_consumer()` removed; ABI 59. |
 | R10 | No green-throughout; build-only per phase, one commit per phase, test wholesale at the end. |
+| R12 | Codex sweep (2026-10-11): map corrected per s1.5 (Engine.* stays in Core; roster to Engine; CSPRNG to Core; overlay hook keeps ImGui optional; PhysicsDebugDraw split); re-run clean. |
 | R11 | Grok Bot review (2026-10-11): registrar-reachability concern rejected with the init-table reasoning (s3.3), test strengthened to full roster; mid-arc test runs declined per R10; accepted: in-place package boot (WARP), modular-vs-mono frame-time report, WSL2 link probe in P5, module list logged at boot, forced-ref symbol spelled, IdentityFieldRule -> ArcaneAssets. |
