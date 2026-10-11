@@ -17,6 +17,7 @@
 #include <Astra/Serialization/BinaryWriter.hpp>
 
 #include "Helpers/CVarTestDesc.hpp"
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "Helpers/UserDataDirs.hpp"
 #include "../plugins/HotReloadShared.hpp"
@@ -46,7 +47,7 @@ namespace
 
     void RestoreV1()
     {
-        fs::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+        fs::copy_file(Arcane::Test::BuiltModule("HotReloadPluginV1"), Arcane::Test::ModuleFile("HotReloadPluginV1"),
                       fs::copy_options::overwrite_existing);
     }
 
@@ -104,7 +105,7 @@ TEST_CASE("a module's cvars, commands and callbacks leave with its image", "[cva
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
 
@@ -141,19 +142,19 @@ TEST_CASE("a hot reload re-registers from the NEW image; an ABI-refused image le
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     REQUIRE(reg.Execute("hotreload.ping", Arcane::CVarContext::Editor).text == "step 1");
 
-    fs::copy_file("HotReloadPluginV2.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(Arcane::Test::ModuleFile("HotReloadPluginV2"), Arcane::Test::ModuleFile("HotReloadPluginV1"), fs::copy_options::overwrite_existing);
     REQUIRE(host.ForceReload());
     REQUIRE_FALSE(reg.Find("hotreload.step").IsStale());
     CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 10);
     CHECK(reg.Execute("hotreload.ping", Arcane::CVarContext::Editor).text == "step 10");
 
     // Bad's statics run inside LoadLibrary, THEN the ABI gate refuses it.
-    fs::copy_file("HotReloadPluginBad.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(Arcane::Test::ModuleFile("HotReloadPluginBad"), Arcane::Test::ModuleFile("HotReloadPluginV1"), fs::copy_options::overwrite_existing);
     CHECK_FALSE(host.ForceReload());                       // rolled back to the last-good (V2) image
     CHECK(reg.Execute("hotreload.ping", Arcane::CVarContext::Editor).text == "step 10");
     CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 10);
@@ -172,7 +173,7 @@ TEST_CASE("an unload flushes the module's unsaved User values to the archive fir
     RegisterFixtureTypes(rt);
     rt.SetUserCVarArchiving(true);
     REQUIRE(rt.OpenProject(dir / "P"));
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     REQUIRE(reg.Set(reg.Find("hotreload.step"), Arcane::CVarValue::Int32(7), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
@@ -200,7 +201,7 @@ TEST_CASE("a callback a module adds from a tick entry point leaves with its imag
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     host.FixedUpdateAll(1.0 / 60.0);                           // the tick-time AddCallback lands here
@@ -230,7 +231,7 @@ TEST_CASE("an AddCallback from a module ECS tick with no CVarModuleScope leaves 
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     // pluginFixed (scoped) then the ECS scheduler (no scope). ServerOnlyTick
@@ -260,7 +261,7 @@ TEST_CASE("an AddCallback from SaveStatePrimary leaves with the image", "[cvar][
     Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     std::vector<std::byte> buf;
@@ -313,7 +314,7 @@ TEST_CASE("a module that loads AFTER the project opened gets its Project rung, a
     Arcane::Runtime rt(Arcane::Test::Process());
     RegisterFixtureTypes(rt);
     REQUIRE(rt.OpenProject(dir / "P"));                       // hotreload.step does not exist yet
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 42);
@@ -339,13 +340,13 @@ TEST_CASE("a User value survives a hot reload: flushed before the unload, re-app
     RegisterFixtureTypes(rt);
     rt.SetUserCVarArchiving(true);
     REQUIRE(rt.OpenProject(dir / "P"));
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     REQUIRE(reg.Set(reg.Find("hotreload.step"), Arcane::CVarValue::Int32(9), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
     reg.Publish();
 
-    fs::copy_file("HotReloadPluginV2.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(Arcane::Test::ModuleFile("HotReloadPluginV2"), Arcane::Test::ModuleFile("HotReloadPluginV1"), fs::copy_options::overwrite_existing);
     REQUIRE(host.ForceReload());
     CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 9);    // V2's default is 10
     CHECK(reg.Explain("hotreload.step")->setBy == Arcane::SetBy::User);
@@ -403,7 +404,8 @@ TEST_CASE("a module project's keys are not logged as unknown at OpenProject: the
         std::ofstream(dir / "P" / "P.arcproj", std::ios::binary)
             << R"({"formatVersion":)" << Arcane::ProjectManifest::kFormatVersion
             << R"(,"name":"P","engine":{"abi":)" << static_cast<int>(Arcane::kGamePluginABIVersion)
-            << R"(},"gameModule":"HotReloadPluginV1.dll","plugins":[],"bootScene":""})";
+            << R"(},"gameModule":")" << Arcane::Test::ModuleFile("HotReloadPluginV1")
+            << R"(","plugins":[],"bootScene":""})";
         std::ofstream(dir / "P" / "Config" / "hotreload.json", std::ios::binary) << R"({ "step": 42 })";
         std::ofstream(dir / "P" / "Config" / "cvardiagtest.json", std::ios::binary) << R"({ "bogus": 1 })";
     }
@@ -423,7 +425,7 @@ TEST_CASE("a module project's keys are not logged as unknown at OpenProject: the
         CHECK(log.text.find("cvar config:") == std::string::npos);   // ... the log waits for the module
     }
 
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     CHECK(reg.Get(reg.Find("hotreload.step"))->AsInt32() == 42);   // the deferral changed nothing about layering
@@ -436,7 +438,7 @@ TEST_CASE("a module project's keys are not logged as unknown at OpenProject: the
         CHECK(CountOf(log.text, "config.cvar.unknown-key 'hotreload.step'") == 0);
     }
 
-    fs::copy_file("HotReloadPluginV2.dll", "HotReloadPluginV1.dll", fs::copy_options::overwrite_existing);
+    fs::copy_file(Arcane::Test::ModuleFile("HotReloadPluginV2"), Arcane::Test::ModuleFile("HotReloadPluginV1"), fs::copy_options::overwrite_existing);
     REQUIRE(host.ForceReload());                               // a second load republishes the same set ...
     {
         const std::vector<Arcane::Diagnostic>* rows = cap.Last("config.cvars");

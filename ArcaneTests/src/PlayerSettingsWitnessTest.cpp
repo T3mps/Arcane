@@ -2,6 +2,7 @@
 // and LocalHost in Dist. This witness checks the host wiring, beyond the helper
 // contract tested in CVarAccessTest. The interactive overlay uses the session role.
 #include "Helpers/HostWitness.hpp"
+#include <Arcane/Platform/Platform.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -18,7 +19,7 @@ namespace
     {
         const std::filesystem::path p = std::filesystem::absolute("../ArcaneRuntime");
         INFO("staged ArcaneRuntime not found -- build Arcane.slnx first: " << p.string());
-        REQUIRE(std::filesystem::exists(p / "ArcaneRuntime.exe"));
+        REQUIRE(std::filesystem::exists(p / Arcane::Platform::ExecutableFileName("ArcaneRuntime")));
         return p;
     }
 
@@ -34,7 +35,7 @@ TEST_CASE("PS-W1: Debug runtime --set accepts Server and Game settings through t
 {
     WitnessScratch scratch(StagedRuntimeDir(), "ps-w1-command-line-set");
     WitnessInvocation inv;
-    inv.exePath    = scratch.Dir() / "ArcaneRuntime.exe";
+    inv.exePath    = scratch.Dir() / Arcane::Platform::ExecutableFileName("ArcaneRuntime");
     inv.workingDir = scratch.Dir();
     inv.reportPath = scratch.Dir() / "witness-report.json";
     inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "vulkan",

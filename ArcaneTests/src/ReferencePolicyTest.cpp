@@ -10,6 +10,7 @@
 
 #include <filesystem>
 
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 using namespace Arcane;
@@ -41,7 +42,7 @@ TEST_CASE("ReferenceGame's mods policy: off by default; on, it widens LocalHost 
 
     {
         Runtime runtime(Test::Process());
-        PluginHost host(Test::Process(), std::filesystem::path("ReferenceGameUnderTest.dll"));
+        PluginHost host(Test::Process(), std::filesystem::path(Arcane::Test::ModuleFile("ReferenceGameUnderTest")));
         REQUIRE(host.AttachRuntime(runtime));
         REQUIRE(host.Load());
 

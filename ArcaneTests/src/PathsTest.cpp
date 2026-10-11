@@ -17,6 +17,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectPaths.hpp>   // ApplyEngineDirDefaults, kDistBuild
 
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"
 
@@ -438,7 +439,7 @@ TEST_CASE("PluginHost stages its versioned module copies under Paths' TempDir", 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Arcane::HotReloadTest::Pulse>();
     rt.Components()->RegisterComponent<Arcane::HotReloadTest::RoleCounters>();
-    Arcane::PluginHost host(Arcane::Test::Process(), fs::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), fs::path(Arcane::Test::ModuleFile("HotReloadPluginV1")));
     host.AttachRuntime(rt);
     REQUIRE(host.Load());
     CHECK(fs::exists(Arcane::Paths::Get(L::TempDir) / "plugins" / "HotReloadPluginV1_1.dll"));

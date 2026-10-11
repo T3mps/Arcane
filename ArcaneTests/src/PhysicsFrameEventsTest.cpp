@@ -13,6 +13,7 @@
 
 #include <App/PlayMode.hpp>
 
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
@@ -495,9 +496,9 @@ TEST_CASE("Play, Stop and scene open clear both windows", "[physics][events]")
 // restores one that cannot carry Arcane::PhysicsWorld2D.
 TEST_CASE("a module hot reload clears both windows", "[physics][events]")
 {
-    const std::filesystem::path dll = "PhysicsEventsReload.dll";
+    const std::filesystem::path dll = Arcane::Test::ModuleFile("PhysicsEventsReload");
     std::error_code ec;
-    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", dll,
+    std::filesystem::copy_file(Arcane::Test::BuiltModule("HotReloadPluginV1"), dll,
                                std::filesystem::copy_options::overwrite_existing, ec);
     REQUIRE_FALSE(ec);
 

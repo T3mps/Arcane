@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 using namespace Arcane;
@@ -31,7 +32,12 @@ namespace
     static_assert(Detail::kIsSettingsFieldType<std::uint32_t>);
     static_assert(Detail::kIsSettingsFieldType<std::int64_t>);
     static_assert(Detail::kIsSettingsFieldType<std::uint64_t>);
-    static_assert(Detail::kIsSettingsFieldType<std::size_t>);   // == std::uint64_t on x64 MSVC
+    // size_t is a field exactly where it IS one of the fixed-width types:
+    // uint64_t (unsigned long long) on x64 MSVC, uint64_t (unsigned long) on
+    // LP64 Linux; on macOS it is unsigned long while uint64_t is unsigned long
+    // long, so there it is a distinct type and correctly refused.
+    static_assert(Detail::kIsSettingsFieldType<std::size_t> ==
+                  (std::is_same_v<std::size_t, std::uint32_t> || std::is_same_v<std::size_t, std::uint64_t>));
     static_assert(Detail::kIsSettingsFieldType<float>);
     static_assert(Detail::kIsSettingsFieldType<double>);
     static_assert(Detail::kIsSettingsFieldType<std::string>);
@@ -41,7 +47,28 @@ namespace
     static_assert(Detail::kIsSettingsFieldType<CVarVec4>);
     static_assert(Detail::kIsSettingsFieldType<SettingsProbe::Quality>);
     static_assert(!Detail::kIsSettingsFieldType<std::vector<int>>);
-    static_assert(!Detail::kIsSettingsFieldType<long>);           // 32-bit on MSVC, but not std::int32_t
+    // long is distinct from int32_t on MSVC, but aliases int64_t on LP64.
+    static_assert(Detail::kIsSettingsFieldType<long> ==
+                  (std::is_same_v<long, std::int32_t> || std::is_same_v<long, std::int64_t>));
+    // The real intent: the trait matches the exact fixed-width types, never an
+    // integer that merely has the same width. Every platform has one: long on
+    // MSVC (32-bit, not int32_t) and macOS (64-bit, not int64_t), long long on
+    // LP64 Linux (64-bit, not int64_t).
+    using DistinctSameWidthInt = std::conditional_t<
+        std::is_same_v<long, std::int32_t> || std::is_same_v<long, std::int64_t>, long long, long>;
+    static_assert(sizeof(DistinctSameWidthInt) == sizeof(std::int32_t) || sizeof(DistinctSameWidthInt) == sizeof(std::int64_t));
+    static_assert(!std::is_same_v<DistinctSameWidthInt, std::int32_t> && !std::is_same_v<DistinctSameWidthInt, std::int64_t>);
+    static_assert(!Detail::kIsSettingsFieldType<DistinctSameWidthInt>);
+    // The unsigned half: unsigned long on MSVC (32-bit, not uint32_t) and macOS
+    // (64-bit, not uint64_t), unsigned long long on LP64 Linux.
+    static_assert(Detail::kIsSettingsFieldType<unsigned long> ==
+                  (std::is_same_v<unsigned long, std::uint32_t> || std::is_same_v<unsigned long, std::uint64_t>));
+    using DistinctSameWidthUInt = std::conditional_t<
+        std::is_same_v<unsigned long, std::uint32_t> || std::is_same_v<unsigned long, std::uint64_t>,
+        unsigned long long, unsigned long>;
+    static_assert(sizeof(DistinctSameWidthUInt) == sizeof(std::uint32_t) || sizeof(DistinctSameWidthUInt) == sizeof(std::uint64_t));
+    static_assert(!std::is_same_v<DistinctSameWidthUInt, std::uint32_t> && !std::is_same_v<DistinctSameWidthUInt, std::uint64_t>);
+    static_assert(!Detail::kIsSettingsFieldType<DistinctSameWidthUInt>);
     static_assert(!Detail::kIsSettingsFieldType<std::uint8_t>);
     static_assert(!Detail::kIsSettingsFieldType<std::int16_t>);
     static_assert(!Detail::kIsSettingsFieldType<const char*>);

@@ -8,6 +8,7 @@
 #include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
@@ -198,7 +199,7 @@ TEST_CASE("PlayerSettings follows the primary world's net mode through the plugi
     struct ResetSession { ~ResetSession() { PlayerSettings::SetSessionMode(NetMode::Standalone); } } reset;
 
     Runtime runtime(Test::Process(), NetMode::Client);
-    PluginHost host(Test::Process(), std::filesystem::path("ReferenceGameUnderTest.dll"));
+    PluginHost host(Test::Process(), std::filesystem::path(Arcane::Test::ModuleFile("ReferenceGameUnderTest")));
     REQUIRE(host.AttachRuntime(runtime));
     REQUIRE(host.Load());                                   // no ClientRuntime: ReferenceGame's OnInit returns true
     CHECK(PlayerSettings::SessionMode() == NetMode::Client);

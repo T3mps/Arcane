@@ -20,7 +20,8 @@ TEST_CASE("sweep: render device defaults are the pre-sweep values, per configura
     CHECK(d.validation == debugOn);
     CHECK(d.d3d12DebugLayer == debugOn);     // the graph vehicle forced it in Debug
     CHECK(d.vkSyncValidation == debugOn);
-    CHECK(RenderSettings{}.backend == GraphicsBackend::D3D12);
+    CHECK(RenderSettings{}.backend == kDefaultGraphicsBackend);   // D3D12 on Windows, Vulkan elsewhere
+    CHECK(RenderSettings{}.backend == HostConfig{}.backend);       // the setting and the parsed default agree
     CHECK(RenderSettings{}.vsync);
     CHECK(RenderSettings{}.adapter == -1);
     CHECK_FALSE(RenderSettings{}.allowTearing);
@@ -86,11 +87,16 @@ TEST_CASE("sweep: --backend and --no-vsync reach render.backend/render.vsync on 
     }
     {
         // No flag: the setting (here from --set) is what the host boots with,
-        // and an absent --backend does not pin the rung to D3D12.
-        HostConfig cfg = parse({ "ArcaneRuntime", "--set", "render.backend=Vulkan", "--set", "render.vsync=false" });
-        CHECK(cfg.backend == GraphicsBackend::D3D12);   // the parsed default, before the rungs
+        // and an absent --backend does not pin the rung to the parsed default.
+        // The --set names the backend that is NOT this platform's default, so
+        // the adoption is observable on every platform.
+        constexpr GraphicsBackend other = kDefaultGraphicsBackend == GraphicsBackend::D3D12 ? GraphicsBackend::Vulkan
+                                                                                            : GraphicsBackend::D3D12;
+        HostConfig cfg = parse({ "ArcaneRuntime", "--set", other == GraphicsBackend::Vulkan ? "render.backend=Vulkan" : "render.backend=D3D12",
+                                 "--set", "render.vsync=false" });
+        CHECK(cfg.backend == kDefaultGraphicsBackend);   // the parsed default, before the rungs
         HostBoot::ApplyEarlyConfigRungs(cfg, CVarContext::Editor, /*editor*/ false);
-        CHECK(cfg.backend == GraphicsBackend::Vulkan);
+        CHECK(cfg.backend == other);
         CHECK_FALSE(cfg.vsync);
         reg.RevertLayer(SetBy::CommandLine); reg.PublishImmediate();
     }

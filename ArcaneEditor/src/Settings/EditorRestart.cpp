@@ -3,6 +3,7 @@
 #include "Project/RuntimeLaunch.hpp"
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Process.hpp>
 
 #include <system_error>
 
@@ -26,16 +27,9 @@ namespace Arcane::Editor::EditorRestart
 
     std::filesystem::path CurrentExe()
     {
-#ifdef _WIN32
-        std::wstring buf(32768, L'\0');
-        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-        if (n == 0 || n >= buf.size()) return {};
-        buf.resize(n);
-        return std::filesystem::path(buf);
-#else
-        std::error_code ec;
-        return std::filesystem::read_symlink("/proc/self/exe", ec);
-#endif
+        // GetModuleFileNameW / /proc/self/exe / _NSGetExecutablePath+realpath:
+        // macOS has no /proc, so the old /proc read answered empty there.
+        return Arcane::Platform::ExecutablePath();
     }
 
     bool Spawn(const std::filesystem::path& exe, const std::vector<std::wstring>& args)
