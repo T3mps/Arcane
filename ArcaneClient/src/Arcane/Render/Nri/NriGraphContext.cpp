@@ -494,6 +494,11 @@ namespace Arcane
         // See NodeSet's invariant block.
         // ---------------------------------------------------------------
         const RenderOverlayHooks overlay = GetRenderOverlayHooks();
+        if ((nodes.hostHud || nodes.gameUi) && !overlay.create)
+        {
+            static bool warned = false;
+            if (!warned) { warned = true; ARC_WARN("[nri-graph] UI node requested without a render overlay hook"); }
+        }
         if (nodes.hostHud && overlay.create)
         {
             m_imguiHud = overlay.create(*this);

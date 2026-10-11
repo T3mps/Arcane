@@ -273,11 +273,12 @@ namespace Arcane
     // DrawPhysicsDebug
     // -------------------------------------------------------------------------
 
-    PhysicsDebugGeometry GatherPhysicsDebug(const ::Manifold2D::Physics::PhysicsWorld& world,
+    void GatherPhysicsDebug(const ::Manifold2D::Physics::PhysicsWorld& world,
                           const Arcane::PhysicsDebugDrawOptions2D& opts,
-                          const Arcane::PhysicsDebugStyleSettings2D& style)
+                          const Arcane::PhysicsDebugStyleSettings2D& style,
+                          PhysicsDebugGeometry& batcher)
     {
-        PhysicsDebugGeometry batcher;
+        batcher.primitives.clear();
         namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
@@ -294,7 +295,8 @@ namespace Arcane
         {
             if (!world.Alive(i))
                 continue;
-            if (opts.onlyBody && *opts.onlyBody != world.HandleOf(i))
+            if (opts.onlyBody && *opts.onlyBody !=
+                ((static_cast<std::uint64_t>(world.HandleOf(i).index) << 32) | world.HandleOf(i).generation))
                 continue;
 
             const Shape&    s      = world.ShapeSlot(i);
@@ -591,22 +593,31 @@ namespace Arcane
                     }
                 });
         }
-        return batcher;
+    }
+
+    PhysicsDebugGeometry GatherPhysicsDebug(const ::Manifold2D::Physics::PhysicsWorld& world,
+                                            const PhysicsDebugDrawOptions2D& opts,
+                                            const PhysicsDebugStyleSettings2D& style)
+    {
+        PhysicsDebugGeometry out;
+        GatherPhysicsDebug(world, opts, style, out);
+        return out;
     }
 
     // -------------------------------------------------------------------------
     // DrawNarrowphaseWorldOverlay (Slice B)
     // -------------------------------------------------------------------------
 
-PhysicsDebugGeometry GatherNarrowphaseWorldOverlay(const ::Manifold2D::Physics::NarrowphaseTrace& trace,
+void GatherNarrowphaseWorldOverlay(const ::Manifold2D::Physics::NarrowphaseTrace& trace,
                                      int stepIndex, const Affine2D& view,
                                      std::optional<float> lineThickness,
                                      std::optional<float> emphasis,
                                      const Arcane::PhysicsDebugTraceSettings2D& trc,
                                      const Arcane::PhysicsDebugColorSettings2D& pal,
-                                     const Arcane::PhysicsDebugStyleSettings2D& style)
+                                     const Arcane::PhysicsDebugStyleSettings2D& style,
+                                     PhysicsDebugGeometry& batcher)
     {
-        PhysicsDebugGeometry batcher;
+        batcher.primitives.clear();
         namespace Phys = ::Manifold2D::Physics;
         using namespace Phys;
 
@@ -713,7 +724,16 @@ PhysicsDebugGeometry GatherNarrowphaseWorldOverlay(const ::Manifold2D::Physics::
             const glm::vec2 sp = ToScreen(p, view);
             batcher.Circle(sp, style.contactDiscRadius, Dim(ToVec4(pal.tracePoint)));
         }
-        return batcher;
+    }
+
+    PhysicsDebugGeometry GatherNarrowphaseWorldOverlay(const ::Manifold2D::Physics::NarrowphaseTrace& trace,
+        int stepIndex, const Affine2D& view, std::optional<float> lineThickness,
+        std::optional<float> emphasis, const PhysicsDebugTraceSettings2D& trc,
+        const PhysicsDebugColorSettings2D& pal, const PhysicsDebugStyleSettings2D& style)
+    {
+        PhysicsDebugGeometry out;
+        GatherNarrowphaseWorldOverlay(trace, stepIndex, view, lineThickness, emphasis, trc, pal, style, out);
+        return out;
     }
 
 } // namespace Arcane

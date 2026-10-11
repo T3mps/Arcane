@@ -14,6 +14,17 @@ namespace Arcane
 
     namespace SecureRandomDetail
     {
+        inline bool EntropySamplesDegenerate(const std::vector<std::uint8_t>& first,
+                                             const std::vector<std::uint8_t>& second)
+        {
+            if (first.empty() || first.size() != second.size() || first == second) return true;
+            auto stuck = [](const std::vector<std::uint8_t>& sample) {
+                for (std::uint8_t byte : sample)
+                    if (byte != sample.front()) return false;
+                return true;
+            };
+            return stuck(first) || stuck(second);
+        }
         using PlatformFillFn = bool (*)(std::uint8_t*, std::size_t);
 #if !defined(ARC_BUILD_DIST)
         ARC_CORE_API PlatformFillFn& PlatformFillOverrideSlot();

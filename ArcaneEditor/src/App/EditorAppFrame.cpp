@@ -1931,7 +1931,8 @@ namespace Arcane::Editor
                 opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
                 opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
                 opts.contacts   = plan.wholeWorld;
-                if (!plan.wholeWorld) opts.onlyBody = selectedBody;
+                if (!plan.wholeWorld && selectedBody)
+                    opts.onlyBody = (static_cast<std::uint64_t>(selectedBody->index) << 32) | selectedBody->generation;
                 Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), b, opts);
             }
         }

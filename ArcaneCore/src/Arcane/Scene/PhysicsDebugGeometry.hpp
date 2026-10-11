@@ -1,8 +1,8 @@
 #pragma once
 #include <Arcane/Core/Api.hpp>
-#include <Arcane/Core/PhysicsDebugTypes.hpp>
+#include <Arcane/Scene/PhysicsDebugTypes.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
-#include <Manifold2D/Physics/PhysicsTypes.hpp>
+#include <cstdint>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 #include <optional>
@@ -69,7 +69,8 @@ namespace Arcane
         // so the editor can outline the SELECTED entity's collider in Edit mode
         // without the whole-world overlay (the Unity collider gizmo). Null (the
         // default) is every existing caller: the whole world, every flag honoured.
-        std::optional<Manifold2D::Physics::BodyHandle> onlyBody;
+        // Packed {index, generation}; the solver handle is reconstructed in the .cpp.
+        std::optional<std::uint64_t> onlyBody;
     };
 
 
@@ -95,6 +96,10 @@ namespace Arcane
         const Manifold2D::Physics::PhysicsWorld& world,
         const PhysicsDebugDrawOptions2D& opts,
         const PhysicsDebugStyleSettings2D& style);
+    ARC_CORE_API void GatherPhysicsDebug(
+        const Manifold2D::Physics::PhysicsWorld& world,
+        const PhysicsDebugDrawOptions2D& opts,
+        const PhysicsDebugStyleSettings2D& style, PhysicsDebugGeometry& out);
     ARC_CORE_API PhysicsDebugGeometry GatherNarrowphaseWorldOverlay(
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex, const Affine2D& view,
@@ -102,4 +107,11 @@ namespace Arcane
         const PhysicsDebugTraceSettings2D& trc,
         const PhysicsDebugColorSettings2D& pal,
         const PhysicsDebugStyleSettings2D& style);
+    ARC_CORE_API void GatherNarrowphaseWorldOverlay(
+        const Manifold2D::Physics::NarrowphaseTrace& trace,
+        int stepIndex, const Affine2D& view,
+        std::optional<float> lineThickness, std::optional<float> emphasis,
+        const PhysicsDebugTraceSettings2D& trc,
+        const PhysicsDebugColorSettings2D& pal,
+        const PhysicsDebugStyleSettings2D& style, PhysicsDebugGeometry& out);
 }

@@ -14,7 +14,7 @@
 //   both overlays read the published block directly, so the options layout is
 //   unchanged.
 
-#include <Arcane/Core/PhysicsDebugTypes.hpp>
+#include <Arcane/Scene/PhysicsDebugTypes.hpp>
 
 namespace Arcane
 {

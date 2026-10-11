@@ -239,26 +239,7 @@ namespace Arcane
         static bool EntropySamplesDegenerate(const std::vector<uint8_t>& first,
                                              const std::vector<uint8_t>& second)
         {
-            // Empty or size-mismatched draws did not fulfil the request.
-            if (first.empty() || first.size() != second.size())
-                return true;
-
-            // Two independent draws must not collide (echoing /
-            // fixed-seed generator).
-            if (first == second)
-                return true;
-
-            // A draw stuck at a single repeated byte value carries no
-            // entropy (0x00 being the classic short-read residue).
-            auto stuck = [](const std::vector<uint8_t>& sample) {
-                for (uint8_t b : sample)
-                {
-                    if (b != sample.front())
-                        return false;
-                }
-                return true;
-            };
-            return stuck(first) || stuck(second);
+            return SecureRandomDetail::EntropySamplesDegenerate(first, second);
         }
 
         // Draws two samples through the platform RNG and applies the

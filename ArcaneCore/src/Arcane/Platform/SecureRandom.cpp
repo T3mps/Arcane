@@ -81,12 +81,7 @@ namespace Arcane
         {
             const auto a = DrawUnchecked(32);
             const auto b = DrawUnchecked(32);
-            auto stuck = [](const std::vector<std::uint8_t>& sample)
-            {
-                return std::all_of(sample.begin(), sample.end(),
-                                   [&](std::uint8_t byte) { return byte == sample.front(); });
-            };
-            return a != b && !stuck(a) && !stuck(b);
+            return !EntropySamplesDegenerate(a, b);
         }
 
         void EnsureEntropySelfTest()

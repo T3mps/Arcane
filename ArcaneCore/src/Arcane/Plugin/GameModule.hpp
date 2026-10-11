@@ -172,6 +172,13 @@ namespace Arcane
             Arcane::ComponentModule* components = nullptr;
             GameModule*              instance   = nullptr;
 
+            void DrawUI()
+            {
+#if defined(ARC_GAME_HAS_IMGUI)
+                if (instance && ctx && ctx->imguiContext) instance->OnDrawUI();
+#endif
+            }
+
             template <typename Type>
             bool Init(EngineContext* c, const char* name)
             {
@@ -323,8 +330,7 @@ namespace Arcane
         { if (auto* m = arcane_game_module_state_.instance) m->OnUpdate(dt, alpha); }              \
         ARC_GAME_MODULE_EXPORT void GamePlugin_DrawUI()                                         \
         {                                                                                          \
-            auto& s = arcane_game_module_state_;                                                   \
-            if (s.instance && s.ctx && s.ctx->imguiContext) s.instance->OnDrawUI();                \
+            arcane_game_module_state_.DrawUI();                                                   \
         }                                                                                          \
         ARC_GAME_MODULE_EXPORT void GamePlugin_SaveState(::Arcane::BinaryWriter& w)             \
         { arcane_game_module_state_.SaveState(w); }                                                \

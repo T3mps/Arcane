@@ -3,6 +3,11 @@
 
 namespace Arcane
 {
+    namespace
+    {
+        struct PhysicsDebugDrawBuffer { PhysicsDebugGeometry geometry; };
+        thread_local PhysicsDebugDrawBuffer drawBuffer;
+    }
     PhysicsDebugDrawOptions2D MakePhysicsDebugDrawOptions()
     {
         PhysicsDebugDrawOptions2D o;
@@ -27,15 +32,17 @@ namespace Arcane
     void DrawPhysicsDebug(const Manifold2D::Physics::PhysicsWorld& world,
                           Batcher2D& batcher, const PhysicsDebugDrawOptions2D& opts)
     {
-        DrawGeometry(batcher, GatherPhysicsDebug(world, opts, Settings<PhysicsDebugStyleSettings2D>()));
+        GatherPhysicsDebug(world, opts, Settings<PhysicsDebugStyleSettings2D>(), drawBuffer.geometry);
+        DrawGeometry(batcher, drawBuffer.geometry);
     }
 
     void DrawNarrowphaseWorldOverlay(const Manifold2D::Physics::NarrowphaseTrace& trace,
                                      int stepIndex, Batcher2D& batcher, const Affine2D& view,
                                      std::optional<float> lineThickness, std::optional<float> emphasis)
     {
-        DrawGeometry(batcher, GatherNarrowphaseWorldOverlay(trace, stepIndex, view,
+        GatherNarrowphaseWorldOverlay(trace, stepIndex, view,
             lineThickness, emphasis, Settings<PhysicsDebugTraceSettings2D>(),
-            Settings<PhysicsDebugColorSettings2D>(), Settings<PhysicsDebugStyleSettings2D>()));
+            Settings<PhysicsDebugColorSettings2D>(), Settings<PhysicsDebugStyleSettings2D>(), drawBuffer.geometry);
+        DrawGeometry(batcher, drawBuffer.geometry);
     }
 }

@@ -282,7 +282,7 @@ TEST_CASE("onlyBody draws exactly one outline and no other overlay", "[physics][
     const BodyHandle hb = w.AddBody(b);
     RecMock rec;
     Arcane::PhysicsDebugDrawOptions2D opts;   // defaults: contacts/velocity/COM/orientation ON
-    opts.onlyBody = hb;
+    opts.onlyBody = (static_cast<std::uint64_t>(hb.index) << 32) | hb.generation;
     Arcane::DrawPhysicsDebug(w, rec, opts);
     CHECK(rec.circles.size() == 1);
     CHECK(rec.lines.size() == 0);
