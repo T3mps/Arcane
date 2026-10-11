@@ -5,7 +5,7 @@
     #define ARC_DLL_IMPORT __declspec(dllimport)
 #else
     #define ARC_DLL_EXPORT __attribute__((visibility("default")))
-    #define ARC_DLL_IMPORT
+    #define ARC_DLL_IMPORT __attribute__((visibility("default")))
 #endif
 
 #if defined(ARC_MONOLITHIC)

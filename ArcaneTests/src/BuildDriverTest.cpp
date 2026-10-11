@@ -2105,13 +2105,16 @@ namespace
                                      std::string_view firstDescriptor,
                                      std::string_view secondDescriptor,
                                      std::string_view expectedCheck,
-                                     bool wrongFolder = false)
+                                     bool wrongFolder = false,
+                                     std::string_view expectedDetail = {})
     {
         UniqueTempDir tempDir(fixtureName);
         const fs::path repoRoot =
             Arcane::Editor::ModuleBuild::SdkRootFromExeDir(
                 Arcane::Editor::ModuleBuild::ExeDir());
-        const fs::path premake = repoRoot / "ThirdParty" / "premake5" / "premake5.exe";
+        const auto resolvedPremake = BackendResolver().ResolvePremake(repoRoot);
+        REQUIRE(resolvedPremake.has_value());
+        const fs::path premake = *resolvedPremake;
         REQUIRE(fs::is_regular_file(premake));
 
         auto writeDescriptor = [&](std::string_view moduleName, std::string_view body,
@@ -2158,6 +2161,8 @@ namespace
         INFO(allMessages);
         CHECK(allMessages.find("[arcmodule] " + std::string(expectedCheck) + ":") !=
               std::string::npos);
+        if (!expectedDetail.empty())
+            CHECK(allMessages.find(expectedDetail) != std::string::npos);
     }
 }
 
@@ -2195,7 +2200,7 @@ TEST_CASE("module descriptors reject unknown keys", "[build-generator]")
 {
     CheckModuleGeneratorFailure("module_unknown_key",
         R"({"name":"ArcaneFoo","type":"Runtime","unknownKey":true,"dependencies":{"public":[],"private":[]},"thirdParty":{"public":[],"private":[]}})",
-        {}, "schema");
+        {}, "schema", false, "unknown key descriptor.unknownKey");
 }
 
 TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 output from the fixture",

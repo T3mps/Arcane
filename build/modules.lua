@@ -57,7 +57,7 @@ local allowed_edges = {
 }
 
 local function suffix(name)
-    local short = name:gsub("^Arcane", "")
+    local short = name:match("^Arcane(.+)$") or name
     return short:gsub("(%l)(%u)", "%1_%2"):gsub("(%u)(%u%l)", "%1_%2"):upper()
 end
 
@@ -67,7 +67,10 @@ end
 
 local function api_folder(mod)
     if mod.name == "ArcaneCore" then return "Core" end
-    return mod.name:gsub("^Arcane", "")
+    if mod.name == "ArcaneClient" then return "Client" end
+    local folders = os.matchdirs(path.join(mod.root, "src/Arcane/*"))
+    if #folders ~= 1 then fail("api-header", mod.file .. ": expected one directory under src/Arcane or apiHeader") end
+    return path.getname(folders[1])
 end
 
 local function load_one(file)
@@ -75,13 +78,16 @@ local function load_one(file)
     if not raw then fail("schema", file .. ": cannot read descriptor") end
     local doc, err = json.decode(raw)
     if not doc then fail("schema", file .. ": " .. tostring(err)) end
-    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true}, file, "descriptor")
+    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true,apiHeader=true}, file, "descriptor")
     if type(doc.name) ~= "string" or doc.name ~= path.getbasename(file) then
         fail("schema", file .. ": name must equal descriptor stem")
     end
     if not types[doc.type] then fail("schema", file .. ": invalid type " .. tostring(doc.type)) end
     if doc.apiMacro and (doc.name ~= "ArcaneCore" or doc.apiMacro ~= "ARC_CORE_API") then
         fail("schema", file .. ": apiMacro override is reserved for ArcaneCore")
+    end
+    if doc.apiHeader ~= nil and (type(doc.apiHeader) ~= "string" or doc.apiHeader == "" or path.isabsolute(doc.apiHeader)) then
+        fail("schema", file .. ": apiHeader must be a relative path")
     end
     for _, field in ipairs({"dependencies", "thirdParty"}) do
         keys(doc[field], {public=true,private=true}, file, field)
@@ -108,14 +114,20 @@ end
 
 function arc_modules_load(roots)
     local mods = {byName={},order={}}
-    local files, seen = {}, {}
+    local files, seen, relative = {}, {}, {}
     for _, root in ipairs(roots) do
         local found = {}
         if root:match("%.arcmodule$") then found = {root}
         else found = os.matchfiles(path.join(root, "**.arcmodule")) end
         for _, file in ipairs(found) do
             file = path.translate(file, "/")
-            if not seen[file] then files[#files+1] = file; seen[file] = true end
+            if not seen[file] then
+                files[#files+1] = file; seen[file] = true
+                local rel = root:match("%.arcmodule$") and path.getname(root) or path.getrelative(root, file)
+                local root_name = path.getname(path.getabsolute(root))
+                relative[file] = path.translate((root_name == "Source" or root_name == "ThirdParty") and
+                    path.join(root_name, rel) or rel, "/")
+            end
         end
     end
     table.sort(files)
@@ -126,8 +138,8 @@ function arc_modules_load(roots)
     end
     for _, file in ipairs(files) do
         local mod = mods.byName[path.getbasename(file)]
-        local source_type = file:match("/Source/([^/]+)/") or file:match("^Source/([^/]+)/")
-        local vendor = file:match("/ThirdParty/") or file:match("^ThirdParty/")
+        local source_type = relative[file]:match("^Source/([^/]+)/")
+        local vendor = relative[file]:match("^ThirdParty/")
         local bootstrap = bootstrap_outside_source and
             (file == "ArcaneCore/ArcaneCore.arcmodule" or
              file == "ArcaneClient/ArcaneClient.arcmodule")
@@ -175,13 +187,14 @@ function arc_modules_load(roots)
         local mod = mods.byName[name]
         local count = 0
         for _, cpp in ipairs(os.matchfiles(path.join(mod.root, "src/**.cpp"))) do
-            local source = io.readfile(cpp) or ""
+            local source = (io.readfile(cpp) or ""):gsub("/%*.-%*/", " "):gsub("//[^\r\n]*", "")
             for declared in source:gmatch("ARC_MODULE%s*%(%s*([%w_]+)%s*%)") do
                 if declared == name then count = count + 1 end
             end
         end
         if count ~= 1 then fail("declaration", mod.file .. ": expected exactly one ARC_MODULE(" .. name .. "), found " .. count) end
-        local header = path.join(mod.root, "src/Arcane", api_folder(mod), "Api.hpp")
+        local header = mod.apiHeader and path.join(mod.root, mod.apiHeader) or
+            path.join(mod.root, "src/Arcane", api_folder(mod), "Api.hpp")
         local expected = template:gsub("@MODULE@", suffix(name)):gsub("@API_MACRO@", api_macro(mod))
         local actual = io.readfile(header)
         local function normalized(s) return s and s:gsub("\r\n", "\n") end
@@ -209,15 +222,16 @@ function arc_module_closure(mods, name, kind)
     return result
 end
 
-local function layout() return _OPTIONS.layout or "modular" end
+local function layout()
+    if _OPTIONS.layout == "monolithic" then fail("layout", "monolithic is not wired until P5") end
+    return _OPTIONS.layout or "modular"
+end
 
 function arc_module_project(mods, name, bootstrap)
     local mod = assert(mods.byName[name], "unknown module " .. name)
-    group(mod.type)
     project(name)
     kind(layout() == "monolithic" and "StaticLib" or "SharedLib")
     defines { "ARC_" .. suffix(name) .. "_EXPORTS" }
-    if name == "ArcaneCore" then defines { "ARC_CORE_API_EXPORTS" } end
     if bootstrap then return end -- P2: fully descriptor-driven after the source move.
     location(mod.root)
     language "C++"
@@ -233,8 +247,9 @@ function arc_module_project(mods, name, bootstrap)
         if vendors[vendor] then return end
         vendors[vendor] = true
         local entry = ARC_THIRDPARTY[vendor]
-        local dir = entry.include == "@SDL3_INCLUDE_DIR@" and SDL3_INCLUDE_DIR or
-            (root .. "/" .. entry.include)
+        local dir
+        if vendor == "SDL3" then dir = SDL3_INCLUDE_DIR
+        else dir = root .. "/" .. entry.include end
         if dir then includedirs { dir } end
         if entry.link then links { entry.link } end
     end
@@ -274,7 +289,7 @@ function arc_module_stage(mods, names)
         if selected[name] then
             local extension = os.target() == "windows" and ".dll" or (os.target() == "macosx" and ".dylib" or ".so")
             local prefix = os.target() == "windows" and "" or "lib"
-            commands[#commands+1] = '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
+            commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/bin/' .. outputdir .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
         end
     end
     postbuildcommands(commands)

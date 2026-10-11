@@ -141,6 +141,10 @@ newoption {
     default = "modular",
 }
 
+if _OPTIONS.layout == "monolithic" then
+    error("[arcmodule] layout: monolithic is not wired until P5")
+end
+
 workspace "Arcane"
     architecture(ARCANE_ARCH)
     startproject "ArcaneTests"
