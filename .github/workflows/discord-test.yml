@@ -1,0 +1,24 @@
+name: Discord webhook test
+
+# Manual check that the DISCORD_WEBHOOK secret posts to the channel, without running the CI matrix.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post a test message
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then echo "DISCORD_WEBHOOK not set"; exit 1; fi
+          jq -n --arg u "https://github.com/$REPO/actions/runs/$RUN_ID" \
+             '{username: "GitHub Actions", embeds: [{title: "Arcane CI notifications are connected", description: "Test post from the discord-test workflow.", url: $u, color: 3447003}]}' \
+            | curl -fsS -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK" >/dev/null

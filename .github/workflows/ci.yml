@@ -15,6 +15,7 @@ name: CI
 #     layer, and the X11 + Wayland windowed smoke (scripts/linux-windowed-smoke.sh);
 #   * macos-appleclang Debug: [gpu] on MoltenVK over the runner's Apple GPU
 #     (see docs/ci.md "GPU lanes" for what that proves and what it cannot).
+# A final `notify` job posts FAILED / RECOVERED to Discord (DISCORD_WEBHOOK secret).
 # The Jenkins full gate on the GPU desk (Jenkinsfile) stays the unfiltered,
 # real-GPU, golden-gate run.
 
@@ -377,3 +378,54 @@ jobs:
             /tmp/arcane-witness/
           if-no-files-found: ignore
           retention-days: 14
+
+  # Discord status, the Jenkins notifier's twin (Jenkinsfile `failure` / `fixed`): post on EVERY failed
+  # run and on the first green run after a failure (plus any manual run), naming the failed legs.
+  # Optional plumbing: no DISCORD_WEBHOOK secret -> skip; a Discord error never turns CI red. Never runs
+  # for pull requests (fork PRs must not reach the secret; roadmap D26).
+  notify:
+    name: Discord notify
+    needs: build-test
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Post status transition to Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.build-test.result }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK:-}" ]; then echo "DISCORD_WEBHOOK not set; skipping"; exit 0; fi
+          # The previous decided (success/failure) run of this workflow on this branch; cancelled runs don't count.
+          prev=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=$BRANCH&status=completed&per_page=20" \
+                   --jq "[.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\" and (.conclusion == \"success\" or .conclusion == \"failure\"))][0].conclusion // \"none\"" \
+                 || echo none)
+          case "$RESULT" in
+            failure) title="FAILED: Arcane CI on $BRANCH"; color=15158332 ;;
+            success)
+              if [ "$prev" = "failure" ]; then title="RECOVERED: Arcane CI on $BRANCH"
+              elif [ "$EVENT" = "workflow_dispatch" ]; then title="PASSED: Arcane CI on $BRANCH (manual run)"
+              else echo "green, previous was $prev: nothing to post"; exit 0; fi
+              color=3066993 ;;
+            *) echo "result $RESULT: nothing to post"; exit 0 ;;
+          esac
+          failed=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+                     --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")' || true)
+          subject=$(printf '%s' "${HEAD_MSG:-}" | head -n1 | cut -c1-200)
+          desc="Branch \`$BRANCH\` at \`${SHA:0:8}\`"
+          [ -n "$subject" ] && desc="$desc: $subject"
+          [ -n "$failed" ] && desc="$desc"$'\n'"**Failed legs:** $failed"
+          jq -n --arg t "$title" --arg d "$desc" --arg u "https://github.com/$REPO/actions/runs/$RUN_ID" --argjson c "$color" \
+             '{username: "GitHub Actions", embeds: [{title: $t, description: $d, url: $u, color: $c}]}' \
+            | curl -fsS -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK" >/dev/null \
+            || echo "Discord post failed (ignored)"
