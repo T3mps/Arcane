@@ -1,0 +1,20 @@
+{
+  "name": "ArcaneEdit",
+  "type": "Editor",
+  "dependencies": {
+    "public": [
+      "ArcaneCore",
+      "ArcaneScene"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "glm",
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

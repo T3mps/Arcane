@@ -1,0 +1,19 @@
+{
+  "name": "ArcanePhysics2D",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore",
+      "ArcaneScene"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Manifold2D",
+      "glm"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

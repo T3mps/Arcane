@@ -1,6 +1,4 @@
 -- The single reader for engine and external-project .arcmodule descriptors.
--- P2 deletes this flag when the two bootstrap descriptors move under Source/.
-local bootstrap_outside_source = true
 local modules_dir = _SCRIPT_DIR
 
 ARC_THIRDPARTY = {
@@ -57,7 +55,8 @@ local allowed_edges = {
 }
 
 local function suffix(name)
-    local short = name:match("^Arcane(.+)$") or name
+    -- "ImGui" is one word in the macro (ArcaneImGui -> ARC_IMGUI_API, not ARC_IM_GUI_API).
+    local short = (name:match("^Arcane(.+)$") or name):gsub("ImGui", "Imgui")
     return short:gsub("(%l)(%u)", "%1_%2"):gsub("(%u)(%u%l)", "%1_%2"):upper()
 end
 
@@ -65,20 +64,13 @@ local function api_macro(mod)
     return mod.apiMacro or ("ARC_" .. suffix(mod.name) .. "_API")
 end
 
-local function api_folder(mod)
-    if mod.name == "ArcaneCore" then return "Core" end
-    if mod.name == "ArcaneClient" then return "Client" end
-    local folders = os.matchdirs(path.join(mod.root, "src/Arcane/*"))
-    if #folders ~= 1 then fail("api-header", mod.file .. ": expected one directory under src/Arcane or apiHeader") end
-    return path.getname(folders[1])
-end
-
 local function load_one(file)
     local raw = io.readfile(file)
     if not raw then fail("schema", file .. ": cannot read descriptor") end
     local doc, err = json.decode(raw)
     if not doc then fail("schema", file .. ": " .. tostring(err)) end
-    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true,apiHeader=true}, file, "descriptor")
+    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true,apiHeader=true,vendor=true}, file, "descriptor")
+    if doc.vendor ~= nil and type(doc.vendor) ~= "boolean" then fail("schema", file .. ": vendor must be boolean") end
     if type(doc.name) ~= "string" or doc.name ~= path.getbasename(file) then
         fail("schema", file .. ": name must equal descriptor stem")
     end
@@ -123,9 +115,12 @@ function arc_modules_load(roots)
             file = path.translate(file, "/")
             if not seen[file] then
                 files[#files+1] = file; seen[file] = true
-                local rel = root:match("%.arcmodule$") and path.getname(root) or path.getrelative(root, file)
+                local rel = root:match("%.arcmodule$") and path.translate(root, "/") or path.getrelative(root, file)
                 local root_name = path.getname(path.getabsolute(root))
-                relative[file] = path.translate((root_name == "Source" or root_name == "ThirdParty") and
+                if root:match("%.arcmodule$") and path.isabsolute(rel) and ARCANE_SDK then
+                    rel = path.getrelative(ARCANE_SDK, rel)
+                end
+                relative[file] = root:match("%.arcmodule$") and rel or path.translate((root_name == "Source" or root_name == "ThirdParty") and
                     path.join(root_name, rel) or rel, "/")
             end
         end
@@ -140,10 +135,8 @@ function arc_modules_load(roots)
         local mod = mods.byName[path.getbasename(file)]
         local source_type = relative[file]:match("^Source/([^/]+)/")
         local vendor = relative[file]:match("^ThirdParty/")
-        local bootstrap = bootstrap_outside_source and
-            (file == "ArcaneCore/ArcaneCore.arcmodule" or
-             file == "ArcaneClient/ArcaneClient.arcmodule")
-        if not source_type and not vendor and not bootstrap then fail("folder", file .. ": outside Source/<Type>/") end
+        if not source_type and not vendor then fail("folder", file .. ": outside Source/<Type>/") end
+        if vendor and not mod.vendor then fail("folder", file .. ": ThirdParty descriptor requires vendor=true") end
         if source_type and source_type ~= mod.type then
             fail("folder", file .. ": " .. mod.type .. " does not match Source/" .. source_type)
         end
@@ -185,6 +178,7 @@ function arc_modules_load(roots)
     if not template then fail("api-header", "cannot read build/templates/Api.hpp.in") end
     for _, name in ipairs(mods.order) do
         local mod = mods.byName[name]
+        if not mod.vendor then
         local count = 0
         for _, cpp in ipairs(os.matchfiles(path.join(mod.root, "src/**.cpp"))) do
             local source = (io.readfile(cpp) or ""):gsub("/%*.-%*/", " "):gsub("//[^\r\n]*", "")
@@ -194,12 +188,13 @@ function arc_modules_load(roots)
         end
         if count ~= 1 then fail("declaration", mod.file .. ": expected exactly one ARC_MODULE(" .. name .. "), found " .. count) end
         local header = mod.apiHeader and path.join(mod.root, mod.apiHeader) or
-            path.join(mod.root, "src/Arcane", api_folder(mod), "Api.hpp")
+            path.join(mod.root, "src/Arcane/Modules", name .. "Api.hpp")
         local expected = template:gsub("@MODULE@", suffix(name)):gsub("@API_MACRO@", api_macro(mod))
         local actual = io.readfile(header)
         local function normalized(s) return s and s:gsub("\r\n", "\n") end
         if normalized(actual) ~= normalized(expected) then
             fail("api-header", mod.file .. ": " .. header .. " differs from template")
+        end
         end
     end
     return mods
@@ -227,12 +222,12 @@ local function layout()
     return _OPTIONS.layout or "modular"
 end
 
-function arc_module_project(mods, name, bootstrap)
+function arc_module_project(mods, name)
     local mod = assert(mods.byName[name], "unknown module " .. name)
     project(name)
     kind(layout() == "monolithic" and "StaticLib" or "SharedLib")
     defines { "ARC_" .. suffix(name) .. "_EXPORTS" }
-    if bootstrap then return end -- P2: fully descriptor-driven after the source move.
+    if name == "ArcaneCore" then defines { "ARC_CORE_API_EXPORTS" } end
     location(mod.root)
     language "C++"
     cppdialect "C++23"
@@ -243,6 +238,11 @@ function arc_module_project(mods, name, bootstrap)
     includedirs { "%{prj.location}/src" }
     local root = ARCANE_SDK or "%{wks.location}"
     local vendors = {}
+    -- A dependency's PUBLIC thirdParty is linked too: its public headers carry
+    -- inline code that calls the vendor (e.g. PhysicsSystem.hpp -> Manifold2D),
+    -- and a vendor static lib has no exports to import. The linker only pulls the
+    -- objects a module references; the vendor libs linked this way hold no
+    -- process-global state (SDL3, which does, is special-cased below).
     local function add_vendor(vendor)
         if vendors[vendor] then return end
         vendors[vendor] = true
@@ -251,12 +251,23 @@ function arc_module_project(mods, name, bootstrap)
         if vendor == "SDL3" then dir = SDL3_INCLUDE_DIR
         else dir = root .. "/" .. entry.include end
         if dir then includedirs { dir } end
-        if entry.link then links { entry.link } end
+        if vendor == "SDL3" then
+            -- ONE SDL instance per process. Off Windows SDL3 is the system's shared
+            -- library, so every user links it. On Windows it is vcpkg's SDL3-static:
+            -- only ArcaneWindow links it (ARC_MODULE_EXTRAS) and re-exports the SDL
+            -- entry points the other modules call -- a second static copy would be a
+            -- second SDL with its own window/event/keyboard state.
+            filter "system:not windows"
+                links { "SDL3" }
+                if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR } end
+            filter {}
+        elseif entry.link then links { entry.link } end
     end
     for _, dep in ipairs(arc_module_closure(mods, name, "all")) do
         links { dep }
-        local dep_root = mods.byName[dep].root
-        includedirs { (path.isabsolute(dep_root) and dep_root or (root .. "/" .. dep_root)) .. "/src" }
+        local dep_mod = mods.byName[dep]
+        local dep_root = dep_mod.root
+        includedirs { (path.isabsolute(dep_root) and dep_root or (root .. "/" .. dep_root)) .. (dep_mod.vendor and "" or "/src") }
         for _, vendor in ipairs(mods.byName[dep].thirdParty.public) do add_vendor(vendor) end
     end
     for _, visibility in ipairs({"public", "private"}) do
@@ -275,10 +286,13 @@ function arc_module_project(mods, name, bootstrap)
     filter "system:macosx"
         linkoptions { "-Wl,-rpath,@loader_path" }
     filter {}
+    if ARC_MODULE_EXTRAS and ARC_MODULE_EXTRAS[name] then ARC_MODULE_EXTRAS[name]() end
 end
 
 function arc_module_stage(mods, names)
     if layout() == "monolithic" then return end
+    -- An SDK consumer's own outputdir names ITS layout; the engine's is always -md.
+    local out = (not ARCANE_SDK and outputdir) or "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
     local selected = {}
     for _, name in ipairs(names) do
         selected[name] = true
@@ -289,10 +303,51 @@ function arc_module_stage(mods, names)
         if selected[name] then
             local extension = os.target() == "windows" and ".dll" or (os.target() == "macosx" and ".dylib" or ".so")
             local prefix = os.target() == "windows" and "" or "lib"
-            commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/bin/' .. outputdir .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
+            commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/bin/' .. out .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
         end
     end
     postbuildcommands(commands)
+    -- In-workspace: a staged-but-unlinked module still has to be BUILT first.
+    if not ARCANE_SDK then
+        local order = {}
+        for _, name in ipairs(mods.order) do if selected[name] then order[#order+1] = name end end
+        dependson(order)
+    end
+end
+
+-- Link + include the module closure of `names`. opts.stage: false = do not
+-- copy the module binaries beside the target (a loaded game module: the host
+-- already carries them); a list = stage that closure instead (a host that maps
+-- modules it never links, e.g. ArcaneServer for a game module's full set).
+function arc_module_consumer(mods, names, opts)
+    opts = opts or {}
+    local selected = {}
+    for _, name in ipairs(names) do
+        selected[name] = true
+        for _, dep in ipairs(arc_module_closure(mods, name, "all")) do selected[dep] = true end
+    end
+    local root = ARCANE_SDK or "%{wks.location}"
+    local vendors = {}
+    for _, name in ipairs(mods.order) do
+        if selected[name] then
+            local mod = mods.byName[name]
+            links { name }
+            if ARCANE_SDK then libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md/" .. name } end
+            includedirs { (path.isabsolute(mod.root) and mod.root or root .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
+            if opts.vendors ~= false then
+                for _, vendor in ipairs(mod.thirdParty.public) do vendors[vendor] = true end
+            end
+        end
+    end
+    local vendor_names = {}
+    for vendor in pairs(vendors) do vendor_names[#vendor_names+1] = vendor end
+    table.sort(vendor_names)   -- deterministic include order across generations
+    for _, vendor in ipairs(vendor_names) do
+        local entry = ARC_THIRDPARTY[vendor]
+        if vendor == "SDL3" then includedirs { SDL3_INCLUDE_DIR }
+        elseif entry then includedirs { root .. "/" .. entry.include } end
+    end
+    if opts.stage ~= false then arc_module_stage(mods, type(opts.stage) == "table" and opts.stage or names) end
 end
 
 function arc_module_forced_refs(names)

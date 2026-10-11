@@ -1,0 +1,40 @@
+#pragma once
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+
+// NRI substrate (Phase 1, Task 4): result-check discipline, callback-to-
+// latch wiring, and one-line device identity logging. Every later NRI task
+// in ArcaneClient/src/Arcane/Render/Nri/ builds on these three symbols, so
+// the signatures here are load-bearing. (The surviving account of how the NRI
+// layer was built is the milestone record at the tail of each plan under
+// docs/plans/.)
+//
+// Include order: NRIDeviceCreation.h declares nri::Message with an
+// enumerator literally named ERROR, and <windows.h> (dragged in
+// transitively by Arcane/Base/Log.hpp -> spdlog) #defines ERROR via
+// wingdi.h. Once that macro is live, every later textual "ERROR" in the
+// including translation unit -- even a qualified nri::Message::ERROR --
+// gets corrupted by preprocessor substitution. Keep the NRI includes first
+// in this header and in NriCommon.cpp.
+#include <NRI.h>                          // vendored NRI include root: nri::Result, nri::Device
+#include <Extensions/NRIDeviceCreation.h> // nri::CallbackInterface, nri::Message
+
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+
+namespace Arcane
+{
+    // Every nri call that returns nri::Result goes through this. Logs the
+    // failing expression + result name at ERROR and bumps RenderErrorCount
+    // (the 0/0 gate latch), returns false on failure. Never throws.
+    ARC_RENDER_API bool NriCheckImpl(nri::Result result, const char* expr, const char* file, int line);
+    #define ARC_NRI_CHECK(expr) ::Arcane::NriCheckImpl((expr), #expr, __FILE__, __LINE__)
+
+    // Install into DeviceCreationDesc/wrapper descs: routes NRI's
+    // MessageCallback into ARC_INFO/WARN/ERROR by severity, ERRORs bump
+    // RenderErrorCount. Feeds the ONE gate every render-layer error producer
+    // feeds (Render/RenderErrorLatch.hpp -- see NriCommon.cpp's
+    // RouteNriError).
+    ARC_RENDER_API nri::CallbackInterface MakeNriCallbacks() noexcept;
+
+    // One INFO line: nriVersion + which backend + validation on/off.
+    ARC_RENDER_API void LogNriIdentity(nri::Device& device);
+}

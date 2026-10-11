@@ -1,0 +1,27 @@
+{
+  "name": "ArcaneClient",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneAssets",
+      "ArcaneAudio",
+      "ArcaneCore",
+      "ArcaneEngine",
+      "ArcaneInput",
+      "ArcaneRender",
+      "ArcaneScene",
+      "ArcaneSim",
+      "ArcaneWindow"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "glm",
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

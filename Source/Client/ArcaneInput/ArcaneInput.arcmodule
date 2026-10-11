@@ -1,0 +1,22 @@
+{
+  "name": "ArcaneInput",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": [
+      "ArcaneWindow"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "glm",
+      "nlohmann"
+    ],
+    "private": [
+      "SDL3"
+    ]
+  },
+  "platforms": {}
+}

@@ -160,9 +160,8 @@ TEST_CASE("FreeType: library init/done and version", "[vendor][freetype]")
 // ---------------------------------------------------------------- cgltf
 // F2c Task 1: cgltf's IMPLEMENTATION TU lives at ArcaneAssetPipeline/src/Arcane/
 // AssetPipeline/CgltfImpl.cpp (MeshImporter.cpp needs cgltf_parse/cgltf_validate),
-// and that static lib is linked into this exe -- defining CGLTF_IMPLEMENTATION here
-// too would merge a SECOND copy of every cgltf symbol and fail to link (LNK2005).
-// Declarations only, same rule as the stb block above.
+// which EXPORTS the three entry points this test calls from ArcaneAssetPipeline.dll
+// (P2). Declarations only -- a CGLTF_IMPLEMENTATION here would be a second copy.
 #include <cgltf.h>
 
 TEST_CASE("cgltf: a minimal glTF parses, validates, and reports its meshes",

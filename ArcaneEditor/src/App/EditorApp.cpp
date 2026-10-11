@@ -22,6 +22,7 @@
 //   EditorAppProject.cpp  Open Project, material/instance creation, the watcher.
 
 #include "App/EditorApp.hpp"
+#include <Arcane/Core/ModuleAttach.hpp>   // AttachAllModules (R13)
 #include <Arcane/Platform/Platform.hpp>
 
 #include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
@@ -381,6 +382,7 @@ namespace Arcane::Editor
         // different component's bytes at worst). ArcaneCore.dll's slot is installed by
         // ProcessContext::Create itself.
         Astra::SetTypeContext(&m_process->TypeContext());
+        ::Arcane::AttachAllModules(&m_process->TypeContext());   // every engine module image's slot (R13)
         // NOW, and not a line earlier (2026-09-16): EditModeSchedule's ctor resolves
         // the TransformPropagationSystem's component mask, and TypeID<T>::Value()
         // caches per module for the process's life -- as a plain EditorApp member it

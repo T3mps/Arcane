@@ -7,9 +7,10 @@
 -- multi-version registry is a later nicety -- spec 2026-07-22 S10/S12):
 --
 --   ARCANE_SDK  ->  the Arcane engine repo root (e.g. D:\dev\starworks\Arcane)
---                   include surface = $ARCANE_SDK/ArcaneClient/src (+ ThirdParty header-only)
---                   import lib       = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/ArcaneClient/ArcaneClient.lib
---                   ArcaneClient.dll        ships beside the host exe (host copies it)
+--                   include surface = every linked module's $ARCANE_SDK/Source/<Type>/<Module>/src
+--                                      (+ ThirdParty header-only), read from the .arcmodule descriptors
+--                   import libs      = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/<Module>/<Module>.lib
+--                   module DLLs      ship beside the host exe (the host stages them)
 --
 -- Usage from a project's premake5.lua:
 --   workspace "MyGame"
@@ -39,6 +40,7 @@ if not ARCANE_SDK then
 end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
 include(ARCANE_SDK .. "/build/modules.lua") -- shared descriptor reader for P4 consumers
+local ARCANE_MODULES = arc_modules_load { ARCANE_SDK .. "/Source", ARCANE_SDK .. "/ThirdParty/imgui/ImGui.arcmodule", ARCANE_SDK .. "/ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule" }
 local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
 
 -- macOS port (2026-10-07): a Mac target builds for the host architecture
@@ -241,14 +243,7 @@ function arcane_game_module(name)
         -- PhysicsComponents.hpp, and Json.hpp through InputActionAsset.hpp).
         includedirs {
             "%{wks.location}/" .. sourceDir,
-            ARCANE_SDK .. "/ArcaneClient/src",
-            -- Core's namespaced include root (<Arcane/Guid.hpp>, and since the
-            -- Core-DLL split the whole headless engine layer: Base/Scene/
-            -- Plugin/Project/Serialization/...) -- and its import lib: a game
-            -- module links BOTH engine DLLs (spec docs/specs/
-            -- 2026-09-15-core-dll-split-design.md s1.2); the host's own copies
-            -- of both DLLs are what the loader binds.
-            ARCANE_SDK .. "/ArcaneCore/src",
+            -- The engine module include roots come from arc_module_consumer below.
             ARCANE_TP .. "/glm",
             ARCANE_TP .. "/Astra/include",
             ARCANE_TP .. "/enkiTS/src",
@@ -259,19 +254,19 @@ function arcane_game_module(name)
             ARCANE_TP .. "/nlohmann",
         }
 
-        -- Link the engine import libs by name out of the per-config SDK bin dirs.
-        -- Neither is a project in this workspace, so premake treats them as
-        -- library links resolved against libdirs (-> ArcaneCore.lib /
-        -- ArcaneClient.lib). imgui's exported surface arrives through
-        -- ArcaneClient's import lib (/WHOLEARCHIVE in the engine).
-        libdirs { ARCANE_BIN .. "/ArcaneCore", ARCANE_BIN .. "/ArcaneClient" }
-        links   { "ArcaneCore", "ArcaneClient" }
+        -- Link the engine module import libs by name out of the per-config SDK bin
+        -- dirs (none is a project in this workspace, so premake resolves them
+        -- against libdirs) + each module's include root. Until P4 makes this
+        -- descriptor-driven: the DEFAULT set -- every Runtime + Client module
+        -- (ArcaneClient's closure + Crypto), ImGui (the vendor DLL that exports
+        -- imgui itself) and ArcaneImGui. Not staged: the host carries the DLLs.
+        arc_module_consumer(ARCANE_MODULES, { "ArcaneClient", "ArcaneImGui", "ImGui", "ArcaneNet", "ArcaneCrypto" }, { stage = false })
 
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARC_GAME_MODULE needs no define
             "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3)
             "ARC_GAME_HAS_IMGUI",
-            -- adopt ArcaneClient's single GImGui. __declspec is PE/COFF-only;
+            -- adopt ImGui.dll's single GImGui. __declspec is PE/COFF-only;
             -- ELF and Mach-O have no import decoration (default visibility exports it).
             "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
             "_CRT_SECURE_NO_WARNINGS",
@@ -384,7 +379,6 @@ function arcane_core_consumer()
     filter {}
 
     includedirs {
-        ARCANE_SDK .. "/ArcaneCore/src",
         ARCANE_TP .. "/glm",
         ARCANE_TP .. "/Astra/include",
         ARCANE_TP .. "/enkiTS/src",
@@ -396,8 +390,9 @@ function arcane_core_consumer()
     -- (Arcane/Config/CVarModule.hpp; settings spec s4.3): its own project.
     defines { "ARC_MODULE_NAME=%{prj.name}" }
 
-    libdirs { ARCANE_BIN .. "/ArcaneCore" }
-    links   { "ArcaneCore" }
+    -- Module roots + import libs only: vendors = false keeps spdlog/nlohmann off
+    -- the include path (see above); arcane_core_stage_dll() does the staging.
+    arc_module_consumer(ARCANE_MODULES, { "ArcaneCore", "ArcaneNet", "ArcaneCrypto" }, { stage = false, vendors = false })
 
     -- Same toolset scoping as arcane_game_module: MSVC flags only reach the
     -- MSVC compiler; a GCC/Clang toolset (gmake on Windows) gets the -m
@@ -422,7 +417,5 @@ function arcane_core_consumer()
 end
 
 function arcane_core_stage_dll()
-    postbuildcommands {
-        '{COPYFILE} "' .. ARCANE_BIN .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
-    }
+    arc_module_stage(ARCANE_MODULES, { "ArcaneCore", "ArcaneNet", "ArcaneCrypto" })
 end

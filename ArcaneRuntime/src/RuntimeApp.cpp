@@ -5,6 +5,7 @@
 // CONTRACT is encoded in the RuntimeApp member declaration order -- see RuntimeApp.hpp.
 
 #include "RuntimeApp.hpp"
+#include <Arcane/Core/ModuleAttach.hpp>   // AttachAllModules (R13)
 #include "RuntimeFrame.hpp"   // MainLoop's frame body
 
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
@@ -99,6 +100,7 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // This exe's OWN per-module Astra slot (unchanged reasoning: the slot is per module).
     // ArcaneCore.dll's slot is installed by ProcessContext::Create itself.
     Astra::SetTypeContext(&m_process->TypeContext());
+    ::Arcane::AttachAllModules(&m_process->TypeContext());   // every engine module image's slot (R13)
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
     // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
