@@ -2,7 +2,7 @@
 #include <Arcane/Modules/ArcaneAssetPipelineApi.hpp>
 
 // Arcane::AssetPipeline::CookSession -- F2b Task 5: the shared cook orchestration both
-// arccook (this task's CLI, arccook/src/main.cpp) and the editor's in-process cook
+// arccook (this task's CLI, Source/Programs/arccook/src/main.cpp) and the editor's in-process cook
 // (Task 12) drive VERBATIM, so the CLI and the editor never diverge on what "stale" or
 // "cooked" means. A CookSession owns no state across calls beyond the last CookProject
 // call's failure map -- every CookProject/CheckProject call opens its own
@@ -26,7 +26,7 @@
 // Source enumeration: every source extension in the kind table (CookKinds() below --
 // ".png" for Texture, ".gltf"/".glb" for Mesh) found under <projectDir>/Content
 // (recursive) that has a sibling "<file>.meta" sidecar (Unity convention -- matches
-// ArcaneClient/src/Arcane/Project/AssetRegistry.cpp's ResolveSidecarId) is a cookable
+// Source/Runtime/ArcaneEngine/src/Arcane/Project/AssetRegistry.cpp's ResolveSidecarId) is a cookable
 // source. A source with no sidecar is not yet a registered asset -- CookSession never
 // mints one (minting a guid is AssetRegistry's job, host-side only) -- it is silently
 // skipped, never a failure. Nothing outside Content/ is ever considered: in particular

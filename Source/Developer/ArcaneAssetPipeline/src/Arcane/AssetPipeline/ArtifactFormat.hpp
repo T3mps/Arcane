@@ -16,7 +16,7 @@
 // artifact non-deterministic across toolchains/configs, which breaks content-hash-based caching
 // in later tasks (spec s4).
 //
-// BYTE-CONTRACT PEER (F2b Task 6): ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp/.cpp
+// BYTE-CONTRACT PEER (F2b Task 6): Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.hpp/.cpp
 // mirrors BOTH pairs by hand -- a DELIBERATE, INDEPENDENT reimplementation, not a shared
 // consumer of this header (ArcaneClient must never link/include ArcaneAssetPipeline). It
 // mirrors the texture pair (ReadClientArtifact, F2b) AND the mesh pair (ReadClientMeshArtifact,
@@ -112,7 +112,7 @@ namespace Arcane::AssetPipeline
 
     // Reads a BOUNDED PREFIX, never the whole file: this runs once per artifact in the
     // store on every scan, and a texture artifact's payload is megabytes. Mirrors
-    // ArcaneClient/src/Arcane/Assets/ArtifactReader.cpp's own ParseCommonPrefix/
+    // Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.cpp's own ParseCommonPrefix/
     // kHeaderProbeBytes reasoning (that file's the client-side twin of this one; see
     // this header's own BYTE-CONTRACT PEER paragraph) -- a generous fixed-size read from
     // the start of the file, well inside which the 37-byte common prefix (magic 4 +

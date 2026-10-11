@@ -77,7 +77,7 @@ namespace Arcane
         // The fixed step's rate (Hz) -- a RUNTIME value (Core-DLL split, plan 1
         // Task 6 review round 1): StepFixed's canonical `fixedDt` (`1.0 /
         // m_cfg.fixedHz`) used to be fixed at construction, so a host whose
-        // --fixed-dt names a non-default step (ArcaneServer/src/ServerApp.cpp)
+        // --fixed-dt names a non-default step (Source/Programs/ArcaneServer/src/ServerApp.cpp)
         // had no way to make that step size real -- only realDt, the Advance()
         // PARAMETER, was under its control, and realDt only decides how many
         // fixed steps ACCUMULATE per Advance() call, never their size. The two

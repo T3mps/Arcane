@@ -145,7 +145,7 @@ namespace Arcane
                 // The section is still the right one to emit, and it starts
                 // naming scopes the moment WriteMarkerNative above stops
                 // returning false, with no edit at this line. Pinned both
-                // ways in ArcaneTests/src/NriDiagnosticsTest.cpp so the day
+                // ways in Tests/ArcaneTests/src/NriDiagnosticsTest.cpp so the day
                 // that arc lands, the change in this report is visible.
                 Diag::EmitQueueSnapshot(m_breadcrumbs, "graphics", envelope, humanText);
 

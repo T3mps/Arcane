@@ -5,7 +5,7 @@
 // F2c Task 4 this covers BOTH artifact kinds the container format carries: Texture
 // (ReadClientArtifact, F2b Task 6) and Mesh (ReadClientMeshArtifact, F2c Task 4).
 //
-// BYTE-CONTRACT PEER: ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp/.cpp
+// BYTE-CONTRACT PEER: Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp/.cpp
 // (Task 1's texture writer, Task 3's mesh writer) is the OTHER half of this contract. This
 // file is a DELIBERATE, INDEPENDENT reimplementation -- ArcaneClient must never link or
 // #include ArcaneAssetPipeline (premake keeps that structurally true: ArcaneClient's
@@ -214,7 +214,7 @@
 namespace Arcane
 {
     // Client-local MIRROR of Arcane::AssetPipeline::ArtifactPixelFormat's VALUES
-    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) -- deliberately
+    // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) -- deliberately
     // NOT shared (see this file's header banner). The numeric values below must stay in
     // lockstep with that enum BY HAND: RGBA8=0, BC7=1, BC5_Reserved=2, BC6H_Reserved=3.
     // A drift here is caught immediately by ArtifactReaderTest.cpp's cross-lib
@@ -281,7 +281,7 @@ namespace Arcane
     };
 
     // This engine's own copy of the pipeline's kTextureImporterVersion
-    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.hpp) -- mirrored BY HAND,
+    // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.hpp) -- mirrored BY HAND,
     // never included, per this file's no-shared-code banner above. Bump this number IN
     // LOCKSTEP with that one; a mismatch left standing would make every artifact THIS
     // engine's own cook produces look "newer than the engine" to itself the moment the
@@ -374,7 +374,7 @@ namespace Arcane
     // of the .gltf's own JSON text (`buffers[].uri`) instead of going through cgltf.
     //
     // BYTE-CONTRACT PEER: Arcane::AssetPipeline::ReadExternalBuffers
-    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/MeshImporter.cpp) is the OTHER half of
+    // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/MeshImporter.cpp) is the OTHER half of
     // this contract -- a DELIBERATE, INDEPENDENT reimplementation, agreeing with this
     // function BY HAND rather than by shared code, per this file's own header banner. Both
     // sides: skip a buffer with no `uri` (embedded -- a GLB's BIN chunk, or cgltf's own

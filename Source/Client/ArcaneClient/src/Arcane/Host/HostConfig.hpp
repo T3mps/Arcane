@@ -428,6 +428,6 @@ namespace Arcane
     // Everything else is kept verbatim (--project, --plugin, --scene,
     // --backend, the editor-only seeds), and an argument containing a space is
     // quoted. Pure: no host state, no parse, no side effects -- which is what
-    // makes it unit-testable (ArcaneTests/src/HostConfigTest.cpp, "[host]").
+    // makes it unit-testable (Tests/ArcaneTests/src/HostConfigTest.cpp, "[host]").
     [[nodiscard]] ARC_CLIENT_API std::string SanitizeRelaunchLine(std::span<const std::string> argv);
 }

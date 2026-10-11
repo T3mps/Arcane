@@ -1,5 +1,5 @@
-// libFuzzer harness: Arcane::Cli argv parsing (ArcaneCore/src/Arcane/Cli) and
-// the dedicated server's own spec over it (ArcaneServer/src/ServerConfig.cpp).
+// libFuzzer harness: Arcane::Cli argv parsing (Source/Runtime/ArcaneCore/src/Arcane/Cli) and
+// the dedicated server's own spec over it (Source/Programs/ArcaneServer/src/ServerConfig.cpp).
 //
 // The input is an argv: arguments separated by NUL bytes (argv[0] is supplied
 // by the harness). Each argv is parsed twice:
@@ -17,7 +17,7 @@
 #include <Arcane/Cli/Cli.hpp>
 #include <Arcane/Util/CharConv.hpp>
 
-#include "../ArcaneServer/src/ServerConfig.hpp"
+#include "../Source/Programs/ArcaneServer/src/ServerConfig.hpp"
 
 #include <charconv>
 #include <cstddef>

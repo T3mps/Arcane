@@ -9,7 +9,7 @@
 // touches the Assets facade by design: it reads two pre-resolved lookup tables
 // the host must publish every frame (SceneResources.hpp:4 states the contract).
 // Until 2026-07-29 only the Arcane Editor did -- the resolution cache itself
-// lived in ArcaneEditor/src/SpriteCache.hpp -- so the standalone runtime host
+// lived in Source/Programs/ArcaneEditor/src/SpriteCache.hpp -- so the standalone runtime host
 // structurally could not draw a textured sprite whatever the scene contained,
 // and neither could it bind a sprite material or a post chain. That is the
 // second capability in one evening that the editor grew and the standalone host

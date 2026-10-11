@@ -4,7 +4,7 @@ All of these come from `Arcane/data/images/arcane_logo.png` — the same source
 the editor's icon is built from, so the Hub and `ArcaneEditor.exe` show one mark
 in Explorer, the taskbar and Alt-Tab.
 
-`icon.ico` is a **byte-for-byte copy** of `Arcane/ArcaneEditor/resources/arcane.ico`
+`icon.ico` is a **byte-for-byte copy** of `Arcane/Source/Programs/ArcaneEditor/resources/arcane.ico`
 rather than a fresh render of the logo. It is the file Windows shows for the
 executable, and copying it means the two binaries carry the identical icon
 instead of two lookalikes that could drift apart the next time either is
@@ -35,7 +35,7 @@ sizes = {
 }
 for name, n in sizes.items():
     src.resize((n, n), Image.LANCZOS).save(out / name, "PNG")
-shutil.copyfile("ArcaneEditor/resources/arcane.ico", out / "icon.ico")
+shutil.copyfile("Source/Programs/ArcaneEditor/resources/arcane.ico", out / "icon.ico")
 ```
 
 Run it from `Arcane/`.

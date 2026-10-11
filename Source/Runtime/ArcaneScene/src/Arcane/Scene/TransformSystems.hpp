@@ -42,7 +42,7 @@
 // locks, two cache copies and two heap allocations per frame are gone
 // outright, and the per-entity lookups go four to TWO (its own Transform and
 // WorldTransform) -- the parent's world matrix and the parent's identity both
-// come from arrays now. Pinned in ArcaneTests/src/TransformOrderTest.cpp.
+// come from arrays now. Pinned in Tests/ArcaneTests/src/TransformOrderTest.cpp.
 //
 // The ordering and dirty policy live HERE, in Arcane. Astra supplied the
 // version and nothing more; "spatial" is not a concept the ECS needs.

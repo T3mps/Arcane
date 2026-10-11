@@ -12,9 +12,11 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer
 $vs = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { Write-Host 'settings-compile-fail: no Visual Studio with the C++ tools' -ForegroundColor Red; exit 2 }
 $vcvars  = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-$fixture = Join-Path $Root 'ArcaneTests\compile-fail\SettingsUnmappableField.cpp'
+$fixture = Join-Path $Root 'Tests\ArcaneTests\compile-fail\SettingsUnmappableField.cpp'
 $obj     = Join-Path $env:TEMP 'settings-compile-fail.obj'
-$inc = @('ArcaneCore\src', 'ThirdParty\Astra\include', 'ThirdParty\Mosaic\include', 'ThirdParty\spdlog\include',
+$moduleIncs = Get-ChildItem -Directory (Join-Path $Root 'Source\Runtime') |
+    ForEach-Object { 'Source\Runtime\' + $_.Name + '\src' }   # every Runtime module's include root
+$inc = @($moduleIncs) + @('ThirdParty\Astra\include', 'ThirdParty\Mosaic\include', 'ThirdParty\spdlog\include',
          'ThirdParty\nlohmann', 'ThirdParty\glm') | ForEach-Object { '/I"' + (Join-Path $Root $_) + '"' }
 $flags = '/nologo /std:c++latest /Zc:__cplusplus /EHsc /c /DNOMINMAX /DWIN32_LEAN_AND_MEAN ' + ($inc -join ' ')
 

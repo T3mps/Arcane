@@ -103,10 +103,10 @@ echo
 # Output.cpp are the rest of the runner's own arcbuild-local closure.
 echo "--- stage 1: POSIX compile of the process runner ---------------------------"
 
-for unit in arcbuild/src/Process.cpp arcbuild/src/Compose.cpp arcbuild/src/Output.cpp; do
+for unit in Source/Programs/arcbuild/src/Process.cpp Source/Programs/arcbuild/src/Compose.cpp Source/Programs/arcbuild/src/Output.cpp; do
     echo "  $CXX -std=c++23 -fsyntax-only $unit"
     "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only \
-        -Iarcbuild/src "$unit"
+        -ISource/Programs/arcbuild/src "$unit"
 done
 
 echo "  OK: the POSIX branch compiles clean with no Win32 header in sight."

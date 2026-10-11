@@ -10,7 +10,7 @@
 //   walk. Its inventory row is "Editor Dev"; declared in Core, it is Game +
 //   Dev (compiled out of Dist), as the plan's S6 Open questions record.
 // assets.sprite.defaultPixelsPerUnit is an Editor setting and lives in the
-// editor (ArcaneEditor/src/Settings/AssetsSpriteSettings.hpp);
+// editor (Source/Programs/ArcaneEditor/src/Settings/AssetsSpriteSettings.hpp);
 // assets.cook.pendingRepollInterval is the texture cache's, in ArcaneClient
 // (Render/Nri/AssetsCookSettings.hpp).
 

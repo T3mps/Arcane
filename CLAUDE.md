@@ -11,25 +11,22 @@ monorepo with full filtered history; docs under `docs/` may still cite
 pre-extraction paths (`Arcane/...`, `docs/superpowers/...`, `../ThirdParty`).
 
 ```
-ArcaneCore/        # the shared engine DLL (ArcaneCore.dll): Base/Config/Jobs/
-                   #   Material/Mesh/Plugin/Project/Scene/Serialization/Sim/
-                   #   Sprite/Assets (the headless engine layer) plus Net/
-                   #   Types/Logger + shared header-only utils. Presentation-
-                   #   free; every host, tool and game module links it
-                   #   (Core-DLL split, 2026-09-15). Namespaced include root
-                   #   ArcaneCore/src/Arcane -> #include <Arcane/...>. ZERO
+Source/<Type>/<Module>/  # the engine as module DLLs, one <Module>.arcmodule
+                   #   descriptor each (build/modules.lua reads them):
+                   #   Runtime/ (Core, Net, Crypto, Assets, Scene, Physics2D,
+                   #   Sim, Engine -- every host, servers included), Client/
+                   #   (Window, Input, Audio, Render, ImGui, Client), Developer/
+                   #   (AssetPipeline, Verify), Editor/ (Edit). Include roots
+                   #   Source/<Type>/<Module>/src -> #include <Arcane/...>. ZERO
                    #   game references -- keep it that way.
-ArcaneClient/      # the engine DLL: Base/Platform/Render/Host (SDL3, NRI on
-                   #   D3D12+Vulkan, Batcher2D, ACES tonemap, MSDF text, Assets,
-                   #   ImGui, enkiTS jobs, Astra ECS runtime, scene save/load,
-                   #   plugin host)
-ArcaneRuntime/     # standalone runtime host: opens an .arcproj, runs its game
-                   #   module; --frames N = scripted GPU-verify; F5/F6 hot reload
-ArcaneEditor/      # the ImGui-on-NRI editor host (namespace Arcane::Editor)
+Source/Programs/   # ArcaneRuntime (standalone runtime host; --frames N =
+                   #   scripted GPU-verify), ArcaneEditor (the ImGui-on-NRI
+                   #   editor host, namespace Arcane::Editor), ArcaneServer
+                   #   (headless host), ArcaneCrashReporter, arcbuild, arccook
 ArcaneHub/         # Tauri launcher (Rust): .arcproj association + recents
 ArcaneHub/crates/arcane_release/  # releases.json: schema, signing, verification, archives; `arcrelease` CLI (docs/releasing.md)
-ArcaneServer/      # server-side engine tooling (scaffold)
-ArcaneTests/       # Catch2 suite + HotReloadPluginV1/V2/Bad fixture DLLs
+Tests/             # ArcaneTests (Catch2 suite + data) and Fixtures/ (hot-reload
+                   #   plugin DLLs, process/death fixtures, game-module fixtures)
 ReferenceProject/  # in-repo sample game, built like an EXTERNAL project via the
                    #   SDK (build/arcane.lua) -> Binaries/ReferenceGame.dll
 ThirdParty/        # vendored deps (see NOTICE.md); premake5 + dxc binaries
@@ -37,7 +34,7 @@ build/arcane.lua   # the SDK premake module external games consume (ARCANE_SDK)
 data/              # shaders (HLSL sources -> compiled into data/shaders/generated/),
                    #   fonts, EngineConfig
 docs/              # specs, plans, audits (engine copy of the monorepo docs)
-vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset) for SDL3
+vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset; SDL3 as SDL3.dll)
 ```
 
 ## Build
@@ -82,11 +79,11 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   backbuffer. `kPxRange`/`kAtlasSize` are mirrored constants between
   `msdf.hlsl` and `TextSystem.cpp`.
 - **One TU per module owns the Vulkan-Hpp dynamic dispatcher storage** --
-  `ArcaneClient/src/Arcane/Render/VulkanDispatchStorage.cpp`. Projects define
+  `Source/Client/ArcaneRender/src/Arcane/Render/VulkanDispatchStorage.cpp`. Projects define
   `NDEBUG` in Release; vulkan.hpp's dispatcher layout is NDEBUG-conditional
   and must match the NRI static lib.
 - **ABI bumps are cheap** during engine dev -- never weaken a design to avoid
-  a `kGamePluginABIVersion` bump (`ArcaneClient/src/Arcane/Plugin/PluginABI.hpp`).
+  a `kGamePluginABIVersion` bump (`Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp`).
 - The 2D physics engine is **Manifold2D** (github.com/T3mps/Manifold2D),
   vendored at `ThirdParty/Manifold2D` (source-only sync: `include/`+`src/`;
   the vendored `premake5.lua` is THIS repo's consumer wrapper -- never
@@ -204,12 +201,12 @@ a CLI client to an in-host listener, designed with the cvar/console build.
 ## Engine-as-SDK
 
 External projects set `ARCANE_SDK` to this repo root and consume
-`build/arcane.lua` (see README). The include surface is
-`$ARCANE_SDK/ArcaneClient/src` + `$ARCANE_SDK/ArcaneCore/src` + header-only
-ThirdParty; the import lib is
-`$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/ArcaneClient/ArcaneClient.lib`. The
+`build/arcane.lua` (see README). The include surface is each linked
+module's `$ARCANE_SDK/Source/<Type>/<Module>/src` + header-only ThirdParty;
+the import libs are
+`$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/<Module>/<Module>.lib`. The
 editor's Build -> Rebuild Game Module spawns `arcbuild.exe` (below); it no
-longer resolves premake/msbuild itself (`ArcaneEditor/src/Project/
+longer resolves premake/msbuild itself (`Source/Programs/ArcaneEditor/src/Project/
 ModuleBuild.cpp` only composes the `arcbuild` command line and streams its
 output).
 
@@ -222,7 +219,7 @@ looks in both places; specs
 `docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`, both
 **Implemented**) is the one entry point that drives Premake generation plus a
 backend-native build for an SDK-built game project (Aphelyon/Gacha's `Game/`,
-this repo's own `ReferenceProject/`, or the `ArcaneTests/data/arcbuild-
+this repo's own `ReferenceProject/`, or the `Tests/ArcaneTests/data/arcbuild-
 fixture/` test fixture) -- the editor, CI, and any script call the same exe
 instead of re-implementing premake+msbuild composition three times over.
 
@@ -257,7 +254,7 @@ actions.
 generate/build/rebuild/clean produce and remove `Binaries\Fixture.dll` (the
 slot is arcbuild's own staged copy of `Intermediate/<Config>/Ninja/Binaries/`,
 because beta8's ninja module cannot run a post-build command on Windows --
-see `arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
+see `Source/Programs/arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
 plus a MinGW-w64 GCC compile of the module; the link then fails because a
 GCC object cannot resolve the MSVC-built `ArcaneCore`/`ArcaneClient` import
 libraries (C++ mangling) -- a Make-built module needs the GCC-built engine of

@@ -155,7 +155,7 @@ namespace Arcane
         //
         // DELIBERATE EXCEPTION TO RULE 3 (silent-inertness), not an oversight
         // that Task 12's audit missed: every other HostConfig flag either does
-        // something or is refused per-host (ArcaneEditor/src/main.cpp's flag
+        // something or is refused per-host (Source/Programs/ArcaneEditor/src/main.cpp's flag
         // table). This is the one flag that stays a no-op on purpose, because
         // refusing it would break exactly the backward-compatibility case it
         // exists for. Do not "fix" this into a refusal later.

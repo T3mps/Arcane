@@ -3,7 +3,7 @@
 
 // NRI substrate (Phase 1, Task 4): result-check discipline, callback-to-
 // latch wiring, and one-line device identity logging. Every later NRI task
-// in ArcaneClient/src/Arcane/Render/Nri/ builds on these three symbols, so
+// in Source/Client/ArcaneRender/src/Arcane/Render/Nri/ builds on these three symbols, so
 // the signatures here are load-bearing. (The surviving account of how the NRI
 // layer was built is the milestone record at the tail of each plan under
 // docs/plans/.)

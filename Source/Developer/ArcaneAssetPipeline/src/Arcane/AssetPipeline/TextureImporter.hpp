@@ -3,7 +3,7 @@
 
 // Arcane::AssetPipeline::TextureImporter -- texture importer v1, the RGBA8 path. This lib now
 // owns the decode step (stb_image; the implementation TU lives at StbImpl.cpp in this same
-// project -- ArcaneClient/src/Arcane/Assets/StbImpl.cpp stays put, the oracle/chrome still
+// project -- Source/Runtime/ArcaneAssets/src/Arcane/Assets/StbImpl.cpp stays put, the oracle/chrome still
 // decode content textures through it).
 //
 // Pipeline: decode (stb) -> linearize sRGB (when settings.srgb) -> build the mip chain via a

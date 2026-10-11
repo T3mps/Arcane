@@ -23,7 +23,7 @@
 //     artifact keeps its exact on-disk sourceHash.
 //   - MeshImporter.cpp hashes the source bytes FOLLOWED BY every external buffer's
 //     bytes, concatenated in glTF declaration order -- the exact concatenation
-//     ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp's `currentSourceBytes`
+//     Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.hpp's `currentSourceBytes`
 //     contract already names, so the pipeline and the client agree on what "the
 //     current source bytes" means by construction, not by two functions happening
 //     to match.

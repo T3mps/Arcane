@@ -10,7 +10,7 @@
 // an embedded glTF image has no registered source, no sidecar and no cook key of its
 // own, so it cannot ride the ordinary texture-cook path at all (the comparison's
 // Decision 10 records why our divergence from UE's in-memory-decode approach is
-// forced, not stylistic). The editor's own MeshImportWave.hpp (ArcaneEditor/src/
+// forced, not stylistic). The editor's own MeshImportWave.hpp (Source/Programs/ArcaneEditor/src/
 // Project) answers this by extracting an embedded image to a loose .png SIBLING at
 // discovery time, which the ordinary texture path then picks up on its own next
 // sweep -- SurveyGltf is the read-only front half that makes that extraction

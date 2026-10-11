@@ -5,7 +5,7 @@
 //
 // PURE AND DEVICE-FREE -- no NRI, no NriDevice, no GPU type anywhere in this
 // file or its .cpp. Same discipline GraphGridPhase
-// (ArcaneEditor/src/Widgets/GraphGridPhase.hpp) follows, and for the same
+// (Source/Programs/ArcaneEditor/src/Widgets/GraphGridPhase.hpp) follows, and for the same
 // reason: it is what lets a device-less test drive the whole builder without a
 // device.
 //
@@ -55,7 +55,7 @@ namespace Arcane
     };
 
     // One drawable range with its slot. Mirrors AssetPipeline::MeshArtifactSection
-    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) field for
+    // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) field for
     // field -- that header is never included here, though: ArcaneClient links no
     // AssetPipeline.
     struct MeshSection

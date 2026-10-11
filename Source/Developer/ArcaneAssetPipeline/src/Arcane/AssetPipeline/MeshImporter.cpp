@@ -713,7 +713,7 @@ namespace Arcane::AssetPipeline
 
         // Step 7 (SourceHash): the artifact's sourceHash covers the source bytes FOLLOWED BY
         // every passed-in external buffer's bytes, concatenated in glTF declaration order --
-        // the exact concatenation ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp's
+        // the exact concatenation Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.hpp's
         // `currentSourceBytes` contract names, so the client's re-hash of "the current source
         // bytes" agrees with this header field by construction rather than by two functions
         // happening to match. This is what makes `externalBuffers` a USED parameter: through

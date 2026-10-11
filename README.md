@@ -34,7 +34,7 @@ been hand-verified on Linux or macOS.
 ### ECS
 
 The ECS is [Astra](ThirdParty/Astra), vendored under `ThirdParty/Astra`.
-Game code never includes `Astra::`. [`Arcane/Ecs.hpp`](ArcaneCore/src/Arcane/Ecs.hpp)
+Game code never includes `Astra::`. [`Arcane/Ecs.hpp`](Source/Runtime/ArcaneScene/src/Arcane/Ecs.hpp)
 is the facade: `Arcane::View`, `Arcane::Res`, `Arcane::ResMut`,
 `Arcane::Commands`, `Arcane::Entity`, `Arcane::SystemTraits`,
 `Arcane::Before`, and `Arcane::After`. `Arcane::Registry` is the Astra
@@ -60,7 +60,7 @@ The flat-API contract is
 ### 2D physics
 
 2D physics is [Manifold2D](ThirdParty/Manifold2D). Game code includes
-[`Arcane/Physics2D.hpp`](ArcaneCore/src/Arcane/Physics2D.hpp) and talks to
+[`Arcane/Physics2D.hpp`](Source/Runtime/ArcanePhysics2D/src/Arcane/Physics2D.hpp) and talks to
 `Arcane::PhysicsWorld2D`, `Arcane::PhysicsSystem2D`, `Arcane::RigidBody2D`,
 and `Arcane::Collider2D`.
 
@@ -181,7 +181,7 @@ structs are part of the same system. Design (implemented):
 A game module subclasses `Arcane::GameModule` and exports its entry
 points with `ARC_GAME_MODULE`. The host checks `kGamePluginABIVersion`
 and refuses a mismatch. The current version lives in
-[`PluginABI.hpp`](ArcaneCore/src/Arcane/Plugin/PluginABI.hpp). Bumping it
+[`PluginABI.hpp`](Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp). Bumping it
 is normal during engine development.
 
 ```cpp
@@ -245,7 +245,7 @@ They choose which systems run. They do not replicate entities.
 
 `INetDriver` is the transport seam (`IsActive()`). No production driver
 ships. A length-framed JSON protocol over TCP
-([`Net/Protocol.hpp`](ArcaneCore/src/Arcane/Net/Protocol.hpp)) is what
+([`Net/Protocol.hpp`](Source/Runtime/ArcaneNet/src/Arcane/Net/Protocol.hpp)) is what
 the protocol fuzzer exercises.
 
 `ArcaneServer` is a dedicated-server host. It links `ArcaneCore` and not
@@ -319,16 +319,11 @@ the C++ solution.
 
 | Path | What it is |
 |---|---|
-| `ArcaneCore/` | Shared library. Headless engine: ECS facade, scene, 2D physics, reflection, cvars, assets reader, the net seam, logging. Include root `#include <Arcane/...>`. No game references. |
-| `ArcaneClient/` | Shared library. SDL3, NRI, the render graph, Batcher2D, audio, ImGui, input, the plugin host's client side. |
-| `ArcaneAssetPipeline/` | Static library. Cook importers. Used by `arccook` and the editor. |
-| `arccook/` | Command-line cooker. |
-| `arcbuild/` | Game-project build driver (Premake, then MSBuild, Make, Ninja, or xcodebuild). |
-| `ArcaneRuntime/` | Windowed runtime host. Opens an `.arcproj` and runs its module. |
-| `ArcaneEditor/` | Editor host. |
-| `ArcaneServer/` | Dedicated server host. Links `ArcaneCore` only. |
-| `ArcaneCrashReporter/` | Windows-only crash and hang reporter. |
-| `ArcaneTests/` | Catch2 suite and hot-reload fixture modules. |
+| `Source/Runtime/` | Runtime module DLLs, every host (servers included): `ArcaneCore` (Base, Config, Jobs, Platform, Cli, reflection), `ArcaneNet`, `ArcaneCrypto`, `ArcaneAssets`, `ArcaneScene`, `ArcanePhysics2D`, `ArcaneSim`, `ArcaneEngine` (runtime, plugin host, projects). Include root `#include <Arcane/...>`. No game references. |
+| `Source/Client/` | Client module DLLs, windowed hosts: `ArcaneWindow`, `ArcaneInput`, `ArcaneAudio`, `ArcaneRender` (NRI, the render graph, Batcher2D), `ArcaneImGui`, `ArcaneClient`. |
+| `Source/Developer/`, `Source/Editor/` | `ArcaneAssetPipeline` (cook importers), `ArcaneVerify` (the verify harness), `ArcaneEdit`. |
+| `Source/Programs/` | `arccook` (command-line cooker), `arcbuild` (game-project build driver: Premake, then MSBuild, Make, Ninja, or xcodebuild), `ArcaneRuntime` (windowed runtime host), `ArcaneEditor` (editor host), `ArcaneServer` (dedicated server host, Runtime modules only), `ArcaneCrashReporter` (Windows-only crash and hang reporter). |
+| `Tests/` | `ArcaneTests` (Catch2 suite, its data and reference images) and `Fixtures/` (hot-reload modules, process/death fixtures, game-module fixtures). |
 | `ArcaneHub/` | Tauri and Svelte launcher. Recents, and on Windows the `.arcproj` file association. |
 | `ReferenceProject/` | Sample game. Builds to `Binaries/ReferenceGame.dll` (`.so` / `.dylib` off Windows). |
 | `ThirdParty/` | Vendored dependencies. See [NOTICE.md](NOTICE.md). |

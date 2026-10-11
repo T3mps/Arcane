@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate fuzz/corpus/artifact: small, VALID .arcart files built byte-for-byte
-from the on-disk format in ArcaneCore/src/Arcane/Assets/ArtifactReader.hpp.
+from the on-disk format in Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.hpp.
 
 Every seed carries the harness's fixed guid and the sourceHash of EMPTY source
 bytes (the FNV-1a 64 offset basis), so the reader accepts it and the fuzzer

@@ -11,7 +11,7 @@ namespace Arcane
     namespace
     {
         // The sRGB transfer (IEC 61966-2-1): the curve the editor's colour
-        // picker uses (ArcaneEditor/src/Widgets/EditorWidgets.cpp:1368-1383).
+        // picker uses (Source/Programs/ArcaneEditor/src/Widgets/EditorWidgets.cpp:1368-1383).
         float EncodeSrgb(float linear)
         {
             if (linear <= 0.0f) return 0.0f;

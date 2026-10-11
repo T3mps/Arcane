@@ -1,5 +1,5 @@
 // libFuzzer harness: the cooked content-artifact reader (.arcart) --
-// ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp.
+// Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.cpp.
 //
 // The input is the whole .arcart file. It is written to a private temp dir and
 // read through every public entry point that parses it:

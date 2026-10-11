@@ -205,7 +205,7 @@ function arcane_game_module(name)
         -- location instead; arcbuild's Ninja backend then copies the
         -- freshly-linked module into the canonical single slot every host
         -- expects (Binaries/<name>, the manifest's gameModule) after a
-        -- successful build (arcbuild/src/Stage.cpp). Every other action
+        -- successful build (Source/Programs/arcbuild/src/Stage.cpp). Every other action
         -- (vs2026, gmake, xcode4, ...) keeps the flat targetdir above
         -- untouched.
         --
@@ -224,7 +224,7 @@ function arcane_game_module(name)
         -- The unique location lives INSIDE Intermediate/<Config>/ (the
         -- objdir above) on purpose: that directory is one of the two
         -- filesystem clean targets arcbuild removes unconditionally
-        -- (arcbuild/src/ProjectLayout.cpp CleanTargets -- Binaries/ and
+        -- (Source/Programs/arcbuild/src/ProjectLayout.cpp CleanTargets -- Binaries/ and
         -- Intermediate/<config>/), so the linked DLL/PDB cannot survive an
         -- `arcbuild clean` whose backend step soft-skipped or failed. The
         -- earlier Intermediate/Ninja/<Config>/ spelling sat OUTSIDE that

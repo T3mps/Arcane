@@ -37,7 +37,7 @@
 #   ArcaneEditor  --backend vulkan  --compare editor-material-page  --open-asset <materials/reference_mesh.arcmat>
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
-# EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
+# EXIT CODE ALONE (Source/Programs/ArcaneEditor/src/main.cpp's own exit-code table names the
 # collisions this works around): "compare-failed" is exit 3 for a genuine
 # mismatch but exit 4 for a bless-write I/O failure -- unreachable here since
 # this script never passes --bless, but the string is still what carries the
@@ -400,7 +400,7 @@ $script:SelfTestExpect = @{}
 foreach ($c in $combos) { $script:SelfTestExpect["$($c.Host)/$($c.Backend)/$($c.Reference)"] = $c.SelfTestExpect }
 
 # THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
-# whose other half is Arcane::Verdict (ArcaneClient/src/Arcane/Host/Verdict.hpp),
+# whose other half is Arcane::Verdict (Source/Developer/ArcaneVerify/src/Arcane/Host/Verdict.hpp),
 # pinned by VerdictTest.cpp. PowerShell cannot include that header -- so the
 # [verdict] cases PUBLISH what Arcane::ToString actually produces into
 # automation-vocabulary.txt beside ArcaneTests.exe, and -SelfTest reads that
@@ -412,7 +412,7 @@ $script:VerdictNames = @(
 )
 # THE VERIFY-REPORT SCHEMA RANGE this script claims to understand -- the
 # PowerShell copy of VerifyReport::kOldestSupportedSchemaVersion and
-# kSchemaVersion (ArcaneClient/src/Arcane/Host/VerifyReport.hpp). Read at the
+# kSchemaVersion (Source/Developer/ArcaneVerify/src/Arcane/Host/VerifyReport.hpp). Read at the
 # report parse site below, so the range is a mechanism here and not only a
 # constant the header tests exercise. Pinned by -SelfTest against what the
 # engine actually publishes, exactly like $script:VerdictNames above -- these

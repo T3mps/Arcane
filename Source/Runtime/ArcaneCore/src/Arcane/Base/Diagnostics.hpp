@@ -413,7 +413,7 @@ namespace Arcane::Diagnostics
     // needed (GPU crash diagnostics arc, Task 8; F-6 in the seam-facts
     // survey). A host calls this immediately after whatever per-project state
     // it already retargets on the same event -- the editor's
-    // RetargetLayoutIni (ArcaneEditor/src/App/EditorApp.cpp) and its
+    // RetargetLayoutIni (Source/Programs/ArcaneEditor/src/App/EditorApp.cpp) and its
     // ArcaneRuntime equivalent -- with `<project>/Saved/Diagnostics` on
     // project open. An empty path reverts to Config::dumpDir's own default
     // (empty => "<exe dir>/diagnostics", see the Config comment above) --

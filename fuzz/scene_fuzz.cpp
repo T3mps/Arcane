@@ -1,5 +1,5 @@
 // libFuzzer harness: scene asset load -- Scene::ReadSceneFile
-// (ArcaneCore/src/Arcane/Serialization/SceneAsset.hpp) followed by
+// (Source/Runtime/ArcaneScene/src/Arcane/Serialization/SceneAsset.hpp) followed by
 // Scene::ApplySceneDocument -> LoadJson (SceneSerializer.hpp), the reflection
 // driven component reader, into a registry with the engine's scene components
 // registered (RegisterSceneComponents + Arcane::RegisterPhysicsComponents2D).

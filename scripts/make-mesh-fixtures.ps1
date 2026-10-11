@@ -1,7 +1,7 @@
 <#
     F2c Task 2: the checked-in glTF fixture corpus's generator (spec s9).
 
-    This script is the SOURCE OF TRUTH for ArcaneTests/data/gltf/*. The committed
+    This script is the SOURCE OF TRUTH for Tests/ArcaneTests/data/gltf/*. The committed
     binaries are its output, never hand-typed. Every vertex/index/matrix number
     used below is a LITERAL in this file -- nothing is base64-typed by hand and
     nothing is fetched from anywhere.
@@ -184,7 +184,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$OutDir = (Join-Path $PSScriptRoot "..\ArcaneTests\data\gltf"),
+    [string]$OutDir = (Join-Path $PSScriptRoot "..\Tests\ArcaneTests\data\gltf"),
     [switch]$Force
 )
 
