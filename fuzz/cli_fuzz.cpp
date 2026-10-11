@@ -15,6 +15,7 @@
 // Exit codes are only ever 0 or 2.
 
 #include <Arcane/Cli/Cli.hpp>
+#include <Arcane/Util/CharConv.hpp>
 
 #include "../ArcaneServer/src/ServerConfig.hpp"
 
@@ -39,7 +40,7 @@ namespace
     bool ParsesFully(const std::string& s)
     {
         T v{};
-        const auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+        const auto [end, ec] = Arcane::FromChars(s.data(), s.data() + s.size(), v);   // Cli's own parser; float-capable on Apple libc++
         return ec == std::errc{} && end == s.data() + s.size();
     }
 

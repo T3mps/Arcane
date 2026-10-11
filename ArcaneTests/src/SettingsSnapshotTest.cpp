@@ -100,7 +100,22 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
     std::atomic<int> ready{ 0 };
     bool allApplied = true;
     {
+        // std::thread, not std::jthread: Apple libc++ (Xcode 16) has no jthread.
+        // JoinOnExit keeps jthread's join-at-scope-exit on every path, an
+        // exception included (raising stop first so the worker loops end), so
+        // the workers are joined before any assertion below runs.
         std::vector<std::thread> workers;
+        struct JoinOnExit
+        {
+            std::vector<std::thread>& threads;
+            std::atomic<bool>&        stopFlag;
+            ~JoinOnExit()
+            {
+                stopFlag.store(true, std::memory_order_release);
+                for (std::thread& t : threads)
+                    if (t.joinable()) t.join();
+            }
+        } joinOnExit{ workers, stop };
         auto ReadOnce = [&] {
             const std::shared_ptr<const ProbeSettings> s = SettingsShared<ProbeSettings>(reg);
             if (static_cast<std::uint32_t>(s->count) != s->mask) torn.fetch_add(1);
@@ -121,10 +136,7 @@ TEST_CASE("Workers reading through SettingsShared<T>() never see a torn struct w
             allApplied = reg.Set(mask, CVarValue::UInt32(static_cast<std::uint32_t>(i)), SetBy::Code) == SetResult::Applied && allApplied;
             reg.Publish();
         }
-        stop.store(true, std::memory_order_release);
-        for (std::thread& worker : workers)
-            worker.join();
-    }
+    }   // joinOnExit: stop, then join every worker
     CHECK(allApplied);
     CHECK(torn.load() == 0);
     CHECK(reads.load() >= 4);
