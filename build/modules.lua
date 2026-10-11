@@ -14,7 +14,7 @@ ARC_THIRDPARTY = {
     VulkanHeaders={include="ThirdParty/Vulkan-Headers/include"},
     DirectXHeaders={include="ThirdParty/DirectX-Headers/include"},
     VMA={include="ThirdParty/VMA/include"}, D3D12MA={include="ThirdParty/D3D12MA/include"},
-    SDL3={include="@SDL3_INCLUDE_DIR@",link="SDL3"}, imgui={include="ThirdParty/imgui",link="imgui"},
+    imgui={include="ThirdParty/imgui",link="imgui"},
     imguinodeeditor={include="ThirdParty/imgui-node-editor",link="imgui-node-editor"},
     Manifold2D={include="ThirdParty/Manifold2D/include",link="Manifold2D"},
     Mosaic={include="ThirdParty/Mosaic/include"},
@@ -69,8 +69,38 @@ local function load_one(file)
     if not raw then fail("schema", file .. ": cannot read descriptor") end
     local doc, err = json.decode(raw)
     if not doc then fail("schema", file .. ": " .. tostring(err)) end
-    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true,apiHeader=true,vendor=true}, file, "descriptor")
+    keys(doc, {name=true,type=true,dependencies=true,thirdParty=true,platforms=true,apiMacro=true,apiHeader=true,vendor=true,prebuilt=true}, file, "descriptor")
     if doc.vendor ~= nil and type(doc.vendor) ~= "boolean" then fail("schema", file .. ": vendor must be boolean") end
+    if doc.prebuilt ~= nil then
+        -- A PREBUILT vendor module: a library the engine links but never builds
+        -- (no premake project). Per platform: include dir, link name, libdir,
+        -- the runtime file(s) staged beside a program, rpath (ELF/Mach-O), and a
+        -- "debug" override of libdir/runtime for the Debug configuration.
+        -- A value may name a premake5.lua global as @NAME@ (the discovery stays
+        -- there); an unresolved one drops the field.
+        if not doc.vendor then fail("schema", file .. ": prebuilt requires vendor=true") end
+        keys(doc.prebuilt, {windows=true,linux=true,macosx=true}, file, "prebuilt")
+        for platform, entry in pairs(doc.prebuilt) do
+            local field = "prebuilt." .. platform
+            keys(entry, {include=true,link=true,libdir=true,runtime=true,rpath=true,debug=true}, file, field)
+            for _, key in ipairs({"include", "link", "libdir"}) do
+                if entry[key] ~= nil and (type(entry[key]) ~= "string" or entry[key] == "") then
+                    fail("schema", file .. ": " .. field .. "." .. key .. " must be a string")
+                end
+            end
+            if entry.runtime ~= nil then strings(entry.runtime, file, field .. ".runtime") end
+            if entry.rpath ~= nil and type(entry.rpath) ~= "boolean" then
+                fail("schema", file .. ": " .. field .. ".rpath must be boolean")
+            end
+            if entry.debug ~= nil then
+                keys(entry.debug, {libdir=true,runtime=true}, file, field .. ".debug")
+                if entry.debug.libdir ~= nil and (type(entry.debug.libdir) ~= "string" or entry.debug.libdir == "") then
+                    fail("schema", file .. ": " .. field .. ".debug.libdir must be a string")
+                end
+                if entry.debug.runtime ~= nil then strings(entry.debug.runtime, file, field .. ".debug.runtime") end
+            end
+        end
+    end
     if type(doc.name) ~= "string" or doc.name ~= path.getbasename(file) then
         fail("schema", file .. ": name must equal descriptor stem")
     end
@@ -200,6 +230,61 @@ function arc_modules_load(roots)
     return mods
 end
 
+-- @NAME@ placeholders resolve from premake5.lua's globals; nil when one is unset.
+local function resolve(value)
+    if type(value) ~= "string" then return value end
+    local missing = false
+    local out = value:gsub("@([%w_]+)@", function(name)
+        local v = _G[name]
+        if type(v) ~= "string" or v == "" then missing = true; return "" end
+        return (v:gsub("\\", "/"))
+    end)
+    if missing then return nil end
+    return out
+end
+
+local function resolve_list(list)
+    local out = {}
+    for _, item in ipairs(list or {}) do
+        local v = resolve(item)
+        if v then out[#out+1] = v end
+    end
+    return out
+end
+
+-- The current target's prebuilt entry of a module, resolved (nil = not prebuilt here).
+function arc_module_prebuilt(mod)
+    if not mod.prebuilt then return nil end
+    local entry = mod.prebuilt[os.target()]
+    if not entry then return nil end
+    local debug = entry.debug or {}
+    return {
+        include = resolve(entry.include), link = entry.link,
+        libdir = resolve(entry.libdir), runtime = resolve_list(entry.runtime), rpath = entry.rpath,
+        debugLibdir = debug.libdir and resolve(debug.libdir) or nil,
+        debugRuntime = debug.runtime and resolve_list(debug.runtime) or nil,
+    }
+end
+
+-- Compile + link a prebuilt vendor module into the CURRENT project. Leaves no
+-- filter active.
+local function use_prebuilt(mod)
+    local p = arc_module_prebuilt(mod)
+    if not p then return end
+    if p.include then includedirs { p.include } end
+    if p.link then links { p.link } end
+    if p.debugLibdir then
+        filter "configurations:Debug"
+            libdirs { p.debugLibdir }
+        filter "configurations:not Debug"
+            if p.libdir then libdirs { p.libdir } end
+        filter {}
+    elseif p.libdir then
+        libdirs { p.libdir }
+    end
+    if p.rpath and p.libdir and os.target() ~= "windows" then linkoptions { "-Wl,-rpath," .. p.libdir } end
+end
+
 function arc_module_closure(mods, name, kind)
     if kind ~= "public" and kind ~= "all" then fail("schema", "closure kind must be public or all") end
     if not mods.byName[name] then fail("schema", "unknown module " .. name) end
@@ -215,6 +300,18 @@ function arc_module_closure(mods, name, kind)
     local result = {}
     for _, candidate in ipairs(mods.order) do if found[candidate] then result[#result+1] = candidate end end
     return result
+end
+
+-- What a module (or a consumer naming `names`) compiles against: those names
+-- plus their PUBLIC closures. A prebuilt vendor module is linked only when it
+-- is visible this way -- ArcaneWindow's private SDL3 stays ArcaneWindow's.
+local function visible(mods, names)
+    local seen = {}
+    for _, name in ipairs(names) do
+        seen[name] = true
+        for _, dep in ipairs(arc_module_closure(mods, name, "public")) do seen[dep] = true end
+    end
+    return seen
 end
 
 local function layout()
@@ -242,33 +339,30 @@ function arc_module_project(mods, name)
     -- inline code that calls the vendor (e.g. PhysicsSystem.hpp -> Manifold2D),
     -- and a vendor static lib has no exports to import. The linker only pulls the
     -- objects a module references; the vendor libs linked this way hold no
-    -- process-global state (SDL3, which does, is special-cased below).
+    -- process-global state. A vendor library that DOES (SDL3: window, event and
+    -- keyboard state) is a prebuilt vendor MODULE instead -- one shared library
+    -- per process, linked by the modules that depend on it.
     local function add_vendor(vendor)
         if vendors[vendor] then return end
         vendors[vendor] = true
         local entry = ARC_THIRDPARTY[vendor]
-        local dir
-        if vendor == "SDL3" then dir = SDL3_INCLUDE_DIR
-        else dir = root .. "/" .. entry.include end
-        if dir then includedirs { dir } end
-        if vendor == "SDL3" then
-            -- ONE SDL instance per process. Off Windows SDL3 is the system's shared
-            -- library, so every user links it. On Windows it is vcpkg's SDL3-static:
-            -- only ArcaneWindow links it (ARC_MODULE_EXTRAS) and re-exports the SDL
-            -- entry points the other modules call -- a second static copy would be a
-            -- second SDL with its own window/event/keyboard state.
-            filter "system:not windows"
-                links { "SDL3" }
-                if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR } end
-            filter {}
-        elseif entry.link then links { entry.link } end
+        includedirs { root .. "/" .. entry.include }
+        if entry.link then links { entry.link } end
+    end
+    local seen = {}
+    for _, visibility in ipairs({"public", "private"}) do
+        for dep in pairs(visible(mods, mod.dependencies[visibility])) do seen[dep] = true end
     end
     for _, dep in ipairs(arc_module_closure(mods, name, "all")) do
-        links { dep }
         local dep_mod = mods.byName[dep]
-        local dep_root = dep_mod.root
-        includedirs { (path.isabsolute(dep_root) and dep_root or (root .. "/" .. dep_root)) .. (dep_mod.vendor and "" or "/src") }
-        for _, vendor in ipairs(mods.byName[dep].thirdParty.public) do add_vendor(vendor) end
+        if dep_mod.prebuilt then
+            if seen[dep] then use_prebuilt(dep_mod) end
+        else
+            links { dep }
+            local dep_root = dep_mod.root
+            includedirs { (path.isabsolute(dep_root) and dep_root or (root .. "/" .. dep_root)) .. (dep_mod.vendor and "" or "/src") }
+            for _, vendor in ipairs(dep_mod.thirdParty.public) do add_vendor(vendor) end
+        end
     end
     for _, visibility in ipairs({"public", "private"}) do
         for _, vendor in ipairs(mod.thirdParty[visibility]) do add_vendor(vendor) end
@@ -298,19 +392,44 @@ function arc_module_stage(mods, names)
         selected[name] = true
         for _, dep in ipairs(arc_module_closure(mods, name, "all")) do selected[dep] = true end
     end
-    local commands = {}
+    local commands, debug_commands, release_commands = {}, {}, {}
     for _, name in ipairs(mods.order) do
-        if selected[name] then
+        local mod = mods.byName[name]
+        if selected[name] and mod.prebuilt then
+            -- A prebuilt vendor module stages its runtime file(s), per configuration
+            -- (none on a target where it is a system library).
+            local p = arc_module_prebuilt(mod)
+            if p then
+                for _, file in ipairs(p.debugRuntime or p.runtime) do
+                    debug_commands[#debug_commands+1] = '{COPYFILE} "' .. file .. '" "%{cfg.buildtarget.directory}/' .. path.getname(file) .. '"'
+                end
+                for _, file in ipairs(p.runtime) do
+                    release_commands[#release_commands+1] = '{COPYFILE} "' .. file .. '" "%{cfg.buildtarget.directory}/' .. path.getname(file) .. '"'
+                end
+            end
+        elseif selected[name] then
             local extension = os.target() == "windows" and ".dll" or (os.target() == "macosx" and ".dylib" or ".so")
             local prefix = os.target() == "windows" and "" or "lib"
             commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/bin/' .. out .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
         end
     end
     postbuildcommands(commands)
+    if #debug_commands > 0 then
+        filter "configurations:Debug"
+            postbuildcommands(debug_commands)
+        filter {}
+    end
+    if #release_commands > 0 then
+        filter "configurations:not Debug"
+            postbuildcommands(release_commands)
+        filter {}
+    end
     -- In-workspace: a staged-but-unlinked module still has to be BUILT first.
     if not ARCANE_SDK then
         local order = {}
-        for _, name in ipairs(mods.order) do if selected[name] then order[#order+1] = name end end
+        for _, name in ipairs(mods.order) do
+            if selected[name] and not mods.byName[name].prebuilt then order[#order+1] = name end
+        end
         dependson(order)
     end
 end
@@ -328,9 +447,12 @@ function arc_module_consumer(mods, names, opts)
     end
     local root = ARCANE_SDK or "%{wks.location}"
     local vendors = {}
+    local seen = visible(mods, names)
     for _, name in ipairs(mods.order) do
-        if selected[name] then
-            local mod = mods.byName[name]
+        local mod = mods.byName[name]
+        if selected[name] and mod.prebuilt then
+            if seen[name] then use_prebuilt(mod) end
+        elseif selected[name] then
             links { name }
             if ARCANE_SDK then libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md/" .. name } end
             includedirs { (path.isabsolute(mod.root) and mod.root or root .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
@@ -344,8 +466,7 @@ function arc_module_consumer(mods, names, opts)
     table.sort(vendor_names)   -- deterministic include order across generations
     for _, vendor in ipairs(vendor_names) do
         local entry = ARC_THIRDPARTY[vendor]
-        if vendor == "SDL3" then includedirs { SDL3_INCLUDE_DIR }
-        elseif entry then includedirs { root .. "/" .. entry.include } end
+        if entry then includedirs { root .. "/" .. entry.include } end
     end
     if opts.stage ~= false then arc_module_stage(mods, type(opts.stage) == "table" and opts.stage or names) end
 end

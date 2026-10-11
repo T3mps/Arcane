@@ -9,7 +9,9 @@
       "ArcaneScene",
       "ArcaneWindow"
     ],
-    "private": []
+    "private": [
+      "SDL3"
+    ]
   },
   "thirdParty": {
     "public": [
@@ -21,7 +23,6 @@
     "private": [
       "D3D12MA",
       "DirectXHeaders",
-      "SDL3",
       "VMA",
       "freetype",
       "msdfgen",

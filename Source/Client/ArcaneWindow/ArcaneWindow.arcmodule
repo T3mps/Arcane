@@ -6,13 +6,13 @@
       "ArcaneCore"
     ],
     "private": [
-      "ArcaneAssets"
+      "ArcaneAssets",
+      "SDL3"
     ]
   },
   "thirdParty": {
     "public": [],
     "private": [
-      "SDL3",
       "stb"
     ]
   },

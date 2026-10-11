@@ -11,7 +11,8 @@
     ],
     "private": [
       "ArcaneInput",
-      "ArcaneWindow"
+      "ArcaneWindow",
+      "SDL3"
     ]
   },
   "thirdParty": {
@@ -19,9 +20,7 @@
       "NRI",
       "glm"
     ],
-    "private": [
-      "SDL3"
-    ]
+    "private": []
   },
   "platforms": {}
 }

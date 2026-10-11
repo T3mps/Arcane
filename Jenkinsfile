@@ -26,10 +26,12 @@ pipeline {
                 }
                 stage('Provision (vcpkg SDL3)') {
                     // Self-heal: build SDL3 with the repo's static-md overlay
-                    // triplet if it is absent from the agent's vcpkg. Guarded on
-                    // presence -- the from-source build is expensive.
+                    // triplet (SDL3 itself as a DLL) if it is absent from the
+                    // agent's vcpkg -- or still the old static flavor, which the
+                    // script replaces. Guarded on presence -- the from-source
+                    // build is expensive.
                     steps {
-                        bat 'if not exist "%VCPKG_ROOT%\\installed\\x64-windows-static-md\\lib\\SDL3-static.lib" ( call scripts\\setup-vcpkg-deps.bat ) else ( echo [provision] SDL3 present -- skipping vcpkg build )'
+                        bat 'if not exist "%VCPKG_ROOT%\\installed\\x64-windows-static-md\\bin\\SDL3.dll" ( call scripts\\setup-vcpkg-deps.bat ) else ( echo [provision] SDL3 present -- skipping vcpkg build )'
                     }
                 }
                 stage('Generate') {

@@ -6,7 +6,8 @@
       "ArcaneCore"
     ],
     "private": [
-      "ArcaneWindow"
+      "ArcaneWindow",
+      "SDL3"
     ]
   },
   "thirdParty": {
@@ -14,9 +15,7 @@
       "glm",
       "nlohmann"
     ],
-    "private": [
-      "SDL3"
-    ]
+    "private": []
   },
   "platforms": {}
 }

@@ -40,7 +40,7 @@ if not ARCANE_SDK then
 end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
 include(ARCANE_SDK .. "/build/modules.lua") -- shared descriptor reader for P4 consumers
-local ARCANE_MODULES = arc_modules_load { ARCANE_SDK .. "/Source", ARCANE_SDK .. "/ThirdParty/imgui/ImGui.arcmodule", ARCANE_SDK .. "/ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule" }
+local ARCANE_MODULES = arc_modules_load { ARCANE_SDK .. "/Source", ARCANE_SDK .. "/ThirdParty/imgui/ImGui.arcmodule", ARCANE_SDK .. "/ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule", ARCANE_SDK .. "/ThirdParty/SDL3/SDL3.arcmodule" }
 local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
 
 -- macOS port (2026-10-07): a Mac target builds for the host architecture

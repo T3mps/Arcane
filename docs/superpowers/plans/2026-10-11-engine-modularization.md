@@ -44,8 +44,9 @@ arcbuild stay this arc), UHT codegen.
 module are fine (Base and Config share `ArcaneCore`). A vendor library is a
 **private static dependency** of the module that owns it; it becomes its own
 module only if several modules need one shared instance or it is optional per
-host -- today only `ImGui` and `ImGuiNodeEditor` qualify (Tracy joins when it is
-actually linked; nothing links it today).
+host -- today `ImGui`, `ImGuiNodeEditor` and `SDL3` (a *prebuilt* vendor module:
+a descriptor with no project, R14) qualify (Tracy joins when it is actually
+linked; nothing links it today).
 
 ### 1.1 Runtime (every host, servers included)
 
@@ -64,20 +65,26 @@ actually linked; nothing links it today).
 
 | Module | Contents | Depends on |
 |---|---|---|
-| `ArcaneWindow` | Client `Platform/` (Window, RenderWindowSettings; SDL3 on Linux/macOS) | Core |
-| `ArcaneInput` | `Input/` | Core, Window |
+| `ArcaneWindow` | Client `Platform/` (Window, RenderWindowSettings) | Core, Assets (private: stb image decode for the window icon), SDL3 (private) |
+| `ArcaneInput` | `Input/` | Core, Window (private), SDL3 (private) |
 | `ArcaneAudio` | `Audio/` | Core, Assets |
-| `ArcaneRender` | `Render/` incl. `Nri/` minus `nodes/ImGuiNriNode.*`; `PhysicsDebugDraw` keeps only its DRAW half | Core, Scene, Assets, Window, Physics2D (picking, debug draw), *NRI, freetype, msdfgen, DXC, Vulkan-Headers* |
-| `ImGui` (vendor) | imgui + backends; the one `GImGui` | -- |
-| `ArcaneImGui` | `ImGui/` + `ImGuiNriNode.*`; implements ArcaneClient's overlay hook | Core, Render, ImGui, Input, Sim, Window |
+| `ArcaneRender` | `Render/` incl. `Nri/` minus `nodes/ImGuiNriNode.*`; `PhysicsDebugDraw` keeps only its DRAW half | Core, Scene, Assets, Window, Physics2D (picking, debug draw), SDL3 (private), *NRI, freetype, msdfgen, DXC, Vulkan-Headers* |
+| `SDL3` (vendor, prebuilt) | `ThirdParty/SDL3/SDL3.arcmodule`: no project; one shared SDL3 per process -- `SDL3.dll` on Windows (vcpkg per-port linkage in the overlay triplet), the system shared library on Linux/macOS; staged beside every program whose closure reaches it | -- |
+| `ImGui` (vendor) | imgui core only; the one `GImGui` (the SDL3 platform backend compiles into ArcaneImGui) | -- |
+| `ArcaneImGui` | `ImGui/` + `ImGuiNriNode.*` + imgui's SDL3 backend; implements ArcaneClient's overlay hook | Core, Client, Render, ImGui, Sim; Input, Window, SDL3 (private) |
 | `ArcaneClient` | `Client/`, `Host/` minus the verify files; owns the overlay hook (no imgui include) | Core, Engine, Render, Input, Audio, Window, Assets, Scene, Sim |
+
+**Known leak.** Manifold2D (a static vendor lib) is linked into every module that
+depends on `ArcanePhysics2D`, because Physics2D's public headers call it inline.
+It holds no mutable globals, so the copies are harmless; making it private to
+Physics2D is a later physics cleanup.
 
 ### 1.3 Developer, Editor, Programs
 
 | Module | Type | Contents |
 |---|---|---|
 | `ArcaneVerify` | Developer | `Host/Verdict.*`, `VerifyReport.*`, `ReferenceImages.*`, `OffscreenVehicle.*` (depends on Core, Assets, Client, Render) |
-| `ArcaneAssetPipeline` | Developer | today's static lib (*bc7enc_rdo, meshoptimizer*) |
+| `ArcaneAssetPipeline` | Developer | a module DLL (exports `ARC_ASSET_PIPELINE_API`, plus cgltf's `cgltf_parse`/`cgltf_validate`/`cgltf_free` for the tests); depends on Core (*bc7enc_rdo, meshoptimizer*; cgltf public) |
 | `ArcaneEdit` | Editor | `Edit/` (only ArcaneEditor uses it; depends on Core, Scene) |
 | `ImGuiNodeEditor` (vendor) | Editor | imgui-node-editor |
 
@@ -326,6 +333,8 @@ tests, no CI), and **one commit per phase** so a late regression bisects by phas
 | R10 | No green-throughout; build-only per phase, one commit per phase, test wholesale at the end. |
 | R12 | Codex sweep (2026-10-11): map corrected per s1.5 (Engine.* stays in Core; roster to Engine; CSPRNG to Core; overlay hook keeps ImGui optional; PhysicsDebugDraw split); re-run clean. |
 | R11 | Grok Bot review (2026-10-11): registrar-reachability concern rejected with the init-table reasoning (s3.3), test strengthened to full roster; mid-arc test runs declined per R10; accepted: in-place package boot (WARP), modular-vs-mono frame-time report, WSL2 link probe in P5, module list logged at boot, forced-ref symbol spelled, IdentityFieldRule -> ArcaneAssets. |
+| R13 | Module attach (P2): Astra's current-`TypeContext` slot is per module image, so each `ARC_MODULE` TU registers an attach callback with Core (`Arcane/Core/ModuleAttach.hpp`: `RegisterModuleAttach`, `AttachAllModules`); every site that installs the process context calls `AttachAllModules`, and a module registered later attaches at once. Collapses to one image in monolithic. |
+| R14 | P2 rulings (Step 0 of P3): SDL3 is a prebuilt vendor module (descriptor `prebuilt` field: include, link, libdir, runtime files, rpath, a Debug override), one instance per process -- `SDL3.dll` on Windows via the overlay triplet's per-port `VCPKG_LIBRARY_LINKAGE dynamic`, the system shared library elsewhere; every module that calls SDL depends on it (privately), and `arc_module_stage` stages its runtime file. Replaces ArcaneWindow's static SDL3 and its `/EXPORT` list. The monolithic package's SDL3 linkage stays P5's probe (s3.4). The s1 tables match the built graph. |
 
 ---
 

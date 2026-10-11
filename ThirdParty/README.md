@@ -10,7 +10,7 @@ Every vendored dependency lives in its own subdir alongside a `LICENSE` file. Th
 - Lua libs: single-file libraries at `<name>/<name>.lua`; multi-file packages at `<name>/init.lua` (plus internal modules).
 - Binaries (build tools, runtimes): tracked in the subdir (`love2d/`, `premake5/`).
 
-vcpkg-managed deps do **not** live here — they're installed under `$VCPKG_ROOT/installed/` and pulled in via include/link paths from the consuming workspace's premake5.lua. Currently: `libpq` (Server, `x64-windows-static`) and `sdl3` 3.4.0 (Arcane, `x64-windows-static-md` overlay triplet — dynamic CRT to match the /MD engine workspace). See the "Why vcpkg?" section in `Server/BUILD.md`.
+vcpkg-managed deps do **not** live here — they're installed under `$VCPKG_ROOT/installed/` and pulled in via include/link paths from the consuming workspace's premake5.lua. Currently: `libpq` (Server, `x64-windows-static`) and `sdl3` 3.4.0 (Arcane, `x64-windows-static-md` overlay triplet — dynamic CRT to match the /MD engine workspace, and the one port the triplet builds as a DLL: `SDL3/SDL3.arcmodule` describes it as a prebuilt vendor module, one `SDL3.dll` per process). See the "Why vcpkg?" section in `Server/BUILD.md`.
 
 Prebuilt **tool binaries** live under `tools/` (shader pipeline, used from M2 on): `tools/dxc/` (DirectX Shader Compiler release v1.9.2602.24, binaries dxc.exe/dxcompiler.dll/dxil.dll, LLVM/MIT/MS licenses included) and `tools/ShaderMake/` (NVIDIA-RTX/ShaderMake @ 5daebdb, built from source with CMake/MSVC, MIT).
 

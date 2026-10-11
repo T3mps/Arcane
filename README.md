@@ -367,7 +367,8 @@ msbuild Arcane.slnx /p:Configuration=Debug /m
 ```
 
 `setup-vcpkg-deps.bat` installs SDL3 with the overlay triplet in
-`vcpkg-triplets/` (dynamic CRT).
+`vcpkg-triplets/` (dynamic CRT; SDL3 itself as `SDL3.dll`, staged beside
+every program -- `ThirdParty/SDL3/SDL3.arcmodule`).
 
 CPU tests, from the exe directory, two equivalent doors:
 

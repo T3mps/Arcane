@@ -38,8 +38,8 @@ file is authoritative. Summary:
 
 Build-time (not vendored):
 
-- **SDL3** is installed via vcpkg (`scripts/setup-vcpkg-deps.bat`) -- zlib
-  license.
+- **SDL3** is installed via vcpkg (`scripts/setup-vcpkg-deps.bat`) as
+  `SDL3.dll`, staged beside each program -- zlib license.
 
 Reimplemented (not vendored):
 

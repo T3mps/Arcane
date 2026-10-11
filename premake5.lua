@@ -7,7 +7,11 @@
 -- Tools/ keep their static-runtime conventions, unaffected.
 
 -- vcpkg required for SDL3 (platform layer; deep build system -> vcpkg per
--- the repo rule). Overlay triplet x64-windows-static-md pins v143 + /MD.
+-- the repo rule). Overlay triplet x64-windows-static-md pins v143 + /MD and
+-- builds SDL3 (only) as a DLL: SDL3 is a prebuilt vendor MODULE
+-- (ThirdParty/SDL3/SDL3.arcmodule) -- one SDL3.dll per process, staged beside
+-- every program whose module closure reaches it. The discovery below feeds
+-- that descriptor's @SDL3_INCLUDE_DIR@ / @SDL3_PREFIX@ / @SDL3_LIB_DIR@.
 -- Linux/macOS (Linux port, 2026-10-05): SDL3 is NOT taken from vcpkg there --
 -- it comes from the system (pkg-config `sdl3`, e.g. a from-source install in
 -- /usr/local; Ubuntu 24.04 does not package SDL3). VCPKG_ROOT is therefore a
@@ -18,6 +22,7 @@ if not VCPKG_ROOT then
     error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
 end
 VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
+SDL3_PREFIX      = VCPKG_INSTALLED_MD
 SDL3_INCLUDE_DIR = VCPKG_INSTALLED_MD .. "/include"
 else
     -- `pkg-config --variable=includedir sdl3` names the include ROOT (the one
@@ -262,7 +267,8 @@ workspace "Arcane"
 
     include "build/modules.lua"
     local engine_modules = arc_modules_load {
-        "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule"
+        "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule",
+        "ThirdParty/SDL3/SDL3.arcmodule",
     }
     -- The set a game module links until P4 makes it descriptor-driven (mirrors
     -- build/arcane.lua): every Runtime + Client module (ArcaneClient's closure
@@ -341,33 +347,6 @@ ARC_MODULE_EXTRAS.ArcaneRender = function()
         includedirs { "%{wks.location}/ThirdParty/tools/dxc-macos/include/dxc" }
     filter {}
 end
--- ONE SDL per process (see build/modules.lua's SDL3 note): on Windows SDL3 is a
--- static lib, so ArcaneWindow alone links it and EXPORTS the entry points the
--- other modules call (Input, Render, ArcaneImGui + imgui's SDL3 backend); they
--- resolve them through ArcaneWindow's import lib. A new SDL call outside
--- ArcaneWindow is an LNK2019 naming the function -> add it here.
-local ARC_WINDOW_SDL_EXPORTS = {
-    "SDL_AddEventWatch", "SDL_CaptureMouse", "SDL_CloseGamepad", "SDL_CreateSystemCursor",
-    "SDL_CreateWindow", "SDL_DelayNS", "SDL_DestroyCursor", "SDL_DestroyWindow", "SDL_GL_CreateContext",
-    "SDL_GL_DestroyContext", "SDL_GL_GetCurrentContext", "SDL_GL_MakeCurrent", "SDL_GL_SetAttribute",
-    "SDL_GL_SetSwapInterval", "SDL_GL_SwapWindow", "SDL_GamepadConnected", "SDL_GetClipboardText",
-    "SDL_GetCurrentVideoDriver", "SDL_GetDisplayBounds", "SDL_GetDisplayContentScale",
-    "SDL_GetDisplayUsableBounds", "SDL_GetDisplays", "SDL_GetError", "SDL_GetGamepadAxis",
-    "SDL_GetGamepadButton", "SDL_GetGamepads", "SDL_GetGlobalMouseState", "SDL_GetKeyFromName",
-    "SDL_GetKeyFromScancode", "SDL_GetKeyName", "SDL_GetKeyboardFocus", "SDL_GetKeyboardState",
-    "SDL_GetMouseFocus", "SDL_GetMouseState", "SDL_GetPerformanceCounter",
-    "SDL_GetPerformanceFrequency", "SDL_GetPointerProperty", "SDL_GetPrefPath",
-    "SDL_GetScancodeFromKey", "SDL_GetScancodeFromName", "SDL_GetScancodeName", "SDL_GetVersion",
-    "SDL_GetWindowDisplayScale", "SDL_GetWindowFlags", "SDL_GetWindowFromID", "SDL_GetWindowID",
-    "SDL_GetWindowPosition", "SDL_GetWindowProperties", "SDL_GetWindowRelativeMouseMode",
-    "SDL_GetWindowSize", "SDL_GetWindowSizeInPixels", "SDL_HasClipboardText", "SDL_HideCursor",
-    "SDL_InitSubSystem", "SDL_OpenGamepad", "SDL_OpenURL", "SDL_QuitSubSystem", "SDL_RaiseWindow",
-    "SDL_RemoveEventWatch", "SDL_SetClipboardText", "SDL_SetCursor", "SDL_SetHint",
-    "SDL_SetTextInputArea", "SDL_SetWindowOpacity", "SDL_SetWindowParent", "SDL_SetWindowPosition",
-    "SDL_SetWindowSize", "SDL_SetWindowTitle", "SDL_ShowCursor", "SDL_ShowWindow", "SDL_StartTextInput",
-    "SDL_StopTextInput", "SDL_TextInputActive", "SDL_Vulkan_CreateSurface", "SDL_WarpMouseGlobal",
-    "SDL_WarpMouseInWindow", "SDL_WasInit", "SDL_free",
-}
 ARC_MODULE_EXTRAS.ArcaneAssetPipeline = function()
     module_defaults()
     -- cgltf's entry points ArcaneTests calls directly (CgltfImpl.cpp's note).
@@ -375,27 +354,11 @@ ARC_MODULE_EXTRAS.ArcaneAssetPipeline = function()
         linkoptions { "/EXPORT:cgltf_parse", "/EXPORT:cgltf_validate", "/EXPORT:cgltf_free" }
     filter {}
 end
-ARC_MODULE_EXTRAS.ArcaneWindow = function()
-    module_defaults()
-    filter "system:windows"
-        links { "SDL3-static", "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8" }
-        local exports = {}
-        for _, fn in ipairs(ARC_WINDOW_SDL_EXPORTS) do exports[#exports+1] = "/EXPORT:" .. fn end
-        linkoptions(exports)
-    filter "system:not windows"
-        links { "SDL3" }
-        if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR }; linkoptions { "-Wl,-rpath," .. SDL3_LIB_DIR } end
-    filter { "system:windows", "configurations:Debug" }
-        libdirs { (VCPKG_INSTALLED_MD or "") .. "/debug/lib" }
-    filter { "system:windows", "configurations:Release or configurations:Dist" }
-        libdirs { (VCPKG_INSTALLED_MD or "") .. "/lib" }
-    filter {}
-end
 ARC_MODULE_EXTRAS.ImGui = function()
     -- The vendor DLL: Dear ImGui's core only, exporting IMGUI_API (GImGui and the
     -- whole API live in ONE image; replaces ArcaneClient's /WHOLEARCHIVE:imgui
     -- re-export). The SDL3 platform backend compiles into ArcaneImGui, the one
-    -- module that drives it, so this DLL has no SDL3 of its own.
+    -- module that drives it, so this DLL does not depend on SDL3.
     module_defaults()
     cppdialect "C++17"
     files { "%{prj.location}/imgui.cpp", "%{prj.location}/imgui_draw.cpp", "%{prj.location}/imgui_tables.cpp", "%{prj.location}/imgui_widgets.cpp", "%{prj.location}/imgui_demo.cpp" }
@@ -430,8 +393,10 @@ ARC_MODULE_EXTRAS.ArcaneClient = function()
 end
 for _, name in ipairs(engine_modules.order) do
     local mod = engine_modules.byName[name]
-    group(mod.vendor and "ThirdParty" or mod.type)
-    arc_module_project(engine_modules, name)
+    if not mod.prebuilt then   -- a prebuilt vendor module (SDL3) has no project
+        group(mod.vendor and "ThirdParty" or mod.type)
+        arc_module_project(engine_modules, name)
+    end
 end
 -- The programs below (P3 moves them under Source/Programs/) keep one folder.
 group "Programs"
