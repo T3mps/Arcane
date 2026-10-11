@@ -91,6 +91,8 @@ Tauri, outside this build.
 - **Dedicated server:** Runtime modules only.
 - **Aphelyon services:** `ArcaneCore`, `ArcaneNet`, `ArcaneCrypto`.
 
+**ImGui's role (user, 2026-10-11).** ImGui is a developer/debug UI and a *temporary* game-UI stopgap, never Arcane's game-UI API. Games may keep shipping it for developer debug panels. Arcane's own game UI is roadmap item D7 (pre-1.0: a retained runtime UI with flex layout, themes, MSDF text, localization, gamepad navigation, data binding and a UI editor -- a Slate + UMG counterpart), and after 1.0 Arcane's own UI replaces imgui as the editor UI layer. This arc keeps that path open: `ImGui`/`ArcaneImGui` are optional per host behind ArcaneClient's `HostOverlay` seam, a future game-UI module (Client type) plugs into the same seam, and `ARC_GAME_HAS_IMGUI` / `OnDrawUI` are the imgui debug path only.
+
 ### 1.5 The untangle (measured 2026-10-11 by `#include` edges)
 
 Verified exhaustively by the Codex sweep (`.superpowers/sdd/2026-10-11-modularization/sweep.py`, 415 engine files) and re-run with every row below applied (`recheck.py` -> `sweep-r2.md`): **0 unassigned files, 0 undeclared dependencies, 0 type-rule violations, 0 cycles.** Every module lists `ArcaneCore` explicitly when it includes it. Vendor headers a module's own public headers include are public `thirdParty` of that module (Core: Astra, glm, spdlog, nlohmann, Mosaic), and flow to consumers through public dependencies.
