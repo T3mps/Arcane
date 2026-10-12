@@ -37,7 +37,11 @@
 - Every `uses:` in `ci.yml` is pinned to a 40-hex commit SHA.
 - `packages: write` appears on the `ci-image` job only; the workflow default stays `permissions: contents: read`.
 - No repository secret is referenced by a job that a pull request runs.
-- Pinned actions:
+- Pinned actions (node24 releases; audit C3, 2026-10-12):
+  - `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`, always with `persist-credentials: false`
+  - `actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0`
+  - `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2`
+  - `microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3`
   - `docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0`
   - `docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1`
   - `StarworksDev/.github/actions/discord-ci-notify@b2d36340a4b0bff117f0cfcba3564fe3fa984687 # main 2026-10-12`
@@ -78,6 +82,8 @@
 | R12 | s3.5 "every `uses:` is pinned" | The Discord notify action is pinned too (it was `@main`) | The acceptance check is literal |
 | R13 | s1.1 / s3.2 "a writable runtime dir for root" + GPU-lane risk | `verify-image.sh` starts headless weston and Xvfb as root at image-build time | Surfaces the GPU-lane casualty before any leg runs |
 | R14 | — | `vulkan-tools` added to the image | `verify-image.sh` uses `vulkaninfo` to prove lavapipe under Xvfb |
+
+> **Audit amendments:** see the section of that name at the end. They change the action pins, the cache keys and the image package list, and add Tasks 13-14 and follow-ons F1-F3.
 
 ## Review Focus
 
@@ -902,6 +908,7 @@ check "SDL3_ROOT=/usr/local" test "${SDL3_ROOT:-}" = /usr/local
 check "validation layer 1.4.328" grep -q '"api_version": "1.4.328' /usr/local/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json
 check "no distro validation layer" test ! -e /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json
 check "lavapipe ICD" test -f /usr/share/vulkan/icd.d/lvp_icd.json
+check "clang-19 sanitizer runtimes" sh -c 'find /usr/lib/llvm-19/lib/clang -name "libclang_rt.asan*" | grep -q . && find /usr/lib/llvm-19/lib/clang -name "libclang_rt.tsan*" | grep -q .'
 for t in make cmake ninja pkg-config xvfb-run xauth weston weston-screenshooter xdotool import xwininfo \
          python3 ccache rsync git curl vulkaninfo; do
     check "tool $t" has "$t"
@@ -1001,13 +1008,14 @@ RUN apt-get update \
 # SDL3's X11/Wayland build deps, the Vulkan loader + Mesa lavapipe, Xvfb; the
 # GPU-lane extras (weston, xdotool, imagemagick, x11-utils, python3); ccache
 # and rsync for local runs; git and curl for the pinned fetch/build scripts;
-# vulkan-tools for verify-image.sh. The grep guard fails the build if apt did
+# vulkan-tools for verify-image.sh; libclang-rt-19-dev (the sanitizer runtimes)
+# for the ASan/UBSan lane that follows A (audit P1). The grep guard fails the build if apt did
 # NOT read the snapshot.
 RUN apt-get update \
  && ls /var/lib/apt/lists | grep -q '^snapshot\.ubuntu\.com_' \
  && apt-get install -y --no-install-recommends \
       g++-14 clang-19 make cmake ninja-build pkg-config \
-      libvulkan-dev mesa-vulkan-drivers vulkan-tools \
+      libclang-rt-19-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools \
       libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
       libxss-dev libxfixes-dev libxtst-dev libxkbcommon-dev \
       libwayland-dev wayland-protocols libdecor-0-dev \
@@ -2514,7 +2522,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: CI script tests
         run: |
@@ -2551,7 +2561,9 @@ jobs:
       # A fork pull request never publishes (scripts/ci/ci-image.sh).
       SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -2611,7 +2623,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Toolchain (CI image)
         run: |
@@ -2672,7 +2686,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-${{ matrix.leg }}-${{ matrix.config }}
           path: test-results/
@@ -2682,7 +2696,7 @@ jobs:
       # Crashes/hangs drop symbolized stacks under <exe dir>/diagnostics/.
       - name: Upload logs
         if: failure() || env.LINUX_GPU_LANE == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-${{ matrix.leg }}-${{ matrix.config }}
           path: |
@@ -2732,14 +2746,16 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # ------------------------------------------------------------------
       # Toolchains
       # ------------------------------------------------------------------
       - name: Toolchain (Windows MSVC)
         if: runner.os == 'Windows'
-        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
 
       - name: Toolchain (macOS Apple Clang, pinned Xcode)
         if: runner.os == 'macOS'
@@ -2757,11 +2773,13 @@ jobs:
       # triplet (~10 min) -- cache the installed tree.
       - name: Cache SDL3 (Windows, vcpkg)
         if: runner.os == 'Windows'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\installed
-          key: ${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.config }}-${{ hashFiles('vcpkg-triplets/**', 'scripts/setup-vcpkg-deps.bat') }}
-          restore-keys: ${{ matrix.os }}-${{ matrix.compiler }}-
+          # One key per image, not per config: the installed tree serves every
+          # configuration (audit C9 -- per-config keys stored identical copies).
+          key: ${{ matrix.os }}-vcpkg-${{ hashFiles('vcpkg-triplets/**', 'scripts/setup-vcpkg-deps.bat') }}
+          restore-keys: ${{ matrix.os }}-vcpkg-
 
       - name: SDL3 (Windows, vcpkg overlay triplet)
         if: runner.os == 'Windows'
@@ -2775,11 +2793,11 @@ jobs:
       # (premake5.lua gives libArcaneClient.dylib an rpath to it).
       - name: Cache SDL3 (macOS)
         if: runner.os == 'macOS'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/sdl3-prefix
-          key: ${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.config }}-sdl3-${{ hashFiles('scripts/build-sdl3.sh') }}
-          restore-keys: ${{ matrix.os }}-${{ matrix.compiler }}-
+          # SDL3 always builds Release: one copy per image (audit C9).
+          key: ${{ matrix.os }}-sdl3-${{ hashFiles('scripts/build-sdl3.sh') }}
 
       - name: SDL3 (macOS, from source)
         if: runner.os == 'macOS'
@@ -2796,13 +2814,14 @@ jobs:
       # POSIX (ThirdParty/premake5/premake5, beside the vendored .exe).
       - name: Cache premake + Vulkan SDK (macOS)
         if: runner.os == 'macOS'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ThirdParty/premake5/premake5
             ThirdParty/tools/vulkan-sdk-macos/download
-          key: ${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.config }}-tools-${{ hashFiles('scripts/fetch-premake.sh', 'scripts/fetch-vulkan-sdk-macos.sh') }}
-          restore-keys: ${{ matrix.os }}-${{ matrix.compiler }}-
+          # Identical downloads for every config: one copy per image (audit C9;
+          # the per-config keys held fifteen 326 MB copies on 2026-10-12).
+          key: ${{ matrix.os }}-tools-${{ hashFiles('scripts/fetch-premake.sh', 'scripts/fetch-vulkan-sdk-macos.sh') }}
 
       # MoltenVK + the Vulkan loader + validation layer + DXC, one pinned SDK
       # (the script header says why this is the macOS DXC source).
@@ -2880,7 +2899,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-${{ matrix.leg }}-${{ matrix.config }}
           path: test-results/
@@ -2889,7 +2908,7 @@ jobs:
 
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logs-${{ matrix.leg }}-${{ matrix.config }}
           path: |
@@ -3118,7 +3137,7 @@ compares two downloaded sets of `test-results-*` artifacts (or a local
 - [ ] **Step 5: `docs/ci.md`, Supply chain, Reproducing locally, Deviations**
 
 In `## Supply chain`:
-- Replace the first bullet's action list with `` (`actions/checkout` v4.4.0, `actions/cache` v4.3.0, `actions/upload-artifact` v4.6.2, `microsoft/setup-msbuild` v2.0.0, `docker/login-action` v4.6.0, `docker/setup-buildx-action` v4.4.1, and the org's `discord-ci-notify`). ``
+- Replace the first bullet's action list with `` (`actions/checkout` v7.0.1 with `persist-credentials: false`, `actions/cache` v6.1.0, `actions/upload-artifact` v7.0.2, `microsoft/setup-msbuild` v3, `docker/login-action` v4.6.0, `docker/setup-buildx-action` v4.4.1, and the org's `discord-ci-notify`). Cache keys are per image, never per configuration, for configuration-independent contents. ``
 - Replace the second bullet with `` - The workflow token is read-only (`permissions: contents: read`); `ci-image` alone adds `packages: write`, and the Linux legs `packages: read`. ``
 - Append the bullet `` - The Linux image's base is pinned by digest and its apt packages by one archive snapshot (`APT_SNAPSHOT` in `ci/linux/Dockerfile`). ``
 
@@ -3358,3 +3377,198 @@ Report to the user:
 - whether `-Full` ran locally.
 
 **Merging the PR is the user's call.** After the merge, the next step is sub-project B's brainstorm, per the spec s5 rollout.
+
+---
+
+## Audit amendments (2026-10-12)
+
+The cross-repo Actions audit (`StarworksDev/.github` `docs/ci-audit-2026-10-12.md`) changed this plan in place:
+
+- **Global Constraints and Task 9:** node24 action pins (C3) and `persist-credentials: false` (C7).
+- **Task 9:** cache keys per image, not per config (C9).
+- **Task 3:** `libclang-rt-19-dev` in the image, for F2 below.
+- **Task 10:** the docs follow those changes.
+
+It also adds Tasks 13–14 and the follow-ons F1–F3. Tasks 13–14 run after Task 12's PR is green. Each is its own commit on the same branch, pushed with the user's standing go-ahead for that PR.
+
+### Task 13: Notify through `discord-ci-notify` v1 (audit C1, C2)
+
+**Precondition:** the `StarworksDev/.github` branch `discord-ci-notify-v1` is merged, its `Test` workflow is green, and the tag `discord-ci-notify-v1.0.0` exists (the user's go-ahead).
+
+**Files:**
+- Modify: `.github/workflows/ci.yml` (the `notify` job)
+- Modify: this plan's Global Constraints (the notify pin line)
+
+- [ ] **Step 1: Resolve the tag's commit**
+
+```bash
+SHA=$(git ls-remote https://github.com/StarworksDev/.github 'refs/tags/discord-ci-notify-v1.0.0^{}' | cut -f1)
+[ -n "$SHA" ] || SHA=$(git ls-remote https://github.com/StarworksDev/.github refs/tags/discord-ci-notify-v1.0.0 | cut -f1)
+echo "$SHA" | grep -qE '^[0-9a-f]{40}$' && echo "v1.0.0 = $SHA"
+```
+
+Expected: `v1.0.0 = <40 hex>`. `^{}` peels an annotated tag; a lightweight tag falls through to the second line.
+
+- [ ] **Step 2: Point the notify job at it, passing `needs`**
+
+Write `scratch/notify-v1.py` with the Write tool, then run it with `python scratch/notify-v1.py "$SHA"`:
+
+```python
+import sys
+sha = sys.argv[1]
+P = '.github/workflows/ci.yml'
+s = open(P, encoding='utf-8').read()
+old_uses = "StarworksDev/.github/actions/discord-ci-notify@b2d36340a4b0bff117f0cfcba3564fe3fa984687 # main 2026-10-12"
+old_result = ("          result: ${{ contains(needs.*.result, 'failure') && 'failure' || "
+              "(contains(needs.*.result, 'cancelled') && 'cancelled' || 'success') }}\n")
+old_head = "    if: always() && github.event_name != 'pull_request'\n    runs-on: ubuntu-24.04\n    permissions:\n      actions: read"
+assert s.count(old_uses) == 1 and s.count(old_result) == 1 and s.count(old_head) == 1
+s = s.replace(old_uses, f"StarworksDev/.github/actions/discord-ci-notify@{sha} # discord-ci-notify-v1.0.0")
+s = s.replace(old_result, "          needs: ${{ toJSON(needs) }}\n")
+s = s.replace(old_head, old_head.replace("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n"))
+open(P, 'w', encoding='utf-8', newline='\n').write(s)
+print('ok')
+```
+
+Expected: `ok`. `grep -n "discord-ci-notify@\|toJSON(needs)\|timeout-minutes: 5" .github/workflows/ci.yml` shows the pinned `uses:`, the `needs:` input, and the notify job's timeout. Update the Global Constraints line that names the notify pin to the same SHA and tag.
+
+- [ ] **Step 3: Lint and commit**
+
+Run `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/ci.yml` and expect no output. Then commit `.github/workflows/ci.yml` and this plan:
+
+```
+ci: Discord notify through discord-ci-notify v1 -- pinned to the release tag's commit, classifies the run from needs (a skipped job is INCOMPLETE, never success)
+```
+
+The commit carries the attribution lines.
+
+### Task 14: Jenkins-only checks that need no GPU move to the hosted Windows legs (audit C10)
+
+The Jenkinsfile's "Asset cook check" (`arccook --check`, Debug + Release) and "ReferenceProject (SDK build)" (premake `vs2026` + msbuild on `ReferenceProject.slnx`) need no GPU. Today they run only on the desk. They move into a script both CI and B's runner can call. Jenkins keeps running them until B retires it.
+
+**Files:**
+- Create: `scripts/ci/reference-checks.ps1`
+- Modify: `.github/workflows/ci.yml` (one step in `build-test`)
+- Modify: `docs/ci.md` (Extra lanes table)
+
+- [ ] **Step 1: Find out whether `--check` passes on a fresh checkout (desk)**
+
+The Jenkins agent's workspace persists, so its cook state may never have been cold. In a fresh worktree:
+
+```bash
+git worktree add ../Arcane-coldcheck HEAD && cd ../Arcane-coldcheck
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci/build.ps1 Debug
+bin/Debug-windows-x86_64-md/arccook/arccook.exe --project ReferenceProject --check; echo "check exit=$?"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-tests.ps1 Debug --rng-seed 1 > /dev/null
+bin/Debug-windows-x86_64-md/arccook/arccook.exe --project ReferenceProject --check; echo "after tests exit=$?"
+cd .. && git worktree remove --force Arcane-coldcheck
+```
+
+Record both exit codes:
+- `check exit=0`: the check could run right after the build. The script still runs after the tests, which keeps one order.
+- Non-zero before the tests and 0 after: the after-tests order is required. Say so in the script header.
+- Non-zero both times: **stop and report to the user.** The check then needs a cook step first (`arccook --project ReferenceProject` without `--check`), which is a decision about what "nothing stale" means on a clean machine.
+
+- [ ] **Step 2: Write the script**
+
+```powershell
+# reference-checks.ps1 <Debug|Release|Dist> -- the Jenkins-gate checks that
+# need no GPU, run on the hosted Windows legs after the tests
+# (.github/workflows/ci.yml; audit C10). Sub-project B's runner calls the same
+# script. Run AFTER scripts\ci\build.ps1 and scripts\run-tests.ps1:
+#   * Debug and Release: arccook --project ReferenceProject --check -- the
+#     cooked content is current (the Jenkinsfile's "Asset cook check").
+#   * Debug: ReferenceProject built as its own workspace (premake vs2026 +
+#     msbuild ReferenceProject.slnx) -- a game author's path without arcbuild
+#     (the Jenkinsfile's "ReferenceProject (SDK build)").
+# Exit: 0, or the first failing check's code.
+param([Parameter(Mandatory, Position = 0)][ValidateSet('Debug', 'Release', 'Dist')][string]$Config)
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'ArcaneCi.psm1') -Force
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$logs = Join-Path $root 'logs'
+
+if ($Config -ne 'Dist') {
+    $arccook = Join-Path $root "bin\$Config-windows-x86_64-md\arccook\arccook.exe"
+    $code = Invoke-NativeLogged -FilePath $arccook -ArgumentList @('--project', (Join-Path $root 'ReferenceProject'), '--check') `
+        -LogPath (Join-Path $logs "check-cook-$Config.log")
+    if ($code -ne 0) { Write-Host "reference-checks: arccook --check FAILED ($code)" -ForegroundColor Red; exit $code }
+}
+if ($Config -eq 'Debug') {
+    # premake runs inside ReferenceProject/, as the Jenkinsfile does.
+    Push-Location (Join-Path $root 'ReferenceProject')
+    try {
+        $code = Invoke-NativeLogged -FilePath (Join-Path $root 'ThirdParty\premake5\premake5.exe') -ArgumentList @('vs2026') `
+            -LogPath (Join-Path $logs 'check-sdk-generate.log')
+    } finally { Pop-Location }
+    if ($code -ne 0) { Write-Host "reference-checks: ReferenceProject premake FAILED ($code)" -ForegroundColor Red; exit $code }
+    $code = Invoke-NativeLogged -FilePath (Resolve-MSBuild) `
+        -ArgumentList @((Join-Path $root 'ReferenceProject\ReferenceProject.slnx'), '/p:Configuration=Debug', '/m', '/nologo', '/v:minimal') `
+        -LogPath (Join-Path $logs 'check-sdk-build.log')
+    if ($code -ne 0) { Write-Host "reference-checks: ReferenceProject standalone build FAILED ($code)" -ForegroundColor Red; exit $code }
+}
+Write-Host "reference-checks: $Config ok"
+exit 0
+```
+
+- [ ] **Step 3: Run it on the desk**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci\reference-checks.ps1 Debug; "exit=$LASTEXITCODE"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ci\reference-checks.ps1 Release; "exit=$LASTEXITCODE"
+```
+
+Expected: `reference-checks: Debug ok` and `Release ok`, both `exit=0`, and the logs under `logs\`.
+
+- [ ] **Step 4: Call it from the Windows legs**
+
+In `build-test`, directly after the `Test (Windows, two seeds)` step:
+
+```yaml
+      # Jenkins parity, no GPU needed (audit C10): arccook --check (Debug,
+      # Release) and ReferenceProject built standalone (Debug).
+      - name: Reference checks (Windows)
+        if: runner.os == 'Windows' && !cancelled() && matrix.config != 'Dist'
+        shell: pwsh
+        run: ./scripts/ci/reference-checks.ps1 ${{ matrix.config }}
+```
+
+Add a row to `docs/ci.md`'s Extra lanes table:
+
+```
+| `arccook --check` + ReferenceProject standalone build (`scripts/ci/reference-checks.ps1`) | `windows-msvc` Debug (both), Release (cook check) | the cooked sample content is current; a game workspace builds without arcbuild (moved from the Jenkins gate) |
+```
+
+Lint with actionlint (no output expected), then commit:
+
+```
+ci: arccook --check and the standalone ReferenceProject build move from Jenkins to the hosted Windows legs (scripts/ci/reference-checks.ps1)
+```
+
+The commit carries the attribution lines.
+
+### Follow-ons after A merges (planned separately; each needs A's measurements)
+
+**F1. Hosted compiler cache (audit C8).** This is the largest remaining time cost.
+
+| Leg | Approach |
+|---|---|
+| Linux (container) | `PATH=/usr/lib/ccache:$PATH`, `CCACHE_DIR` in the workspace, `actions/cache` keyed `ccache-<leg>-<Config>-<sha>` with a `ccache-<leg>-<Config>-` restore prefix. Saved on `main` pushes only, so PRs restore but never pollute. |
+| macOS | ccache from its release tarball, SHA-256 pinned (not unpinned `brew`). |
+| Windows | ccache's MSBuild mode or sccache: needs a premake option for `/Z7` object debug info (the linker still writes the PDB) plus `/p:UseMultiToolTask=true`. Prove it on the desk first. |
+
+`max-size` per leg comes from Task 8's measured `ccache -s` on the desk. The total must stay under ~8 GB of the repo's 10 GB, now that C9 freed the duplicated tool caches.
+
+Acceptance: a warm-run timing table against run 38154946856; a cold run no slower than +5%; identical test counts.
+
+**F2. ASan + UBSan lane (audit P1).**
+1. Add `--sanitize=address|thread` to Arcane's `premake5.lua`, with the same shape as Astra, Manifold2D and Mosaic.
+2. Triage locally in the image: linux-clang-19 Debug `--sanitize=address`, on the `~[gpu]` CPU suite.
+3. Fix or suppress findings, each with a reason. LSan suppressions live in `scripts/ci/lsan-suppressions.txt`, in the same `<pattern> | <reason>` discipline as the test exclusions.
+4. Add the lane to `build-test-linux` only when it is green on the desk.
+5. TSan for the job system is a later lane.
+
+**F3. Org / repo settings (user or admin; audit C5, C6, C4).**
+- Fork-PR approval → `all_external_contributors` on all five repos.
+- `can_approve_pull_request_reviews` → false at the org.
+- `sha_pinning_required` → true at the org, once every repo's pinning PR has merged.
