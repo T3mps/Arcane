@@ -57,7 +57,24 @@ namespace Arcane
         // itself failed to load; check Module::LastLoadError() for that case).
         static std::optional<Plugin> Load(std::filesystem::path path, PluginResolveError* error);
 
-        [[nodiscard]] bool IsLoaded() const noexcept { return m_module.IsLoaded(); }
+        // A game linked INTO the host (the monolithic layout; engine
+        // modularization s3.1): no Module, no file, no ABI probe -- the table is
+        // ArcGameModule_Get()'s, and the static_assert in ARC_GAME_MODULE already
+        // pinned the ABI at compile time. `table` must outlive the Plugin (it is
+        // the game's function-local static). The cvar module is registered by
+        // NAME only: there is no image range, and nothing in a package unloads.
+        [[nodiscard]] static Plugin FromStatic(const PluginVTable& table, std::string cvarModule);
+
+        [[nodiscard]] bool IsLoaded() const noexcept { return m_module.IsLoaded() || m_staticTable != nullptr; }
+        // True for FromStatic: LoadedModule() is then an empty Module (no image).
+        [[nodiscard]] bool IsStatic() const noexcept { return m_staticTable != nullptr; }
+        // The system-factory owner key (Arcane/Plugin/SystemFactory.hpp): the
+        // loaded image's base, or -- for a static game, which has no image of its
+        // own -- the address of its table, equally unique and stable.
+        [[nodiscard]] const void* FactoryOwner() const noexcept
+        {
+            return m_staticTable ? static_cast<const void*>(m_staticTable) : m_module.Image().base;
+        }
         [[nodiscard]] const Module& LoadedModule() const noexcept { return m_module; }
         [[nodiscard]] const PluginVTable& VTable() const noexcept { return m_vtable; }
         // The cvar module this image's registrations belong to (settings spec
@@ -110,6 +127,7 @@ namespace Arcane
 
         Module m_module;
         PluginVTable m_vtable{};
+        const PluginVTable* m_staticTable = nullptr;   // FromStatic only
         // Declared AFTER m_module: members destroy in reverse, so the module's
         // cvars, commands and callbacks go BEFORE the FreeLibrary.
         CVarOwner m_cvars;

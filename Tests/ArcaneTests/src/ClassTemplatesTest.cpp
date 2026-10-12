@@ -13,6 +13,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
+#include <Arcane/Project/GameDescriptor.hpp>
 #include <Arcane/Sim/Time.hpp>
 
 #include <filesystem>
@@ -223,6 +224,30 @@ TEST_CASE("ClassTemplates::KindLabel names every kind", "[editor]")
     CHECK(std::string(ClassTemplates::KindLabel(ClassTemplates::Kind::System)) == "System");
     CHECK(std::string(ClassTemplates::KindLabel(ClassTemplates::Kind::PlainClass)) == "Plain class");
     CHECK(static_cast<int>(ClassTemplates::Kind::Count) == 3);
+}
+
+// ---- the game descriptor (engine modularization s4) ------------------------------
+
+TEST_CASE("ClassTemplates renders the default game descriptor for the project's module", "[editor][templates]")
+{
+    const ClassTemplates::DescriptorFile d = ClassTemplates::RenderGameDescriptor("ReferenceGame");
+    CHECK(d.fileName == "ReferenceGame.arcmodule");
+    CHECK(d.text == Arcane::RenderDefaultGameDescriptor("ReferenceGame"));
+    CHECK(Has(d.text, "\"name\": \"ReferenceGame\""));   // name == file stem (build/modules.lua's rule)
+    CHECK(Has(d.text, "\"type\": \"Game\""));
+    for (const std::string_view module : Arcane::kDefaultGameModules)
+        CHECK(Has(d.text, "\"" + std::string(module) + "\""));
+    CHECK_FALSE(Has(d.text, "ArcaneEdit"));      // no Editor module reaches a game
+    CHECK_FALSE(Has(d.text, "ArcaneVerify"));    // no Developer module either
+    CHECK(d.text.back() == '\n');
+}
+
+TEST_CASE("ClassTemplates names the game module from the manifest, else the project", "[editor][templates]")
+{
+    CHECK(ClassTemplates::GameModuleNameFor("ReferenceGame.dll", "ReferenceProject") == "ReferenceGame");
+    CHECK(ClassTemplates::GameModuleNameFor("Aphelyon.so", "Aphelyon") == "Aphelyon");
+    CHECK(ClassTemplates::GameModuleNameFor("Binaries/Mod.dylib", "X") == "Mod");
+    CHECK(ClassTemplates::GameModuleNameFor("", "MyGame") == "MyGame");   // a plugins-only project
 }
 
 // ---- the compile proof (input-seam spec s8 T8) --------------------------------

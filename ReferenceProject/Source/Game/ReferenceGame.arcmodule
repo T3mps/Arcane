@@ -1,0 +1,9 @@
+{
+  "name": "ReferenceGame",
+  "type": "Game",
+  "dependencies": {
+    "public": [],
+    "private": ["ArcaneClient", "ArcaneCore", "ArcaneEngine", "ArcaneInput", "ArcanePhysics2D", "ArcaneScene", "ArcaneSim"]
+  },
+  "thirdParty": { "public": [], "private": [] }
+}

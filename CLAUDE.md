@@ -83,7 +83,7 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   `NDEBUG` in Release; vulkan.hpp's dispatcher layout is NDEBUG-conditional
   and must match the NRI static lib.
 - **ABI bumps are cheap** during engine dev -- never weaken a design to avoid
-  a `kGamePluginABIVersion` bump (`Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp`).
+  a `kGamePluginABIVersion` bump (`Source/Runtime/ArcaneCore/src/Arcane/Core/AbiVersion.hpp`; history in `Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp`).
 - The 2D physics engine is **Manifold2D** (github.com/T3mps/Manifold2D),
   vendored at `ThirdParty/Manifold2D` (source-only sync: `include/`+`src/`;
   the vendored `premake5.lua` is THIS repo's consumer wrapper -- never
@@ -201,9 +201,14 @@ a CLI client to an in-host listener, designed with the cvar/console build.
 ## Engine-as-SDK
 
 External projects set `ARCANE_SDK` to this repo root and consume
-`build/arcane.lua` (see README). The include surface is each linked
-module's `$ARCANE_SDK/Source/<Type>/<Module>/src` + header-only ThirdParty;
-the import libs are
+`build/arcane.lua` (see README). A game declares its engine modules in
+`<sourceDir>/<Game>.arcmodule` (type `Game`, Runtime/Client deps only;
+absent = the default set, `ARC_GAME_DEFAULT_MODULES` in `build/modules.lua`)
+and `arcane_game_module` links/includes only that closure; a non-game
+consumer (Aphelyon's Server) uses `arcane_module_consumer { ... }` +
+`arcane_stage_modules { ... }`. The include
+surface is each linked module's `$ARCANE_SDK/Source/<Type>/<Module>/src` +
+its public header-only ThirdParty; the import libs are
 `$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/<Module>/<Module>.lib`. The
 editor's Build -> Rebuild Game Module spawns `arcbuild.exe` (below); it no
 longer resolves premake/msbuild itself (`Source/Programs/ArcaneEditor/src/Project/

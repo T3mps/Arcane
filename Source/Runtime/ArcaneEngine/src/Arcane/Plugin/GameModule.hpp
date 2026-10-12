@@ -39,11 +39,16 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>   // Process()/RegisterSystem reach SystemFactories()
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Core/ModuleApi.hpp>
 #include <Arcane/Plugin/GameComponents.hpp>
 #include <Arcane/Plugin/GameSystems.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>   // RoleMask / SystemPhase
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot: SceneRootEntity() + the Save/LoadState root id
+
+#if defined(ARC_MONOLITHIC)
+#include <Arcane/Core/ModuleAttach.hpp>
+#endif
 
 #include <Arcane/Ecs.hpp>   // the Arcane:: names (aliases) this header's declarations spell
 
@@ -57,7 +62,13 @@
 #include <type_traits>
 #include <vector>
 
-#if defined(_WIN32)
+// Modular layout: the eight GamePlugin_* entry points (and ArcGameModule_Get)
+// leave the game DLL. Monolithic layout (ARC_MONOLITHIC, the packaged exe):
+// the game is a static library linked into the host, so nothing is exported --
+// the host calls ArcGameModule_Get() as a linked symbol (Plugin/PluginHost.cpp).
+#if defined(ARC_MONOLITHIC)
+  #define ARC_GAME_MODULE_EXPORT
+#elif defined(_WIN32)
   #define ARC_GAME_MODULE_EXPORT __declspec(dllexport)
 #else
   #define ARC_GAME_MODULE_EXPORT __attribute__((visibility("default")))
@@ -311,10 +322,47 @@ namespace Arcane
 // The one-argument face: the module reports the SDK's own ABI version.
 #define ARC_GAME_MODULE(Type) ARC_GAME_MODULE_ABI(Type, ::Arcane::kGamePluginABIVersion)
 
+// ARC_MODULE supplies the anchor and attach callback for a resident static
+// game. A hot-reloadable DLL must emit only the anchor: Core keeps attach
+// callbacks for the process lifetime, beyond the game's unload. The game
+// pins its TypeContext in Init instead. Two levels expand ARC_MODULE_NAME.
+#define ARC_GAME_MODULE_ANCHOR_(Name) extern "C" ARC_GAME_MODULE_EXPORT void ArcModule_##Name() {}
+#define ARC_GAME_MODULE_ANCHOR(Name) ARC_GAME_MODULE_ANCHOR_(Name)
+#define ARC_GAME_MODULE_STATIC_(Name) ARC_MODULE(Name)
+#define ARC_GAME_MODULE_STATIC(Name) ARC_GAME_MODULE_STATIC_(Name)
+#if defined(ARC_MODULE_NAME)
+  #if defined(ARC_MONOLITHIC)
+    #define ARC_GAME_MODULE_DECLARATION_ ARC_GAME_MODULE_STATIC(ARC_MODULE_NAME)
+  #else
+    #define ARC_GAME_MODULE_DECLARATION_ ARC_GAME_MODULE_ANCHOR(ARC_MODULE_NAME)
+  #endif
+#else
+  #define ARC_GAME_MODULE_DECLARATION_
+#endif
+
+// Monolithic: engine and game build together, so the runtime ABI gate becomes a
+// compile-time one (HotReloadPluginBad, the one deliberate mismatch, is never
+// packaged).
+#if defined(ARC_MONOLITHIC)
+  #define ARC_GAME_MODULE_ABI_CHECK_(Abi)                                                          \
+      static_assert(static_cast<uint32_t>(Abi) == ::Arcane::kGamePluginABIVersion,                 \
+                    "ARC_GAME_MODULE: a monolithic game must report the SDK's ABI version");
+#else
+  #define ARC_GAME_MODULE_ABI_CHECK_(Abi)
+#endif
+
 // The two-argument form exists for ONE caller: the HotReloadPluginBad test
 // build, which must report a version the host's gate refuses. A real module
 // never passes anything but the SDK's constant.
+//
+// Besides the eight GamePlugin_* entry points it emits ArcGameModule_Get(): the
+// same eight as one Arcane::PluginVTable (the game table, s3.1). Modular hosts
+// resolve the GamePlugin_* exports by name (Plugin::Load); a monolithic host
+// adopts ArcGameModule_Get() (Plugin::FromStatic). Both layouts emit it so one
+// acquisition test covers both.
 #define ARC_GAME_MODULE_ABI(Type, Abi)                                                          \
+    ARC_GAME_MODULE_ABI_CHECK_(Abi)                                                               \
+    ARC_GAME_MODULE_DECLARATION_                                                                  \
     namespace { ::Arcane::GameModuleDetail::State arcane_game_module_state_; }                     \
     extern "C"                                                                                     \
     {                                                                                              \
@@ -336,4 +384,12 @@ namespace Arcane
         { arcane_game_module_state_.SaveState(w); }                                                \
         ARC_GAME_MODULE_EXPORT bool GamePlugin_LoadState(::Arcane::BinaryReader& r)             \
         { return arcane_game_module_state_.LoadState(r); }                                         \
+        ARC_GAME_MODULE_EXPORT const ::Arcane::PluginVTable* ArcGameModule_Get()                  \
+        {                                                                                         \
+            static const ::Arcane::PluginVTable table{                                            \
+                &GamePlugin_ABIVersion, &GamePlugin_Init, &GamePlugin_Shutdown,                   \
+                &GamePlugin_FixedUpdate, &GamePlugin_Update, &GamePlugin_SaveState,               \
+                &GamePlugin_LoadState, &GamePlugin_DrawUI };                                      \
+            return &table;                                                                        \
+        }                                                                                         \
     }

@@ -1,5 +1,7 @@
 #include "Project/ClassTemplates.hpp"
 
+#include <Arcane/Project/GameDescriptor.hpp>
+
 #include <cctype>
 #include <string_view>
 
@@ -355,5 +357,23 @@ namespace {{NS}}
                 break;
         }
         return r;
+    }
+
+    DescriptorFile RenderGameDescriptor(std::string_view moduleName)
+    {
+        return DescriptorFile{ Arcane::GameDescriptorFileName(moduleName),
+                               Arcane::RenderDefaultGameDescriptor(moduleName) };
+    }
+
+    std::string GameModuleNameFor(std::string_view gameModule, std::string_view projectName)
+    {
+        // The stem: strip any directory and the LAST extension (".dll" /
+        // ".so" / ".dylib" -- the manifest may name any of them).
+        std::string_view stem = gameModule;
+        if (const auto slash = stem.find_last_of("/\\"); slash != std::string_view::npos)
+            stem.remove_prefix(slash + 1);
+        if (const auto dot = stem.find_last_of('.'); dot != std::string_view::npos && dot != 0)
+            stem = stem.substr(0, dot);
+        return std::string(stem.empty() ? projectName : stem);
     }
 }

@@ -8,6 +8,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Platform/Process.hpp>   // Platform::QueryProcess -- EditorLock liveness off-Windows
 #include <Arcane/Project/ProjectPaths.hpp>   // PathsConfigFor, kDistBuild
+#include <Arcane/Project/GameDescriptor.hpp>   // Create writes the default game descriptor
 
 #include <Json.hpp>
 
@@ -582,6 +583,17 @@ namespace Arcane
                 ARC_WARN("Project::Create: failed writing '{}'", gitignorePath.generic_string());
                 return std::nullopt;
             }
+        }
+
+        // The game module's descriptor (engine modularization s4): the default
+        // engine-module set, named for the project, under Source/ (the default
+        // sourceDir). It changes nothing a build links -- a descriptor-less game
+        // gets the same set -- but a new project starts with the list in view.
+        if (!WriteDefaultGameDescriptorIfAbsent(dir / "Source", name))
+        {
+            ARC_WARN("Project::Create: failed writing '{}'",
+                     (dir / "Source" / GameDescriptorFileName(name)).generic_string());
+            return std::nullopt;
         }
 
         return Open(dir);

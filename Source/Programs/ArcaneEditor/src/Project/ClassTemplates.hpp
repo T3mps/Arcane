@@ -76,4 +76,22 @@ namespace Arcane::Editor::ClassTemplates
                                   std::string_view className,
                                   std::string_view projectName,
                                   SystemOptions options = {});
+
+    // ---- the game descriptor (engine modularization s4) -----------------------
+    // A C++ Class makes a project a code project, so the wizard also writes the
+    // game module's `<sourceDir>/<Module>.arcmodule` -- the engine modules the
+    // game links -- when the project has none yet. It is the DEFAULT set (what
+    // a descriptor-less game links anyway, Arcane/Project/GameDescriptor.hpp),
+    // so writing it changes no build; an existing descriptor is never touched.
+    struct DescriptorFile
+    {
+        std::string fileName;   // "<Module>.arcmodule"
+        std::string text;       // JSON, type Game, ends in a newline
+    };
+    [[nodiscard]] DescriptorFile RenderGameDescriptor(std::string_view moduleName);
+
+    // The game module's name: the manifest's gameModule stem
+    // ("ReferenceGame.dll" -> "ReferenceGame"), else the project name -- the
+    // name build/arcane.lua's arcane_game_module(<name>) looks the descriptor up by.
+    [[nodiscard]] std::string GameModuleNameFor(std::string_view gameModule, std::string_view projectName);
 }

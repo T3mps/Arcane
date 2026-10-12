@@ -471,6 +471,75 @@ function arc_module_consumer(mods, names, opts)
     if opts.stage ~= false then arc_module_stage(mods, type(opts.stage) == "table" and opts.stage or names) end
 end
 
+-- ============================================================================
+-- Games (engine modularization s4). A game names its engine modules in
+-- <sourceDir>/<name>.arcmodule (type Game); the SDK links and includes that
+-- closure and nothing else. A game WITHOUT a descriptor gets the default set:
+-- every Runtime + Client module (ArcaneClient's closure plus Net and Crypto),
+-- ImGui and ArcaneImGui -- exactly the pre-descriptor surface. The C++ twin of
+-- this list is Arcane::kDefaultGameModules (Arcane/Project/GameDescriptor.hpp),
+-- which the editor writes into a new project's descriptor; keep them equal.
+-- ============================================================================
+ARC_GAME_DEFAULT_MODULES = { "ArcaneClient", "ArcaneImGui", "ImGui", "ArcaneNet", "ArcaneCrypto" }
+
+-- Validate a game descriptor against the loaded engine graph and return the
+-- game's direct engine dependencies, or nil when `file` does not exist (the
+-- caller then uses ARC_GAME_DEFAULT_MODULES). Checks: the descriptor schema
+-- (load_one: strict keys, name == file stem), type Game, every dependency a
+-- known module, the s2.3 type rule (Game -> Runtime/Client only -- no Developer
+-- or Editor module ever reaches a game), and -- when `sourceRoot` is given --
+-- the declaration check's game form: exactly one ARC_GAME_MODULE /
+-- ARC_GAME_MODULE_ABI in the game's .cpp files (the macro emits the
+-- ArcModule_<Name> anchor). A game is a leaf, so it adds no cycle.
+function arc_game_descriptor(mods, file, sourceRoot)
+    if not os.isfile(file) then return nil end
+    local mod = load_one(file)
+    if mod.type ~= "Game" then
+        fail("type-rule", file .. ": a game descriptor must have type Game, not " .. tostring(mod.type))
+    end
+    local names, seen = {}, {}
+    for _, visibility in ipairs({"public", "private"}) do
+        for _, dep in ipairs(mod.dependencies[visibility]) do
+            local target = mods.byName[dep]
+            if not target then fail("schema", file .. ": unknown dependency " .. dep) end
+            if not allowed_edges.Game[target.type] then
+                fail("type-rule", mod.name .. " (Game) -> " .. dep .. " (" .. target.type .. ") in " .. file)
+            end
+            if not seen[dep] then seen[dep] = true; names[#names+1] = dep end
+        end
+    end
+    if sourceRoot then
+        local count = 0
+        for _, cpp in ipairs(os.matchfiles(path.join(sourceRoot, "**.cpp"))) do
+            local source = (io.readfile(cpp) or ""):gsub("/%*.-%*/", " "):gsub("//[^\r\n]*", "")
+            for _ in source:gmatch("ARC_GAME_MODULE_ABI%s*%(") do count = count + 1 end
+            for _ in source:gmatch("ARC_GAME_MODULE%s*%(") do count = count + 1 end
+        end
+        if count ~= 1 then
+            fail("declaration", file .. ": expected exactly one ARC_GAME_MODULE in " .. sourceRoot .. ", found " .. count)
+        end
+    end
+    mod.modules = names
+    mod.thirdPartyIncludes = {}
+    for _, visibility in ipairs({"public", "private"}) do
+        for _, vendor in ipairs(mod.thirdParty[visibility]) do
+            mod.thirdPartyIncludes[#mod.thirdPartyIncludes+1] = ARC_THIRDPARTY[vendor].include
+        end
+    end
+    return mod
+end
+
+-- Does the closure of `names` contain module `wanted`?
+function arc_closure_contains(mods, names, wanted)
+    for _, name in ipairs(names) do
+        if name == wanted then return true end
+        for _, dep in ipairs(arc_module_closure(mods, name, "all")) do
+            if dep == wanted then return true end
+        end
+    end
+    return false
+end
+
 function arc_module_forced_refs(names)
     local options = {}
     for _, name in ipairs(names) do

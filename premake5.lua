@@ -293,10 +293,10 @@ workspace "Arcane"
         "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule",
         "ThirdParty/SDL3/SDL3.arcmodule",
     }
-    -- The set a game module links until P4 makes it descriptor-driven (mirrors
-    -- build/arcane.lua): every Runtime + Client module (ArcaneClient's closure
-    -- plus Crypto) and ImGui + ArcaneImGui.
-    ARC_GAME_DEFAULT_MODULES = { "ArcaneClient", "ArcaneImGui", "ImGui", "ArcaneNet", "ArcaneCrypto" }
+    -- ARC_GAME_DEFAULT_MODULES (a descriptor-less game's set) and the game
+    -- descriptor reader (arc_game_descriptor) live in build/modules.lua, shared
+    -- with build/arcane.lua; the game-type fixtures below read their own
+    -- .arcmodule through it (game_fixture_modules).
 
 -- Vendor static libraries share the "ThirdParty" folder with the vendor modules.
 group "ThirdParty"
@@ -1931,6 +1931,22 @@ project "ArcaneTests"
 -- same id, uncached). The post-build check turns any TLV that remains into a
 -- build error naming its symbols, rather than a module that silently never
 -- leaves. Call inside a project, with no filter active.
+-- A game-type fixture's engine surface, from its .arcmodule descriptor through
+-- the SAME reader build/arcane.lua uses for a real game (engine modularization
+-- s4): link + include only the descriptor's closure, ARC_GAME_HAS_IMGUI and the
+-- ImGui import decoration only when ImGui is in it. Call inside a project.
+local function game_fixture_modules(descriptor, sourceRoot)
+    local game = arc_game_descriptor(engine_modules, path.join(_MAIN_SCRIPT_DIR, descriptor), path.join(_MAIN_SCRIPT_DIR, sourceRoot))
+    if not game then error("[arcmodule] schema: missing game descriptor " .. descriptor, 0) end
+    arc_module_consumer(engine_modules, game.modules, { stage = false })   -- loaded by a host that carries the modules
+    for _, include in ipairs(game.thirdPartyIncludes) do includedirs { "%{wks.location}/" .. include } end
+    if arc_closure_contains(engine_modules, game.modules, "ImGui") then
+        -- IMGUI_API=dllimport: adopt ImGui.dll's single GImGui, exactly as
+        -- arcane.lua does for a real module.
+        defines { "ARC_GAME_HAS_IMGUI", "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
+    end
+end
+
 local function macos_unloadable_module()
     filter "system:macosx"
         defines { "SPDLOG_NO_TLS" }
@@ -1944,7 +1960,8 @@ end
 local function test_plugin(name, defs)
     group "Tests/Fixtures"
     project(name)
-        arc_module_consumer(engine_modules, ARC_GAME_DEFAULT_MODULES, { stage = false })   -- loaded by a host that carries the modules
+        -- One descriptor for the four builds of the one source.
+        game_fixture_modules("Tests/Fixtures/HotReloadPlugin/HotReloadPlugin.arcmodule", "Tests/Fixtures/HotReloadPlugin")
         location "Tests/Fixtures/HotReloadPlugin"
         kind "SharedLib"
         language "C++"
@@ -1975,21 +1992,9 @@ local function test_plugin(name, defs)
         targetdir ("bin/" .. outputdir .. "/" .. name)
         objdir ("bin-int/" .. outputdir .. "/" .. name)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/HotReloadShared.hpp" }
-        -- The include surface a game module gets from build/arcane.lua, minus the
-        -- project's own Source/: GameModule.hpp pulls Log.hpp (spdlog) and imgui.h
-        -- (the ABI v2 handoff) on top of what Runtime.hpp already needed.
-        includedirs {
-            "%{IncludeDir.glm}",
-            "%{IncludeDir.Astra}",
-            "%{IncludeDir.enkiTS}",
-            "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)
-            "%{IncludeDir.imgui}",
-            "%{IncludeDir.spdlog}",
-        }
-        -- IMGUI_API=dllimport: adopt ArcaneClient.dll's single GImGui, exactly as
-        -- arcane.lua does for a real module.
+        -- The include surface is the descriptor closure's (game_fixture_modules
+        -- above), exactly what build/arcane.lua gives a game module.
         defines (defs)
-        defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "ARC_GAME_HAS_IMGUI" }
         filter "system:windows"
             systemversion "latest"
             buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }   -- /utf-8: spdlog/fmt via Log.hpp, as arcane.lua sets
@@ -2016,7 +2021,8 @@ test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_
 -- ============================================================================
 group "Tests/Fixtures"
 project "ReferenceGameUnderTest"
-    arc_module_consumer(engine_modules, ARC_GAME_DEFAULT_MODULES, { stage = false })   -- loaded by a host that carries the modules
+    -- ReferenceProject's OWN descriptor: the fixture links what the real game links.
+    game_fixture_modules("ReferenceProject/Source/Game/ReferenceGame.arcmodule", "ReferenceProject/Source/Game")
     location "Tests/Fixtures/ReferenceGameUnderTest"   -- the project file only: it compiles ReferenceProject/Source/Game in place
     kind "SharedLib"
     language "C++"
@@ -2040,20 +2046,8 @@ project "ReferenceGameUnderTest"
         "%{wks.location}/ReferenceProject/Source/Game/**.cpp",
         "%{wks.location}/ReferenceProject/Source/Game/**.hpp",
     }
-    includedirs {
-        "%{wks.location}/ReferenceProject/Source/Game",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-        "%{IncludeDir.nlohmann}",
-    }
+    includedirs { "%{wks.location}/ReferenceProject/Source/Game" }   -- engine + vendor roots: the descriptor closure
     defines {
-        "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
-        "ARC_GAME_HAS_IMGUI",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }
@@ -2080,7 +2074,7 @@ project "ReferenceGameUnderTest"
 -- ============================================================================
 group "Tests/Fixtures"
 project "TemplateSmokePlugin"
-    arc_module_consumer(engine_modules, ARC_GAME_DEFAULT_MODULES, { stage = false })   -- loaded by a host that carries the modules
+    game_fixture_modules("Tests/Fixtures/TemplateSmokePlugin/TemplateSmokePlugin.arcmodule", "Tests/Fixtures/TemplateSmokePlugin")
     location "Tests/Fixtures/TemplateSmokePlugin"
     kind "SharedLib"
     language "C++"
@@ -2104,20 +2098,8 @@ project "TemplateSmokePlugin"
         "%{prj.location}/**.cpp",
         "%{prj.location}/**.hpp",
     }
-    includedirs {
-        "%{prj.location}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-        "%{IncludeDir.nlohmann}",
-    }
+    includedirs { "%{prj.location}" }   -- engine + vendor roots: the descriptor closure
     defines {
-        "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
-        "ARC_GAME_HAS_IMGUI",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }

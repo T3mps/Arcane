@@ -181,6 +181,7 @@ structs are part of the same system. Design (implemented):
 A game module subclasses `Arcane::GameModule` and exports its entry
 points with `ARC_GAME_MODULE`. The host checks `kGamePluginABIVersion`
 and refuses a mismatch. The current version lives in
+[`AbiVersion.hpp`](Source/Runtime/ArcaneCore/src/Arcane/Core/AbiVersion.hpp); its history is in
 [`PluginABI.hpp`](Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp). Bumping it
 is normal during engine development.
 
@@ -561,6 +562,39 @@ or `MyGame.dylib`. The manifest may still say `MyGame.dll`.
 
 `ReferenceProject/premake5.lua` is the worked example. Inside this repo
 it locates the SDK itself when `ARCANE_SDK` is unset.
+
+### Declare the engine modules the game uses
+
+`<sourceDir>/MyGame.arcmodule` names the engine modules the game links.
+The SDK links and includes their closure and nothing else, so including
+a header from an undeclared module is a missing-header error.
+`ReferenceProject/Source/Game/ReferenceGame.arcmodule`:
+
+```json
+{
+  "name": "ReferenceGame",
+  "type": "Game",
+  "dependencies": {
+    "public": [],
+    "private": ["ArcaneClient", "ArcaneCore", "ArcaneEngine", "ArcaneInput",
+                "ArcanePhysics2D", "ArcaneScene", "ArcaneSim"]
+  },
+  "thirdParty": { "public": [], "private": [] }
+}
+```
+
+`name` must equal the file stem and the `arcane_game_module` name. A game
+may depend on Runtime and Client modules only. `ImGui` and `ArcaneImGui`
+are modules too: list `ArcaneImGui` to draw from `OnDrawUI` (the macro
+adopts the host's ImGui context only when ImGui is in the closure).
+Without a descriptor a game gets every Runtime and Client module plus
+`ImGui` and `ArcaneImGui`. A new project and the editor's
+Create -> C++ Class write that default descriptor when none exists.
+
+A non-game consumer, such as a server executable, calls
+`arcane_module_consumer { "ArcaneCore", "ArcaneNet" }` inside its own
+`project` block and `arcane_stage_modules { ... }` to copy the module
+DLLs beside an executable.
 
 ### A module, a component, a system
 

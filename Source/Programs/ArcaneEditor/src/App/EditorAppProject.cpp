@@ -3131,6 +3131,26 @@ namespace Arcane::Editor
             return {};
         }
 
+        // The game descriptor (engine modularization s4): a project that has
+        // none yet gets the DEFAULT one beside its sources -- the set a
+        // descriptor-less game links anyway, so no build changes. An existing
+        // descriptor is the project's own module list: left exactly as it is.
+        {
+            const ClassTemplates::DescriptorFile descriptor = ClassTemplates::RenderGameDescriptor(
+                ClassTemplates::GameModuleNameFor(proj->Manifest().gameModule, proj->Manifest().name));
+            const std::filesystem::path descriptorPath =
+                proj->Root() / proj->Manifest().sourceDir / descriptor.fileName;
+            if (!std::filesystem::exists(descriptorPath, ec))
+            {
+                if (write(descriptorPath, descriptor.text))
+                    ARC_INFO("Create: wrote the game descriptor {} (the default engine-module set)",
+                             descriptorPath.generic_string());
+                else
+                    ARC_WARN("Create: could not write the game descriptor '{}' -- the module builds "
+                             "with the default set regardless", descriptorPath.generic_string());
+            }
+        }
+
         // Register both under source:// (Project::RegisterAsset lists the
         // source root; AssetRegistry's path-derived-guid rule mints no
         // sidecar) so the rows appear without a reopen.

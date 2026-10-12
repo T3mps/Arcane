@@ -32,6 +32,13 @@
 #include <utility>
 #include <vector>
 
+#if defined(ARC_MONOLITHIC)
+// The game linked into this executable (ARC_GAME_MODULE, Plugin/GameModule.hpp).
+// Declared ONLY in the monolithic layout: the modular engine never references
+// it -- a modular host resolves the GamePlugin_* exports from the game DLL.
+extern "C" const ::Arcane::PluginVTable* ArcGameModule_Get();
+#endif
+
 namespace Arcane
 {
     namespace
@@ -424,8 +431,9 @@ namespace Arcane
         bool InitImage(Plugin& p)
         {
             const CVarModuleScope scope(p.CVarModule());   // OnInit's AddCallback/RegisterCommand belong to the module
-            const Module::ImageSpan image = p.LoadedModule().Image();
-            if (!image.base)
+            // The image base, or a static game's table address (Plugin::FactoryOwner).
+            const void* const owner = p.FactoryOwner();
+            if (!owner)
             {
                 ARC_ERROR("plugin: '{}' reports no image range -- system-factory registration is "
                           "refused for it (the owner key is the image base, Arcane/Plugin/"
@@ -433,7 +441,7 @@ namespace Arcane
                           p.LoadedModule().Path().generic_string());
                 return p.VTable().Init(&ctx);
             }
-            process.SystemFactories().BeginOwner(image.base);
+            process.SystemFactories().BeginOwner(owner);
             const bool ok = p.VTable().Init(&ctx);
             process.SystemFactories().EndOwner();
             return ok;
@@ -551,7 +559,7 @@ namespace Arcane
             // behind a range the purge needs would leave a dangling callable whenever
             // Image() reports a base but no usable size. (A null base opened no
             // bracket, so this is then a no-op on an empty owner.)
-            process.SystemFactories().ClearOwner(image.base);
+            process.SystemFactories().ClearOwner(img.plugin->FactoryOwner());   // == image.base for a loaded image
             // Component descriptors need the RANGE, not just the base -- hence the
             // separate guard. Every attached world's registry is swept: they SHARE the
             // primary's ComponentRegistry (Runtime's three-argument ctor), so this is
@@ -597,7 +605,7 @@ namespace Arcane
                 // GameModule::RegisterSystem path, so they get the same
                 // before-the-unmap clear the primary does in TeardownImage -- and,
                 // for the same reason, keyed on `base` alone, outside the range guard.
-                process.SystemFactories().ClearOwner(image.base);
+                process.SystemFactories().ClearOwner(img.plugin->FactoryOwner());   // == image.base for a loaded image
                 if (image.size != 0)
                 {
                     for (Runtime* rt : runtimes)
@@ -1056,6 +1064,35 @@ namespace Arcane
 
         const std::string name = m_impl->source.stem().string();
 
+#if defined(ARC_MONOLITHIC)
+        // STATIC MODE (engine modularization s3.1/s3.2): the game is linked into
+        // this executable. No copy, no Module::Load, no ABI probe (ARC_GAME_MODULE's
+        // static_assert pinned it), no hot reload -- adopt ArcGameModule_Get()'s
+        // table and run the same Init/instantiate sequence as a loaded image.
+        {
+            PluginImage img;
+            img.plugin = Plugin::FromStatic(*ArcGameModule_Get(), name);
+            m_impl->LayerModuleCVars(*img.plugin);
+            m_impl->RefreshContext();
+            if (!m_impl->InitImage(*img.plugin))
+            {
+                m_impl->TeardownImage(img, false);
+                ARC_ERROR("plugin: initial load failed (static game module '{}')", name);
+                return false;
+            }
+            m_impl->current = std::move(img);
+            m_impl->gen = 1;
+            Diagnostics::Clear("plugin:" + name);
+            ARC_INFO("plugin: static game module '{}' adopted", name);
+            if (!m_impl->LoadInitPlugins())
+            {
+                Unload();
+                return false;
+            }
+            m_impl->InstantiateAll();
+            return true;
+        }
+#else
         const std::uint32_t g = m_impl->gen + 1;
         PluginImage img;
         bool copied = false;
@@ -1113,6 +1150,7 @@ namespace Arcane
         // its Init: give each attached world the systems its NetMode matches (spec s4).
         m_impl->InstantiateAll();
         return true;
+#endif
     }
 
     void PluginHost::Unload()
@@ -1155,6 +1193,13 @@ namespace Arcane
 
     bool PluginHost::Reload(bool restoreState)
     {
+#if defined(ARC_MONOLITHIC)
+        // Static mode: the game is linked in; there is nothing to reload. A
+        // no-op SUCCESS, the same answer a plugins-only host gives below (every
+        // caller -- RuntimeFrame's reload keys, Poll -- ignores or tolerates it).
+        (void)restoreState;
+        return true;
+#else
         // See UiContextGuard's comment (Load() above).
         const UiContextGuard uiGuard(m_impl->PrimaryHooks());
 
@@ -1182,10 +1227,14 @@ namespace Arcane
         // they brought back.
         m_impl->InstantiateAll();
         return ok;
+#endif
     }
 
     void PluginHost::Poll()
     {
+#if defined(ARC_MONOLITHIC)
+        // Static mode: no file to watch, Generation() never moves.
+#else
         if (m_impl->source.empty())
             return;   // no primary to watch (plugins-only host); secondaries don't hot-reload
 
@@ -1211,6 +1260,7 @@ namespace Arcane
             m_impl->pending = false;
             Reload(true);
         }
+#endif
     }
 
     void PluginHost::FixedUpdateAll(double dt)

@@ -85,6 +85,15 @@ namespace Arcane
         m_cvars = CVarOwner(std::move(cvarModule), image.base, image.size);
     }
 
+    Plugin Plugin::FromStatic(const PluginVTable& table, std::string cvarModule)
+    {
+        // Module{} is the empty handle: Image() reports {}, so the ctor's
+        // CVarOwner falls back to name-only ownership (UnregisterModule).
+        Plugin plugin(Module{}, table, std::move(cvarModule));
+        plugin.m_staticTable = &table;
+        return plugin;
+    }
+
     std::optional<Plugin> Plugin::Load(std::filesystem::path path)
     {
         return Load(std::move(path), nullptr);

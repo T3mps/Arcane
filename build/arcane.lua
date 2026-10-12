@@ -1,5 +1,6 @@
 -- ============================================================================
--- arcane.lua -- the Arcane SDK premake module (engine-as-SDK, Slice 5).
+-- arcane.lua -- the Arcane SDK premake module (engine-as-SDK, Slice 5; the
+-- module contract is engine modularization s4, 2026-10-11).
 --
 -- An EXTERNAL project (one built OUTSIDE the Arcane.slnx workspace) consumes the
 -- engine through this file. The "SDK" is the engine's own build output consumed
@@ -8,23 +9,42 @@
 --
 --   ARCANE_SDK  ->  the Arcane engine repo root (e.g. D:\dev\starworks\Arcane)
 --                   include surface = every linked module's $ARCANE_SDK/Source/<Type>/<Module>/src
---                                      (+ ThirdParty header-only), read from the .arcmodule descriptors
+--                                      (+ its public ThirdParty headers), read from the .arcmodule descriptors
 --                   import libs      = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/<Module>/<Module>.lib
 --                   module DLLs      ship beside the host exe (the host stages them)
 --
--- Usage from a project's premake5.lua:
+-- Three entry points:
+--
+--   arcane_game_module("MyGame")   -- declares the game module (-> Binaries/MyGame.dll).
+--       Reads the source directory (Source/ by default, or the manifest's
+--       "sourceDir", e.g. Source/Game) from the one .arcproj beside this
+--       premake5.lua, and the game's engine modules from the descriptor
+--       <sourceDir>/MyGame.arcmodule (type Game; dependencies Runtime/Client
+--       modules only). Only that descriptor's module CLOSURE is linked and
+--       on the include path; a header of an undeclared module is a missing
+--       header. No descriptor = the default set (ARC_GAME_DEFAULT_MODULES in
+--       modules.lua: every Runtime + Client module, ImGui, ArcaneImGui).
+--
+--   arcane_module_consumer { "ArcaneCore", "ArcaneNet", ... }
+--       -- inside any `project` block: a NON-game consumer (a server exe, a
+--       static lib, a test exe) links those modules' closure on /MD with the
+--       engine's flavor contract. See its block below.
+--
+--   arcane_stage_modules { ... }   -- inside an exe's `project` block: postbuild
+--       copy of those modules' DLL closure beside the exe.
+--
+-- Usage from a game project's premake5.lua:
 --   workspace "MyGame"
 --       architecture "x64"
 --       configurations { "Debug", "Release", "Dist" }
 --   include(os.getenv("ARCANE_SDK") .. "/build/arcane.lua")
---   arcane_game_module("MyGame")   -- declares the SharedLib game module (-> Binaries/MyGame.dll)
---   (arcane_game_module reads the game module's source directory -- Source/ by default, or the manifest's "sourceDir" e.g. Source/Game -- from the one .arcproj beside this premake5.lua)
+--   arcane_game_module("MyGame")
 --
 -- The module implements the extern-C plugin ABI (Arcane/Plugin/PluginABI.hpp --
--- see kGamePluginABIVersion there); the host's ABI gate refuses a cross-build
--- mismatch. The include + link + define set below is the proven minimal
--- game-module recipe (ReferenceProject is the in-repo consumer; Aphelyon the
--- external one) so an external build matches an in-tree one.
+-- see kGamePluginABIVersion in Arcane/Core/AbiVersion.hpp); the host's ABI
+-- gate refuses a cross-build mismatch. ReferenceProject is the in-repo
+-- consumer; Aphelyon the external one -- so an external build matches an
+-- in-tree one.
 -- ============================================================================
 
 -- A consumer may pre-set the ARCANE_SDK global before including this file
@@ -48,7 +68,7 @@ local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps
 -- the SAME rule as the engine's premake5.lua (arcane_mac_architecture), so a
 -- game module always links the engine flavor ARCANE_BIN below names. A
 -- consumer workspace keeps its `architecture "x64"`; arcane_game_module and
--- arcane_core_consumer override it per project on a Mac target only.
+-- arcane_module_consumer override it per project on a Mac target only.
 function arcane_sdk_mac_architecture()
     local want = os.getenv("ARCANE_MAC_ARCH")
     if not want or want == "" then
@@ -123,11 +143,25 @@ end
 -- Call AFTER declaring the workspace + configurations. Builds -> Binaries/<name>.dll.
 function arcane_game_module(name)
     local sourceDir = arcane_module_source_dir()
+    -- The game's engine modules (engine modularization s4): its descriptor,
+    -- validated against the SDK's module graph (schema, type Game, the type
+    -- rule, one ARC_GAME_MODULE in the sources), else the default set.
+    local sourceRoot = _MAIN_SCRIPT_DIR .. "/" .. sourceDir
+    local descriptor = arc_game_descriptor(ARCANE_MODULES, sourceRoot .. "/" .. name .. ".arcmodule", sourceRoot)
+    local modules    = descriptor and descriptor.modules or ARC_GAME_DEFAULT_MODULES
+    local hasImGui   = arc_closure_contains(ARCANE_MODULES, modules, "ImGui")
+    -- Monolithic (a packaged exe): the game is a static library the package
+    -- links (engine modularization s3.3). Not wired until P5 -- refused here,
+    -- as modules.lua refuses the engine's own monolithic layout.
+    local monolithic = _OPTIONS and _OPTIONS.layout == "monolithic"
+    if monolithic then
+        error("[arcmodule] layout: monolithic is not wired until P5", 0)
+    end
     project(name)
-        kind "SharedLib"
+        kind(monolithic and "StaticLib" or "SharedLib")
         language "C++"
         cppdialect "C++23"
-        staticruntime "off"                         -- /MD: share one CRT heap with ArcaneClient.dll
+        staticruntime "off"                         -- /MD: share one CRT heap with the engine module DLLs
 
         -- C4251 ("needs to have dll-interface"): disabled for every consumer, the
         -- same ruling the engine workspace makes for itself (premake5.lua, the
@@ -237,41 +271,41 @@ function arcane_game_module(name)
 
         files { "%{wks.location}/" .. sourceDir .. "/**.cpp", "%{wks.location}/" .. sourceDir .. "/**.hpp" }
 
-        -- Public engine header surface (in-place) + the header-only ThirdParty deps a
-        -- game module pulls in transitively (glm/Astra scene types, imgui handoff,
-        -- spdlog via Log.hpp, the Mosaic threading seam, Manifold2D through
-        -- PhysicsComponents.hpp, and Json.hpp through InputActionAsset.hpp).
-        includedirs {
-            "%{wks.location}/" .. sourceDir,
-            -- The engine module include roots come from arc_module_consumer below.
-            ARCANE_TP .. "/glm",
-            ARCANE_TP .. "/Astra/include",
-            ARCANE_TP .. "/enkiTS/src",
-            ARCANE_TP .. "/Manifold2D/include",
-            ARCANE_TP .. "/imgui",
-            ARCANE_TP .. "/spdlog/include",
-            ARCANE_TP .. "/Mosaic/include",
-            ARCANE_TP .. "/nlohmann",
-        }
+        -- The game's own sources. Every engine include root and vendor header
+        -- root comes from the module closure below -- nothing else.
+        includedirs { "%{wks.location}/" .. sourceDir }
 
-        -- Link the engine module import libs by name out of the per-config SDK bin
-        -- dirs (none is a project in this workspace, so premake resolves them
-        -- against libdirs) + each module's include root. Until P4 makes this
-        -- descriptor-driven: the DEFAULT set -- every Runtime + Client module
-        -- (ArcaneClient's closure + Crypto), ImGui (the vendor DLL that exports
-        -- imgui itself) and ArcaneImGui. Not staged: the host carries the DLLs.
-        arc_module_consumer(ARCANE_MODULES, { "ArcaneClient", "ArcaneImGui", "ImGui", "ArcaneNet", "ArcaneCrypto" }, { stage = false })
+        -- Link + include ONLY the closure of the game's modules: each module's
+        -- import lib out of the per-config SDK bin dirs (none is a project in
+        -- this workspace, so premake resolves them against libdirs), its include
+        -- root, and its public ThirdParty headers (glm/Astra/spdlog/Mosaic via
+        -- ArcaneCore, Manifold2D via ArcanePhysics2D, ...). Not staged: the host
+        -- carries the DLLs.
+        arc_module_consumer(ARCANE_MODULES, modules, { stage = false })
+        -- A descriptor's own thirdParty entries: header roots only (a game
+        -- links no vendor library of its own through the SDK).
+        if descriptor then
+            for _, include in ipairs(descriptor.thirdPartyIncludes) do
+                includedirs { ARCANE_SDK .. "/" .. include }
+            end
+        end
 
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARC_GAME_MODULE needs no define
-            "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3)
-            "ARC_GAME_HAS_IMGUI",
-            -- adopt ImGui.dll's single GImGui. __declspec is PE/COFF-only;
-            -- ELF and Mach-O have no import decoration (default visibility exports it).
-            "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
+            "ARC_MODULE_NAME=" .. name,               -- the cvar module (settings spec s4.3) and the ArcModule_<name> anchor
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         }
+        if hasImGui then
+            defines {
+                -- GameModule.hpp adopts the host's ImGui context + allocators
+                -- and calls OnDrawUI only when ImGui is in the game's closure.
+                "ARC_GAME_HAS_IMGUI",
+                -- adopt ImGui.dll's single GImGui. __declspec is PE/COFF-only;
+                -- ELF and Mach-O have no import decoration (default visibility exports it).
+                "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
+            }
+        end
 
         filter "system:windows"
             systemversion "latest"
@@ -303,7 +337,7 @@ function arcane_game_module(name)
         filter { "system:windows", "toolset:gcc or toolset:clang", "architecture:x86_64" }
             buildoptions { "-mavx2", "-mfma" }
 
-        -- Per-config: runtime + NDEBUG must match ArcaneClient.dll's flavor (the vulkan.hpp
+        -- Per-config: runtime + NDEBUG must match the engine DLLs' flavor (the vulkan.hpp
         -- dispatcher layout + inline header layouts are NDEBUG-conditional).
         filter "configurations:Debug"
             defines { "ARC_BUILD_DEBUG" }
@@ -323,42 +357,44 @@ function arcane_game_module(name)
 end
 
 -- ============================================================================
--- Core-only consumers (Core-DLL split, spec docs/specs/2026-09-15-core-dll-split-
--- design.md s1.2 / s8, Plan 3). An external exe or static lib that needs the
--- headless engine -- Cli, Guid, Base/Log, Project, ... -- and NOTHING from the
--- presentation DLL links ArcaneCore.dll alone. Aphelyon's three services,
--- their Common lib and their test exes are the consumers; the recipe is lifted
--- from the engine's own ArcaneServer block in premake5.lua (the proven
--- Core-only host).
+-- Non-game consumers (engine modularization s4; the recipe began as the
+-- Core-DLL split's Core-only consumer, spec docs/specs/2026-09-15-core-dll-
+-- split-design.md s1.2 / s8, Plan 3). An external exe or static lib that links
+-- engine modules WITHOUT being a game -- Aphelyon's services, their Common lib
+-- and their test exes -- names the modules it uses:
 --
--- arcane_core_consumer() configures the CURRENT project: call it INSIDE a
--- `project` block, in place of `staticruntime`. It composes into whatever
--- shape the project has (ConsoleApp, StaticLib, a factory function) rather
--- than declaring one, because Core consumers do not share a shape the way
--- game modules do. It adds:
---   * staticruntime "off" -- /MD, one CRT heap across the DLL boundary (the
---     whole reason a consumer links a DLL instead of compiling Core from
---     source: objects allocated in ArcaneCore.dll are freed by the caller);
---   * the Core include root + the SDK-PRIVATE header-only deps a Core header
---     closure can reach (glm, Astra, enkiTS, Manifold2D, Mosaic). spdlog and
---     nlohmann are deliberately NOT added: a consumer vendors its own copies
---     (Aphelyon does, at the engine's versions), and two copies of a
---     header-only library on one include path is a version split waiting to
---     happen -- a consumer without them gets a clear missing-header error;
---   * the import lib + libdir;
---   * the engine's flavor contract, the same lines arcane_game_module
---     carries: /utf-8, /arch:AVX2 (ArcaneCore.dll is built AVX2 workspace-wide,
---     so the process already requires it -- matching keeps inline header
---     codegen identical across the boundary), and per-config runtime +
---     ARC_BUILD_DEBUG / ARC_BUILD_RELEASE+NDEBUG / ARC_BUILD_DIST+NDEBUG so inline
---     header layouts under #ifndef NDEBUG agree with the DLL's.
+--   arcane_module_consumer { "ArcaneCore", "ArcaneNet", "ArcaneCrypto" }
+--
+-- It configures the CURRENT project: call it INSIDE a `project` block, in place
+-- of `staticruntime`. It composes into whatever shape the project has
+-- (ConsoleApp, StaticLib, a factory function) rather than declaring one,
+-- because consumers do not share a shape the way game modules do. It adds:
+--   * staticruntime "off" -- /MD, one CRT heap across the DLL boundary (objects
+--     allocated in a module DLL are freed by the caller);
+--   * the closure of `names`: each module's include root + import lib + libdir,
+--     plus the SDK-PRIVATE header-only deps a module header closure can reach
+--     (glm, Astra, enkiTS, Manifold2D, Mosaic). spdlog and nlohmann are
+--     deliberately NOT added: a consumer vendors its own copies (Aphelyon does,
+--     at the engine's versions), and two copies of a header-only library on one
+--     include path is a version split waiting to happen -- a consumer without
+--     them gets a clear missing-header error;
+--   * ARC_MODULE_NAME=<project> (the cvar module its ARC_CVAR declarations name);
+--   * the engine's flavor contract, the same lines arcane_game_module carries:
+--     /utf-8, /arch:AVX2 (the module DLLs are built AVX2 workspace-wide, so the
+--     process already requires it -- matching keeps inline header codegen
+--     identical across the boundary), and per-config runtime + ARC_BUILD_DEBUG /
+--     ARC_BUILD_RELEASE+NDEBUG / ARC_BUILD_DIST+NDEBUG so inline header layouts
+--     under #ifndef NDEBUG agree with the DLLs'.
 -- It ends with `filter {}` so the caller's following lines are unfiltered.
 --
--- arcane_core_stage_dll() adds the postbuild copy of ArcaneCore.dll beside an
--- exe's output (the dev bin layout; ArcaneRuntime's own postbuild is the
--- template). StaticLib consumers do not call it.
+-- arcane_stage_modules(names) adds the postbuild copy of those modules' DLL
+-- closure beside an exe's output (the dev bin layout). StaticLib consumers do
+-- not call it.
 -- ============================================================================
-function arcane_core_consumer()
+function arcane_module_consumer(names)
+    if type(names) ~= "table" or #names == 0 then
+        error("arcane_module_consumer: pass the module names, e.g. arcane_module_consumer { \"ArcaneCore\" }", 2)
+    end
     staticruntime "off"
     filter "system:macosx"
         architecture(arcane_sdk_mac_architecture())
@@ -368,7 +404,7 @@ function arcane_core_consumer()
     -- same ruling the engine workspace makes for itself (premake5.lua, the
     -- workspace-level disablewarnings). The warning guards against a
     -- DLL/client CRT-layout mismatch; this helper's contract -- /MD, one
-    -- toolset, one heap shared with ArcaneCore.dll -- makes that mismatch
+    -- toolset, one heap shared with the module DLLs -- makes that mismatch
     -- structurally impossible, and the host's CRT-flavor gate refuses a
     -- module that breaks it at load. Every exported engine class that holds
     -- an STL member would otherwise warn at every consumer call site.
@@ -391,8 +427,8 @@ function arcane_core_consumer()
     defines { "ARC_MODULE_NAME=%{prj.name}" }
 
     -- Module roots + import libs only: vendors = false keeps spdlog/nlohmann off
-    -- the include path (see above); arcane_core_stage_dll() does the staging.
-    arc_module_consumer(ARCANE_MODULES, { "ArcaneCore", "ArcaneNet", "ArcaneCrypto" }, { stage = false, vendors = false })
+    -- the include path (see above); arcane_stage_modules() does the staging.
+    arc_module_consumer(ARCANE_MODULES, names, { stage = false, vendors = false })
 
     -- Same toolset scoping as arcane_game_module: MSVC flags only reach the
     -- MSVC compiler; a GCC/Clang toolset (gmake on Windows) gets the -m
@@ -416,6 +452,9 @@ function arcane_core_consumer()
     filter {}
 end
 
-function arcane_core_stage_dll()
-    arc_module_stage(ARCANE_MODULES, { "ArcaneCore", "ArcaneNet", "ArcaneCrypto" })
+function arcane_stage_modules(names)
+    if type(names) ~= "table" or #names == 0 then
+        error("arcane_stage_modules: pass the module names, e.g. arcane_stage_modules { \"ArcaneCore\" }", 2)
+    end
+    arc_module_stage(ARCANE_MODULES, names)
 end

@@ -1169,6 +1169,13 @@ namespace Arcane
     //     its next engine sync). Main already consumed v52 through v57
     //     (settings, physics events, namespace facades, the flat API), so
     //     this layout change is v58.
+    // v59 (2026-10-11, engine modularization P4 -- the game contract): the
+    //     ARC_GAME_MODULE macro also emits ArcGameModule_Get() (the eight entry
+    //     points as one PluginVTable, the monolithic layout's acquisition path)
+    //     and the ArcModule_<Name> declaration anchor; Plugin gained a static
+    //     (image-less) form -- layout. A game links only its .arcmodule
+    //     descriptor's closure. ReferenceProject.arcproj and the arcbuild
+    //     fixture restamped (Aphelyon.arcproj restamps in P7).
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

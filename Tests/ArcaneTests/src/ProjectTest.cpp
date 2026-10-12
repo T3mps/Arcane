@@ -8,12 +8,14 @@
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- the mountDiagnostics case needs a REAL .arcdiag
 
 #include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Project/GameDescriptor.hpp>   // RenderDefaultGameDescriptor
 #include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
 
 #include <Json.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 #include "Helpers/UserDataDirs.hpp"
 
@@ -344,6 +346,14 @@ TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[
     // Manifest + gitignore.
     CHECK(std::filesystem::is_regular_file(dir / "Aphelyon.arcproj"));
     CHECK(std::filesystem::is_regular_file(dir / ".gitignore"));
+    // The game descriptor (engine modularization s4): the default module set
+    // under Source/, named for the project -- byte-equal to the renderer's.
+    {
+        std::ifstream in(dir / "Source" / "Aphelyon.arcmodule", std::ios::binary);
+        REQUIRE(in.good());
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(text == Arcane::RenderDefaultGameDescriptor("Aphelyon"));
+    }
 
     // The created project is valid and re-openable.
     CHECK(proj->Manifest().name == "Aphelyon");

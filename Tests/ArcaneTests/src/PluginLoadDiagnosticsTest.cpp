@@ -115,25 +115,25 @@ TEST_CASE("An ABI-mismatched plugin reports BOTH version numbers", "[plugin][dia
 
 TEST_CASE("A missing required export is named", "[plugin][diagnostics]")
 {
-    // ArcaneClient.dll itself loads fine as a module but exports none of the
+    // ArcaneRender.dll itself loads fine as a module but exports none of the
     // plugin entry points -- the cheapest real MissingExport case in-tree.
-    // (libArcaneClient.so on ELF: SharedLibraryFileName spells it.)
+    // (libArcaneRender.so on ELF: SharedLibraryFileName spells it.)
     Arcane::PluginResolveError error;
-    auto plugin = Arcane::Plugin::Load(std::filesystem::path(Arcane::Platform::SharedLibraryFileName("ArcaneClient")), &error);
+    auto plugin = Arcane::Plugin::Load(std::filesystem::path(Arcane::Platform::SharedLibraryFileName("ArcaneRender")), &error);
 
     CHECK_FALSE(plugin.has_value());
     CHECK(error.kind == Arcane::PluginResolveError::Kind::MissingExport);
     CHECK(error.symbol == std::string(Arcane::PluginEntry::kABIVersion));   // the first checked
 
-    // The refusal must not touch the LIVE ArcaneClient.dll's registrations:
+    // The refusal must not touch the LIVE ArcaneRender.dll's registrations:
     // that image was already mapped, so this Load ran none of its statics and
     // has nothing of its own to drop. (The S1 gate caught the by-name
-    // UnregisterModule("ArcaneClient") here wiping render.meshCull, which made
+    // UnregisterModule("ArcaneRender") here wiping render.meshCull, which made
     // CVarRegistryTest's meshCull case vacuous under one random order.)
 #if !defined(ARC_BUILD_DIST)   // the Dev cvar is compiled out of a Dist registry
     const Arcane::CVarHandle meshCull = Arcane::CVarRegistry::Get().Find("render.meshCull");
     CHECK_FALSE(meshCull.IsStale());
-    CHECK(Arcane::CVarRegistry::Get().ModuleOf(meshCull) == "ArcaneClient");
+    CHECK(Arcane::CVarRegistry::Get().ModuleOf(meshCull) == "ArcaneRender");
 #endif
 }
 
