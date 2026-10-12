@@ -60,6 +60,11 @@
 - Build logs: `logs/build-{generate,engine,referencegame,tests}.log`.
 - Local output: `logs/local/<leg>-<Config>/`.
 
+**Desk shell (Git Bash):**
+- `export MSYS_NO_PATHCONV=1` once per session before any Task step. Git Bash otherwise rewrites container paths in arguments: `/v/verify-image.sh` becomes `C:/Program Files/Git/v/...`, and `-v a:/r:ro` is treated as a path list.
+- Bind-mount sources are `"$(pwd -W)"` (`D:/dev/...`), never `"$PWD"` (`/d/dev/...`).
+- `local.ps1` is unaffected: PowerShell does not convert paths.
+
 **Project rules:**
 - Pushing, opening a PR, and any GitHub-side change need the user's explicit go-ahead.
 - Never force tooling: the existing entry points (`GenerateProjects.bat`, `run-tests.*`, the plain make sequence) keep working; `local.ps1` is optional.
@@ -82,6 +87,7 @@
 | R12 | s3.5 "every `uses:` is pinned" | The Discord notify action is pinned too (it was `@main`) | The acceptance check is literal |
 | R13 | s1.1 / s3.2 "a writable runtime dir for root" + GPU-lane risk | `verify-image.sh` starts headless weston and Xvfb as root at image-build time | Surfaces the GPU-lane casualty before any leg runs |
 | R14 | — | `vulkan-tools` added to the image | `verify-image.sh` uses `vulkaninfo` to prove lavapipe under Xvfb |
+| R15 | s3.2 "the same ArcaneTests counts (cases / assertions)" | Parity compares the JUnit `tests` and `skipped` totals per `<leg>-<Config>[-gpu]`, and requires zero failures | JUnit carries no assertion count. The Catch2 console totals (cases + assertions) are still printed per leg by `local.ps1`'s summary and the CI logs, for a manual cross-check |
 
 > **Audit amendments:** see the section of that name at the end. They change the action pins, the cache keys and the image package list, and add Tasks 13-14 and follow-ons F1-F3.
 
@@ -113,7 +119,7 @@
   - `Test-WslConfigLimits -Text string [-MinMemoryBytes 24GB] [-MinProcessors 16]` → bool
   - `Get-Catch2Totals -Path` → `{Found, Cases, CasesPassed, CasesFailed, CasesSkipped, Assertions, AssertionsFailed}`
   - `Get-JUnitTotals -Path` → `{Tests, Failures, Errors, Skipped}`
-  - `Compare-JUnitDirs -Baseline dir -Candidate dir` → rows `{Key, BaselineTests, CandidateTests, BaselineSkipped, CandidateSkipped, CandidateFailures, Match}`
+  - `Compare-JUnitDirs -Baseline dir -Candidate dir [-Key pattern[]]` → rows `{Key, BaselineTests, CandidateTests, BaselineSkipped, CandidateSkipped, CandidateFailures, Match}`
   - `Get-BuildErrorLines [-Path string[]] [-Max 40]` → string[]
   - `Read-LegStatus -Path` → OrderedDictionary
   - `Write-LegStatus -Path -Status IDictionary`
@@ -200,6 +206,8 @@ try {
     Check 'wsl: idempotent' ((Set-WslConfigLimits -Text $otherOut) -ceq $otherOut)
     Check 'wsl: section appended' ((Set-WslConfigLimits -Text "[experimental]`r`nsparseVhd=true`r`n") -ceq "[experimental]`r`nsparseVhd=true`r`n`r`n[wsl2]`r`nmemory=24GB`r`nprocessors=16`r`n")
     Check 'wsl: case-insensitive keys' ((Set-WslConfigLimits -Text "[WSL2]`nMemory = 4GB`n") -ceq "[WSL2]`nmemory=24GB`nprocessors=16`n")
+    Check 'wsl: missing key lands after its predecessor' ((Set-WslConfigLimits -Text "[wsl2]`nswap=0`nmemory=8GB`nlocalhostForwarding=true`n") -ceq "[wsl2]`nswap=0`nmemory=24GB`nprocessors=16`nlocalhostForwarding=true`n")
+    Check 'wsl: only processors present' ((Set-WslConfigLimits -Text "[wsl2]`nprocessors=4`n") -ceq "[wsl2]`nmemory=24GB`nprocessors=16`n")
     Check 'wsl limits: desk today is below' (-not (Test-WslConfigLimits -Text $desk))
     Check 'wsl limits: after Set' (Test-WslConfigLimits -Text (Set-WslConfigLimits -Text $desk))
     Check 'wsl limits: missing processors' (-not (Test-WslConfigLimits -Text "[wsl2]`nmemory=24GB`n"))
@@ -236,6 +244,8 @@ try {
     Check 'junit: totals' ($jt.Tests -eq 30 -and $jt.Failures -eq 1 -and $jt.Skipped -eq 0)
     $rows = Compare-JUnitDirs -Baseline (Join-Path $tmp 'base') -Candidate (Join-Path $tmp 'cand')
     $byKey = @{}; foreach ($r in $rows) { $byKey[$r.Key] = $r }
+    $one = Compare-JUnitDirs -Baseline (Join-Path $tmp 'base') -Candidate (Join-Path $tmp 'cand') -Key 'linux-gcc-14-Debug'
+    Check 'compare: -Key keeps only the named key (no -gpu row)' ($one.Count -eq 1 -and $one[0].Key -eq 'linux-gcc-14-Debug' -and $one[0].Match)
     Check 'compare: four keys' ($rows.Count -eq 4)
     Check 'compare: matching key' ($byKey['linux-gcc-14-Debug'].Match)
     Check 'compare: count drift' (-not $byKey['windows-msvc-Debug'].Match)
@@ -268,8 +278,10 @@ try {
     Check 'result: pass' ($ok.Passed -and $ok.Build -eq 'ok' -and $ok.Tests -like 'seed 7: 2/2 cases*10 assertions*')
     $red = New-LegResult -Run $run -Status ([ordered]@{ build = 2 }) -OutDir $leg -Seeds @('7') -Seconds 30 -Image 'build-x'
     Check 'result: build failure' ((-not $red.Passed) -and $red.Build -eq 'FAILED (2)')
-    $oom = New-LegResult -Run $run -Status ([ordered]@{ build = 137; oom = 137 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
+    $oom = New-LegResult -Run $run -Status ([ordered]@{ build = 2; oom = 1 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
     Check 'result: OOM named' ((-not $oom.Passed) -and $oom.Build -like 'OOM*-Jobs*')
+    $killed = New-LegResult -Run $run -Status ([ordered]@{ container = 137 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
+    Check 'result: a killed container is not called OOM' ((-not $killed.Passed) -and $killed.Build -notlike 'OOM*')
     $none = New-LegResult -Run $run -Status ([ordered]@{ build = 0 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
     Check 'result: tests that never ran fail the leg' ((-not $none.Passed) -and $none.Tests -eq 'tests did not run')
     $tf = New-LegResult -Run $run -Status ([ordered]@{ build = 0; 'tests-7' = 1 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
@@ -424,15 +436,22 @@ function Set-WslConfigLimits {
         for ($i = $start + 1; $i -lt $lines.Count; $i++) {
             if ($lines[$i].Trim().StartsWith('[')) { $end = $i; break }
         }
-        $seen = @{}
+        # $at[key] = the line index of that key inside the section.
+        $at = @{}
         for ($i = $start + 1; $i -lt $end; $i++) {
             foreach ($k in @($want.Keys)) {
-                if ($lines[$i] -match "^\s*$k\s*=") { $lines[$i] = $want[$k]; $seen[$k] = $true }
+                if ($lines[$i] -match "^\s*$k\s*=") { $lines[$i] = $want[$k]; $at[$k] = $i }
             }
         }
+        # A missing key goes right after the previous wanted key's line (so
+        # memory= stays above processors=), else directly under the header.
         $insert = $start + 1
         foreach ($k in @($want.Keys)) {
-            if (-not $seen.ContainsKey($k)) { $lines.Insert($insert, $want[$k]); $insert++ }
+            if ($at.ContainsKey($k)) { $insert = $at[$k] + 1; continue }
+            $lines.Insert($insert, $want[$k])
+            foreach ($other in @($at.Keys)) { if ($at[$other] -ge $insert) { $at[$other]++ } }
+            $at[$k] = $insert
+            $insert++
         }
     }
     $out = [string]::Join($nl, $lines.ToArray())
@@ -513,20 +532,27 @@ function Get-JUnitTotals {
 # <leg>-<Config>[-gpu] (the JUnit file name without its seed). A key matches
 # when both sides have it, the tests/skipped counts agree (across every seed
 # file of the candidate), and the candidate has no failures or errors.
+# -Key limits the comparison to keys matching any of the given -like patterns
+# (e.g. a local run has no -gpu lane: -Key linux-gcc-14-Debug).
 function Compare-JUnitDirs {
-    param([Parameter(Mandatory)][string]$Baseline, [Parameter(Mandatory)][string]$Candidate)
+    param([Parameter(Mandatory)][string]$Baseline, [Parameter(Mandatory)][string]$Candidate, [string[]]$Key = @())
     $sets = @{}
     foreach ($side in @('Baseline', 'Candidate')) {
         $dir = $Baseline; if ($side -eq 'Candidate') { $dir = $Candidate }
         $map = @{}
         foreach ($f in @(Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.junit.xml')) {
-            $key = $f.Name -replace '-seed[^.]*\.junit\.xml$', ''
-            if (-not $map.ContainsKey($key)) { $map[$key] = New-Object System.Collections.Generic.List[object] }
-            $map[$key].Add((Get-JUnitTotals -Path $f.FullName))
+            # $name, not $key: PowerShell names are case-insensitive, and $Key is the
+            # [string[]] parameter -- assigning to it would coerce to an array.
+            $name = $f.Name -replace '-seed[^.]*\.junit\.xml$', ''
+            if (-not $map.ContainsKey($name)) { $map[$name] = [System.Collections.Generic.List[object]]::new() }
+            $map[$name].Add((Get-JUnitTotals -Path $f.FullName))
         }
         $sets[$side] = $map
     }
     $keys = @(@($sets['Baseline'].Keys) + @($sets['Candidate'].Keys) | Sort-Object -Unique)
+    if ($Key.Count -gt 0) {
+        $keys = @($keys | Where-Object { $k = $_; @($Key | Where-Object { $k -like $_ }).Count -gt 0 })
+    }
     $rows = @()
     foreach ($k in $keys) {
         $b = $sets['Baseline'][$k]; $c = $sets['Candidate'][$k]
@@ -589,7 +615,7 @@ function New-LegResult {
     )
     $passed = $false
     if ($Status.Contains('oom')) {
-        $build = 'OOM (exit 137): lower -Jobs'
+        $build = "OOM (a compiler or linker was killed; build exit $($Status['build'])): lower -Jobs"
     } elseif ($Status.Contains('build')) {
         if ([int]$Status['build'] -eq 0) { $build = 'ok'; $passed = $true } else { $build = "FAILED ($($Status['build']))" }
     } elseif ($Status.Contains('container')) {
@@ -713,10 +739,11 @@ Create `scripts/ci/compare-test-counts.ps1`:
 # skipped counts must agree and the candidate must have no failures. The
 # container-parity check of docs/superpowers/specs/2026-10-12-local-ci-pipeline-design.md
 # s3.2; sub-project B reuses it for Jenkins side by side. Exit 0 = every key matches.
-param([Parameter(Mandatory)][string]$Baseline, [Parameter(Mandatory)][string]$Candidate)
+# -Key <pattern[]> limits the comparison (a local run has no -gpu lane).
+param([Parameter(Mandatory)][string]$Baseline, [Parameter(Mandatory)][string]$Candidate, [string[]]$Key = @())
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ArcaneCi.psm1') -Force
-$rows = Compare-JUnitDirs -Baseline $Baseline -Candidate $Candidate
+$rows = Compare-JUnitDirs -Baseline $Baseline -Candidate $Candidate -Key $Key
 $rows | Format-Table Key, BaselineTests, CandidateTests, BaselineSkipped, CandidateSkipped, CandidateFailures, Match -AutoSize | Out-Host
 $bad = @($rows | Where-Object { -not $_.Match }).Count
 if ($bad -gt 0) { Write-Host "compare-test-counts: $bad key(s) differ" -ForegroundColor Red; exit 1 }
@@ -899,10 +926,10 @@ has() { command -v "$1" > /dev/null; }
 check "default user is root" test "$(id -u)" = 0
 check "g++-14 is GCC 14" sh -c 'g++-14 -dumpfullversion | grep -q "^14\."'
 check "clang++-19 is Clang 19" sh -c 'clang++-19 --version | grep -q "version 19\."'
-check "premake 5.0.0-beta8" sh -c '"$ARCANE_TOOLS_DIR/premake5/premake5" --version | grep -q "5.0.0-beta8"'
-check "dxc runs" "$ARCANE_TOOLS_DIR/dxc-linux/bin/dxc" --version
-check "libdxcompiler.so present" test -f "$ARCANE_TOOLS_DIR/dxc-linux/lib/libdxcompiler.so"
-check "dxc headers present" test -d "$ARCANE_TOOLS_DIR/dxc-linux/include/dxc"
+check "premake 5.0.0-beta8" sh -c '"${ARCANE_TOOLS_DIR:-}/premake5/premake5" --version | grep -q "5.0.0-beta8"'
+check "dxc runs" "${ARCANE_TOOLS_DIR:-}/dxc-linux/bin/dxc" --version
+check "libdxcompiler.so present" test -f "${ARCANE_TOOLS_DIR:-}/dxc-linux/lib/libdxcompiler.so"
+check "dxc headers present" test -d "${ARCANE_TOOLS_DIR:-}/dxc-linux/include/dxc"
 check "SDL3 3.2.22 via pkg-config" sh -c 'test "$(pkg-config --modversion sdl3)" = 3.2.22'
 check "SDL3_ROOT=/usr/local" test "${SDL3_ROOT:-}" = /usr/local
 check "validation layer 1.4.328" grep -q '"api_version": "1.4.328' /usr/local/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json
@@ -942,7 +969,7 @@ if [ "$fails" -eq 0 ]; then echo "verify-image: all checks passed"; else echo "v
 - [ ] **Step 2: Watch it fail against a stock image**
 
 ```bash
-docker run --rm -v "$PWD/ci/linux:/v:ro" ubuntu:24.04 bash /v/verify-image.sh | tail -n 5
+docker run --rm -v "$(pwd -W)/ci/linux:/v:ro" ubuntu:24.04 bash /v/verify-image.sh | tail -n 5
 ```
 
 Expected: many `FAIL` lines (no g++-14, no premake), then `verify-image: N check(s) failed`, and a non-zero exit (`echo ${PIPESTATUS[0]}` prints 1).
@@ -997,8 +1024,9 @@ ARG APT_SNAPSHOT=20261012T000000Z
 ENV DEBIAN_FRONTEND=noninteractive
 
 # snapshot.ubuntu.com is HTTPS-only and the base image has no TLS roots, so
-# ca-certificates comes first, from the archive the base image names. Every
-# later apt call resolves from the snapshot (APT::Snapshot).
+# ca-certificates comes first, from the archive the base image names -- the
+# ONE package outside the snapshot (it supplies TLS roots only). Every later
+# apt call resolves from the snapshot (APT::Snapshot).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && echo "APT::Snapshot \"${APT_SNAPSHOT}\";" > /etc/apt/apt.conf.d/50arcane-snapshot \
@@ -1102,7 +1130,7 @@ If `userdel --remove ubuntu` fails on a missing mail spool, use `userdel ubuntu 
 - [ ] **Step 7: Verify the image**
 
 ```bash
-docker run --rm -v "$PWD/ci/linux:/v:ro" arcane-ci:dev bash /v/verify-image.sh
+docker run --rm -v "$(pwd -W)/ci/linux:/v:ro" arcane-ci:dev bash /v/verify-image.sh
 docker inspect --format '{{.Config.User}}' arcane-ci:dev    # expected: empty (root)
 ```
 
@@ -1400,7 +1428,7 @@ scripts/ci/tests/test-image-tag.sh
 Expected: every line `ok` (on the desk, the ps1 checks run through `powershell.exe`), then `test-image-tag: all passed`, exit 0. Also run it inside the image to prove the Linux tools agree:
 
 ```bash
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash -c 'cp -r /r /tmp/r && cd /tmp/r && scripts/ci/tests/test-image-tag.sh' | tail -n 3
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash -c 'cp -r /r /tmp/r && cd /tmp/r && scripts/ci/tests/test-image-tag.sh' | tail -n 3
 ```
 
 Expected: `test-image-tag: all passed`. The copy is needed because the bind mount is read-only and `fixture` writes only to mktemp, so this is just isolation. The `.gitattributes` checks print `skip` there, because `/tmp/r/.git` is the worktree's Windows-path file.
@@ -1567,7 +1595,7 @@ echo
 
 ```bash
 git add --chmod=+x scripts/ci/tests/test-build-sh.sh
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh 2>&1 | tail -n 5
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh 2>&1 | tail -n 5
 ```
 
 Expected: `cp: cannot stat '/r/scripts/ci/build.sh'` from the first fixture, and a non-zero exit. The suite runs in the image (bash 5, GNU tools) here; it also runs in Git Bash on the desk.
@@ -1676,7 +1704,7 @@ echo "build: $CONFIG ok"
 
 ```bash
 git add --chmod=+x scripts/ci/build.sh
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh 2>&1 | tail -n 4
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh 2>&1 | tail -n 4
 scripts/ci/tests/test-build-sh.sh 2>&1 | tail -n 4     # Git Bash on the desk (the no-CC case is skipped: uname is MINGW)
 ```
 
@@ -1690,7 +1718,7 @@ Run gcc Debug against a throwaway copy of the checkout, as `arcane` (the local u
 
 ```bash
 docker volume create arcane-src-smoke
-docker run --rm --user 1000:1000 -v "$PWD:/src:ro" -v arcane-src-smoke:/work -e CC=gcc-14 -e CXX=g++-14 arcane-ci:dev \
+docker run --rm --user 1000:1000 -v "$(pwd -W):/src:ro" -v arcane-src-smoke:/work -e CC=gcc-14 -e CXX=g++-14 arcane-ci:dev \
   bash -c 'rsync -a --exclude=/.git --exclude=/bin/ --exclude=/logs/ /src/ /work/ && cd /work && scripts/ci/build.sh Debug -j 12'
 ```
 
@@ -1919,7 +1947,7 @@ echo
 
 ```bash
 git add --chmod=+x scripts/ci/tests/test-ci-image.sh
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-ci-image.sh 2>&1 | tail -n 3
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-ci-image.sh 2>&1 | tail -n 3
 ```
 
 Expected: every case `FAIL` (`ci-image.sh: No such file`), then `test-ci-image: 5 failure(s)`, non-zero exit.
@@ -1974,7 +2002,7 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "digest=$digest" >> "$GITHUB_OUTPUT"; 
 
 ```bash
 git add --chmod=+x scripts/ci/ci-image.sh
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-ci-image.sh 2>&1 | tail -n 7
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-ci-image.sh 2>&1 | tail -n 7
 ```
 
 Expected: five `ok` lines, then `test-ci-image: all passed`, exit 0.
@@ -2026,8 +2054,9 @@ Create `scripts/ci/rsync-filter.txt`:
 # Explicit list, not a .gitignore merge: ReferenceProject/Saved/verify-layout.ini
 # is tracked yet matches .gitignore's *.ini.
 
-# git metadata: a desk worktree's .git FILE names a Windows path
-- /.git
+# git metadata, at any depth: a desk worktree's (or a submodule's) .git FILE
+# names a Windows path
+- .git
 
 # build outputs, reports, local junk (Windows and Linux)
 - /bin/
@@ -2130,6 +2159,11 @@ rm -rf logs test-results
 scripts/ci/build.sh "$CONFIG" -j "${MAKE_JOBS:-2}"
 build=$?
 note build "$build"
+# An out-of-memory VM kills cc1plus/ld, not the container: make exits 2. The
+# kill shows up in the step logs; only then is the failure called OOM.
+if [ "$build" -ne 0 ] && grep -qE "Killed signal terminated program|terminated with signal 9|signal 9 \(Killed\)" logs/build-*.log 2> /dev/null; then
+    note oom 1
+fi
 failed=$build
 if [ "$build" -eq 0 ]; then
     export SDL_VIDEODRIVER=x11
@@ -2292,6 +2326,8 @@ function Invoke-WindowsLeg($Run) {
     if ($Jobs -gt 0) { $buildArgs += @('-Jobs', [string]$Jobs) }
     $status['build'] = Invoke-NativeLogged -FilePath 'powershell.exe' -ArgumentList $buildArgs -LogPath (Join-Path $out 'build.log')
     if ($status['build'] -eq 0) {
+        # Earlier runs' results for this leg/config (other seeds) must not ride along.
+        Remove-Item -Path (Join-Path $root "test-results\$($Run.Leg)-$($Run.Config)-seed*") -ErrorAction SilentlyContinue
         foreach ($s in $seedList) {
             $status["tests-$s"] = Invoke-NativeLogged -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass',
                 '-File', (Join-Path $root 'scripts\run-tests.ps1'), $Run.Config, '--rng-seed', $s) -LogPath (Join-Path $out "tests-seed$s.log")
@@ -2316,7 +2352,8 @@ function Invoke-LinuxLeg($Run) {
     $dockerArgs = @('run', '--rm', '--init', '--shm-size=2g', '--user', '1000:1000', '--name', $name,
         '-v', "${root}:/src:ro", '-v', "arcane-src-$($Run.Leg):/work", '-v', 'arcane-ccache:/ccache', '-v', "${out}:/out",
         '-e', "CC=$($Run.CC)", '-e', "CXX=$($Run.CXX)", '-e', "ARCANE_CI_LEG=$($Run.Leg)", '-e', "MAKE_JOBS=$linuxJobs",
-        '-e', 'CCACHE_DIR=/ccache', '-e', 'PATH=/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        '-e', 'CCACHE_DIR=/ccache', '-e', 'CCACHE_MAXSIZE=20G', '-e', 'TINI_KILL_PROCESS_GROUP=1',
+        '-e', 'PATH=/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
         $image.Ref, 'bash', '/src/scripts/ci/container-leg.sh', $Run.Config, ($seedList -join ','))
     $code = -1
     try {
@@ -2325,7 +2362,6 @@ function Invoke-LinuxLeg($Run) {
         $null = Invoke-NativeQuiet -FilePath 'docker' -ArgumentList @('rm', '-f', $name)
     }
     $status = Read-LegStatus -Path (Join-Path $out 'status.txt')
-    if ($code -eq 137) { $status['oom'] = 137 }
     if (-not $status.Contains('build')) { $status['container'] = $code }
     return New-LegResult -Run $Run -Status $status -OutDir $out -Seeds $seedList -Seconds $sw.Elapsed.TotalSeconds -Image $image.Label
 }
@@ -2363,7 +2399,7 @@ Record `sync_seconds` from `logs\local\linux-gcc-14-Debug\status.txt` (first syn
 2. Add filter lines for any the Linux build never reads.
 3. Rerun, and record both numbers in the commit message.
 
-Also re-run `docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh | tail -n 3` (the new lint line), expecting `all passed`.
+Also re-run `docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash /r/scripts/ci/tests/test-build-sh.sh | tail -n 3` (the new lint line), expecting `all passed`.
 
 - [ ] **Step 5: Review Focus 5, the unpublished image is labelled**
 
@@ -2558,8 +2594,10 @@ jobs:
       digest: ${{ steps.image.outputs.digest }}
     env:
       TAG: ${{ needs.image-tag.outputs.tag }}
-      # A fork pull request never publishes (scripts/ci/ci-image.sh).
-      SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      # A fork pull request never publishes (scripts/ci/ci-image.sh), and
+      # neither does Dependabot: its same-repo PRs get a read-only token, so a
+      # build would run ~30 min and then fail at the push.
+      SAME_REPO: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2663,6 +2701,10 @@ jobs:
         env:
           SDL_VIDEODRIVER: x11
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          # The bare runner got /run/user/1001 from systemd-logind; in the
+          # container nothing sets it. The image creates root's (0700). Not
+          # in the Dockerfile ENV: local runs are uid 1000.
+          XDG_RUNTIME_DIR: /run/user/0
         run: |
           set -o pipefail
           xvfb-run -a -s "-screen 0 1920x1080x24" scripts/run-tests.sh --gpu ${{ matrix.config }} \
@@ -2672,6 +2714,9 @@ jobs:
         if: env.LINUX_GPU_LANE == 'true'
         env:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          # x11 hosts use it; the Wayland half makes its own (the smoke's
+          # weston gets a private mktemp runtime dir).
+          XDG_RUNTIME_DIR: /run/user/0
         run: |
           set -o pipefail
           xvfb-run -a -s "-screen 0 1920x1080x24" scripts/linux-windowed-smoke.sh \
@@ -2942,7 +2987,7 @@ jobs:
 - [ ] **Step 2: Lint the workflow**
 
 ```bash
-docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/ci.yml
+docker run --rm -v "$(pwd -W):/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/ci.yml
 ```
 
 Expected: no output, exit 0. actionlint knows `needs` in `container.image` and `concurrency`. If the pinned tag is unavailable, use the newest `rhysd/actionlint` tag shown on Docker Hub; it is a dev-only check, not a pin in the repo.
@@ -3092,6 +3137,13 @@ holds `packages: write`, so a maintainer **reviews the `ci/linux/` and
 `scripts/` diff first**. A Dependabot PR, if one is ever configured, behaves
 the same way.
 
+**Same-repo branches can publish.** `packages: write` covers every same-repo
+run. `scripts/ci/ci-image.sh` is not a tag input, so a branch that edits it
+(say, to pass a build argument) can push a differently built image over a tag
+`main` already uses. The legs pin the digest read from that tag at run time,
+so the pin does not help. This is accepted with the current solo / trusted
+writer set; the control is review of `ci/linux/` and `scripts/ci/` changes.
+
 **Retention:** every image-input change on any branch publishes a tag, and
 nothing deletes old ones yet; the package size is watched (cleanup deferred).
 
@@ -3124,7 +3176,8 @@ scripts\ci\local.ps1 -Full                    # windows-msvc, linux-gcc-14, linu
   Windows `msbuild /m`; `-Jobs` sets both.
 - **Output:** one table (leg, config, verdict, minutes, build, per-seed test
   counts, image, log directory), the first compiler/linker errors of a failed
-  build, an OOM hint on exit 137; logs under `logs\local\<leg>-<Config>\`.
+  build, an OOM hint when the build logs show a compiler or linker killed by
+  signal 9; logs under `logs\local\<leg>-<Config>\`.
   Exit 0 all passed, 1 a leg failed, 2 a preflight check failed (Docker not
   running, MSBuild missing -- each names its fix).
 - macOS legs run on the hosted runner only.
@@ -3211,7 +3264,7 @@ EOF
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci/tests/test-arcane-ci.ps1 | tail -n 1
 scripts/ci/tests/test-image-tag.sh | tail -n 1
-docker run --rm -v "$PWD:/r:ro" arcane-ci:dev bash -c 'cp -r /r /tmp/r && cd /tmp/r && scripts/ci/tests/test-image-tag.sh && scripts/ci/tests/test-build-sh.sh && scripts/ci/tests/test-ci-image.sh' | grep -E "all passed|failure"
+docker run --rm -v "$(pwd -W):/r:ro" arcane-ci:dev bash -c 'cp -r /r /tmp/r && cd /tmp/r && scripts/ci/tests/test-image-tag.sh && scripts/ci/tests/test-build-sh.sh && scripts/ci/tests/test-ci-image.sh' | grep -E "all passed|failure"
 ```
 
 Expected: `all checks passed` and three `all passed` lines.
@@ -3346,10 +3399,10 @@ A mismatch means stop and diagnose before anything else; a container-only differ
 
 ```powershell
 powershell -File scripts\ci\local.ps1 -Leg linux-gcc-14 -Config Debug -Seeds 2 -Seed <run_number of the CI run>
-powershell -File scripts\ci\compare-test-counts.ps1 -Baseline logs\parity\candidate\test-results-linux-gcc-14-Debug -Candidate logs\local\linux-gcc-14-Debug\test-results
+powershell -File scripts\ci\compare-test-counts.ps1 -Baseline logs\parity\candidate\test-results-linux-gcc-14-Debug -Candidate logs\local\linux-gcc-14-Debug\test-results -Key linux-gcc-14-Debug
 ```
 
-Expected: `linux-gcc-14-Debug` matches. The local run is on the published image, so its label has no `-local`.
+Expected: `linux-gcc-14-Debug` matches. `-Key` drops the CI artifact's `-gpu` JUnit, since the local leg runs no GPU lane. The local run is on the published image, so its label has no `-local`.
 
 - [ ] **Step 8: Spec s3.4 (CI half): red is visible in CI (ask first)**
 
@@ -3434,7 +3487,7 @@ Expected: `ok`. `grep -n "discord-ci-notify@\|toJSON(needs)\|timeout-minutes: 5"
 
 - [ ] **Step 3: Lint and commit**
 
-Run `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/ci.yml` and expect no output. Then commit `.github/workflows/ci.yml` and this plan:
+Run `docker run --rm -v "$(pwd -W):/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/ci.yml` and expect no output. Then commit `.github/workflows/ci.yml` and this plan:
 
 ```
 ci: Discord notify through discord-ci-notify v1 -- pinned to the release tag's commit, classifies the run from needs (a skipped job is INCOMPLETE, never success)
