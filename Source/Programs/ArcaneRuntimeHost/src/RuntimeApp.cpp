@@ -11,8 +11,10 @@
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Config/CVarConfig.hpp>  // CommandLineCVarContext (integration ruling I3)
+#if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
+#endif
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
 #include <Arcane/Assets/ImageCompare.hpp>   // Arcane::CompareImages/ImageCompareOptions (Task 8: --compare)
 #include <Arcane/Base/Assert.hpp>        // ARC_ASSERT (ShutdownGraphPath's offscreen-guaranteed invariant, Fix 3)
@@ -495,6 +497,9 @@ void RuntimeApp::MainLoop()
     if (!m_config.headless)
         m_gpu->Win().Show();
 
+    // The offscreen vehicle exists only where ArcaneVerify is linked (RuntimeApp.hpp's
+    // ARC_RUNTIME_HOST_VERIFY note); a package refused --headless at startup.
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     if (m_config.headless)
     {
         // THE EXTENT, from the same place the windowed path's initial extent
@@ -573,6 +578,7 @@ void RuntimeApp::MainLoop()
         m_offscreen->Graph().SetGpuHeartbeatPublisher(true);
     }
     else
+#endif
     {
         m_graphContext = Arcane::NriGraphContext::Create(m_config, m_gpu->Win());
         if (!m_graphContext)
@@ -641,6 +647,7 @@ void RuntimeApp::MainLoop()
     compareOptions.maxDiffPixels     = m_config.maxDiffPixels;
     compareOptions.maxDiffPixelRatio = m_config.maxDiffPixelRatio;
 
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     if (!m_config.compareReference.empty())
     {
         const std::filesystem::path projectRoot =
@@ -697,6 +704,7 @@ void RuntimeApp::MainLoop()
         // else: a reference exists but --bless will overwrite it -- also
         // nothing to load; compareRequested stays false either way (Finding 4).
     }
+#endif
 
     // Finding 4: disabled outright whenever --bless is set, regardless of
     // whether m_compareResolution actually found anything -- see
@@ -959,6 +967,7 @@ void RuntimeApp::ShutdownGraphPath()
     // further down (it needs m_frameCount/m_graphExit settled first) -- this
     // captures the FACTS while the vehicle is still alive, and the block
     // below hands them to report.SetPick() once the report exists.
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     struct PickResolution
     {
         std::int32_t  armedX = 0, armedY = 0;
@@ -1087,6 +1096,7 @@ void RuntimeApp::ShutdownGraphPath()
             pickResolution = res;
         }
     }
+#endif
 
     // THE GPU CULL'S OWN VISIBLE-ROW COUNT, read here for the same reason the
     // pick answer above is: the reset below takes the readback ring with it.
@@ -1113,7 +1123,9 @@ void RuntimeApp::ShutdownGraphPath()
     // ordering debt against m_gpu -- but the latch below still has to be
     // sampled after its last NRI object is gone, which is what this line is.
     m_graphContext.reset();
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     m_offscreen.reset();
+#endif
 
     // A present Tier 1 overlay is NAMED on the summary line: the drains tag
     // every debug-layer message by producer, but "[d3d12]" cannot say whether
@@ -1171,6 +1183,7 @@ void RuntimeApp::ShutdownGraphPath()
     // THIS is where that converged capture actually becomes the new
     // reference. Never attempted when settleFailed (nothing converged to
     // bless) or when --bless was not given at all.
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     bool compareBlessed     = false;
     bool compareWriteFailed = false;
     if (m_config.bless && !m_config.compareReference.empty() && m_captureRead)
@@ -1548,6 +1561,7 @@ void RuntimeApp::ShutdownGraphPath()
         else
             ARC_ERROR("failed to write report to '{}'", m_config.reportPath);
     }
+#endif
 }
 
 void RuntimeApp::Shutdown()

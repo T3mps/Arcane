@@ -8,6 +8,7 @@
 // opt-in [build-desk] cases at the bottom (Task 3) are the only tests that
 // reach it, SKIPping unless ARCANE_BUILD_DESK names a project directory.
 
+#include <Json.hpp>
 #include <cerrno>
 #include <Arcane/Platform/Platform.hpp>
 #include <cstdint>
@@ -299,18 +300,20 @@ namespace
 
 // ---- CLI -------------------------------------------------------------------
 
-TEST_CASE("arcbuild::ParseCommand knows the five commands and nothing else", "[build]")
+TEST_CASE("arcbuild::ParseCommand knows the six commands and nothing else", "[build]")
 {
     CHECK(ParseCommand("generate") == Command::Generate);
     CHECK(ParseCommand("build")    == Command::Build);
     CHECK(ParseCommand("rebuild")  == Command::Rebuild);
     CHECK(ParseCommand("clean")    == Command::Clean);
     CHECK(ParseCommand("probe")    == Command::Probe);
+    CHECK(ParseCommand("package")  == Command::Package);
     CHECK_FALSE(ParseCommand("Build").has_value());     // exact, lower-case
     CHECK_FALSE(ParseCommand("--project").has_value()); // a flag is not a command
     CHECK_FALSE(ParseCommand("").has_value());
     // Round-trip: the name printed in the log is the word that parses.
-    for (Command c : { Command::Generate, Command::Build, Command::Rebuild, Command::Clean, Command::Probe })
+    for (Command c : { Command::Generate, Command::Build, Command::Rebuild, Command::Clean, Command::Probe,
+                       Command::Package })
         CHECK(ParseCommand(CommandName(c)) == c);
 }
 
@@ -997,6 +1000,67 @@ TEST_CASE("arcbuild::NinjaLinkOutput is Intermediate/<config>/Ninja/Binaries/<ga
     ProjectLayout noModule = project;
     noModule.gameModule.clear();
     CHECK(NinjaLinkOutput(noModule, "Debug").empty());
+}
+
+TEST_CASE("arcbuild::StagePackage copies one configuration's stage list into a fresh package directory",
+          "[build]")
+{
+    TempDir root("stage_package");
+    const fs::path src = root.path / "src";
+    fs::create_directories(src / "data" / "sub");
+    std::ofstream(src / "Game.exe", std::ios::binary) << "exe";
+    std::ofstream(src / "data" / "a.txt", std::ios::binary) << "a";
+    std::ofstream(src / "data" / "sub" / "b.txt", std::ios::binary) << "b";
+
+    const auto entry = [&](const fs::path& from, const char* to, const char* kind, bool optional) {
+        return nlohmann::json{ { "from", from.generic_string() }, { "to", to }, { "kind", kind }, { "optional", optional } };
+    };
+    const fs::path manifest = root.path / "stage.json";
+    const fs::path out = root.path / "Packages" / "Game-windows-Debug";
+    const auto write = [&](nlohmann::json debugEntries) {
+        nlohmann::json doc{ { "package", "Game" }, { "configs", { { "Debug", debugEntries } } } };
+        std::ofstream(manifest, std::ios::binary | std::ios::trunc) << doc.dump();
+    };
+
+    SECTION("files, directories and a skipped optional entry; a previous package is cleared")
+    {
+        fs::create_directories(out);
+        std::ofstream(out / "stale.txt", std::ios::binary) << "old";
+        write(nlohmann::json::array({
+            entry(src / "Game.exe", "Game.exe", "file", false),
+            entry(src / "data", "data/engine", "dir", false),
+            entry(src / "Game.pdb", "Game.pdb", "file", true),
+        }));
+        const auto staged = StagePackage(manifest, "Debug", out);
+        REQUIRE(staged.has_value());
+        CHECK(staged->copied == 2);
+        CHECK(staged->skipped == 1);
+        CHECK(fs::is_regular_file(out / "Game.exe"));
+        CHECK(fs::is_regular_file(out / "data" / "engine" / "sub" / "b.txt"));
+        CHECK_FALSE(fs::exists(out / "stale.txt"));
+    }
+
+    SECTION("a missing required entry is a named refusal")
+    {
+        write(nlohmann::json::array({ entry(src / "Missing.dll", "Missing.dll", "file", false) }));
+        const auto staged = StagePackage(manifest, "Debug", out);
+        REQUIRE_FALSE(staged.has_value());
+        CHECK(staged.error().find("Missing.dll") != std::string::npos);
+    }
+
+    SECTION("an entry that leaves the package directory is refused")
+    {
+        write(nlohmann::json::array({ entry(src / "Game.exe", "../escape.exe", "file", false) }));
+        REQUIRE_FALSE(StagePackage(manifest, "Debug", out).has_value());
+        CHECK_FALSE(fs::exists(out.parent_path() / "escape.exe"));
+    }
+
+    SECTION("an unknown configuration and a missing list are refusals")
+    {
+        write(nlohmann::json::array());
+        CHECK_FALSE(StagePackage(manifest, "Release", out).has_value());
+        CHECK_FALSE(StagePackage(root.path / "nope.json", "Debug", out).has_value());
+    }
 }
 
 TEST_CASE("arcbuild::StageBuiltModule copies the built module (and its .pdb) over the slot, and refuses what it cannot stage",

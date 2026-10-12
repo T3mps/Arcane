@@ -29,5 +29,13 @@
       "stb"
     ]
   },
-  "platforms": {}
+  "platforms": {
+    "windows": {
+      "links": [
+        "d3d12",
+        "dxgi",
+        "dxguid"
+      ]
+    }
+  }
 }

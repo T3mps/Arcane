@@ -1,5 +1,8 @@
 #include "Stage.hpp"
 
+#include <Json.hpp>
+
+#include <fstream>
 #include <system_error>
 
 namespace arcbuild
@@ -84,6 +87,83 @@ namespace arcbuild
             staged.copied.push_back(slotPdb);
         }
 
+        return staged;
+    }
+
+    std::expected<StagedPackage, std::string> StagePackage(
+        const std::filesystem::path& manifest,
+        std::string_view config,
+        const std::filesystem::path& outDir)
+    {
+        std::ifstream in(manifest, std::ios::binary);
+        if (!in)
+            return std::unexpected("no package stage list at " + manifest.generic_string() +
+                                   " -- the monolithic generate writes it (build/arcane.lua)");
+
+        const nlohmann::json doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+        if (doc.is_discarded() || !doc.is_object() || !doc.contains("configs") || !doc["configs"].is_object())
+            return std::unexpected("malformed package stage list " + manifest.generic_string());
+
+        const auto configs = doc["configs"];
+        const auto it = configs.find(std::string(config));
+        if (it == configs.end() || !it->is_array())
+            return std::unexpected("the package stage list has no '" + std::string(config) +
+                                   "' configuration (" + manifest.generic_string() + ")");
+
+        std::error_code ec;
+        std::filesystem::remove_all(outDir, ec);
+        if (ec)
+            return std::unexpected("failed to clear " + outDir.generic_string() + ": " + ec.message());
+        std::filesystem::create_directories(outDir, ec);
+        if (ec)
+            return std::unexpected("failed to create " + outDir.generic_string() + ": " + ec.message());
+
+        const std::filesystem::path root = outDir.lexically_normal();
+        StagedPackage staged;
+        for (const nlohmann::json& entry : *it)
+        {
+            if (!entry.is_object() || !entry.contains("from") || !entry.contains("to") ||
+                !entry["from"].is_string() || !entry["to"].is_string())
+                return std::unexpected("malformed package stage entry in " + manifest.generic_string());
+
+            const std::filesystem::path from = entry["from"].get<std::string>();
+            const std::string           rel  = entry["to"].get<std::string>();
+            const bool optional = entry.value("optional", false);
+            const bool dir      = entry.value("kind", std::string("file")) == "dir";
+
+            const std::filesystem::path to = (root / rel).lexically_normal();
+            const std::filesystem::path back = to.lexically_relative(root);
+            if (rel.empty() || std::filesystem::path(rel).is_absolute() || back.empty() ||
+                *back.begin() == "..")
+                return std::unexpected("package stage entry '" + rel + "' leaves the package directory");
+
+            const bool present = dir ? std::filesystem::is_directory(from, ec)
+                                     : std::filesystem::is_regular_file(from, ec);
+            if (!present)
+            {
+                if (optional) { ++staged.skipped; continue; }
+                return std::unexpected("package stage: missing " + std::string(dir ? "directory " : "file ") +
+                                       from.generic_string());
+            }
+
+            std::filesystem::create_directories(dir ? to : to.parent_path(), ec);
+            if (ec)
+                return std::unexpected("failed to create " + to.generic_string() + ": " + ec.message());
+
+            if (dir)
+            {
+                std::filesystem::copy(from, to,
+                    std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+                if (ec)
+                    return std::unexpected("failed to stage " + from.generic_string() + " -> " +
+                                           to.generic_string() + ": " + ec.message());
+            }
+            else if (const auto copied = CopyOver(from, to); !copied)
+            {
+                return std::unexpected(copied.error());
+            }
+            ++staged.copied;
+        }
         return staged;
     }
 }

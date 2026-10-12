@@ -596,6 +596,27 @@ A non-game consumer, such as a server executable, calls
 `project` block and `arcane_stage_modules { ... }` to copy the module
 DLLs beside an executable.
 
+### Package a game as one executable
+
+`arcbuild package` links the engine, the standalone host and the game
+into one `<Project>.exe` and stages it with what it needs to run:
+
+```bat
+bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe package --project MyGame --config Release --sdk %ARCANE_SDK%
+```
+
+It builds the engine's monolithic layout (`premake5 --layout=monolithic`:
+every Runtime and Client module as a static library, in
+`bin/<cfg>-<sys>-<arch>-mono/`), regenerates the project with the same
+option (the game becomes a static library plus a `<Project>Package`
+executable, in `<Workspace>-mono.slnx` beside the modular solution), builds
+it, and stages `Packages/<Project>-<platform>-<config>/`: the executable,
+`SDL3.dll`, the DXC and Agility SDK runtime files, the engine data the host
+reads, and the project in `<Project>/` (content copied raw). Run it in place;
+it opens the staged project when no `--project` is given. A package never
+contains a Developer or Editor module, so the verification flags
+(`--headless`, `--report`, `--compare`) belong to `ArcaneRuntime.exe`.
+
 ### A module, a component, a system
 
 Game code spells `Arcane::` names. The samples below match
@@ -718,7 +739,8 @@ bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --co
 bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 ```
 
-Commands are `generate`, `build`, `rebuild`, `clean`, and `probe`.
+Commands are `generate`, `build`, `rebuild`, `clean`, `probe`, and
+`package` (the one-executable build above; MSBuild only for now).
 `probe` only inspects the manifest and the `Binaries/` slot. It needs
 no SDK. Other flags: `--action`, `--force-rebuild`, `--quiet`, `--set`.
 

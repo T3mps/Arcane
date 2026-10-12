@@ -1196,8 +1196,10 @@ namespace Arcane
 #if defined(ARC_MONOLITHIC)
         // Static mode: the game is linked in; there is nothing to reload. A
         // no-op SUCCESS, the same answer a plugins-only host gives below (every
-        // caller -- RuntimeFrame's reload keys, Poll -- ignores or tolerates it).
+        // caller -- RuntimeFrame's reload keys, Poll -- ignores or tolerates it),
+        // logged so a reload key pressed in a package is not a silent no-op.
         (void)restoreState;
+        ARC_INFO("plugin: hot reload is unavailable -- the game is linked into this executable");
         return true;
 #else
         // See UiContextGuard's comment (Load() above).

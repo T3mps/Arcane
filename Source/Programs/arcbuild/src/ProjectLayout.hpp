@@ -40,6 +40,19 @@ namespace arcbuild
     // generated Fixture.ninja's link edges against THIS function. Inside
     // Intermediate/<config>/ on purpose, so CleanTargets above removes it.
     // Empty when the project names no game module.
+    // `arcbuild package` (engine modularization s3.3): the stage list
+    // build/arcane.lua's arcane_package_exe writes at generate time, and the
+    // staged package directory, Packages/<Project>-<platform>-<config>/.
+    [[nodiscard]]
+    std::filesystem::path PackageManifestPath(
+        const ProjectLayout& project);
+
+    [[nodiscard]]
+    std::filesystem::path PackageOutputDir(
+        const ProjectLayout& project,
+        std::string_view platform,
+        std::string_view config);
+
     [[nodiscard]]
     std::filesystem::path NinjaLinkOutput(
         const ProjectLayout& project,

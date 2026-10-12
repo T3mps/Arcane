@@ -43,4 +43,29 @@ namespace arcbuild
     std::expected<StagedModule, std::string> StageBuiltModule(
         const std::filesystem::path& built,
         const std::filesystem::path& slot);
+
+    // `arcbuild package`'s stage (engine modularization s3.3): copy one
+    // configuration's entries of the stage list (Intermediate/Package/
+    // stage.json, written by build/arcane.lua's arcane_package_exe, which knows
+    // the platform's runtime files) into `outDir`, after removing whatever a
+    // previous package left there -- a package is exactly its list.
+    //
+    //   { "package": "<Project>",
+    //     "configs": { "<Config>": [ { "from": "<abs path>", "to": "<rel path>",
+    //                                  "kind": "file"|"dir", "optional": bool }, ... ] } }
+    //
+    // A missing required entry fails the stage (naming it); a missing optional
+    // one (a .pdb, a project with no Config/) is skipped. `to` must stay inside
+    // `outDir`. Returns the number of entries copied.
+    struct StagedPackage
+    {
+        std::size_t copied  = 0;
+        std::size_t skipped = 0;
+    };
+
+    [[nodiscard]]
+    std::expected<StagedPackage, std::string> StagePackage(
+        const std::filesystem::path& manifest,
+        std::string_view config,
+        const std::filesystem::path& outDir);
 }

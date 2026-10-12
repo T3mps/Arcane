@@ -25,6 +25,12 @@ namespace arcbuild
         [[nodiscard]]
         virtual int CleanBackend(
             const DriverContext& context) const = 0;
+
+        // `arcbuild package` (engine modularization s3.3). Not pure: the
+        // recording fakes the pipeline tests use have no package path.
+        [[nodiscard]]
+        virtual int Package(
+            const DriverContext& context) const;
     };
 
     class BuildExecutor final : public IBuildExecutor
@@ -51,6 +57,15 @@ namespace arcbuild
 
         [[nodiscard]]
         int CleanBackend(
+            const DriverContext& context) const override;
+
+        // 1. the SDK's monolithic layout: generate + build (incremental);
+        // 2. the project's monolithic workspace (game static lib + the
+        //    <Project> exe, build/arcane.lua): generate + build;
+        // 3. stage Packages/<Project>-<platform>-<config>/ from the stage list.
+        // MSBuild only for now; Make/Xcode join with the Linux/macOS plumbing.
+        [[nodiscard]]
+        int Package(
             const DriverContext& context) const override;
 
     private:

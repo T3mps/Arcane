@@ -23,5 +23,11 @@
     ],
     "private": []
   },
-  "platforms": {}
+  "platforms": {
+    "windows": {
+      "links": [
+        "dbghelp"
+      ]
+    }
+  }
 }

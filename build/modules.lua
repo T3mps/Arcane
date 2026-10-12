@@ -22,6 +22,44 @@ ARC_THIRDPARTY = {
     cgltf={include="ThirdParty/cgltf"}, meshoptimizer={include="ThirdParty/meshoptimizer/src",link="meshoptimizer"},
 }
 
+-- SDL3 discovery (the prebuilt vendor module's @SDL3_*@ placeholders,
+-- ThirdParty/SDL3/SDL3.arcmodule), shared by the engine workspace and every SDK
+-- consumer that links SDL3 (a packaged game). Windows: the vcpkg overlay
+-- triplet's SDL3 (VCPKG_ROOT required). Linux/macOS: SDL3_ROOT or pkg-config.
+-- Idempotent; a value already set wins.
+function arc_discover_sdl3()
+    if SDL3_INCLUDE_DIR then return end
+    VCPKG_ROOT = os.getenv("VCPKG_ROOT")
+    if os.target() == "windows" then
+        if not VCPKG_ROOT then
+            error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
+        end
+        VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
+        SDL3_PREFIX      = VCPKG_INSTALLED_MD
+        SDL3_INCLUDE_DIR = VCPKG_INSTALLED_MD .. "/include"
+    else
+        -- `pkg-config --variable=includedir sdl3` names the include ROOT (the one
+        -- holding SDL3/SDL.h), which is what every <SDL3/...> include expects.
+        -- SDL3_ROOT (an install prefix) overrides it; neither -> the compiler's
+        -- default search path, which already covers /usr/include and /usr/local/include.
+        local sdlRoot = os.getenv("SDL3_ROOT")
+        if sdlRoot then
+            SDL3_INCLUDE_DIR = sdlRoot .. "/include"
+            SDL3_LIB_DIR     = sdlRoot .. "/lib"
+        else
+            local inc = os.outputof("pkg-config --variable=includedir sdl3 2>/dev/null")
+            local lib = os.outputof("pkg-config --variable=libdir sdl3 2>/dev/null")
+            if inc and inc ~= "" then SDL3_INCLUDE_DIR = inc end
+            if lib and lib ~= "" then SDL3_LIB_DIR = lib end
+        end
+        SDL3_INCLUDE_DIR = SDL3_INCLUDE_DIR or "/usr/local/include"
+    end
+end
+
+-- A prebuilt vendor module's discovery, run the first time its entry is
+-- resolved -- so a consumer that never links SDL3 (a server) never needs vcpkg.
+ARC_PREBUILT_DISCOVERY = { SDL3 = arc_discover_sdl3 }
+
 local function fail(check, detail)
     error("[arcmodule] " .. check .. ": " .. detail, 0)
 end
@@ -255,6 +293,7 @@ end
 -- The current target's prebuilt entry of a module, resolved (nil = not prebuilt here).
 function arc_module_prebuilt(mod)
     if not mod.prebuilt then return nil end
+    if ARC_PREBUILT_DISCOVERY[mod.name] then ARC_PREBUILT_DISCOVERY[mod.name]() end
     local entry = mod.prebuilt[os.target()]
     if not entry then return nil end
     local debug = entry.debug or {}
@@ -266,12 +305,14 @@ function arc_module_prebuilt(mod)
     }
 end
 
--- Compile + link a prebuilt vendor module into the CURRENT project. Leaves no
--- filter active.
-local function use_prebuilt(mod)
+-- Compile + link a prebuilt vendor module into the CURRENT project
+-- (`headers_only`: compile only -- a monolithic static module, whose package
+-- links the library once). Leaves no filter active.
+local function use_prebuilt(mod, headers_only)
     local p = arc_module_prebuilt(mod)
     if not p then return end
     if p.include then includedirs { p.include } end
+    if headers_only then return end
     if p.link then links { p.link } end
     if p.debugLibdir then
         filter "configurations:Debug"
@@ -315,8 +356,12 @@ local function visible(mods, names)
 end
 
 local function layout()
-    if _OPTIONS.layout == "monolithic" then fail("layout", "monolithic is not wired until P5") end
     return _OPTIONS.layout or "modular"
+end
+
+-- The bin flavor suffix of the current layout: bin/<cfg>-<sys>-<arch>-<suffix>/.
+function arc_layout_suffix()
+    return layout() == "monolithic" and "mono" or "md"
 end
 
 function arc_module_project(mods, name)
@@ -356,7 +401,9 @@ function arc_module_project(mods, name)
     for _, dep in ipairs(arc_module_closure(mods, name, "all")) do
         local dep_mod = mods.byName[dep]
         if dep_mod.prebuilt then
-            if seen[dep] then use_prebuilt(dep_mod) end
+            -- Static (monolithic): headers only. A static library that absorbed
+            -- an import lib would hand every package a duplicate per module.
+            if seen[dep] then use_prebuilt(dep_mod, layout() == "monolithic") end
         else
             links { dep }
             local dep_root = dep_mod.root
@@ -369,7 +416,8 @@ function arc_module_project(mods, name)
     end
     for platform, settings in pairs(mod.platforms or {}) do
         filter("system:" .. platform)
-        if settings.links then links(settings.links) end
+        -- System libraries: a static module leaves them to the package link.
+        if settings.links and layout() ~= "monolithic" then links(settings.links) end
         if settings.defines then defines(settings.defines) end
     end
     filter {}
@@ -434,7 +482,8 @@ function arc_module_stage(mods, names)
     end
 end
 
--- Link + include the module closure of `names`. opts.stage: false = do not
+-- Link + include the module closure of `names` (opts.link = false: include
+-- only). opts.stage: false = do not
 -- copy the module binaries beside the target (a loaded game module: the host
 -- already carries them); a list = stage that closure instead (a host that maps
 -- modules it never links, e.g. ArcaneServer for a game module's full set).
@@ -453,8 +502,10 @@ function arc_module_consumer(mods, names, opts)
         if selected[name] and mod.prebuilt then
             if seen[name] then use_prebuilt(mod) end
         elseif selected[name] then
-            links { name }
-            if ARCANE_SDK then libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md/" .. name } end
+            -- opts.link = false: headers only (a monolithic game's static
+            -- library -- the package links every module once, whole-archived).
+            if opts.link ~= false then links { name } end
+            if ARCANE_SDK and opts.link ~= false then libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" .. arc_layout_suffix() .. "/" .. name } end
             includedirs { (path.isabsolute(mod.root) and mod.root or root .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
             if opts.vendors ~= false then
                 for _, vendor in ipairs(mod.thirdParty.public) do vendors[vendor] = true end
@@ -496,6 +547,22 @@ function arc_game_descriptor(mods, file, sourceRoot)
     local mod = load_one(file)
     if mod.type ~= "Game" then
         fail("type-rule", file .. ": a game descriptor must have type Game, not " .. tostring(mod.type))
+    end
+    -- A game links its engine modules and nothing else through the SDK: no
+    -- vendor/prebuilt module shape, no per-platform links, and only HEADER-ONLY
+    -- third-party roots (a vendor that needs a library reaches a game through
+    -- the engine module that links it) -- refused here, by name, rather than as
+    -- a late unresolved external.
+    if mod.vendor or mod.prebuilt or (mod.platforms and next(mod.platforms)) then
+        fail("schema", file .. ": a game descriptor takes no vendor, prebuilt or platforms field")
+    end
+    for _, visibility in ipairs({"public", "private"}) do
+        for _, vendor in ipairs(mod.thirdParty[visibility]) do
+            if ARC_THIRDPARTY[vendor].link then
+                fail("schema", file .. ": thirdParty " .. vendor .. " is a compiled library; a game names " ..
+                     "header-only vendors only (depend on the engine module that links it)")
+            end
+        end
     end
     local names, seen = {}, {}
     for _, visibility in ipairs({"public", "private"}) do
@@ -549,4 +616,91 @@ function arc_module_forced_refs(names)
         else options[#options+1] = "-Wl,-u," .. symbol end
     end
     linkoptions(options)
+end
+
+-- ============================================================================
+-- The package link (engine modularization s3.3): what a monolithic <Game>.exe
+-- links for the module closure of `names`, in the CURRENT project. Every module
+-- static library is whole-archived (/WHOLEARCHIVE:, --whole-archive,
+-- -force_load) so its static registrars' initializers reach the link -- the
+-- init-table entries keep them past dead-code stripping (s3.3's "why registrars
+-- survive") -- plus one forced reference per module (a missing ARC_MODULE fails
+-- the link). The vendor static libraries the closure's modules use, the prebuilt
+-- vendor modules' libraries (SDL3) and the descriptors' system libraries link
+-- once, normally. `sdk` is the engine root; returns the closure, in link order.
+-- ============================================================================
+local function vendor_dir(vendor)
+    -- ThirdParty/<Dir>/... -> ThirdParty/<Dir>: where the wrapper's bin/ lives.
+    return ARC_THIRDPARTY[vendor].include:match("^(ThirdParty/[^/]+)")
+end
+
+function arc_module_package(mods, names, sdk)
+    local selected = {}
+    for _, name in ipairs(names) do
+        selected[name] = true
+        for _, dep in ipairs(arc_module_closure(mods, name, "all")) do selected[dep] = true end
+    end
+    local closure, vendors, vendor_order = {}, {}, {}
+    for _, name in ipairs(mods.order) do
+        if selected[name] then
+            local mod = mods.byName[name]
+            if mod.type ~= "Runtime" and mod.type ~= "Client" then
+                fail("package", name .. " (" .. mod.type .. ") cannot be linked into a package: only Runtime and Client modules ship")
+            end
+            closure[#closure+1] = name
+            for _, visibility in ipairs({"public", "private"}) do
+                for _, vendor in ipairs(mod.thirdParty[visibility]) do
+                    if ARC_THIRDPARTY[vendor].link and not vendors[vendor] then
+                        vendors[vendor] = true; vendor_order[#vendor_order+1] = vendor
+                    end
+                end
+            end
+        end
+    end
+    local bin = "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/"
+    local static_ext = os.target() == "windows" and ".lib" or ".a"
+    local static_prefix = os.target() == "windows" and "" or "lib"
+    local whole = {}
+    for _, name in ipairs(closure) do
+        local mod = mods.byName[name]
+        if mod.prebuilt then
+            use_prebuilt(mod)
+        else
+            local lib = sdk .. bin .. name .. "/" .. static_prefix .. name .. static_ext
+            if os.target() == "windows" then whole[#whole+1] = "/WHOLEARCHIVE:" .. lib
+            elseif os.target() == "macosx" then whole[#whole+1] = "-Wl,-force_load," .. lib
+            else whole[#whole+1] = lib end
+            includedirs { (path.isabsolute(mod.root) and mod.root or sdk .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
+            for _, vendor in ipairs(mod.thirdParty.public) do
+                includedirs { sdk .. "/" .. ARC_THIRDPARTY[vendor].include }
+            end
+        end
+        for platform, settings in pairs(mod.platforms or {}) do
+            filter("system:" .. platform)
+            if settings.links then links(settings.links) end
+            if settings.defines then defines(settings.defines) end
+        end
+        filter {}
+    end
+    if os.target() == "windows" or os.target() == "macosx" then
+        linkoptions(whole)
+    else
+        linkoptions { "-Wl,--whole-archive" }
+        linkoptions(whole)
+        linkoptions { "-Wl,--no-whole-archive" }
+    end
+    for _, vendor in ipairs(vendor_order) do
+        local entry = ARC_THIRDPARTY[vendor]
+        links { entry.link }
+        libdirs { sdk .. "/" .. vendor_dir(vendor) .. bin .. entry.link }
+    end
+    local forced = {}
+    for _, name in ipairs(closure) do
+        if not mods.byName[name].vendor then forced[#forced+1] = name end
+    end
+    arc_module_forced_refs(forced)
+    filter "system:not windows"
+        links { "dl", "pthread" }
+    filter {}
+    return closure
 end

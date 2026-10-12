@@ -84,6 +84,9 @@ namespace Arcane
         void Unload();                     // Shutdown + ClearSystems + ResetRegistry + unload + delete copies
         bool Reload(bool restoreState);    // full sequence; rollback on any failure (re-establishes secondaries)
         void Poll();                       // debounced mtime watch -> Reload(true) on a stable change
+        // ARC_MONOLITHIC (a packaged game, engine modularization s3.2): the game is
+        // linked in -- Load adopts ArcGameModule_Get()'s table, Reload/ReloadFresh/
+        // ForceReload log and return true having done nothing, Poll watches nothing.
 
         bool ForceReload() { return Reload(true);  }
         bool ReloadFresh() { return Reload(false); }

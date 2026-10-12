@@ -12,8 +12,16 @@
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 8): PixelData/ImageCompareResult
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/GpuContext.hpp>
+// ARC_RUNTIME_HOST_VERIFY: the verification vehicle (--headless, --report,
+// --compare/--bless, pick@ probes) lives in ArcaneVerify, a Developer module.
+// ArcaneRuntime.exe links it and defines the macro; a packaged game never
+// links a Developer module (engine modularization s3.2), so its copy of this
+// host compiles the vehicle out and refuses those flags (RuntimeHost.cpp,
+// HostConfig::Parse's "verify harness not linked").
+#if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/ReferenceImages.hpp>  // --compare/--bless (Task 8): ReferenceResolution
 #include <Arcane/Host/OffscreenVehicle.hpp>   // --headless's vehicle: device + NRI wrap + offscreen graph context, no window, no swapchain
+#endif
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Host/SettleBound.hpp>   // --settle's bail conjunction: SettleBail
@@ -105,7 +113,11 @@ private:
     // and needs a null to test rather than a reference to nothing.
     [[nodiscard]] Arcane::NriGraphContext* Graph() noexcept
     {
+#if defined(ARC_RUNTIME_HOST_VERIFY)
         return m_offscreen ? &m_offscreen->Graph() : m_graphContext.get();
+#else
+        return m_graphContext.get();
+#endif
     }
 
     Arcane::HostConfig                  m_config;
@@ -143,7 +155,9 @@ private:
     // reason -- even though this vehicle borrows NO window (that is the whole
     // point of it), the pair must sit on the same side of m_gpu so the rule
     // reads as one rule rather than two that happen to agree.
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     std::unique_ptr<Arcane::OffscreenVehicle> m_offscreen;
+#endif
 
     // The boot splash: non-owning, see the ctor's doc comment. It is
     // BootSequence::Run's presenter for the WHOLE boot, not merely a
@@ -255,7 +269,9 @@ private:
     // paths empty) on a run that never asked for --compare at all, which
     // ShutdownGraphPath must never mistake for "the reference was looked
     // for and not found".
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     Arcane::ReferenceResolution           m_compareResolution;
+#endif
     // The software adapter's own reference set (Arcane::ReferenceAdapterSet),
     // "" on hardware. Fixed at the first resolve so the post-bless re-resolve
     // in ShutdownGraphPath walks the same levels.

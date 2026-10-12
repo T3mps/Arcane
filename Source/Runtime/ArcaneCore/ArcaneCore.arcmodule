@@ -18,7 +18,16 @@
       "picosha2"
     ]
   },
-  "platforms": {},
+  "platforms": {
+    "windows": {
+      "links": [
+        "dbghelp",
+        "user32",
+        "gdi32",
+        "bcrypt"
+      ]
+    }
+  },
   "apiMacro": "ARC_CORE_API",
   "apiHeader": "src/Arcane/Core/Api.hpp"
 }

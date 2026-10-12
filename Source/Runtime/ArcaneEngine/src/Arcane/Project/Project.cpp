@@ -562,6 +562,7 @@ namespace Arcane
             "Binaries/\n"
             "Intermediate/\n"
             "Saved/\n"
+            "Packages/\n"
             "\n"
             "# Plugin generated output\n"
             "Plugins/**/Binaries/\n"
@@ -569,6 +570,7 @@ namespace Arcane
             "\n"
             "# Generated IDE project files\n"
             "*.sln\n"
+            "*.slnx\n"
             "*.vcxproj\n"
             "*.vcxproj.filters\n"
             "*.vcxproj.user\n"
@@ -589,11 +591,14 @@ namespace Arcane
         // engine-module set, named for the project, under Source/ (the default
         // sourceDir). It changes nothing a build links -- a descriptor-less game
         // gets the same set -- but a new project starts with the list in view.
+        // Optional, so a failed write warns and the project still opens (the
+        // manifest and .gitignore are already on disk; refusing here would
+        // strand a half-created project a retry calls "not empty").
         if (!WriteDefaultGameDescriptorIfAbsent(dir / "Source", name))
         {
-            ARC_WARN("Project::Create: failed writing '{}'",
+            ARC_WARN("Project::Create: failed writing '{}' -- the game builds with the default "
+                     "module set until one is written",
                      (dir / "Source" / GameDescriptorFileName(name)).generic_string());
-            return std::nullopt;
         }
 
         return Open(dir);

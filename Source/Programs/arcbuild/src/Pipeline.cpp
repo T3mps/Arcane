@@ -181,6 +181,12 @@ namespace arcbuild
         case Command::Probe:
             return Probe(
                 context);
+
+        case Command::Package:
+            if (!RequireBuildBackend(context))
+                return kExitRefused;
+            return executor_.Package(
+                context);
         }
 
         output_.Error(

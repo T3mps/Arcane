@@ -16,31 +16,10 @@
 -- it comes from the system (pkg-config `sdl3`, e.g. a from-source install in
 -- /usr/local; Ubuntu 24.04 does not package SDL3). VCPKG_ROOT is therefore a
 -- Windows-target requirement only, and VCPKG_INSTALLED_MD is nil elsewhere.
-VCPKG_ROOT = os.getenv("VCPKG_ROOT")
-if os.target() == "windows" then
-if not VCPKG_ROOT then
-    error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
-end
-VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
-SDL3_PREFIX      = VCPKG_INSTALLED_MD
-SDL3_INCLUDE_DIR = VCPKG_INSTALLED_MD .. "/include"
-else
-    -- `pkg-config --variable=includedir sdl3` names the include ROOT (the one
-    -- holding SDL3/SDL.h), which is what every <SDL3/...> include expects.
-    -- SDL3_ROOT (an install prefix) overrides it; neither -> the compiler's
-    -- default search path, which already covers /usr/include and /usr/local/include.
-    local sdlRoot = os.getenv("SDL3_ROOT")
-    if sdlRoot then
-        SDL3_INCLUDE_DIR = sdlRoot .. "/include"
-        SDL3_LIB_DIR     = sdlRoot .. "/lib"
-    else
-        local inc, ok = os.outputof("pkg-config --variable=includedir sdl3 2>/dev/null")
-        local lib = os.outputof("pkg-config --variable=libdir sdl3 2>/dev/null")
-        if inc and inc ~= "" then SDL3_INCLUDE_DIR = inc end
-        if lib and lib ~= "" then SDL3_LIB_DIR = lib end
-    end
-    SDL3_INCLUDE_DIR = SDL3_INCLUDE_DIR or "/usr/local/include"
-end
+-- The discovery itself is shared with SDK consumers (a package links SDL3 too):
+-- arc_discover_sdl3() in build/modules.lua.
+include "build/modules.lua"
+arc_discover_sdl3()
 
 -- ---- Per-target file-name spellings (Linux port, 2026-10-05) ---------------
 -- Every postbuild line below names a built binary. A Windows target keeps its
@@ -129,8 +108,9 @@ end
 -- keyword: GCC rejects it outright on ELF and Clang needs -fdeclspec. ELF
 -- exports every default-visibility symbol (no import decoration exists), so
 -- the empty spelling is exact there while the workspace keeps default
--- visibility (no -fvisibility=hidden).
-if ARCANE_WINDOWS then
+-- visibility (no -fvisibility=hidden). The monolithic layout links ImGui
+-- statically into one image: empty everywhere.
+if ARCANE_WINDOWS and _OPTIONS.layout ~= "monolithic" then
     ARCANE_IMGUI_EXPORT = "__declspec(dllexport)"
     ARCANE_IMGUI_IMPORT = "__declspec(dllimport)"
 else
@@ -169,9 +149,13 @@ newoption {
     default = "modular",
 }
 
-if _OPTIONS.layout == "monolithic" then
-    error("[arcmodule] layout: monolithic is not wired until P5")
-end
+-- The monolithic layout (engine modularization s2.5/s3.3): every Runtime and
+-- Client module as a static library, plus ArcaneRuntimeHost -- the pieces a
+-- packaged game links (`arcbuild package`). Generated BESIDE the modular
+-- projects as Arcane-mono.slnx / <Project>-mono.vcxproj (the end of the module
+-- section renames them), so neither layout overwrites the other; outputs land
+-- in bin/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures are modular only.
+ARC_MONOLITHIC_LAYOUT = (_OPTIONS.layout == "monolithic")
 
 workspace "Arcane"
     architecture(ARCANE_ARCH)
@@ -288,7 +272,6 @@ workspace "Arcane"
     IncludeDir["cgltf"]            = "%{wks.location}/ThirdParty/cgltf"
     IncludeDir["meshoptimizer"]    = "%{wks.location}/ThirdParty/meshoptimizer/src"
 
-    include "build/modules.lua"
     local engine_modules = arc_modules_load {
         "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule",
         "ThirdParty/SDL3/SDL3.arcmodule",
@@ -322,7 +305,7 @@ local function module_defaults()
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }
     filter "system:not windows"
-        links { "dl", "pthread" }
+        if not ARC_MONOLITHIC_LAYOUT then links { "dl", "pthread" } end   -- a package links them once
         inlinesvisibility "Hidden"
     filter "system:linux"
         linkoptions { "-Wl,-z,defs" }
@@ -349,8 +332,9 @@ ARC_MODULE_EXTRAS = {}
 for _, name in ipairs(engine_modules.order) do ARC_MODULE_EXTRAS[name] = module_defaults end
 ARC_MODULE_EXTRAS.ArcaneCore = function()
     module_defaults()
+    -- System libraries live in the descriptors (platforms.<os>.links): a
+    -- monolithic static module must not absorb them (the package links them once).
     filter "system:windows"
-        links { "dbghelp", "user32", "gdi32", "bcrypt" }
         removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
     filter {}
 end
@@ -360,7 +344,6 @@ ARC_MODULE_EXTRAS.ArcaneRender = function()
     includedirs { "%{IncludeDir.DirectXHeaders}/directx" }
     filter "system:windows"
         defines { "VK_USE_PLATFORM_WIN32_KHR" }
-        links { "d3d12", "dxgi", "dxguid" }
         prebuildcommands { 'call "%{wks.location}/data/shaders/compile-shaders.bat"' }
     filter "system:not windows"
         prebuildcommands { 'sh "%{wks.location}/data/shaders/compile-shaders.sh"' }
@@ -409,20 +392,80 @@ ARC_MODULE_EXTRAS.ArcaneImGui = function()
     files { "%{wks.location}/ThirdParty/imgui/backends/imgui_impl_sdl3.cpp" }
     defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "IMGUI_IMPL_API=" }
 end
-ARC_MODULE_EXTRAS.ArcaneClient = function()
-    module_defaults()
-    filter "system:windows"
-        links { "dbghelp" }
-    filter {}
+ARC_MODULE_EXTRAS.ArcaneClient = module_defaults
+-- What a package can link (s3.2: Developer and Editor modules never reach a
+-- game), so the only modules the monolithic layout builds.
+local function packageable(mod)
+    return mod.type == "Runtime" or mod.type == "Client"
 end
 for _, name in ipairs(engine_modules.order) do
     local mod = engine_modules.byName[name]
-    if not mod.prebuilt then   -- a prebuilt vendor module (SDL3) has no project
+    if not mod.prebuilt and (not ARC_MONOLITHIC_LAYOUT or packageable(mod)) then
         group(mod.vendor and "ThirdParty" or mod.type)
         arc_module_project(engine_modules, name)
     end
 end
 group ""
+
+-- ============================================================================
+-- ArcaneRuntimeHost: the standalone host's whole body (RuntimeApp, the frame
+-- body, Arcane::RuntimeHost::Run) as a static library, built in BOTH layouts
+-- (engine modularization s3.3). Modular: linked by ArcaneRuntime.exe with the
+-- verification vehicle (ArcaneVerify; ARC_RUNTIME_HOST_VERIFY). Monolithic:
+-- linked by every packaged <Game>.exe, without it -- a package never links a
+-- Developer module (s3.2), so --headless/--report/--compare are refused there.
+-- ============================================================================
+group "Programs"
+project "ArcaneRuntimeHost"
+    arc_module_consumer(engine_modules,
+        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui" },
+        { stage = false })
+    location "Source/Programs/ArcaneRuntimeHost"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        -- HEADERS ONLY (see ArcaneRuntime's note below): Manifold2D-typed
+        -- engine roster, Mosaic's scheduler alias, NRI-typed NriGraphContext.
+        "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
+        "%{IncludeDir.NRI}",
+    }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
+    if not ARC_MONOLITHIC_LAYOUT then defines { "ARC_RUNTIME_HOST_VERIFY" } end
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
+group ""
+
+if ARC_MONOLITHIC_LAYOUT then
+    -- Every project generated so far gets a -mono file name (and the workspace
+    -- Arcane-mono.slnx): the modular files beside them stay untouched.
+    local wks = premake.api.scope.workspace
+    workspace(wks.name)
+        filename(wks.name .. "-mono")
+    for _, prj in ipairs(wks.projects) do
+        project(prj.name)
+            filename(prj.name .. "-mono")
+    end
+    return
+end
 -- Programs (Source/Programs/<Program>/), the test exe (Tests/ArcaneTests/) and
 -- its fixtures (Tests/Fixtures/<Fixture>/): every project below names its own
 -- solution folder right before it, and the last one resets the group.
@@ -905,6 +948,9 @@ project "ArcaneServer"
 group "Programs"
 project "ArcaneRuntime"
     arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
+    -- The host's body (RuntimeApp & co.); this exe is main.cpp + the staging below.
+    links { "ArcaneRuntimeHost" }
+    includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
     location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
@@ -1931,6 +1977,16 @@ project "ArcaneTests"
 -- same id, uncached). The post-build check turns any TLV that remains into a
 -- build error naming its symbols, rather than a module that silently never
 -- leaves. Call inside a project, with no filter active.
+local function macos_unloadable_module()
+    filter "system:macosx"
+        defines { "SPDLOG_NO_TLS" }
+        postbuildcommands {
+            'if nm -m "%{cfg.buildtarget.abspath}" | grep -E "__thread_(vars|data|bss)"; then ' ..
+            'echo "error: %{prj.name}: thread-local storage in a loaded module (symbols above) -- dyld never unloads such an image, so hot reload cannot replace it" >&2; exit 1; fi'
+        }
+    filter {}
+end
+
 -- A game-type fixture's engine surface, from its .arcmodule descriptor through
 -- the SAME reader build/arcane.lua uses for a real game (engine modularization
 -- s4): link + include only the descriptor's closure, ARC_GAME_HAS_IMGUI and the
@@ -1945,16 +2001,6 @@ local function game_fixture_modules(descriptor, sourceRoot)
         -- arcane.lua does for a real module.
         defines { "ARC_GAME_HAS_IMGUI", "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
     end
-end
-
-local function macos_unloadable_module()
-    filter "system:macosx"
-        defines { "SPDLOG_NO_TLS" }
-        postbuildcommands {
-            'if nm -m "%{cfg.buildtarget.abspath}" | grep -E "__thread_(vars|data|bss)"; then ' ..
-            'echo "error: %{prj.name}: thread-local storage in a loaded module (symbols above) -- dyld never unloads such an image, so hot reload cannot replace it" >&2; exit 1; fi'
-        }
-    filter {}
 end
 
 local function test_plugin(name, defs)

@@ -60,6 +60,18 @@ namespace arcbuild
         return spec;
     }
 
+    ProcessSpec ComposeMonolithicGenerate(
+        const std::filesystem::path& root,
+        const std::filesystem::path& premake,
+        std::string_view action)
+    {
+        ProcessSpec spec;
+        spec.executable       = premake;
+        spec.arguments        = { std::string(action), "--layout=monolithic" };
+        spec.workingDirectory = root;
+        return spec;
+    }
+
     ProcessPlan ComposeBuild(
         BuildBackend backend,
         const std::filesystem::path& builder,

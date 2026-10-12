@@ -41,6 +41,21 @@ namespace arcbuild
         };
     }
 
+    std::filesystem::path PackageManifestPath(
+        const ProjectLayout& project)
+    {
+        return project.root / "Intermediate" / "Package" / "stage.json";
+    }
+
+    std::filesystem::path PackageOutputDir(
+        const ProjectLayout& project,
+        std::string_view platform,
+        std::string_view config)
+    {
+        return project.root / "Packages" /
+               (project.name + "-" + std::string(platform) + "-" + std::string(config));
+    }
+
     std::filesystem::path NinjaLinkOutput(
         const ProjectLayout& project,
         std::string_view config)

@@ -33,6 +33,10 @@
 --   arcane_stage_modules { ... }   -- inside an exe's `project` block: postbuild
 --       copy of those modules' DLL closure beside the exe.
 --
+-- With --layout=monolithic (`arcbuild package`), arcane_game_module builds the
+-- game as a static library and also declares the packaged <Project>.exe
+-- (arcane_package_exe below): engine, host and game in one executable.
+--
 -- Usage from a game project's premake5.lua:
 --   workspace "MyGame"
 --       architecture "x64"
@@ -59,6 +63,20 @@ if not ARCANE_SDK then
           "then restart the terminal and re-generate.")
 end
 ARCANE_SDK = ARCANE_SDK:gsub("\\", "/")             -- normalize separators for premake tokens
+
+-- --layout=modular|monolithic (engine modularization s2.5): modular builds the
+-- game module DLL the hosts load; monolithic builds the packaged <Project>.exe
+-- (`arcbuild package`). Declared here for consumers; the engine's own
+-- premake5.lua declares the same option.
+if not premake.option.get("layout") then
+    newoption {
+        trigger = "layout",
+        value = "LAYOUT",
+        description = "Engine link layout",
+        allowed = { { "modular" }, { "monolithic" } },
+        default = "modular",
+    }
+end
 include(ARCANE_SDK .. "/build/modules.lua") -- shared descriptor reader for P4 consumers
 local ARCANE_MODULES = arc_modules_load { ARCANE_SDK .. "/Source", ARCANE_SDK .. "/ThirdParty/imgui/ImGui.arcmodule", ARCANE_SDK .. "/ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule", ARCANE_SDK .. "/ThirdParty/SDL3/SDL3.arcmodule" }
 local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps live inside the SDK repo
@@ -109,6 +127,11 @@ local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.archi
 -- %{wks.location} (where the glob is rooted); neither in-repo nor external
 -- consumer does.
 local function arcane_module_source_dir()
+    return (arcane_project_manifest())
+end
+
+-- The project's manifest beside premake5.lua: (sourceDir, manifest path).
+function arcane_project_manifest()
     local root = _MAIN_SCRIPT_DIR
     local manifests = os.matchfiles(root .. "/*.arcproj")
     if #manifests == 0 then
@@ -124,7 +147,7 @@ local function arcane_module_source_dir()
     end
     local dir = doc.sourceDir
     if dir == nil then
-        return "Source"
+        return "Source", manifests[1]
     end
     if type(dir) ~= "string" then
         error("arcane_game_module: " .. manifests[1] .. ": sourceDir must be a string")
@@ -136,7 +159,7 @@ local function arcane_module_source_dir()
         error("arcane_game_module: " .. manifests[1] .. ": sourceDir '" .. tostring(doc.sourceDir) ..
               "' must be Source or a directory under Source/ (no '..', no backslash)")
     end
-    return dir
+    return dir, manifests[1]
 end
 
 -- Declare + fully configure a game module (the project's primary plugin).
@@ -151,13 +174,17 @@ function arcane_game_module(name)
     local modules    = descriptor and descriptor.modules or ARC_GAME_DEFAULT_MODULES
     local hasImGui   = arc_closure_contains(ARCANE_MODULES, modules, "ImGui")
     -- Monolithic (a packaged exe): the game is a static library the package
-    -- links (engine modularization s3.3). Not wired until P5 -- refused here,
-    -- as modules.lua refuses the engine's own monolithic layout.
+    -- links (engine modularization s3.3); arcane_package_exe below declares the
+    -- exe. Generated beside the modular files as <Workspace>-mono.slnx and
+    -- <Project>-mono.vcxproj, so neither layout overwrites the other.
     local monolithic = _OPTIONS and _OPTIONS.layout == "monolithic"
     if monolithic then
-        error("[arcmodule] layout: monolithic is not wired until P5", 0)
+        local wks = premake.api.scope.workspace
+        workspace(wks.name)
+            filename(wks.name .. "-mono")
     end
     project(name)
+        if monolithic then filename(name .. "-mono") end
         kind(monolithic and "StaticLib" or "SharedLib")
         language "C++"
         cppdialect "C++23"
@@ -229,6 +256,11 @@ function arcane_game_module(name)
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.
         targetdir "%{wks.location}/Binaries"
         objdir "%{wks.location}/Intermediate/%{cfg.buildcfg}"
+        if monolithic then
+            -- Never the hosts' Binaries/ slot: the package's own tree.
+            targetdir "%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/lib"
+            objdir("%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/obj/" .. name)
+        end
 
         -- Ninja-only: beta8 emits a DUPLICATE link edge per configuration when
         -- every configuration links directly to the same Binaries/<name>
@@ -281,7 +313,9 @@ function arcane_game_module(name)
         -- root, and its public ThirdParty headers (glm/Astra/spdlog/Mosaic via
         -- ArcaneCore, Manifold2D via ArcanePhysics2D, ...). Not staged: the host
         -- carries the DLLs.
-        arc_module_consumer(ARCANE_MODULES, modules, { stage = false })
+        -- Monolithic: headers only -- a static library that linked the module
+        -- libraries would hand the package a second copy of each.
+        arc_module_consumer(ARCANE_MODULES, modules, { stage = false, link = not monolithic })
         -- A descriptor's own thirdParty entries: header roots only (a game
         -- links no vendor library of its own through the SDK).
         if descriptor then
@@ -296,14 +330,20 @@ function arcane_game_module(name)
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         }
+        if monolithic then
+            -- Engine headers: every ARC_<MODULE>_API empty; GameModule.hpp: no
+            -- exports, the ABI pinned by static_assert, ArcGameModule_Get linked.
+            defines { "ARC_MONOLITHIC" }
+        end
         if hasImGui then
             defines {
                 -- GameModule.hpp adopts the host's ImGui context + allocators
                 -- and calls OnDrawUI only when ImGui is in the game's closure.
                 "ARC_GAME_HAS_IMGUI",
                 -- adopt ImGui.dll's single GImGui. __declspec is PE/COFF-only;
-                -- ELF and Mach-O have no import decoration (default visibility exports it).
-                "IMGUI_API=" .. ((os.target() == "windows") and "__declspec(dllimport)" or ""),
+                -- ELF and Mach-O have no import decoration (default visibility
+                -- exports it); a package links ImGui into the one image.
+                "IMGUI_API=" .. ((os.target() == "windows" and not monolithic) and "__declspec(dllimport)" or ""),
             }
         end
 
@@ -321,7 +361,10 @@ function arcane_game_module(name)
             -- hardening, review F1). Listed for every action -- redundant but
             -- harmless under vs*, `-l<lib>` against MinGW's import libs under
             -- gmake, `<lib>.lib` under ninja.
-            links { "kernel32", "user32", "gdi32", "advapi32", "shell32", "ole32", "oleaut32", "uuid" }
+            -- (Not into a monolithic static library: the package exe links them.)
+            if not monolithic then
+                links { "kernel32", "user32", "gdi32", "advapi32", "shell32", "ole32", "oleaut32", "uuid" }
+            end
         -- MSVC-only flags, scoped to the MSVC compiler (see the 4251 note
         -- above for why `action:vs* or toolset:msc`): beta8's `gmake` action
         -- hands g++ these verbatim otherwise, where a `/utf-8` is an input
@@ -339,6 +382,205 @@ function arcane_game_module(name)
 
         -- Per-config: runtime + NDEBUG must match the engine DLLs' flavor (the vulkan.hpp
         -- dispatcher layout + inline header layouts are NDEBUG-conditional).
+        filter "configurations:Debug"
+            defines { "ARC_BUILD_DEBUG" }
+            runtime "Debug"
+            symbols "on"
+        filter "configurations:Release"
+            defines { "ARC_BUILD_RELEASE", "NDEBUG" }
+            runtime "Release"
+            optimize "speed"
+            symbols "on"
+        filter "configurations:Dist"
+            defines { "ARC_BUILD_DIST", "NDEBUG" }
+            runtime "Release"
+            optimize "speed"
+            symbols "off"
+        filter {}
+
+    if monolithic then arcane_package_exe(name, modules) end
+end
+
+-- ============================================================================
+-- The packaged game (engine modularization s3.3; `arcbuild package`): in the
+-- monolithic layout arcane_game_module also declares <Project>Package, the
+-- one-exe build of the game -- targetname <Project> (the manifest's stem), so
+-- it never collides with a game module of the same name. It links:
+--   * the game's static library, whole-archived (its ARC_COMPONENT/ARC_SYSTEM
+--     registrars must reach the link), with a forced reference to its
+--     ArcModule_<Game> anchor;
+--   * ArcaneRuntimeHost (the standalone host's body, built without the
+--     Developer-only verification vehicle);
+--   * the module closure of the host's modules plus the game's, each
+--     whole-archived with its forced reference, and the vendor / system
+--     libraries once (modules.lua's arc_module_package). A Developer or Editor
+--     module anywhere in that closure fails generation, naming it.
+-- Its main is generated here (Intermediate/Package/PackageMain.cpp): the Agility
+-- SDK export, the linked module list (logged at boot) and the staged project's
+-- path, handed to Arcane::RuntimeHost::Run. `arcbuild package` stages the result.
+-- ============================================================================
+ARC_PACKAGE_HOST_MODULES = { "ArcaneClient", "ArcaneImGui" }   -- ArcaneRuntimeHost's own needs
+
+function arcane_package_exe(game, gameModules)
+    local _, manifest = arcane_project_manifest()
+    local projectName = path.getbasename(manifest)
+    local root = _MAIN_SCRIPT_DIR
+    local names = {}
+    for _, n in ipairs(ARC_PACKAGE_HOST_MODULES) do names[#names+1] = n end
+    for _, n in ipairs(gameModules) do names[#names+1] = n end
+
+    project(projectName .. "Package")
+        filename(projectName .. "Package-mono")
+        targetname(projectName)
+        language "C++"
+        cppdialect "C++23"
+        staticruntime "off"
+        filter "configurations:Debug"
+            kind "ConsoleApp"                    -- a console for the log in Debug
+        filter "configurations:not Debug"
+            kind "WindowedApp"
+        filter { "system:windows", "configurations:not Debug" }
+            entrypoint "mainCRTStartup"          -- WindowedApp with a plain main()
+        filter "system:macosx"
+            architecture(arcane_sdk_mac_architecture())
+        filter {}
+        targetdir "%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/bin"
+        objdir("%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/obj/" .. projectName .. "Package")
+        dependson { game }
+
+        local closure = arc_module_package(ARCANE_MODULES, names, ARCANE_SDK)
+
+        -- The game, whole-archived, plus its anchor; then the host library.
+        local static_ext = os.target() == "windows" and ".lib" or ".a"
+        local static_prefix = os.target() == "windows" and "" or "lib"
+        local gameLib = root .. "/Intermediate/Package/%{cfg.buildcfg}/lib/" .. static_prefix .. game .. static_ext
+        if os.target() == "windows" then
+            linkoptions { "/WHOLEARCHIVE:" .. gameLib }
+        elseif os.target() == "macosx" then
+            linkoptions { "-Wl,-force_load," .. gameLib }
+        else
+            linkoptions { "-Wl,--whole-archive", gameLib, "-Wl,--no-whole-archive" }
+        end
+        arc_module_forced_refs({ game })
+        links { "ArcaneRuntimeHost" }
+        libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/ArcaneRuntimeHost" }
+        includedirs {
+            ARCANE_SDK .. "/Source/Programs/ArcaneRuntimeHost/src",
+            ARCANE_TP .. "/glm", ARCANE_TP .. "/Astra/include", ARCANE_TP .. "/enkiTS/src",
+            ARCANE_TP .. "/Manifold2D/include", ARCANE_TP .. "/Mosaic/include",
+        }
+
+        -- The generated main, rewritten only when its text changes (no rebuild churn).
+        local quoted = {}
+        for _, n in ipairs(closure) do quoted[#quoted+1] = '"' .. n .. '"' end
+        quoted[#quoted+1] = '"' .. game .. '"'
+        local main = table.concat({
+            "// GENERATED by build/arcane.lua (arcane_package_exe) -- do not edit.",
+            "// The packaged " .. projectName .. ": engine modularization s3.3.",
+            "#include <Arcane/Render/AgilitySdk.hpp>",
+            "#include <Arcane/RuntimeHost/RuntimeHost.hpp>",
+            "",
+            "// Agility SDK handshake: must be exported by the exe itself.",
+            "ARC_AGILITY_SDK_EXPORTS();",
+            "",
+            "static const char* const kModules[] = { " .. table.concat(quoted, ", ") .. " };",
+            "",
+            "int main(int argc, char** argv)",
+            "{",
+            "    Arcane::RuntimeHost::PackageInfo package;",
+            '    package.projectRelPath = "' .. projectName .. "/" .. path.getname(manifest) .. '";',
+            "    package.modules        = kModules;",
+            "    package.moduleCount    = static_cast<int>(sizeof(kModules) / sizeof(kModules[0]));",
+            '    package.appName        = "' .. projectName .. '";',
+            "    return Arcane::RuntimeHost::Run(argc, argv, &package);",
+            "}",
+            "",
+        }, "\n")
+        local mainPath = root .. "/Intermediate/Package/PackageMain.cpp"
+        if io.readfile(mainPath) ~= main then
+            os.mkdir(root .. "/Intermediate/Package")
+            local f = assert(io.open(mainPath, "wb"), "arcane_package_exe: cannot write " .. mainPath)
+            f:write(main)
+            f:close()
+        end
+        files { mainPath }
+
+        -- The stage list `arcbuild package` copies into Packages/<Project>-
+        -- <platform>-<config>/ (Source/Programs/arcbuild/src/Stage.hpp,
+        -- StagePackage): the exe, the platform's vendor runtime files (the same
+        -- set premake5.lua's arcane_vendor_runtime stages beside the engine's
+        -- programs, plus each prebuilt vendor module's runtime file -- SDL3.dll),
+        -- the engine data the host reads exe-relative, and the project itself
+        -- in <Project>/ (content copied raw; D15 replaces that with a cook).
+        local exe = (os.target() == "windows") and (projectName .. ".exe") or projectName
+        local projectRoot = path.getdirectory(manifest)
+        local function stage_entries(cfg)
+            local e = {}
+            local function add(from, to, kind, optional)
+                e[#e+1] = { from = from, to = to, kind = kind or "file", optional = optional or false }
+            end
+            add(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. exe, exe)
+            if os.target() == "windows" then
+                add(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. projectName .. ".pdb", projectName .. ".pdb", "file", true)
+            end
+            for _, n in ipairs(closure) do
+                local mod = ARCANE_MODULES.byName[n]
+                local pre = mod.prebuilt and arc_module_prebuilt(mod)
+                if pre then
+                    for _, f in ipairs((cfg == "Debug" and pre.debugRuntime) or pre.runtime) do
+                        add(f, path.getname(f))
+                    end
+                end
+            end
+            if os.target() == "windows" then
+                add(ARCANE_TP .. "/tools/dxc/dxcompiler.dll", "dxcompiler.dll")
+                add(ARCANE_TP .. "/tools/dxc/dxil.dll", "dxil.dll")
+                add(ARCANE_TP .. "/AgilitySDK/x64/D3D12Core.dll", "D3D12/D3D12Core.dll")
+                if cfg == "Debug" then
+                    add(ARCANE_TP .. "/AgilitySDK/x64/d3d12SDKLayers.dll", "D3D12/d3d12SDKLayers.dll")
+                end
+            elseif os.target() == "macosx" then
+                add(ARCANE_TP .. "/tools/dxc-macos/lib/libdxcompiler.dylib", "libdxcompiler.dylib", "file", true)
+            else
+                add(ARCANE_TP .. "/tools/dxc-linux/lib/libdxcompiler.so", "libdxcompiler.so", "file", true)
+                add(ARCANE_TP .. "/tools/dxc-linux/lib/libdxil.so", "libdxil.so", "file", true)
+            end
+            add(ARCANE_SDK .. "/data/shaders/generated", "data/shaders", "dir")
+            add(ARCANE_SDK .. "/data/shaders/materials", "data/shaders/materials", "dir")
+            add(ARCANE_SDK .. "/data/EngineConfig", "data/EngineConfig", "dir")
+            add(ARCANE_SDK .. "/data/images/arcane_logo.png", "data/images/arcane_logo.png")
+            add(manifest, projectName .. "/" .. path.getname(manifest))
+            add(projectRoot .. "/Content", projectName .. "/Content", "dir", true)
+            add(projectRoot .. "/Config", projectName .. "/Config", "dir", true)
+            add(projectRoot .. "/Intermediate/Artifacts", projectName .. "/Intermediate/Artifacts", "dir", true)
+            return e
+        end
+        local stage = { package = projectName, configs = {} }
+        for _, cfg in ipairs({ "Debug", "Release", "Dist" }) do stage.configs[cfg] = stage_entries(cfg) end
+        local stageText = json.encode(stage)
+        local stagePath = root .. "/Intermediate/Package/stage.json"
+        if io.readfile(stagePath) ~= stageText then
+            local f = assert(io.open(stagePath, "wb"), "arcane_package_exe: cannot write " .. stagePath)
+            f:write(stageText)
+            f:close()
+        end
+
+        defines {
+            "ARC_MONOLITHIC",
+            "ARC_MODULE_NAME=" .. projectName,
+            "IMGUI_API=",
+            "_CRT_SECURE_NO_WARNINGS",
+            "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        }
+        filter "action:vs* or toolset:msc"
+            disablewarnings { "4251" }
+        filter { "system:windows", "action:vs* or toolset:msc" }
+            buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
+        filter { "system:linux or system:macosx", "architecture:x86_64" }
+            buildoptions { "-mavx2", "-mfma" }
+        filter "system:windows"
+            systemversion "latest"
+            links { "kernel32", "user32", "gdi32", "advapi32", "shell32", "ole32", "oleaut32", "uuid" }
         filter "configurations:Debug"
             defines { "ARC_BUILD_DEBUG" }
             runtime "Debug"

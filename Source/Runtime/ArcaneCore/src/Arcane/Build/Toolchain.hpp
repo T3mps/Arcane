@@ -40,7 +40,15 @@ namespace Arcane::Toolchain
     // the project root (Aphelyon.slnx beside Aphelyon.arcproj), and a
     // recursive scan would find ThirdParty/vendor solutions that are not
     // ours to build.
+    // The monolithic layout's workspace (<Workspace>-mono.slnx, engine
+    // modularization s2.5) is NEVER this answer: it sorts before its modular
+    // twin ('-' < '.'), and building it in place of the game module would be
+    // a silent wrong build. DiscoverPackageSolution below is its one reader.
     ARC_CORE_API std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
+
+    // The monolithic workspace `arcbuild package` builds: the first
+    // *-mono.slnx in `projectRoot` (lexicographic), else empty.
+    ARC_CORE_API std::filesystem::path DiscoverPackageSolution(const std::filesystem::path& projectRoot);
 
     // A shell-free PATH search: split `searchPath` on the native list
     // separator (';' on Windows, ':' on POSIX) and probe each directory in

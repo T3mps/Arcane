@@ -41,7 +41,7 @@ namespace arcbuild
     void Application::PrintUsage() const
     {
         std::printf(
-            "usage: arcbuild <generate|build|rebuild|clean|probe> "
+            "usage: arcbuild <generate|build|rebuild|clean|probe|package> "
             "--project <dir|.arcproj>\n"
             "                [--config Debug|Release|Dist] "
             "[--sdk <root>] [--action <premake-action>]\n"
@@ -56,7 +56,10 @@ namespace arcbuild
             "             Intermediate/<config>/; filesystem cleanup still runs "
             "if backend clean fails\n"
             "  probe      print the slot state and exit 0 for absent/match or "
-            "3 for mismatch/unreadable\n");
+            "3 for mismatch/unreadable\n"
+            "  package    build the engine's monolithic layout and the game as one\n"
+            "             executable, then stage it with its runtime files and\n"
+            "             content in Packages/<Project>-<platform>-<config>/\n");
 
         std::fflush(stdout);
     }

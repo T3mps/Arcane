@@ -17,7 +17,9 @@
 #include <Arcane/Host/HostSettings.hpp>       // app.window.minimizedSleepMs
 #include <Arcane/Host/RuntimeSettings.hpp>    // runtime.hud.show (BuildHud)
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
+#if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
+#endif
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
@@ -612,6 +614,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // the frame -- the flag's own fixed pixel is superseded rather than
     // silently ignored, which is an acceptable trade for an untested
     // combination neither mechanism was designed to share.
+    // Verify-only (RuntimeApp.hpp's ARC_RUNTIME_HOST_VERIFY note): a package has no --report.
+#if defined(ARC_RUNTIME_HOST_VERIFY)
     if (!io.config.reportPath.empty())
     {
         const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes);
@@ -645,6 +649,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
             graphFrame.hoverPixel = glm::ivec2(-1, -1);
         }
     }
+#endif
 
     // ============================================================
     // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8) -- this frame's mesh

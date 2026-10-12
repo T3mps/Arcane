@@ -17,6 +17,10 @@ namespace arcbuild
     // (Process.hpp) -- never a shell string. Nothing here quotes, escapes,
     // or concatenates for a shell.
     [[nodiscard]] ProcessSpec ComposeGenerate(const ProjectLayout& project, const std::filesystem::path& premake, std::string_view action);
+    // `premake5 <action> --layout=monolithic` in `root` (the SDK or a project):
+    // the package workspace, generated beside the modular one (engine
+    // modularization s2.5).
+    [[nodiscard]] ProcessSpec ComposeMonolithicGenerate(const std::filesystem::path& root, const std::filesystem::path& premake, std::string_view action);
     [[nodiscard]] ProcessPlan ComposeBuild(BuildBackend backend, const std::filesystem::path& builder, const BackendContext& context, std::string_view config, BuildOperation operation);
     [[nodiscard]] ProcessPlan ComposeMsBuild(const std::filesystem::path& msbuild, const BackendContext& context, std::string_view config, BuildOperation operation);
     [[nodiscard]] ProcessPlan ComposeMake(const std::filesystem::path& make, const BackendContext& context, std::string_view config, BuildOperation operation);

@@ -11,6 +11,7 @@ namespace arcbuild
         if (word == "rebuild")  return Command::Rebuild;
         if (word == "clean")    return Command::Clean;
         if (word == "probe")    return Command::Probe;
+        if (word == "package")  return Command::Package;
 
         return std::nullopt;
     }
@@ -24,6 +25,7 @@ namespace arcbuild
         case Command::Rebuild:  return "rebuild";
         case Command::Clean:    return "clean";
         case Command::Probe:    return "probe";
+        case Command::Package:  return "package";
         }
 
         return "?";
@@ -34,7 +36,7 @@ namespace arcbuild
     {
         Arcane::Cli cli
         {
-            "arcbuild <generate|build|rebuild|clean|probe>",
+            "arcbuild <generate|build|rebuild|clean|probe|package>",
             "Arcane game-project build driver: Premake generation plus "
             "backend-native builds with the single-slot incremental rule "
             "(spec 2026-09-13)"

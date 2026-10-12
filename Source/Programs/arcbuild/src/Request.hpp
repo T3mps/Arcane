@@ -19,7 +19,8 @@ namespace arcbuild
         Build,
         Rebuild,
         Clean,
-        Probe
+        Probe,
+        Package   // engine modularization s3.3: the monolithic one-exe build + stage
     };
 
     [[nodiscard]] std::optional<Command> ParseCommand(std::string_view word);

@@ -72,6 +72,8 @@ ReferenceProject/*.xcodeproj/
 ReferenceProject/*.xcworkspace/
 ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
+# `arcbuild package` output (engine modularization s3.3).
+ReferenceProject/Packages/
 # Task 12a: a bless run points --project at this SOURCE tree, so a harvest
 # during a bless (MaterialPreviewHarvester's thumbnailDir) would otherwise
 # drop Saved/Thumbnails/<guid>.png here.

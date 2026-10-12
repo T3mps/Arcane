@@ -217,13 +217,37 @@ namespace Arcane::Toolchain
         return {};
     }
 
+    namespace
+    {
+        // <Workspace>-mono.<ext>: the monolithic layout's workspace file.
+        bool IsMonolithicWorkspace(const std::filesystem::path& file)
+        {
+            const std::string stem = file.stem().string();
+            return stem.size() > 5 && stem.ends_with("-mono");
+        }
+    }
+
+    std::filesystem::path DiscoverPackageSolution(const std::filesystem::path& projectRoot)
+    {
+        std::vector<std::filesystem::path> found;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(projectRoot, ec))
+        {
+            if (entry.is_regular_file(ec) && LowerExt(entry.path()) == ".slnx" &&
+                IsMonolithicWorkspace(entry.path()))
+                found.push_back(entry.path());
+        }
+        std::sort(found.begin(), found.end());
+        return found.empty() ? std::filesystem::path{} : found.front();
+    }
+
     std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot)
     {
         std::vector<std::filesystem::path> slnx, sln;
         std::error_code ec;
         for (const auto& entry : std::filesystem::directory_iterator(projectRoot, ec))
         {
-            if (!entry.is_regular_file(ec))
+            if (!entry.is_regular_file(ec) || IsMonolithicWorkspace(entry.path()))
                 continue;
             const std::string ext = LowerExt(entry.path());
             if (ext == ".slnx")     slnx.push_back(entry.path());

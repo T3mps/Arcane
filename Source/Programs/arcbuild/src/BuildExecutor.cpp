@@ -4,6 +4,8 @@
 #include "ProjectLayout.hpp"
 #include "Stage.hpp"
 
+#include <Arcane/Build/Toolchain.hpp>
+
 #include <string>
 
 namespace arcbuild
@@ -46,6 +48,110 @@ namespace arcbuild
 
             return kExitOk;
         }
+    }
+
+    int IBuildExecutor::Package(
+        const DriverContext&) const
+    {
+        return kExitRefused;
+    }
+
+    namespace
+    {
+        const char* PackagePlatformName()
+        {
+            switch (CurrentHostPlatform())
+            {
+            case HostPlatform::Windows: return "windows";
+            case HostPlatform::Linux:   return "linux";
+            case HostPlatform::MacOS:   return "macosx";
+            }
+            return "unknown";
+        }
+    }
+
+    int BuildExecutor::Package(
+        const DriverContext& context) const
+    {
+        if (context.backend != BuildBackend::MsBuild)
+        {
+            output_.Error(
+                std::string("package: the '") + BuildBackendName(context.backend) +
+                "' backend is not wired for packages yet (MSBuild only)");
+            return kExitRefused;
+        }
+
+        const auto premake = backends_.ResolvePremake(*context.sdkRoot);
+        if (!premake)
+        {
+            output_.Error(premake.error());
+            return kExitRefused;
+        }
+        const auto builder = backends_.ResolveBuilder(context.backend);
+        if (!builder)
+        {
+            output_.Error(builder.error());
+            return kExitRefused;
+        }
+        const BuildOperation operation =
+            context.request.forceRebuild ? BuildOperation::Rebuild : BuildOperation::Build;
+
+        // 1. The engine's monolithic layout (static modules + ArcaneRuntimeHost).
+        {
+            ProcessPlan plan;
+            plan.steps.push_back(ComposeMonolithicGenerate(*context.sdkRoot, *premake, context.request.action));
+            if (const int exit = ExecutePlan(plan, processes_, output_, "[premake]"); exit != kExitOk)
+                return exit;
+
+            const std::filesystem::path solution = Arcane::Toolchain::DiscoverPackageSolution(*context.sdkRoot);
+            if (solution.empty())
+            {
+                output_.Error("package: no monolithic engine workspace (*-mono.slnx) in " +
+                              context.sdkRoot->generic_string() + " after generate");
+                return kExitRefused;
+            }
+            output_.Info("package: engine (monolithic) " + solution.generic_string());
+            const ProcessPlan build = ComposeMsBuild(*builder, BackendContext{ solution, std::nullopt },
+                                                     context.request.config, operation);
+            if (const int exit = ExecutePlan(build, processes_, output_, BuildBackendPrefix(context.backend));
+                exit != kExitOk)
+                return exit;
+        }
+
+        // 2. The project's package workspace.
+        {
+            ProcessPlan plan;
+            plan.steps.push_back(ComposeMonolithicGenerate(context.project.root, *premake, context.request.action));
+            if (const int exit = ExecutePlan(plan, processes_, output_, "[premake]"); exit != kExitOk)
+                return exit;
+
+            const std::filesystem::path solution = Arcane::Toolchain::DiscoverPackageSolution(context.project.root);
+            if (solution.empty())
+            {
+                output_.Error("package: no monolithic project workspace (*-mono.slnx) in " +
+                              context.project.root.generic_string() + " after generate");
+                return kExitRefused;
+            }
+            output_.Info("package: project (monolithic) " + solution.generic_string());
+            const ProcessPlan build = ComposeMsBuild(*builder, BackendContext{ solution, std::nullopt },
+                                                     context.request.config, operation);
+            if (const int exit = ExecutePlan(build, processes_, output_, BuildBackendPrefix(context.backend));
+                exit != kExitOk)
+                return exit;
+        }
+
+        // 3. Stage.
+        const std::filesystem::path outDir =
+            PackageOutputDir(context.project, PackagePlatformName(), context.request.config);
+        const auto staged = StagePackage(PackageManifestPath(context.project), context.request.config, outDir);
+        if (!staged)
+        {
+            output_.Error(staged.error());
+            return kExitRefused;
+        }
+        output_.Always("package: staged " + std::to_string(staged->copied) + " entr" +
+                       (staged->copied == 1 ? "y" : "ies") + " -> " + outDir.generic_string());
+        return kExitOk;
     }
 
     int BuildExecutor::Generate(
