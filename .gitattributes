@@ -17,6 +17,7 @@
 
 # -- Cross-platform scripts and source -----------------------------------------
 *.sh    text eol=lf
+Dockerfile text eol=lf
 *.lua   text eol=lf
 *.cpp   text eol=lf
 *.hpp   text eol=lf
