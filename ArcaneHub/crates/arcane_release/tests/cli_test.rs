@@ -279,3 +279,26 @@ fn change_date_reports_the_bsl_date() {
     ok(&o);
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "2030-10-12");
 }
+
+#[test]
+fn min_serial_skips_serials_already_taken_in_history() {
+    // history/ may hold an orphaned serial (a run died between its two history
+    // writes); the next manifest must take a serial above it.
+    let t = TempDir::new().unwrap();
+    let m1 = init(t.path());
+    let resign = |min: &str, out: &str| {
+        arc(
+            &[
+                "resign", "--manifest", &p(&m1.join("releases.json")), "--sig", &p(&m1.join("releases.json.minisig")),
+                "--trust-key", &pub_path(1), "--now", NOW, "--min-serial", min, "--out-dir", &p(&t.path().join(out)),
+            ],
+            Some(1),
+            common::TEST_PASSWORD,
+        )
+    };
+    ok(&resign("5", "high"));
+    assert_eq!(serial(&t.path().join("high")), 5);
+    ok(&verify(&t.path().join("high"), &[]));
+    ok(&resign("1", "low"));
+    assert_eq!(serial(&t.path().join("low")), 2);
+}

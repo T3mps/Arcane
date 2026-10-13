@@ -60,6 +60,7 @@ pub fn read_dist(dist: &Path, version: &str) -> Result<(EngineInfo, Vec<Artifact
                 path: format!("engine/{version}/{name}"),
                 size: d.size,
                 sha256: d.sha256,
+                extra: Default::default(),
             });
         }
     }

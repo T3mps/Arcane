@@ -18,6 +18,7 @@ pub fn artifact(v: &str, os: &str, kind: &str) -> Artifact {
         path: format!("engine/{v}/arcane-{v}-{os}-x86_64{suffix}.{ext}"),
         size: 1000,
         sha256: sha(if kind == "symbols" { '5' } else { 'e' }),
+        extra: Default::default(),
     }
 }
 
@@ -38,6 +39,7 @@ pub fn release(v: &str) -> Release {
         notes_url: format!("https://starworks.dev/arcane/releases#{v}"),
         notes: format!("Notes for {v}."),
         artifacts: vec![artifact(v, "windows", "engine")],
+        extra: Default::default(),
     }
 }
 
@@ -51,6 +53,7 @@ pub fn manifest(releases: Vec<Release>) -> Manifest {
         channels: Channels::default(),
         hub: HubInfo::default(),
         releases,
+        extra: Default::default(),
     }
 }
 use std::fs;

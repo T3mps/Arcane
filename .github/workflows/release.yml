@@ -249,7 +249,7 @@ jobs:
           client-id: ${{ vars.STARWORKS_APP_CLIENT_ID }}
           private-key: ${{ secrets.STARWORKS_APP_PRIVATE_KEY }}
           owner: StarworksDev
-          repositories: Starworks
+          repositories: StarworksWebsite
           # repository_dispatch needs contents:write on the website; nothing more.
           permission-contents: write
       - name: Rebuild starworks.dev
@@ -257,6 +257,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.site-token.outputs.token }}
         run: |
-          gh api repos/StarworksDev/Starworks/dispatches -f event_type=arcane-release \
+          gh api repos/StarworksDev/StarworksWebsite/dispatches -f event_type=arcane-release \
             -F "client_payload[version]=$VERSION" -F "client_payload[channel]=$CHANNEL" \
             || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."

@@ -54,6 +54,7 @@ said "already uploaded, identical" && ok "  and says so" || bad "  and says so"
 refused "different content under the same key"    bash -c ". '$REL/lib.sh'; r2_init; put_immutable '$T/b' x/a"
 said "different content" && ok "  and says why" || bad "  and says why"
 refused "a failed put of a missing object fails"   bash -c "export FAKE_AWS_FAIL_PUT=x/c; . '$REL/lib.sh'; r2_init; put_immutable '$T/a' x/c"
+said "InternalError" && ok "  and shows aws-cli's error" || bad "  and shows aws-cli's error"
 
 # --- init
 setup
@@ -69,9 +70,18 @@ expect  "publish a rehearsal"                      publish 0.0.0-preview.1
 [ "$(find "$(obj staging/engine/0.0.0-preview.1)" -type f | wc -l)" -eq 4 ] && ok "  four archives" || bad "  four archives"
 [ "$(serial_of staging/releases.json)" = 2 ] && ok "  serial 2" || bad "  serial 2"
 pointer_verifies && ok "  pointer verifies" || bad "  pointer verifies"
-refused "publishing the same version again"        publish 0.0.0-preview.1
+expect  "re-publishing identical archives is a no-op" publish 0.0.0-preview.1
+said "already published, identical" && ok "  says so" || bad "  says so"
+[ "$(serial_of staging/releases.json)" = 2 ] && ok "  manifest unchanged" || bad "  manifest unchanged"
+echo "changed" >> "$T/dist/linux/arcane-0.0.0-preview.1-linux-x86_64.tar.gz"
+refused "the same version with different archives" publish 0.0.0-preview.1
 said "already published" && ok "  says already published" || bad "  says already published"
 [ "$(serial_of staging/releases.json)" = 2 ] && ok "  manifest unchanged" || bad "  manifest unchanged"
+
+# --- nothing is uploaded when the current manifest can't be built on
+setup; make_dist "$T/dist" 0.0.0-preview.5
+refused "a publish with no manifest yet"           publish 0.0.0-preview.5
+[ ! -d "$(obj staging/engine)" ] && ok "  uploaded no archives" || bad "  uploaded no archives"
 
 # --- rerun_after_partial: archives uploaded, manifest failed; a rerun completes
 setup; admin init staging >/dev/null; make_dist "$T/dist" 0.0.0-preview.2
@@ -100,6 +110,26 @@ refused "nothing builds on the half-updated pointer" admin resign staging
 expect  "repair restores the newest verified pair" admin repair staging
 pointer_verifies && ok "  pointer verifies" || bad "  pointer verifies"
 [ "$(serial_of staging/releases.json)" = 2 ] && ok "  at serial 2" || bad "  at serial 2"
+
+# --- orphaned_history: history/<N+1>.json landed, its .minisig did not; the
+# next run takes a serial above it instead of colliding forever
+setup; admin init staging >/dev/null
+refused "a resign failing at the history signature" env FAKE_AWS_FAIL_PUT=staging/history/000000002.json.minisig bash "$REL/manifest-admin.sh" resign staging
+[ -f "$(obj staging/history/000000002.json)" ] && ok "  left an orphaned history/2" || bad "  left an orphaned history/2"
+expect  "the next resign succeeds"                 admin resign staging
+[ "$(serial_of staging/releases.json)" = 3 ] && ok "  at serial 3, above the orphan" || bad "  at serial 3, above the orphan"
+pointer_verifies && ok "  pointer verifies" || bad "  pointer verifies"
+expect  "repair still works"                       admin repair staging
+[ "$(serial_of staging/releases.json)" = 3 ] && ok "  and keeps serial 3" || bad "  and keeps serial 3"
+
+# --- pointer_failed: the history pair landed, the pointer write did not
+setup; admin init staging >/dev/null
+refused "a resign whose pointer write fails"        env FAKE_AWS_FAIL_PUT=staging/releases.json bash "$REL/manifest-admin.sh" resign staging
+said "InternalError" && ok "  shows aws-cli's error" || bad "  shows aws-cli's error"
+said "op=repair" && ok "  names the repair" || bad "  names the repair"
+expect  "the re-run succeeds"                      admin resign staging
+[ "$(serial_of staging/releases.json)" = 3 ] && ok "  at serial 3" || bad "  at serial 3"
+pointer_verifies && ok "  pointer verifies" || bad "  pointer verifies"
 
 # --- tampered: refused, and the message says so
 setup; admin init staging >/dev/null

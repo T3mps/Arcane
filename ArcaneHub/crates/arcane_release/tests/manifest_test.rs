@@ -133,3 +133,22 @@ fn base_url_is_https_with_a_trailing_slash() {
         assert!(matches!(m.validate(), Err(ManifestError::BadBaseUrl(_))), "{url} was accepted");
     }
 }
+
+#[test]
+fn unknown_fields_survive_a_rewrite() {
+    // A schema-1 manifest may gain fields; an older arcrelease that re-signs it
+    // must carry them over, not drop them from the signed bytes.
+    let mut v: serde_json::Value = serde_json::from_slice(&manifest(vec![release("0.3.1")]).to_bytes()).unwrap();
+    v["added_later"] = serde_json::json!({ "x": 1 });
+    v["hub"]["hub_later"] = serde_json::json!(2);
+    v["channels"]["lts"] = serde_json::json!("0.3.1");
+    v["releases"][0]["release_later"] = serde_json::json!(true);
+    v["releases"][0]["artifacts"][0]["artifact_later"] = serde_json::json!("y");
+    let m = Manifest::parse(&serde_json::to_vec(&v).unwrap()).unwrap();
+    let again: serde_json::Value = serde_json::from_slice(&m.to_bytes()).unwrap();
+    assert_eq!(again["added_later"], serde_json::json!({ "x": 1 }));
+    assert_eq!(again["hub"]["hub_later"], 2);
+    assert_eq!(again["channels"]["lts"], "0.3.1");
+    assert_eq!(again["releases"][0]["release_later"], true);
+    assert_eq!(again["releases"][0]["artifacts"][0]["artifact_later"], "y");
+}

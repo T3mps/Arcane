@@ -52,6 +52,15 @@ struct Clock {
     now: Option<String>,
 }
 
+#[derive(Args)]
+struct Serial {
+    /// The lowest serial the new manifest may take. CI passes 1 + the highest
+    /// serial under history/, so a serial an interrupted run left there is skipped
+    /// (Hubs only need serials to rise).
+    #[arg(long)]
+    min_serial: Option<u64>,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Generate an encrypted minisign key pair; the password comes from ARCANE_MINISIGN_PASSWORD.
@@ -83,6 +92,8 @@ enum Cmd {
         trust: Trust,
         #[command(flatten)]
         clock: Clock,
+        #[command(flatten)]
+        serial: Serial,
         #[arg(long, default_value = BASE_URL)]
         base_url: String,
         #[arg(long)]
@@ -96,6 +107,8 @@ enum Cmd {
         trust: Trust,
         #[command(flatten)]
         clock: Clock,
+        #[command(flatten)]
+        serial: Serial,
         #[arg(long)]
         dist: PathBuf,
         #[arg(long)]
@@ -119,6 +132,8 @@ enum Cmd {
         trust: Trust,
         #[command(flatten)]
         clock: Clock,
+        #[command(flatten)]
+        serial: Serial,
         #[arg(long)]
         version: String,
         #[arg(long)]
@@ -134,6 +149,8 @@ enum Cmd {
         trust: Trust,
         #[command(flatten)]
         clock: Clock,
+        #[command(flatten)]
+        serial: Serial,
         #[arg(long)]
         out_dir: PathBuf,
     },
@@ -184,13 +201,13 @@ fn main() -> Result<()> {
             println!("ok");
             Ok(())
         }
-        Cmd::Init { trust, clock, base_url, out_dir } => {
+        Cmd::Init { trust, clock, serial, base_url, out_dir } => {
             let now = now(&clock)?;
             let m = ops::empty(&base_url, now);
             m.validate()?;
-            write_signed(&m, &keys_for(&trust)?, &out_dir, now)
+            write_signed(floor(m, &serial), &keys_for(&trust)?, &out_dir, now)
         }
-        Cmd::Add { current, trust, clock, dist, version, released_at, notes_file, security, min_hub_version, out_dir } => {
+        Cmd::Add { current, trust, clock, serial, dist, version, released_at, notes_file, security, min_hub_version, out_dir } => {
             let now = now(&clock)?;
             let keys = keys_for(&trust)?;
             let cur = read_current(&current, &keys)?;
@@ -206,19 +223,19 @@ fn main() -> Result<()> {
                 notes,
                 artifacts,
             };
-            write_signed(&ops::add_release(&cur, new, now)?, &keys, &out_dir, now)
+            write_signed(floor(ops::add_release(&cur, new, now)?, &serial), &keys, &out_dir, now)
         }
-        Cmd::Yank { current, trust, clock, version, reason, out_dir } => {
+        Cmd::Yank { current, trust, clock, serial, version, reason, out_dir } => {
             let now = now(&clock)?;
             let keys = keys_for(&trust)?;
             let cur = read_current(&current, &keys)?;
-            write_signed(&ops::yank(&cur, &version, &reason, now)?, &keys, &out_dir, now)
+            write_signed(floor(ops::yank(&cur, &version, &reason, now)?, &serial), &keys, &out_dir, now)
         }
-        Cmd::Resign { current, trust, clock, out_dir } => {
+        Cmd::Resign { current, trust, clock, serial, out_dir } => {
             let now = now(&clock)?;
             let keys = keys_for(&trust)?;
             let cur = read_current(&current, &keys)?;
-            write_signed(&ops::resign(&cur, now)?, &keys, &out_dir, now)
+            write_signed(floor(ops::resign(&cur, now)?, &serial), &keys, &out_dir, now)
         }
         Cmd::Verify { current, trust, clock, highest_serial, signature_only } => {
             let keys = keys_for(&trust)?;
@@ -240,6 +257,14 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Raises the new manifest's serial to `--min-serial` if it is lower.
+fn floor(mut m: Manifest, serial: &Serial) -> Manifest {
+    if let Some(min) = serial.min_serial {
+        m.serial = m.serial.max(min);
+    }
+    m
 }
 
 fn now(clock: &Clock) -> Result<OffsetDateTime> {
@@ -271,7 +296,7 @@ fn read_current(current: &Current, keys: &[PublicKey]) -> Result<Manifest> {
     })
 }
 
-fn write_signed(m: &Manifest, keys: &[PublicKey], out_dir: &Path, now: OffsetDateTime) -> Result<()> {
+fn write_signed(m: Manifest, keys: &[PublicKey], out_dir: &Path, now: OffsetDateTime) -> Result<()> {
     let key_text = std::env::var(KEY_ENV).with_context(|| format!("{KEY_ENV} is not set"))?;
     let password = std::env::var(PASSWORD_ENV).with_context(|| format!("{PASSWORD_ENV} is not set"))?;
     let sk = sign::open_secret_key(&key_text, &password)?;

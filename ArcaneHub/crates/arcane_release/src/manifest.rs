@@ -1,7 +1,8 @@
 //! `releases.json`, schema 1 (spec s5). serde ignores fields it doesn't know,
 //! so a later schema-1 manifest may ADD fields; a change an older Hub would
 //! misread bumps `schema` instead. `kind`, `os` and `arch` are strings, not
-//! enums, so a new artifact kind never breaks an older Hub's parse.
+//! enums, so a new artifact kind never breaks an older Hub's parse. Unknown
+//! fields are kept (`extra`) and written back, so re-signing never drops them.
 
 use std::collections::HashSet;
 
@@ -32,6 +33,10 @@ pub struct Artifact {
     pub path: String,
     pub size: u64,
     pub sha256: String,
+    /// Fields this build doesn't know (a later schema-1 addition), kept so a
+    /// re-sign by an older arcrelease never drops them from the signed bytes.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,12 +62,20 @@ pub struct Release {
     #[serde(default)]
     pub notes: String,
     pub artifacts: Vec<Artifact>,
+    /// Fields this build doesn't know (a later schema-1 addition), kept so a
+    /// re-sign by an older arcrelease never drops them from the signed bytes.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub stable: Option<String>,
     pub preview: Option<String>,
+    /// Fields this build doesn't know (a later schema-1 addition), kept so a
+    /// re-sign by an older arcrelease never drops them from the signed bytes.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The Hub's own release line (spec s5 `hub`); filled in by phase 4.
@@ -72,6 +85,10 @@ pub struct HubInfo {
     pub min_supported: Option<String>,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
+    /// Fields this build doesn't know (a later schema-1 addition), kept so a
+    /// re-sign by an older arcrelease never drops them from the signed bytes.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +102,10 @@ pub struct Manifest {
     #[serde(default)]
     pub hub: HubInfo,
     pub releases: Vec<Release>,
+    /// Fields this build doesn't know (a later schema-1 addition), kept so a
+    /// re-sign by an older arcrelease never drops them from the signed bytes.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

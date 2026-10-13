@@ -39,20 +39,25 @@ content_type_for() {
     esac
 }
 
-# put_immutable FILE KEY: upload once. If KEY exists already, the same SHA-256
-# counts as uploaded (a rerun); different content fails (versions are immutable).
+# aws_error FILE: aws-cli's error text from a captured stderr, on one line.
+aws_error() { tr -s '\r\n' '  ' <"$1" | sed 's/^ *//; s/ *$//'; }
+
+# put_immutable FILE KEY [WHY]: upload once. If KEY exists already, the same
+# SHA-256 counts as uploaded (a rerun); different content fails with WHY
+# (default: versions are immutable).
 put_immutable() {
-    local file=$1 key=$2 sha existing
+    local file=$1 key=$2 sha existing err
+    err=$(mktemp)
     sha=$(sha256_of "$file")
     if r2 put-object --bucket "$R2_BUCKET" --key "$key" --body "$file" --if-none-match '*' \
         --content-type "$(content_type_for "$key")" --cache-control 'public, max-age=31536000, immutable' \
-        --metadata "sha256=$sha" >/dev/null 2>&1; then
+        --metadata "sha256=$sha" >/dev/null 2>"$err"; then
         echo "uploaded $key"
         return 0
     fi
     existing=$(r2 head-object --bucket "$R2_BUCKET" --key "$key" 2>/dev/null | jq -r '.Metadata.sha256 // empty') || existing=""
-    [ -n "$existing" ] || die "uploading $key failed and no such object exists"
-    [ "$existing" = "$sha" ] || die "$key already exists with different content (sha256 $existing); versions are immutable"
+    [ -n "$existing" ] || die "uploading $key failed: $(aws_error "$err")"
+    [ "$existing" = "$sha" ] || die "${3:-$key already exists with different content (sha256 $existing); versions are immutable}"
     echo "already uploaded, identical: $key"
 }
 
@@ -83,11 +88,12 @@ get_manifest() {
 # (or only if absent), then its signature (retried). The pair cannot be
 # written atomically; history/ is what repair restores from.
 put_pointer() {
-    local dir=$1 prefix=$2 etag=$3 i cond
+    local dir=$1 prefix=$2 etag=$3 i cond err
+    err=$(mktemp)
     if [ "$etag" = none ]; then cond=(--if-none-match '*'); else cond=(--if-match "$etag"); fi
     r2 put-object --bucket "$R2_BUCKET" --key "${prefix}releases.json" --body "$dir/releases.json" "${cond[@]}" \
-        --content-type application/json --cache-control no-cache >/dev/null 2>&1 \
-        || die "${prefix}releases.json changed since it was read (another run published first?); nothing was overwritten. Re-run this workflow."
+        --content-type application/json --cache-control no-cache >/dev/null 2>"$err" \
+        || die "${prefix}releases.json was not written: $(aws_error "$err"). On PreconditionFailed another run published first and nothing was overwritten: re-run this workflow. On any other error the write's outcome is unknown: run manifest-admin.yml with op=repair, then re-run."
     for i in 1 2 3; do
         if r2 put-object --bucket "$R2_BUCKET" --key "${prefix}releases.json.minisig" --body "$dir/releases.json.minisig" \
             --content-type text/plain --cache-control no-cache >/dev/null 2>&1; then
@@ -99,14 +105,29 @@ put_pointer() {
     die "${prefix}releases.json was updated but its signature was not; run manifest-admin.yml with op=repair (docs/releasing.md, \"Repair\")"
 }
 
-# publish_manifest DIR PREFIX ETAG|none: the history copy FIRST, write-once (an
-# existing copy is refused unless byte-identical, which only a re-run of the
-# same signing produces), so repair always has a signed copy; then the pointer.
+# history_floor PREFIX: 1 + the highest serial under PREFIXhistory/ (1 if none),
+# passed to arcrelease as --min-serial. A run that died between its two history
+# writes leaves its serial taken; the next manifest skips it (Hubs only need
+# serials to rise), so one failed upload never blocks every later write.
+history_floor() {
+    local prefix=$1 listing top
+    listing=$(r2 list-objects-v2 --bucket "$R2_BUCKET" --prefix "${prefix}history/") \
+        || die "cannot list ${prefix}history/"
+    top=$(jq -r '.Contents[]?.Key' <<<"$listing" | sed -n 's|.*/\([0-9]\{9\}\)\.json$|\1|p' | sort | tail -1)
+    echo $((10#${top:-0} + 1))
+}
+
+# publish_manifest DIR PREFIX ETAG|none: the history copy FIRST, write-once, so
+# repair always has a signed copy; then the pointer. The serial is above every
+# history entry (history_floor), so a collision means another run published
+# that serial first: this run's manifest is stale and nothing is overwritten.
 publish_manifest() {
-    local dir=$1 prefix=$2 etag=$3 hist
-    hist=$(printf '%shistory/%09d' "$prefix" "$(jq -r .serial "$dir/releases.json")")
-    put_immutable "$dir/releases.json" "$hist.json"
-    put_immutable "$dir/releases.json.minisig" "$hist.json.minisig"
+    local dir=$1 prefix=$2 etag=$3 serial hist race
+    serial=$(jq -r .serial "$dir/releases.json")
+    hist=$(printf '%shistory/%09d' "$prefix" "$serial")
+    race="another run published serial $serial first; nothing was overwritten. Re-run this workflow."
+    put_immutable "$dir/releases.json" "$hist.json" "$race"
+    put_immutable "$dir/releases.json.minisig" "$hist.json.minisig" "$race"
     put_pointer "$dir" "$prefix" "$etag"
 }
 

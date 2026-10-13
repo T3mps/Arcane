@@ -48,7 +48,7 @@
   The rest (`actions/download-artifact`, `azure/login`, `azure/artifact-signing-action`, `actions/create-github-app-token`) are written at their current major and frozen by `pin-actions.sh`. Never a v4 action (the Node 20 line the 2026-10-12 Actions audit retired, C3).
 - Every `actions/checkout` sets `persist-credentials: false` (audit C7). Nothing in these jobs pushes with git; `gh` uses an explicit `GH_TOKEN`.
 - `history/<serial>.json` and its `.minisig` are written FIRST and are write-once. An existing copy is refused unless it is byte-identical, which only a re-run of the same signing produces. That way repair always has a signed copy to restore from.
-- The website rebuild is a `repository_dispatch` (`arcane-release`) to `StarworksDev/Starworks`. Its token comes from a StarworksDev GitHub App (`actions/create-github-app-token`), never a personal token. The website's own workflow builds and deploys (Task 16).
+- The website rebuild is a `repository_dispatch` (`arcane-release`) to `StarworksDev/StarworksWebsite`. Its token comes from a StarworksDev GitHub App (`actions/create-github-app-token`), never a personal token. The website's own workflow builds and deploys (Task 16).
 - A watchdog outside GitHub's scheduler checks `releases.json`'s `expires` daily and alerts when fewer than 30 days remain: the Starworks Ops bot (Task 17). A disabled schedule fails silently.
 - Never echo a secret. Scripts read secrets from the environment only.
 
@@ -4364,16 +4364,16 @@ jobs:
         if: env.MODE == 'publish'
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.STARWORKS_APP_ID }}
+          client-id: ${{ vars.STARWORKS_APP_CLIENT_ID }}
           private-key: ${{ secrets.STARWORKS_APP_PRIVATE_KEY }}
           owner: StarworksDev
-          repositories: Starworks
+          repositories: StarworksWebsite
       - name: Rebuild starworks.dev
         if: env.MODE == 'publish'
         env:
           GH_TOKEN: ${{ steps.site-token.outputs.token }}
         run: |
-          gh api repos/StarworksDev/Starworks/dispatches -f event_type=arcane-release \
+          gh api repos/StarworksDev/StarworksWebsite/dispatches -f event_type=arcane-release \
             -F "client_payload[version]=$VERSION" -F "client_payload[channel]=$CHANNEL" \
             || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."
 ```
@@ -4748,18 +4748,18 @@ arcrelease verify --manifest releases.json --sig releases.json.minisig
 
 - [ ] **Step 6: The cross-repo token for the website rebuild (owner)**
 
-The publish job sends a `repository_dispatch` to the website repo, using a token minted from a StarworksDev **GitHub App**: the StarworksBuilder decision, never a personal token. A `repository_dispatch` needs the app to have **Contents: Read and write** on the target repository.
+The publish job sends a `repository_dispatch` to the website repo, using a token minted from a StarworksDev **GitHub App**: the StarworksBuilder decision, never a personal token. A `repository_dispatch` needs the app to have **Contents: Read and write** on the target repository (`StarworksDev/StarworksWebsite`).
 
 1. If the org already has the StarworksBuilder app, open it (StarworksDev → Settings → Developer settings → GitHub Apps). Otherwise create it there as **New GitHub App**:
    - name `StarworksBuilder`;
    - no webhook (untick Active);
    - **Repository permissions:** Contents: Read and write, and Metadata: Read-only (required);
    - "Only on this account".
-2. Install it on StarworksDev, choosing **Only select repositories** and including `Starworks`.
-3. Generate a private key (App settings → Private keys), and store the app's ID and key in Arcane's `release` environment:
+2. Install it on StarworksDev, choosing **Only select repositories** and including `StarworksWebsite`.
+3. Generate a private key (App settings → Private keys), and store the app's **Client ID** (starts with `Iv`, on the app's General page; not the numeric App ID) and key in Arcane's `release` environment:
 
 ```bash
-gh variable set STARWORKS_APP_ID --env release --repo StarworksDev/Arcane --body "<app id>"
+gh variable set STARWORKS_APP_CLIENT_ID --env release --repo StarworksDev/Arcane --body "<client id>"
 gh secret set STARWORKS_APP_PRIVATE_KEY --env release --repo StarworksDev/Arcane < ~/Downloads/starworksbuilder.*.private-key.pem
 ```
 
@@ -4927,12 +4927,12 @@ This task is in **`D:\dev\web\Starworks`**, not Arcane. Do it on a branch there 
 - [ ] **Step 1: Find out how the Pages project deploys (owner)**
 
 Open Cloudflare → Workers & Pages → `starworksdev` → Settings:
-- If it shows a connected Git repository, it is **Git-integrated**. Create a deploy hook (Settings → Builds → Deploy hooks → `arcane-release`, branch `main`) and store it in the website repo: `gh secret set PAGES_DEPLOY_HOOK_URL --repo StarworksDev/Starworks`.
+- If it shows a connected Git repository, it is **Git-integrated**. Create a deploy hook (Settings → Builds → Deploy hooks → `arcane-release`, branch `main`) and store it in the website repo: `gh secret set PAGES_DEPLOY_HOOK_URL --repo StarworksDev/StarworksWebsite`.
 - Otherwise it is **Direct Upload**. Create a Cloudflare API token with the "Cloudflare Pages: Edit" permission for this account only, and store it:
 
 ```bash
-gh secret set CLOUDFLARE_API_TOKEN --repo StarworksDev/Starworks
-gh variable set CLOUDFLARE_ACCOUNT_ID --repo StarworksDev/Starworks --body "<account id>"
+gh secret set CLOUDFLARE_API_TOKEN --repo StarworksDev/StarworksWebsite
+gh variable set CLOUDFLARE_ACCOUNT_ID --repo StarworksDev/StarworksWebsite --body "<account id>"
 ```
 
 The workflow handles both cases: it POSTs the hook when one exists, and otherwise builds and runs `wrangler pages deploy`.
@@ -5029,7 +5029,7 @@ Expected: green, and a new Pages deployment listed in Cloudflare.
 Then from Arcane's side, send the dispatch the release job sends:
 
 ```bash
-gh api repos/StarworksDev/Starworks/dispatches -f event_type=arcane-release -F "client_payload[version]=0.0.0-test"
+gh api repos/StarworksDev/StarworksWebsite/dispatches -f event_type=arcane-release -F "client_payload[version]=0.0.0-test"
 ```
 
 Expected: an `arcane-release` run starts in the website repo. This uses your own `gh` login; the release job uses the app token.

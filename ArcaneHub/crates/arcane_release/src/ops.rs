@@ -54,6 +54,7 @@ pub fn empty(base_url: &str, now: OffsetDateTime) -> Manifest {
         channels: Channels::default(),
         hub: HubInfo::default(),
         releases: Vec::new(),
+        extra: Default::default(),
     };
     stamp(&mut m, now);
     m
@@ -88,6 +89,7 @@ pub fn add_release(current: &Manifest, new: NewRelease, now: OffsetDateTime) -> 
         security: new.security,
         notes: new.notes,
         artifacts: new.artifacts,
+        extra: Default::default(),
     });
     finish(m, now)
 }
@@ -134,7 +136,8 @@ fn add_years(d: Date, years: i32) -> Date {
 
 fn finish(mut m: Manifest, now: OffsetDateTime) -> Result<Manifest, OpError> {
     m.releases.sort_by(|a, b| Version::parse(&b.version).ok().cmp(&Version::parse(&a.version).ok()));
-    m.channels = Channels { stable: newest(&m, true), preview: newest(&m, false) };
+    m.channels.stable = newest(&m, true);
+    m.channels.preview = newest(&m, false);
     stamp(&mut m, now);
     m.validate()?;
     Ok(m)
