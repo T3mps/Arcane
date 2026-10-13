@@ -77,7 +77,7 @@ TEST_CASE("ExeCandidates: packaged layout first, dev bin layout second", "[edito
     REQUIRE(candidates.size() == 2);
     // Packaged layout: ArcaneRuntime.exe sits BESIDE ArcaneEditor.exe.
     CHECK(candidates[0] == dir / "ArcaneRuntime.exe");
-    // Dev bin layout: premake's bin/<cfg>-<os>-<arch>-md/<Project>/ puts
+    // Dev bin layout: premake's Binaries/<cfg>-<os>-<arch>-md/<Project>/ puts
     // every project in its own sibling directory.
     CHECK(candidates[1] == dir / ".." / "ArcaneRuntime" / "ArcaneRuntime.exe");
 }

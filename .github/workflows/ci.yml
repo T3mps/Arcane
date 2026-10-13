@@ -29,7 +29,7 @@ name: CI
 #     (see docs/ci.md "GPU lanes" for what that proves and what it cannot);
 #   * Release on windows-msvc, linux-gcc-14 and macos-appleclang: the
 #     monolithic package (`arcbuild package`, engine modularization s3.3) run
-#     IN PLACE from Packages/ with no SDK, no bin/ and a bare PATH -- a windowed
+#     IN PLACE from Packages/ with no SDK, no Binaries/ and a bare PATH -- a windowed
 #     boot on Linux (Xvfb + lavapipe), a load check (--print-engine-info) plus
 #     an imports check on Windows and macOS. Every Linux/macOS leg also runs the
 #     LinkProbe fixture (whole-archive + forced references on GNU ld / ld64).
@@ -240,7 +240,7 @@ jobs:
 
       # The one-executable ReferenceProject, staged and run where it lands: its
       # own libSDL3 and no Arcane module (ldd), then a windowed boot (Xvfb +
-      # lavapipe) with no SDK, no bin/ and a bare PATH.
+      # lavapipe) with no SDK, no Binaries/ and a bare PATH.
       - name: Package (Linux)
         if: env.PACKAGE_LANE == 'true'
         run: scripts/ci/package.sh ${{ matrix.config }}
@@ -269,9 +269,9 @@ jobs:
           name: logs-${{ matrix.leg }}-${{ matrix.config }}
           path: |
             logs/
-            bin/*/ArcaneTests/diagnostics/
-            bin/*/ArcaneTests/*.log
-            bin/*/ArcaneTests/ReferenceProject/Saved/Verify/
+            Binaries/*/ArcaneTests/diagnostics/
+            Binaries/*/ArcaneTests/*.log
+            Binaries/*/ArcaneTests/ReferenceProject/Saved/Verify/
             /tmp/arcane-witness/
           if-no-files-found: ignore
           retention-days: 14
@@ -507,9 +507,9 @@ jobs:
           name: logs-${{ matrix.leg }}-${{ matrix.config }}
           path: |
             logs/
-            bin/*/ArcaneTests/diagnostics/
-            bin/*/ArcaneTests/*.log
-            bin/*/ArcaneTests/ReferenceProject/Saved/Verify/
+            Binaries/*/ArcaneTests/diagnostics/
+            Binaries/*/ArcaneTests/*.log
+            Binaries/*/ArcaneTests/ReferenceProject/Saved/Verify/
           if-no-files-found: ignore
           retention-days: 14
 

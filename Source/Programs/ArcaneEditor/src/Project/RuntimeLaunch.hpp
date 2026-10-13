@@ -32,7 +32,7 @@ namespace Arcane::Editor::RuntimeLaunch
 
     // Where ArcaneRuntime.exe might live relative to the EDITOR exe's own
     // directory: packaged layout first (installed side by side), dev bin
-    // layout second (premake's bin/<cfg>-<os>-<arch>-md/<Project>/ puts every
+    // layout second (premake's Binaries/<cfg>-<os>-<arch>-md/<Project>/ puts every
     // project in its own sibling directory, so ArcaneEditor's dir has an
     // "../ArcaneRuntime/" neighbor). Mirrors the Hub's suggest_engine, which
     // probes exe_dir/ArcaneEditor.exe then exe_dir/../ArcaneEditor/

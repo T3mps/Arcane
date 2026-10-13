@@ -219,15 +219,15 @@ TEST_CASE("foreign modules: OriginOf tells this host's own tree, Windows' tree a
 {
     using Arcane::ForeignModules::Origin;
     using Arcane::ForeignModules::OriginOf;
-    const std::vector<std::string> owned = { "D:\\dev\\starworks\\Arcane\\bin\\Debug-windows-x86_64-md\\ArcaneEditor" };
+    const std::vector<std::string> owned = { "D:\\dev\\starworks\\Arcane\\Binaries\\Debug-windows-x86_64-md\\ArcaneEditor" };
     const std::string_view          windows = "C:\\Windows";
 
     // Ours: the exe's own tree, subdirectories included (the vendored Agility
     // runtime lives in <exedir>/D3D12/), whatever case and slashes the loader
     // reports.
-    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\bin\\Debug-windows-x86_64-md\\ArcaneEditor\\ArcaneClient.dll", owned, windows) == Origin::Owned);
-    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\bin\\Debug-windows-x86_64-md\\ArcaneEditor\\D3D12\\D3D12Core.dll", owned, windows) == Origin::Owned);
-    CHECK(OriginOf("d:/DEV/starworks/arcane/bin/debug-windows-x86_64-md/arcaneeditor/ArcaneCore.dll", owned, windows) == Origin::Owned);
+    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\Binaries\\Debug-windows-x86_64-md\\ArcaneEditor\\ArcaneClient.dll", owned, windows) == Origin::Owned);
+    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\Binaries\\Debug-windows-x86_64-md\\ArcaneEditor\\D3D12\\D3D12Core.dll", owned, windows) == Origin::Owned);
+    CHECK(OriginOf("d:/DEV/starworks/arcane/Binaries/debug-windows-x86_64-md/arcaneeditor/ArcaneCore.dll", owned, windows) == Origin::Owned);
 
     // The OS: everything under the Windows directory, the driver store included.
     CHECK(OriginOf("C:\\Windows\\System32\\ntdll.dll", owned, windows) == Origin::System);
@@ -241,7 +241,7 @@ TEST_CASE("foreign modules: OriginOf tells this host's own tree, Windows' tree a
     // A prefix is not a tree: a sibling directory whose name merely starts
     // the same way is outside both.
     CHECK(OriginOf("C:\\Windows2\\x.dll", owned, windows) == Origin::Foreign);
-    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\bin\\Debug-windows-x86_64-md\\ArcaneEditorOld\\x.dll", owned, windows) == Origin::Foreign);
+    CHECK(OriginOf("D:\\dev\\starworks\\Arcane\\Binaries\\Debug-windows-x86_64-md\\ArcaneEditorOld\\x.dll", owned, windows) == Origin::Foreign);
 
     // No path at all cannot be placed: it is not called foreign on no evidence.
     CHECK(OriginOf("", owned, windows) == Origin::Unknown);

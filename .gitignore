@@ -4,7 +4,11 @@
 # =============================================================================
 
 # -- Build output --------------------------------------------------------------
-# All compiled output lands in bin/ and bin-int/ by premake5 convention.
+# The engine's compiled output: Binaries/<cfg>-<sys>-<arch>-md|mono/ and
+# Intermediate/Build/ (Intermediate/ is ignored below). Vendored ThirdParty
+# libraries still build into their own bin/ + bin-int/ (and a pre-rename
+# checkout keeps its old root bin/ + bin-int/).
+/Binaries/
 bin/
 # ...but not a Rust crate's src/bin/ (the arcrelease CLI)
 !ArcaneHub/crates/arcane_release/src/bin/

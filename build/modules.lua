@@ -359,7 +359,7 @@ local function layout()
     return _OPTIONS.layout or "modular"
 end
 
--- The bin flavor suffix of the current layout: bin/<cfg>-<sys>-<arch>-<suffix>/.
+-- The bin flavor suffix of the current layout: Binaries/<cfg>-<sys>-<arch>-<suffix>/.
 function arc_layout_suffix()
     return layout() == "monolithic" and "mono" or "md"
 end
@@ -381,8 +381,8 @@ function arc_module_project(mods, name)
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir("bin/" .. outputdir .. "/%{prj.name}")
-    objdir("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { src .. "/src/**.hpp", src .. "/src/**.cpp" }
     includedirs { src .. "/src" }
     local root = ARCANE_SDK or ARC_ROOT or "%{wks.location}"
@@ -465,7 +465,7 @@ function arc_module_stage(mods, names)
         elseif selected[name] then
             local extension = os.target() == "windows" and ".dll" or (os.target() == "macosx" and ".dylib" or ".so")
             local prefix = os.target() == "windows" and "" or "lib"
-            commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/bin/' .. out .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
+            commands[#commands+1] = '{COPYFILE} "' .. (ARCANE_SDK or "%{wks.location}") .. '/Binaries/' .. out .. '/' .. name .. '/' .. prefix .. name .. extension .. '" "%{cfg.buildtarget.directory}/' .. prefix .. name .. extension .. '"'
         end
     end
     postbuildcommands(commands)
@@ -512,7 +512,7 @@ function arc_module_consumer(mods, names, opts)
             -- opts.link = false: headers only (a monolithic game's static
             -- library -- the package links every module once, whole-archived).
             if opts.link ~= false then links { name } end
-            if ARCANE_SDK and opts.link ~= false then libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" .. arc_layout_suffix() .. "/" .. name } end
+            if ARCANE_SDK and opts.link ~= false then libdirs { ARCANE_SDK .. "/Binaries/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" .. arc_layout_suffix() .. "/" .. name } end
             includedirs { (path.isabsolute(mod.root) and mod.root or root .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
             if opts.vendors ~= false then
                 for _, vendor in ipairs(mod.thirdParty.public) do vendors[vendor] = true end
@@ -664,7 +664,10 @@ function arc_module_package(mods, names, sdk)
             end
         end
     end
-    local bin = "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/"
+    -- The engine's mono static libs live in <sdk>/Binaries/; a vendor wrapper
+    -- library (premake-built under ThirdParty/<Dir>/) keeps its own bin/.
+    local bin = "/Binaries/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/"
+    local vendor_bin = "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/"
     local static_ext = os.target() == "windows" and ".lib" or ".a"
     local static_prefix = os.target() == "windows" and "" or "lib"
     local whole = {}
@@ -701,7 +704,7 @@ function arc_module_package(mods, names, sdk)
     for _, vendor in ipairs(vendor_order) do
         local entry = ARC_THIRDPARTY[vendor]
         links { entry.link }
-        libdirs { sdk .. "/" .. vendor_dir(vendor) .. bin .. entry.link }
+        libdirs { sdk .. "/" .. vendor_dir(vendor) .. vendor_bin .. entry.link }
     end
     local forced = {}
     for _, name in ipairs(closure) do

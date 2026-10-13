@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # package.sh <Config> -- the monolithic ReferenceProject package (engine
 # modularization s3.3 / s6), staged with `arcbuild package` and run IN PLACE
-# from Packages/ with no SDK, no bin/ and a bare PATH. Linux (the CI image or a
+# from Packages/ with no SDK, no Binaries/ and a bare PATH. Linux (the CI image or a
 # bare runner) and macOS; scripts/ci/package.ps1 is the Windows twin. Run after
 # scripts/ci/build.sh <Config>. Logs: logs/package*.{log,txt}.
 #   Linux: ldd shows no Arcane module and the package's OWN libSDL3 (RUNPATH

@@ -12,8 +12,8 @@
 // style define, no fixture-copy convention to follow), so rather than hardcoding
 // a fixed "../../.." depth this walks UP from the exe's own directory looking
 // for the "ReferenceProject/ReferenceProject.arcproj" landmark. The premake
-// layout (Arcane/bin/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the
-// expected answer today, but verifying-by-search survives a future bin/ layout
+// layout (Arcane/Binaries/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the
+// expected answer today, but verifying-by-search survives a future Binaries/ layout
 // change instead of silently opening the wrong directory (or none) with no
 // diagnostic. Bounded to 8 levels; empty on failure.
 //

@@ -10,7 +10,7 @@
 --   ARCANE_SDK  ->  the Arcane engine repo root (e.g. D:\dev\starworks\Arcane)
 --                   include surface = every linked module's $ARCANE_SDK/Source/<Type>/<Module>/src
 --                                      (+ its public ThirdParty headers), read from the .arcmodule descriptors
---                   import libs      = $ARCANE_SDK/bin/<cfg>-<sys>-x86_64-md/<Module>/<Module>.lib
+--                   import libs      = $ARCANE_SDK/Binaries/<cfg>-<sys>-x86_64-md/<Module>/<Module>.lib
 --                   module DLLs      ship beside the host exe (the host stages them)
 --
 -- Three entry points:
@@ -105,7 +105,7 @@ end
 -- The engine's per-config bin flavor. Must byte-match the engine's own outputdir
 -- literal in the SDK root premake5.lua ("-md" = the dynamic-CRT flavor; /MD everywhere so
 -- one heap crosses the ArcaneClient.dll/Game.dll boundary).
-local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
+local ARCANE_BIN = ARCANE_SDK .. "/Binaries/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
 
 -- The game module's source directory comes from the project's MANIFEST, never
 -- from a premake option (decision record docs/research/2026-09-16-multiplayer-
@@ -499,7 +499,7 @@ function arcane_package_exe(game, gameModules)
         end
         arc_module_forced_refs({ game })
         links { "ArcaneRuntimeHost" }
-        libdirs { ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/ArcaneRuntimeHost" }
+        libdirs { ARCANE_SDK .. "/Binaries/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-mono/ArcaneRuntimeHost" }
         includedirs {
             ARCANE_SDK .. "/Source/Programs/ArcaneRuntimeHost/src",
             ARCANE_TP .. "/glm", ARCANE_TP .. "/Astra/include", ARCANE_TP .. "/enkiTS/src",

@@ -227,7 +227,7 @@ own reader. It does not link `ArcaneAssetPipeline` (that static library
 is the cook side, used by `arccook` and the editor cook queue).
 
 ```bat
-bin\Debug-windows-x86_64-md\arccook\arccook.exe --project ReferenceProject --check
+Binaries\Debug-windows-x86_64-md\arccook\arccook.exe --project ReferenceProject --check
 ```
 
 `--check` exits 0 when nothing is stale and 2 when something is.
@@ -289,7 +289,7 @@ planned and not built.
 | Graphics in CI | The CPU suite. Real GPU is the Jenkins agent. | `[gpu]` on lavapipe, GCC 14 Debug only | `[gpu]` on MoltenVK, Debug only |
 | Renderer you can select | D3D12 and Vulkan | Vulkan | Vulkan (MoltenVK) |
 | Default `arcbuild` action | `vs2026` | `gmake` | `gmake` (`xcode4` remains available) |
-| Output directory | `bin\Debug-windows-x86_64-md` | `bin/Debug-linux-x86_64-md` | `bin/Debug-macosx-AARCH64-md` |
+| Output directory | `Binaries\Debug-windows-x86_64-md` | `Binaries/Debug-linux-x86_64-md` | `Binaries/Debug-macosx-AARCH64-md` |
 
 Toolchains below the CI pins do not build the engine. GCC 13 lacks the
 C++23 feature set the code uses. Clang needs libstdc++ from GCC 14.
@@ -373,7 +373,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-tests.ps1 Debug 
 ```
 
 ```bat
-cd bin\Debug-windows-x86_64-md\ArcaneTests
+cd Binaries\Debug-windows-x86_64-md\ArcaneTests
 ArcaneTests.exe ~[gpu] --rng-seed 1
 ```
 
@@ -497,7 +497,7 @@ Paths below are the Windows Debug layout. On Linux and macOS drop
 ### Editor
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject
+Binaries\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject
 ```
 
 Headless captures used by the golden gate add `--headless`, `--backend`
@@ -508,7 +508,7 @@ is also set.
 ### Runtime
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
 ```
 
 `--frames N` runs N frames and exits. That is the scripted GPU check.
@@ -519,7 +519,7 @@ than the project boot scene.
 ### Server
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneServer\ArcaneServer.exe --project ReferenceProject --frames 300 --report server.json
+Binaries\Debug-windows-x86_64-md\ArcaneServer\ArcaneServer.exe --project ReferenceProject --frames 300 --report server.json
 ```
 
 The process ticks until `--frames` completes, or until Ctrl-C when
@@ -602,12 +602,12 @@ DLLs beside an executable.
 into one `<Project>.exe` and stages it with what it needs to run:
 
 ```bat
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe package --project MyGame --config Release --sdk %ARCANE_SDK%
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe package --project MyGame --config Release --sdk %ARCANE_SDK%
 ```
 
 It builds the engine's monolithic layout (`premake5 --layout=monolithic`:
 every Runtime and Client module as a static library, in
-`bin/<cfg>-<sys>-<arch>-mono/`), regenerates the project with the same
+`Binaries/<cfg>-<sys>-<arch>-mono/`), regenerates the project with the same
 option (the game becomes a static library plus a `<Project>Package`
 executable, generated under `Intermediate/Package/Workspace/`), builds
 it, and stages `Packages/<Project>-<platform>-<config>/` in Unreal's layout:
@@ -743,9 +743,9 @@ generate and build a game module. Specs:
 [docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md](docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md).
 
 ```bat
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --config Debug --sdk %ARCANE_SDK%
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --config Debug --sdk %ARCANE_SDK%
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 ```
 
 Commands are `generate`, `build`, `rebuild`, `clean`, `probe`, and
@@ -793,7 +793,7 @@ does not run it.
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
-type bin\Debug-windows-x86_64-md\golden-gate-summary.json
+type Binaries\Debug-windows-x86_64-md\golden-gate-summary.json
 ```
 
 Assert `gatePassed` and each lane's `verdict`. Ignore the process exit
@@ -843,12 +843,12 @@ macOS editor goldens are exclusions rather than a new slot.
 is relative to the working directory. From the repo root the write
 lands in source `ReferenceProject/Verify/References`. From the host's
 exe directory (how the gate runs) it lands in the staged copy under
-`bin/<config>/<Host>/ReferenceProject`, and the next sample build
+`Binaries/<config>/<Host>/ReferenceProject`, and the next sample build
 overwrites that copy. Bless from the repo root, or copy the PNG back
 into source. `git status` should show the reference.
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
   --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
 ```
 

@@ -43,24 +43,24 @@ namespace
     }
 }
 
-TEST_CASE("SdkRootFromExeDir inverts the bin/<cfg>/<project> targetdir rule", "[editor]")
+TEST_CASE("SdkRootFromExeDir inverts the Binaries/<cfg>/<project> targetdir rule", "[editor]")
 {
     CHECK(ModuleBuild::SdkRootFromExeDir(
-              "D:/dev/starworks/Gacha/Arcane/bin/Debug-windows-x86_64-md/ArcaneEditor") ==
+              "D:/dev/starworks/Gacha/Arcane/Binaries/Debug-windows-x86_64-md/ArcaneEditor") ==
           fs::path("D:/dev/starworks/Gacha/Arcane"));
     // A trailing separator must not eat one of the three parent steps.
     CHECK(ModuleBuild::SdkRootFromExeDir(
-              "D:/dev/starworks/Gacha/Arcane/bin/Debug-windows-x86_64-md/ArcaneEditor/") ==
+              "D:/dev/starworks/Gacha/Arcane/Binaries/Debug-windows-x86_64-md/ArcaneEditor/") ==
           fs::path("D:/dev/starworks/Gacha/Arcane"));
 }
 
 TEST_CASE("DriverCandidates: packaged beside the editor first, dev bin layout second", "[editor]")
 {
     // The RuntimeLaunch::ExeCandidates rule, applied to arcbuild.exe.
-    const auto c = ModuleBuild::DriverCandidates("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor");
+    const auto c = ModuleBuild::DriverCandidates("D:/sdk/Binaries/Debug-windows-x86_64-md/ArcaneEditor");
     REQUIRE(c.size() == 2);
-    CHECK(c[0] == fs::path("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor") / "arcbuild.exe");
-    CHECK(c[1] == fs::path("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor") / ".." / "arcbuild" / "arcbuild.exe");
+    CHECK(c[0] == fs::path("D:/sdk/Binaries/Debug-windows-x86_64-md/ArcaneEditor") / "arcbuild.exe");
+    CHECK(c[1] == fs::path("D:/sdk/Binaries/Debug-windows-x86_64-md/ArcaneEditor") / ".." / "arcbuild" / "arcbuild.exe");
 }
 
 TEST_CASE("ResolveDriver returns the first candidate that exists, else empty", "[editor]")
@@ -92,14 +92,14 @@ TEST_CASE("ComposeDriverCommand is arcbuild + the three flags, parenthesised, st
     // through cmd, and arcbuild's own [build] tests pin what these flags
     // mean on the other side (spec s5.1).
     ModuleBuild::DriverInputs in;
-    in.driverExe     = "D:/sdk/bin/Debug-windows-x86_64-md/arcbuild/arcbuild.exe";
+    in.driverExe     = "D:/sdk/Binaries/Debug-windows-x86_64-md/arcbuild/arcbuild.exe";
     in.projectRoot   = "D:/dev/starworks/Gacha/Game";
     in.sdkRoot       = "D:/sdk";
     in.command       = "build";
     in.configuration = "Debug";
 
     CHECK(ModuleBuild::ComposeDriverCommand(in) ==
-          "( \"D:/sdk/bin/Debug-windows-x86_64-md/arcbuild/arcbuild.exe\" build"
+          "( \"D:/sdk/Binaries/Debug-windows-x86_64-md/arcbuild/arcbuild.exe\" build"
           " --project \"D:/dev/starworks/Gacha/Game\" --config Debug --sdk \"D:/sdk\" ) 2>&1");
 
     // RegenerateSolution's spelling: same shape, `generate`.

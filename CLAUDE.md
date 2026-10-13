@@ -43,8 +43,8 @@ vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset; SDL3 a
 scripts\setup-vcpkg-deps.bat   # once: SDL3 via the overlay triplet (VCPKG_ROOT required)
 GenerateProjects.bat            # premake5 -> Arcane.slnx
 msbuild Arcane.slnx /p:Configuration=Debug /m
-bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe             # run FROM the exe dir
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 180
+Binaries\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe             # run FROM the exe dir
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 180
 ```
 
 - Re-run `GenerateProjects.bat` whenever `premake5.lua`, any
@@ -209,11 +209,11 @@ consumer (Aphelyon's Server) uses `arcane_module_consumer { ... }` +
 `arcane_stage_modules { ... }`. The include
 surface is each linked module's `$ARCANE_SDK/Source/<Type>/<Module>/src` +
 its public header-only ThirdParty; the import libs are
-`$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/<Module>/<Module>.lib`.
+`$ARCANE_SDK/Binaries/<cfg>-windows-x86_64-md/<Module>/<Module>.lib`.
 **Monolithic layout** (`premake5 --layout=monolithic`, engine modularization
 s3): Runtime + Client modules and `ArcaneRuntimeHost` (the standalone host's
 body, `Source/Programs/ArcaneRuntimeHost/`; `ArcaneRuntime.exe` is its modular
-main) as static libs in `bin/<cfg>-<sys>-<arch>-mono/`, generated as
+main) as static libs in `Binaries/<cfg>-<sys>-<arch>-mono/`, generated as
 under `Intermediate/Mono/` (gitignored; gmake names every project file
 `Makefile`, so in place the layouts would overwrite each other).
 `arcbuild package` builds it, then the project's own premake5.lua with the
@@ -233,7 +233,7 @@ output).
 
 ## arcbuild -- the game-project build driver
 
-`arcbuild.exe` (built to `bin/<cfg>-windows-x86_64-md/arcbuild/`, not on
+`arcbuild.exe` (built to `Binaries/<cfg>-windows-x86_64-md/arcbuild/`, not on
 PATH; a packaged layout ships it beside `ArcaneEditor.exe`, and the editor
 looks in both places; specs
 `docs/specs/2026-09-13-arcbuild-driver-design.md` +

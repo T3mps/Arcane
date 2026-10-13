@@ -174,7 +174,7 @@ namespace arcbuild
         // 3. Cook the project's content, so the package stages current
         //    artifacts (a project never cooked would boot into an
         //    ArtifactMissing refusal). arccook is built beside arcbuild
-        //    (bin/<cfg>/arccook/); without it the existing artifacts stage.
+        //    (Binaries/<cfg>/arccook/); without it the existing artifacts stage.
         {
             const std::string self = Arcane::ExecutablePathUtf8();
             const std::filesystem::path cook =

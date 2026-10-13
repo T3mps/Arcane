@@ -5,7 +5,7 @@
 # fires -- RenderErrorCount). Run by .github/workflows/linux.yml; runnable as is.
 #
 #   scripts/linux-windowed-smoke.sh <config> <outdir> [x11|wayland]...
-#     config:  Debug | Release | Dist  (bin/<config>-linux-x86_64-md/<Host>)
+#     config:  Debug | Release | Dist  (Binaries/<config>-linux-x86_64-md/<Host>)
 #     outdir:  logs and screenshots land here
 #     drivers: default "x11 wayland"
 #
@@ -26,7 +26,7 @@ shift 2
 DRIVERS=("$@")
 [ ${#DRIVERS[@]} -eq 0 ] && DRIVERS=(x11 wayland)
 
-BIN="$ROOT/bin/$CONFIG-linux-x86_64-md"
+BIN="$ROOT/Binaries/$CONFIG-linux-x86_64-md"
 FRAMES="${SMOKE_FRAMES:-180}"
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)

@@ -55,7 +55,7 @@ runs](#local-runs)).
 - **macOS:** `sudo xcode-select -s /Applications/Xcode_16.4.app` (the
   `XCODE_APP` workflow variable), `CC=clang CXX=clang++`, premake
   `--cc=clang gmake`. Builds are native arm64
-  (`bin/<Config>-macosx-AARCH64-md/`; `scripts/arcane-bin-dir.sh` prints the
+  (`Binaries/<Config>-macosx-AARCH64-md/`; `scripts/arcane-bin-dir.sh` prints the
   path). SDL3 is built from source like Linux; MoltenVK, the Vulkan loader,
   the validation layer and DXC come from one pinned LunarG Vulkan SDK
   (`scripts/fetch-vulkan-sdk-macos.sh --system`, which installs into

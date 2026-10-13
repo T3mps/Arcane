@@ -123,7 +123,7 @@ end
 -- overridable with ARCANE_MAC_ARCH=arm64|x86_64 (e.g. to cross-generate from
 -- Linux with --os=macosx). Every other target keeps "x64". premake reports
 -- ARM64 as %{cfg.architecture} = "AARCH64", so the Mac bin dirs are
--- bin/<Config>-macosx-AARCH64-md (scripts/arcane-bin-dir.sh spells it once).
+-- Binaries/<Config>-macosx-AARCH64-md (scripts/arcane-bin-dir.sh spells it once).
 -- build/arcane.lua carries the same rule so a game module matches its engine.
 function arcane_mac_architecture()
     local want = os.getenv("ARCANE_MAC_ARCH")
@@ -153,7 +153,7 @@ newoption {
 -- Client module as a static library, plus ArcaneRuntimeHost -- the pieces a
 -- packaged game links (`arcbuild package`). Generated under Intermediate/Mono/
 -- (ARC_MONOLITHIC_PROJECTS below), so neither layout overwrites the other;
--- outputs land in bin/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures
+-- outputs land in Binaries/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures
 -- are modular only.
 ARC_MONOLITHIC_LAYOUT = (_OPTIONS.layout == "monolithic")
 -- Where the monolithic layout's workspace + project files go (gitignored): a
@@ -203,7 +203,7 @@ workspace "Arcane"
         buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
         -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
         -- beside the exe) must win, exactly as the PE loader searches the exe
-        -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy
+        -- directory first -- otherwise the dev-tree Binaries/<cfg>/ArcaneCore copy
         -- loads and the injected-module census calls the engine foreign.
         -- runpathdirs (unlike linkoptions) is emitted AHEAD of the
         -- ../ArcaneCore-style entries premake adds for linked siblings, which
@@ -233,7 +233,7 @@ workspace "Arcane"
     defines { "ARC_MODULE_NAME=%{prj.name}" }
 
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
-    -- bin/ under its own dir) separate from the static-CRT flavors the
+    -- Binaries/ under its own dir) separate from the static-CRT flavors the
     -- Server workspace builds from the same wrapper scripts.
     outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" ..
         (_OPTIONS.layout == "monolithic" and "mono" or "md")
@@ -450,8 +450,8 @@ project "ArcaneRuntimeHost"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { "Source/Programs/ArcaneRuntimeHost/src/**.cpp", "Source/Programs/ArcaneRuntimeHost/src/**.hpp" }
     includedirs {
         "Source/Programs/ArcaneRuntimeHost/src",
@@ -506,8 +506,8 @@ project "arccook"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -527,7 +527,7 @@ project "arccook"
     dependson { "ArcaneAssetPipeline" }
 
     -- Core-DLL split: ArcaneCore is a DLL now, loaded from this exe's own
-    -- directory (dev bin layout: bin/<cfg>/arccook/).
+    -- directory (dev bin layout: Binaries/<cfg>/arccook/).
     postbuildcommands(arcane_cmds {
     })
 
@@ -583,8 +583,8 @@ project "arcbuild"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -611,7 +611,7 @@ project "arcbuild"
     }
 
     -- The driver loads ArcaneCore.dll from its own directory (dev bin
-    -- layout: bin/<cfg>/arcbuild/); a packaged layout ships it beside the
+    -- layout: Binaries/<cfg>/arcbuild/); a packaged layout ships it beside the
     -- editor, where the DLL already is.
     postbuildcommands(arcane_cmds {
     })
@@ -666,8 +666,8 @@ project "arcbuild-process-fixture"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/ProcessFixtureMain.cpp",
@@ -721,8 +721,8 @@ project "death-fixture"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/DeathFixtureMain.cpp",
@@ -787,7 +787,7 @@ project "death-fixture"
     -- other consumer (mirrors ArcaneTests' matching postbuild line).
     postbuildcommands(arcane_cmds {
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
     })
 
 -- ============================================================================
@@ -817,8 +817,8 @@ project "ArcaneCrashReporter"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -890,8 +890,8 @@ project "ArcaneServer"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
     includedirs {
         "%{prj.location}/src",
@@ -919,7 +919,7 @@ project "ArcaneServer"
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
     postbuildcommands(arcane_cmds {
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         -- P10: the game module (ReferenceGame.dll et al) links BOTH ArcaneCore's
         -- and ArcaneClient's import libs -- it is built as an engine-as-SDK
         -- consumer against the FULL surface, the same DLL a windowed host loads
@@ -973,8 +973,8 @@ project "ArcaneRuntime"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{prj.location}/src",           -- RuntimeApp.hpp (self-resolving quoted include; kept for any future local header)
@@ -1018,10 +1018,10 @@ project "ArcaneRuntime"
         -- Safe by construction: the cook is idempotent by hash (a second run is free)
         -- and concurrent same-key writes are atomic-rename + deterministic (identical
         -- bytes, last rename wins -- see ArtifactStore.hpp's concurrency contract).
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -1099,8 +1099,8 @@ project "ArcaneEditor"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
@@ -1148,10 +1148,10 @@ project "ArcaneEditor"
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
         -- shape as ArcaneRuntime's matching comment above (safe under /m: idempotent by
         -- hash, concurrent same-key writes atomic-rename + deterministic).
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -1233,8 +1233,8 @@ project "ArcaneTests"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.cpp",
@@ -1851,7 +1851,7 @@ project "ArcaneTests"
         -- Unlike those two hosts, this project does NOT blanket-copy the whole
         -- ReferenceProject tree (see the targeted Verify/-only COPYDIR below), so this
         -- line is this exe's ONLY source of a staged Intermediate/Artifacts.
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -1875,12 +1875,12 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/' .. arcane_module("HotReloadPluginV1") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV1") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/' .. arcane_module("HotReloadPluginV2") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV2") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/' .. arcane_module("HotReloadPluginBad") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginBad") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginInitFail/' .. arcane_module("HotReloadPluginInitFail") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginInitFail") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ReferenceGameUnderTest/' .. arcane_module("ReferenceGameUnderTest") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("ReferenceGameUnderTest") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/TemplateSmokePlugin/' .. arcane_module("TemplateSmokePlugin") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("TemplateSmokePlugin") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginV1/' .. arcane_module("HotReloadPluginV1") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV1") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginV2/' .. arcane_module("HotReloadPluginV2") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV2") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginBad/' .. arcane_module("HotReloadPluginBad") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginBad") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginInitFail/' .. arcane_module("HotReloadPluginInitFail") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginInitFail") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ReferenceGameUnderTest/' .. arcane_module("ReferenceGameUnderTest") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("ReferenceGameUnderTest") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/TemplateSmokePlugin/' .. arcane_module("TemplateSmokePlugin") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("TemplateSmokePlugin") .. '"',
         -- Test data fixtures: copy Tests/ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the
@@ -2052,8 +2052,8 @@ local function test_plugin(name, defs)
             buildoptions { "-fno-gnu-unique" }
         filter {}
         macos_unloadable_module()
-        targetdir ("bin/" .. outputdir .. "/" .. name)
-        objdir ("bin-int/" .. outputdir .. "/" .. name)
+        targetdir ("Binaries/" .. outputdir .. "/" .. name)
+        objdir ("Intermediate/Build/" .. outputdir .. "/" .. name)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/HotReloadShared.hpp" }
         -- The include surface is the descriptor closure's (game_fixture_modules
         -- above), exactly what build/arcane.lua gives a game module.
@@ -2103,8 +2103,8 @@ project "ReferenceGameUnderTest"
         buildoptions { "-fno-gnu-unique" }
     filter {}
     macos_unloadable_module()
-    targetdir ("bin/" .. outputdir .. "/ReferenceGameUnderTest")
-    objdir ("bin-int/" .. outputdir .. "/ReferenceGameUnderTest")
+    targetdir ("Binaries/" .. outputdir .. "/ReferenceGameUnderTest")
+    objdir ("Intermediate/Build/" .. outputdir .. "/ReferenceGameUnderTest")
     files {
         "%{wks.location}/ReferenceProject/Source/Game/**.cpp",
         "%{wks.location}/ReferenceProject/Source/Game/**.hpp",
@@ -2155,8 +2155,8 @@ project "TemplateSmokePlugin"
         buildoptions { "-fno-gnu-unique" }
     filter {}
     macos_unloadable_module()
-    targetdir ("bin/" .. outputdir .. "/TemplateSmokePlugin")
-    objdir ("bin-int/" .. outputdir .. "/TemplateSmokePlugin")
+    targetdir ("Binaries/" .. outputdir .. "/TemplateSmokePlugin")
+    objdir ("Intermediate/Build/" .. outputdir .. "/TemplateSmokePlugin")
     files {
         "%{prj.location}/**.cpp",
         "%{prj.location}/**.hpp",

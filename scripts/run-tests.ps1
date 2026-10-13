@@ -3,7 +3,7 @@
 # (same arguments).
 #
 #   powershell -File scripts\run-tests.ps1 <Config> [--rng-seed N] [extra Catch2 args...]
-#     Config: Debug | Release | Dist   (bin\<Config>-windows-x86_64-md\ArcaneTests)
+#     Config: Debug | Release | Dist   (Binaries\<Config>-windows-x86_64-md\ArcaneTests)
 #     --rng-seed N: the suite runs in RANDOM order; CI runs every leg with two
 #             seeds. Omitted -> Catch2 picks one and prints it in the banner.
 #
@@ -48,7 +48,7 @@ for ($i = 1; $i -lt $args.Count; $i++) {
 }
 
 $root    = Split-Path -Parent $PSScriptRoot
-$exeDir  = Join-Path $root "bin\$Config-windows-x86_64-md\ArcaneTests"
+$exeDir  = Join-Path $root "Binaries\$Config-windows-x86_64-md\ArcaneTests"
 $exe     = Join-Path $exeDir 'ArcaneTests.exe'
 if (-not (Test-Path $exe)) {
     Write-Host "run-tests: $exe not built" -ForegroundColor Red

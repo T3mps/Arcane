@@ -15,7 +15,7 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logs = Join-Path $root 'logs'
 
 if ($Config -ne 'Dist') {
-    $arccook = Join-Path $root "bin\$Config-windows-x86_64-md\arccook\arccook.exe"
+    $arccook = Join-Path $root "Binaries\$Config-windows-x86_64-md\arccook\arccook.exe"
     $code = Invoke-NativeLogged -FilePath $arccook -ArgumentList @('--project', (Join-Path $root 'ReferenceProject'), '--check') `
         -LogPath (Join-Path $logs "check-cook-$Config.log")
     if ($code -ne 0) { Write-Host "reference-checks: arccook --check FAILED ($code)" -ForegroundColor Red; exit $code }

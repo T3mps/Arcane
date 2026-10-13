@@ -49,7 +49,7 @@ old icon in a build that otherwise looks completely fresh.
 
 `cargo clean -p arcane_hub` does **not** fix this. It was tried: it removed
 3.4 GB and the very next build still produced the old icon, because it leaves
-`bin-int/hub-cargo/release/build/arcane_hub-*/out/` in place. Check that
+`Intermediate/Build/hub-cargo/release/build/arcane_hub-*/out/` in place. Check that
 directory's `resource.lib` timestamp if an icon change seems not to take.
 
 The in-app titlebar mark is separate — that is `Hub/static/logo.png`, a copy of

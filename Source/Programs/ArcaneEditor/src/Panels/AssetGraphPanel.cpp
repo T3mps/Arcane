@@ -676,7 +676,7 @@ namespace Arcane::Editor
         // over one). On a 32-bit target 1<<32 truncates to 0, the two ranges
         // silently become one again, and the collision above returns with no
         // symptom until someone hovers the wrong node. Arcane is x64-only today
-        // (bin/*-windows-x86_64), so this asserts a fact rather than adding a
+        // (Binaries/*-windows-x86_64), so this asserts a fact rather than adding a
         // constraint -- it just makes the fact refuse to be broken quietly.
         static_assert(sizeof(std::uintptr_t) >= 8,
                       "kGraphPinIdBase (1<<32) must survive ed::PinId's uintptr_t; "

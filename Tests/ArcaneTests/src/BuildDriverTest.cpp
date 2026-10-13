@@ -2483,7 +2483,7 @@ TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 outp
           "[build-generator]")
 {
     // Self-hosting SDK root: this repo IS an Arcane checkout, so the same
-    // <sdk>/bin/<cfg>-<system>-<arch>-md/<Project> inversion the editor uses
+    // <sdk>/Binaries/<cfg>-<system>-<arch>-md/<Project> inversion the editor uses
     // to find "the SDK the running exe belongs to" gives the fixture's
     // premake5.lua a real $ARCANE_SDK/build/arcane.lua to include.
     const fs::path repoRoot =

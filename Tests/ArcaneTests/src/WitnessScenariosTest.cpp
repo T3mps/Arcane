@@ -8,7 +8,7 @@
 //
 // FRESH-COPY HYGIENE (spec section 6): every scenario runs against a COPY of
 // the staged tree and mutates only the copy. Nothing here may touch
-// bin/<Config>-windows-x86_64-md/ArcaneRuntime/ itself.
+// Binaries/<Config>-windows-x86_64-md/ArcaneRuntime/ itself.
 //
 // -----------------------------------------------------------------------
 // WHY `--frames 60` AND NOT A SMALLER BUDGET -- load-bearing, measured.

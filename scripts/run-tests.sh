@@ -4,7 +4,7 @@
 # (same arguments).
 #
 #   scripts/run-tests.sh [--gpu] <Config> [--rng-seed N] [extra Catch2 args...]
-#     Config: Debug | Release | Dist   (bin/<Config>-<system>-<arch>-md/ArcaneTests,
+#     Config: Debug | Release | Dist   (Binaries/<Config>-<system>-<arch>-md/ArcaneTests,
 #             see scripts/arcane-bin-dir.sh)
 #     --rng-seed N: ArcaneTests runs in RANDOM order; CI runs every leg with two
 #             seeds. Omitted -> Catch2 picks one and prints it in the banner.

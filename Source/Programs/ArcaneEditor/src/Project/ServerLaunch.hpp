@@ -29,7 +29,7 @@ namespace Arcane::Editor::ServerLaunch
 {
     // Where ArcaneServer.exe might live relative to the EDITOR exe's own
     // directory: packaged layout first (installed side by side), dev bin layout
-    // second (premake's bin/<cfg>-<os>-<arch>-md/<Project>/ puts every project
+    // second (premake's Binaries/<cfg>-<os>-<arch>-md/<Project>/ puts every project
     // in its own sibling directory, so ArcaneEditor's dir has an
     // "../ArcaneServer/" neighbour). Identical shape and identical reasoning to
     // RuntimeLaunch::ExeCandidates -- read that one's comment for the Hub

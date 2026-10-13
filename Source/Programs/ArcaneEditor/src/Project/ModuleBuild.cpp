@@ -48,7 +48,7 @@ namespace Arcane::Editor::ModuleBuild
 
     std::filesystem::path SdkRootFromExeDir(const std::filesystem::path& exeDir)
     {
-        // <sdk>/bin/<cfg>-<system>-<arch>-md/ArcaneEditor -> <sdk>. A
+        // <sdk>/Binaries/<cfg>-<system>-<arch>-md/ArcaneEditor -> <sdk>. A
         // trailing separator ("...\ArcaneEditor\") survives lexically_normal
         // as an empty filename element and would spend one of the three
         // parent_path steps on it -- drop it first so the walk starts at the

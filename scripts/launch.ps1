@@ -28,9 +28,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$binRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'bin'
+$binRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'Binaries'
 if (-not (Test-Path $binRoot)) {
-    Write-Host "No bin directory at $binRoot -- build something first (msbuild Arcane.slnx)." -ForegroundColor Red
+    Write-Host "No Binaries directory at $binRoot -- build something first (msbuild Arcane.slnx)." -ForegroundColor Red
     exit 1
 }
 

@@ -1799,7 +1799,7 @@ namespace Arcane::Editor
         // pre-S4 file (<EditorUserDir>\layouts\<key>.ini), else the named
         // layout editor.layout.default, else the legacy exe-dir imgui.ini, so a
         // hand-tuned layout survives the move. Every source is COPIED and left
-        // in place (bin/ is untracked scratch; the pre-S4 file stays for a
+        // in place (Binaries/ is untracked scratch; the pre-S4 file stays for a
         // rollback).
         if (!std::filesystem::exists(target, ec))
         {

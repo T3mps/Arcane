@@ -34,7 +34,7 @@ namespace Arcane::Editor::ModuleBuild
 
     // The engine workspace root ("SDK root", what arcane.lua calls ARCANE_SDK)
     // from the editor exe's directory: three levels up, inverting the premake
-    // targetdir rule <sdk>/bin/<cfg>-<system>-<arch>-md/ArcaneEditor/. Pure
+    // targetdir rule <sdk>/Binaries/<cfg>-<system>-<arch>-md/ArcaneEditor/. Pure
     // path math -- no filesystem probe -- so it composes into tests. Passed
     // to the driver as --sdk: "rebuild against the engine you are looking at".
     std::filesystem::path SdkRootFromExeDir(const std::filesystem::path& exeDir);
@@ -56,7 +56,7 @@ namespace Arcane::Editor::ModuleBuild
 
     // Where arcbuild.exe might live relative to the EDITOR exe's directory:
     // packaged layout first (installed side by side), dev bin layout second
-    // (premake's bin/<cfg>-<os>-<arch>-md/<Project>/ gives ArcaneEditor's
+    // (premake's Binaries/<cfg>-<os>-<arch>-md/<Project>/ gives ArcaneEditor's
     // dir an "../arcbuild/" neighbour) -- the RuntimeLaunch::ExeCandidates
     // rule. Existence is NOT checked here; ResolveDriver does that.
     std::vector<std::filesystem::path> DriverCandidates(const std::filesystem::path& editorExeDir);

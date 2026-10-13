@@ -156,7 +156,7 @@ esac
 
 # The test exe resolves its fixtures relative to its own directory, so it is
 # run FROM that directory -- the same rule the Windows runs follow.
-test_dir="bin/$CONFIG-$premake_system-x86_64-md/ArcaneTests"
+test_dir="Binaries/$CONFIG-$premake_system-x86_64-md/ArcaneTests"
 
 if [ ! -x "$test_dir/ArcaneTests" ]; then
     echo "verify-arcbuild-posix.sh: built ArcaneTests not found at $test_dir --" \

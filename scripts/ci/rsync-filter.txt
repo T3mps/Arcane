@@ -10,6 +10,9 @@
 - .git
 
 # build outputs, reports, local junk (Windows and Linux)
+- /Binaries/
+# a pre-rename checkout's outputs (engine bin/ -> Binaries/, bin-int/ ->
+# Intermediate/Build/, 2026-10): stale, and GBs
 - /bin/
 - /bin-int/
 - /.vs/

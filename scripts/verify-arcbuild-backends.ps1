@@ -89,7 +89,7 @@ $env:Path = $env:Path + ';' +
 
 $repoRoot      = Split-Path -Parent $PSScriptRoot
 $configDirName = "$Configuration-windows-x86_64-md"
-$arcbuildExe   = Join-Path $repoRoot "bin\$configDirName\arcbuild\arcbuild.exe"
+$arcbuildExe   = Join-Path $repoRoot "Binaries\$configDirName\arcbuild\arcbuild.exe"
 $fixtureSource = Join-Path $repoRoot 'Tests\ArcaneTests\data\arcbuild-fixture'
 
 Write-Host "=== verify-arcbuild-backends: $Configuration ===" -ForegroundColor Cyan

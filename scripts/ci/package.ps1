@@ -1,6 +1,6 @@
 # package.ps1 <Debug|Release|Dist> -- the monolithic ReferenceProject package
 # (engine modularization s3.3 / s6) on Windows, staged with `arcbuild package`
-# and run IN PLACE from Packages/ with no SDK, no bin/ and a bare PATH.
+# and run IN PLACE from Packages/ with no SDK, no Binaries/ and a bare PATH.
 # scripts/ci/package.sh is the Linux/macOS twin. Run after
 # scripts\ci\build.ps1 <Config>. The hosted runner has no GPU and the engine
 # has no WARP selector, so this proves the package LOADS in place (every
@@ -13,7 +13,7 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logs = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force $logs | Out-Null
 
-& (Join-Path $root "bin\$Config-windows-x86_64-md\arcbuild\arcbuild.exe") package --project (Join-Path $root 'ReferenceProject') --config $Config --sdk $root
+& (Join-Path $root "Binaries\$Config-windows-x86_64-md\arcbuild\arcbuild.exe") package --project (Join-Path $root 'ReferenceProject') --config $Config --sdk $root
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $pkg = Join-Path $root "ReferenceProject\Packages\ReferenceProject-windows-$Config"
 Get-ChildItem -Recurse $pkg -Depth 1 | Select-Object -ExpandProperty FullName
