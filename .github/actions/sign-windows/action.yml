@@ -1,0 +1,45 @@
+name: Sign Windows binaries
+description: >-
+  Authenticode-signs every .exe and .dll under a folder with Azure Artifact
+  Signing, authenticating by GitHub OIDC (no stored secret), then checks that
+  each one is signed and timestamped. Spec s3 (Credentials), s4 step 4.
+inputs:
+  folder: { description: Folder to sign recursively, required: true }
+  client-id: { description: Entra app (client) ID with the federated credential, required: true }
+  tenant-id: { description: Entra tenant ID, required: true }
+  subscription-id: { description: Azure subscription ID, required: true }
+  endpoint: { description: Artifact Signing endpoint for the account's region, required: true }
+  account: { description: Artifact Signing account name, required: true }
+  profile: { description: Certificate profile name, required: true }
+runs:
+  using: composite
+  steps:
+    - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+    - uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+      with:
+        endpoint: ${{ inputs.endpoint }}
+        signing-account-name: ${{ inputs.account }}
+        certificate-profile-name: ${{ inputs.profile }}
+        files-folder: ${{ inputs.folder }}
+        files-folder-filter: exe,dll
+        files-folder-recurse: true
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+        # Only the azure/login session (Azure CLI credential) may authenticate.
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+    - name: Check every signature
+      shell: pwsh
+      run: '& "${{ github.action_path }}/check-signatures.ps1" -Folder "${{ inputs.folder }}"'

@@ -27,6 +27,7 @@ ArcaneRuntime/     # standalone runtime host: opens an .arcproj, runs its game
                    #   module; --frames N = scripted GPU-verify; F5/F6 hot reload
 ArcaneEditor/      # the ImGui-on-NRI editor host (namespace Arcane::Editor)
 ArcaneHub/         # Tauri launcher (Rust): .arcproj association + recents
+ArcaneHub/crates/arcane_release/  # releases.json: schema, signing, verification, archives; `arcrelease` CLI (docs/releasing.md)
 ArcaneServer/      # server-side engine tooling (scaffold)
 ArcaneTests/       # Catch2 suite + HotReloadPluginV1/V2/Bad fixture DLLs
 ReferenceProject/  # in-repo sample game, built like an EXTERNAL project via the

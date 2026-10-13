@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# A stand-in for `aws s3api` over a folder ($FAKE_R2), for the release scripts'
+# tests: put-object (with --if-none-match/--if-match), get-object, head-object
+# and list-objects-v2. Its output is REPLAYED from responses/ (see the README
+# there: recorded aws-cli output, with only the per-object fields filled in),
+# so the scripts are tested against what aws-cli prints, not against a guess.
+# Objects live in $FAKE_R2/objects/<key>; their metadata in $FAKE_R2/meta/<key>.
+# FAKE_AWS_FAIL_PUT=<key> makes every put to that key fail.
+set -euo pipefail
+: "${FAKE_R2:?FAKE_R2 is not set}"
+RESPONSES=$(cd "$(dirname "$0")/responses" && pwd)
+echo "$*" >> "$FAKE_R2/calls.log"
+[ "${1:-}" = s3api ] || { echo "fake aws: only s3api is faked" >&2; exit 2; }
+shift
+# aws-cli takes global options before the operation too (lib.sh's r2 does).
+while [ "${1:-}" = --endpoint-url ]; do shift 2; done
+op=$1
+shift
+key="" body="" ifnm="" ifm="" sha="" prefix="" out="" ctype="" cache=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        --endpoint-url|--bucket) shift 2 ;;
+        --content-type) ctype=$2; shift 2 ;;
+        --cache-control) cache=$2; shift 2 ;;
+        --key) key=$2; shift 2 ;;
+        --body) body=$2; shift 2 ;;
+        --if-none-match) ifnm=$2; shift 2 ;;
+        --if-match) ifm=$2; shift 2 ;;
+        --metadata) sha=${2#sha256=}; shift 2 ;;
+        --prefix) prefix=$2; shift 2 ;;
+        --*) echo "fake aws: unknown option $1" >&2; exit 2 ;;
+        *) out=$1; shift ;;
+    esac
+done
+obj="$FAKE_R2/objects/$key"
+meta="$FAKE_R2/meta/$key"
+etag_of() { printf '"%s"' "$(md5sum "$1" | cut -d' ' -f1)"; }
+fail() { cat "$RESPONSES/$1.stderr" >&2; exit 254; }
+# The recorded head/get response, with this object's fields.
+describe() {
+    jq --arg e "$(etag_of "$obj")" --argjson n "$(wc -c <"$obj")" --slurpfile m "$meta.json" \
+        '.ETag = $e | .ContentLength = $n | .ContentType = $m[0].type | .CacheControl = $m[0].cache
+         | .Metadata = (if $m[0].sha256 == "" then {} else {sha256: $m[0].sha256} end)' \
+        "$RESPONSES/$1.stdout.json"
+}
+case $op in
+    put-object)
+        if [ "${FAKE_AWS_FAIL_PUT:-}" = "$key" ]; then fail put-object-internal-error; fi
+        if [ -n "$ifnm" ] && [ -e "$obj" ]; then fail put-object-precondition-failed; fi
+        if [ -n "$ifm" ]; then { [ -e "$obj" ] && [ "$(etag_of "$obj")" = "$ifm" ]; } || fail put-object-precondition-failed; fi
+        mkdir -p "$(dirname "$obj")" "$(dirname "$meta")"
+        cp "$body" "$obj"
+        jq -n --arg s "$sha" --arg t "$ctype" --arg c "$cache" '{sha256: $s, type: $t, cache: $c}' > "$meta.json"
+        jq --arg e "$(etag_of "$obj")" '.ETag = $e' "$RESPONSES/put-object.stdout.json" ;;
+    get-object)
+        [ -e "$obj" ] || fail get-object-no-such-key
+        cp "$obj" "$out"
+        describe get-object ;;
+    head-object)
+        [ -e "$obj" ] || fail head-object-not-found
+        describe head-object ;;
+    list-objects-v2)
+        keys=""
+        if [ -d "$FAKE_R2/objects" ]; then
+            keys=$(cd "$FAKE_R2/objects" && find . -type f | sed 's|^\./||' | LC_ALL=C sort | awk -v p="$prefix" 'index($0, p) == 1')
+        fi
+        if [ -z "$keys" ]; then
+            jq --arg p "$prefix" '.Prefix = $p' "$RESPONSES/list-objects-v2-empty.stdout.json"
+        else
+            entries=$(while read -r k; do
+                jq -n --arg k "$k" --arg e "$(etag_of "$FAKE_R2/objects/$k")" --argjson n "$(wc -c <"$FAKE_R2/objects/$k")" '{Key: $k, ETag: $e, Size: $n}'
+            done <<<"$keys" | jq -s .)
+            jq --arg p "$prefix" --argjson es "$entries" '.Prefix = $p | .Contents[0] as $t | .Contents = [$es[] | $t + .]' \
+                "$RESPONSES/list-objects-v2.stdout.json"
+        fi ;;
+    *) echo "fake aws: unsupported $op" >&2; exit 2 ;;
+esac

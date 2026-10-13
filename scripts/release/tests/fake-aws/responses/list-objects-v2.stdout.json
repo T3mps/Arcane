@@ -1,0 +1,13 @@
+{
+    "Contents": [
+        {
+            "Key": "fixture-capture-20261013T063752Z/a",
+            "LastModified": "2026-10-13T06:37:55.918000+00:00",
+            "ETag": "\"9504a7b7666faec5abd046d28a69450e\"",
+            "Size": 8,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "fixture-capture-20261013T063752Z/"
+}

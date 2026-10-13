@@ -88,3 +88,10 @@ ReferenceProject/Saved/verify-layout.ini text eol=lf
 *.gz    binary
 *.tar   binary
 *.7z    binary
+
+# arcane_release: test keys and signed golden manifests are byte-exact (a CRLF breaks them)
+ArcaneHub/crates/arcane_release/tests/keys/** -text
+ArcaneHub/crates/arcane_release/tests/golden/** -text
+ArcaneHub/crates/arcane_release/keys/** -text
+# release scripts: the fake aws (no extension) and its recorded responses are replayed byte for byte
+scripts/release/tests/fake-aws/** text eol=lf
