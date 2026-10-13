@@ -208,6 +208,16 @@ scripts\ci\local.ps1 -Full                    # windows-msvc, linux-gcc-14, linu
   signal 9; logs under `logs\local\<leg>-<Config>\`.
   Exit 0 all passed, 1 a leg failed, 2 a preflight check failed (Docker not
   running, MSBuild missing -- each names its fix).
+- **Line endings:** a Windows checkout with `core.autocrlf` holds text files as
+  CRLF that CI's Linux checkout has as LF. `local.ps1` lists them with git on
+  the desk and each Linux leg converts them after its mirror, so the leg builds
+  and tests CI's bytes (the container itself runs no git).
+- **Docker Desktop's Resource Saver** pauses the VM after a few idle minutes,
+  which is shorter than a Windows leg, and some Docker Desktop versions resume
+  wedged (API 500). Each Linux leg re-checks Docker first and, if it stays
+  unresponsive, reports "Docker Desktop is not responding" instead of building.
+  Restart Docker Desktop, and turn Resource Saver off (Settings > Resources) or
+  update Docker Desktop; `setup-desk.ps1` warns while it is on.
 - macOS legs run on the hosted runner only.
 
 `scripts\ci\compare-test-counts.ps1 -Baseline <dir> -Candidate <dir>`

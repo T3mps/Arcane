@@ -259,6 +259,28 @@ function Get-BuildErrorLines {
     return ,@($hits | Sort-Object -Unique | Select-Object -First $Max)
 }
 
+# The files a Linux checkout of this tree holds as LF but this (Windows,
+# core.autocrlf) working tree holds as CRLF: index LF, worktree CRLF, and no
+# eol=crlf attribute (those stay CRLF everywhere). Input: the lines of
+# `git -c core.quotepath=off ls-files --eol` ("i/.. w/.. attr/..<TAB>path").
+# A local Linux leg converts these after its mirror, so it compiles and tests
+# the bytes CI's Linux checkout has (container-leg.sh, lf-files.txt).
+function Get-LfCheckoutPaths {
+    param([AllowEmptyCollection()][string[]]$EolLines = @())
+    $paths = New-Object System.Collections.Generic.List[string]
+    foreach ($l in $EolLines) {
+        if (-not $l) { continue }
+        $tab = $l.IndexOf("`t")
+        if ($tab -lt 0) { continue }
+        $info = @($l.Substring(0, $tab).Trim() -split '\s+')
+        if ($info.Count -lt 3) { continue }
+        if ($info[0] -ne 'i/lf' -or $info[1] -ne 'w/crlf') { continue }
+        if (($info[2..($info.Count - 1)] -join ' ') -match 'eol=crlf') { continue }
+        $paths.Add($l.Substring($tab + 1))
+    }
+    return ,$paths.ToArray()
+}
+
 # status.txt: one key=integer per line (build=, tests-<seed>=, sync=, ...).
 function Read-LegStatus {
     param([Parameter(Mandatory)][string]$Path)
@@ -293,6 +315,8 @@ function New-LegResult {
         $build = "OOM (a compiler or linker was killed; build exit $($Status['build'])): lower -Jobs"
     } elseif ($Status.Contains('build')) {
         if ([int]$Status['build'] -eq 0) { $build = 'ok'; $passed = $true } else { $build = "FAILED ($($Status['build']))" }
+    } elseif ($Status.Contains('docker')) {
+        $build = 'not run (Docker Desktop is not responding -- restart it; Resource Saver can wedge it, docs/ci.md "Local runs")'
     } elseif ($Status.Contains('container')) {
         $build = "not run (container exit $($Status['container']); see container.log)"
     } else {
@@ -402,7 +426,7 @@ function Resolve-MSBuild {
     return $found
 }
 
-Export-ModuleMember -Function Resolve-LocalRuns, Get-SeedList, Get-LinuxJobCount, ConvertTo-Bytes,
+Export-ModuleMember -Function Resolve-LocalRuns, Get-SeedList, Get-LinuxJobCount, ConvertTo-Bytes, Get-LfCheckoutPaths,
     Set-WslConfigLimits, Test-WslConfigLimits, Get-Catch2Totals, Get-JUnitTotals, Compare-JUnitDirs,
     Get-BuildErrorLines, Read-LegStatus, Write-LegStatus, New-LegResult, Format-LocalSummary,
     Invoke-NativeLogged, Invoke-NativeQuiet, Resolve-MSBuild

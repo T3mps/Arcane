@@ -116,6 +116,20 @@ try {
     Check 'compare: missing baseline' (-not $byKey['linux-clang-19-Release'].Match)
     Check 'compare: candidate failure' (-not $byKey['linux-gcc-14-Debug-gpu'].Match -and $byKey['linux-gcc-14-Debug-gpu'].CandidateFailures -eq 1)
 
+    # --- Get-LfCheckoutPaths (git ls-files --eol -> what a Linux checkout has as LF) ---
+    $eolLines = @(
+        "i/lf    w/crlf  attr/text=auto        `tscripts/settings-frozen-names.txt",
+        "i/lf    w/lf    attr/text eol=lf      `tscripts/ci/build.sh",
+        "i/lf    w/crlf  attr/text eol=crlf    `tscripts/run-tests.ps1",
+        "i/lf    w/crlf  attr/text=auto eol=crlf `tci/msbuild.cmd",
+        "i/crlf  w/crlf  attr/text=auto        `tlegacy/committed-crlf.txt",
+        "i/-text w/-text attr/text=auto        `tdata/images/logo.png",
+        "i/lf    w/crlf  attr/                 `tdocs/with space.md",
+        '')
+    $lf = Get-LfCheckoutPaths -EolLines $eolLines
+    Check 'lf paths: CRLF on disk, LF in the index, no eol=crlf' (($lf -join '|') -eq 'scripts/settings-frozen-names.txt|docs/with space.md')
+    Check 'lf paths: none' ((Get-LfCheckoutPaths -EolLines @()).Count -eq 0)
+
     # --- Get-BuildErrorLines ---------------------------------------------------
     $p = Join-Path $tmp 'logs/build-engine.log'
     Put $p "ok line`nfoo.cpp:1:2: error: bad`nfoo.cpp:1:2: error: bad`n/usr/bin/ld: x.o: undefined reference to ``y'`nwarning: meh`nError: capitalised is not matched`n"
@@ -152,6 +166,8 @@ try {
     Check 'result: test failure' ((-not $tf.Passed) -and $tf.Tests -like 'seed 7: FAILED (1)*')
     $ce = New-LegResult -Run $run -Status ([ordered]@{ container = 125 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
     Check 'result: container never built' ((-not $ce.Passed) -and $ce.Build -like 'not run (container exit 125*')
+    $dk = New-LegResult -Run $run -Status ([ordered]@{ docker = 1 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
+    Check 'result: Docker not responding is named, not a container exit' ((-not $dk.Passed) -and $dk.Build -like 'not run (Docker Desktop is not responding*')
     $text = (Format-LocalSummary -Results @($ok, $red)) -join "`n"
     Check 'summary: verdicts' ($text -match 'PASS' -and $text -match 'FAIL')
     Check 'summary: first build errors shown' ($text -match 'a\.cpp:1: error: boom')

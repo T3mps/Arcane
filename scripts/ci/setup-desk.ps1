@@ -44,6 +44,17 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     } else {
         Write-Host "setup-desk: docker ok (OS, CPUs, memory bytes: $($info.Output[0]))"
     }
+    # Resource Saver pauses the Docker VM after a few idle minutes -- shorter than a
+    # Windows leg -- and some Docker Desktop versions resume wedged (API 500).
+    $dd = Join-Path $env:APPDATA 'Docker\settings.json'
+    if (Test-Path -LiteralPath $dd) {
+        try {
+            $settings = [System.IO.File]::ReadAllText($dd) | ConvertFrom-Json
+            if ($settings.PSObject.Properties['useResourceSaver'] -and $settings.useResourceSaver) {
+                Write-Host 'setup-desk: WARNING Docker Desktop Resource Saver is on -- a Linux leg after a long Windows leg may find Docker wedged; turn it off (Settings > Resources > Resource Saver) or update Docker Desktop' -ForegroundColor Yellow
+            }
+        } catch { }
+    }
 }
 
 try { Write-Host "setup-desk: MSBuild $(Resolve-MSBuild)" }

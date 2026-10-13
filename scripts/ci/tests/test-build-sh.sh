@@ -114,7 +114,7 @@ d=$(fixture --no-premake); run "$d" scripts/ci/build.sh Debug
 
 # Portability lints (comment lines ignored): bash 3.2 has no associative
 # arrays, case-modifying expansions, mapfile/readarray, namerefs, |&, coproc.
-LINTED="$REPO/scripts/ci/build.sh"
+LINTED="$REPO/scripts/ci/build.sh $REPO/scripts/ci/container-leg.sh"
 hits=$(grep -nE 'declare -A|typeset -A|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*(,,|\^\^)|local -n|\|&|coproc' $LINTED | grep -vE '^([^:]*:)?[0-9]+:[[:space:]]*#' || true)
 [ -z "$hits" ] && ok "bash 3.2 lint" || bad "bash 3.2 lint: $hits"
 gits=$(grep -nE '(^|[^A-Za-z0-9_./-])git([[:space:]]|$)' "$REPO/scripts/ci/build.sh" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
