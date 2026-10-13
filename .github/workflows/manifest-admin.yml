@@ -33,9 +33,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: arcane-manifest
-  cancel-in-progress: false
+# No concurrency group: a newly queued run in a group cancels the one already
+# pending, so a dry run could silently cancel a release waiting behind an
+# approval. Writers are kept apart by R2's conditional writes instead: of two
+# runs, the later one fails before touching releases.json and says to re-run.
 
 jobs:
   admin:
@@ -47,10 +48,6 @@ jobs:
       TARGET: ${{ inputs.target || 'production' }}
       VERSION: ${{ inputs.version }}
       REASON: ${{ inputs.reason }}
-      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
-      R2_BUCKET: ${{ vars.R2_BUCKET }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,6 +57,10 @@ jobs:
         run: bash scripts/release/install-aws-cli.sh
       - name: ${{ env.OP }} ${{ env.TARGET }}
         env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: bash scripts/release/manifest-admin.sh "$OP" "$TARGET" "$VERSION" "$REASON"

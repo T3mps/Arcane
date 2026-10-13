@@ -31,7 +31,7 @@
   - secrets live only in the `release` environment, which needs the owner's approval;
   - no `pull_request` or `pull_request_target` trigger reaches it;
   - rehearsals and manifest admin run only from `main`;
-  - `release.yml` and `manifest-admin.yml` share `concurrency: arcane-manifest` with `cancel-in-progress: false`.
+  - no workflow-level concurrency group (final review: a queued run cancels a pending one); R2's conditional writes keep writers apart.
 - Release runners: `windows-2025` and `ubuntu-24.04`.
 - Notes: `docs/releases/<version>.md` must exist and be non-empty at the tag. It feeds both the GitHub Release and `releases.json`.
 - Phase 1 contract (assumed here, provided there):

@@ -5,6 +5,8 @@
 #                        nothing uploaded, no secrets, any branch.
 #   dispatch rehearsal (main only) -> a fixture build, really signed, published to
 #                        staging/ with the TEST manifest key, which no Hub trusts.
+# Re-run only the failed jobs ("Re-run failed jobs"), never "Re-run all jobs": a
+# fresh signing gives the Windows archives new bytes under names already taken.
 # Rules (spec s4, roadmap D26): every third-party `uses:` pinned to a commit SHA
 # (release-tooling checks); a read-only token unless a job needs more; secrets only
 # in the `release` environment, whose jobs wait for the owner's approval; no
@@ -26,9 +28,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: arcane-manifest
-  cancel-in-progress: false
+# No concurrency group: a newly queued run in a group cancels the one already
+# pending, so a dry run could silently cancel a release waiting behind an
+# approval. Writers are kept apart by R2's conditional writes instead: of two
+# runs, the later one fails before touching releases.json and says to re-run.
 
 jobs:
   prepare:
@@ -175,7 +178,9 @@ jobs:
 
   dry-run-manifest:
     needs: [prepare, package]
-    if: needs.prepare.outputs.mode == 'dry-run'
+    # Explicit: in a dry run sign-windows is skipped, and a job whose ancestors
+    # include a skipped job is skipped too unless its `if` says otherwise.
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.prepare.outputs.mode == 'dry-run' }}
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -195,7 +200,7 @@ jobs:
 
   publish:
     needs: [prepare, package]
-    if: needs.prepare.outputs.mode != 'dry-run'
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.prepare.outputs.mode != 'dry-run' }}
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -207,10 +212,8 @@ jobs:
       CHANNEL: ${{ needs.prepare.outputs.channel }}
       RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
       NOTES: ${{ needs.prepare.outputs.notes }}
-      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
-      R2_BUCKET: ${{ vars.R2_BUCKET }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    # The R2 credentials go only to the steps that use R2, never to the job,
+    # where `cargo install` runs every dependency's build script.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,13 +226,22 @@ jobs:
           pattern: dist-*
           merge-multiple: true
           path: dist
-      - name: Upload the archives, then sign and publish releases.json
+      - name: Sign releases.json, upload the archives, publish
         env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: bash scripts/release/publish.sh "$MODE" "$PREFIX" "$VERSION" "$RELEASED_AT" "$NOTES" dist "$RUNNER_TEMP/publish"
       - name: List archives left unreferenced
         if: failure()
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: bash scripts/release/list-unreferenced.sh "$PREFIX" "$VERSION" >> "$GITHUB_STEP_SUMMARY"
       - name: GitHub Release (a permanent date record, no files)
         if: env.MODE == 'publish'
@@ -238,12 +250,18 @@ jobs:
         run: |
           flags=()
           if [ "$CHANNEL" = preview ]; then flags=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Arcane $VERSION" --notes-file "$NOTES" "${flags[@]}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "The GitHub Release $GITHUB_REF_NAME exists already (a re-run)."
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Arcane $VERSION" --notes-file "$NOTES" "${flags[@]}"
+          fi
       # The website rebuilds itself (its workflow, Task 16); this only tells it to.
       # A StarworksDev GitHub App token scoped to the website repo, never a personal token.
       - name: Website token
         id: site-token
         if: env.MODE == 'publish'
+        # The release is published by now; a missing app or key only skips the rebuild.
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.STARWORKS_APP_CLIENT_ID }}
@@ -253,10 +271,13 @@ jobs:
           # repository_dispatch needs contents:write on the website; nothing more.
           permission-contents: write
       - name: Rebuild starworks.dev
-        if: env.MODE == 'publish'
+        if: env.MODE == 'publish' && steps.site-token.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.site-token.outputs.token }}
         run: |
           gh api repos/StarworksDev/StarworksWebsite/dispatches -f event_type=arcane-release \
             -F "client_payload[version]=$VERSION" -F "client_payload[channel]=$CHANNEL" \
             || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."
+      - name: Website rebuild skipped
+        if: env.MODE == 'publish' && steps.site-token.outcome != 'success'
+        run: echo "::warning::No website token (is the StarworksBuilder app set up?). The release is published; run the website's arcane-release workflow by hand."

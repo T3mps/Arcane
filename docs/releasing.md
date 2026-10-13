@@ -24,9 +24,27 @@ How an engine release reaches `downloads.starworks.dev` (design:
 Everything fails closed. A tag that doesn't match `Version.hpp`, missing
 notes, an unpublished CI image, a failed test, signing or signature check, an
 object that already exists with different content, or a manifest that doesn't
-verify each stops the run before `releases.json` changes. Archives uploaded
-before a failure stay and are never overwritten: the job summary lists them,
-and re-running the workflow accepts them if they're identical.
+verify each stops the run before `releases.json` changes. The publish job
+verifies the current manifest and signs the new one before it uploads
+anything, so a wrong key or a broken manifest uploads nothing. Archives
+uploaded before a later failure stay and are never overwritten; the job
+summary lists them.
+
+**Re-running.** Use **Re-run failed jobs**, never **Re-run all jobs**: a fresh
+signing gives the Windows binaries new bytes, and their archive names are
+already taken. A re-run of the publish job is safe at any point:
+- identical archives already uploaded are accepted;
+- a version already in `releases.json` with the same archives is a no-op, so
+  the run goes on to the GitHub Release and the website rebuild (both also
+  skip what's already done);
+- a manifest serial an interrupted run left in `history/` is skipped (the
+  next manifest takes a higher serial; Hubs only need serials to rise).
+
+If the run says `releases.json` was not written for a reason other than
+PreconditionFailed, run manifest-admin with `op=repair` first. Two runs that
+write the manifest at once (a release and the monthly re-sign) don't wait for
+each other: the later one fails without overwriting anything and says to
+re-run it.
 
 `released_at` is when the run started. The archive's LICENSE (phase 1) and the
 manifest share it, and it is never rewritten (spec s12).
