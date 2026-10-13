@@ -1,4 +1,4 @@
-# Cargo intermediates land under Arcane/bin-int/, beside the Hub's
-# (ArcaneHub/src-tauri/.cargo/config.toml) and premake's objdirs.
+# Cargo intermediates land under Arcane/Intermediate/Build/, beside the Hub's
+# (hub-cargo) and premake's objdirs (the modularization rename of bin-int/).
 [build]
-target-dir = "../../../bin-int/release-cargo"
+target-dir = "../../../Intermediate/Build/release-cargo"

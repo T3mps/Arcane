@@ -16,12 +16,22 @@ for os in windows linux; do
 done
 [ -f "$T/dist/windows/arcane-$V-windows-x86_64.zip" ] || { echo "FAIL no windows zip"; exit 1; }
 [ -f "$T/dist/linux/arcane-$V-linux-x86_64-symbols.tar.gz" ] || { echo "FAIL no linux symbols"; exit 1; }
+# The engine archives use the SDK's layout (Binaries/<Config>-<os>-<arch>-md/,
+# the modularization rename of bin/), under one root folder.
+win_bin="arcane-$V/Binaries/Release-windows-x86_64-md/arcrelease/arcrelease.exe"
+lin_bin="arcane-$V/Binaries/Release-linux-x86_64-md/arcrelease/arcrelease"
+grep -qxF "$win_bin" <<<"$(unzip -Z1 "$T/dist/windows/arcane-$V-windows-x86_64.zip")" \
+    || { echo "FAIL the Windows archive lacks $win_bin"; exit 1; }
+# Listed first, then searched: `tar | grep -q` would fail under pipefail when
+# grep exits early and tar hits the closed pipe.
+listing=$(tar -tvzf "$T/dist/linux/arcane-$V-linux-x86_64.tar.gz")
+# (Off Linux, Git Bash's cp names the copied exe arcrelease.exe; the exact name
+# and the exec bit are checked on Linux, where CI runs this.)
+grep -q " $lin_bin" <<<"$listing" || { echo "FAIL the Linux archive lacks $lin_bin"; echo "$listing"; exit 1; }
 if [ "$(uname -s)" = Linux ]; then
-    # The Linux engine archive must keep the binary's exec bit (tar mode 0755).
-    # Listed first, then searched: `tar | grep -q` would fail under pipefail when
-    # grep exits early and tar hits the closed pipe.
-    listing=$(tar -tvzf "$T/dist/linux/arcane-$V-linux-x86_64.tar.gz")
-    grep -q "^-rwxr-xr-x .*bin/arcrelease$" <<<"$listing"         || { echo "FAIL the Linux archive lost the binary's exec bit"; echo "$listing"; exit 1; }
+    # ...named exactly, and keeping the binary's exec bit (tar mode 0755).
+    grep -q "^-rwxr-xr-x .* $lin_bin$" <<<"$listing" \
+        || { echo "FAIL the Linux archive lost the binary's exec bit"; echo "$listing"; exit 1; }
 fi
 GITHUB_STEP_SUMMARY="$T/summary.md" bash "$REL/dry-run-manifest.sh" "$T/dist" "$V" 2026-10-12T00:00:00Z "$REL/fixtures/rehearsal-notes.md"
 grep -q "\"version\": \"$V\"" "$T/summary.md" || { echo "FAIL the summary lacks the release"; exit 1; }

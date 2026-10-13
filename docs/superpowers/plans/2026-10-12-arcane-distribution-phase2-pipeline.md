@@ -142,10 +142,10 @@ tempfile = "3"
 `ArcaneHub/crates/arcane_release/.cargo/config.toml`:
 
 ```toml
-# Cargo intermediates land under Arcane/bin-int/, beside the Hub's
-# (ArcaneHub/src-tauri/.cargo/config.toml) and premake's objdirs.
+# Cargo intermediates land under Arcane/Intermediate/Build/, beside the Hub's
+# (hub-cargo) and premake's objdirs (the modularization rename of bin-int/).
 [build]
-target-dir = "../../../bin-int/release-cargo"
+target-dir = "../../../Intermediate/Build/release-cargo"
 ```
 
 `ArcaneHub/crates/arcane_release/src/lib.rs`:
@@ -4047,8 +4047,9 @@ exe=arcrelease
 bin=${ARCRELEASE_BIN:-$(command -v arcrelease)}
 [ -f "$bin" ] || bin="$bin.exe"
 [ -f "$bin" ] || { echo "stage-fixture: arcrelease is not installed" >&2; exit 1; }
-mkdir -p "$stage/engine/bin" "$stage/symbols"
-cp "$bin" "$stage/engine/bin/$exe"
+dir="$stage/engine/Binaries/Release-$os-x86_64-md/arcrelease"
+mkdir -p "$dir" "$stage/symbols"
+cp "$bin" "$dir/$exe"
 cp LICENSE "$stage/engine/LICENSE"
 printf '{"version":"%s","build":"%s","abi":0,"channel":"preview"}\n' "$version" \
     "${GITHUB_SHA:-0000000000000000000000000000000000000000}" >"$stage/engine/engine.json"
@@ -4067,7 +4068,7 @@ set -euo pipefail
 stage=$1 version=$2 os=$3
 die() { echo "check-stage: $*" >&2; exit 1; }
 jq -e --arg v "$version" '.version == $v' "$stage/engine/engine.json" >/dev/null || die "$stage/engine/engine.json is not $version"
-exe="$stage/engine/bin/arcrelease"
+exe="$stage/engine/Binaries/Release-$os-x86_64-md/arcrelease/arcrelease"
 [ "$os" = windows ] && exe="$exe.exe"
 [ -f "$exe" ] || die "no staged binary at $exe (phase 1: the engine's probe goes here)"
 "$exe" --version
@@ -4875,7 +4876,7 @@ arcrelease verify --manifest releases.json --sig releases.json.minisig --trust-k
 Then download the Windows zip named in that manifest, extract it, and check the signature in PowerShell:
 
 ```powershell
-(Get-AuthenticodeSignature .\arcane-0.0.0-preview.<run>\bin\arcrelease.exe) | Format-List Status, SignerCertificate, TimeStamperCertificate
+(Get-AuthenticodeSignature .\arcane-0.0.0-preview.<run>\Binaries\Release-windows-x86_64-md\arcrelease\arcrelease.exe) | Format-List Status, SignerCertificate, TimeStamperCertificate
 ```
 
 Expected: `Status : Valid`, with the signer naming you (the individual) and a timestamp certificate present.
@@ -5379,6 +5380,7 @@ When phase 1's plan is written, it fills these slots without changing anything a
 
 - **`release.yml`, `stage` job:**
   - replace the "Engine stage (phase 1)" step with `scripts/release/stage-engine.{ps1,sh}`. These build Dist with debug info, split and match symbols, run the tests and the probe, and lay out `stage/engine` (engine.json, LICENSE stamped with `arcrelease change-date`, `THIRD_PARTY_NOTICES`) and `stage/symbols`;
+  - use the modularization layout: binaries in `Binaries/<Config>-<os>-<arch>-md|mono/`, never `bin/` (the fixture already does). On Linux and macOS, find the folder with `scripts/arcane-bin-dir.sh <Config>` instead of hardcoding it;
   - run the Linux leg in `container: ${{ needs.prepare.outputs.ci_image }}`.
 - **`check-stage.sh`:** compare `--print-engine-info` (`version`, `commit`, `engineAbi`) with `engine.json`, on the signed binaries.
 - **`ci.yml`'s Dist legs:** run `stage-engine` + `check-stage.sh` + `pack.sh` on every pull request, with no signing and no upload. This is spec s10's packaging check, and it does not rebuild Dist.

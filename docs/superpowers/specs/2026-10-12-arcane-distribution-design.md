@@ -418,8 +418,9 @@ deleted on the next start.
 
 ```
 arcane-0.3.1/
-  bin/          editor, runtime, server, crash reporter, arcbuild, arccook,
-                engine module libraries, runtime deps (D3D12/, DXC; Vulkan loader on Linux)
+  Binaries/     <Config>-<os>-<arch>-md/ (and -mono/): editor, runtime, server,
+                crash reporter, arcbuild, arccook, engine module libraries,
+                runtime deps (D3D12/, DXC; Vulkan loader on Linux)
   data/         built-in assets
   sdk/          the installed SDK (below)
   LICENSE       BSL 1.1 + this version's change date
@@ -431,6 +432,20 @@ arcane-0.3.1/
 `engine.json` must equal what the probe reports (`version`, `commit` as
 `build`, `engineAbi` as `abi`), checked in CI. The ReferenceProject is not
 included.
+
+**Folder names (the modularization layout).** Engine binaries live in
+`Binaries/<Config>-<os>-<arch>-md|mono/` (formerly `bin/`) and build
+intermediates in `Intermediate/Build/` (formerly `bin-int/`; the Hub's cargo
+target is `Intermediate/Build/hub-cargo`). Every SDK path in the manifest, the
+installer, the Hub's engine manager and the docs uses `Binaries/`, for example
+`%ARCANE_SDK%\Binaries\Release-windows-x86_64-md\arcbuild\arcbuild.exe` and
+`$ARCANE_SDK/Binaries/Release-linux-x86_64-md/ArcaneCore/libArcaneCore.so`.
+On Linux and macOS, scripts resolve the folder with
+`scripts/arcane-bin-dir.sh <Config>` rather than hardcoding it. Unchanged:
+vendored `ThirdParty/*` libraries keep their own `bin/`, a game package's
+internal `Intermediate/Package/<cfg>/bin`, and the packaged-game layout
+(`Packages/<Proj>-<os>-<cfg>/<Proj>.exe` with
+`<Proj>/Binaries/Win64|Linux|Mac/`).
 
 **The SDK after modularization** (`sdk/`, what `build/arcane.lua` reads as
 `ARCANE_SDK`):
@@ -463,7 +478,7 @@ on top of the ~43 MB runtime. Phase 1 measures the real figure. The per-file
 figures go in the manifest, so the Hub's disk-space check uses real numbers.
 
 `arcane.lua` gains an "installed SDK" mode (it finds libraries under
-`sdk/lib/` instead of `bin/<cfg>-<sys>-<arch>-md/` and `-mono/`). Developer
+`sdk/lib/` instead of `Binaries/<cfg>-<sys>-<arch>-md/` and `-mono/`). Developer
 checkouts keep working as they do now.
 
 ### 7.2 Game module configs: Development and Release
@@ -586,7 +601,7 @@ conditions:
 What ships:
 - **`THIRD_PARTY_NOTICES`** at the archive root, generated at packaging time
   from the vendor modules in the module graph plus the runtime dependencies
-  in `bin/`. Each entry has the name, the version and the licence text
+  in `Binaries/`. Each entry has the name, the version and the licence text
   verbatim. A dependency that isn't redistributed (Catch2, rapidcheck, the
   Playwright fixtures) is left out.
 - **Packaged games** carry the notices for whatever they link.
