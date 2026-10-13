@@ -1,7 +1,7 @@
 # Arcane public distribution: Hub engine manager, R2 releases, signing, SDK packaging
 
 **Date:** 2026-10-12 · **Base:** `main` 946092fb · **Branch:** `docs/distribution-design`
-**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); written-spec review rounds 1 and 2 folded in (packaged-game writes, logs, premake, notices, manifest expiry, release image, PR packaging check, SAC and local modules; the AVX2 requirement and check, the SAC registry state); approved for the implementation plan
+**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); written-spec review rounds 1 and 2 folded in (packaged-game writes, logs, premake, notices, manifest expiry, release image, PR packaging check, SAC and local modules; the AVX2 requirement and check, the SAC registry state); approved. Phase 2 plan review folded in (the manifest pair bypasses the cache, write-once history and repair, the notes file, staging rehearsals, a repository_dispatch website rebuild, an expiry watchdog, action pins and `persist-credentials: false`). Plan: `docs/superpowers/plans/2026-10-12-arcane-distribution-phase2-pipeline.md`
 
 ## 0. Status and context
 
@@ -130,7 +130,7 @@ is stale. All-users Hub installs need the NSIS `installMode` changed from
 - **One release workflow** in GitHub Actions, triggered by a tag. It builds
   through `scripts/ci/build.{sh,ps1}` (plan A §1.3), signs, packages, uploads
   to R2, regenerates and signs `releases.json`, creates a GitHub Release, and
-  calls the website's deploy hook.
+  tells the website to rebuild (a `repository_dispatch`).
 - **The Hub** gains:
   - an engine manager (list, install, verify, remove);
   - a release client that reads and verifies the manifest;
@@ -144,14 +144,21 @@ is stale. All-users Hub installs need the NSIS `installMode` changed from
   URL). It holds:
   - `releases.json` and its signature `releases.json.minisig`;
   - the Hub's update feed, `hub/latest.json`;
-  - the immutable archives under `engine/<version>/...` and `hub/<version>/...`.
+  - the immutable archives under `engine/<version>/...` and `hub/<version>/...`;
+  - `history/<serial>.json` and `.minisig`: every manifest ever published,
+    written first and write-once, so a half-finished update can always be
+    repaired from a signed copy (and a fourth record of release dates);
+  - `staging/`: a separate manifest for rehearsals, signed with a committed
+    test key no Hub trusts.
 - Cache Rules: archives (including `.AppImage`) get a long edge cache
-  lifetime; the `.json` files a short one (s12).
+  lifetime; the manifest pair (`.json`, `.minisig`) bypasses the cache, so the
+  edge can never serve a manifest beside a stale signature (s12).
 
 **The website repo** (`D:/dev/web/Starworks`, Pages project `starworksdev`):
 - `/arcane/download` and `/arcane/releases`, built from the manifest at build
   time.
-- A Pages deploy hook that Arcane's CI calls after publishing.
+- A workflow that rebuilds and deploys the site on a `repository_dispatch`
+  (`arcane-release`) from Arcane's release job.
 
 **Credentials** live only in a protected GitHub environment (`release`) in
 the Arcane repo, with required reviewers:
@@ -162,7 +169,8 @@ the Arcane repo, with required reviewers:
 - the minisign key and the Tauri updater key, each with an offline backup;
 - an R2 API token scoped to Object Read & Write on the `arcane-downloads`
   bucket only;
-- the Pages deploy-hook URL.
+- a StarworksDev GitHub App's ID and private key, for the cross-repo
+  dispatch (never a personal token).
 
 **Unchanged:** Arcane's existing CI (`ci.yml`) keeps building and testing all
 three platforms, macOS included.
@@ -198,7 +206,8 @@ stays with `ci-image` alone (plan A, `docs/ci.md`).
   is reachable from a pull request: no `pull_request` or `pull_request_target`
   trigger touches the `release` environment, and fork code never runs with its
   credentials.
-- Every `uses:` is pinned to a commit SHA.
+- Every `uses:` is pinned to a commit SHA, at the releases plan A pins (no
+  Node 20 `v4` actions), and every checkout sets `persist-credentials: false`.
 - `permissions:` is read-only by default; `id-token: write` (for OIDC) and
   `contents: write` (for the GitHub Release) are granted only to the jobs that
   need them.
@@ -224,7 +233,9 @@ stays with `ci-image` alone (plan A, `docs/ci.md`).
 7. Update `releases.json`, bump its serial, set its expiry, sign it, and
    upload it.
 8. Create a GitHub Release with the notes and no files attached; it serves as
-   a permanent date record. Then call the deploy hook.
+   a permanent date record. Notes come from `docs/releases/<version>.md`,
+   which must exist at the tag, and feed both the GitHub Release and the
+   manifest's `notes`. Then send the website its `repository_dispatch`.
 
 **Hub job**
 - Builds the NSIS installer on `windows-2025`, and an AppImage plus a .deb on
@@ -239,9 +250,12 @@ stays with `ci-image` alone (plan A, `docs/ci.md`).
   `releases.json`. The archives stay, so projects pinned to that version can
   still install it.
 
-**Re-signing.** A scheduled job re-signs `releases.json` every 30 days, even
-when nothing changed (s5). It runs in the `release` environment, so it waits
-for the owner's approval like any publish.
+**Re-signing.** A scheduled job re-signs `releases.json` monthly, even when
+nothing changed (s5). It runs in the `release` environment, so it waits for
+the owner's approval like any publish. GitHub silently disables a public
+repository's schedules after 60 days without activity, so a watchdog outside
+GitHub (the Starworks Ops bot) checks `expires` daily and alerts when fewer
+than 30 days remain.
 
 **Safety**
 - The approval gate above.
@@ -249,6 +263,9 @@ for the owner's approval like any publish.
   rebuilding Dist in a separate workflow (s10).
 - The release workflow has a dry-run mode for a manual dispatch: it builds and
   packages without uploading anything (test key, no `release` environment).
+- A rehearsal mode (from `main`) signs for real and publishes a fixture to
+  `staging/` with the committed test key. A test checks that the production
+  key list rejects manifests signed with it.
 
 ## 5. Manifest and trust (design section 3)
 
@@ -266,6 +283,7 @@ for the owner's approval like any publish.
     "min_hub_version": "0.2.0",
     "yanked": false, "yank_reason": null, "security": false,
     "notes_url": "https://starworks.dev/arcane/releases#0.3.1",
+    "notes": "<markdown from docs/releases/0.3.1.md>",
     "artifacts": [
       { "os": "windows", "arch": "x86_64", "kind": "engine",
         "path": "engine/0.3.1/arcane-0.3.1-windows-x86_64.zip",
@@ -376,6 +394,9 @@ deleted on the next start.
 - **Follow patches**, if a project opts in, means the newest `0.3.x` with the
   same ABI.
 - The Hub always shows which engine a project uses and why.
+- Release notes are shown as escaped text or sanitized Markdown, never raw
+  HTML: the webview sits in an app that can launch processes, so the signed
+  manifest is not the only defense.
 - The Hub sets `ARCANE_SDK` to the pinned engine's `sdk/` folder before
   launching the editor or a build. Outside the Hub (a terminal, an IDE), you
   set it yourself: each engine in the Engines view has **Copy environment**,
@@ -596,7 +617,8 @@ The notice list goes to the legal review (s12).
 - Every release with its channel, date, ABI, notes and badges. Yanked releases
   are struck through, with the reason.
 - Each version has its own anchor, e.g. `#0.3.1`.
-- Notes are copied from the GitHub Release into `releases.json` by CI.
+- Notes come from `docs/releases/<version>.md` at the tag; CI copies them into
+  both the GitHub Release and `releases.json`.
 
 **How it's built**
 - A `+page.server.ts` loader fetches `releases.json` at build time, verifies
@@ -705,8 +727,9 @@ no engine changes and may be prepared in parallel with it.
    OIDC federation; the keys and their backups; the scoped R2 token; the
    release workflow scaffolding (dry run, then publish behind approval), with
    the Linux image resolved, never built; the manifest generator, the yank
-   workflow, the 30-day re-sign behind approval, and the GitHub Release; the
-   deploy hook; the legal review (s12). Result: pushing `v0.2.0` publishes a release (once phase 1
+   workflow, the monthly re-sign behind approval, history and repair, and the
+   GitHub Release; the website's `repository_dispatch` rebuild; the expiry
+   watchdog in the Starworks Ops bot; the legal review (s12). Result: pushing `v0.2.0` publishes a release (once phase 1
    has landed).
 3. **The Hub as engine manager.** Manifest trust; the Engines view; install
    scopes and the UAC helper; pinning, upgrades and follow patches; symbols;
@@ -784,8 +807,9 @@ no engine changes and may be prepared in parallel with it.
   new key in a Hub release before the old one retires.
 - **R2 cache rules.** Cloudflare caches by extension: `.zip`, `.gz` and `.exe`
   are cached by default, `.json` and `.AppImage` are not. Explicit Cache Rules
-  give the archives (and `.AppImage`) a long TTL and the `.json` files a short
-  one. On the Free plan files over 512 MB are not cached; they are still
+  give the archives (and `.AppImage`) a long TTL; the manifest pair (`.json`,
+  `.minisig`) bypasses the cache, since a cached manifest beside a fresh
+  signature (or the reverse) would fail every Hub's check. On the Free plan files over 512 MB are not cached; they are still
   served from R2.
 - **aws-cli checksums with R2.** aws-cli 2.23 and later calculate request
   checksums by default (`WHEN_SUPPORTED`), which R2 does not fully support.

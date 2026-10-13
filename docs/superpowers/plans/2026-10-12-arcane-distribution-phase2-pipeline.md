@@ -39,6 +39,17 @@
   - `engine.json` is `{ "version", "build" (40-hex SHA), "abi", "channel" }`;
   - a stage folder holds `stage/engine/...` and `stage/symbols/...`;
   - symlinks are not allowed in a stage.
+- Action versions match plan A's pins (PR #7):
+  - `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`;
+  - `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2`;
+  - `actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0` if a cache is added;
+  - `dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable`.
+
+  The rest (`actions/download-artifact`, `azure/login`, `azure/artifact-signing-action`, `actions/create-github-app-token`) are written at their current major and frozen by `pin-actions.sh`. Never a v4 action (the Node 20 line the 2026-10-12 Actions audit retired, C3).
+- Every `actions/checkout` sets `persist-credentials: false` (audit C7). Nothing in these jobs pushes with git; `gh` uses an explicit `GH_TOKEN`.
+- `history/<serial>.json` and its `.minisig` are written FIRST and are write-once. An existing copy is refused unless it is byte-identical, which only a re-run of the same signing produces. That way repair always has a signed copy to restore from.
+- The website rebuild is a `repository_dispatch` (`arcane-release`) to `StarworksDev/Starworks`. Its token comes from a StarworksDev GitHub App (`actions/create-github-app-token`), never a personal token. The website's own workflow builds and deploys (Task 16).
+- A watchdog outside GitHub's scheduler checks `releases.json`'s `expires` daily and alerts when fewer than 30 days remain: the Starworks Ops bot (Task 17). A disabled schedule fails silently.
 - Never echo a secret. Scripts read secrets from the environment only.
 
 ## Review Focus
@@ -2630,6 +2641,7 @@ use std::path::PathBuf;
 
 use arcane_release::manifest::{Artifact, ManifestError, BASE_URL};
 use arcane_release::ops::{self, NewRelease};
+use arcane_release::keys;
 use arcane_release::sign;
 use arcane_release::verify::{self, VerifyError};
 use serde_json::json;
@@ -2754,6 +2766,20 @@ fn goldens_are_current_and_verify_as_documented() {
     check("rotated", &both).unwrap();
     assert!(matches!(check("tampered", &k1), Err(VerifyError::BadSignature)));
     assert!(matches!(check("schema2", &k1), Err(VerifyError::Invalid(ManifestError::UnsupportedSchema(2)))));
+}
+
+/// The rehearsal (test) keys sign staging/. The production key list built into
+/// every Hub must reject them: a slip that adds a test key to
+/// TRUSTED_MANIFEST_KEYS fails here. (Before the key ceremony the list is empty
+/// and this fails closed with NoKeys; after it, with BadSignature.)
+#[test]
+fn the_production_keys_reject_rehearsal_manifests() {
+    for name in ["valid", "rotated"] {
+        let bytes = fs::read(dir().join(format!("{name}.json"))).unwrap();
+        let sig = fs::read_to_string(dir().join(format!("{name}.json.minisig"))).unwrap();
+        let got = verify::verify_manifest(&bytes, &sig, &keys::trusted(), None, NOW);
+        assert!(matches!(got, Err(VerifyError::BadSignature | VerifyError::NoKeys)), "{name}: {got:?}");
+    }
 }
 ```
 
@@ -3141,7 +3167,9 @@ put_pointer() {
     die "${prefix}releases.json was updated but its signature was not; run manifest-admin.yml with op=repair (docs/releasing.md, \"Repair\")"
 }
 
-# publish_manifest DIR PREFIX ETAG|none: the history copy first, then the pointer.
+# publish_manifest DIR PREFIX ETAG|none: the history copy FIRST, write-once (an
+# existing copy is refused unless byte-identical, which only a re-run of the
+# same signing produces), so repair always has a signed copy; then the pointer.
 publish_manifest() {
     local dir=$1 prefix=$2 etag=$3 hist
     hist=$(printf '%shistory/%09d' "$prefix" "$(jq -r .serial "$dir/releases.json")")
@@ -3791,7 +3819,7 @@ description: Builds arcrelease (ArcaneHub/crates/arcane_release) from this check
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
     - name: cargo install arcrelease
       shell: bash
       run: |
@@ -3810,7 +3838,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .github/actions/sign-windows
 ```
 
 Expected:
-- `pin-actions` prints three `-> <sha>` lines (`azure/login`, `azure/artifact-signing-action`, `dtolnay/rust-toolchain`);
+- `pin-actions` prints two `-> <sha>` lines (`azure/login`, `azure/artifact-signing-action`; the toolchain is already pinned). First confirm each is at its current major: `gh release view -R Azure/login` and `gh release view -R Azure/artifact-signing-action`;
 - `check-pinned` exits 0;
 - `test-pin` reports `0 failed`;
 - the PowerShell test prints only `ok`/`skip` lines and exits 0.
@@ -3880,8 +3908,10 @@ jobs:
       run:
         working-directory: ArcaneHub/crates/arcane_release
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: clippy
       - run: cargo test --locked
@@ -3892,21 +3922,27 @@ jobs:
   scripts:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
       - run: bash scripts/release/tests/run-all.sh
 
   signature-check:
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - shell: pwsh
         run: ./.github/actions/sign-windows/tests/test-check-signatures.ps1
 
   workflows:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Third-party actions pinned to commit SHAs
         run: >-
           bash scripts/release/check-pinned.sh
@@ -4135,7 +4171,9 @@ jobs:
       notes: ${{ steps.run.outputs.notes }}
       ci_image: ${{ steps.run.outputs.ci_image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Log in to GHCR (plan A's CI image is read, never built)
         if: github.event_name == 'push'
         run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
@@ -4161,7 +4199,9 @@ jobs:
       MODE: ${{ needs.prepare.outputs.mode }}
       OS: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
       - name: Engine stage (phase 1)
         if: env.MODE == 'publish'
@@ -4173,7 +4213,7 @@ jobs:
         if: env.MODE != 'publish'
         shell: bash
         run: bash scripts/release/stage-fixture.sh "$VERSION" "$OS" stage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stage-${{ matrix.os }}
           path: stage/
@@ -4189,8 +4229,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
         with:
           name: stage-windows
           path: stage
@@ -4203,7 +4245,7 @@ jobs:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
           account: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           profile: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stage-windows-signed
           path: stage/
@@ -4228,9 +4270,11 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       OS: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: ${{ (matrix.os == 'windows' && needs.sign-windows.result == 'success') && 'stage-windows-signed' || format('stage-{0}', matrix.os) }}
           path: stage
@@ -4240,7 +4284,7 @@ jobs:
       - name: Pack
         shell: bash
         run: bash scripts/release/pack.sh stage "dist/$OS" "$VERSION" "$OS"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.os }}
           path: dist/
@@ -4256,9 +4300,11 @@ jobs:
       RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
       NOTES: ${{ needs.prepare.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: dist-*
           merge-multiple: true
@@ -4284,11 +4330,13 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
       - name: Install the pinned aws-cli
         run: bash scripts/release/install-aws-cli.sh
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: dist-*
           merge-multiple: true
@@ -4309,13 +4357,25 @@ jobs:
           flags=()
           if [ "$CHANNEL" = preview ]; then flags=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Arcane $VERSION" --notes-file "$NOTES" "${flags[@]}"
+      # The website rebuilds itself (its workflow, Task 16); this only tells it to.
+      # A StarworksDev GitHub App token scoped to the website repo, never a personal token.
+      - name: Website token
+        id: site-token
+        if: env.MODE == 'publish'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.STARWORKS_APP_ID }}
+          private-key: ${{ secrets.STARWORKS_APP_PRIVATE_KEY }}
+          owner: StarworksDev
+          repositories: Starworks
       - name: Rebuild starworks.dev
         if: env.MODE == 'publish'
         env:
-          HOOK: ${{ secrets.PAGES_DEPLOY_HOOK_URL }}
+          GH_TOKEN: ${{ steps.site-token.outputs.token }}
         run: |
-          if [ -z "$HOOK" ]; then echo "::notice::No PAGES_DEPLOY_HOOK_URL; the website picks the release up on its next build (phase 6)."; exit 0; fi
-          curl -fsS -X POST "$HOOK" >/dev/null || echo "::warning::The Pages deploy hook failed. The release is published; rebuild starworks.dev by hand."
+          gh api repos/StarworksDev/Starworks/dispatches -f event_type=arcane-release \
+            -F "client_payload[version]=$VERSION" -F "client_payload[channel]=$CHANNEL" \
+            || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."
 ```
 
 - [ ] **Step 5: Write `docs/releasing.md`** and the CLAUDE.md pointer
@@ -4380,6 +4440,8 @@ bash scripts/release/check-pinned.sh .github/workflows/release.yml
 docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/release.yml
 bash scripts/release/tests/run-all.sh
 ```
+
+Before pinning, confirm that `actions/download-artifact` and `actions/create-github-app-token` are written at their current majors (`gh release view -R actions/download-artifact`, `gh release view -R actions/create-github-app-token`). Download-artifact's major should match upload-artifact's v7.
 
 Expected: pins written, `check-pinned` exits 0, actionlint is silent, and every test file reports `0 failed` or `ok`. A real dry-run needs the workflow on `main`, because `workflow_dispatch` only dispatches workflows on the default branch. That run happens after merge, in Task 15 Step 1.
 
@@ -4459,7 +4521,9 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/arcrelease
       - name: Install the pinned aws-cli
         run: bash scripts/release/install-aws-cli.sh
@@ -4682,15 +4746,24 @@ curl -fsSO https://downloads.starworks.dev/releases.json && curl -fsSO https://d
 arcrelease verify --manifest releases.json --sig releases.json.minisig
 ```
 
-- [ ] **Step 6: The website rebuild hook (owner)**
+- [ ] **Step 6: The cross-repo token for the website rebuild (owner)**
 
-Pages deploy hooks exist only for Git-integrated Pages projects. If `starworksdev` is Git-integrated, go to Pages → starworksdev → Settings → Builds → Deploy hooks, create `arcane-release` for branch `main`, and store it:
+The publish job sends a `repository_dispatch` to the website repo, using a token minted from a StarworksDev **GitHub App**: the StarworksBuilder decision, never a personal token. A `repository_dispatch` needs the app to have **Contents: Read and write** on the target repository.
+
+1. If the org already has the StarworksBuilder app, open it (StarworksDev → Settings → Developer settings → GitHub Apps). Otherwise create it there as **New GitHub App**:
+   - name `StarworksBuilder`;
+   - no webhook (untick Active);
+   - **Repository permissions:** Contents: Read and write, and Metadata: Read-only (required);
+   - "Only on this account".
+2. Install it on StarworksDev, choosing **Only select repositories** and including `Starworks`.
+3. Generate a private key (App settings → Private keys), and store the app's ID and key in Arcane's `release` environment:
 
 ```bash
-gh secret set PAGES_DEPLOY_HOOK_URL --env release --repo StarworksDev/Arcane
+gh variable set STARWORKS_APP_ID --env release --repo StarworksDev/Arcane --body "<app id>"
+gh secret set STARWORKS_APP_PRIVATE_KEY --env release --repo StarworksDev/Arcane < ~/Downloads/starworksbuilder.*.private-key.pem
 ```
 
-If the project is Direct Upload, leave the secret unset. The publish job then skips the step with a notice, and phase 6 adds a cross-repo trigger instead.
+Delete the downloaded `.pem` after storing it. Back it up only if you want to avoid generating a new key later; a lost app key is replaced by generating another.
 
 - [ ] **Step 7: Write `check-hosting.sh`** and append "Hosting" to `docs/releasing.md`
 
@@ -4839,6 +4912,467 @@ git commit -m "docs(release): signing runbook -- Artifact Signing over OIDC"
 
 ---
 
+### Task 16: The website rebuilds on an Arcane release (website repo)
+
+This task is in **`D:\dev\web\Starworks`**, not Arcane. Do it on a branch there once no other agent is working in that checkout, and merge through a PR like any website change.
+
+**Files (website repo):**
+- Create: `.github/workflows/arcane-release.yml`
+- Modify: `docs/deployment.md` (one paragraph)
+
+**Interfaces:**
+- Consumes: the `repository_dispatch` with `event_type: arcane-release` and `client_payload: { version, channel }` that Arcane's publish job sends (Task 11).
+- Produces: a fresh build of starworks.dev deployed to the `starworksdev` Pages project. Phase 6's loader then reads the new `releases.json` at build time.
+
+- [ ] **Step 1: Find out how the Pages project deploys (owner)**
+
+Open Cloudflare → Workers & Pages → `starworksdev` → Settings:
+- If it shows a connected Git repository, it is **Git-integrated**. Create a deploy hook (Settings → Builds → Deploy hooks → `arcane-release`, branch `main`) and store it in the website repo: `gh secret set PAGES_DEPLOY_HOOK_URL --repo StarworksDev/Starworks`.
+- Otherwise it is **Direct Upload**. Create a Cloudflare API token with the "Cloudflare Pages: Edit" permission for this account only, and store it:
+
+```bash
+gh secret set CLOUDFLARE_API_TOKEN --repo StarworksDev/Starworks
+gh variable set CLOUDFLARE_ACCOUNT_ID --repo StarworksDev/Starworks --body "<account id>"
+```
+
+The workflow handles both cases: it POSTs the hook when one exists, and otherwise builds and runs `wrangler pages deploy`.
+
+- [ ] **Step 2: Write the workflow**
+
+`.github/workflows/arcane-release.yml`:
+
+```yaml
+# Rebuilds and deploys starworks.dev when Arcane publishes a release: Arcane's
+# release workflow sends a repository_dispatch (arcane-release) with a token
+# from the StarworksDev GitHub App. Also runnable by hand. From phase 6 the
+# build reads releases.json; before that a rebuild is harmless.
+# Git-integrated Pages project: POST its deploy hook. Direct Upload: build,
+# check, and deploy with the repo's pinned wrangler.
+name: arcane-release
+
+on:
+  repository_dispatch:
+    types: [arcane-release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    env:
+      HOOK: ${{ secrets.PAGES_DEPLOY_HOOK_URL }}
+      VERSION: ${{ github.event.client_payload.version }}
+    steps:
+      - name: Which release
+        run: echo "Rebuilding for Arcane ${VERSION:-(manual run)}"
+      - name: Deploy hook (Git-integrated project)
+        if: env.HOOK != ''
+        run: curl -fsS -X POST "$HOOK" >/dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HOOK == ''
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.HOOK == ''
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - if: env.HOOK == ''
+        run: npm ci
+      - if: env.HOOK == ''
+        run: npm run build
+      - name: Deploy check (skips the gitignored private/ paths under CI)
+        if: env.HOOK == ''
+        run: npm run deploy:verify
+      - name: Deploy (Direct Upload)
+        if: env.HOOK == ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler pages deploy build --project-name starworksdev --branch main
+```
+
+- [ ] **Step 3: Lint, document, commit**
+
+Run: `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color .github/workflows/arcane-release.yml`
+Expected: silent.
+
+Add to `docs/deployment.md`:
+
+```markdown
+## Rebuilds on an Arcane release
+
+`.github/workflows/arcane-release.yml` rebuilds and deploys the site when
+Arcane publishes a release (a `repository_dispatch` from Arcane's release
+workflow, sent with a StarworksDev GitHub App token), or by hand from the
+Actions tab. It POSTs the Pages deploy hook if `PAGES_DEPLOY_HOOK_URL` is set
+(a Git-integrated project); otherwise it builds and runs `wrangler pages
+deploy` with `CLOUDFLARE_API_TOKEN`.
+```
+
+```bash
+git add .github/workflows/arcane-release.yml docs/deployment.md
+git commit -m "ci: rebuild and deploy the site on an Arcane release (repository_dispatch)"
+```
+
+- [ ] **Step 4: Prove it end to end (after Task 14 Step 6 and this task are merged)**
+
+Run the workflow by hand (Actions → arcane-release → Run workflow).
+Expected: green, and a new Pages deployment listed in Cloudflare.
+
+Then from Arcane's side, send the dispatch the release job sends:
+
+```bash
+gh api repos/StarworksDev/Starworks/dispatches -f event_type=arcane-release -F "client_payload[version]=0.0.0-test"
+```
+
+Expected: an `arcane-release` run starts in the website repo. This uses your own `gh` login; the release job uses the app token.
+
+---
+
+### Task 17: A release-manifest watchdog in Starworks Ops (starworks-ops repo)
+
+GitHub disables a public repository's scheduled workflows after 60 days without activity. A disabled schedule produces no failure and no notification; silence looks like health. With a 90-day expiry and monthly re-signs, the margin can be about 30 days. So a check outside GitHub's scheduler runs daily on the desk: the Starworks Ops bot, as a new feature module.
+
+This task is in **`D:\dev\starworks\starworks-ops`**.
+
+**Files (starworks-ops):**
+- Create: `starworks_ops/features/release_watch/__init__.py`
+- Create: `starworks_ops/features/release_watch/service.py`
+- Modify: `starworks_ops/config.py` (add `ReleaseWatchConfig`, parse `[release_watch]`)
+- Modify: `config.toml` (enable it only once the production manifest exists: Step 6)
+- Modify: `README.md` (the feature table)
+- Test: `tests/test_release_watch.py`; `tests/test_config.py` (two cases)
+
+**Interfaces:**
+- Consumes:
+  - `Alerter.post_alert(key, text)`, which suppresses a repeat of the same key within 24 hours, so a daily check alerts once a day;
+  - `Http.get_json(url) -> (status, body)`, which raises `TransientError` on network errors;
+  - `util.parse_ts`, which reads `2027-01-10T00:00:00Z`.
+- Produces:
+  - `ReleaseWatchConfig(manifest_urls: tuple[str, ...], warn_days: int = 30, check_hours: int = 24)`;
+  - `ReleaseWatchService.check() -> list[Reading]`;
+  - the alert keys `release-watch:expiry:<url>` and `release-watch:read:<url>`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_release_watch.py`:
+
+```python
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from starworks_ops.alerts import Alerter
+from starworks_ops.config import ReleaseWatchConfig
+from starworks_ops.features.release_watch.service import ReleaseWatchService
+from starworks_ops.http import TransientError
+from starworks_ops.state import StateStore
+from tests.fakes import FakeClock, FakeHttp
+
+T0 = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+URL = "https://downloads.starworks.dev/releases.json"
+
+
+def make(tmp_path: Path, responses, clock: FakeClock | None = None, warn_days: int = 30):
+    clock = clock or FakeClock(T0)
+    sent: list[str] = []
+
+    async def send(text: str) -> None:
+        sent.append(text)
+
+    alerter = Alerter(send, StateStore(tmp_path / "alerts.json"), now=clock)
+    cfg = ReleaseWatchConfig(manifest_urls=(URL,), warn_days=warn_days)
+    return ReleaseWatchService(cfg, FakeHttp(responses), alerter, now=clock), sent
+
+
+def manifest(expires: datetime) -> dict:
+    return {"schema": 1, "serial": 7, "expires": expires.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+async def test_plenty_of_time_is_quiet(tmp_path: Path):
+    service, sent = make(tmp_path, [(200, manifest(T0 + timedelta(days=60)))])
+    [reading] = await service.check()
+    assert reading.problem is None
+    assert round(reading.days_left) == 60
+    assert sent == []
+
+
+async def test_fewer_than_30_days_alerts_with_the_fix(tmp_path: Path):
+    service, sent = make(tmp_path, [(200, manifest(T0 + timedelta(days=29)))])
+    await service.check()
+    assert len(sent) == 1
+    assert "expires in 29 day(s)" in sent[0]
+    assert "manifest-admin" in sent[0]
+
+
+async def test_an_expired_manifest_says_so(tmp_path: Path):
+    service, sent = make(tmp_path, [(200, manifest(T0 - timedelta(days=1)))])
+    await service.check()
+    assert "has EXPIRED" in sent[0]
+
+
+async def test_alerts_repeat_daily_not_every_check(tmp_path: Path):
+    clock = FakeClock(T0)
+    soon = manifest(T0 + timedelta(days=10))
+    service, sent = make(tmp_path, [(200, soon), (200, soon), (200, soon)], clock)
+    await service.check()
+    clock.advance(hours=6)
+    await service.check()
+    clock.advance(hours=18)
+    await service.check()
+    assert len(sent) == 2
+
+
+async def test_unreadable_manifests_alert(tmp_path: Path):
+    cases = [
+        (TransientError("network error (ClientError)"), "could not be fetched"),
+        ((404, None), "returned HTTP 404"),
+        ((200, {"schema": 1}), "has no expires field"),
+        ((200, {"expires": "next tuesday"}), "unreadable expires"),
+        ((200, ["not", "an", "object"]), "has no expires field"),
+    ]
+    for i, (response, words) in enumerate(cases):
+        service, sent = make(tmp_path / str(i), [response])  # its own alert history
+        [reading] = await service.check()
+        assert reading.problem is not None
+        assert len(sent) == 1 and words in sent[0], (words, sent)
+```
+
+Append to `tests/test_config.py`:
+
+```python
+def test_release_watch_defaults_when_enabled():
+    data = tomllib.loads(VALID.replace('"presence", "social_feed"', '"presence", "social_feed", "release_watch"'))
+    rw = parse_config(data).release_watch
+    assert rw is not None
+    assert rw.manifest_urls == ("https://downloads.starworks.dev/releases.json",)
+    assert rw.warn_days == 30
+    assert rw.check_hours == 24
+
+
+def test_release_watch_urls_must_be_https():
+    text = VALID.replace('"presence", "social_feed"', '"presence", "social_feed", "release_watch"')
+    text += '\n[release_watch]\nmanifest_urls = ["http://downloads.starworks.dev/releases.json"]\n'
+    with pytest.raises(ConfigError, match="manifest_urls"):
+        parse_config(tomllib.loads(text))
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `.venv\Scripts\python -m pytest tests/test_release_watch.py tests/test_config.py -q`
+Expected: FAIL. You'll see `ModuleNotFoundError: starworks_ops.features.release_watch` and `ImportError: cannot import name 'ReleaseWatchConfig'`.
+
+- [ ] **Step 3: Add the config**
+
+In `starworks_ops/config.py`, add after `SocialFeedConfig`:
+
+```python
+DEFAULT_MANIFEST_URL = "https://downloads.starworks.dev/releases.json"
+
+
+@dataclass(frozen=True)
+class ReleaseWatchConfig:
+    manifest_urls: tuple[str, ...] = (DEFAULT_MANIFEST_URL,)
+    warn_days: int = 30
+    check_hours: int = 24
+```
+
+Give `AppConfig` a third field, `release_watch: ReleaseWatchConfig | None = None`, after `social_feed`. In `parse_config`, before the `return`, add:
+
+```python
+    release_watch = None
+    if "release_watch" in bot.features:
+        table = data.get("release_watch", {})
+        if not isinstance(table, dict):
+            raise ConfigError("[release_watch] must be a table")
+        where = "release_watch"
+        urls = _opt(table, "manifest_urls", list, where, [DEFAULT_MANIFEST_URL])
+        if not urls or not all(isinstance(u, str) and u.startswith("https://") for u in urls):
+            raise ConfigError("[release_watch].manifest_urls must be a non-empty list of https URLs")
+        release_watch = ReleaseWatchConfig(
+            manifest_urls=tuple(urls),
+            warn_days=_opt(table, "warn_days", int, where, 30),
+            check_hours=_opt(table, "check_hours", int, where, 24),
+        )
+        for key in ("warn_days", "check_hours"):
+            if getattr(release_watch, key) < 1:
+                raise ConfigError(f"[release_watch].{key} must be at least 1")
+```
+
+Change the `return` to `return AppConfig(bot=bot, social_feed=social_feed, release_watch=release_watch)`.
+
+- [ ] **Step 4: Write the feature**
+
+`starworks_ops/features/release_watch/service.py`:
+
+```python
+"""Release watch: alerts when Arcane's releases.json is close to expiring.
+
+The manifest expires 90 days after it is signed, and a monthly GitHub workflow
+re-signs it behind an approval. GitHub silently disables a public repository's
+schedules after 60 days without activity, and a missed approval looks the same
+from outside, so this check runs on the desk, outside GitHub. Once a day it
+alerts the ops channel when fewer than warn_days remain, or when the manifest
+can't be read. It only watches the clock: the Hub verifies the signature.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable
+
+from ...alerts import Alerter
+from ...config import ReleaseWatchConfig
+from ...http import Http, TransientError
+from ...util import parse_ts, utcnow
+
+FIX = (
+    "Approve the pending manifest-admin run in Arcane's Actions, or run it with op=resign, "
+    "and check that its monthly schedule isn't disabled (Arcane docs/releasing.md)."
+)
+
+
+@dataclass(frozen=True)
+class Reading:
+    url: str
+    expires: datetime | None
+    days_left: float | None
+    problem: str | None
+
+
+class ReleaseWatchService:
+    def __init__(self, cfg: ReleaseWatchConfig, http: Http, alerter: Alerter, now: Callable[[], datetime] = utcnow):
+        self.cfg = cfg
+        self.http = http
+        self.alerter = alerter
+        self.now = now
+        self.last: list[Reading] = []
+
+    async def read(self, url: str) -> Reading:
+        try:
+            status, body = await self.http.get_json(url)
+        except TransientError as exc:
+            return Reading(url, None, None, f"could not be fetched ({exc})")
+        if status != 200:
+            return Reading(url, None, None, f"returned HTTP {status}")
+        expires = body.get("expires") if isinstance(body, dict) else None
+        if not isinstance(expires, str):
+            return Reading(url, None, None, "has no expires field")
+        try:
+            when = parse_ts(expires)
+        except ValueError:
+            return Reading(url, None, None, f"has an unreadable expires ({expires!r})")
+        return Reading(url, when, (when - self.now()).total_seconds() / 86400, None)
+
+    async def check(self) -> list[Reading]:
+        readings = [await self.read(url) for url in self.cfg.manifest_urls]
+        for r in readings:
+            if r.problem is not None:
+                await self.alerter.post_alert(
+                    f"release-watch:read:{r.url}",
+                    f"Arcane's release manifest {r.url} {r.problem}. If this lasts, Hubs see no new releases.",
+                )
+            elif r.days_left is not None and r.days_left < self.cfg.warn_days:
+                state = "has EXPIRED" if r.days_left <= 0 else f"expires in {int(r.days_left)} day(s)"
+                await self.alerter.post_alert(
+                    f"release-watch:expiry:{r.url}",
+                    f"Arcane's release manifest {r.url} {state} ({r.expires:%Y-%m-%d}); Hubs refuse it once expired. {FIX}",
+                )
+        self.last = readings
+        return readings
+```
+
+`starworks_ops/features/release_watch/__init__.py`:
+
+```python
+"""Release watch: a daily expiry check of Arcane's releases.json (see service.py)."""
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+import aiohttp
+from discord.ext import tasks
+from discord.ext.commands import Cog
+
+from ...config import ReleaseWatchConfig
+from ...http import AiohttpHttp
+from .service import ReleaseWatchService
+
+if TYPE_CHECKING:
+    from ...bot import StarworksOps
+
+log = logging.getLogger(__name__)
+
+
+class ReleaseWatchCog(Cog):
+    def __init__(self, bot: "StarworksOps", service: ReleaseWatchService, session: aiohttp.ClientSession, cfg: ReleaseWatchConfig):
+        self.bot = bot
+        self.service = service
+        self.session = session
+        self.check_loop = tasks.loop(hours=cfg.check_hours)(self._check)
+        self.check_loop.before_loop(self._wait_ready)
+
+    async def cog_load(self) -> None:
+        self.check_loop.start()
+
+    async def cog_unload(self) -> None:
+        self.check_loop.cancel()
+        await self.session.close()
+
+    async def _wait_ready(self) -> None:
+        await self.bot.wait_until_ready()
+
+    async def _check(self) -> None:
+        try:
+            await self.service.check()
+        except Exception:
+            log.exception("release watch crashed; retrying next cycle")
+
+
+async def setup(bot: "StarworksOps") -> None:
+    cfg = bot.config.release_watch
+    if cfg is None:
+        raise RuntimeError("the [release_watch] config is missing")
+    session = aiohttp.ClientSession(headers={"User-Agent": "StarworksOps release watch"})
+    service = ReleaseWatchService(cfg, AiohttpHttp(session), bot.alerter)
+    await bot.add_cog(ReleaseWatchCog(bot, service, session, cfg))
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `.venv\Scripts\python -m pytest -q`
+Expected: the whole suite passes, the new tests included.
+
+- [ ] **Step 6: Turn it on once the production manifest exists, and commit**
+
+Leave `config.toml` alone until Task 14 Step 5 has published the production `releases.json`; before that, the check would alert "HTTP 404" every day. Then:
+- add `"release_watch"` to `[bot].features`;
+- add the table:
+
+  ```toml
+  [release_watch]
+  manifest_urls = ["https://downloads.starworks.dev/releases.json"]
+  warn_days = 30
+  check_hours = 24
+  ```
+- add a row to the README's feature table: `` `release_watch` `` | "Checks Arcane's releases.json daily; alerts in #💬・dev-general when fewer than 30 days remain before it expires, or when it can't be read."
+
+Restart the bot (`schtasks /End` then `/Run` on "Starworks Ops presence"). Expected: the log shows `feature loaded: release_watch`, and no alert while the manifest has more than 30 days left.
+
+```bash
+git add starworks_ops config.toml README.md tests
+git commit -m "feat: release_watch -- daily expiry check of Arcane's releases.json, alerts under 30 days"
+```
+
+---
+
 ## What phase 1 plugs in
 
 When phase 1's plan is written, it fills these slots without changing anything above:
@@ -4849,3 +5383,9 @@ When phase 1's plan is written, it fills these slots without changing anything a
 - **`check-stage.sh`:** compare `--print-engine-info` (`version`, `commit`, `engineAbi`) with `engine.json`, on the signed binaries.
 - **`ci.yml`'s Dist legs:** run `stage-engine` + `check-stage.sh` + `pack.sh` on every pull request, with no signing and no upload. This is spec s10's packaging check, and it does not rebuild Dist.
 - **`Version.hpp`:** add `kVersionPatch` and `kVersionPrerelease`.
+
+## Rules phase 3 inherits
+
+- **Release notes are untrusted text inside the Hub.** The Hub shows `notes` inside a Tauri webview, in an app that can launch processes. Render them as escaped text or through a Markdown renderer that sanitizes, never as raw HTML. The manifest is signed, but this is defense in depth.
+- **Verify with `arcane_release`** (`default-features = false`), against `keys::TRUSTED_MANIFEST_KEYS`. Test against the goldens in `tests/golden/` at their documented `now` and highest serial.
+- **Fetch the manifest pair as served.** The edge doesn't cache it. A signature that doesn't match is retried once, then the cached copy is kept, per spec s9.
