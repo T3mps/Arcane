@@ -13,35 +13,45 @@ document covers the hosted GitHub Actions workflow only.
 ## Overview
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every pull
-request, on pushes to `main`, and on demand (`workflow_dispatch`). Job
-`build-test` is the whole matrix; extra lanes ride one leg each (see
-[Extra lanes](#extra-lanes)) rather than living in a second workflow. A newer
-push to the same ref cancels the older run (`concurrency: ci-<ref>`).
+request, on pushes to `main`, and on demand (`workflow_dispatch`). A newer
+push to the same ref cancels the older run (`concurrency: ci-<ref>`). Its jobs:
 
-Every leg does the same things in the same order: fetch pinned tools and
-dependencies, generate with premake5, build the engine libraries and tools,
-build ReferenceProject's game module through `arcbuild` (the SDK path an
-external game takes), build the hosts and ArcaneTests, run the suite with two
-seeds.
+| Job | What it does |
+|---|---|
+| `image-tag` | Runs the CI scripts' own tests, then computes the Linux image tag (`scripts/ci/image-tag.sh`) |
+| `ci-image` | Makes sure `ghcr.io/starworksdev/arcane-ci:<tag>` exists -- reused, or built, pushed and verified (`scripts/ci/ci-image.sh`) -- and outputs its digest. The only job with `packages: write` |
+| `build-test-linux` | The two Linux legs, inside that image pinned by digest |
+| `build-test` | The Windows and macOS legs, on the hosted runners |
+| `notify` | Discord FAILED / RECOVERED; never for pull requests |
+
+Every leg does the same things in the same order, from scripts rather than
+YAML (`scripts/ci/build.sh` / `scripts/ci/build.ps1`, then the test entry
+points): generate with premake5, build the engine libraries and tools, build
+ReferenceProject's game module through `arcbuild` (the SDK path an external
+game takes), build the hosts and ArcaneTests, run the suite with two seeds.
+`scripts/ci/local.ps1` runs the same scripts on the desk ([Local
+runs](#local-runs)).
 
 ## Matrix
 
 | Leg | Runner image | Compiler | Configs |
 |---|---|---|---|
 | `windows-msvc` | `windows-2025` | MSVC from the newest Visual Studio on the image (`vs2026` / `Arcane.slnx`), C++23 | Debug, Release, Dist |
-| `linux-gcc-14` | `ubuntu-24.04` | GCC 14 (`g++-14`), libstdc++ 14 | Debug, Release, Dist |
-| `linux-clang-19` | `ubuntu-24.04` | Clang 19 (`clang++-19`) on libstdc++ 14 | Debug, Release, Dist |
+| `linux-gcc-14` | `ubuntu-24.04` host; the leg runs in the `arcane-ci` image ([Image](#image)) | GCC 14 (`g++-14`), libstdc++ 14 | Debug, Release, Dist |
+| `linux-clang-19` | `ubuntu-24.04` host; the leg runs in the `arcane-ci` image ([Image](#image)) | Clang 19 (`clang++-19`) on libstdc++ 14 | Debug, Release, Dist |
 | `macos-appleclang` | `macos-15` (arm64) | Apple Clang from Xcode 16.4, libc++ | Debug, Release, Dist |
 
 ## Toolchains
 
 - **Images** are pinned by name (`windows-2025`, `ubuntu-24.04`, `macos-15`),
-  never `*-latest`.
+  never `*-latest`. The Linux legs' container image is pinned by digest (see [Image](#image)).
 - **Windows:** `microsoft/setup-msbuild`, `GenerateProjects.bat` (vs2026),
   SDL3 through vcpkg with the repo's overlay triplet (`vcpkg-triplets/`).
-- **Linux:** `g++-14` or `clang-19` from the Ubuntu 24.04 archive; the leg
-  exports `CC` / `CXX` and premake gets `--cc=gcc|clang`. SDL3 (not packaged
-  on 24.04) is built from a pinned release by `scripts/build-sdl3.sh`.
+- **Linux:** the legs run inside the repo's CI image ([Image](#image)):
+  `g++-14` / `clang-19` from the Ubuntu 24.04 archive (one apt snapshot), the
+  pinned SDL3, premake, DXC and Vulkan validation layer baked in. The leg
+  exports `CC` / `CXX`; `scripts/ci/build.sh` gives premake `--cc=gcc|clang`
+  from `CC`.
 - **macOS:** `sudo xcode-select -s /Applications/Xcode_16.4.app` (the
   `XCODE_APP` workflow variable), `CC=clang CXX=clang++`, premake
   `--cc=clang gmake`. Builds are native arm64
@@ -55,16 +65,24 @@ seeds.
 ## Build driver
 
 premake5 5.0.0-beta8 on every OS: the vendored `ThirdParty/premake5/premake5.exe`
-on Windows, `scripts/fetch-premake.sh` (version + SHA-256 pinned) on Linux and
-macOS. Generation is `GenerateProjects.bat` (Windows) or
-`ThirdParty/premake5/premake5 --cc=<gcc|clang> gmake` (Linux, macOS).
+on Windows; on Linux the CI image's copy (`/opt/arcane-tools`, linked into
+`ThirdParty/premake5/premake5` by the build script); on macOS
+`scripts/fetch-premake.sh` (version + SHA-256 pinned).
 
-The POSIX build order matters: `make ArcaneCore ArcaneAssetPipeline arccook
-arcbuild ArcaneClient`, then `arcbuild build --project ReferenceProject --config
-<cfg> --sdk <checkout>`, then `make ArcaneServer ArcaneRuntime ArcaneEditor
-ArcaneTests` (their postbuild stages ReferenceProject, `Binaries/` included,
-beside each host). Windows builds the solution, then ReferenceGame through
-arcbuild, then the solution again so every host restages the game module.
+The build sequence is two scripts with the same four steps and log names
+(`logs/build-{generate,engine,referencegame,tests}.log`); each stops at the
+first failing step and exits with its code:
+
+| Step | `scripts/ci/build.sh <cfg> [-j N]` (Linux, macOS) | `scripts/ci/build.ps1 <cfg> [-Jobs N]` (Windows) |
+|---|---|---|
+| generate | `premake5 --cc=<gcc\|clang> gmake` | `GenerateProjects.bat` (vs2026) |
+| engine | `make -k ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient` | `msbuild Arcane.slnx` |
+| game | `arcbuild build --project ReferenceProject --config <cfg> --sdk <checkout>` | the same |
+| hosts | `make -k ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests` (their postbuild stages ReferenceProject, `Binaries/` included) | `msbuild Arcane.slnx` again, so every host restages the game module |
+
+`build.sh` is bash 3.2-safe (macOS `/bin/bash`) and calls no git (desk
+worktrees' `.git` file points at a Windows path a container cannot see).
+`scripts/ci/tests/test-build-sh.sh` checks it against stub tools.
 
 ## Tests
 
@@ -110,33 +128,118 @@ Both macOS test steps run under SDL's `cocoa` driver (the runner has an Aqua
 session), so windows are real NSWindows whose `CAMetalLayer` is the MoltenVK
 surface; Linux runs under Xvfb with the `x11` driver.
 
+## Image
+
+The Linux legs run in `ghcr.io/starworksdev/arcane-ci`, built from
+[`ci/linux/Dockerfile`](../ci/linux/Dockerfile) (target `build`): Ubuntu
+24.04 pinned by digest, apt resolved from one Ubuntu archive snapshot
+(`APT_SNAPSHOT`), the compilers and libraries the legs need, and SDL3, the
+Vulkan validation layer, premake and DXC from the repo's pinned scripts. It
+holds tools only, never the Arcane source. The default user is root (GitHub's
+container jobs expect it); user `arcane` (uid 1000) is what local runs use.
+
+**Tag:** `build-<16 hex>` = SHA-256 over the Dockerfile and every repo file it
+copies, listed in `ci/linux/image-inputs.txt`, CR-insensitive
+(`scripts/ci/image-tag.sh`; the PowerShell twin `image-tag.ps1` prints the
+same tag). The scripts refuse a Dockerfile that copies a file outside the list
+or a list entry the Dockerfile does not copy; repo files enter only through
+one-line `COPY --from=scripts <file>... <dest>` (the build context `scripts`
+is the repo's `scripts/`). Building by hand:
+
+```
+docker build --target build --build-context scripts=scripts -f ci/linux/Dockerfile -t arcane-ci:dev ci/linux
+docker run --rm -v "$PWD/ci/linux:/v:ro" arcane-ci:dev bash /v/verify-image.sh
+```
+
+**Publishing:** `ci-image` reuses a published tag or, on a same-repo run,
+builds, pushes and verifies it (`scripts/ci/ci-image.sh`). The legs run on
+`image@sha256:<digest>`, never the tag: the tag names the inputs, the digest
+names the image. The package is **public** (Arcane is public, the image holds
+no secrets), so pulls need no credentials; the legs still pass the workflow
+token so a not-yet-public package also works.
+
+**Fork pull requests** cannot publish: when a fork changes an image input,
+`ci-image` fails naming the tag. Re-running it from a branch of this
+repository executes the fork's Dockerfile and scripts in the one job that
+holds `packages: write`, so a maintainer **reviews the `ci/linux/` and
+`scripts/` diff first**. A Dependabot PR, if one is ever configured, behaves
+the same way.
+
+**Same-repo branches can publish.** `packages: write` covers every same-repo
+run. `scripts/ci/ci-image.sh` is not a tag input, so a branch that edits it
+(say, to pass a build argument) can push a differently built image over a tag
+`main` already uses. The legs pin the digest read from that tag at run time,
+so the pin does not help. This is accepted with the current solo / trusted
+writer set; the control is review of `ci/linux/` and `scripts/ci/` changes.
+
+**Retention:** every image-input change on any branch publishes a tag, and
+nothing deletes old ones yet; the package size is watched (cleanup deferred).
+
+## Local runs
+
+`scripts\ci\local.ps1` runs the CI legs on the desk before a push, from the
+same scripts:
+
+```
+scripts\ci\setup-desk.ps1                     # once: .wslconfig 24 GB / 16 CPUs, Docker + MSBuild checks
+scripts\ci\local.ps1                          # windows-msvc Debug + linux-gcc-14 Debug
+scripts\ci\local.ps1 -Leg linux-clang-19 -Config Release
+scripts\ci\local.ps1 -Full                    # windows-msvc, linux-gcc-14, linux-clang-19 x Debug/Release/Dist
+         [-Seeds 1|2] [-Seed N] [-Jobs N] [-NoPull]
+```
+
+- **Windows legs** run `build.ps1` and `run-tests.ps1` natively in the checkout.
+- **Linux legs** run in the CI image. The image is pulled by tag (`image-tag.ps1`);
+  when it cannot be pulled, or with `-NoPull`, it is built locally and the
+  summary labels it `<tag>-local (local image)` -- a pass on a local image is
+  not yet parity with CI's. The checkout is mounted read-only and mirrored
+  into a volume per leg (`arcane-src-<leg>`) by `scripts/ci/container-leg.sh`
+  through `scripts/ci/rsync-filter.txt`: no `.git`, no build outputs, no
+  Windows tools, and the leg's own outputs survive (incremental). Compiles go
+  through ccache (volume `arcane-ccache`; local only).
+- **Uncommitted changes are included.** Legs run one at a time (Windows first)
+  and every leg runs even when one fails. Seeds: one random seed by default
+  (printed); `-Seeds 2` runs CI's pair; `-Seed N` fixes N (CI's N is the run
+  number). Jobs: Linux `min(CPUs, memory GB / 2)` of what Docker reports,
+  Windows `msbuild /m`; `-Jobs` sets both.
+- **Output:** one table (leg, config, verdict, minutes, build, per-seed test
+  counts, image, log directory), the first compiler/linker errors of a failed
+  build, an OOM hint when the build logs show a compiler or linker killed by
+  signal 9; logs under `logs\local\<leg>-<Config>\`.
+  Exit 0 all passed, 1 a leg failed, 2 a preflight check failed (Docker not
+  running, MSBuild missing -- each names its fix).
+- macOS legs run on the hosted runner only.
+
+`scripts\ci\compare-test-counts.ps1 -Baseline <dir> -Candidate <dir>`
+compares two downloaded sets of `test-results-*` artifacts (or a local
+`logs\local\...\test-results`) by `<leg>-<Config>`.
+
 ## Supply chain
 
 - Actions are pinned by full commit SHA with the tag in a comment
-  (`actions/checkout` v4.4.0, `actions/cache` v4.3.0,
-  `actions/upload-artifact` v4.6.2, `microsoft/setup-msbuild` v2.0.0).
-- The workflow token is read-only: `permissions: contents: read`.
+  (`actions/checkout` v7.0.1 with `persist-credentials: false`, `actions/cache` v6.1.0, `actions/upload-artifact` v7.0.2, `microsoft/setup-msbuild` v3, `docker/login-action` v4.6.0, `docker/setup-buildx-action` v4.4.1, and the org's `discord-ci-notify`). Cache keys are per image, never per configuration, for configuration-independent contents.
+- The workflow token is read-only (`permissions: contents: read`); `ci-image` alone adds `packages: write`, and the Linux legs `packages: read`.
 - Every download is version-pinned and SHA-256 checked by
   `scripts/sha256-check.sh`: premake, DXC (Linux), SDL3 source, the Vulkan
   validation layer (tag must resolve to `VVL_COMMIT`), and the macOS Vulkan
   SDK zip (`VK_SDK_PINNED_SHA256` in `scripts/fetch-vulkan-sdk-macos.sh`).
   Compilers come from the pinned images.
+- The Linux image's base is pinned by digest and its apt packages by one archive snapshot (`APT_SNAPSHOT` in `ci/linux/Dockerfile`).
 
 ## Reproducing locally
 
+On the desk, `scripts\ci\local.ps1` is the one command (see [Local runs](#local-runs)).
+By hand, the sequences are the build scripts:
+
 ```bash
 # Ubuntu 24.04
-CC=gcc-14 CXX=g++-14 ThirdParty/premake5/premake5 --cc=gcc gmake
-make -j3 config=debug ArcaneCore ArcaneAssetPipeline arccook arcbuild ArcaneClient
-"$(scripts/arcane-bin-dir.sh Debug)/arcbuild/arcbuild" build --project ReferenceProject --config Debug --sdk "$PWD"
-make -j3 config=debug ArcaneServer ArcaneRuntime ArcaneEditor ArcaneTests
+CC=gcc-14 CXX=g++-14 scripts/ci/build.sh Debug -j3
 xvfb-run -a scripts/run-tests.sh Debug --rng-seed 1
 
 # macOS (Apple silicon)
 sudo xcode-select -s /Applications/Xcode_16.4.app
 scripts/fetch-premake.sh && scripts/fetch-vulkan-sdk-macos.sh --system
-ThirdParty/premake5/premake5 --cc=clang gmake
-# ... same make / arcbuild / make sequence as Linux ...
+scripts/ci/build.sh Debug -j2
 scripts/run-tests.sh Debug --rng-seed 1
 scripts/run-tests.sh --gpu Debug --rng-seed 1
 ```
@@ -144,8 +247,7 @@ scripts/run-tests.sh --gpu Debug --rng-seed 1
 ```powershell
 # Windows
 scripts\setup-vcpkg-deps.bat
-GenerateProjects.bat
-msbuild Arcane.slnx /p:Configuration=Debug /m
+scripts\ciuild.ps1 Debug
 powershell -File scripts\run-tests.ps1 Debug --rng-seed 1
 ```
 
@@ -157,6 +259,7 @@ powershell -File scripts\run-tests.ps1 Debug --rng-seed 1
 | Branch pushes other than `main` are not a trigger | Running both `push` and `pull_request` for a PR branch runs every head twice and starves the shared macOS arm64 pool; matches Astra. |
 | Extra lanes ride a matrix leg instead of a separate `extra` job | The GPU lanes need the leg's own build tree (hosts, staged ReferenceProject, compiled shaders); rebuilding it in a second job would double the slowest legs. |
 | No sanitizer lanes | Not yet: the engine has never been run under ASan/TSan on POSIX. Tracked as follow-up work, not a design choice. |
-| SDL3 and the Vulkan validation layer are built from source on Linux/macOS | Ubuntu 24.04 does not package SDL3 and its validation layer (1.3.275) is too old; both builds are pinned and cached. |
+| The Linux legs run in a repo-defined container image (`ci/linux/Dockerfile`) instead of on the bare runner image | One toolchain for hosted CI and the desk (`scripts/ci/local.ps1`); SDL3 and the validation layer (not packaged / too old on 24.04) are built once per image instead of per leg. Astra and Manifold2D may adopt the pattern. |
+| macOS still builds SDL3 from source per runner (cached) | No macOS containers; the hosted macOS image is the environment. |
 | The Windows leg uses the vendored premake `.exe` rather than a fetched, SHA-pinned one | It is checked in (`ThirdParty/premake5/`), so the repo itself pins it. |
 | The macOS [gpu] lane excludes the editor golden witnesses (E2-E6) | MoltenVK on the paravirtual device rasterises editor text differently from the Windows desk's reference; see `scripts/macos-test-exclusions.txt`. |

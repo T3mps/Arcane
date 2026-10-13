@@ -839,6 +839,10 @@ the CPU suite on two seeds. Extra Debug lanes: lavapipe `[gpu]` and
 the windowed smoke on `linux-gcc-14`, and MoltenVK `[gpu]` on
 `macos-appleclang`. There is no ASan or TSan leg.
 
+The Linux legs run inside the repo's CI image (`ci/linux/Dockerfile`). To run
+the same build and tests on the desk before pushing: `scripts\ci\local.ps1`
+(see [docs/ci.md](docs/ci.md#local-runs)).
+
 The [Jenkinsfile](Jenkinsfile) defines the Windows real-GPU gate:
 all three configurations, the unfiltered suite (including `[gpu]`),
 `arccook --check`, the golden gate (Release then Debug), the self-test
