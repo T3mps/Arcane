@@ -91,9 +91,13 @@
      Shared by the header strip in ProjectsView and by every ProjectRow --
      two components drawing one table, so the track list and the gap have to be
      one value each or the labels drift off the data the first time either
-     side changes. minmax(0, 1fr) on the name lets a long path shrink the
-     cell instead of widening the whole grid. */
-  --cols-project: 20px minmax(0, 1fr) 78px 170px 62px 26px;
+     side changes. The ENGINE column flexes between 96px and 230px (enough for
+     "Default: Arcane 0.1 (M5) [Release]"): it gives way first when the window
+     narrows, its full label in its title, while the name keeps at least
+     180px -- at the 800px minimum a fixed 170px engine column used to leave
+     the name about 128px (user report 2026-10-13). The name's 1fr still lets
+     a long path shrink the cell instead of widening the whole grid. */
+  --cols-project: 20px minmax(180px, 1fr) 78px minmax(96px, 230px) 62px 26px;
   --gap-project: 12px;
 
   --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);
@@ -122,7 +126,12 @@ body {
    copied verbatim into all three views; with the sizes changing they are now
    defined once. Used as `<h2 class="display view-title">` plus `<p class="view-sub">`.
    Settings is not among them: it is a sheet, and its title is the modal's. */
-.view-title { font-size: 26px; margin: 0; color: var(--text-bright); }
+/* The page title scales with the window between two bounds (22px at the
+   800px minimum, 26px at the 1024px default, 30px from about 1250px up):
+   the one type that is large enough to look small on a maximised window.
+   Body type stays fixed -- names that change size with the window read as
+   unstable, and wrapping or a column giving way handles the narrow end. */
+.view-title { font-size: clamp(22px, calc(1.8vw + 7.6px), 30px); margin: 0; color: var(--text-bright); }
 .view-sub { font-size: 12.5px; color: var(--text-muted); margin: 3px 0 0; }
 
 :focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }

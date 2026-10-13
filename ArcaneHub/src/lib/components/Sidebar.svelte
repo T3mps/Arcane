@@ -25,11 +25,15 @@
   //
   // The gear belongs to Settings, where it is the near-universal convention;
   // Engines takes the box, reading as the thing that gets installed and picked;
-  // Packages takes stacked layers.
+  // Packages, when it returns, takes stacked layers.
+  //
+  // Packages is HIDDEN until it is built (user call 2026-10-13): its page is a
+  // "not built yet" placeholder citing an internal spec, which a public
+  // preview must not ship. PackagesView and the "packages" view id stay, so
+  // bringing it back is this one line.
   const items: NavItem[] = [
     { id: "projects", label: "Projects", icon: "folder" },
     { id: "engines", label: "Engines", icon: "box" },
-    { id: "packages", label: "Packages", icon: "layers" },
   ];
 </script>
 
@@ -87,7 +91,10 @@
      At the 800px window minimum this is 176px, narrower than the 198px it
      replaces, which is why the engine name below is truncated rather than left
      to wrap. */
-  .side { width: 22%; flex: none; background: var(--surface-2);
+  /* Capped at 260px: an uncapped 22% made the rail 422px of mostly empty
+     column on a maximised 1920px window (2026-10-13). The floor keeps the
+     176px it always had at the 800px minimum. */
+  .side { width: clamp(176px, 22%, 260px); flex: none; background: var(--surface-2);
           border-right: 1px solid var(--border-soft);
           padding: 10px 11px 14px; display: flex; flex-direction: column;
           min-width: 0; }

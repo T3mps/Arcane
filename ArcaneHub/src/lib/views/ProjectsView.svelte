@@ -349,7 +349,11 @@
   /* auto-fill, NOT repeat(3, 1fr): the window minimum is 800px wide. 230px
      tracks -- 190 originally, then 210 for the larger type, now 230 because a
      tile carries the folder path as well. Still three columns at the default
-     window size, so this costs no density. */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+     window size, so this costs no density. The minimum then grows with the
+     window up to 300px, so a maximised window gets wider tiles (five across
+     at 1920px) rather than six tiles still at 230px, each cutting its name
+     short. */
+  .grid { display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(clamp(230px, 18vw, 300px), 1fr));
           gap: 12px; }
 </style>

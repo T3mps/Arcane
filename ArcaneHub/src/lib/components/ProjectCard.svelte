@@ -87,8 +87,10 @@
         <span class="mono" style="--a: {mono.angle}deg" aria-hidden="true">{mono.monogram}</span>
       {/if}
       <span class="txt">
-        <span class="nm">{project.name}</span>
-        <span class="path">{dir}</span>
+        <!-- A title on each line: the button's own title explains launching,
+             so a name or folder cut short needs its own way to be read whole. -->
+        <span class="nm" title={project.name}>{project.name}</span>
+        <span class="path" title={dir}>{dir}</span>
       </span>
     </button>
 
@@ -149,6 +151,12 @@
 </div>
 
 <style>
+  /* A column whose meta row is pushed to the bottom: the grid stretches every
+     tile in a row to the tallest, and with names now wrapping to two lines a
+     one-line tile's meta and engine band floated up, out of line with its
+     neighbours'. */
+  .card { display: flex; flex-direction: column; }
+  .card > .meta { margin-top: auto; }
   .card { position: relative; border: 1px solid var(--border-soft);
           border-radius: var(--r-panel); overflow: hidden; background: var(--surface);
           transition: border-color var(--dur) var(--ease),
@@ -187,8 +195,16 @@
   /* Same type as the list row's name cell, deliberately: one record, two
      layouts, and a project should not change weight or colour between them. */
   .txt { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  /* Up to TWO lines, then an ellipsis. At the 230px track minimum the name has
+     about 90px beside the monogram, star and menu, and one line cut
+     "Reference Project" to "Reference P..." (user report 2026-10-13).
+     Wrapping beats shrinking the type: a tile whose name is smaller than its
+     neighbour's reads as broken. The path stays one line -- it is secondary,
+     and its title has the rest. */
   .nm { max-width: 100%; font-size: 14px; font-weight: 600; color: var(--text);
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        line-height: 1.3; overflow: hidden; overflow-wrap: anywhere;
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+        line-clamp: 2; }
   .path { max-width: 100%; font-family: var(--font-mono); font-size: 11.5px;
           color: var(--text-dim);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

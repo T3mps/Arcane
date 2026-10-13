@@ -68,8 +68,10 @@
           title={gone ? missingNote(project.path)
                       : running ? `${project.name} is open — this focuses its window.`
                       : why} aria-label={project.name}>
-    <span class="nm">{project.name}</span>
-    <span class="path">{dir}</span>
+    <!-- A title on each line, as on the tile: the button's own title explains
+         launching, so a name or folder cut short needs its own. -->
+    <span class="nm" title={project.name}>{project.name}</span>
+    <span class="path" title={dir}>{dir}</span>
   </button>
 
   <!-- The Opened cell answers "when was this last live". While an editor has
