@@ -1,7 +1,7 @@
 # Arcane public distribution: Hub engine manager, R2 releases, signing, SDK packaging
 
 **Date:** 2026-10-12 · **Base:** `main` 946092fb · **Branch:** `docs/distribution-design`
-**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); written-spec review round 1 folded in (packaged-game writes, logs, premake, notices, manifest expiry, release image, PR packaging check, SAC and local modules); awaiting approval
+**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); written-spec review rounds 1 and 2 folded in (packaged-game writes, logs, premake, notices, manifest expiry, release image, PR packaging check, SAC and local modules; the AVX2 requirement and check, the SAC registry state); approved for the implementation plan
 
 ## 0. Status and context
 
@@ -328,6 +328,21 @@ through, with the reason.
 - Dev builds are handled as today: added by path (`register_engine`), probed,
   labelled "Dev build". Removing one only unregisters it; the files stay.
 
+**The machine check.** An x64 CPU without AVX2 would crash the engine with
+an illegal instruction instead of showing an error. So the Hub checks first,
+before an install and before every launch: AVX2 and FMA, including OS support
+for the AVX state (Rust's `is_x86_feature_detected!`, which reads CPUID and
+XGETBV). The Hub itself is built for the plain x86-64 baseline, so the check
+always runs. On a machine that fails, it says plainly "Arcane needs a CPU with
+AVX2 (Intel Haswell / AMD Excavator or newer)". The download page states the
+same requirement (s8).
+
+A check inside the editor is not v1. The editor exe and the engine DLLs are
+compiled with `/arch:AVX2`, so AVX2 instructions can run before any
+`main()`-time check: static initializers run as each DLL loads. A reliable
+editor-side check needs a small entry stub compiled without AVX2 that checks
+before loading the engine; it's listed under Later (s11).
+
 **Installing.** The order is fixed, and nothing from the download runs before
 its hash is proven:
 1. Download the archive to a temp folder (resumable).
@@ -565,8 +580,13 @@ The notice list goes to the legal review (s12).
 **`/arcane/download`**
 - Hub download buttons for the visitor's OS (Windows or Linux), with each
   file's size and SHA-256 and how to check it.
-- System requirements: Windows x64; Ubuntu 24.04 (glibc 2.39) or newer
-  with a Vulkan driver; the build tools needed for game development.
+- System requirements, on both platforms an **x64 CPU with AVX2 and FMA**
+  (the engine's min-spec, `/arch:AVX2` and `-mavx2 -mfma` in
+  `build/arcane.lua`; roughly Intel Haswell / AMD Excavator and later):
+  - Windows: Windows 10 22H2 or Windows 11, 64-bit, with a Direct3D 12 GPU
+    and driver;
+  - Linux: Ubuntu 24.04 (glibc 2.39) or newer, with a Vulkan driver;
+  - the build tools needed for game development.
 - macOS: "build from source on GitHub".
 - The current stable and preview versions.
 - A licence line: BSL 1.1, with each version becoming MIT four years after it
@@ -601,6 +621,8 @@ The notice list goes to the legal review (s12).
 | Not enough disk space | Checked before downloading, using the sizes in the manifest. |
 | Probe fails, or its version, commit or ABI doesn't match the manifest | Deletes `.partial`. |
 | UAC declined | Clear message, with "Install for just me instead" and Try again. |
+| CPU without AVX2/FMA | Install and launch are disabled, with a plain message naming the requirement (s6). |
+| Smart App Control on, or in evaluation mode | A note before the first build that game development needs it off (s12). |
 | The pinned version was yanked | The project opens, with a banner giving the reason and offering an upgrade. |
 | The pinned version is unknown | Offers adding an engine by path, or picking another version. |
 | Removing an engine an editor is running from | Blocked. The Hub finds running editors through each project's `Saved/editor.lock` (`{pid, creation time}`, `ArcaneHub/src-tauri/src/editorlock.rs`) and its own spawn map, and compares each live editor's executable path with the engine folder; the lock itself does not name an engine. |
@@ -627,6 +649,9 @@ signature means the build fails.
   - Pinning: exact, follow patches, yanked, unknown, migration of ABI-only
     projects, the "why this engine" text.
   - Engine removal blocked by a live editor.
+  - The machine check and the SAC note, with the CPU features and the
+    registry value injected: AVX2 without FMA, no OS AVX support, SAC states
+    0, 1 and 2.
   - UI states of the Engines view.
 - **Engine**
   - Archive layout, `manifest.txt` completeness, `engine.json` matching the
@@ -685,7 +710,8 @@ no engine changes and may be prepared in parallel with it.
    has landed).
 3. **The Hub as engine manager.** Manifest trust; the Engines view; install
    scopes and the UAC helper; pinning, upgrades and follow patches; symbols;
-   Remove all. Result: the Hub installs released engines.
+   the AVX2 machine check and the SAC note; Remove all. Result: the Hub
+   installs released engines.
 4. **Hub distribution (Windows).** The signed NSIS installer with both scopes;
    Tauri self-update (`tauri-plugin-updater` 2.13.3+, downgrades blocked); the
    Hub's release workflow. Result: the Hub updates itself.
@@ -704,6 +730,8 @@ no engine changes and may be prepared in parallel with it.
 - The Hub sets up the C++ toolchain (Build Tools, via a `.vsconfig`).
 - Packaged-game portability (s7.5).
 - A sample-project download.
+- An AVX2 check in the editor itself, through an entry stub compiled without
+  AVX2 (s6).
 - Delta updates.
 - Optional modules.
 
@@ -736,8 +764,11 @@ no engine changes and may be prepared in parallel with it.
   Hub say that game development needs Smart App Control turned off on that
   machine, as other native development tools do. Players are unaffected:
   a shipped game is signed by its developer, or not, and that's between the
-  developer and SAC. The Hub detects SAC's state and shows the note before the
-  first build instead of after a confusing failure.
+  developer and SAC. The Hub reads SAC's state from
+  `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState`
+  (0 off, 1 on, 2 evaluation mode) and shows the note before the first build
+  instead of after a confusing failure. It warns for both 1 and 2, because
+  evaluation mode can turn itself on later.
 - **Legal review before the first public release.** No review is recorded
   yet. It covers:
   - Arcane's BSL 1.1 parameters and change dates;
