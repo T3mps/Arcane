@@ -1,0 +1,4 @@
+# Cargo intermediates land under Arcane/bin-int/, beside the Hub's
+# (ArcaneHub/src-tauri/.cargo/config.toml) and premake's objdirs.
+[build]
+target-dir = "../../../bin-int/release-cargo"
