@@ -111,6 +111,7 @@ skip themselves by design (crash-reporting spec section 6) and the
 | `[gpu]` on Mesa lavapipe + pinned validation layer (`scripts/build-vvl-linux.sh`) | `linux-gcc-14` Debug | API-agnostic `[gpu]` cases on the native backend with VUIDs latched as failures; editor golden slots blessed for lavapipe |
 | Windowed smoke, X11 + Wayland (`scripts/linux-windowed-smoke.sh`) | `linux-gcc-14` Debug | real windows + swapchains on both Linux display servers |
 | `[gpu]` on MoltenVK (`scripts/run-tests.sh --gpu`) | `macos-appleclang` Debug | the Vulkan backend boots on MoltenVK over the runner's paravirtual Apple GPU; see [GPU lanes](#gpu-lanes) |
+| `arccook --check` + ReferenceProject standalone build (`scripts/ci/reference-checks.ps1`) | `windows-msvc` Debug (both), Release (cook check) | the cooked sample content is current; a game workspace builds without arcbuild (moved from the Jenkins gate) |
 
 ### GPU lanes
 

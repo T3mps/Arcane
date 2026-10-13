@@ -406,6 +406,13 @@ jobs:
           }
           exit $failed
 
+      # Jenkins parity, no GPU needed (audit C10): arccook --check (Debug,
+      # Release) and ReferenceProject built standalone (Debug).
+      - name: Reference checks (Windows)
+        if: runner.os == 'Windows' && !cancelled() && matrix.config != 'Dist'
+        shell: pwsh
+        run: ./scripts/ci/reference-checks.ps1 ${{ matrix.config }}
+
       # SDL's cocoa driver in the runner's Aqua session, so windows are real
       # NSWindows with a CAMetalLayer (offscreen has none).
       - name: Test (macOS, two seeds)
