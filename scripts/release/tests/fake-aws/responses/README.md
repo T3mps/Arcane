@@ -22,17 +22,12 @@ and the error texts, is the file's.
 Every error exits **254**, aws-cli v2's code for an error the service
 returned.
 
-**PROVISIONAL.** These were written from aws-cli 2.x's documented output, not
-captured from R2. Replace them before the first rehearsal (plan Task 14):
-with the R2 token in the environment, run
-
-```bash
-bash scripts/release/tests/record-r2-responses.sh
-```
-
-It makes each call above against the real bucket, under a throwaway
-`fixture-capture-<time>/` prefix it deletes afterwards, and writes the raw
-output over these files (all but the synthetic one). Then delete this
-paragraph, run `scripts/release/tests/test-r2.sh` and commit. A format the
-scripts misread then fails in CI instead of in a release. The staging
-rehearsal (Task 15) is still the gate.
+**Recorded from R2** on 2026-10-13 with aws-cli 2.37.13 (the pinned version),
+by `scripts/release/tests/record-r2-responses.sh` against `arcane-downloads`
+(all but the synthetic internal error, written in the same format). Real
+aws-cli differs from its documentation in ways a hand-written fake would have
+missed: errors start with `aws: [ERROR]: ` and end with a period, put-object
+also returns `ChecksumCRC64NVME` and `VersionId`, and list-objects-v2 times
+carry microseconds. Record again after an aws-cli bump: with the R2 token in
+the environment, run the script, review the diff, run
+`scripts/release/tests/test-r2.sh` and commit.

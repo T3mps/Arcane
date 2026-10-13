@@ -1,9 +1,11 @@
 {
     "AcceptRanges": "bytes",
-    "LastModified": "2026-10-12T00:00:00+00:00",
-    "ContentLength": 0,
-    "ETag": "\"00000000000000000000000000000000\"",
+    "LastModified": "2026-10-13T06:37:55+00:00",
+    "ContentLength": 8,
+    "ETag": "\"9504a7b7666faec5abd046d28a69450e\"",
     "CacheControl": "public, max-age=31536000, immutable",
-    "ContentType": "application/octet-stream",
-    "Metadata": {}
+    "ContentType": "text/plain",
+    "Metadata": {
+        "sha256": "a9cff0709f9f8b7bb9a381ee3a5a88fdb7143565621d8f0fd83afd12f99c78e0"
+    }
 }
