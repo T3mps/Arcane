@@ -12,6 +12,8 @@ pub mod verify;
 pub mod version;
 
 #[cfg(feature = "tools")]
+pub mod dist;
+#[cfg(feature = "tools")]
 pub mod pack;
 #[cfg(feature = "tools")]
 pub mod sign;

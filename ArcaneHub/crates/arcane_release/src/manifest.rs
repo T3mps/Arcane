@@ -205,3 +205,13 @@ pub fn parse_date(s: &str) -> Result<Date, ManifestError> {
 pub fn format_date(d: Date) -> String {
     d.format(format_description!("[year]-[month]-[day]")).expect("a date always formats")
 }
+
+/// engine.json, inside every engine archive and beside it in the dist folder
+/// (spec s7.1): it must equal what the probe reports. Phase 1 writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineInfo {
+    pub version: String,
+    pub build: String,
+    pub abi: u32,
+    pub channel: Channel,
+}
