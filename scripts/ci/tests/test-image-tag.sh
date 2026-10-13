@@ -9,8 +9,15 @@ PS=""
 if command -v pwsh > /dev/null 2>&1; then PS=pwsh
 elif command -v powershell.exe > /dev/null 2>&1; then PS=powershell.exe; fi
 fails=0
+# The twins' stderr goes here, not to /dev/null, so a FAIL says why (a
+# desk-only flake once failed three checks with nothing to show for it).
+ERRLOG=$(mktemp)
 ok()  { echo "ok   $1"; }
-bad() { echo "FAIL $1" >&2; fails=$((fails + 1)); }
+bad() {
+    echo "FAIL $1" >&2
+    if [ -s "$ERRLOG" ]; then echo "     last stderr: $(tail -n 3 "$ERRLOG" | tr '\n' ' ')" >&2; fi
+    fails=$((fails + 1))
+}
 
 inputs() { tr -d '\r' < "$REPO/ci/linux/image-inputs.txt" | sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d'; }
 # fixture: a temp root holding copies of the real inputs.
@@ -20,11 +27,13 @@ fixture() {
     for f in $(inputs); do mkdir -p "$d/$(dirname "$f")"; cp "$REPO/$f" "$d/$f"; done
     echo "$d"
 }
-tag_of() { "$TAG" --root "$1" 2> /dev/null; }
+tag_of() { "$TAG" --root "$1" 2>> "$ERRLOG"; }
 ps_tag_of() {
-    local root=$1
-    if [ "$PS" = powershell.exe ]; then root=$(cygpath -w "$root"); fi
-    "$PS" -NoProfile -ExecutionPolicy Bypass -File "$REPO/scripts/ci/image-tag.ps1" -Root "$root" 2> /dev/null | tr -d '\r'
+    local root=$1 script="$REPO/scripts/ci/image-tag.ps1"
+    # Both paths explicitly: with MSYS_NO_PATHCONV=1 set (docs/ci.md's desk
+    # shell rule) Git Bash hands powershell.exe "/d/dev/..." untranslated.
+    if [ "$PS" = powershell.exe ]; then root=$(cygpath -w "$root"); script=$(cygpath -w "$script"); fi
+    "$PS" -NoProfile -ExecutionPolicy Bypass -File "$script" -Root "$root" 2>> "$ERRLOG" | tr -d '\r'
 }
 
 real=$("$TAG")
@@ -68,9 +77,11 @@ d=$(fixture); printf 'FROM build AS runtime\nCOPY --from=build /usr/local/lib/li
 d=$(fixture); rm "$d/scripts/sha256-check.sh"
 "$TAG" --root "$d" > /dev/null 2>&1 && bad "missing input refused" || ok "missing input refused"
 
-if git -C "$REPO" rev-parse --git-dir > /dev/null 2>&1; then
-    case "$(git -C "$REPO" check-attr eol -- ci/linux/Dockerfile)" in *": eol: lf") ok ".gitattributes: Dockerfile eol=lf" ;; *) bad ".gitattributes: Dockerfile eol=lf" ;; esac
-    case "$(git -C "$REPO" check-attr eol -- scripts/ci/image-tag.sh)" in *": eol: lf") ok ".gitattributes: *.sh eol=lf" ;; *) bad ".gitattributes: *.sh eol=lf" ;; esac
+# git.exe on the desk needs a Windows path (MSYS_NO_PATHCONV=1 stops Git Bash translating it).
+GITREPO=$REPO; if command -v cygpath > /dev/null 2>&1; then GITREPO=$(cygpath -w "$REPO"); fi
+if git -C "$GITREPO" rev-parse --git-dir > /dev/null 2>&1; then
+    case "$(git -C "$GITREPO" check-attr eol -- ci/linux/Dockerfile)" in *": eol: lf") ok ".gitattributes: Dockerfile eol=lf" ;; *) bad ".gitattributes: Dockerfile eol=lf" ;; esac
+    case "$(git -C "$GITREPO" check-attr eol -- scripts/ci/image-tag.sh)" in *": eol: lf") ok ".gitattributes: *.sh eol=lf" ;; *) bad ".gitattributes: *.sh eol=lf" ;; esac
 else
     echo "skip .gitattributes checks (no git checkout)"
 fi

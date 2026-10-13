@@ -19,7 +19,7 @@ push to the same ref cancels the older run (`concurrency: ci-<ref>`). Its jobs:
 | Job | What it does |
 |---|---|
 | `image-tag` | Runs the CI scripts' own tests, then computes the Linux image tag (`scripts/ci/image-tag.sh`) |
-| `ci-image` | Makes sure `ghcr.io/starworksdev/arcane-ci:<tag>` exists -- reused, or built, pushed and verified (`scripts/ci/ci-image.sh`) -- and outputs its digest. The only job with `packages: write` |
+| `ci-image` | Makes sure `ghcr.io/starworksdev/arcane-ci:<tag>` exists -- reused, or built, verified and only then pushed (`scripts/ci/ci-image.sh`) -- and outputs its digest. The only job with `packages: write` |
 | `build-test-linux` | The two Linux legs, inside that image pinned by digest |
 | `build-test` | The Windows and macOS legs, on the hosted runners |
 | `notify` | Discord FAILED / RECOVERED; never for pull requests |
@@ -152,7 +152,8 @@ docker run --rm -v "$PWD/ci/linux:/v:ro" arcane-ci:dev bash /v/verify-image.sh
 ```
 
 **Publishing:** `ci-image` reuses a published tag or, on a same-repo run,
-builds, pushes and verifies it (`scripts/ci/ci-image.sh`). The legs run on
+builds it, verifies it (`verify-image.sh`) and only then pushes it
+(`scripts/ci/ci-image.sh`), so a failed verify publishes nothing. The legs run on
 `image@sha256:<digest>`, never the tag: the tag names the inputs, the digest
 names the image. The package is **public** (Arcane is public, the image holds
 no secrets), so pulls need no credentials; the legs still pass the workflow
@@ -257,7 +258,7 @@ scripts/run-tests.sh --gpu Debug --rng-seed 1
 ```powershell
 # Windows
 scripts\setup-vcpkg-deps.bat
-scripts\ciuild.ps1 Debug
+scripts\ci\build.ps1 Debug
 powershell -File scripts\run-tests.ps1 Debug --rng-seed 1
 ```
 

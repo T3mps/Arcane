@@ -386,10 +386,14 @@ function Invoke-NativeLogged {
     $ErrorActionPreference = 'Continue'
     try {
         & $FilePath @ArgumentList 2>&1 | ForEach-Object {
-            # A native stderr line arrives as an ErrorRecord; its text is TargetObject
-            # (an EMPTY line would otherwise stringify as "...RemoteException").
+            # A native stderr line arrives as an ErrorRecord, whose ToString() of an
+            # EMPTY line is "...RemoteException". Its text: TargetObject on Windows
+            # PowerShell 5.1, Exception.Message on pwsh 7 (TargetObject is null there).
             $line = "$_"
-            if ($_ -is [System.Management.Automation.ErrorRecord] -and $_.TargetObject -is [string]) { $line = $_.TargetObject }
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                if ($_.TargetObject -is [string]) { $line = $_.TargetObject }
+                elseif ($_.Exception) { $line = [string]$_.Exception.Message }
+            }
             $writer.WriteLine($line)
             Write-Host $line
         }

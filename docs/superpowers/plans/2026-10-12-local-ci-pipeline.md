@@ -3625,3 +3625,11 @@ Acceptance: a warm-run timing table against run 38154946856; a cold run no slowe
 - Fork-PR approval → `all_external_contributors` on all five repos.
 - `can_approve_pull_request_reviews` → false at the org.
 - `sha_pinning_required` → true at the org, once every repo's pinning PR has merged.
+
+## Final review amendments (2026-10-12)
+
+The whole-branch review found two defects in this plan's own code; the branch carries the fixes, and any reuse (sub-project B) must take them, not Task 7's text:
+- **Task 7 digest:** `grep '"digest":"sha256:...'` never matches buildx's pretty-printed `{{json .Manifest}}` (`"digest": "..."`), so `ci-image` would fail on every hosted run. `ci-image.sh` now hashes the raw manifest (`imagetools inspect --raw` into a file, then SHA-256), which equals the registry digest; the stub prints real-shaped output.
+- **Task 7 order:** the image was pushed before `verify-image.sh` ran, so a failed verify left a published tag later runs reused unverified. Now `buildx build --load`, verify, then `docker push`; a failed verify publishes nothing.
+- `Invoke-NativeLogged` reads a native stderr line's text from `TargetObject` (Windows PowerShell 5.1) or `Exception.Message` (pwsh 7).
+- `test-image-tag.sh`'s "desk flake" was `MSYS_NO_PATHCONV=1` (this plan's desk shell rule) stopping Git Bash from translating the paths handed to `powershell.exe` and `git.exe`; both now go through `cygpath -w`, and the twins' stderr is kept for FAIL messages.
