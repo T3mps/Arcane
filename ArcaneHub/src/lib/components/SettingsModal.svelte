@@ -182,16 +182,21 @@
       {:else if cat === "data"}
         <section class="grp">
           <h3>Hub data folder</h3>
+          <!-- The project list is SHARED: the editor reads and writes the same
+               recents.archub for File > Open Recent and its start page
+               (ArcaneEditor/src/Project/RecentProjects.hpp). Engines and
+               settings are the Hub's alone. -->
           <p class="d">Where the project list, the registered engines and these
-            settings are stored. The engine never reads it.</p>
+            settings are stored. The editor shares the project list for its
+            Open Recent menu; the rest is the Hub's alone.</p>
           <p class="path"><code>{hubDir}</code></p>
           <Button onclick={onReveal} disabled={busy}>Open folder</Button>
         </section>
         <section class="grp">
           <h3>Recent projects</h3>
           <!-- States plainly what the Remove control on a card also promises. -->
-          <p class="d">{recentCount} in the list. Clearing removes them from the Hub
-            only; nothing is deleted from disk.</p>
+          <p class="d">{recentCount} in the list. Clearing also empties the editor's
+            Open Recent menu; nothing is deleted from disk.</p>
           {#if confirmClear}
             <div class="ctl">
               <Button onclick={() => (confirmClear = false)} disabled={busy}>Cancel</Button>
