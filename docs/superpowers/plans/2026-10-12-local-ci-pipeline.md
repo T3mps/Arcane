@@ -44,7 +44,7 @@
   - `microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3`
   - `docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0`
   - `docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1`
-  - `StarworksDev/.github/actions/discord-ci-notify@b2d36340a4b0bff117f0cfcba3564fe3fa984687 # main 2026-10-12`
+  - `StarworksDev/.github/actions/discord-ci-notify@af9284cd93ba45b7d5bd5818c9ee90812271535c # discord-ci-notify-v1.0.0`
 
 **Script rules:**
 - `scripts/ci/build.sh` is bash 3.2 + POSIX tools: no associative arrays, `${v,,}`, `mapfile`/`readarray`, or namerefs.
