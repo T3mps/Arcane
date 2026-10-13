@@ -39,3 +39,29 @@ Actions → release → Run workflow:
 - **rehearsal** (main only): the same fixture, really signed with Artifact
   Signing, published to `downloads.starworks.dev/staging/` with the TEST
   manifest key. Use it after changing the pipeline or the hosting.
+
+## Maintaining the manifest
+
+`releases.json` expires 90 days after it is signed, and Hubs refuse an
+expired manifest (installed engines keep working; installs and updates
+stop). On the 1st of each month `manifest-admin` re-signs it. **Approve that
+run.** Two missed months are still survivable; three are not.
+
+GitHub disables scheduled workflows in a public repository after 60 days
+without repository activity. If Arcane goes quiet that long, re-enable
+manifest-admin (Actions → manifest-admin → Enable) or run it by hand.
+
+By hand (Actions → manifest-admin → Run workflow, from `main`):
+- **resign**: sign again now.
+- **yank** (version and reason): marks it yanked. The archives stay, so
+  projects pinned to it still install it; the Hub and the website show the
+  reason. `released_at` is never touched.
+- **init**: writes serial 1. For the first publish to a target only; it
+  refuses if a manifest exists.
+- **repair**: if `releases.json` and its `.minisig` disagree (a publish failed
+  between the two writes, and the run says so), this restores both from the
+  newest `history/<serial>.json` pair that verifies. Then re-run whatever
+  failed.
+
+Every serial is also stored, immutably, at `history/<serial>.json(.minisig)`:
+a record of every manifest ever published.
