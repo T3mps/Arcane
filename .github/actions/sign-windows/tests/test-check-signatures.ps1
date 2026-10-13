@@ -35,4 +35,7 @@ Expect 'an unsigned dll in a subfolder fails' "$root\nested" 1
 Expect 'an empty folder fails' "$root\empty" 1
 
 Remove-Item -Recurse -Force $root
+# Exit explicitly: GitHub's pwsh wrapper exits with $LASTEXITCODE, which still
+# holds the last deliberately failing check's 1.
 if ($failures) { exit 1 }
+exit 0

@@ -6,6 +6,8 @@
 # -- Build output --------------------------------------------------------------
 # All compiled output lands in bin/ and bin-int/ by premake5 convention.
 bin/
+# ...but not a Rust crate's src/bin/ (the arcrelease CLI)
+!ArcaneHub/crates/arcane_release/src/bin/
 bin-int/
 
 # -- Visual Studio generated files ---------------------------------------------
