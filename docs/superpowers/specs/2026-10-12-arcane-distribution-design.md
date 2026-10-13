@@ -1,0 +1,696 @@
+# Arcane public distribution: Hub engine manager, R2 releases, signing, SDK packaging
+
+**Date:** 2026-10-12 · **Base:** `main` 946092fb · **Branch:** `docs/distribution-design`
+**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); awaiting written-spec review
+
+## 0. Status and context
+
+This spec takes Arcane from "build it from the repo" to a public, free download:
+the Arcane Hub installs, updates and manages several engine versions, each a
+signed release served from `downloads.starworks.dev`.
+
+It **supersedes**:
+- the Hub launcher spec's v1 non-goal "engine version management, installs,
+  downloads, accounts" (`docs/specs/2026-07-26-arcane-hub-launcher-design.md`,
+  Non-goals): versions, installs and downloads are now in scope; accounts stay
+  out (s11);
+- the Hub product review's **Tier 3** (`docs/audits/2026-07-29-arcane-hub-product-review-vs-comparable-launchers.md`):
+  download/install, Verify/repair, channels, opt-in Hub self-update and code
+  signing are designed here. The review's deliberate non-goals (sign-in,
+  store/news, telemetry, forced updates, tray residency) still hold;
+- the project-format spec's deferral of a "packaged/installed SDK with a
+  multi-version registry" (`docs/specs/2026-07-22-arcane-project-format-design.md`
+  §12). Its §10A SDK layout is the starting point; s7 updates it for the
+  module system.
+
+It **builds on**:
+- engine modularization (`docs/superpowers/specs/2026-10-11-engine-modularization-design.md`):
+  `.arcmodule` descriptors, `build/modules.lua`, `arcane_module_consumer`,
+  `arcbuild package`. Engine work here (phase 1) starts after its P6/P7 land;
+- the local CI pipeline, sub-project A (`docs/superpowers/specs/2026-10-12-local-ci-pipeline-design.md`
+  on `ci/local-pipeline`, "plan A" below): `scripts/ci/build.{sh,ps1}`, the
+  content-addressed GHCR image, and its `ci-image` job rules;
+- roadmap D15 (ship pipeline: "cooking, installers and Dist crash capture",
+  per the modularization spec §3) and D26 (GitHub Actions security rules) in
+  `docs/superpowers/specs/2026-10-05-arcane-1.0-roadmap.md`;
+- `LICENSING.md`: each version becomes MIT four years after it is first
+  publicly distributed, so release dates and version identity are evidence
+  (s4, s12).
+
+**What exists today** (verified on `main` 946092fb):
+- The Hub is Tauri 2 (`ArcaneHub/`, binary `arcane_hub`, identifier
+  `dev.starworks.arcanehub`, 0.1.0). It has no network code. Its NSIS
+  installer (`installMode: "currentUser"`) exists only as an artifact of
+  `.github/workflows/build-arcane-hub.yml`. Its state is
+  `%LOCALAPPDATA%\Arcane\hub\{recents,engines,settings}.archub`
+  (`ArcaneHub/src-tauri/src/paths.rs`). Engines are added by path
+  (`register_engine`) and probed with `ArcaneEditor.exe --print-engine-info`.
+- The probe prints one line of JSON, `{ "engineAbi", "build", "exePath" }`
+  (`HostBoot::EngineInfoJson`, `ArcaneClient/src/Arcane/Host/ProjectBoot.hpp`).
+  `build` is `BuildInfo()`, a display string such as `Arcane 0.1 (M5) [Dist]`
+  (`ArcaneCore/src/Arcane/Base/Engine.cpp`).
+- `ArcaneCore/src/Arcane/Version.hpp` has `kVersionMajor = 0`,
+  `kVersionMinor = 1` and `VersionString()` = `"Arcane 0.1 (M5)"`: no patch,
+  no prerelease, no tags.
+- The plugin ABI is `kGamePluginABIVersion = 58` (`ArcaneCore/src/Arcane/Plugin/PluginABI.hpp`);
+  modularization bumps it to 59. `.arcproj` requires `engine.abi`
+  (`ArcaneCore/src/Arcane/Project/ProjectManifest.cpp`).
+- No engine installer, no signing, no release manifest. The Dist editor
+  folder is about 43 MB unpacked (`dxcompiler` 18 MB, D3D12 9.6 MB).
+
+Paths below are as on `main`; modularization moves programs and modules under
+`Source/<Type>/` with include paths unchanged.
+
+## 1. Goals and non-goals
+
+**Goals.**
+1. Anyone can download the Hub from starworks.dev, install an engine from it
+   without admin rights, and build a game against that engine's SDK.
+2. Every byte the Hub installs is verified against a signed manifest; every
+   Windows binary is Authenticode-signed, so Smart App Control lets it run.
+3. A project records exactly which engine it uses; nothing upgrades it
+   silently.
+4. One tag push produces a release: build, sign, package, upload, manifest,
+   GitHub Release, website.
+5. Release dates are recorded in more than one independent place, because
+   each version's MIT change date depends on them.
+
+**Non-goals (v1).** macOS packages and notarization; the Microsoft Store;
+Flathub; accounts; telemetry and crash upload; forced updates; nightly builds;
+auto-upgrading projects; a Hub-managed C++ toolchain (later, s11); shipped-game
+portability below the engine's glibc floor (follow-on, s7.5).
+
+## 2. Decisions
+
+| Topic | Decision |
+|---|---|
+| Audience | Public and free. The Hub installs, updates and manages multiple engine versions. |
+| What an engine download contains | Full development: the editor, runtime and server, plus the packaged SDK (s7). A Hub-managed C++ toolchain comes in a later phase. |
+| Hosting | Cloudflare R2 behind `downloads.starworks.dev`. The manifest lives in R2 and is written by Arcane's CI (approach A). |
+| Channels | Stable, plus an opt-in preview channel. No nightly builds. |
+| Integrity | Each file's SHA-256 is listed in a manifest signed with minisign (Ed25519). The Hub verifies everything. |
+| Windows signing | Azure Artifact Signing (formerly Trusted Signing), Basic SKU, about $10 a month (US individual). It signs the engine, the SDK tools and the Hub installer. CI authenticates by OIDC federation, never a stored secret. |
+| Distribution | Direct downloads from starworks.dev only. No Microsoft Store. |
+| Platforms | Windows and Linux. macOS isn't offered; Mac users build from source. |
+| Linux floor | Ubuntu 24.04 / glibc 2.39 for the engine and Hub downloads, one toolchain (plan A's image). Games packaged with the v1 SDK inherit it; a lower shipped-game floor is a follow-on (s7.5). |
+| Engine build | The Dist engine, with debug info split into a separate symbols archive (s7.3). Game modules build in two configs, Development and Release, against it (s7.2). |
+| Project pinning | `.arcproj` records the exact version, the build and the channel. Upgrades are always explicit; "follow patches" is opt-in. |
+| Install scope | "Just me" by default (no admin). "All users" is an option (Program Files, UAC). |
+| Website | `/arcane/download` and `/arcane/releases`, both generated from the same manifest. |
+| Spec home | This file, in the Arcane repo; the website repo carries a pointer. |
+
+### 2.1 Install locations
+
+| | Just me (default) | All users (UAC) |
+|---|---|---|
+| Hub | `%LOCALAPPDATA%\Arcane Hub\` (as today) | `C:\Program Files\Arcane Hub\` |
+| Engines | `%LOCALAPPDATA%\Arcane\Engines\<version>\` | `C:\Program Files\Arcane\Engines\<version>\` |
+| Symbols | `%LOCALAPPDATA%\Arcane\Symbols\<version>\` | same (always per user) |
+| Data | `%LOCALAPPDATA%\Arcane\`, always per user | same |
+
+Linux: engines in `~/.local/share/arcane/engines/<version>/`; symbols in
+`$XDG_CACHE_HOME/arcane/symbols/<version>/` (default `~/.cache`); Hub data in
+the XDG state and cache folders.
+
+A **Choose location...** setting installs engines somewhere else, such as
+another drive. The Hub's data never moves.
+
+Note: the Hub's "as today" path is `%LOCALAPPDATA%\Arcane Hub\` (the NSIS
+per-user default; `ArcaneHub/src-tauri/src/lib.rs` and the `assoc.rs` test
+agree). The comment at `paths.rs:8` saying `%LOCALAPPDATA%\Programs\Arcane Hub\`
+is stale. All-users Hub installs need the NSIS `installMode` changed from
+`"currentUser"` to `"both"` (phase 4).
+
+## 3. Components (design section 1)
+
+**The Arcane repo:**
+- **Engine packaging.** A Dist build is packed into a versioned archive (.zip
+  on Windows, .tar.gz on Linux), plus a symbols archive from the same build
+  (s7.3).
+- **One release workflow** in GitHub Actions, triggered by a tag. It builds
+  through `scripts/ci/build.{sh,ps1}` (plan A §1.3), signs, packages, uploads
+  to R2, regenerates and signs `releases.json`, creates a GitHub Release, and
+  calls the website's deploy hook.
+- **The Hub** gains:
+  - an engine manager (list, install, verify, remove);
+  - a release client that reads and verifies the manifest;
+  - project pinning and upgrades;
+  - Tauri self-update;
+  - install-scope settings.
+
+**Cloudflare:**
+- An R2 bucket `arcane-downloads`, served at `downloads.starworks.dev` (a
+  custom domain on the starworks.dev zone; never the rate-limited `r2.dev`
+  URL). It holds:
+  - `releases.json` and its signature `releases.json.minisig`;
+  - the Hub's update feed, `hub/latest.json`;
+  - the immutable archives under `engine/<version>/...` and `hub/<version>/...`.
+- Cache Rules: archives (including `.AppImage`) get a long edge cache
+  lifetime; the `.json` files a short one (s12).
+
+**The website repo** (`D:/dev/web/Starworks`, Pages project `starworksdev`):
+- `/arcane/download` and `/arcane/releases`, built from the manifest at build
+  time.
+- A Pages deploy hook that Arcane's CI calls after publishing.
+
+**Credentials** live only in a protected GitHub environment (`release`) in
+the Arcane repo, with required reviewers:
+- Artifact Signing: no stored secret. `azure/login` exchanges the job's
+  GitHub OIDC token through a federated credential whose subject is the
+  `release` environment; the environment holds only the client, tenant and
+  subscription IDs;
+- the minisign key and the Tauri updater key, each with an offline backup;
+- an R2 API token scoped to Object Read & Write on the `arcane-downloads`
+  bucket only;
+- the Pages deploy-hook URL.
+
+**Unchanged:** Arcane's existing CI (`ci.yml`) keeps building and testing all
+three platforms, macOS included.
+
+## 4. Release pipeline (design section 2)
+
+**Versions**
+- Semver tags: `v0.3.0` for stable, `v0.3.0-preview.N` for previews. CI checks
+  the tag against `Version.hpp`, which gains a patch number and a prerelease
+  string (phase 1).
+- The probe gains `version` (the semver string) and `commit` (the full git
+  SHA, passed in by CI through an environment variable, since plan A's build
+  scripts never call git, plan A §1.3). The existing `engineAbi`, `build` and
+  `exePath` keys stay as they are, so today's Hub keeps parsing it.
+- The ABI version comes from the probe's `engineAbi`.
+- The Hub has its own `hub-v*` tags, so the Hub and the engine release
+  independently.
+
+**Runners.** `windows-2025` and `ubuntu-24.04`, the images `ci.yml` uses
+today. The Linux build runs in plan A's content-addressed image
+(`ghcr.io/starworksdev/arcane-ci@sha256:<digest>`), so a release is built by
+exactly the toolchain CI tests.
+
+**Workflow rules** (plan A's `ci-image` rules and roadmap D26):
+- Triggered only by a tag push or a manual dispatch from `main`. Nothing in it
+  is reachable from a pull request: no `pull_request` or `pull_request_target`
+  trigger touches the `release` environment, and fork code never runs with its
+  credentials.
+- Every `uses:` is pinned to a commit SHA.
+- `permissions:` is read-only by default; `id-token: write` (for OIDC) and
+  `contents: write` (for the GitHub Release) are granted only to the jobs that
+  need them.
+- Publishing jobs run in the `release` environment and wait for the owner's
+  one-click approval.
+
+**Engine job**
+1. `scripts/ci/build.{sh,ps1} Dist` on `windows-2025` and in the image on
+   `ubuntu-24.04`, with debug info on (s7.3).
+2. Split symbols (s7.3). Check that every binary's PDB GUID + age (Windows)
+   or GNU build-id (Linux) matches its debug file. A mismatch stops the run.
+3. Run `--print-engine-info` and the test suite against the built binaries.
+4. Sign every Windows `.exe` and `.dll` with Artifact Signing.
+5. Package, then record each file's size and SHA-256. The archive's LICENSE
+   carries that version's BSL change date.
+6. Upload to R2 at `engine/<v>/arcane-<v>-<os>-<arch>.<ext>` and
+   `engine/<v>/arcane-<v>-<os>-<arch>-symbols.<ext>`, refusing to overwrite
+   anything already there. Uploads use the S3 API (aws-cli or rclone), not
+   Wrangler (s12).
+7. Update `releases.json`, bump its serial, set its expiry, sign it, and
+   upload it.
+8. Create a GitHub Release with the notes and no files attached; it serves as
+   a permanent date record. Then call the deploy hook.
+
+**Hub job**
+- Builds the NSIS installer on `windows-2025`, and an AppImage plus a .deb on
+  `ubuntu-24.04`.
+- Signs the Windows installer and the Hub's binaries with Artifact Signing.
+- Signs the Tauri update files with the Tauri updater key.
+- Uploads everything to `hub/<v>/` and updates `hub/latest.json`.
+
+**Channels and yanking**
+- A tag containing `-preview` publishes to the preview channel.
+- Yanking is a small manual workflow. It marks the release yanked and re-signs
+  `releases.json`. The archives stay, so projects pinned to that version can
+  still install it.
+
+**Safety**
+- The approval gate above.
+- A dry-run mode builds and packages without uploading anything (test key,
+  no `release` environment).
+
+## 5. Manifest and trust (design section 3)
+
+```json
+{
+  "schema": 1, "serial": 42,
+  "generated_at": "...", "expires": "...",
+  "base_url": "https://downloads.starworks.dev/",
+  "channels": { "stable": "0.3.1", "preview": "0.4.0-preview.2" },
+  "hub": { "latest": "0.2.0", "min_supported": "0.2.0", "artifacts": [] },
+  "releases": [{
+    "version": "0.3.1", "channel": "stable", "released_at": "...",
+    "build": "<full git commit SHA>", "abi": 59,
+    "license": "BUSL-1.1", "change_date": "2030-11-02",
+    "min_hub_version": "0.2.0",
+    "yanked": false, "yank_reason": null, "security": false,
+    "notes_url": "https://starworks.dev/arcane/releases#0.3.1",
+    "artifacts": [
+      { "os": "windows", "arch": "x86_64", "kind": "engine",
+        "path": "engine/0.3.1/arcane-0.3.1-windows-x86_64.zip",
+        "size": 0, "sha256": "..." },
+      { "os": "windows", "arch": "x86_64", "kind": "symbols",
+        "path": "engine/0.3.1/arcane-0.3.1-windows-x86_64-symbols.zip",
+        "size": 0, "sha256": "..." }
+    ]
+  }]
+}
+```
+
+`build` is the release's full commit SHA (the probe's `commit`), not the
+probe's display string `build`. `change_date` is four years after
+`released_at`, per `LICENSE`.
+
+How the Hub checks it:
+1. **Signature.** Verify the minisign signature against a public key built
+   into the Hub. Reject the manifest if it fails.
+2. **No rollback.** Remember the highest serial seen, and reject any manifest
+   with a lower one. This blocks a downgrade by replaying an old, validly
+   signed manifest.
+3. **No stale lists.** Reject a manifest past its `expires`. CI re-signs it
+   every month even when nothing changed. When offline, installed engines
+   keep working.
+4. **Every download.** Check its SHA-256 against this verified manifest before
+   anything else touches it (s6).
+5. **Old Hubs.** If `min_supported` or `min_hub_version` is newer than the
+   Hub, prompt to update the Hub.
+
+**Keys.** The minisign key (for the manifest) and the Tauri key (for Hub
+updates) are separate. The Hub embeds a *list* of trusted manifest keys, so a
+key can be rotated by shipping the new one before retiring the old.
+
+**The Hub's own updates.** Tauri's updater verifies each update artifact's
+minisign signature, but its feed (`hub/latest.json`) is not itself signed.
+The Hub requires `tauri-plugin-updater` **2.13.3 or later**: 2.12.0 removed
+`allowDowngrades` from the webview-callable `check` command and made it a
+plugin-config setting (default `false`), and 2.13.3 moved to `minisign-verify`
+0.3, which rejects non-canonical Ed25519 signatures. The Hub sets
+`allowDowngrades: false` and supplies no custom version comparator. Sources:
+the [updater plugin docs](https://v2.tauri.app/plugin/updater/) and the
+[updater changelog](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/updater/CHANGELOG.md)
+(2.12.0, 2.13.3).
+
+**Website.** The site reads the same file. Yanked releases are shown struck
+through, with the reason.
+
+## 6. The Hub (design section 4)
+
+**The Engines view**
+- Lists each installed engine with its version, channel, ABI, scope, location
+  and size, with buttons for Open folder, Verify and Remove.
+- **Install engine...** lists stable versions, plus previews if you've opted
+  in, with dates, notes and "security" or "yanked" badges. Yanked versions are
+  hidden unless a project needs one.
+- Dev builds are handled as today: added by path (`register_engine`), probed,
+  labelled "Dev build". Removing one only unregisters it; the files stay.
+
+**Installing.** The order is fixed, and nothing from the download runs before
+its hash is proven:
+1. Download the archive to a temp folder (resumable).
+2. **Verify its SHA-256 against the signed manifest** (s5). On a mismatch,
+   nothing is extracted and nothing is executed.
+3. Extract to `<version>.partial`.
+4. Only now run `--print-engine-info` from `.partial`, and check that its
+   `version`, `commit` and `engineAbi` match the manifest entry.
+5. Rename `.partial` to the final folder.
+
+An interrupted install leaves nothing half-done: a leftover `.partial` is
+deleted on the next start.
+- **Just me** needs no admin.
+- **All users** uses a signed helper behind one UAC prompt. If you decline it,
+  the Hub says so clearly and offers "Install for just me instead".
+- **Verify** re-checks every file against the archive's own file list
+  (`manifest.txt`) and offers to repair.
+- **Symbols** are an optional per-version download into the symbol cache
+  (s2.1), offered from the Engines view and from a crash report. They are
+  verified the same way.
+
+**Projects**
+- `.arcproj`'s `engine` block gains `version`, `build`, `channel` and
+  `followPatches` beside the required `abi`, which the host's ABI gate keeps
+  reading. Older projects that only record an ABI are still read, and get
+  migrated the next time you upgrade them.
+- Opening a project whose version is missing offers **Install 0.3.1** or
+  **Use another installed version...**. The second warns if the ABI differs.
+- **Upgrade project...** is always explicit. It shows the release notes and an
+  ABI warning.
+- **Follow patches**, if a project opts in, means the newest `0.3.x` with the
+  same ABI.
+- The Hub always shows which engine a project uses and why.
+- The Hub sets `ARCANE_SDK` to the pinned engine's `sdk/` folder before
+  launching the editor or a build.
+
+**Updates and settings**
+- The Hub checks for updates at launch and then every few hours. A new engine
+  release shows up as a quiet badge.
+- The Hub's own update goes through Tauri: "Restart to update", never forced,
+  never a downgrade.
+- **Settings:** default install scope, install location, show previews, check
+  automatically, and **Remove all engines**.
+- No telemetry.
+
+## 7. Engine packaging and the SDK (design section 5)
+
+### 7.1 Archive layout
+
+```
+arcane-0.3.1/
+  bin/          editor, runtime, server, crash reporter, arcbuild, arccook,
+                engine module libraries, runtime deps (D3D12/, DXC; Vulkan loader on Linux)
+  data/         built-in assets
+  sdk/          the installed SDK (below)
+  LICENSE       BSL 1.1 + this version's change date
+  manifest.txt  every file + SHA-256 (Verify)
+  engine.json   { version, build, abi, channel }
+```
+
+`engine.json` must equal what the probe reports (`version`, `commit` as
+`build`, `engineAbi` as `abi`), checked in CI. The ReferenceProject is not
+included.
+
+**The SDK after modularization** (`sdk/`, what `build/arcane.lua` reads as
+`ARCANE_SDK`):
+- every `.arcmodule` descriptor of the engine's modules and vendor modules,
+  at the paths `build/modules.lua` expects;
+- `build/arcane.lua` and `build/modules.lua` (the descriptor reader);
+- the libraries `arcbuild package` links: each module's and vendor library's
+  static library for the monolithic layout, `ArcaneRuntimeHost`, and a
+  prebuilt package launcher (`ArcanePackageLauncher`; today
+  `arcane_package_launcher` compiles `Launcher.cpp` from the SDK's source at
+  package time, which an installed SDK without sources cannot do); plus the
+  import libraries for the modular layout the editor loads;
+- public headers, **generated from the module graph**: a module's headers
+  ship when the module is public, and a vendor's headers ship only when a
+  public module depends on it publicly. Private dependencies' headers are not
+  shipped. This replaces the hand-kept "list of public headers";
+- the header-only dependencies a public header reaches (`arcane_module_consumer`
+  names glm, Astra, enkiTS, Manifold2D and Mosaic today).
+
+Size: the static libraries dominate; expect **100+ MB** unpacked for the SDK
+on top of the ~43 MB runtime. Phase 1 measures the real figure. The per-file
+figures go in the manifest, so the Hub's disk-space check uses real numbers.
+
+`arcane.lua` gains an "installed SDK" mode (it finds libraries under
+`sdk/lib/` instead of `bin/<cfg>-<sys>-<arch>-md/` and `-mono/`). Developer
+checkouts keep working as they do now.
+
+### 7.2 Game module configs: Development and Release
+
+An installed engine is one Dist build, so a game module built against it may
+not change the ABI. `arcane_game_module` and `arcane_module_consumer` offer two
+configs against an installed SDK:
+
+| Config | ABI macros (identical to the engine's Dist) | Codegen |
+|---|---|---|
+| Development | `NDEBUG`, `ARC_BUILD_DIST`, release CRT (`runtime "Release"`, `/MD`), so `_ITERATOR_DEBUG_LEVEL` is 0 | only `/Od /Zi` (`-O0 -g`) |
+| Release | the same | `optimize "speed"`, debug info on |
+
+- The flavor contract `arcane_module_consumer` already enforces (per-config
+  runtime, `ARC_BUILD_*`, `NDEBUG`, `/utf-8`, `/arch:AVX2`, so inline header
+  layouts agree with the DLLs') is the one place this is enforced. Against an
+  installed SDK it refuses, at generate time with a named error, any
+  ABI-affecting change: a Debug config, the debug CRT, `_ITERATOR_DEBUG_LEVEL`
+  other than 0, or a missing `NDEBUG`/`ARC_BUILD_DIST`.
+- `ARC_ASSERT` follows `NDEBUG` (`MOSAIC_ASSERT`, `ThirdParty/Mosaic/include/Mosaic/Assert.hpp`),
+  so it is off in both configs. Game code gets **`ARC_GAME_ASSERT`**, keyed to
+  the module's own config: active in Development, compiled out in Release.
+  It never changes a type's layout.
+- Developer checkouts keep Debug/Release/Dist as today.
+
+### 7.3 Symbols
+
+Dist gets debug info, split off:
+- **Windows:** `/Zi`, linker `/DEBUG /OPT:REF,ICF` (with `/DEBUG` the MSVC
+  linker otherwise defaults to `/OPT:NOREF`). Every Dist filter in
+  `premake5.lua` sets `symbols "off"` today: on `feat/modularization`
+  (b81d73da) the module block at line 350 and the hosts' one-line filter at
+  478, among others (559, 639, 692, 870, 953, 1084, 1214); on `main` the same
+  filters sit at other lines. ArcaneTests' Dist block already turns symbols on.
+- **Linux:** `-g`, then `objcopy --only-keep-debug`, `strip --strip-debug`
+  (`strip`), and `objcopy --add-gnu-debuglink`.
+- Both archives come from the same build. CI checks that each binary's PDB
+  GUID + age or build-id matches its debug file (s4, step 2).
+
+**The symbol cache.** The Hub installs a symbols archive into
+`%LOCALAPPDATA%\Arcane\Symbols\<version>\` (Linux: the XDG cache, s2.1). In
+phase 1 the crash reporter adds the running engine's cache folder to its
+symbol path: `DefaultSymbolPath` in `ArcaneCrashReporter/src/Symbolizer.cpp`
+(DbgEng, `IDebugSymbols3`), which today searches the dump's module folders,
+the reporter's own folder and, outside Dist only, `_NT_SYMBOL_PATH`. Because a
+Dist reporter ignores `_NT_SYMBOL_PATH` on purpose (R113), the cache must be
+added explicitly. The reporter has no Linux symbolizer today; on Linux the
+cache serves `gdb` (`debug-file-directory`) until it does.
+
+### 7.4 Read-only install folder
+
+An audit moves every write the engine makes out of its install folder. Known
+targets (verified on `main`):
+- **`imgui.ini`**: ImGui's default `IniFilename` is a relative `imgui.ini`
+  until the editor retargets it, and the editor reads a legacy `imgui.ini` as
+  a layout seed (`ArcaneEditor/src/App/EditorApp.cpp:1809`). Session layouts
+  already go to `<UserRoot>/Editor/Layouts/Session/` (`EditorUserDir`,
+  `Paths.cpp`), which is per user.
+- **`diagnostics/`**: with no project, `Paths::DiagnosticsDir` resolves to
+  `<engineDir>/diagnostics` (`ArcaneCore/src/Arcane/Platform/Paths.cpp:180`),
+  and the reporter's fallback report folder is `<exeDir>/diagnostics`
+  (`ArcaneCore/src/Arcane/Base/Diagnostics.cpp:2661`).
+- **Logs** beside the exe: a derived log folder follows the report folder, so
+  it lands in that same `diagnostics/`.
+- **Packaged games** under `<Project>/Binaries/<Platform>/` (`Win64`, `Linux`,
+  `Mac`; `build/arcane.lua` on `feat/modularization`): a game installed under
+  Program Files must not write there either.
+
+These move to the per-user data folder (`%LOCALAPPDATA%\Arcane\...`, the XDG
+state folder on Linux) or the project's `Saved/`. A CI test runs the editor,
+runtime and a packaged game from a read-only copy and fails on any write.
+
+### 7.5 Linux
+
+- Rendering uses Vulkan; the archive ships the Vulkan loader. A
+  Vulkan-capable driver is required.
+- **The download floor is Ubuntu 24.04 / glibc 2.39** for the engine, its
+  SDK and the Hub: one toolchain, plan A's image.
+- **The shipped-game floor is a separate concept.** A game packaged with the
+  v1 SDK links the SDK's static libraries and so inherits glibc 2.39. v1
+  release notes state: **"Games packaged with this SDK require glibc 2.39+."**
+- **Follow-on, not in v1: packaged-game portability.** A second build of the
+  SDK's static libraries in the Steam Linux Runtime sniper SDK image
+  (`registry.gitlab.steamos.cloud/steamrt/sniper/sdk`, glibc 2.31), produced
+  through plan A's content-addressed images, so packaged games run on older
+  systems and in the Steam runtime.
+
+## 8. Website (design section 6)
+
+**`/arcane/download`**
+- Hub download buttons for the visitor's OS (Windows or Linux), with each
+  file's size and SHA-256 and how to check it.
+- System requirements: Windows x64; Ubuntu 24.04 (glibc 2.39) or newer
+  with a Vulkan driver; the build tools needed for game development.
+- macOS: "build from source on GitHub".
+- The current stable and preview versions.
+- A licence line: BSL 1.1, with each version becoming MIT four years after it
+  is first published.
+
+**`/arcane/releases`**
+- Every release with its channel, date, ABI, notes and badges. Yanked releases
+  are struck through, with the reason.
+- Each version has its own anchor, e.g. `#0.3.1`.
+- Notes are copied from the GitHub Release into `releases.json` by CI.
+
+**How it's built**
+- A `+page.server.ts` loader fetches `releases.json` at build time, verifies
+  its signature, and prerenders.
+- If the manifest is unreachable, the build uses a committed fallback copy.
+- If the signature is bad, the build fails.
+
+**Links**
+- A Download button on `/arcane`, and a Download link in the Technology menu.
+- The page gets its own share card.
+- No visitor tracking.
+
+## 9. Failure handling (design section 7)
+
+| Failure | What the Hub does |
+|---|---|
+| Offline, or the manifest can't be fetched | Installed engines work. Install and update show "can't reach downloads.starworks.dev" with Retry. The cached manifest is shown with its age. |
+| Bad signature, lower serial or expired manifest | Rejects it and keeps the cached copy. No installs from an unverified list. |
+| Hub too old | "Needs Arcane Hub 0.2+", with an Update Hub button. |
+| Download interrupted | Resumes. After 3 failures, shows an error and Retry. |
+| SHA mismatch | Deletes the file and retries once. If that fails, shows an error with a report link. Nothing is extracted or run. |
+| Not enough disk space | Checked before downloading, using the sizes in the manifest. |
+| Probe fails, or its version, commit or ABI doesn't match the manifest | Deletes `.partial`. |
+| UAC declined | Clear message, with "Install for just me instead" and Try again. |
+| The pinned version was yanked | The project opens, with a banner giving the reason and offering an upgrade. |
+| The pinned version is unknown | Offers adding an engine by path, or picking another version. |
+| Removing an engine an editor is running from | Blocked. The Hub finds running editors through each project's `Saved/editor.lock` (`{pid, creation time}`, `ArcaneHub/src-tauri/src/editorlock.rs`) and its own spawn map, and compares each live editor's executable path with the engine folder; the lock itself does not name an engine. |
+| Installed SDK and an ABI-affecting module config | Generation fails with a named error (s7.2). |
+
+**CI fails closed.** A tag that doesn't match `Version.hpp`, a failing test, a
+symbol-match failure, a signing failure, an object that already exists, a
+failing read-only audit, or a manifest that won't verify all stop the run
+before `releases.json` is touched. Any archives already uploaded stay
+unreferenced, and a cleanup step lists them.
+
+**Website.** An unreachable manifest means the fallback is used. A bad
+signature means the build fails.
+
+## 10. Testing (design section 8)
+
+- **Hub (Rust and vitest)**
+  - Golden manifests: valid, bad signature, lower serial, expired, unknown
+    fields, `min_hub_version`, rotated key.
+  - The installer against a local server: full install, resume, SHA mismatch
+    (asserting the probe never ran), failure mid-extract, probe mismatch
+    rollback, Verify.
+  - Pinning: exact, follow patches, yanked, unknown, migration of ABI-only
+    projects, the "why this engine" text.
+  - Engine removal blocked by a live editor.
+  - UI states of the Engines view.
+- **Engine**
+  - Archive layout, `manifest.txt` completeness, `engine.json` matching the
+    probe, the LICENSE.
+  - Symbol match: PDB GUID + age / build-id per binary.
+  - SDK smoke test: build the ReferenceProject game module, in Development and
+    Release, against an *extracted archive*, then `arcbuild package` it, on
+    Windows and Linux.
+  - The installed SDK refuses a Debug config and a debug CRT.
+  - Read-only install test (s7.4).
+- **Release workflow**
+  - A dry run on pull requests (test key, no `release` environment, nothing
+    uploaded).
+  - Unit tests for the manifest generator, the refusal to overwrite, the yank
+    workflow and the re-sign workflow.
+- **Website**
+  - Loader tests: signature, fallback, bad signature.
+  - Playwright: download buttons per OS, the macOS note, release anchors, the
+    existing link test.
+- **First real release, by hand**
+  - A clean Windows 11 VM with Smart App Control on, and Ubuntu 24.04.
+  - Install the Hub; install an engine in both scopes; open a project; build a
+    module; fetch symbols; update the Hub; remove everything.
+
+## 11. Phases (design section 9)
+
+Engine work starts after modularization lands (its P6 and P7). Phase 2 needs
+no engine changes and may be prepared in parallel with it.
+
+1. **Engine release-readiness** (after modularization P6/P7). Real semver in
+   `Version.hpp`; the probe's `version` and `commit`; the read-only audit and
+   its test; public headers generated from the module graph; the installed-SDK
+   mode in `arcane.lua`, with the Development/Release configs, `ARC_GAME_ASSERT`
+   and the refusal; Dist debug info, the symbol split and the reporter's symbol
+   cache path; the packaging script and its self-test. Result: a standalone
+   engine archive and its symbols archive.
+2. **Pipeline and hosting** (may run in parallel with modularization). R2 and
+   `downloads.starworks.dev` with the Cache Rules; Artifact Signing and its
+   OIDC federation; the keys and their backups; the scoped R2 token; the
+   release workflow scaffolding (dry run, then publish behind approval); the
+   manifest generator, the yank and re-sign workflows, and the GitHub Release;
+   the deploy hook. Result: pushing `v0.2.0` publishes a release (once phase 1
+   has landed).
+3. **The Hub as engine manager.** Manifest trust; the Engines view; install
+   scopes and the UAC helper; pinning, upgrades and follow patches; symbols;
+   Remove all. Result: the Hub installs released engines.
+4. **Hub distribution (Windows).** The signed NSIS installer with both scopes;
+   Tauri self-update (`tauri-plugin-updater` 2.13.3+, downgrades blocked); the
+   Hub's release workflow. Result: the Hub updates itself.
+5. **The Linux Hub port.** The Hub is Windows-shaped today, and each of these
+   needs a Linux counterpart: the AppUserModelID taskbar grouping
+   (`spawn::APP_USER_MODEL_ID`, `dev.starworks.arcane`, shared with the
+   editor), the tray (`tray.rs`), the `.arcproj` file association (`assoc.rs`,
+   HKCU), and the NSIS-specific install and uninstall code. Plus the AppImage
+   and .deb, desktop entries and MIME registration. Result: the Hub installs
+   and updates on Ubuntu 24.04.
+6. **Website and launch.** `/arcane/download`, `/arcane/releases`, the
+   Download buttons, and the loader with its fallback. Result: public launch,
+   then the manual VM pass.
+
+**Later, listed but not designed yet**
+- The Hub sets up the C++ toolchain (Build Tools, via a `.vsconfig`).
+- Packaged-game portability (s7.5).
+- A sample-project download.
+- Delta updates.
+- Optional modules.
+
+**Out of scope**
+- macOS packages and notarization.
+- The Microsoft Store.
+- Flathub.
+- Accounts.
+- Telemetry and crash upload.
+- Forced updates.
+- Nightly builds.
+- Auto-upgrading projects.
+
+## 12. Risks and open items
+
+- **Smart App Control and signing.** Windows 11 Smart App Control checks every
+  `.exe` and `.dll` it loads, including Hub-downloaded files that carry no
+  mark of the web, so an unsigned engine binary is blocked. Every Windows
+  binary in an archive is signed, and the first release is tested by hand
+  with Smart App Control on. A signing outage blocks releases (CI fails
+  closed) rather than shipping unsigned files.
+- **A lost key strands installed Hubs.** A Hub trusts only the manifest keys
+  it embeds and the Tauri key it was built with. Lose the minisign key and
+  installed Hubs reject every new manifest; lose the Tauri key and they can
+  never self-update again. Both keys have offline backups; rotation ships the
+  new key in a Hub release before the old one retires.
+- **R2 cache rules.** Cloudflare caches by extension: `.zip`, `.gz` and `.exe`
+  are cached by default, `.json` and `.AppImage` are not. Explicit Cache Rules
+  give the archives (and `.AppImage`) a long TTL and the `.json` files a short
+  one. On the Free plan files over 512 MB are not cached; they are still
+  served from R2.
+- **aws-cli checksums with R2.** aws-cli 2.23 and later calculate request
+  checksums by default (`WHEN_SUPPORTED`), which R2 does not fully support.
+  The release workflow sets `AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED`
+  (and `AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED`), and pins the
+  aws-cli version.
+- **Wrangler's 315 MB cap.** `wrangler r2 object put` cannot upload objects
+  above 315 MB, and the SDK plus symbols archives can exceed it. CI uploads
+  through the S3 API only.
+- **BSL date evidence.** Each version's change date runs from its first public
+  distribution, so the date must be provable. Three independent records back
+  `released_at`: the git tag, the GitHub Release timestamp, and the R2 upload
+  time. `released_at` is **never rewritten**, not by the yank workflow, not by
+  a monthly re-sign, not by a fix to the notes.
+- **The modularization dependency.** Phase 1 cannot start until P6/P7 land;
+  if the module layout changes in its wholesale test, the SDK contents
+  follow it (s7.1 is stated in terms of "every descriptor" and the module graph
+  for that reason).
+
+## 13. Sources
+
+Research from 2026-10-12.
+- Cloudflare R2: [pricing](https://developers.cloudflare.com/r2/pricing/),
+  [public buckets and custom domains](https://developers.cloudflare.com/r2/buckets/public-buckets/),
+  [limits](https://developers.cloudflare.com/r2/platform/limits/),
+  [aws-cli with R2](https://developers.cloudflare.com/r2/examples/aws/aws-cli/),
+  [S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/),
+  [Wrangler R2 commands](https://developers.cloudflare.com/workers/wrangler/commands/r2/).
+- Cloudflare cache: [default cache behavior](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/),
+  [Cache Rules](https://developers.cloudflare.com/cache/how-to/cache-rules/).
+- Cloudflare Pages: [limits](https://developers.cloudflare.com/pages/platform/limits/),
+  [deploy hooks](https://developers.cloudflare.com/pages/configuration/deploy-hooks/).
+- AWS: [data integrity protections, `AWS_REQUEST_CHECKSUM_CALCULATION`](https://docs.aws.amazon.com/sdkref/latest/guide/feature-dataintegrity.html).
+- Tauri: [updater plugin](https://v2.tauri.app/plugin/updater/),
+  [updater changelog](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/updater/CHANGELOG.md) (2.12.0, 2.13.3),
+  [Windows installer](https://v2.tauri.app/distribute/windows-installer/).
+- minisign: [jedisct1.github.io/minisign](https://jedisct1.github.io/minisign/).
+- Microsoft: [Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/overview),
+  [Smart App Control](https://support.microsoft.com/en-us/topic/what-is-smart-app-control-285ea03d-fa88-4d56-882e-6698afdb7003),
+  [Azure login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect),
+  [`azure/login`](https://github.com/Azure/login).
+- GitHub: [security hardening for Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions),
+  [runner images](https://github.com/actions/runner-images).
+- Steam Linux Runtime: [sniper SDK](https://gitlab.steamos.cloud/steamrt/sniper/sdk).
+- Business Source License 1.1: [mariadb.com/bsl11](https://mariadb.com/bsl11/); Arcane's
+  parameters in `LICENSE` and `LICENSING.md`.
+- Launcher precedents (Unity Hub, Epic, Godot, rustup, Python install manager):
+  summarised in the brainstorm's research B; the design adopts their per-user
+  default, signed manifest with per-file hashes, Verify/Repair, explicit
+  Locate for dev builds and an exact project pin.
