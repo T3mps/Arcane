@@ -311,7 +311,14 @@ end
 local function use_prebuilt(mod, headers_only)
     local p = arc_module_prebuilt(mod)
     if not p then return end
-    if p.include then includedirs { p.include } end
+    -- Off Windows a prebuilt's include dir can be a system prefix
+    -- (/usr/local/include: SDL3's fallback), which also holds older copies of
+    -- headers the engine vendors (the Vulkan SDK's vulkan/ on the macOS
+    -- runners). -isystem dirs are searched after every -I dir, so the vendored
+    -- ThirdParty/ headers always win whatever the module order.
+    if p.include then
+        if os.target() == "windows" then includedirs { p.include } else externalincludedirs { p.include } end
+    end
     if headers_only then return end
     if p.link then links { p.link } end
     if p.debugLibdir then
