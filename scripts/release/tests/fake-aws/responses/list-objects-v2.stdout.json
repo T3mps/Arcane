@@ -1,0 +1,13 @@
+{
+    "Contents": [
+        {
+            "Key": "x",
+            "LastModified": "2026-10-12T00:00:00+00:00",
+            "ETag": "\"00000000000000000000000000000000\"",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "x"
+}
