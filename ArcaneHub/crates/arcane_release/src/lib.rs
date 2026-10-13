@@ -4,11 +4,14 @@
 //! and the engine archive packer. CI drives it through the `arcrelease`
 //! binary; the Hub links the library with `default-features = false`.
 
+pub mod digest;
 pub mod keys;
 pub mod manifest;
 pub mod ops;
 pub mod verify;
 pub mod version;
 
+#[cfg(feature = "tools")]
+pub mod pack;
 #[cfg(feature = "tools")]
 pub mod sign;
