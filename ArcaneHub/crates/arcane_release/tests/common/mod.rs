@@ -53,3 +53,30 @@ pub fn manifest(releases: Vec<Release>) -> Manifest {
         releases,
     }
 }
+use std::fs;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+pub const TEST_PASSWORD: &str = "arcane-test-key-not-a-secret";
+
+pub fn key_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("keys")
+}
+
+/// Test key 1 or 2, opened once per test binary (scrypt is slow on purpose).
+pub fn test_secret(n: u8) -> &'static minisign::SecretKey {
+    static KEYS: [OnceLock<minisign::SecretKey>; 2] = [OnceLock::new(), OnceLock::new()];
+    KEYS[usize::from(n - 1)].get_or_init(|| {
+        let text = fs::read_to_string(key_dir().join(format!("test-manifest-{n}.key"))).unwrap();
+        arcane_release::sign::open_secret_key(&text, TEST_PASSWORD).unwrap()
+    })
+}
+
+pub fn test_public_line(n: u8) -> String {
+    let text = fs::read_to_string(key_dir().join(format!("test-manifest-{n}.pub"))).unwrap();
+    text.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap().to_string()
+}
+
+pub fn test_public(n: u8) -> minisign_verify::PublicKey {
+    minisign_verify::PublicKey::from_base64(&test_public_line(n)).unwrap()
+}
