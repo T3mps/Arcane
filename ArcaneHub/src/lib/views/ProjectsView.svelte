@@ -104,6 +104,10 @@
   const missing = $derived(recents.filter((p) => p.missing).length);
 </script>
 
+<!-- The view fills main's height so only the projects scroll: the title,
+     search, actions, meta row and the list's column headers stay put while a
+     long list scrolls under them. -->
+<div class="view">
 <!-- Title, search and actions on ONE row. The count and the layout toggle drop
      to a slim second row: the count line runs long once projects are
      incompatible ("3 projects - 1 needs a different engine"), and at the 800px
@@ -202,6 +206,7 @@
     </div>
   {/if}
 
+  <div class="scroll">
   <div class:grid={layout === "grid"} class:list={layout === "list"}>
     {#each shown as p (p.path)}
       {@const r = resolvedFor(p)}
@@ -224,9 +229,26 @@
       {/if}
     {/each}
   </div>
+  </div>
 {/if}
+</div>
 
 <style>
+  .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .view > * { flex: none; }
+
+  /* The one scrolling region. It reaches into main's right and bottom padding
+     so its scrollbar sits at the window edge and the last row scrolls clear
+     of the bottom; scrollbar-gutter keeps that gutter reserved whether or not
+     the list overflows, so the rows never shift sideways and stay exactly as
+     wide as the header and column strip above them. No inset on the top and
+     left: nothing focusable sits at those edges (a card clips its own
+     contents, a row pads its controls), and a negative top margin would let
+     scrolled rows show above the column strip's rule. */
+  .view > .scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
+                    margin: 0 calc(-1 * var(--main-pad-x)) calc(-1 * var(--main-pad-b)) 0;
+                    padding: 0 calc(var(--main-pad-x) - var(--scrollbar)) var(--main-pad-b) 0; }
+
   .top { display: flex; align-items: center; gap: 12px; }
   .acts { display: flex; gap: 8px; flex: none; }
 

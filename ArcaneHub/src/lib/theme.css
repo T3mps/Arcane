@@ -97,6 +97,10 @@
   --gap-project: 12px;
 
   --dur: 200ms; --ease: cubic-bezier(.22, .61, .36, 1);
+
+  /* The scrollbar's thickness, named because ProjectsView reserves exactly
+     this gutter so its rows line up with the header above them. */
+  --scrollbar: 9px;
 }
 
 * { box-sizing: border-box; }
@@ -124,7 +128,7 @@ body {
 :focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; border-radius: 4px; }
 
 /* WebView2 is Chromium, so this applies. */
-::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar { width: var(--scrollbar); height: var(--scrollbar); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #333333; border-radius: 5px;
                             border: 2px solid transparent; background-clip: padding-box; }

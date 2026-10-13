@@ -463,7 +463,17 @@
   .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden;
          background: linear-gradient(var(--bg-top), var(--bg-bottom)); }
   .body { flex: 1; display: flex; min-height: 0; }
-  main { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 28px 26px; }
+  /* A column, so a view can fill the height and scroll only its own list
+     (ProjectsView: the title, search and actions stay put). A view that
+     doesn't (Engines, Packages) keeps its natural height and main scrolls it
+     as before. The padding is named because ProjectsView's scroll region
+     reaches into it, to put its scrollbar at the window edge. */
+  main { --main-pad-x: 28px; --main-pad-b: 26px;
+         flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column;
+         padding: 22px var(--main-pad-x) var(--main-pad-b); }
+  /* Banners and natural-height views keep their size; only a view that asks
+     to fill (flex: 1 on its own root) does. */
+  main > :global(*) { flex: none; }
 
   .error { background: color-mix(in srgb, var(--fail-accent) 12%, transparent);
            border: 1px solid color-mix(in srgb, var(--fail-accent) 40%, transparent);
