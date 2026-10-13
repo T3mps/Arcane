@@ -6,6 +6,7 @@
 
 pub mod keys;
 pub mod manifest;
+pub mod ops;
 pub mod verify;
 pub mod version;
 
