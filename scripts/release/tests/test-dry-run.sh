@@ -18,7 +18,10 @@ done
 [ -f "$T/dist/linux/arcane-$V-linux-x86_64-symbols.tar.gz" ] || { echo "FAIL no linux symbols"; exit 1; }
 if [ "$(uname -s)" = Linux ]; then
     # The Linux engine archive must keep the binary's exec bit (tar mode 0755).
-    tar -tvzf "$T/dist/linux/arcane-$V-linux-x86_64.tar.gz" | grep -q "^-rwxr-xr-x .*bin/arcrelease$"         || { echo "FAIL the Linux archive lost the binary's exec bit"; exit 1; }
+    # Listed first, then searched: `tar | grep -q` would fail under pipefail when
+    # grep exits early and tar hits the closed pipe.
+    listing=$(tar -tvzf "$T/dist/linux/arcane-$V-linux-x86_64.tar.gz")
+    grep -q "^-rwxr-xr-x .*bin/arcrelease$" <<<"$listing"         || { echo "FAIL the Linux archive lost the binary's exec bit"; echo "$listing"; exit 1; }
 fi
 GITHUB_STEP_SUMMARY="$T/summary.md" bash "$REL/dry-run-manifest.sh" "$T/dist" "$V" 2026-10-12T00:00:00Z "$REL/fixtures/rehearsal-notes.md"
 grep -q "\"version\": \"$V\"" "$T/summary.md" || { echo "FAIL the summary lacks the release"; exit 1; }
