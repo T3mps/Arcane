@@ -157,6 +157,9 @@ suite including `[gpu]`, golden-gate, `--frames 180`). **The job itself is
 not created by checking in this file** -- stand it up once per
 `ci/README.md` (Script Console: `ci/create-arcane-job.groovy`). GitHub
 Actions (`.github/workflows/ci.yml`) is the hosted `~[gpu]` lane only.
+Run the CI legs locally before pushing with `scripts\ci\local.ps1` (Windows
+natively, Linux in the CI image; one-time `scripts\ci\setup-desk.ps1`). The
+build steps live in `scripts/ci/build.{sh,ps1}`, not in the workflow YAML.
 
 ## Tests
 

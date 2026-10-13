@@ -1,0 +1,11 @@
+# The Linux CI image's tag inputs, in hash order (scripts/ci/image-tag.sh and
+# image-tag.ps1 read this file). Every repo file ci/linux/Dockerfile copies
+# must be listed, and every scripts/ entry must be copied by it -- both
+# scripts refuse a mismatch. Paths are repo-relative, forward slashes.
+ci/linux/Dockerfile
+ci/linux/image-inputs.txt
+scripts/build-sdl3.sh
+scripts/build-vvl-linux.sh
+scripts/fetch-dxc-linux.sh
+scripts/fetch-premake.sh
+scripts/sha256-check.sh

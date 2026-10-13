@@ -1,0 +1,72 @@
+# rsync filter for a local Linux leg: /src (the desk checkout) -> /work (the
+# leg's volume), used by scripts/ci/container-leg.sh. First match wins.
+# An EXCLUDED path is neither copied nor deleted (rsync --delete spares it),
+# so /work keeps its own build outputs, generated Makefiles and tool links.
+# Explicit list, not a .gitignore merge: ReferenceProject/Saved/verify-layout.ini
+# is tracked yet matches .gitignore's *.ini.
+
+# git metadata, at any depth: a desk worktree's (or a submodule's) .git FILE
+# names a Windows path
+- .git
+
+# build outputs, reports, local junk (Windows and Linux)
+- /bin/
+- /bin-int/
+- /.vs/
+- /logs/
+- /test-results/
+- /Packages/
+- /Intermediate/
+- /.claude/
+- /.superpowers/
+- /graphify-out/
+- /.example/
+- /.screenshots/
+- /vcpkg/
+- /vcpkg_installed/
+- /data/images/icons/
+- /data/shaders/generated/
+- node_modules/
+
+# not part of the Linux engine build (Tauri app, its own workflow)
+- /ArcaneHub/
+
+# tools: Windows binaries never cross; build.sh links the image's own
+- /ThirdParty/premake5/premake5
+- /ThirdParty/premake5/premake5.exe
+- /ThirdParty/tools/dxc/
+- /ThirdParty/tools/dxc-linux
+- /ThirdParty/tools/vulkan-sdk-macos/
+- /ThirdParty/tools/dxc-macos/
+
+# ReferenceProject outputs (Saved/ is ignored except the tracked layout seed)
+- /ReferenceProject/Binaries/
+- /ReferenceProject/Intermediate/
++ /ReferenceProject/Saved/verify-layout.ini
+- /ReferenceProject/Saved/*
+
+# generated project files (premake: vs2026 on Windows, gmake here)
+- *.sln
+- *.slnx
+- *.vcxproj
+- *.vcxproj.filters
+- *.vcxproj.user
+- /ThirdParty/*/ide-md/
+- /Makefile
+- /ReferenceProject/Makefile
+- /Arcane*/Makefile
+- /arcbuild/Makefile
+- /arccook/Makefile
+- /ArcaneTests/death-fixture/Makefile
+- *.make
+- *.ninja
+- .ninja_log
+- .ninja_deps
+
+# object files, wherever a tool dropped them
+- *.o
+- *.obj
+- *.pdb
+- *.ilk
+- *.pch
+- *.gch
