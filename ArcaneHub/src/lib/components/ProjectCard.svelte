@@ -2,11 +2,12 @@
   import ProjectMenu, { type ProjectActions } from "$lib/components/ProjectMenu.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { coverFor, engineChipText, engineChipTitle, compatibilityNote,
-           missingNote, projectDir } from "$lib/format";
-  import { since, type RecentProject } from "$lib/api";
+           missingNote, projectDir, since, launchLabel } from "$lib/format";
+  import type { RecentProject } from "$lib/api";
 
   let { project, compatible, engineAbi, engineLabel, pinned, dangling,
-        running = false, cover = undefined, disabled = false, confirmDelete, actions }:
+        running = false, cover = undefined, disabled = false, hasEngine = true,
+        confirmDelete, actions }:
     {
       project: RecentProject; compatible: boolean; engineAbi: number | null;
       /** Build name of the engine that will actually launch this project. */
@@ -24,7 +25,15 @@
        * two identity marks on one tile would compete.
        */
       cover?: string;
-      disabled?: boolean; confirmDelete: boolean;
+      /** An action is running: every control here waits for it. */
+      disabled?: boolean;
+      /**
+       * Some engine will open this project. Gates ONLY launching and the
+       * engine band (the picker has nothing to offer without an engine); the
+       * action menu stays open to a user who has not registered one yet.
+       */
+      hasEngine?: boolean;
+      confirmDelete: boolean;
       /** The whole per-project vocabulary -- see ProjectActions in ProjectMenu. */
       actions: ProjectActions;
     } = $props();
@@ -45,6 +54,9 @@
   const engineTitle = $derived(engineChipTitle(engineLabel, pinned, dangling));
   const why = $derived(
     compatibilityNote(compatible, project.path, project.engineAbi, engineLabel, engineAbi),
+  );
+  const launchName = $derived(
+    launchLabel(project.name, { missing: gone, running, compatible, hasEngine }),
   );
 
   // Right-click opens the SAME menu the ellipsis does, at the cursor.
@@ -72,11 +84,15 @@
     <img class="shot" src={cover} alt="" draggable="false" />
   {/if}
   <div class="top">
-    <button class="hit" type="button" disabled={disabled || gone}
+    <!-- The accessible name carries the state (launchLabel): a screen reader
+         does not read the title of a labelled button, so "missing" or "needs
+         a different engine" would otherwise only exist for mouse users. -->
+    <button class="hit" type="button" disabled={disabled || gone || !hasEngine}
             onclick={() => actions.launch(project)}
             title={gone ? missingNote(project.path)
+                        : !hasEngine ? "Register an engine on the Engines page to launch this."
                         : running ? `${project.name} is open — this focuses its window.`
-                        : why} aria-label={project.name}>
+                        : why} aria-label={launchName}>
       <!-- The monogram, at BADGE scale -- the fallback identity when no
            screenshot exists yet. (It was once a 76px gradient band; shrunk
            because a gradient is decoration. The .shot band above is NOT that
@@ -111,9 +127,12 @@
          things. In flow at the end of the header rather than floating over the
          card: absolutely positioned, it sat on top of whatever the name line
          needed, and the name is the one thing a tile must always show. -->
-    <ProjectMenu bind:this={menu} {project} {disabled} {confirmDelete} {actions} />
+    <ProjectMenu bind:this={menu} {project} {disabled} {running} {confirmDelete} {actions} />
   </div>
 
+  <!-- The lowercase "abi 59" here is a CODE-STYLE token, set in mono like the
+       value it echoes; prose everywhere else says "ABI". Deliberate, not
+       drift. -->
   <div class="meta">
     {#if gone}
       <!-- The badge slot: being gone supersedes any ABI statement, because the
@@ -138,7 +157,7 @@
        button is invalid HTML and browsers do not deliver its clicks reliably.
        Behind a hairline because it is a different action from the rest of the
        card -- everything above launches, this changes what launches it. -->
-  <button class="eng" type="button" disabled={disabled || gone}
+  <button class="eng" type="button" disabled={disabled || gone || !hasEngine}
           onclick={() => actions.changeEngine(project)}
           class:pin={pinned} class:missing={dangling} title={engineTitle}
           aria-label="Engine for {project.name}: {engineText}">
@@ -165,7 +184,7 @@
      Border-only was the app's hover idiom before the monochrome pass; every
      other hoverable surface has since moved to lightening. */
   .card:hover { border-color: var(--border-hover);
-                background: color-mix(in srgb, #ffffff 4%, var(--surface)); }
+                background: var(--surface-hover); }
 
   .top { display: flex; align-items: flex-start; gap: 10px; padding: 11px 11px 0 13px; }
   .hit { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
@@ -250,7 +269,7 @@
      as a third state that does not exist. */
   .card.incompat, .card.gone { background: var(--surface-2); border-color: var(--border); }
   .card.incompat:hover, .card.gone:hover {
-    background: color-mix(in srgb, #ffffff 4%, var(--surface-2)); }
+    background: var(--surface-2-hover); }
   .card.incompat .mono, .card.gone .mono {
     background: linear-gradient(var(--a), var(--border-soft), var(--bg-bottom));
     color: var(--text-dim); }
@@ -277,8 +296,12 @@
          cursor: default;
          transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
   .eng:hover:not(:disabled) { color: var(--text-muted);
-                              background: rgba(255, 255, 255, .04); }
+                              background: var(--hover-wash); }
   .eng:disabled { opacity: .5; }
+  /* Inset ring: the band runs edge to edge inside a card that clips its
+     contents (overflow:hidden, for the rounded cover), so the global 2px
+     OUTSIDE offset drew the ring where it was cut away on three sides. */
+  .eng:focus-visible { outline-offset: -2px; border-radius: 0 0 var(--r-panel) var(--r-panel); }
   .mark { flex: none; width: 7px; height: 7px; border-radius: 50%;
           border: 1.5px solid currentColor; }
   .mark.filled { background: currentColor; }

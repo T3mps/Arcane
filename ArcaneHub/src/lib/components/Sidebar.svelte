@@ -10,9 +10,11 @@
 <script lang="ts">
   import Icon, { type IconName } from "$lib/components/Icon.svelte";
   import type { EngineEntry } from "$lib/api";
-  let { view, engine, settingsOpen, onNavigate, onSettings }: {
+  let { view, engine, loading = false, settingsOpen, onNavigate, onSettings }: {
     view: View;
     engine: EngineEntry | null;
+    /** Startup has not loaded state yet: say nothing rather than "None registered". */
+    loading?: boolean;
     settingsOpen: boolean;
     onNavigate: (v: View) => void;
     onSettings: () => void;
@@ -67,7 +69,11 @@
       <!-- "Default", not "Active": a project with its own pinned engine ignores
            this, so calling it active would misdescribe what launches. -->
       <div class="label">Default engine</div>
-      {#if engine}
+      {#if loading}
+        <!-- An empty line of the same height: "None registered" for the few
+             milliseconds before state arrives would be a false statement. -->
+        <div class="v none" aria-hidden="true">&nbsp;</div>
+      {:else if engine}
         <!-- title so the full build string is still reachable once the rail is
              narrow enough to clip it. -->
         <div class="v" title={engine.missing
@@ -76,6 +82,7 @@
           <span class="dot" class:bad={engine.missing} aria-hidden="true"></span>
           <span class="build">{engine.build}</span>
         </div>
+        <!-- Lowercase: a code-style token in mono, like the project chips. -->
         <code>abi {engine.engineAbi}</code>
       {:else}
         <div class="v none">None registered</div>
@@ -108,7 +115,7 @@
          border-radius: 6px; font: inherit; font-size: 13.5px; text-align: left;
          background: none; border: 0; color: var(--text-muted); cursor: default;
          transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
-  .nav:hover:not(.on) { background: rgba(255, 255, 255, .04); color: var(--text); }
+  .nav:hover:not(.on) { background: var(--hover-wash); color: var(--text); }
   /* Selection by SURFACE, not by accent. This was a gold-tinted fill plus a
      gold inset rail; the active nav item is on screen permanently, so it was
      one of the largest constant sources of colour in the app. A lighter
