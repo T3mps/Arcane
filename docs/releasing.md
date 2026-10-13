@@ -104,3 +104,17 @@ a record of every manifest ever published.
 6. Remove key 1 in a later Hub release.
 
 Never put a test key in the trusted list (a test enforces this).
+
+## Hosting
+
+- Bucket `arcane-downloads`, served only at `https://downloads.starworks.dev/`
+  (r2.dev disabled).
+- Cache Rules on starworks.dev: `.json` and `.minisig` bypass the cache (a
+  cached manifest beside a fresh signature, or the reverse, would fail
+  verification); archives are cached, immutable.
+- `staging/` holds rehearsals, signed with the test key no Hub trusts.
+- `history/<serial>.json(.minisig)` holds every manifest ever published.
+- The R2 token can read and write `arcane-downloads` only. CI uploads through
+  the S3 API (aws-cli, pinned in `scripts/release/install-aws-cli.sh`), never
+  Wrangler, whose `r2 object put` caps objects at 315 MB.
+- Check the setup after a rehearsal: `bash scripts/release/check-hosting.sh`.
