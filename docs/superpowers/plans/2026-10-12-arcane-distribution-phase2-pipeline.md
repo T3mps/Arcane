@@ -4749,10 +4749,10 @@ arcrelease verify --manifest releases.json --sig releases.json.minisig
 
 - [ ] **Step 6: The cross-repo token for the website rebuild (owner)**
 
-The publish job sends a `repository_dispatch` to the website repo, using a token minted from a StarworksDev **GitHub App**: the StarworksBuilder decision, never a personal token. A `repository_dispatch` needs the app to have **Contents: Read and write** on the target repository (`StarworksDev/StarworksWebsite`).
+The publish job sends a `repository_dispatch` to the website repo, using a token minted from a StarworksDev **GitHub App**, `Starworks Release Dispatch` (slug `starworks-release-dispatch`, created 2026-10-13), never a personal token. Not `StarworksBuilder`: that is the org's Jenkins CI machine **user** account (ci/README.md), not an app. A `repository_dispatch` needs the app to have **Contents: Read and write** on the target repository (`StarworksDev/StarworksWebsite`).
 
-1. If the org already has the StarworksBuilder app, open it (StarworksDev → Settings → Developer settings → GitHub Apps). Otherwise create it there as **New GitHub App**:
-   - name `StarworksBuilder`;
+1. Create it in StarworksDev → Settings → Developer settings → GitHub Apps → **New GitHub App**:
+   - name `Starworks Release Dispatch`;
    - no webhook (untick Active);
    - **Repository permissions:** Contents: Read and write, and Metadata: Read-only (required);
    - "Only on this account".
@@ -4761,7 +4761,7 @@ The publish job sends a `repository_dispatch` to the website repo, using a token
 
 ```bash
 gh variable set STARWORKS_APP_CLIENT_ID --env release --repo StarworksDev/Arcane --body "<client id>"
-gh secret set STARWORKS_APP_PRIVATE_KEY --env release --repo StarworksDev/Arcane < ~/Downloads/starworksbuilder.*.private-key.pem
+gh secret set STARWORKS_APP_PRIVATE_KEY --env release --repo StarworksDev/Arcane < ~/Downloads/starworks-release-dispatch.*.private-key.pem
 ```
 
 Delete the downloaded `.pem` after storing it. Back it up only if you want to avoid generating a new key later; a lost app key is replaced by generating another.

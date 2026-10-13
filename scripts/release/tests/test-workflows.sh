@@ -27,6 +27,12 @@ done
 dry=$(job_block "$REL_WF" dry-run-manifest)
 check "dry-run-manifest runs although sign-windows was skipped" \
     "grep -q '!cancelled()' <<<\"\$dry\" && grep -q \"needs.package.result == 'success'\" <<<\"\$dry\""
+check "the unsigned rehearsal is a dispatch option" "grep -q 'options: \[dry-run, rehearsal, rehearsal-unsigned\]' '$REL_WF'"
+sign=$(job_block "$REL_WF" sign-windows)
+check "sign-windows is skipped for an unsigned rehearsal" "grep -q \"mode != 'rehearsal-unsigned'\" <<<\"\$sign\""
+pkg=$(job_block "$REL_WF" package)
+check "unsigned Windows binaries are packed only for a dry run or an unsigned rehearsal" \
+    "grep -q \"needs.prepare.outputs.mode == 'dry-run' || needs.prepare.outputs.mode == 'rehearsal-unsigned'\" <<<\"\$pkg\" && ! grep -q \"mode == 'publish'\" <<<\"\$pkg\""
 pub=$(job_block "$REL_WF" publish)
 check "publish needs a successful package job" "grep -q \"needs.package.result == 'success'\" <<<\"\$pub\""
 check "the GitHub Release step tolerates an existing release" "grep -q 'gh release view' <<<\"\$pub\""

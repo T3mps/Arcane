@@ -143,6 +143,13 @@ expect  "yank a staging release"                   admin yank staging 0.0.0-prev
 [ "$(jq -r '.releases[0].yanked' "$(obj staging/releases.json)")" = true ] && ok "  yanked" || bad "  yanked"
 refused "yank without a reason"                    admin yank staging 0.0.0-preview.3
 
+# --- an unsigned rehearsal publishes to staging/ like a rehearsal, never elsewhere
+setup; admin init staging >/dev/null; make_dist "$T/dist" 0.0.0-preview.6
+expect  "an unsigned rehearsal publishes to staging/" bash "$REL/publish.sh" rehearsal-unsigned staging/ 0.0.0-preview.6 2026-10-12T00:00:00Z "$REL/fixtures/rehearsal-notes.md" "$T/dist" "$T/w-u"
+[ "$(serial_of staging/releases.json)" = 2 ] && ok "  serial 2" || bad "  serial 2"
+pointer_verifies && ok "  pointer verifies (test key)" || bad "  pointer verifies (test key)"
+refused "an unsigned rehearsal outside staging/"   bash "$REL/publish.sh" rehearsal-unsigned "" 0.0.0-preview.6 2026-10-12T00:00:00Z "$REL/fixtures/rehearsal-notes.md" "$T/dist" "$T/w-u2"
+
 # --- an empty dist uploads nothing
 setup; admin init staging >/dev/null; mkdir -p "$T/dist"
 refused "a publish with no archives"               publish 0.0.0-preview.4
