@@ -1461,11 +1461,6 @@ project "ArcaneTests"
         -- handle's IsRunning/Stop) IS covered, because the editor calls Stop()
         -- unconditionally after every Play->Stop.
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ServerLaunch.cpp",
-        -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
-        -- publication-group replace semantics, filter/sort/count) source-compiles
-        -- into the test exe so the [diagnostics] units drive it directly -- no
-        -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
-        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
         -- node-page phase s8.2: which Problems rows route, and how (pure, fake facts in LocatorRouteTest).
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/LocatorRoute.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
