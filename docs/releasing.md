@@ -65,3 +65,24 @@ By hand (Actions → manifest-admin → Run workflow, from `main`):
 
 Every serial is also stored, immutably, at `history/<serial>.json(.minisig)`:
 a record of every manifest ever published.
+
+## Keys
+
+- **Manifest key** `arcane-manifest-1`: signs `releases.json`. Secret:
+  `MINISIGN_SECRET_KEY` + `MINISIGN_PASSWORD` in the `release` environment.
+  Its public half is `ArcaneHub/crates/arcane_release/keys/` and
+  `keys::TRUSTED_MANIFEST_KEYS`, built into every Hub.
+- **Tauri updater key** `arcane-hub-updater`: signs Hub updates (phase 4).
+  Secret: `TAURI_SIGNING_PRIVATE_KEY` + `_PASSWORD`.
+- Both have offline backups (password manager + offline drive). Losing either
+  strands installed Hubs (spec s12).
+
+**Rotating the manifest key:**
+1. Generate `arcane-manifest-2`.
+2. Add it to `TRUSTED_MANIFEST_KEYS` beside key 1.
+3. Ship a Hub release.
+4. Wait until the Hub's `min_supported` is at or past that release.
+5. Switch the `release` secrets to key 2.
+6. Remove key 1 in a later Hub release.
+
+Never put a test key in the trusted list (a test enforces this).

@@ -6,8 +6,8 @@
 use minisign_verify::PublicKey;
 
 pub const TRUSTED_MANIFEST_KEYS: &[&str] = &[
-    // The production key's base64 line (keys/arcane-manifest-1.pub) is added
-    // by the owner's key ceremony, plan task 13.
+    // keys/arcane-manifest-1.pub (2026 key ceremony)
+    "RWQw+Bez1EPp8NvTyb347ZetdF9zweCoCjZXp+jS0QMuZVVkliRady86",
 ];
 
 pub fn trusted() -> Vec<PublicKey> {

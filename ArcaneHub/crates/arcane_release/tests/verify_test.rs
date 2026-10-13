@@ -120,3 +120,10 @@ fn every_trusted_key_parses_and_no_test_key_is_trusted() {
         assert!(!keys::TRUSTED_MANIFEST_KEYS.contains(&line.as_str()), "test key {n} is trusted");
     }
 }
+
+#[test]
+fn the_production_key_file_is_the_trusted_key() {
+    let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("keys/arcane-manifest-1.pub")).unwrap();
+    let line = text.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap();
+    assert_eq!(keys::TRUSTED_MANIFEST_KEYS, [line]);
+}
