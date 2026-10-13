@@ -26,7 +26,13 @@ name: CI
 #     validation layer, and the X11 + Wayland windowed smoke
 #     (scripts/linux-windowed-smoke.sh);
 #   * macos-appleclang Debug: [gpu] on MoltenVK over the runner's Apple GPU
-#     (see docs/ci.md "GPU lanes" for what that proves and what it cannot).
+#     (see docs/ci.md "GPU lanes" for what that proves and what it cannot);
+#   * Release on windows-msvc, linux-gcc-14 and macos-appleclang: the
+#     monolithic package (`arcbuild package`, engine modularization s3.3) run
+#     IN PLACE from Packages/ with no SDK, no bin/ and a bare PATH -- a windowed
+#     boot on Linux (Xvfb + lavapipe), a load check (--print-engine-info) plus
+#     an imports check on Windows and macOS. Every Linux/macOS leg also runs the
+#     LinkProbe fixture (whole-archive + forced references on GNU ld / ld64).
 # The Jenkins full gate on the GPU desk (Jenkinsfile) stays the unfiltered,
 # real-GPU, golden-gate run until it is retired (sub-project B).
 
@@ -156,6 +162,8 @@ jobs:
       SEED_A: ${{ github.run_number }}
       SEED_B: ${{ github.run_number }}50021
       LINUX_GPU_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Debug' }}
+      # The package lane: Release on linux-gcc-14 (engine modularization s6).
+      PACKAGE_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Release' }}
       # Hosted Linux runners are 4 vCPU / 16 GB and the Debug ArcaneTests link
       # alone is ~500 MB: -j3 bounds peak memory.
       MAKE_JOBS: 3
@@ -224,6 +232,19 @@ jobs:
           xvfb-run -a -s "-screen 0 1920x1080x24" scripts/linux-windowed-smoke.sh \
             ${{ matrix.config }} logs/windowed x11 wayland 2>&1 | tee logs/windowed-smoke.log
 
+      # ------------------------------------------------------------------
+      # Package (engine modularization s3.3 / s6)
+      # ------------------------------------------------------------------
+      - name: LinkProbe (GNU ld)
+        run: sh Tests/Fixtures/LinkProbe/run.sh "$RUNNER_TEMP/linkprobe"
+
+      # The one-executable ReferenceProject, staged and run where it lands: its
+      # own libSDL3 and no Arcane module (ldd), then a windowed boot (Xvfb +
+      # lavapipe) with no SDK, no bin/ and a bare PATH.
+      - name: Package (Linux)
+        if: env.PACKAGE_LANE == 'true'
+        run: scripts/ci/package.sh ${{ matrix.config }}
+
       # Every distinct compiler/linker error of the build in one place (the
       # build runs `make -k`), so a red leg reads at a glance.
       - name: Summarize build errors
@@ -283,6 +304,7 @@ jobs:
       SEED_A: ${{ github.run_number }}
       SEED_B: ${{ github.run_number }}50021
       MACOS_GPU_LANE: ${{ matrix.leg == 'macos-appleclang' && matrix.config == 'Debug' }}
+      PACKAGE_LANE: ${{ matrix.config == 'Release' }}
       # macos-15 arm64 runners are 3 vCPU / 7 GB, and since the settings arc
       # the heaviest editor/test TUs peak at 1.4-1.9 GB each: three at once
       # swap the VM (a pre-merge macOS build took 51 minutes; CI 38076751748
@@ -441,6 +463,24 @@ jobs:
         run: |
           set -o pipefail
           scripts/run-tests.sh --gpu ${{ matrix.config }} --rng-seed "$SEED_A" 2>&1 | tee logs/tests-gpu.log
+
+      # ------------------------------------------------------------------
+      # Package (engine modularization s3.3 / s6)
+      # ------------------------------------------------------------------
+      - name: LinkProbe (ld64)
+        if: runner.os == 'macOS'
+        run: sh Tests/Fixtures/LinkProbe/run.sh "$RUNNER_TEMP/linkprobe"
+
+      # The one-executable ReferenceProject, staged and run where it lands:
+      # a load check (--print-engine-info) plus an imports check.
+      - name: Package (Windows)
+        if: env.PACKAGE_LANE == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/package.ps1 ${{ matrix.config }}
+
+      - name: Package (macOS)
+        if: env.PACKAGE_LANE == 'true' && runner.os == 'macOS'
+        run: scripts/ci/package.sh ${{ matrix.config }}
 
       # ------------------------------------------------------------------
       # Reports

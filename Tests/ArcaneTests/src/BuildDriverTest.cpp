@@ -243,6 +243,14 @@ namespace
             events.emplace_back("backend-clean");
             return cleanExit;
         }
+
+        int Package(const DriverContext&) const override
+        {
+            events.emplace_back("package");
+            return packageExit;
+        }
+
+        int packageExit = kExitOk;
     };
 
     struct RecordingSlots final : ISlotInspector
@@ -636,6 +644,36 @@ TEST_CASE("arcbuild build orchestration orders work and short-circuits generatio
     }
 }
 
+TEST_CASE("arcbuild package hands the whole job to the executor, and needs a backend", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+
+    SECTION("package: no slot probe, no plain generate -- the executor runs both layouts")
+    {
+        CHECK(pipeline.Run(PipelineContext(Command::Package)) == kExitOk);
+        CHECK(events == std::vector<std::string>{ "package" });
+    }
+
+    SECTION("the executor's exit code is the command's")
+    {
+        executor.packageExit = 17;
+        CHECK(pipeline.Run(PipelineContext(Command::Package)) == 17);
+    }
+
+    SECTION("no backend for the action: refused before the executor")
+    {
+        DriverContext context = PipelineContext(Command::Package);
+        context.backend = BuildBackend::None;
+        CHECK(pipeline.Run(context) == kExitRefused);
+        CHECK(events.empty());
+    }
+}
+
 TEST_CASE("arcbuild probe only inspects and reports even when output is quiet", "[build]")
 {
     std::vector<std::string> events;
@@ -783,6 +821,25 @@ TEST_CASE("arcbuild::ComposeGenerate is a structured premake invocation, cwd pro
     // The action is the Linux seam (spec s6): it is a parameter, not a constant.
     CHECK(ComposeGenerate(AphelyonProject(), PremakePath(), "gmake2").arguments
           == std::vector<std::string>{ "gmake2" });
+}
+
+TEST_CASE("arcbuild::ComposeMonolithicGenerate adds --layout=monolithic, cwd the given root", "[build]")
+{
+    const fs::path sdk("D:/sdk");
+    const ProcessSpec spec = ComposeMonolithicGenerate(sdk, PremakePath(), "vs2026");
+    CHECK(spec.executable == PremakePath());
+    CHECK(spec.arguments == std::vector<std::string>{ "vs2026", "--layout=monolithic" });
+    REQUIRE(spec.workingDirectory.has_value());
+    CHECK(*spec.workingDirectory == sdk);
+
+    // The package's workspaces live in their own trees (gmake names every
+    // project file Makefile), and the package lands in Packages/.
+    const ProjectLayout project = AphelyonProject();
+    CHECK(PackageWorkspaceDir(project) == project.root / "Intermediate" / "Package" / "Workspace");
+    CHECK(EngineMonolithicWorkspaceDir(sdk) == sdk / "Intermediate" / "Mono");
+    CHECK(PackageManifestPath(project) == project.root / "Intermediate" / "Package" / "stage.json");
+    CHECK(PackageOutputDir(project, "windows", "Release") ==
+          project.root / "Packages" / (project.name + "-windows-Release"));
 }
 
 TEST_CASE("arcbuild::ComposeMsBuild: {solution, /p:Configuration=<config>, /m, /nologo}; /t:Rebuild or /t:Clean inserted only when asked",
@@ -1040,12 +1097,25 @@ TEST_CASE("arcbuild::StagePackage copies one configuration's stage list into a f
         CHECK_FALSE(fs::exists(out / "stale.txt"));
     }
 
-    SECTION("a missing required entry is a named refusal")
+    SECTION("a missing required entry is a named refusal, and the previous package survives")
     {
-        write(nlohmann::json::array({ entry(src / "Missing.dll", "Missing.dll", "file", false) }));
+        fs::create_directories(out);
+        std::ofstream(out / "previous.exe", std::ios::binary) << "old";
+        write(nlohmann::json::array({ entry(src / "Game.exe", "Game.exe", "file", false),
+                                      entry(src / "Missing.dll", "Missing.dll", "file", false) }));
         const auto staged = StagePackage(manifest, "Debug", out);
         REQUIRE_FALSE(staged.has_value());
         CHECK(staged.error().find("Missing.dll") != std::string::npos);
+        CHECK(fs::is_regular_file(out / "previous.exe"));
+        CHECK_FALSE(fs::exists(out / "Game.exe"));
+    }
+
+    SECTION("a wrongly-typed field is a refusal, not an exception")
+    {
+        nlohmann::json bad = entry(src / "Game.exe", "Game.exe", "file", false);
+        bad["optional"] = "yes";
+        write(nlohmann::json::array({ bad }));
+        CHECK_FALSE(StagePackage(manifest, "Debug", out).has_value());
     }
 
     SECTION("an entry that leaves the package directory is refused")

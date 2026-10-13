@@ -4,7 +4,9 @@
 #include "ProjectLayout.hpp"
 #include "Stage.hpp"
 
+#include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8: arccook sits beside arcbuild
 #include <Arcane/Build/Toolchain.hpp>
+#include <Arcane/Platform/Platform.hpp>   // ExecutableFileName
 
 #include <string>
 
@@ -58,6 +60,27 @@ namespace arcbuild
 
     namespace
     {
+        // The build context for a monolithic workspace directory: its one
+        // solution (MSBuild) or the directory itself (Make, `make -C`).
+        std::expected<BackendContext, std::string> MonolithicContext(
+            BuildBackend backend,
+            const std::filesystem::path& dir)
+        {
+            std::error_code ec;
+            if (backend == BuildBackend::MsBuild)
+            {
+                const std::filesystem::path solution = Arcane::Toolchain::DiscoverSolution(dir);
+                if (solution.empty())
+                    return std::unexpected("package: no monolithic workspace (.slnx) in " +
+                                           dir.generic_string() + " after generate");
+                return BackendContext{ solution, std::nullopt };
+            }
+            if (!std::filesystem::is_regular_file(dir / "Makefile", ec))
+                return std::unexpected("package: no monolithic Makefile in " + dir.generic_string() +
+                                       " after generate");
+            return BackendContext{ dir, std::nullopt };
+        }
+
         const char* PackagePlatformName()
         {
             switch (CurrentHostPlatform())
@@ -73,11 +96,20 @@ namespace arcbuild
     int BuildExecutor::Package(
         const DriverContext& context) const
     {
-        if (context.backend != BuildBackend::MsBuild)
+        // The package directory is named after the manifest: refuse a name
+        // that is not one plain path component (it would leave Packages/).
+        if (const std::string& n = context.project.name;
+            n.empty() || n == "." || n == ".." || n.find_first_of("/\\:") != std::string::npos)
+        {
+            output_.Error("package: the project name '" + n + "' is not a plain file name");
+            return kExitRefused;
+        }
+
+        if (context.backend != BuildBackend::MsBuild && context.backend != BuildBackend::Make)
         {
             output_.Error(
                 std::string("package: the '") + BuildBackendName(context.backend) +
-                "' backend is not wired for packages yet (MSBuild only)");
+                "' backend is not wired for packages (use an MSBuild or Make action)");
             return kExitRefused;
         }
 
@@ -103,16 +135,16 @@ namespace arcbuild
             if (const int exit = ExecutePlan(plan, processes_, output_, "[premake]"); exit != kExitOk)
                 return exit;
 
-            const std::filesystem::path solution = Arcane::Toolchain::DiscoverPackageSolution(*context.sdkRoot);
-            if (solution.empty())
+            const auto workspace =
+                MonolithicContext(context.backend, EngineMonolithicWorkspaceDir(*context.sdkRoot));
+            if (!workspace)
             {
-                output_.Error("package: no monolithic engine workspace (*-mono.slnx) in " +
-                              context.sdkRoot->generic_string() + " after generate");
+                output_.Error(workspace.error());
                 return kExitRefused;
             }
-            output_.Info("package: engine (monolithic) " + solution.generic_string());
-            const ProcessPlan build = ComposeMsBuild(*builder, BackendContext{ solution, std::nullopt },
-                                                     context.request.config, operation);
+            output_.Info("package: engine (monolithic) " + workspace->path.generic_string());
+            const ProcessPlan build = ComposeBuild(context.backend, *builder, *workspace,
+                                                   context.request.config, operation);
             if (const int exit = ExecutePlan(build, processes_, output_, BuildBackendPrefix(context.backend));
                 exit != kExitOk)
                 return exit;
@@ -125,22 +157,49 @@ namespace arcbuild
             if (const int exit = ExecutePlan(plan, processes_, output_, "[premake]"); exit != kExitOk)
                 return exit;
 
-            const std::filesystem::path solution = Arcane::Toolchain::DiscoverPackageSolution(context.project.root);
-            if (solution.empty())
+            const auto workspace = MonolithicContext(context.backend, PackageWorkspaceDir(context.project));
+            if (!workspace)
             {
-                output_.Error("package: no monolithic project workspace (*-mono.slnx) in " +
-                              context.project.root.generic_string() + " after generate");
+                output_.Error(workspace.error());
                 return kExitRefused;
             }
-            output_.Info("package: project (monolithic) " + solution.generic_string());
-            const ProcessPlan build = ComposeMsBuild(*builder, BackendContext{ solution, std::nullopt },
-                                                     context.request.config, operation);
+            output_.Info("package: project (monolithic) " + workspace->path.generic_string());
+            const ProcessPlan build = ComposeBuild(context.backend, *builder, *workspace,
+                                                   context.request.config, operation);
             if (const int exit = ExecutePlan(build, processes_, output_, BuildBackendPrefix(context.backend));
                 exit != kExitOk)
                 return exit;
         }
 
-        // 3. Stage.
+        // 3. Cook the project's content, so the package stages current
+        //    artifacts (a project never cooked would boot into an
+        //    ArtifactMissing refusal). arccook is built beside arcbuild
+        //    (bin/<cfg>/arccook/); without it the existing artifacts stage.
+        {
+            const std::string self = Arcane::ExecutablePathUtf8();
+            const std::filesystem::path cook =
+                std::filesystem::path(std::u8string(self.begin(), self.end())).parent_path().parent_path() /
+                "arccook" / Arcane::Platform::ExecutableFileName("arccook");
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(cook, ec))
+            {
+                ProcessSpec spec;
+                spec.executable       = cook;
+                spec.arguments        = { "--project", context.project.root.generic_string() };
+                spec.workingDirectory = context.project.root;
+                ProcessPlan plan;
+                plan.steps.push_back(spec);
+                if (const int exit = ExecutePlan(plan, processes_, output_, "[arccook]"); exit != kExitOk)
+                    return exit;
+            }
+            else
+            {
+                output_.Info("package: no arccook beside arcbuild (" + cook.generic_string() +
+                             ") -- staging the project's existing cooked artifacts");
+            }
+        }
+
+        // 4. Stage.
         const std::filesystem::path outDir =
             PackageOutputDir(context.project, PackagePlatformName(), context.request.config);
         const auto staged = StagePackage(PackageManifestPath(context.project), context.request.config, outDir);

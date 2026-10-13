@@ -74,6 +74,10 @@ ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
 # `arcbuild package` output (engine modularization s3.3).
 ReferenceProject/Packages/
+# The engine's monolithic layout's generated workspace + project files, and the
+# vendor wrappers' monolithic project files (premake5.lua ARC_MONOLITHIC_PROJECTS).
+/Intermediate/
+/ThirdParty/*/ide-mono/
 # Task 12a: a bless run points --project at this SOURCE tree, so a harvest
 # during a bless (MaterialPreviewHarvester's thumbnailDir) would otherwise
 # drop Saved/Thumbnails/<guid>.png here.

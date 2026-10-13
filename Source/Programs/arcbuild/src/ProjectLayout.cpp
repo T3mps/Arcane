@@ -47,6 +47,18 @@ namespace arcbuild
         return project.root / "Intermediate" / "Package" / "stage.json";
     }
 
+    std::filesystem::path PackageWorkspaceDir(
+        const ProjectLayout& project)
+    {
+        return project.root / "Intermediate" / "Package" / "Workspace";
+    }
+
+    std::filesystem::path EngineMonolithicWorkspaceDir(
+        const std::filesystem::path& sdkRoot)
+    {
+        return sdkRoot / "Intermediate" / "Mono";
+    }
+
     std::filesystem::path PackageOutputDir(
         const ProjectLayout& project,
         std::string_view platform,

@@ -214,11 +214,16 @@ its public header-only ThirdParty; the import libs are
 s3): Runtime + Client modules and `ArcaneRuntimeHost` (the standalone host's
 body, `Source/Programs/ArcaneRuntimeHost/`; `ArcaneRuntime.exe` is its modular
 main) as static libs in `bin/<cfg>-<sys>-<arch>-mono/`, generated as
-`Arcane-mono.slnx` / `*-mono.vcxproj` BESIDE the modular files.
+under `Intermediate/Mono/` (gitignored; gmake names every project file
+`Makefile`, so in place the layouts would overwrite each other).
 `arcbuild package` builds it, then the project's own premake5.lua with the
 same option (`arcane_game_module` -> game StaticLib + `arcane_package_exe`:
 `<Project>.exe`, generated `Intermediate/Package/PackageMain.cpp` +
-`stage.json`), and stages `Packages/<Project>-<platform>-<cfg>/`. A package
+`stage.json`, workspace in `Intermediate/Package/Workspace/`), and stages
+`Packages/<Project>-<platform>-<cfg>/` (MSBuild or Make) in Unreal's layout:
+a root launcher (`<Project>.exe` stub from `Source/Programs/ArcanePackageLauncher`,
+or a generated `<Project>.sh`) + `<Project>/Binaries/<Win64|Linux|Mac>/` (the
+game, its runtime files, engine `data/`) beside the project folder. A package
 whole-archives every module (`arc_module_package`, build/modules.lua) and
 never links ArcaneVerify (`ARC_RUNTIME_HOST_VERIFY` is modular-only). The
 editor's Build -> Rebuild Game Module spawns `arcbuild.exe` (below); it no
@@ -245,7 +250,7 @@ arcbuild build    --project <dir|.arcproj> [--config Debug|Release|Dist] [--sdk 
 arcbuild rebuild   --project <dir|.arcproj> ...
 arcbuild clean     --project <dir|.arcproj> ...
 arcbuild probe     --project <dir|.arcproj>    # slot verdict only -- no SDK needed
-arcbuild package   --project <dir|.arcproj> [--config ...] [--sdk <root>]   # one-exe build + stage (MSBuild)
+arcbuild package   --project <dir|.arcproj> [--config ...] [--sdk <root>]   # one-exe build + stage (MSBuild/Make)
 ```
 
 **Backends**, one per Premake action, each with a real resolve/compose/

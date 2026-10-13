@@ -58,22 +58,6 @@ TEST_CASE("Toolchain::DiscoverSolution prefers .slnx over .sln, first lexicograp
     CHECK(Arcane::Toolchain::DiscoverSolution(dir.path).filename() == "Alpha.slnx");
 }
 
-TEST_CASE("Toolchain::DiscoverSolution never answers the monolithic workspace; DiscoverPackageSolution only does",
-          "[build]")
-{
-    TempDir dir("discover-mono");
-    // '-' sorts before '.', so a naive first-lexicographic pick takes the package workspace.
-    Touch(dir.path / "Game-mono.slnx");
-    Touch(dir.path / "Game.slnx");
-
-    CHECK(Arcane::Toolchain::DiscoverSolution(dir.path).filename() == "Game.slnx");
-    CHECK(Arcane::Toolchain::DiscoverPackageSolution(dir.path).filename() == "Game-mono.slnx");
-
-    TempDir modularOnly("discover-modular-only");
-    Touch(modularOnly.path / "Game.slnx");
-    CHECK(Arcane::Toolchain::DiscoverPackageSolution(modularOnly.path).empty());
-}
-
 TEST_CASE("Toolchain::DiscoverSolution falls back to .sln, and to empty when neither exists",
           "[build]")
 {

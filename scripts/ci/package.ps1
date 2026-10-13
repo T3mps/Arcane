@@ -1,0 +1,39 @@
+# package.ps1 <Debug|Release|Dist> -- the monolithic ReferenceProject package
+# (engine modularization s3.3 / s6) on Windows, staged with `arcbuild package`
+# and run IN PLACE from Packages/ with no SDK, no bin/ and a bare PATH.
+# scripts/ci/package.sh is the Linux/macOS twin. Run after
+# scripts\ci\build.ps1 <Config>. The hosted runner has no GPU and the engine
+# has no WARP selector, so this proves the package LOADS in place (every
+# runtime file resolves from Packages/, --print-engine-info) and imports no
+# Arcane DLL; the windowed boot is the desk's. Logs: logs\package-*.txt.
+param([Parameter(Mandatory, Position = 0)][ValidateSet('Debug', 'Release', 'Dist')][string]$Config)
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$logs = Join-Path $root 'logs'
+New-Item -ItemType Directory -Force $logs | Out-Null
+
+& (Join-Path $root "bin\$Config-windows-x86_64-md\arcbuild\arcbuild.exe") package --project (Join-Path $root 'ReferenceProject') --config $Config --sdk $root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$pkg = Join-Path $root "ReferenceProject\Packages\ReferenceProject-windows-$Config"
+Get-ChildItem -Recurse $pkg -Depth 1 | Select-Object -ExpandProperty FullName
+
+# Unreal's layout: the game in ReferenceProject\Binaries\Win64\, a stub
+# launcher (same name) at the package root -- the boot goes through it.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$dumpbin = @(& $vswhere -latest -find 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') | Select-Object -First 1
+if (-not $dumpbin) { throw 'dumpbin.exe not found via vswhere' }
+$deps = & $dumpbin /nologo /dependents (Join-Path $pkg 'ReferenceProject\Binaries\Win64\ReferenceProject.exe')
+$deps | Set-Content -Encoding utf8 (Join-Path $logs 'package-imports.txt')
+$deps
+if ($deps -match 'Arcane') { Write-Host '::error::the package imports an Arcane module DLL'; exit 1 }
+
+$env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+Remove-Item Env:ARCANE_SDK -ErrorAction SilentlyContinue
+# A Release package (and its launcher) is a WindowedApp: `&` would not wait
+# for it, and $LASTEXITCODE would not be its exit code.
+$out = Join-Path $logs 'package-info.txt'
+$err = Join-Path $logs 'package-info-err.txt'
+$p = Start-Process -FilePath (Join-Path $pkg 'ReferenceProject.exe') -ArgumentList '--print-engine-info' `
+       -WorkingDirectory $pkg -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+Get-Content $out, $err
+exit $p.ExitCode

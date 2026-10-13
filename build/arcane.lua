@@ -175,16 +175,18 @@ function arcane_game_module(name)
     local hasImGui   = arc_closure_contains(ARCANE_MODULES, modules, "ImGui")
     -- Monolithic (a packaged exe): the game is a static library the package
     -- links (engine modularization s3.3); arcane_package_exe below declares the
-    -- exe. Generated beside the modular files as <Workspace>-mono.slnx and
-    -- <Project>-mono.vcxproj, so neither layout overwrites the other.
+    -- exe. Generated under Intermediate/Package/Workspace/ (ARCANE_PACKAGE_
+    -- WORKSPACE), so neither layout's files overwrite the other's (gmake names
+    -- every one Makefile); paths below then hang off the project root, not
+    -- %{wks.location}.
     local monolithic = _OPTIONS and _OPTIONS.layout == "monolithic"
+    local base = monolithic and _MAIN_SCRIPT_DIR or "%{wks.location}"
     if monolithic then
         local wks = premake.api.scope.workspace
         workspace(wks.name)
-            filename(wks.name .. "-mono")
+            location(_MAIN_SCRIPT_DIR .. "/" .. ARCANE_PACKAGE_WORKSPACE)
     end
     project(name)
-        if monolithic then filename(name .. "-mono") end
         kind(monolithic and "StaticLib" or "SharedLib")
         language "C++"
         cppdialect "C++23"
@@ -257,9 +259,14 @@ function arcane_game_module(name)
         targetdir "%{wks.location}/Binaries"
         objdir "%{wks.location}/Intermediate/%{cfg.buildcfg}"
         if monolithic then
-            -- Never the hosts' Binaries/ slot: the package's own tree.
-            targetdir "%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/lib"
-            objdir("%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/obj/" .. name)
+            -- Never the hosts' Binaries/ slot: the package's own tree. A static
+            -- library keeps its lib prefix off-Windows (the loaded-module rule
+            -- above does not apply): arcane_package_exe links lib<Game>.a.
+            targetdir(base .. "/Intermediate/Package/%{cfg.buildcfg}/lib")
+            objdir(base .. "/Intermediate/Package/%{cfg.buildcfg}/obj/" .. name)
+            filter "system:not windows"
+                targetprefix "lib"
+            filter {}
         end
 
         -- Ninja-only: beta8 emits a DUPLICATE link edge per configuration when
@@ -301,11 +308,11 @@ function arcane_game_module(name)
             targetdir "%{wks.location}/Intermediate/%{cfg.buildcfg}/Ninja/Binaries"
         filter {}
 
-        files { "%{wks.location}/" .. sourceDir .. "/**.cpp", "%{wks.location}/" .. sourceDir .. "/**.hpp" }
+        files { base .. "/" .. sourceDir .. "/**.cpp", base .. "/" .. sourceDir .. "/**.hpp" }
 
         -- The game's own sources. Every engine include root and vendor header
         -- root comes from the module closure below -- nothing else.
-        includedirs { "%{wks.location}/" .. sourceDir }
+        includedirs { base .. "/" .. sourceDir }
 
         -- Link + include ONLY the closure of the game's modules: each module's
         -- import lib out of the per-config SDK bin dirs (none is a project in
@@ -420,6 +427,9 @@ end
 -- path, handed to Arcane::RuntimeHost::Run. `arcbuild package` stages the result.
 -- ============================================================================
 ARC_PACKAGE_HOST_MODULES = { "ArcaneClient", "ArcaneImGui" }   -- ArcaneRuntimeHost's own needs
+-- The package workspace, relative to the project root (arcbuild's
+-- ProjectLayout.cpp PackageWorkspaceDir spells the same path).
+ARCANE_PACKAGE_WORKSPACE = "Intermediate/Package/Workspace"
 
 function arcane_package_exe(game, gameModules)
     local _, manifest = arcane_project_manifest()
@@ -428,9 +438,19 @@ function arcane_package_exe(game, gameModules)
     local names = {}
     for _, n in ipairs(ARC_PACKAGE_HOST_MODULES) do names[#names+1] = n end
     for _, n in ipairs(gameModules) do names[#names+1] = n end
+    -- Unreal's package layout (user decision 2026-10-12): the game binary and
+    -- everything it loads exe-relative (vendor runtime files, the engine's
+    -- data/) live in <Project>/Binaries/<Platform>/ beside the project's own
+    -- folder; the package root holds only a launcher -- <Project>.sh, or a stub
+    -- <Project>.exe on Windows (arcane_package_launcher) -- so the bare game
+    -- binary never collides with the <Project>/ folder (it did on Linux/macOS,
+    -- where the exe has no extension) and the server / crash reporter binaries
+    -- have a home beside it later.
+    local platformDir = ({ windows = "Win64", linux = "Linux", macosx = "Mac" })[os.target()] or os.target()
+    local packageBin = projectName .. "/Binaries/" .. platformDir .. "/"
+    local launcherPath = root .. "/Intermediate/Package/" .. projectName .. ".sh"
 
     project(projectName .. "Package")
-        filename(projectName .. "Package-mono")
         targetname(projectName)
         language "C++"
         cppdialect "C++23"
@@ -444,9 +464,24 @@ function arcane_package_exe(game, gameModules)
         filter "system:macosx"
             architecture(arcane_sdk_mac_architecture())
         filter {}
-        targetdir "%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/bin"
-        objdir("%{wks.location}/Intermediate/Package/%{cfg.buildcfg}/obj/" .. projectName .. "Package")
+        targetdir(root .. "/Intermediate/Package/%{cfg.buildcfg}/bin")
+        objdir(root .. "/Intermediate/Package/%{cfg.buildcfg}/obj/" .. projectName .. "Package")
         dependson { game }
+
+        -- The package loads its shared vendor libraries (SDL3 off-Windows, DXC,
+        -- the macOS Vulkan loader) from beside itself: the exe's own directory
+        -- goes FIRST on the rpath, ahead of any build-machine path a prebuilt
+        -- module adds. Dead-code stripping: /OPT:REF,ICF must be explicit under
+        -- /DEBUG (which defaults to NOREF); --gc-sections / -dead_strip elsewhere.
+        filter "system:linux"
+            -- '$$ORIGIN': make turns $$ into $, the quotes stop the shell
+            -- (a bare $ORIGIN reached the ELF as "RIGIN" -- make expanded $O).
+            linkoptions { "-Wl,-rpath,'$$ORIGIN'", "-Wl,--gc-sections" }
+        filter "system:macosx"
+            linkoptions { "-Wl,-rpath,@executable_path", "-Wl,-dead_strip" }
+        filter { "system:windows", "configurations:not Debug" }
+            linkoptions { "/OPT:REF", "/OPT:ICF" }
+        filter {}
 
         local closure = arc_module_package(ARCANE_MODULES, names, ARCANE_SDK)
 
@@ -459,7 +494,8 @@ function arcane_package_exe(game, gameModules)
         elseif os.target() == "macosx" then
             linkoptions { "-Wl,-force_load," .. gameLib }
         else
-            linkoptions { "-Wl,--whole-archive", gameLib, "-Wl,--no-whole-archive" }
+            -- One string (premake de-duplicates linkoptions; see arc_module_package).
+            linkoptions { "-Wl,--whole-archive " .. gameLib .. " -Wl,--no-whole-archive" }
         end
         arc_module_forced_refs({ game })
         links { "ArcaneRuntimeHost" }
@@ -488,7 +524,7 @@ function arcane_package_exe(game, gameModules)
             "int main(int argc, char** argv)",
             "{",
             "    Arcane::RuntimeHost::PackageInfo package;",
-            '    package.projectRelPath = "' .. projectName .. "/" .. path.getname(manifest) .. '";',
+            '    package.projectRelPath = "../../' .. path.getname(manifest) .. '";',
             "    package.modules        = kModules;",
             "    package.moduleCount    = static_cast<int>(sizeof(kModules) / sizeof(kModules[0]));",
             '    package.appName        = "' .. projectName .. '";',
@@ -505,6 +541,25 @@ function arcane_package_exe(game, gameModules)
         end
         files { mainPath }
 
+        -- The POSIX launcher (<Project>.sh at the package root): runs this
+        -- platform's game binary with the same arguments. Executable at the
+        -- source, so StagePackage's copy (permissions kept) is executable too.
+        if os.target() ~= "windows" then
+            local launcher = table.concat({
+                "#!/bin/sh",
+                "# GENERATED by build/arcane.lua (arcane_package_exe) -- the " .. projectName .. " package launcher:",
+                "# runs the game binary for this platform with the same arguments.",
+                'exec "$(dirname "$0")/' .. packageBin .. projectName .. '" "$@"',
+                "",
+            }, "\n")
+            if io.readfile(launcherPath) ~= launcher then
+                local f = assert(io.open(launcherPath, "wb"), "arcane_package_exe: cannot write " .. launcherPath)
+                f:write(launcher)
+                f:close()
+            end
+            os.chmod(launcherPath, "755")
+        end
+
         -- The stage list `arcbuild package` copies into Packages/<Project>-
         -- <platform>-<config>/ (Source/Programs/arcbuild/src/Stage.hpp,
         -- StagePackage): the exe, the platform's vendor runtime files (the same
@@ -516,39 +571,64 @@ function arcane_package_exe(game, gameModules)
         local projectRoot = path.getdirectory(manifest)
         local function stage_entries(cfg)
             local e = {}
+            -- Every binary-side entry (the exe, the vendor runtime files, the
+            -- engine data the host reads exe-relative) lands in BIN.
             local function add(from, to, kind, optional)
                 e[#e+1] = { from = from, to = to, kind = kind or "file", optional = optional or false }
             end
-            add(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. exe, exe)
+            local function addbin(from, to, kind, optional) add(from, packageBin .. to, kind, optional) end
+            addbin(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. exe, exe)
             if os.target() == "windows" then
-                add(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. projectName .. ".pdb", projectName .. ".pdb", "file", true)
+                addbin(root .. "/Intermediate/Package/" .. cfg .. "/bin/" .. projectName .. ".pdb", projectName .. ".pdb", "file", true)
+                add(root .. "/Intermediate/Package/" .. cfg .. "/launcher/" .. exe, exe)
+            else
+                add(launcherPath, projectName .. ".sh")
             end
             for _, n in ipairs(closure) do
                 local mod = ARCANE_MODULES.byName[n]
                 local pre = mod.prebuilt and arc_module_prebuilt(mod)
                 if pre then
-                    for _, f in ipairs((cfg == "Debug" and pre.debugRuntime) or pre.runtime) do
-                        add(f, path.getname(f))
+                    local runtime = (cfg == "Debug" and pre.debugRuntime) or pre.runtime
+                    for _, f in ipairs(runtime) do
+                        addbin(f, path.getname(f))
+                    end
+                    -- A system shared library (SDL3 on Linux/macOS: no runtime
+                    -- list in the descriptor) ships beside the exe too, found in
+                    -- its libdir -- the package must not need the build
+                    -- machine's install. Every soname spelling (libSDL3.so.0 is
+                    -- what the loader asks for).
+                    if #runtime == 0 and pre.link and pre.libdir and os.target() ~= "windows" then
+                        local pattern = os.target() == "macosx" and ("lib" .. pre.link .. "*.dylib")
+                                                                 or ("lib" .. pre.link .. ".so*")
+                        for _, f in ipairs(os.matchfiles(pre.libdir .. "/" .. pattern)) do
+                            addbin(f, path.getname(f))
+                        end
                     end
                 end
             end
             if os.target() == "windows" then
-                add(ARCANE_TP .. "/tools/dxc/dxcompiler.dll", "dxcompiler.dll")
-                add(ARCANE_TP .. "/tools/dxc/dxil.dll", "dxil.dll")
-                add(ARCANE_TP .. "/AgilitySDK/x64/D3D12Core.dll", "D3D12/D3D12Core.dll")
+                addbin(ARCANE_TP .. "/tools/dxc/dxcompiler.dll", "dxcompiler.dll")
+                addbin(ARCANE_TP .. "/tools/dxc/dxil.dll", "dxil.dll")
+                addbin(ARCANE_TP .. "/AgilitySDK/x64/D3D12Core.dll", "D3D12/D3D12Core.dll")
                 if cfg == "Debug" then
-                    add(ARCANE_TP .. "/AgilitySDK/x64/d3d12SDKLayers.dll", "D3D12/d3d12SDKLayers.dll")
+                    addbin(ARCANE_TP .. "/AgilitySDK/x64/d3d12SDKLayers.dll", "D3D12/d3d12SDKLayers.dll")
                 end
             elseif os.target() == "macosx" then
-                add(ARCANE_TP .. "/tools/dxc-macos/lib/libdxcompiler.dylib", "libdxcompiler.dylib", "file", true)
+                addbin(ARCANE_TP .. "/tools/dxc-macos/lib/libdxcompiler.dylib", "libdxcompiler.dylib", "file", true)
+                -- The Vulkan loader + MoltenVK (scripts/fetch-vulkan-sdk-macos.sh
+                -- links the SDK's lib/ here) and MoltenVK's ICD manifest.
+                addbin(ARCANE_TP .. "/tools/dxc-macos/lib/libvulkan.1.dylib", "libvulkan.1.dylib", "file", true)
+                addbin(ARCANE_TP .. "/tools/dxc-macos/lib/libMoltenVK.dylib", "libMoltenVK.dylib", "file", true)
+                addbin(ARCANE_TP .. "/tools/dxc-macos/share/vulkan/icd.d/MoltenVK_icd.json",
+                    "vulkan/icd.d/MoltenVK_icd.json", "file", true)
             else
-                add(ARCANE_TP .. "/tools/dxc-linux/lib/libdxcompiler.so", "libdxcompiler.so", "file", true)
-                add(ARCANE_TP .. "/tools/dxc-linux/lib/libdxil.so", "libdxil.so", "file", true)
+                addbin(ARCANE_TP .. "/tools/dxc-linux/lib/libdxcompiler.so", "libdxcompiler.so", "file", true)
+                addbin(ARCANE_TP .. "/tools/dxc-linux/lib/libdxil.so", "libdxil.so", "file", true)
             end
-            add(ARCANE_SDK .. "/data/shaders/generated", "data/shaders", "dir")
-            add(ARCANE_SDK .. "/data/shaders/materials", "data/shaders/materials", "dir")
-            add(ARCANE_SDK .. "/data/EngineConfig", "data/EngineConfig", "dir")
-            add(ARCANE_SDK .. "/data/images/arcane_logo.png", "data/images/arcane_logo.png")
+            addbin(ARCANE_SDK .. "/data/shaders/generated", "data/shaders", "dir")
+            addbin(ARCANE_SDK .. "/data/shaders/materials", "data/shaders/materials", "dir")
+            addbin(ARCANE_SDK .. "/data/EngineConfig", "data/EngineConfig", "dir")
+            addbin(ARCANE_SDK .. "/data/images/arcane_logo.png", "data/images/arcane_logo.png")
             add(manifest, projectName .. "/" .. path.getname(manifest))
             add(projectRoot .. "/Content", projectName .. "/Content", "dir", true)
             add(projectRoot .. "/Config", projectName .. "/Config", "dir", true)
@@ -595,6 +675,41 @@ function arcane_package_exe(game, gameModules)
             runtime "Release"
             optimize "speed"
             symbols "off"
+        filter {}
+
+    if os.target() == "windows" then arcane_package_launcher(projectName) end
+end
+
+-- The Windows package launcher (Unreal's bootstrap shape): <Pkg>/<Project>.exe,
+-- a stub that runs <Project>/Binaries/Win64/<Project>.exe with the same
+-- arguments and standard handles and returns its exit code
+-- (Source/Programs/ArcanePackageLauncher/src/Launcher.cpp). Console in Debug
+-- like the game, windowed otherwise.
+function arcane_package_launcher(projectName)
+    local root = _MAIN_SCRIPT_DIR
+    project(projectName .. "Launcher")
+        targetname(projectName)
+        language "C++"
+        cppdialect "C++23"
+        staticruntime "off"
+        filter "configurations:Debug"
+            kind "ConsoleApp"
+        filter "configurations:not Debug"
+            kind "WindowedApp"
+        filter {}
+        entrypoint "wmainCRTStartup"
+        targetdir(root .. "/Intermediate/Package/%{cfg.buildcfg}/launcher")
+        objdir(root .. "/Intermediate/Package/%{cfg.buildcfg}/obj/" .. projectName .. "Launcher")
+        files { ARCANE_SDK .. "/Source/Programs/ArcanePackageLauncher/src/Launcher.cpp" }
+        defines { "UNICODE", "_UNICODE" }
+        systemversion "latest"
+        links { "kernel32", "user32" }
+        filter "configurations:Debug"
+            runtime "Debug"
+            symbols "on"
+        filter "configurations:not Debug"
+            runtime "Release"
+            optimize "speed"
         filter {}
 end
 

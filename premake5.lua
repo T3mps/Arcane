@@ -151,17 +151,29 @@ newoption {
 
 -- The monolithic layout (engine modularization s2.5/s3.3): every Runtime and
 -- Client module as a static library, plus ArcaneRuntimeHost -- the pieces a
--- packaged game links (`arcbuild package`). Generated BESIDE the modular
--- projects as Arcane-mono.slnx / <Project>-mono.vcxproj (the end of the module
--- section renames them), so neither layout overwrites the other; outputs land
--- in bin/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures are modular only.
+-- packaged game links (`arcbuild package`). Generated under Intermediate/Mono/
+-- (ARC_MONOLITHIC_PROJECTS below), so neither layout overwrites the other;
+-- outputs land in bin/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures
+-- are modular only.
 ARC_MONOLITHIC_LAYOUT = (_OPTIONS.layout == "monolithic")
+-- Where the monolithic layout's workspace + project files go (gitignored): a
+-- separate tree, because gmake names every project file Makefile and the
+-- workspace's Makefile sits at the root -- generated in place they would
+-- overwrite the modular ones. Sources are located by module root (modules.lua).
+ARC_MONOLITHIC_PROJECTS = ARC_MONOLITHIC_LAYOUT and "Intermediate/Mono" or nil
+-- The repo root as the engine's paths spell it: %{wks.location} in the modular
+-- layout (its generated files sit at the root), the absolute root in the
+-- monolithic one (whose workspace lives in Intermediate/Mono).
+ARC_ROOT = ARC_MONOLITHIC_LAYOUT and _MAIN_SCRIPT_DIR or "%{wks.location}"
 
 workspace "Arcane"
     architecture(ARCANE_ARCH)
     startproject "ArcaneTests"
     configurations { "Debug", "Release", "Dist" }
-    if _OPTIONS.layout == "monolithic" then defines { "ARC_MONOLITHIC" } end
+    if ARC_MONOLITHIC_LAYOUT then
+        defines { "ARC_MONOLITHIC" }
+        location(ARC_MONOLITHIC_PROJECTS)
+    end
     multiprocessorcompile "On"
 
     -- MSVC: /utf-8 ensures source + execution charsets are UTF-8.
@@ -229,7 +241,7 @@ workspace "Arcane"
     -- Shared ThirdParty wrappers read these; their defaults preserve the
     -- Server/Tools behavior (static CRT, vcxproj in the dep root).
     THIRDPARTY_STATICRUNTIME    = "off"
-    THIRDPARTY_PROJECT_LOCATION = "ide-md"
+    THIRDPARTY_PROJECT_LOCATION = ARC_MONOLITHIC_LAYOUT and "ide-mono" or "ide-md"
     -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
     -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
     THIRDPARTY_SDL3_INCLUDE     = SDL3_INCLUDE_DIR
@@ -244,33 +256,33 @@ workspace "Arcane"
     THIRDPARTY_NODE_EDITOR_IMGUI_API = ARCANE_IMGUI_IMPORT
 
     IncludeDir = {}
-    IncludeDir["nlohmann"]         = "%{wks.location}/ThirdParty/nlohmann"
-    IncludeDir["picosha2"]         = "%{wks.location}/ThirdParty/picosha2"
-    IncludeDir["spdlog"]           = "%{wks.location}/ThirdParty/spdlog/include"
-    IncludeDir["Catch2"]           = "%{wks.location}/ThirdParty/Catch2/src"
-    IncludeDir["rapidcheck"]       = "%{wks.location}/ThirdParty/rapidcheck/include"
-    IncludeDir["rapidcheck_catch"] = "%{wks.location}/ThirdParty/rapidcheck/extras/catch/include"
-    IncludeDir["glm"]              = "%{wks.location}/ThirdParty/glm"
-    IncludeDir["stb"]              = "%{wks.location}/ThirdParty/stb"
-    IncludeDir["miniaudio"]        = "%{wks.location}/ThirdParty/miniaudio"
-    IncludeDir["Astra"]            = "%{wks.location}/ThirdParty/Astra/include"
-    IncludeDir["enkiTS"]           = "%{wks.location}/ThirdParty/enkiTS/src"
-    IncludeDir["tracy"]            = "%{wks.location}/ThirdParty/tracy/public"
-    IncludeDir["freetype"]         = "%{wks.location}/ThirdParty/freetype/include"
-    IncludeDir["msdfgen"]          = "%{wks.location}/ThirdParty/msdfgen"
-    IncludeDir["NRI"]              = "%{wks.location}/ThirdParty/NRI/Include"
-    IncludeDir["VulkanHeaders"]    = "%{wks.location}/ThirdParty/Vulkan-Headers/include"
-    IncludeDir["DirectXHeaders"]   = "%{wks.location}/ThirdParty/DirectX-Headers/include"
-    IncludeDir["VMA"]              = "%{wks.location}/ThirdParty/VMA/include"
-    IncludeDir["D3D12MA"]          = "%{wks.location}/ThirdParty/D3D12MA/include"
+    IncludeDir["nlohmann"]         = ARC_ROOT .. "/ThirdParty/nlohmann"
+    IncludeDir["picosha2"]         = ARC_ROOT .. "/ThirdParty/picosha2"
+    IncludeDir["spdlog"]           = ARC_ROOT .. "/ThirdParty/spdlog/include"
+    IncludeDir["Catch2"]           = ARC_ROOT .. "/ThirdParty/Catch2/src"
+    IncludeDir["rapidcheck"]       = ARC_ROOT .. "/ThirdParty/rapidcheck/include"
+    IncludeDir["rapidcheck_catch"] = ARC_ROOT .. "/ThirdParty/rapidcheck/extras/catch/include"
+    IncludeDir["glm"]              = ARC_ROOT .. "/ThirdParty/glm"
+    IncludeDir["stb"]              = ARC_ROOT .. "/ThirdParty/stb"
+    IncludeDir["miniaudio"]        = ARC_ROOT .. "/ThirdParty/miniaudio"
+    IncludeDir["Astra"]            = ARC_ROOT .. "/ThirdParty/Astra/include"
+    IncludeDir["enkiTS"]           = ARC_ROOT .. "/ThirdParty/enkiTS/src"
+    IncludeDir["tracy"]            = ARC_ROOT .. "/ThirdParty/tracy/public"
+    IncludeDir["freetype"]         = ARC_ROOT .. "/ThirdParty/freetype/include"
+    IncludeDir["msdfgen"]          = ARC_ROOT .. "/ThirdParty/msdfgen"
+    IncludeDir["NRI"]              = ARC_ROOT .. "/ThirdParty/NRI/Include"
+    IncludeDir["VulkanHeaders"]    = ARC_ROOT .. "/ThirdParty/Vulkan-Headers/include"
+    IncludeDir["DirectXHeaders"]   = ARC_ROOT .. "/ThirdParty/DirectX-Headers/include"
+    IncludeDir["VMA"]              = ARC_ROOT .. "/ThirdParty/VMA/include"
+    IncludeDir["D3D12MA"]          = ARC_ROOT .. "/ThirdParty/D3D12MA/include"
     IncludeDir["SDL3"]             = SDL3_INCLUDE_DIR
-    IncludeDir["imgui"]            = "%{wks.location}/ThirdParty/imgui"
-    IncludeDir["imguinodeeditor"]  = "%{wks.location}/ThirdParty/imgui-node-editor"
-    IncludeDir["Manifold2D"]       = "%{wks.location}/ThirdParty/Manifold2D/include"
-    IncludeDir["Mosaic"]           = "%{wks.location}/ThirdParty/Mosaic/include"
-    IncludeDir["bc7enc_rdo"]       = "%{wks.location}/ThirdParty/bc7enc_rdo"
-    IncludeDir["cgltf"]            = "%{wks.location}/ThirdParty/cgltf"
-    IncludeDir["meshoptimizer"]    = "%{wks.location}/ThirdParty/meshoptimizer/src"
+    IncludeDir["imgui"]            = ARC_ROOT .. "/ThirdParty/imgui"
+    IncludeDir["imguinodeeditor"]  = ARC_ROOT .. "/ThirdParty/imgui-node-editor"
+    IncludeDir["Manifold2D"]       = ARC_ROOT .. "/ThirdParty/Manifold2D/include"
+    IncludeDir["Mosaic"]           = ARC_ROOT .. "/ThirdParty/Mosaic/include"
+    IncludeDir["bc7enc_rdo"]       = ARC_ROOT .. "/ThirdParty/bc7enc_rdo"
+    IncludeDir["cgltf"]            = ARC_ROOT .. "/ThirdParty/cgltf"
+    IncludeDir["meshoptimizer"]    = ARC_ROOT .. "/ThirdParty/meshoptimizer/src"
 
     local engine_modules = arc_modules_load {
         "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule",
@@ -283,16 +295,21 @@ workspace "Arcane"
 
 -- Vendor static libraries share the "ThirdParty" folder with the vendor modules.
 group "ThirdParty"
-    include "ThirdParty/Catch2"
-    include "ThirdParty/rapidcheck"
+    -- Test and asset-pipeline vendors are modular-only (no package links them).
+    if not ARC_MONOLITHIC_LAYOUT then
+        include "ThirdParty/Catch2"
+        include "ThirdParty/rapidcheck"
+    end
     include "ThirdParty/enkiTS"
     include "ThirdParty/tracy"
     include "ThirdParty/freetype"
     include "ThirdParty/msdfgen"
     include "ThirdParty/NRI"
     include "ThirdParty/Manifold2D"
-    include "ThirdParty/bc7enc_rdo"
-    include "ThirdParty/meshoptimizer"
+    if not ARC_MONOLITHIC_LAYOUT then
+        include "ThirdParty/bc7enc_rdo"
+        include "ThirdParty/meshoptimizer"
+    end
 group ""
 
 
@@ -309,6 +326,12 @@ local function module_defaults()
         inlinesvisibility "Hidden"
     filter "system:linux"
         linkoptions { "-Wl,-z,defs" }
+    -- A package links with --gc-sections / -dead_strip: per-function sections
+    -- make the stripping function-granular (the MSVC twin is /Gy, on by default).
+    if ARC_MONOLITHIC_LAYOUT then
+        filter "system:not windows"
+            buildoptions { "-ffunction-sections", "-fdata-sections" }
+    end
     filter { "system:not windows", "toolset:gcc" }
         buildoptions { "-fno-gnu-unique" }
     filter "configurations:Debug"
@@ -335,7 +358,7 @@ ARC_MODULE_EXTRAS.ArcaneCore = function()
     -- System libraries live in the descriptors (platforms.<os>.links): a
     -- monolithic static module must not absorb them (the package links them once).
     filter "system:windows"
-        removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
+        removefiles { ARC_MODULE_ROOT .. "/src/Arcane/Base/Posix/**" }
     filter {}
 end
 ARC_MODULE_EXTRAS.ArcaneRender = function()
@@ -344,14 +367,14 @@ ARC_MODULE_EXTRAS.ArcaneRender = function()
     includedirs { "%{IncludeDir.DirectXHeaders}/directx" }
     filter "system:windows"
         defines { "VK_USE_PLATFORM_WIN32_KHR" }
-        prebuildcommands { 'call "%{wks.location}/data/shaders/compile-shaders.bat"' }
+        prebuildcommands { 'call "' .. ARC_ROOT .. '/data/shaders/compile-shaders.bat"' }
     filter "system:not windows"
-        prebuildcommands { 'sh "%{wks.location}/data/shaders/compile-shaders.sh"' }
-        removefiles { "%{prj.location}/src/Arcane/Render/DeviceCreationD3D12.cpp", "%{prj.location}/src/Arcane/Render/GpuCrashD3D12.cpp" }
+        prebuildcommands { 'sh "' .. ARC_ROOT .. '/data/shaders/compile-shaders.sh"' }
+        removefiles { ARC_MODULE_ROOT .. "/src/Arcane/Render/DeviceCreationD3D12.cpp", ARC_MODULE_ROOT .. "/src/Arcane/Render/GpuCrashD3D12.cpp" }
     filter "system:linux"
-        includedirs { "%{wks.location}/ThirdParty/tools/dxc-linux/include/dxc" }
+        includedirs { ARC_ROOT .. "/ThirdParty/tools/dxc-linux/include/dxc" }
     filter "system:macosx"
-        includedirs { "%{wks.location}/ThirdParty/tools/dxc-macos/include/dxc" }
+        includedirs { ARC_ROOT .. "/ThirdParty/tools/dxc-macos/include/dxc" }
     filter {}
 end
 ARC_MODULE_EXTRAS.ArcaneAssetPipeline = function()
@@ -368,8 +391,9 @@ ARC_MODULE_EXTRAS.ImGui = function()
     -- module that drives it, so this DLL does not depend on SDL3.
     module_defaults()
     cppdialect "C++17"
-    files { "%{prj.location}/imgui.cpp", "%{prj.location}/imgui_draw.cpp", "%{prj.location}/imgui_tables.cpp", "%{prj.location}/imgui_widgets.cpp", "%{prj.location}/imgui_demo.cpp" }
-    includedirs { "%{prj.location}" }
+    local r = ARC_MODULE_ROOT
+    files { r .. "/imgui.cpp", r .. "/imgui_draw.cpp", r .. "/imgui_tables.cpp", r .. "/imgui_widgets.cpp", r .. "/imgui_demo.cpp" }
+    includedirs { r }
     defines { "IMGUI_API=" .. ARCANE_IMGUI_EXPORT }
     filter "system:not windows"
         visibility "Default"   -- IMGUI_API is empty off-Windows: export by default visibility
@@ -378,8 +402,9 @@ end
 ARC_MODULE_EXTRAS.ImGuiNodeEditor = function()
     module_defaults()
     cppdialect "C++17"
-    files { "%{prj.location}/imgui_node_editor.cpp", "%{prj.location}/imgui_node_editor_api.cpp", "%{prj.location}/imgui_canvas.cpp", "%{prj.location}/crude_json.cpp" }
-    includedirs { "%{prj.location}" }
+    local r = ARC_MODULE_ROOT
+    files { r .. "/imgui_node_editor.cpp", r .. "/imgui_node_editor_api.cpp", r .. "/imgui_canvas.cpp", r .. "/crude_json.cpp" }
+    includedirs { r }
     defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "IMGUI_NODE_EDITOR_API=" .. ARCANE_IMGUI_EXPORT }
     filter "system:not windows"
         visibility "Default"
@@ -389,7 +414,7 @@ ARC_MODULE_EXTRAS.ArcaneImGui = function()
     module_defaults()
     -- imgui's SDL3 platform backend lives here (see ImGui above); IMGUI_IMPL_API
     -- empty = module-internal, while the core API is imported from ImGui.dll.
-    files { "%{wks.location}/ThirdParty/imgui/backends/imgui_impl_sdl3.cpp" }
+    files { ARC_ROOT .. "/ThirdParty/imgui/backends/imgui_impl_sdl3.cpp" }
     defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "IMGUI_IMPL_API=" }
 end
 ARC_MODULE_EXTRAS.ArcaneClient = module_defaults
@@ -420,16 +445,16 @@ project "ArcaneRuntimeHost"
     arc_module_consumer(engine_modules,
         ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui" },
         { stage = false })
-    location "Source/Programs/ArcaneRuntimeHost"
+    location(ARC_MONOLITHIC_PROJECTS and path.join(ARC_MONOLITHIC_PROJECTS, "ArcaneRuntimeHost") or "Source/Programs/ArcaneRuntimeHost")
     kind "StaticLib"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
+    files { "Source/Programs/ArcaneRuntimeHost/src/**.cpp", "Source/Programs/ArcaneRuntimeHost/src/**.hpp" }
     includedirs {
-        "%{prj.location}/src",
+        "Source/Programs/ArcaneRuntimeHost/src",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.glm}",
@@ -454,18 +479,8 @@ project "ArcaneRuntimeHost"
     filter {}
 group ""
 
-if ARC_MONOLITHIC_LAYOUT then
-    -- Every project generated so far gets a -mono file name (and the workspace
-    -- Arcane-mono.slnx): the modular files beside them stay untouched.
-    local wks = premake.api.scope.workspace
-    workspace(wks.name)
-        filename(wks.name .. "-mono")
-    for _, prj in ipairs(wks.projects) do
-        project(prj.name)
-            filename(prj.name .. "-mono")
-    end
-    return
-end
+-- The monolithic layout stops here: programs, tests and fixtures are modular only.
+if ARC_MONOLITHIC_LAYOUT then return end
 -- Programs (Source/Programs/<Program>/), the test exe (Tests/ArcaneTests/) and
 -- its fixtures (Tests/Fixtures/<Fixture>/): every project below names its own
 -- solution folder right before it, and the last one resets the group.
@@ -947,10 +962,12 @@ project "ArcaneServer"
 -- ============================================================================
 group "Programs"
 project "ArcaneRuntime"
-    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
-    -- The host's body (RuntimeApp & co.); this exe is main.cpp + the staging below.
+    -- The host's body (RuntimeApp & co.); this exe is main.cpp + the staging
+    -- below. FIRST: GNU ld resolves left to right, and under --as-needed a
+    -- module .so listed before the archive that references it is dropped.
     links { "ArcaneRuntimeHost" }
     includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
+    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
     location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"

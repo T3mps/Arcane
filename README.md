@@ -609,11 +609,20 @@ It builds the engine's monolithic layout (`premake5 --layout=monolithic`:
 every Runtime and Client module as a static library, in
 `bin/<cfg>-<sys>-<arch>-mono/`), regenerates the project with the same
 option (the game becomes a static library plus a `<Project>Package`
-executable, in `<Workspace>-mono.slnx` beside the modular solution), builds
-it, and stages `Packages/<Project>-<platform>-<config>/`: the executable,
-`SDL3.dll`, the DXC and Agility SDK runtime files, the engine data the host
-reads, and the project in `<Project>/` (content copied raw). Run it in place;
-it opens the staged project when no `--project` is given. A package never
+executable, generated under `Intermediate/Package/Workspace/`), builds
+it, and stages `Packages/<Project>-<platform>-<config>/` in Unreal's layout:
+
+```
+<Project>.exe | <Project>.sh      launcher (Windows stub / Linux+macOS script)
+<Project>/
+  Binaries/<Win64|Linux|Mac>/     the game, SDL3, DXC, the Agility SDK, engine data/
+  <Project>.arcproj  Content/  Config/  Intermediate/Artifacts/
+```
+
+The launcher runs `<Project>/Binaries/<Platform>/<Project>` with the same
+arguments and returns its exit code; on Linux and macOS the game finds its
+shared libraries beside itself (`$ORIGIN` / `@executable_path`). Run it in
+place; it opens the staged project when no `--project` is given. A package never
 contains a Developer or Editor module, so the verification flags
 (`--headless`, `--report`, `--compare`) belong to `ArcaneRuntime.exe`.
 
@@ -740,7 +749,8 @@ bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 ```
 
 Commands are `generate`, `build`, `rebuild`, `clean`, `probe`, and
-`package` (the one-executable build above; MSBuild only for now).
+`package` (the one-executable build above; MSBuild and Make actions, so
+set `MAKEFLAGS=-jN` for a parallel engine build).
 `probe` only inspects the manifest and the `Binaries/` slot. It needs
 no SDK. Other flags: `--action`, `--force-rebuild`, `--quiet`, `--set`.
 

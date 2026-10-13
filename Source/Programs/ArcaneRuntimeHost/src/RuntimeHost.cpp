@@ -68,24 +68,14 @@ int Arcane::RuntimeHost::Run(int argc, char** argv, const PackageInfo* package)
     Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);   // non-const: the early rungs fill backend/vsync
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 
-#if !defined(ARC_RUNTIME_HOST_VERIFY)
-    // --headless's vehicle (OffscreenVehicle) is ArcaneVerify's, which this host
-    // does not link -- refuse rather than silently open a window.
-    if (parsed.config->headless)
-    {
-        std::fprintf(stderr, "error: --headless needs the verify harness, which a packaged game "
-                             "does not link. Use ArcaneRuntime.exe.\n");
-        return 2;
-    }
-#endif
-
     if (package)
     {
-        // A packaged game hosts the project staged beside it unless told otherwise.
+        // A packaged game hosts the project staged with it unless told otherwise:
+        // <Project>/ is two levels above the exe in <Project>/Binaries/<Platform>/.
         if (parsed.config->projectPath.empty() && parsed.config->pluginPath.empty() &&
             package->projectRelPath)
         {
-            const std::u8string rel = (ExecutableDirectory() / package->projectRelPath).generic_u8string();
+            const std::u8string rel = (ExecutableDirectory() / package->projectRelPath).lexically_normal().generic_u8string();
             parsed.config->projectPath.assign(rel.begin(), rel.end());
         }
         std::string modules;
@@ -116,6 +106,18 @@ int Arcane::RuntimeHost::Run(int argc, char** argv, const PackageInfo* package)
         std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
     }
+
+#if !defined(ARC_RUNTIME_HOST_VERIFY)
+    // --headless's vehicle (OffscreenVehicle) is ArcaneVerify's, which this host
+    // does not link -- refuse rather than silently open a window. After the
+    // probe above, which answers on any host.
+    if (parsed.config->headless)
+    {
+        std::fprintf(stderr, "error: --headless needs the verify harness, which a packaged game "
+                             "does not link. Use ArcaneRuntime.exe.\n");
+        return 2;
+    }
+#endif
 
     // POST-MORTEM CAPTURE, FIRST (bar the probe above) -- crash window plan 1,
     // task 9; spec S5.1's closing paragraph. Same arming, same reasoning and

@@ -32,7 +32,7 @@ function arc_discover_sdl3()
     VCPKG_ROOT = os.getenv("VCPKG_ROOT")
     if os.target() == "windows" then
         if not VCPKG_ROOT then
-            error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
+            error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and generate again.")
         end
         VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
         SDL3_PREFIX      = VCPKG_INSTALLED_MD
@@ -370,15 +370,22 @@ function arc_module_project(mods, name)
     kind(layout() == "monolithic" and "StaticLib" or "SharedLib")
     defines { "ARC_" .. suffix(name) .. "_EXPORTS" }
     if name == "ArcaneCore" then defines { "ARC_CORE_API_EXPORTS" } end
-    location(mod.root)
+    -- Sources by the module's ROOT, never %{prj.location}: the monolithic
+    -- layout generates its project files elsewhere (ARC_MONOLITHIC_PROJECTS,
+    -- premake5.lua) so neither layout's files overwrite the other's -- gmake
+    -- names every project file Makefile. ARC_MODULE_ROOT is the same root for
+    -- the ARC_MODULE_EXTRAS hook below.
+    local src = path.getabsolute(mod.root)
+    ARC_MODULE_ROOT = src
+    location(ARC_MONOLITHIC_PROJECTS and path.join(ARC_MONOLITHIC_PROJECTS, name) or mod.root)
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
     targetdir("bin/" .. outputdir .. "/%{prj.name}")
     objdir("bin-int/" .. outputdir .. "/%{prj.name}")
-    files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
-    includedirs { "%{prj.location}/src" }
-    local root = ARCANE_SDK or "%{wks.location}"
+    files { src .. "/src/**.hpp", src .. "/src/**.cpp" }
+    includedirs { src .. "/src" }
+    local root = ARCANE_SDK or ARC_ROOT or "%{wks.location}"
     local vendors = {}
     -- A dependency's PUBLIC thirdParty is linked too: its public headers carry
     -- inline code that calls the vendor (e.g. PhysicsSystem.hpp -> Manifold2D),
@@ -424,7 +431,7 @@ function arc_module_project(mods, name)
     filter "system:not windows"
         visibility "Hidden"
     filter "system:linux"
-        linkoptions { "-Wl,-rpath,$ORIGIN" }
+        linkoptions { "-Wl,-rpath,'$$ORIGIN'" }   -- make: $$ -> $; quotes: not the shell's (bare $ORIGIN became "RIGIN")
     filter "system:macosx"
         linkoptions { "-Wl,-rpath,@loader_path" }
     filter {}
@@ -494,13 +501,13 @@ function arc_module_consumer(mods, names, opts)
         selected[name] = true
         for _, dep in ipairs(arc_module_closure(mods, name, "all")) do selected[dep] = true end
     end
-    local root = ARCANE_SDK or "%{wks.location}"
+    local root = ARCANE_SDK or ARC_ROOT or "%{wks.location}"
     local vendors = {}
     local seen = visible(mods, names)
     for _, name in ipairs(mods.order) do
         local mod = mods.byName[name]
         if selected[name] and mod.prebuilt then
-            if seen[name] then use_prebuilt(mod) end
+            if seen[name] then use_prebuilt(mod, opts.link == false) end
         elseif selected[name] then
             -- opts.link = false: headers only (a monolithic game's static
             -- library -- the package links every module once, whole-archived).
@@ -685,9 +692,11 @@ function arc_module_package(mods, names, sdk)
     if os.target() == "windows" or os.target() == "macosx" then
         linkoptions(whole)
     else
-        linkoptions { "-Wl,--whole-archive" }
-        linkoptions(whole)
-        linkoptions { "-Wl,--no-whole-archive" }
+        -- ONE option string: premake de-duplicates linkoptions keeping the LAST
+        -- copy, so a separate "-Wl,--whole-archive" here was dropped in favour of
+        -- the game's (arcane_package_exe) and the engine archives linked as plain
+        -- inputs ahead of the objects that need them (GNU ld scans in order).
+        linkoptions { "-Wl,--whole-archive " .. table.concat(whole, " ") .. " -Wl,--no-whole-archive" }
     end
     for _, vendor in ipairs(vendor_order) do
         local entry = ARC_THIRDPARTY[vendor]

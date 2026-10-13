@@ -62,8 +62,9 @@ namespace arcbuild
         // 1. the SDK's monolithic layout: generate + build (incremental);
         // 2. the project's monolithic workspace (game static lib + the
         //    <Project> exe, build/arcane.lua): generate + build;
-        // 3. stage Packages/<Project>-<platform>-<config>/ from the stage list.
-        // MSBuild only for now; Make/Xcode join with the Linux/macOS plumbing.
+        // 3. cook the project's content (arccook beside arcbuild, when built);
+        // 4. stage Packages/<Project>-<platform>-<config>/ from the stage list.
+        // MSBuild and Make (set MAKEFLAGS=-jN for a parallel engine build).
         [[nodiscard]]
         int Package(
             const DriverContext& context) const override;

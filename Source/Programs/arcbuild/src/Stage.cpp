@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <system_error>
+#include <vector>
 
 namespace arcbuild
 {
@@ -110,26 +111,29 @@ namespace arcbuild
             return std::unexpected("the package stage list has no '" + std::string(config) +
                                    "' configuration (" + manifest.generic_string() + ")");
 
+        // Validate EVERY entry before touching outDir: a refusal leaves the
+        // previous package intact rather than half-replaced.
+        struct Planned
+        {
+            std::filesystem::path from, to;
+            bool dir = false;
+        };
         std::error_code ec;
-        std::filesystem::remove_all(outDir, ec);
-        if (ec)
-            return std::unexpected("failed to clear " + outDir.generic_string() + ": " + ec.message());
-        std::filesystem::create_directories(outDir, ec);
-        if (ec)
-            return std::unexpected("failed to create " + outDir.generic_string() + ": " + ec.message());
-
         const std::filesystem::path root = outDir.lexically_normal();
+        std::vector<Planned> plan;
         StagedPackage staged;
         for (const nlohmann::json& entry : *it)
         {
             if (!entry.is_object() || !entry.contains("from") || !entry.contains("to") ||
-                !entry["from"].is_string() || !entry["to"].is_string())
+                !entry["from"].is_string() || !entry["to"].is_string() ||
+                (entry.contains("optional") && !entry["optional"].is_boolean()) ||
+                (entry.contains("kind") && !entry["kind"].is_string()))
                 return std::unexpected("malformed package stage entry in " + manifest.generic_string());
 
             const std::filesystem::path from = entry["from"].get<std::string>();
             const std::string           rel  = entry["to"].get<std::string>();
-            const bool optional = entry.value("optional", false);
-            const bool dir      = entry.value("kind", std::string("file")) == "dir";
+            const bool optional = entry.contains("optional") && entry["optional"].get<bool>();
+            const bool dir      = entry.contains("kind") && entry["kind"].get<std::string>() == "dir";
 
             const std::filesystem::path to = (root / rel).lexically_normal();
             const std::filesystem::path back = to.lexically_relative(root);
@@ -145,7 +149,21 @@ namespace arcbuild
                 return std::unexpected("package stage: missing " + std::string(dir ? "directory " : "file ") +
                                        from.generic_string());
             }
+            plan.push_back({ from, to, dir });
+        }
 
+        std::filesystem::remove_all(outDir, ec);
+        if (ec)
+            return std::unexpected("failed to clear " + outDir.generic_string() + ": " + ec.message());
+        std::filesystem::create_directories(outDir, ec);
+        if (ec)
+            return std::unexpected("failed to create " + outDir.generic_string() + ": " + ec.message());
+
+        for (const Planned& p : plan)
+        {
+            const std::filesystem::path& from = p.from;
+            const std::filesystem::path& to = p.to;
+            const bool dir = p.dir;
             std::filesystem::create_directories(dir ? to : to.parent_path(), ec);
             if (ec)
                 return std::unexpected("failed to create " + to.generic_string() + ": " + ec.message());
