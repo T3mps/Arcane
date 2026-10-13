@@ -166,6 +166,9 @@ try {
     Check 'native: exit code' ($code -eq 3)
     Check 'native: stdout and stderr logged' ($logText -match 'out-line' -and $logText -match 'err-line')
     Check 'native: UTF-8 without BOM' (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF))
+    $log2 = Join-Path $tmp 'sub/native-empty.log'
+    $null = Invoke-NativeLogged -FilePath $ps -ArgumentList @('-NoProfile', '-Command', "[Console]::Error.WriteLine('e1'); [Console]::Error.WriteLine(''); exit 0") -LogPath $log2
+    Check 'native: an empty stderr line logs empty (5.1 RemoteException)' (-not ([System.IO.File]::ReadAllText($log2) -match 'RemoteException'))
     $q = Invoke-NativeQuiet -FilePath $ps -ArgumentList @('-NoProfile', '-Command', "Write-Output 'q'; exit 4")
     Check 'quiet: exit code and stdout' ($q.Code -eq 4 -and ($q.Output -join '') -eq 'q')
 } finally {

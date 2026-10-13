@@ -362,7 +362,10 @@ function Invoke-NativeLogged {
     $ErrorActionPreference = 'Continue'
     try {
         & $FilePath @ArgumentList 2>&1 | ForEach-Object {
+            # A native stderr line arrives as an ErrorRecord; its text is TargetObject
+            # (an EMPTY line would otherwise stringify as "...RemoteException").
             $line = "$_"
+            if ($_ -is [System.Management.Automation.ErrorRecord] -and $_.TargetObject -is [string]) { $line = $_.TargetObject }
             $writer.WriteLine($line)
             Write-Host $line
         }
