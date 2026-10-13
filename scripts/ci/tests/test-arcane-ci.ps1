@@ -187,6 +187,22 @@ try {
     Check 'native: an empty stderr line logs empty (5.1 RemoteException)' (-not ([System.IO.File]::ReadAllText($log2) -match 'RemoteException'))
     $q = Invoke-NativeQuiet -FilePath $ps -ArgumentList @('-NoProfile', '-Command', "Write-Output 'q'; exit 4")
     Check 'quiet: exit code and stdout' ($q.Code -eq 4 -and ($q.Output -join '') -eq 'q')
+
+    # --- Get-DumpbinDependents ------------------------------------------------
+    # dumpbin /dependents names the image in a header; on a hosted runner that
+    # path is D:\a\Arcane\Arcane\..., so a plain -match 'Arcane' over the whole
+    # output flags every package.
+    $dump = @(
+        'Dump of file D:\a\Arcane\Arcane\ReferenceProject\Packages\ReferenceProject-windows-Release\ReferenceProject\Binaries\Win64\ReferenceProject.exe',
+        '', 'File Type: EXECUTABLE IMAGE', '', '  Image has the following dependencies:', '',
+        '    bcrypt.dll', '    SDL3.dll', '    KERNEL32.dll', '    api-ms-win-crt-heap-l1-1-0.dll', '',
+        '  Summary', '', '      1EF000 .data', '      535000 .text')
+    $dll = @(Get-DumpbinDependents -Lines $dump)
+    Check 'dependents: only the dependency list' (($dll -join ',') -eq 'bcrypt.dll,SDL3.dll,KERNEL32.dll,api-ms-win-crt-heap-l1-1-0.dll') ($dll -join ',')
+    Check 'dependents: the header path is not a dependency' (-not ($dll -match 'Arcane'))
+    $withArcane = $dump[0..7] + @('    ArcaneCore.dll') + $dump[8..($dump.Count - 1)]
+    Check 'dependents: an Arcane module import is listed' (@(Get-DumpbinDependents -Lines $withArcane) -contains 'ArcaneCore.dll')
+    Check 'dependents: no list, nothing' (@(Get-DumpbinDependents -Lines @('Dump of file x.exe', 'File Type: EXECUTABLE IMAGE')).Count -eq 0)
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

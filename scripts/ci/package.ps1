@@ -8,6 +8,7 @@
 # Arcane DLL; the windowed boot is the desk's. Logs: logs\package-*.txt.
 param([Parameter(Mandatory, Position = 0)][ValidateSet('Debug', 'Release', 'Dist')][string]$Config)
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'ArcaneCi.psm1') -Force
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logs = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force $logs | Out-Null
@@ -22,10 +23,14 @@ Get-ChildItem -Recurse $pkg -Depth 1 | Select-Object -ExpandProperty FullName
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $dumpbin = @(& $vswhere -latest -find 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') | Select-Object -First 1
 if (-not $dumpbin) { throw 'dumpbin.exe not found via vswhere' }
-$deps = & $dumpbin /nologo /dependents (Join-Path $pkg 'ReferenceProject\Binaries\Win64\ReferenceProject.exe')
-$deps | Set-Content -Encoding utf8 (Join-Path $logs 'package-imports.txt')
-$deps
-if ($deps -match 'Arcane') { Write-Host '::error::the package imports an Arcane module DLL'; exit 1 }
+$dump = @(& $dumpbin /nologo /dependents (Join-Path $pkg 'ReferenceProject\Binaries\Win64\ReferenceProject.exe'))
+$dump | Set-Content -Encoding utf8 (Join-Path $logs 'package-imports.txt')
+$dump
+# Only the dependency list: the dump's header names the image's path, and a
+# checkout path (D:\a\Arcane\Arcane\ on a hosted runner) says Arcane.
+$deps = @(Get-DumpbinDependents -Lines $dump)
+if ($deps.Count -eq 0) { Write-Host '::error::no dependency list in the dumpbin output'; exit 1 }
+if ($deps -match '^Arcane') { Write-Host "::error::the package imports an Arcane module DLL: $(($deps -match '^Arcane') -join ', ')"; exit 1 }
 
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
 Remove-Item Env:ARCANE_SDK -ErrorAction SilentlyContinue
