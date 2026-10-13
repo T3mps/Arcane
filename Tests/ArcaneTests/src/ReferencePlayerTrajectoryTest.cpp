@@ -70,7 +70,7 @@ namespace
     std::filesystem::path FixturePath()
     {
         return Arcane::Test::FindReferenceProjectDir().parent_path() /
-               "ArcaneTests" / "data" / "trajectory" / "reference_player.json";
+               "Tests" / "ArcaneTests" / "data" / "trajectory" / "reference_player.json";
     }
 
     Astra::Entity FindByName(Astra::Registry& reg, const std::string& name)

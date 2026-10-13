@@ -25,6 +25,7 @@
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Util/Logger.hpp>
+#include <Arcane/Base/Log.hpp>
 
 #include <Json.hpp>
 #include <stb_image_write.h>
@@ -33,6 +34,7 @@
 
 #include <spdlog/sinks/base_sink.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -309,8 +311,9 @@ namespace
     // the process-wide Logger::Init/file-sink path (LoggerTest.cpp already owns that seam,
     // and it is order-sensitive across a shared random-order Catch2 run: a second Init with
     // a NEW path is silently ignored once any earlier test already installed a file sink).
-    // Pushed onto -- and popped back off -- the SPECIFIC "AssetPipeline" named logger's own
-    // sink list, so this probe cannot affect any other logger or any other test.
+    // Pushed onto -- and erased back off -- the engine logger (Log::Engine(), ArcaneCore.dll's;
+    // the warning is raised inside ArcaneAssetPipeline.dll, so a header-only Logger::Get copy
+    // in this exe would never see it), so this probe cannot outlive its test.
     class CapturingSink : public spdlog::sinks::base_sink<std::mutex>
     {
     public:
@@ -345,15 +348,15 @@ TEST_CASE("pipeline: TextureMetaSettings format parse is case-insensitive; a gar
     CHECK(TextureMetaSettings::FromMetaJson(lowerAuto, TextureMetaSettings{}).format == TextureMetaSettings::Format::Auto);
 
     // Garbage falls back to Auto AND warns -- watched via a temporary sink pushed onto the
-    // "AssetPipeline" named logger, removed again immediately after.
+    // engine logger, removed again immediately after.
     auto sink = std::make_shared<CapturingSink>();
-    spdlog::logger* logger = Arcane::Logger::Get("AssetPipeline");
-    logger->sinks().push_back(sink);
+    auto& sinks = Arcane::Log::Engine()->sinks();
+    sinks.push_back(sink);
 
     nlohmann::json garbage; garbage["format"] = "not-a-real-format";
     const TextureMetaSettings result = TextureMetaSettings::FromMetaJson(garbage, TextureMetaSettings{});
 
-    logger->sinks().pop_back();   // never leak this probe into any other test's logger
+    sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());   // never leak this probe
 
     CHECK(result.format == TextureMetaSettings::Format::Auto);
     REQUIRE(sink->lines.size() == 1u);

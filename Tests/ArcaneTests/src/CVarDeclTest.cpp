@@ -116,7 +116,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     REQUIRE(cull.has_value());
     CHECK(cull->defaultValue == CVarValue::Bool(true));
     CHECK(cull->flags == CVarFlags::Dev);
-    CHECK(cull->module == "ArcaneClient");   // RenderDebugSettings.cpp, inside ArcaneClient.dll
+    CHECK(cull->module == "ArcaneRender");   // RenderDeviceSettings.cpp, inside ArcaneRender.dll
     CHECK(cull->audience == Audience::Game);
     CHECK(cull->scope == SettingScope::Project);
 

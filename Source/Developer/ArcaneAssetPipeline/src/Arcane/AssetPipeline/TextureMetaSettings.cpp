@@ -47,7 +47,9 @@ namespace Arcane::AssetPipeline
             if (lower == "bc7")   return TextureMetaSettings::Format::Bc7;
             if (lower == "rgba8") return TextureMetaSettings::Format::Rgba8;
 
-            ::Arcane::Logger::Get("AssetPipeline")->warn(
+            // The engine logger (ArcaneCore.dll's), not Logger::Get: that one is
+            // header-only, so inside this DLL it would be a sinkless private copy.
+            ARC_WARN(
                 "TextureMetaSettings: unrecognised \"format\" value '{}' in a .meta texture "
                 "block (expected auto|bc7|rgba8, case-insensitive) -- falling back to the project "
                 "default (assets.import.texture.format)", s);

@@ -26,9 +26,8 @@ TEST_CASE("Macro prefix guard: no ARCANE_* token outside the environment-variabl
     REQUIRE_FALSE(root.empty());
     const std::regex token(R"(\bARCANE_[A-Z0-9_]+)");
     std::vector<std::string> hits;
-    for (const char* dir : { "ArcaneCore", "ArcaneClient", "ArcaneEditor", "ArcaneRuntime", "ArcaneServer",
-                             "ArcaneTests", "ArcaneCrashReporter", "ArcaneAssetPipeline", "arcbuild", "arccook",
-                             "ReferenceProject/Source", "data/shaders" })
+    // Every module and program lives under Source/<Group>/ (engine modularization P3).
+    for (const char* dir : { "Source", "Tests/ArcaneTests", "ReferenceProject/Source", "data/shaders" })
     {
         for (const auto& e : fs::recursive_directory_iterator(root / dir))
         {

@@ -49,8 +49,8 @@ namespace arcbuild
 
     // Where the monolithic generate puts each workspace (engine modularization
     // s2.5; a separate tree, since gmake names every project file Makefile):
-    // the project's -> <root>/Intermediate/Package/Workspace (build/arcane.lua's
-    // ARCANE_PACKAGE_WORKSPACE), the engine's -> <sdk>/Intermediate/Mono
+    // the project's -> <root>/Intermediate/Package/Workspace (build/arcane.lua
+    // spells the same path), the engine's -> <sdk>/Intermediate/Mono
     // (premake5.lua's ARC_MONOLITHIC_PROJECTS).
     [[nodiscard]]
     std::filesystem::path PackageWorkspaceDir(

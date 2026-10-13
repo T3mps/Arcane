@@ -503,6 +503,7 @@ function arc_module_consumer(mods, names, opts)
     end
     local root = ARCANE_SDK or ARC_ROOT or "%{wks.location}"
     local vendors = {}
+    local forced = {}
     local seen = visible(mods, names)
     for _, name in ipairs(mods.order) do
         local mod = mods.byName[name]
@@ -511,7 +512,10 @@ function arc_module_consumer(mods, names, opts)
         elseif selected[name] then
             -- opts.link = false: headers only (a monolithic game's static
             -- library -- the package links every module once, whole-archived).
-            if opts.link ~= false then links { name } end
+            if opts.link ~= false then
+                links { name }
+                if not mod.vendor then forced[#forced+1] = name end
+            end
             if ARCANE_SDK and opts.link ~= false then libdirs { ARCANE_SDK .. "/Binaries/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" .. arc_layout_suffix() .. "/" .. name } end
             includedirs { (path.isabsolute(mod.root) and mod.root or root .. "/" .. mod.root) .. (mod.vendor and "" or "/src") }
             if opts.vendors ~= false then
@@ -526,6 +530,21 @@ function arc_module_consumer(mods, names, opts)
         local entry = ARC_THIRDPARTY[vendor]
         if entry then includedirs { root .. "/" .. entry.include } end
     end
+    -- A linked module is a LOADED module: a consumer that reaches a module only
+    -- through its headers (Net's Protocol.hpp) references no export, so the
+    -- linker drops the import (MSVC; GNU ld --as-needed) and the DLL never
+    -- loads -- its ARC_SETTINGS / ARC_COMPONENT registrars never run (net.*
+    -- unregistered, protocol.json's values ignored). The ArcModule_<Name>
+    -- anchor keeps every linked engine module in the import table. Only where
+    -- something links: a static library's consumer is the exe that links it.
+    -- ELF: --as-needed (Ubuntu's GCC default) keeps a DSO only for a reference
+    -- from an OBJECT -- a -u symbol is not one -- so the libraries link
+    -- --no-as-needed (premake's LDFLAGS precede LIBS on the gmake link line).
+    filter "kind:not StaticLib"
+        arc_module_forced_refs(forced)
+    filter { "kind:not StaticLib", "system:linux" }
+        if #forced > 0 then linkoptions { "-Wl,--no-as-needed" } end
+    filter {}
     if opts.stage ~= false then arc_module_stage(mods, type(opts.stage) == "table" and opts.stage or names) end
 end
 

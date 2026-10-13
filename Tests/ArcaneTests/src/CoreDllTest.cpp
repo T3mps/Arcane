@@ -54,6 +54,7 @@ namespace
 
     HMODULE CoreModule()   { return ::GetModuleHandleW(L"ArcaneCore.dll"); }
     HMODULE ClientModule() { return ::GetModuleHandleW(L"ArcaneClient.dll"); }
+    HMODULE RenderModule() { return ::GetModuleHandleW(L"ArcaneRender.dll"); }
 #elif ARC_PLATFORM_MACOS
     using ModuleId = const void*;   // the owning image's mach_header
 
@@ -82,6 +83,7 @@ namespace
 
     ModuleId CoreModule()   { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneCore")); }
     ModuleId ClientModule() { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneClient")); }
+    ModuleId RenderModule() { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneRender")); }
 #else
     using ModuleId = const void*;   // the owning object's link_map
 
@@ -109,6 +111,7 @@ namespace
 
     ModuleId CoreModule()   { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneCore")); }
     ModuleId ClientModule() { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneClient")); }
+    ModuleId RenderModule() { return LoadedModule(Arcane::Platform::SharedLibraryFileName("ArcaneRender")); }
 #endif
 }
 
@@ -116,14 +119,18 @@ TEST_CASE("ArcaneCore.dll is a loaded module and defines the Core surface", "[co
 {
     const ModuleId core   = CoreModule();
     const ModuleId client = ClientModule();
+    const ModuleId render = RenderModule();
     REQUIRE(core != nullptr);
     REQUIRE(client != nullptr);
+    REQUIRE(render != nullptr);
     CHECK(core != client);
+    CHECK(core != render);
 
     CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::Log::Engine))       == core);
     CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::Diagnostics::SetSink)) == core);
     CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::BuildInfo))          == core);
-    CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::RenderErrorCount))   == client);
+    // The render surface is its own module since the P2 carve (ARC_RENDER_API).
+    CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::RenderErrorCount))   == render);
 }
 
 TEST_CASE("one engine logger: the exe and ArcaneClient.dll see the same spdlog instance", "[core-dll]")
