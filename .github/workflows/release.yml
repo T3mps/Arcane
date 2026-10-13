@@ -280,4 +280,4 @@ jobs:
             || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."
       - name: Website rebuild skipped
         if: env.MODE == 'publish' && steps.site-token.outcome != 'success'
-        run: echo "::warning::No website token (is the StarworksBuilder app set up?). The release is published; run the website's arcane-release workflow by hand."
+        run: echo "::warning::No website token (is the Starworks Release Dispatch app installed on StarworksWebsite?). The release is published; run the website's arcane-release workflow by hand."
