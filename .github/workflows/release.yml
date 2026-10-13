@@ -5,6 +5,9 @@
 #                        nothing uploaded, no secrets, any branch.
 #   dispatch rehearsal (main only) -> a fixture build, really signed, published to
 #                        staging/ with the TEST manifest key, which no Hub trusts.
+#   dispatch rehearsal-unsigned (main only) -> the same without Windows signing:
+#                        tests the pipeline before Artifact Signing exists. staging/
+#                        only; a tag never publishes unsigned binaries.
 # Re-run only the failed jobs ("Re-run failed jobs"), never "Re-run all jobs": a
 # fresh signing gives the Windows archives new bytes under names already taken.
 # Rules (spec s4, roadmap D26): every third-party `uses:` pinned to a commit SHA
@@ -20,9 +23,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: dry-run (nothing uploaded, no secrets) or rehearsal (main only; publishes a fixture to staging/)
+        description: dry-run (nothing uploaded, no secrets), rehearsal (main only; publishes a signed fixture to staging/) or rehearsal-unsigned (the same without Windows signing)
         type: choice
-        options: [dry-run, rehearsal]
+        options: [dry-run, rehearsal, rehearsal-unsigned]
         default: dry-run
 
 permissions:
@@ -104,7 +107,7 @@ jobs:
 
   sign-windows:
     needs: [prepare, stage]
-    if: needs.prepare.outputs.mode != 'dry-run'
+    if: needs.prepare.outputs.mode != 'dry-run' && needs.prepare.outputs.mode != 'rehearsal-unsigned'
     runs-on: windows-2025
     environment: release
     permissions:
@@ -136,11 +139,13 @@ jobs:
 
   package:
     needs: [prepare, stage, sign-windows]
-    # Unsigned Windows binaries may be packed only in a dry run (fail closed).
+    # Unsigned Windows binaries may be packed only in a dry run or an unsigned
+    # rehearsal, which publishes to staging/ only (fail closed for a tag).
     if: >-
       ${{ !cancelled() && needs.stage.result == 'success' &&
       (needs.sign-windows.result == 'success' ||
-      (needs.sign-windows.result == 'skipped' && needs.prepare.outputs.mode == 'dry-run')) }}
+      (needs.sign-windows.result == 'skipped' &&
+      (needs.prepare.outputs.mode == 'dry-run' || needs.prepare.outputs.mode == 'rehearsal-unsigned'))) }}
     strategy:
       fail-fast: true
       matrix:

@@ -57,6 +57,10 @@ Actions → release → Run workflow:
 - **rehearsal** (main only): the same fixture, really signed with Artifact
   Signing, published to `downloads.starworks.dev/staging/` with the TEST
   manifest key. Use it after changing the pipeline or the hosting.
+- **rehearsal-unsigned** (main only): the rehearsal without Windows signing,
+  for testing the pipeline before Artifact Signing is set up. Its Windows
+  binaries are unsigned (SmartScreen warns), and it only ever publishes to
+  `staging/`; a tag never publishes unsigned.
 
 ## Maintaining the manifest
 

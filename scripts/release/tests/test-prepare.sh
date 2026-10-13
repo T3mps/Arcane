@@ -74,6 +74,11 @@ same "  channel" "$(out channel)" preview
 refuses "a rehearsal from a branch"           env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/topic GITHUB_RUN_NUMBER=7 INPUT_MODE=rehearsal bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
 accepts "a rehearsal from main"               env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_RUN_NUMBER=8 INPUT_MODE=rehearsal bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
 same "  mode" "$(out mode)" rehearsal
+refuses "an unsigned rehearsal from a branch"  env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/topic GITHUB_RUN_NUMBER=9 INPUT_MODE=rehearsal-unsigned bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
+accepts "an unsigned rehearsal from main"      env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main GITHUB_RUN_NUMBER=9 INPUT_MODE=rehearsal-unsigned bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
+same "  mode" "$(out mode)" rehearsal-unsigned
+same "  prefix" "$(out prefix)" staging/
+same "  version" "$(out version)" 0.0.0-preview.9
 refuses "a pull_request event"                env GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/1/merge bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
 refuses "a branch push"                       env GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main bash -c "$(declare -f prep); T='$T'; REL='$REL'; prep"
 

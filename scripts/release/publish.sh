@@ -13,7 +13,7 @@
 mode=$1 prefix=$2 version=$3 released_at=$4 notes=$5 dist=$6 work=$7
 case $mode in
     publish) [ -z "$prefix" ] || die "a publish goes to the bucket root" ;;
-    rehearsal) [ "$prefix" = staging/ ] || die "a rehearsal goes to staging/" ;;
+    rehearsal|rehearsal-unsigned) [ "$prefix" = staging/ ] || die "a rehearsal goes to staging/" ;;
     *) die "unknown mode $mode" ;;
 esac
 r2_init

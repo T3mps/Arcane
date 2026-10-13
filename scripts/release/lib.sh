@@ -162,7 +162,7 @@ select_signing_key() {
             ARCANE_MINISIGN_KEY=$MINISIGN_SECRET_KEY
             ARCANE_MINISIGN_PASSWORD=$MINISIGN_PASSWORD
             TRUST=() ;;
-        rehearsal|staging|dry-run)
+        rehearsal|rehearsal-unsigned|staging|dry-run)
             ARCANE_MINISIGN_KEY=$(cat "$TEST_KEY_DIR/test-manifest-1.key")
             ARCANE_MINISIGN_PASSWORD=arcane-test-key-not-a-secret
             TRUST=(--trust-key "$TEST_KEY_DIR/test-manifest-1.pub") ;;

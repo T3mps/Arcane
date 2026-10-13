@@ -6,6 +6,9 @@
 #                            Linux CI image must already be published.
 #   dispatch dry-run      -> a fixture build, nothing uploaded (any branch).
 #   dispatch rehearsal    -> a fixture build published to staging/ (main only).
+#   dispatch rehearsal-unsigned -> the same without Windows signing, for testing
+#                            the pipeline before Artifact Signing exists (main only;
+#                            staging/ only, so nothing unsigned reaches production).
 # released_at is now: the run's start, shared by the archives and the manifest.
 set -euo pipefail
 die() { echo "prepare: $*" >&2; exit 1; }
@@ -27,7 +30,7 @@ case $event in
         mode=${INPUT_MODE:?}
         case $mode in
             dry-run) ;;
-            rehearsal) [ "$ref" = refs/heads/main ] || die "a rehearsal runs only from main" ;;
+            rehearsal|rehearsal-unsigned) [ "$ref" = refs/heads/main ] || die "a rehearsal runs only from main" ;;
             *) die "unknown mode $mode" ;;
         esac
         version="0.0.0-preview.${GITHUB_RUN_NUMBER:?}" prefix="staging/" notes="$here/fixtures/rehearsal-notes.md" ;;
