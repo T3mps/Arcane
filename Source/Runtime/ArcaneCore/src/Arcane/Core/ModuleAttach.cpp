@@ -1,4 +1,5 @@
 #include <Arcane/Core/ModuleAttach.hpp>
+#include <exception>   // std::terminate (libc++ in Dist reaches it through nothing else)
 #include <mutex>
 #include <vector>
 
