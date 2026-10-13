@@ -38,12 +38,12 @@ file is authoritative. Summary:
 
 Build-time (not vendored):
 
-- **SDL3** is installed via vcpkg (`scripts/setup-vcpkg-deps.bat`) -- zlib
-  license.
+- **SDL3** is installed via vcpkg (`scripts/setup-vcpkg-deps.bat`) as
+  `SDL3.dll`, staged beside each program -- zlib license.
 
 Reimplemented (not vendored):
 
-- **Playwright's image comparator** -- `ArcaneClient/src/Arcane/Assets/ImageCompare.*`
+- **Playwright's image comparator** -- `Source/Runtime/ArcaneAssets/src/Arcane/Assets/ImageCompare.*`
   is a C++ reimplementation of `packages/utils/image_tools/*` and
   `packages/utils/comparators.ts` from microsoft/playwright, Apache License 2.0,
   Copyright (c) Microsoft Corporation. Constants and cascade structure are adopted

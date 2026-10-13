@@ -1,5 +1,5 @@
 // The GPU scene row (F3, spec s5.1). MIRRORS Arcane::GpuInstance
-// (ArcaneClient/src/Arcane/Render/GpuSceneTypes.hpp) field for field: 240
+// (Source/Client/ArcaneRender/src/Arcane/Render/GpuSceneTypes.hpp) field for field: 240
 // bytes -- change both or neither. Shared by mesh.hlsl and (plan 2)
 // mesh_cull.hlsl.
 //

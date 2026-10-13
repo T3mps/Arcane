@@ -91,7 +91,7 @@ project "NRI"
         -- "#include "D3D12MemAlloc.cpp"" textually (never compiled as its
         -- own TU; see ThirdParty/D3D12MA/README.md).
         "%{IncludeDir.D3D12MA}",
-        "%{wks.location}/ThirdParty/D3D12MA/src",
+        "../D3D12MA/src",   -- script-relative: correct from either layout's project location
     }
 
     defines {

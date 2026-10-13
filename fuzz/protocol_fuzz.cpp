@@ -1,4 +1,4 @@
-// libFuzzer harness: the client wire protocol (ArcaneCore/src/Arcane/Net).
+// libFuzzer harness: the client wire protocol (Source/Runtime/ArcaneNet/src/Arcane/Net).
 //
 // Wire format: LENGTH:TYPE|TOKEN|PAYLOAD\n -- ExtractLengthFramed (TcpSocket.hpp)
 // strips the length frame, Message::ParseBody (Protocol.hpp) splits the body.

@@ -1,0 +1,14 @@
+{
+  "name": "ImGui",
+  "type": "Client",
+  "vendor": true,
+  "dependencies": {
+    "public": [],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [],
+    "private": []
+  },
+  "platforms": {}
+}

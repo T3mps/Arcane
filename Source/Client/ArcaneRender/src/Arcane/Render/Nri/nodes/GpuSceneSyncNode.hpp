@@ -1,0 +1,69 @@
+#pragma once
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+
+// GpuSceneSyncNode -- the GPU scene's per-frame writer as a graph node (F3,
+// spec s8): imports the four persistent buffers, declares them CopyDst,
+// and in Record hands GpuScene::Apply the frame's staged rows, this slot's
+// args + visible indices + cull batches, and the ad-hoc rows. Transfer only;
+// no shader.
+// Declared BEFORE the mesh node -- by AddMeshNode itself (plan 1 T6, ruling
+// R-A) -- which Reads the same handles (ShaderRead / IndirectArgs), so the
+// graph derives the copy -> read barriers.
+//
+// GROWTH IS SETTLED BEFORE THE IMPORTS: AddGpuSceneSyncNode calls
+// GpuScene::Reserve first, so every handle it mints names the buffer the
+// frame will actually write and read (GpuScene.hpp's header block).
+//
+// Include order: NRI headers first, ALWAYS (NriCommon.hpp); NRIDeviceCreation.h
+// explicitly because GpuSceneTypes.hpp reaches <windows.h> (GpuScene.hpp).
+#include <NRI.h>
+#include <Extensions/NRIDeviceCreation.h>
+
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+#include <Arcane/Render/GpuSceneTypes.hpp>
+#include <Arcane/Render/Nri/RenderGraph.hpp>
+
+#include <memory>
+#include <span>
+
+namespace Arcane
+{
+    class NriGraphContext;
+
+    struct GpuSceneNodeInputs
+    {
+        RgBuffer instances{};
+        RgBuffer args{};
+        RgBuffer visibleIndices{};
+        RgBuffer cullBatches{};
+        std::shared_ptr<GpuSceneFrameReadiness> readiness;
+    };
+
+    // `frame` may be null (no registry-backed scene this frame); `adHoc` may be
+    // empty. Both are borrowed for the RenderFrame call, like FrameDesc::pickables.
+    // A null context (the device-less declaration-shape drives) imports null
+    // buffers, which the executor's barrier walk skips.
+    ARC_RENDER_API GpuSceneNodeInputs AddGpuSceneSyncNode(RenderGraph& graph, NriGraphContext* context,
+                                                       const GpuSceneFrame* frame,
+                                                       std::span<const GpuInstance> adHoc);
+
+    // TEST-ONLY (GpuScene::EnableDebugReadback): a Copy node that reads the
+    // imported instances handle into GpuScene's HOST_READBACK buffer. Declared
+    // by AddMeshNode after the mesh node, and only when the readback is armed.
+    ARC_RENDER_API void AddGpuSceneDebugReadbackNode(RenderGraph& graph, NriGraphContext* context,
+                                                 const GpuSceneNodeInputs& inputs);
+
+    // OPT-IN (GpuScene::EnableVisibilityReadback, F3 plan 2 T5): a Copy node
+    // that reads THIS SLOT's indirect args and visible indices -- what the
+    // cull pass wrote -- into the slot's HOST_READBACK buffer. Declared by
+    // AddMeshNode after the mesh node, and only when a host or a test armed
+    // the ring: an unarmed frame declares nothing and pays nothing. Reading
+    // the args as CopySrc after the mesh pass consumed them as IndirectArgs is
+    // a transition the graph derives, like every other edge here.
+    //
+    // The RESULT is published later, by the graveyard, once this frame's fence
+    // has retired -- never by a wait (GpuScene.hpp's ring block).
+    ARC_RENDER_API void AddGpuSceneVisibilityReadbackNode(RenderGraph& graph, NriGraphContext* context,
+                                                      const GpuSceneNodeInputs& inputs,
+                                                      const GpuSceneFrame* frame);
+}

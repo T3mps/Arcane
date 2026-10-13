@@ -58,7 +58,7 @@ $repoRoot   = Split-Path -Parent $PSScriptRoot
 $gate       = Join-Path $repoRoot 'scripts\golden-gate.ps1'
 $scene      = Join-Path $repoRoot 'ReferenceProject\Content\scenes\main.arcscene'
 $configDir  = "$Configuration-windows-x86_64-md"
-$runtimeDir = Join-Path $repoRoot "bin\$configDir\ArcaneRuntime"
+$runtimeDir = Join-Path $repoRoot "Binaries\$configDir\ArcaneRuntime"
 $runtimeExe = Join-Path $runtimeDir 'ArcaneRuntime.exe'
 $savedVerify = Join-Path $runtimeDir 'ReferenceProject\Saved\Verify'
 
@@ -135,12 +135,12 @@ function Set-MeshCubeBroken {
     # the gate is on disk. An assertion is the only thing separating this from
     # the failure it is here to catch.
     foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
-        $dest = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Content"
+        $dest = Join-Path $repoRoot "Binaries\$configDir\$h\ReferenceProject\Content"
         if (Test-Path $dest) {
             Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Content\*') -Destination $dest -Force -Recurse
         }
     }
-    $stagedScene = Join-Path $repoRoot "bin\$configDir\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene"
+    $stagedScene = Join-Path $repoRoot "Binaries\$configDir\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene"
     if (-not (Test-Path $stagedScene)) {
         throw "No staged scene at $stagedScene -- build the hosts once so the postbuild stages ReferenceProject, then re-run."
     }
@@ -160,7 +160,7 @@ function Restore-Scene {
     # nobody can see. A restore that only restores what git tracks is not a
     # restore.
     foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
-        $dest = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Content"
+        $dest = Join-Path $repoRoot "Binaries\$configDir\$h\ReferenceProject\Content"
         if (Test-Path $dest) {
             Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Content\*') -Destination $dest -Force -Recurse
         }
@@ -259,7 +259,7 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
                 # MEASURED 2026-08-26. --bless writes to the level the reference
                 # RESOLVED FROM. Run the gate's own invocation (`--project
                 # ReferenceProject`, relative, from the exe directory) and the
-                # blessed PNG lands in the STAGED tree under bin/ -- verified:
+                # blessed PNG lands in the STAGED tree under Binaries/ -- verified:
                 # staged mtime moved, the committed reference did not, and
                 # `git status` stayed clean. Nobody can commit that, and the
                 # next host build's postbuild ({COPYDIR} ReferenceProject)
@@ -302,7 +302,7 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
             # Without this the round-trip cannot pass and the failure would be
             # an artifact of this script, not a finding about blessing.
             foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
-                $destVerify = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Verify"
+                $destVerify = Join-Path $repoRoot "Binaries\$configDir\$h\ReferenceProject\Verify"
                 if (Test-Path $destVerify) {
                     Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Verify\*') -Destination $destVerify -Force -Recurse
                 }
@@ -334,7 +334,7 @@ if ($Phase -eq 'All' -or $Phase -eq 'B') {
         # blessed from a deliberately broken scene. That is a green for the
         # wrong reason, left behind by a verification step.
         foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
-            $destVerify = Join-Path $repoRoot "bin\$configDir\$h\ReferenceProject\Verify"
+            $destVerify = Join-Path $repoRoot "Binaries\$configDir\$h\ReferenceProject\Verify"
             if (Test-Path $destVerify) {
                 Copy-Item -Path (Join-Path $repoRoot 'ReferenceProject\Verify\*') -Destination $destVerify -Force -Recurse
             }

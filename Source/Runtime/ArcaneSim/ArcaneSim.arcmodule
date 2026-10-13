@@ -1,0 +1,17 @@
+{
+  "name": "ArcaneSim",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Astra"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

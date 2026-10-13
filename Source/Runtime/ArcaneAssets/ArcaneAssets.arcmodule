@@ -1,0 +1,21 @@
+{
+  "name": "ArcaneAssets",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "glm",
+      "nlohmann"
+    ],
+    "private": [
+      "spdlog",
+      "stb"
+    ]
+  },
+  "platforms": {}
+}

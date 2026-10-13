@@ -1,0 +1,38 @@
+{
+  "name": "SDL3",
+  "type": "Client",
+  "vendor": true,
+  "dependencies": {
+    "public": [],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [],
+    "private": []
+  },
+  "platforms": {},
+  "prebuilt": {
+    "windows": {
+      "include": "@SDL3_INCLUDE_DIR@",
+      "link": "SDL3",
+      "libdir": "@SDL3_PREFIX@/lib",
+      "runtime": ["@SDL3_PREFIX@/bin/SDL3.dll"],
+      "debug": {
+        "libdir": "@SDL3_PREFIX@/debug/lib",
+        "runtime": ["@SDL3_PREFIX@/debug/bin/SDL3.dll"]
+      }
+    },
+    "linux": {
+      "include": "@SDL3_INCLUDE_DIR@",
+      "link": "SDL3",
+      "libdir": "@SDL3_LIB_DIR@",
+      "rpath": true
+    },
+    "macosx": {
+      "include": "@SDL3_INCLUDE_DIR@",
+      "link": "SDL3",
+      "libdir": "@SDL3_LIB_DIR@",
+      "rpath": true
+    }
+  }
+}

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const profile = process.argv[2] === "debug" ? "debug" : "release";
 
-const src = resolve(here, "..", "bin-int", "hub-cargo", profile, "arcane_hub.exe");
+const src = resolve(here, "..", "Intermediate", "Build", "hub-cargo", profile, "arcane_hub.exe");
 const localAppData = process.env.LOCALAPPDATA;
 if (!localAppData) {
   console.error("stage: LOCALAPPDATA is not set -- cannot find the install folder");

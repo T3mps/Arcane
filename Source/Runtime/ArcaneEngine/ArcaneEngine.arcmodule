@@ -1,0 +1,25 @@
+{
+  "name": "ArcaneEngine",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneAssets",
+      "ArcaneCore",
+      "ArcanePhysics2D",
+      "ArcaneScene",
+      "ArcaneSim"
+    ],
+    "private": [
+      "ArcaneNet"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "glm",
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

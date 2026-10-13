@@ -10,6 +10,9 @@
 - .git
 
 # build outputs, reports, local junk (Windows and Linux)
+- /Binaries/
+# a pre-rename checkout's outputs (engine bin/ -> Binaries/, bin-int/ ->
+# Intermediate/Build/, 2026-10): stale, and GBs
 - /bin/
 - /bin-int/
 - /.vs/
@@ -42,6 +45,7 @@
 # ReferenceProject outputs (Saved/ is ignored except the tracked layout seed)
 - /ReferenceProject/Binaries/
 - /ReferenceProject/Intermediate/
+- /ReferenceProject/Packages/
 + /ReferenceProject/Saved/verify-layout.ini
 - /ReferenceProject/Saved/*
 
@@ -54,10 +58,18 @@
 - /ThirdParty/*/ide-md/
 - /Makefile
 - /ReferenceProject/Makefile
-- /Arcane*/Makefile
-- /arcbuild/Makefile
-- /arccook/Makefile
-- /ArcaneTests/death-fixture/Makefile
+- /Source/*/*/Makefile
+- /Tests/*/Makefile
+- /Tests/Fixtures/*/Makefile
+- /ThirdParty/*/ide-md/Makefile
+- /Tests/ArcaneTests/data/arcbuild-fixture/Makefile
+
+# vendor-library and test-fixture outputs (each ThirdParty premake builds
+# into its own bin/ + bin-int/; the arcbuild fixture is a game project)
+- /ThirdParty/*/bin/
+- /ThirdParty/*/bin-int/
+- /Tests/ArcaneTests/data/arcbuild-fixture/Binaries/
+- /Tests/ArcaneTests/data/arcbuild-fixture/Intermediate/
 - *.make
 - *.ninja
 - .ninja_log

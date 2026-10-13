@@ -1,0 +1,681 @@
+#pragma once
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+
+// PickOutlineNodes -- the graph's ENTITY-ID pass (PickNode) and its JUMP-FLOOD
+// SELECTION OUTLINE (OutlineNode).
+//
+// The frame's tail grows, when and only when the driver asks for it:
+//
+//   batch2d -> [post..] -> tonemap -> pick -> pickreadback -> outlineseed
+//           -> outlinejfa0 .. outlinejfaN-1 -> outlinecomposite -> [capture]
+//
+// THIS IS THE ONLY PICK/OUTLINE IMPLEMENTATION. TWO THINGS can arm it:
+// `--pick-probe x,y` (RuntimeFrame.cpp, the ONLY arming on the runtime host,
+// against a SCRIPTED selection) and NodeSet::pickOutline (EditorApp's viewport
+// context, per-frame). With NEITHER, nothing below is declared, created or
+// recorded and the frame is byte-for-byte the frame without it -- which is
+// what keeps this file unable to perturb a capture that did not ask for an
+// outline.
+//
+// ===================================================================
+// ONE EMITTER, TWO RECORDERS -- where the entity ids come from.
+// ===================================================================
+// Not from the batcher. `CollectPickables` (Render/PickEmit.hpp) is a PURE
+// walk of the Astra registry that appends one PickDrawable per pickable
+// silhouette in WORLD space (F4 spec s7.1), and the k-th appended drawable IS
+// hit-proxy id k+1 (`PickEntityForId` inverts it). The graph path consumes
+// exactly that vector -- handed in through NriGraphContext::FrameDesc::pickables
+// by the frame driver, which owns the registry, beside the ViewTransform the
+// pass projects through (FrameDesc::pickView) -- and turns the 2D kinds into
+// vertices through the SHARED `BuildPickIdGeometry`. So there is one id
+// assignment, not two that agree until one is edited. The Mesh kind takes the
+// pass's SECOND pipeline (entity_id_mesh.hlsl) over the resident buffers
+// NriMeshBufferCache already holds for MeshNode, under the same id.
+//
+// THE ORDER RULE (spec s7.1): the 2D silhouettes draw first with the depth
+// test OFF, later-wins by submission order; then the meshes draw depth-tested
+// (LESS, write) against the pass's OWN cleared D32 transient -- so a mesh
+// always owns a pixel it shares with a sprite, and meshes resolve among
+// themselves by depth, which is the main pass's order reproduced.
+//
+// ===================================================================
+// THE READBACK, and why it does not stall.
+// ===================================================================
+// PickBuffer::Pick copies one texel and then calls waitForIdle -- correct for
+// an on-demand editor click, and exactly the anti-pattern for a per-frame
+// graph path. Here the copy is a graph COPY node into an IMPORTED
+// HOST_READBACK buffer carved into ONE REGION PER FRAME SLOT, and the CPU
+// reads a region only at the moment the graph is about to overwrite it:
+//
+//   * the executor ACQUIRES the backbuffer before it resets this frame's
+//     command allocator (RenderGraph::Execute step 1 vs step 3), and the
+//     pacing wait inside NriSwapChain::AcquireNextTexture is what makes that
+//     slot safe to reuse at all -- i.e. the submission that last recorded into
+//     frame slot s has RETIRED by the time any exec fn of this frame runs;
+//   * so the readback node's exec fn drains slot s FIRST and records into it
+//     SECOND, and the value it drains is the one written FramesInFlight()
+//     frames ago. No fence query, no idle, no extra API: the same argument that
+//     makes Batch2DNode's constant-buffer arena safe.
+//
+// LATENCY IS THEREFORE FramesInFlight() FRAMES, not one -- which is
+// why --pick-probe refuses an open-ended run (HostConfig::Parse) and why a
+// probe wants a --frames N comfortably above that.
+//
+// The ReadbackHost pattern (a HOST_READBACK buffer as a copy destination,
+// mapped afterwards) is adapted from .example/NRISamples' Source/Readback.cpp
+// (MIT -- see that tree's LICENSE.txt), reached here through
+// NriGraphContext's own capture node.
+//
+// ===================================================================
+// THE PIPELINE SHAPES, source-verified against the shaders.
+// ===================================================================
+// The plan's input said "JFA per-step push constants are root constants". That
+// is true of the ID pass and FALSE of the outline passes, and the difference is
+// in the HLSL, not in NRI:
+//
+//   * data/shaders/entity_id.hlsl and entity_id_mesh.hlsl declare their b0
+//     block under `#if SPIRV [[vk::push_constant]]`, exactly like sprite.hlsl
+//     -- so PickNode's layout is ROOT CONSTANTS ONLY (80 bytes, VERTEX +
+//     FRAGMENT: the mesh PS reads the id) and carries no descriptor set at
+//     all; both blocks are the same size, so ONE layout serves both pipelines;
+//   * data/shaders/outline_seed|jfa|composite.hlsl declare plain
+//     `cbuffer ... : register(b0)` with NO push-constant variant, and the
+//     SPIR-V build shifts b0 to set-0 binding 256 (compile-shaders.bat's
+//     `-fvk-b-shift 256 0`). A root constant lowers to a VK push-constant
+//     block, which those shaders do not declare -- binding one would leave the
+//     uniform block unwritten on Vulkan. The shape is pinned by the HLSL, so
+//     changing it means changing the shaders first.
+//     => the three outline passes take DESCRIPTOR-SET constant buffers out of
+//     a per-frame-slot HOST_UPLOAD arena, the idiom Batch2DNode and
+//     PostChainNode already carry (and which the same carry names as the
+//     fallback for exactly this case).
+//
+// All three outline passes declare the IDENTICAL binding shape -- one space-0
+// set of { b0 CONSTANT_BUFFER, t0 TEXTURE }, FRAGMENT stage, and no sampler at
+// all (every one of them uses `.Load`, an integer texel fetch) -- so ONE
+// registered pipeline layout serves the whole chain; NriPipelineCache's dedup
+// makes that structural rather than a coincidence.
+//
+// ===================================================================
+// POOL EPOCH DISCIPLINE -- read RenderGraph::PoolEpoch's contract block.
+// ===================================================================
+// OutlineNode caches SHADER_RESOURCE views over graph TRANSIENTS (the id
+// target, the seed target, both ping-pong targets), so it obeys the same two
+// mechanisms FullscreenNodes documents in full: SyncPoolEpoch as the FIRST
+// statement of every Record, burying stale views at DebugSubmitCount(); and
+// one descriptor set per (region, frame slot) so a changed source is ordinary.
+// PickNode caches nothing over the pool -- its only view-shaped resource is
+// its own readback buffer -- so it needs neither.
+//
+// Include order: NRI headers first, ALWAYS -- see NriCommon.hpp.
+#include <NRI.h>
+#include <Arcane/Core/Constant.hpp>
+
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>              // MeshVertex -- the mesh half's vertex layout
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>  // Resident -- the mesh half's buffers
+#include <Arcane/Render/Nri/NriPipelineCache.hpp>
+#include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
+#include <Arcane/Render/RenderOutlineSettings.hpp>   // OutlineMaxThicknessPx, PickSupersample
+#include <Arcane/Render/FramePacing.hpp>       // kMaxFramesInFlight, FramesInFlight()
+#include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
+
+#include <glm/glm.hpp>
+#include <glm/mat4x4.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
+#include <vector>
+
+namespace Arcane
+{
+    class Graveyard;
+    class NriDevice;
+    class NriGraphContext;
+
+    // The entity-id target's format: single-channel 32-bit UINT, 0 ==
+    // background, k == the k-th drawn silhouette. Integer so the PS writes an
+    // exact id (no float rounding) -- the deleted PickBuffer.cpp's kIdFormat, verbatim.
+    inline constexpr nri::Format kGraphPickIdFormat = nri::Format::R32_UINT;
+
+    // The jump-flood field's format. The deleted SelectionOutline.cpp's kFieldFormat:
+    // .xy is a normalized [-1,1] silhouette-edge position, .z a +-1
+    // select/hover tag, .w a 0..1 coverage -- renderable and sample-able on
+    // both backends.
+    inline constexpr nri::Format kGraphOutlineFieldFormat = nri::Format::RGBA16_SNORM;
+
+    // The outline field's maximum useful radius, in 1x px, is the Restart
+    // setting render.outline.maxThicknessPx (default 32), read through the
+    // process latch Arcane::OutlineMaxThicknessPx() (RenderOutlineSettings.hpp,
+    // settings S6-21) -- the deleted SelectionOutline.cpp's `kMaxThicknessPx`,
+    // and the ONLY input to the jump-flood schedule below. The composite
+    // discards any pixel farther than half the outline width from an edge, so
+    // the field only has to be exact near a silhouette; the field is
+    // deliberately EMPTY (w == 0) beyond this.
+
+    // How many jump-flood steps the chain declares for a `maxThicknessPx`-px
+    // field: the halving schedule 2^(N-1) .. 1 (N = ceil(log2(maxThicknessPx)),
+    // whose jumps sum to 2^N - 1 >= maxThicknessPx - 1), PLUS one TRAILING
+    // jump == 1 refinement pass. Always at least 2.
+    //
+    // THE SCHEDULE IS THICKNESS-DERIVED, NOT EXTENT-DERIVED, and the
+    // difference is visible: JFA is an APPROXIMATION whose result depends on
+    // the jump sequence, so a different schedule assigns different
+    // nearest-seeds a few px from an edge -- precisely where the composite's
+    // 1-px AA ramp lives. An extent-derived schedule (ceil(log2(max(width,
+    // height))), starting at a jump spanning the whole field) therefore
+    // renders a DIFFERENT picture, not merely a slower one. The trailing
+    // jump == 1 pass is part of the look: its whole job is to sand off the
+    // errors the halving schedule leaves.
+    //
+    // Cost: 7 fullscreen triangles over the viewport, once per editor frame
+    // that has a selection -- fewer than an extent-derived count, because the
+    // schedule starts at 32 rather than at the surface's long edge.
+    [[nodiscard]] ARC_RENDER_API std::uint32_t OutlineJfaStepCount(std::uint32_t maxThicknessPx) noexcept;
+
+    // The jump for step `step` of a `steps`-step schedule: 2^(steps-2-step)
+    // down to 1, then 1 again for the trailing step. Byte-for-byte
+    // SelectionOutline::Render's `jc.jump` for the same iteration.
+    [[nodiscard]] ARC_RENDER_API std::int32_t OutlineJfaJump(std::uint32_t step,
+                                                         std::uint32_t steps) noexcept;
+
+    // =====================================================================
+    // PickNode -- the entity-id (hit-proxy) pass plus its 1-pixel readback.
+    //
+    // WHAT IT OWNS, all created once at Create():
+    //   * ONE pipeline layout (root constants b0 only, 80 bytes) registered in
+    //     the vehicle's NriPipelineCache and shared by BOTH pipelines -- no
+    //     descriptor pool, no sets, no sampler, because neither entity_id.hlsl
+    //     nor entity_id_mesh.hlsl binds anything else;
+    //   * TWO vertex-input descs, held as MEMBERS because
+    //     GraphicsPipelineDesc::vertexInput is a pointer the cache
+    //     dereferences after the fill callback returns: PickIdVertex for the
+    //     2D half, MeshVertex (MeshNode's layout, verbatim) for the mesh half;
+    //   * the HOST_READBACK buffer (one region per frame slot) and its
+    //     persistent mapping.
+    // The 2D vertex/index STREAMS are per-frame ring allocations made inside
+    // the exec fn, exactly like Batch2DNode's -- never at declaration time,
+    // since the vehicle calls ring.BeginFrame AFTER the frame is declared. The
+    // mesh half binds NriMeshBufferCache's RESIDENT buffers, resolved at
+    // declaration time (PrepareDrawables) exactly as MeshNode::Prepare does.
+    // The pass's colour target AND its own depth transient (RgPickHandles) are
+    // graph resources, minted by AddPickNodes.
+    // =====================================================================
+    class ARC_RENDER_API PickNode
+    {
+    public:
+        // Loads entity_id_vs/ps and entity_id_mesh_vs/ps through the vehicle,
+        // registers the one layout and builds the readback buffer. Null
+        // (already logged + latched) on failure.
+        static std::unique_ptr<PickNode> Create(NriGraphContext& context);
+
+        // SAFETY NET, NOT THE PATH -- see Batch2DNode's matching comment.
+        ~PickNode();
+
+        PickNode(const PickNode&)            = delete;
+        PickNode& operator=(const PickNode&) = delete;
+
+        // Buries every NRI object this node owns at `fence` and empties it.
+        // Idempotent.
+        void Release(Graveyard& graveyard, std::uint64_t fence);
+
+        // Builds the 2D geometry AND resolves every Mesh drawable's resident
+        // buffers (declaration time, like MeshNode::Prepare -- never at record
+        // time: NriMeshBufferCache::Resolve may upload). Called at DECLARATION
+        // time for the same reason Batch2DNode::Prepare is: the 2D half is
+        // pure CPU work (a quad expansion over the scene's pickables) and the
+        // recording window must not carry it. `drawables` is borrowed only for
+        // this call; `view` is the ViewTransform every drawable projects
+        // through; `meshBuffers` is nullable (no mesh picks then).
+        void PrepareDrawables(std::span<const PickDrawable> drawables, const ViewTransform& view,
+                              NriMeshBufferCache* meshBuffers, std::uint64_t frameCounter);
+
+        // Records the id pass into an ALREADY-OPEN raster pass whose single
+        // colour attachment is the R32_UINT id target and whose depth
+        // attachment is the pass's own D32 transient. Clears BOTH (the clear
+        // seam -- graph attachments are LOAD/STORE; 0 is the background id,
+        // 1.0 the far depth), then draws the 2D silhouettes depth-off and the
+        // meshes depth-tested -- the ORDER RULE at the top of this file.
+        // Emits no barrier: the executor derives them.
+        void Record(RenderGraphNodeContext& context, std::uint32_t frameSlot);
+
+        // Records the 1-texel copy into `readback`'s region for `frameSlot`,
+        // AFTER draining whatever the same region already held -- see THE
+        // READBACK at the top of this file for why that ordering is the whole
+        // synchronisation argument. A Copy node, so the executor opens no
+        // rendering around it.
+        //
+        // `ticket` RIDES WITH THE COPY and comes back beside the id when this
+        // slot is next drained. It exists because the
+        // latency makes an unlabelled value ambiguous: a host that probes a
+        // DIFFERENT pixel every frame -- the editor, whose probe is the cursor
+        // between clicks and the click pixel on a click -- cannot otherwise
+        // tell which request the value in hand answers, and applying the wrong
+        // one is a selection change the user did not ask for. Opaque here: this
+        // node stores it per slot and hands it back, and ascribes no meaning to
+        // any value including 0.
+        void RecordReadback(RenderGraphNodeContext& context, RgTexture ids, RgBuffer readback,
+                            std::int32_t probeX, std::int32_t probeY,
+                            std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot,
+                            std::uint64_t ticket = 0);
+
+        // The staging buffer the graph IMPORTS, and its size. Null/0 before a
+        // successful Create -- ImportBuffer stores the pointer without
+        // dereferencing it, so a device-less declaration drive is fine with null.
+        [[nodiscard]] nri::Buffer*  ReadbackBuffer() const noexcept { return m_readback; }
+        [[nodiscard]] std::uint64_t ReadbackBytes()  const noexcept { return m_readbackBytes; }
+
+        // The most recently DRAINED id, or nullopt until one has landed (the
+        // first FramesInFlight() frames of a probe run). 0 is a
+        // legitimate value: it means the probed pixel was background.
+        [[nodiscard]] std::optional<std::uint32_t> LastProbeId() const noexcept
+        {
+            return m_hasProbe ? std::optional<std::uint32_t>(m_probeId) : std::nullopt;
+        }
+
+        // The ticket the COPY that produced LastProbeId() carried -- see
+        // RecordReadback. Meaningless while LastProbeId() is nullopt. It does
+        // NOT reset once read: the value stays until the next drain replaces
+        // it, so a host that reads it every frame will see the same
+        // (id, ticket) pair repeatedly and is responsible for acting on it
+        // once. That is the correct division -- this node knows when a value
+        // ARRIVED, only the host knows when it has been CONSUMED.
+        [[nodiscard]] std::uint64_t LastProbeTicket() const noexcept { return m_probeTicket; }
+
+        // The id pass's supersample factor: the id target is declared at
+        // SuperSample()*width x SuperSample()*height while the root constants stay
+        // LOGICAL, so the same silhouettes rasterise at ss x density and the
+        // seed shader averages them into a sub-pixel edge centroid through
+        // gSuperSample. Stated as ONE accessor rather than left implicit so the
+        // id target's extent, the seed CB and the readback texel cannot
+        // disagree about it.
+        //
+        // CHANGING IT MOVES THE OUTLINE. At 1 every seed position shifts by a
+        // quarter pixel and the outline edge visibly changes, because the seed
+        // shader averages the supersampled silhouettes into a sub-pixel
+        // centroid -- a value other than the default 2 re-blesses the goldens.
+        // The value is Arcane::PickSupersample() (render.outline.supersample,
+        // latched for the process) -- see PickEmit.hpp.
+        [[nodiscard]] static std::uint32_t SuperSample() noexcept { return PickSupersample(); }
+
+        // entity_id.hlsl's BatchConstants and entity_id_mesh.hlsl's MeshIdConstants:
+        // BOTH 80 bytes, so ONE pipeline layout (root constants b0, vertex + fragment)
+        // serves the two pipelines. sizeof pinned because the layout registers the size.
+        struct IdRootConstants     { glm::mat4 viewProj{1.0f}; float pad[4]{}; };
+        struct MeshIdRootConstants { glm::mat4 mvp{1.0f}; std::uint32_t id = 0; std::uint32_t pad[3]{}; };
+        static_assert(sizeof(IdRootConstants) == 80 && sizeof(MeshIdRootConstants) == 80,
+                      "one layout, two shaders");
+        // (The HLSL pads are three scalar uints, deliberately -- see entity_id_mesh.hlsl.)
+
+        // PURE and public so the [nri] tests can prove the property no device
+        // can show: distinct frame slots own distinct, alignment-legal readback
+        // regions. `sliceAlignment` is the device's
+        // memoryAlignment.uploadBufferTextureSlice, which
+        // TextureDataLayoutDesc::offset must be a multiple of.
+        [[nodiscard]] static constexpr std::uint64_t ReadbackRegionStride(
+            std::uint64_t rowPitch, std::uint64_t sliceAlignment) noexcept
+        {
+            return sliceAlignment <= 1
+                 ? (rowPitch == 0 ? 4u : rowPitch)
+                 : ((rowPitch + sliceAlignment - 1) / sliceAlignment) * sliceAlignment;
+        }
+
+    private:
+        PickNode() = default;
+
+        bool Init(NriGraphContext& context);
+        bool CreateReadback();
+
+        // Record's two halves, in the ORDER RULE's order: the 2D silhouettes
+        // (depth-off, ring-streamed) and then the meshes (depth-tested, over
+        // the resident buffers PrepareDrawables resolved).
+        void Record2D(RenderGraphNodeContext& context);
+        void RecordMeshes(RenderGraphNodeContext& context);
+
+        // See Batch2DNode::kShaderPairBase / TonemapNode::kShaderPairId: one
+        // shared pipeline cache, so the nodes' opaque shader-pair id spaces
+        // must not overlap. Two pairs here: the 2D half and the mesh half.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
+        static constexpr std::uint64_t kShaderPairId     = 0x4100;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
+        static constexpr std::uint64_t kMeshShaderPairId = 0x4101;
+
+        NriDevice*        m_device    = nullptr;
+        NriPipelineCache* m_pipelines = nullptr;
+
+        // Owned by the vehicle's bin cache; outlives this node, which the
+        // pipeline cache's fill contract (rule 2) requires.
+        std::span<const std::uint8_t> m_vs;
+        std::span<const std::uint8_t> m_ps;
+        std::span<const std::uint8_t> m_meshVs;
+        std::span<const std::uint8_t> m_meshPs;
+
+        std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
+
+        // MEMBERS, not locals: GraphicsPipelineDesc::vertexInput is a pointer
+        // CreateGraphicsPipeline dereferences AFTER the fill callback returns.
+        // The 2D half's PickIdVertex layout, and the mesh half's MeshVertex
+        // layout (MeshNode.cpp's, attribute for attribute).
+        nri::VertexAttributeDesc m_attributes[4]{};
+        nri::VertexStreamDesc    m_stream{};
+        nri::VertexInputDesc     m_vertexInput{};
+        nri::VertexAttributeDesc m_meshAttributes[3]{};
+        nri::VertexStreamDesc    m_meshStream{};
+        nri::VertexInputDesc     m_meshVertexInput{};
+
+        // The readback staging buffer: FramesInFlight() regions of
+        // m_readbackStride bytes, persistently mapped (NRI's D3D12 UnmapBuffer
+        // is a no-op anyway). NONE-backend MapBuffer returns null, so this node
+        // is a [gpu] path from Create() down -- the same footgun the upload
+        // ring and Batch2DNode's arena carry.
+        nri::Buffer*  m_readback       = nullptr;
+        const void*   m_readbackCpu    = nullptr;
+        std::uint64_t m_readbackBytes  = 0;
+        std::uint64_t m_readbackStride = 0;
+        std::uint32_t m_readbackRow    = 0;   // aligned rowPitch for a 1x1 R32_UINT copy
+
+        // Which frame slots hold a copy that has been recorded but not yet
+        // drained. Cleared by the drain, set by the record -- both inside the
+        // readback node's exec fn.
+        bool m_pending[kMaxFramesInFlight]{};
+        // The ticket each pending copy carried, written beside m_pending and
+        // published to m_probeTicket by the drain. Per SLOT because that is the
+        // granularity the copies themselves have.
+        std::uint64_t m_ticket[kMaxFramesInFlight]{};
+
+        // The prepared geometry for the frame being declared. Members rather
+        // than per-frame vectors so a steady-state probe run allocates nothing.
+        std::vector<PickIdVertex> m_vertices;
+        std::vector<std::uint32_t> m_indices;
+        // The frame's view-projection (FrameDesc::pickView), the 2D half's
+        // root constant.
+        glm::mat4 m_viewProj{1.0f};
+
+        // The mesh half's draw list for the frame being declared: BORROWED
+        // pointers into NriMeshBufferCache's map, resolved by PrepareDrawables
+        // and cleared by Record (its last reader) -- the same discipline
+        // MeshNode::m_residents documents, for the same reason (an
+        // InvalidateMeshGeometry between two frames erases map nodes).
+        struct MeshDraw
+        {
+            const NriMeshBufferCache::Resident* resident = nullptr;
+            glm::mat4                           mvp{1.0f};
+            std::uint32_t                       id = 0;
+        };
+        std::vector<MeshDraw> m_meshDraws;
+
+        std::uint32_t m_probeId     = 0;
+        std::uint64_t m_probeTicket = 0;
+        bool          m_hasProbe    = false;
+        bool          m_warnedRing  = false;
+    };
+
+    // =====================================================================
+    // OutlineNode -- ONE object serving the WHOLE outline chain (seed, every
+    // jump-flood step, and the composite), because all three passes share one
+    // binding shape, one pipeline layout and one constant arena. The per-pass
+    // differences are only the PSO (different bytecode, and a different target
+    // format + blend for the composite) and which arena region / descriptor set
+    // the pass reads -- exactly the split PostChainNode makes.
+    //
+    // WHAT IT OWNS, all created once at Create():
+    //   * the one space-0 pipeline layout ({ b0 CB, t0 texture }, FRAGMENT),
+    //     registered in the vehicle's NriPipelineCache;
+    //   * one descriptor pool holding kCbRegionsPerFrame x
+    //     FramesInFlight() sets -- one per (region, frame slot);
+    //   * the per-frame-slot HOST_UPLOAD constant arena those sets' b0 views
+    //     name, carved into fixed regions: 0 the seed CB, 1 the composite CB,
+    //     2 + step the step's JFA CB;
+    //   * the cached SHADER_RESOURCE views over the graph transients each pass
+    //     samples, under the POOL EPOCH discipline.
+    // =====================================================================
+    class ARC_RENDER_API OutlineNode
+    {
+    public:
+        // Loads the six outline bins through the vehicle and builds the layout,
+        // pool, sets and arena. Null (already logged + latched) on failure.
+        static std::unique_ptr<OutlineNode> Create(NriGraphContext& context);
+
+        // SAFETY NET, NOT THE PATH -- see Batch2DNode's matching comment.
+        ~OutlineNode();
+
+        OutlineNode(const OutlineNode&)            = delete;
+        OutlineNode& operator=(const OutlineNode&) = delete;
+
+        // Buries every NRI object this node owns at `fence` and empties it.
+        // Idempotent.
+        void Release(Graveyard& graveyard, std::uint64_t fence);
+
+        // Buries every view over a graph transient and forgets what each set has
+        // bound, so the next frame rebuilds both. MUST be called before the graph
+        // releases its transient pool -- TEARDOWN and RESIZE only; the in-run
+        // case is SyncPoolEpoch inside Record. Idempotent.
+        void InvalidateSources(Graveyard& graveyard, std::uint64_t fence);
+
+        // COPIES this frame's selection -- the hit-proxy ids the outline traces
+        // as ONE silhouette (their union), so two touching selected entities
+        // show a single outline with no seam. Called at DECLARATION time, and
+        // that is not a style choice: the driver's span lives only for the span
+        // of one BuildFrame (NriGraphContext::CurrentSelectedIds), while
+        // RecordSeed runs later, inside Execute. The same reason
+        // PostChainNode::PrepareChain copies its GlobalParams by value.
+        // Over kMaxSelectedIds the first kMaxSelectedIds are kept, with one WARN.
+        void PrepareSelection(std::span<const std::uint32_t> selectedIds);
+
+        // The composite's two colours (settings arc S4; ruling I5, S6-21 reuses
+        // this transport): the editor pushes editor.theme.amber (selected) and
+        // the graph hover border (hovered) every frame. The member defaults
+        // are the values this node always drew, kept for the producer with no
+        // theme -- ArcaneRuntime's --pick-probe outline.
+        void SetColors(const glm::vec4& select, const glm::vec4& hover) noexcept
+        {
+            m_selectColor[0] = select.x; m_selectColor[1] = select.y; m_selectColor[2] = select.z; m_selectColor[3] = select.w;
+            m_hoverColor[0]  = hover.x;  m_hoverColor[1]  = hover.y;  m_hoverColor[2]  = hover.z;  m_hoverColor[3]  = hover.w;
+        }
+
+        // Pass 1: the SUPERSAMPLED R32_UINT id buffer -> a boundary-seeded
+        // RGBA16_SNORM field at 1x, over the selection PrepareSelection copied.
+        // A cursor of (-1,-1) means no hover.
+        void RecordSeed(RenderGraphNodeContext& context, RgTexture ids, RgTexture target,
+                        std::int32_t cursorX, std::int32_t cursorY, std::uint32_t superSample,
+                        std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot);
+
+        // Pass 2, run once per step with `jump` halving from 2^(N-1) to 1.
+        void RecordJfa(RenderGraphNodeContext& context, std::uint32_t step, std::int32_t jump,
+                       RgTexture source, RgTexture target,
+                       std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot);
+
+        // Pass 3: the field -> an anti-aliased two-colour outline BLENDED over
+        // `target` (the tonemapped backbuffer). The PSO's attachment format is
+        // read back from the resolved target rather than assumed, for the same
+        // reason TonemapNode's is: NRI resolves the swapchain's channel order.
+        void RecordComposite(RenderGraphNodeContext& context, RgTexture field, RgTexture target,
+                             std::uint32_t width, std::uint32_t height, std::uint32_t frameSlot);
+
+        // The chain's caps, and they are pool/arena SIZING constants rather
+        // than opinions about content -- a pool's capacity is fixed at creation
+        // and NRI cannot free a single descriptor set, so the alternative to a
+        // cap is discovering the limit mid-frame.
+        //
+        // 16 steps floods a 65536-px field; the declarator clamps to this and
+        // says so once.
+        ARC_CONSTANT("layout: constant-buffer region count; the log2 ceiling of the JFA schedule")
+        static constexpr std::uint32_t kMaxJfaSteps = 16;
+        // outline_seed.hlsl's `uint4 gSelectedIds[16]` -- 64 ids. Pinned by
+        // the .cpp's static_assert(kMaxSelectedIds * sizeof(std::uint32_t)
+        // == 256, ...) against outline_seed.hlsl's uint4[16].
+        ARC_CONSTANT("shader contract: the 256-byte cbuffer id array the outline shader reads (static_assert)")
+        static constexpr std::uint32_t kMaxSelectedIds = 64;
+        // The largest of the three constant blocks: SeedCB is 288 bytes
+        // (32 header + 256 ids). Pinned by a static_assert in the .cpp.
+        ARC_CONSTANT("layout: constant-buffer placement size; the struct must fit")
+        static constexpr std::uint32_t kCbMaxBytes = 288;
+
+        // Region 0 is the seed CB, region 1 the composite CB, region 2 + step
+        // the JFA step's. One descriptor set per (region, frame slot).
+        ARC_CONSTANT("layout: constant-buffer region index")
+        static constexpr std::uint32_t kSeedRegion         = 0;
+        ARC_CONSTANT("layout: constant-buffer region index")
+        static constexpr std::uint32_t kCompositeRegion    = 1;
+        ARC_CONSTANT("layout: constant-buffer region index")
+        static constexpr std::uint32_t kJfaRegionBase      = 2;
+        static constexpr std::uint32_t kCbRegionsPerFrame  = kJfaRegionBase + kMaxJfaSteps;
+
+        // PURE and public for the same reason Batch2DNode's twins are: they
+        // carry invariants whose violation would be silent. The stride must be
+        // BOTH a multiple of the device's constant-buffer alignment (or every
+        // view past the first is misaligned) AND at least kCbMaxBytes (or the
+        // seed CB spills into the next region).
+        [[nodiscard]] static constexpr std::uint64_t CbRegionStride(
+            std::uint64_t constantBufferAlignment) noexcept
+        {
+            return constantBufferAlignment <= 1
+                 ? kCbMaxBytes
+                 : ((kCbMaxBytes + constantBufferAlignment - 1) / constantBufferAlignment)
+                       * constantBufferAlignment;
+        }
+
+        [[nodiscard]] static constexpr std::uint64_t CbRegionOffset(
+            std::uint64_t regionStride, std::uint32_t frameSlot, std::uint32_t region) noexcept
+        {
+            return ((std::uint64_t)frameSlot * kCbRegionsPerFrame + region) * regionStride;
+        }
+
+        // The owner's declaration-time pool sync -- see PostChainNode's
+        // identically-named overload for the full reasoning. THIS node is the
+        // one that made the case reachable: the outline chain is declared only
+        // while something wants an outline, so toggling the selection off
+        // shrinks the pool while this node is not in the frame to notice.
+        void SyncPoolEpoch(const RenderGraph& graph);
+
+    private:
+        OutlineNode() = default;
+
+        bool Init(NriGraphContext& context);
+        bool CreateBindings();
+        bool CreateConstantArena();
+
+        // Records one fullscreen pass: binds the (region, frame slot) set with
+        // `source` at t0, copies `cbBytes` into that region, and draws the
+        // 3-vertex triangle. False (already reported) when anything refused.
+        bool RecordPass(RenderGraphNodeContext& context, std::uint32_t region,
+                        std::uint64_t shaderPairId,
+                        std::span<const std::uint8_t> vs, std::span<const std::uint8_t> ps,
+                        RgTexture source, RgTexture target, NriPipelineCache::GraphicsKey::Blend blend,
+                        const void* cb, std::size_t cbBytes, std::uint32_t frameSlot);
+
+        // The cached SHADER_RESOURCE view over `texture`, creating it on first
+        // sight. Null (already reported) if NRI refused it.
+        [[nodiscard]] nri::Descriptor* EnsureView(const nri::CoreInterface& core,
+                                                  nri::Texture* texture);
+        // Drops every cached view when the graph's POOL EPOCH moved -- the same
+        // mechanism, for the same reason, as FullscreenNodes'. Called as the
+        // FIRST statement of every Record path.
+        void SyncPoolEpoch(const RenderGraphNodeContext& context);
+
+        [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot, std::uint32_t region) const
+        {
+            return CbRegionOffset(m_arenaStride, frameSlot, region);
+        }
+        [[nodiscard]] std::uint32_t SetIndex(std::uint32_t frameSlot, std::uint32_t region) const noexcept
+        {
+            return frameSlot * kCbRegionsPerFrame + region;
+        }
+
+        // See Batch2DNode::kShaderPairBase: one shared cache, so the nodes'
+        // opaque id spaces must not overlap. PickNode is 0x4100-0x4101.
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
+        static constexpr std::uint64_t kSeedPairId      = 0x4000;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
+        static constexpr std::uint64_t kJfaPairId       = 0x4001;
+        ARC_CONSTANT("id scheme: pick/outline shader-pair ids")
+        static constexpr std::uint64_t kCompositePairId = 0x4002;
+
+        NriDevice*        m_device    = nullptr;
+        NriPipelineCache* m_pipelines = nullptr;
+
+        // All six bins, owned by the vehicle's bin cache (fill contract rule 2).
+        std::span<const std::uint8_t> m_seedVs, m_seedPs;
+        std::span<const std::uint8_t> m_jfaVs, m_jfaPs;
+        std::span<const std::uint8_t> m_compositeVs, m_compositePs;
+
+        std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
+
+        nri::DescriptorPool* m_pool = nullptr;
+        // One set per (frame slot, region) -- SetIndex() is the flattening.
+        nri::DescriptorSet*  m_sets[kMaxFramesInFlight * kCbRegionsPerFrame]{};
+        // What each set currently has bound at t0; a rebind happens only when
+        // it changes.
+        nri::Texture*        m_bound[kMaxFramesInFlight * kCbRegionsPerFrame]{};
+
+        nri::Buffer*     m_arena       = nullptr;
+        void*            m_arenaCpu    = nullptr;
+        std::uint64_t    m_arenaStride = 0;
+        nri::Descriptor* m_cbView[kMaxFramesInFlight * kCbRegionsPerFrame]{};
+
+        // SHADER_RESOURCE views over graph transients, keyed by texture. Buried
+        // wholesale when the pool epoch moves.
+        struct SourceView { nri::Texture* texture = nullptr; nri::Descriptor* view = nullptr; };
+        // This frame's selection, COPIED by PrepareSelection at declaration time
+        // because the driver's span does not survive to record time. Reserved to
+        // the cap at Create, so a steady-state probe run allocates nothing.
+        std::vector<std::uint32_t> m_selectedIds;
+
+        std::vector<SourceView> m_views;
+        // The graph pool epoch m_views was built against. 0 is also
+        // RenderGraph's starting value, which is correct: an empty cache has
+        // nothing to invalidate.
+        std::uint64_t           m_poolEpoch = 0;
+
+        bool m_warnedViewChurn = false;
+        bool m_warnedIdOverflow = false;
+
+        float m_selectColor[4] = { 1.0f, 0.65f, 0.10f, 1.0f };
+        float m_hoverColor[4]  = { 0.25f, 0.70f, 1.00f, 1.0f };
+    };
+
+    // =====================================================================
+    // The declarators. Each takes `context` as a POINTER for the same reason
+    // AddBatch2DNode does: the device-less [nri] frame-shape cases drive the REAL
+    // declarations with no device, and a null context makes only the exec fns
+    // inert.
+    // =====================================================================
+
+    struct RgPickHandles
+    {
+        RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::SuperSample() x
+        RgTexture depth{};      // the pass-local D32 transient (spec s7.1), supersampled like ids
+        RgBuffer  readback{};   // the imported HOST_READBACK staging buffer
+    };
+
+    // Declares "pick" (Raster, the id pass) and "pickreadback" (Copy, the
+    // 1-texel probe copy) into `graph`. `width`/`height` are the LOGICAL 1x
+    // extent: the id target AND the pass's own depth are created here at
+    // PickNode::SuperSample() times that; the id target is read by both the
+    // readback and the outline seed (which are told the factor rather than
+    // left to infer it), the depth by nothing outside the pass.
+    ARC_RENDER_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
+                                          std::uint32_t width, std::uint32_t height);
+
+    // Declares "outlineseed" plus OutlineJfaStepCount(OutlineMaxThicknessPx())
+    // "outlinejfaN" nodes, and hands back the LAST step's target -- the field
+    // the composite samples. Every target is its OWN RGBA16_SNORM transient at
+    // the 1x extent; the two-physical-texture ping-pong is the transient pool
+    // allocator's answer to their lifetimes, exactly as it is for the post
+    // chain (FullscreenNodes.hpp, THE PING-PONG IS DERIVED).
+    ARC_RENDER_API RgTexture AddOutlineNodes(RenderGraph& graph, NriGraphContext* context,
+                                         RgTexture ids,
+                                         std::uint32_t width, std::uint32_t height);
+
+    // Declares "outlinecomposite": blends the field over `target` -- the
+    // imported backbuffer the tonemap has already written. Declared AFTER the
+    // tonemap and BEFORE the capture node, which is the editor's own
+    // compositing order (its phase 12 runs after the scene render and before
+    // the ImGui pass).
+    ARC_RENDER_API void AddOutlineCompositeNode(RenderGraph& graph, NriGraphContext* context,
+                                            RgTexture field, RgTexture target,
+                                            std::uint32_t width, std::uint32_t height);
+}

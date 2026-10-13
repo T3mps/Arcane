@@ -7,35 +7,19 @@
 -- Tools/ keep their static-runtime conventions, unaffected.
 
 -- vcpkg required for SDL3 (platform layer; deep build system -> vcpkg per
--- the repo rule). Overlay triplet x64-windows-static-md pins v143 + /MD.
+-- the repo rule). Overlay triplet x64-windows-static-md pins v143 + /MD and
+-- builds SDL3 (only) as a DLL: SDL3 is a prebuilt vendor MODULE
+-- (ThirdParty/SDL3/SDL3.arcmodule) -- one SDL3.dll per process, staged beside
+-- every program whose module closure reaches it. The discovery below feeds
+-- that descriptor's @SDL3_INCLUDE_DIR@ / @SDL3_PREFIX@ / @SDL3_LIB_DIR@.
 -- Linux/macOS (Linux port, 2026-10-05): SDL3 is NOT taken from vcpkg there --
 -- it comes from the system (pkg-config `sdl3`, e.g. a from-source install in
 -- /usr/local; Ubuntu 24.04 does not package SDL3). VCPKG_ROOT is therefore a
 -- Windows-target requirement only, and VCPKG_INSTALLED_MD is nil elsewhere.
-VCPKG_ROOT = os.getenv("VCPKG_ROOT")
-if os.target() == "windows" then
-if not VCPKG_ROOT then
-    error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and re-run GenerateProjects.bat.")
-end
-VCPKG_INSTALLED_MD = VCPKG_ROOT .. "/installed/x64-windows-static-md"
-SDL3_INCLUDE_DIR = VCPKG_INSTALLED_MD .. "/include"
-else
-    -- `pkg-config --variable=includedir sdl3` names the include ROOT (the one
-    -- holding SDL3/SDL.h), which is what every <SDL3/...> include expects.
-    -- SDL3_ROOT (an install prefix) overrides it; neither -> the compiler's
-    -- default search path, which already covers /usr/include and /usr/local/include.
-    local sdlRoot = os.getenv("SDL3_ROOT")
-    if sdlRoot then
-        SDL3_INCLUDE_DIR = sdlRoot .. "/include"
-        SDL3_LIB_DIR     = sdlRoot .. "/lib"
-    else
-        local inc, ok = os.outputof("pkg-config --variable=includedir sdl3 2>/dev/null")
-        local lib = os.outputof("pkg-config --variable=libdir sdl3 2>/dev/null")
-        if inc and inc ~= "" then SDL3_INCLUDE_DIR = inc end
-        if lib and lib ~= "" then SDL3_LIB_DIR = lib end
-    end
-    SDL3_INCLUDE_DIR = SDL3_INCLUDE_DIR or "/usr/local/include"
-end
+-- The discovery itself is shared with SDK consumers (a package links SDL3 too):
+-- arc_discover_sdl3() in build/modules.lua.
+include "build/modules.lua"
+arc_discover_sdl3()
 
 -- ---- Per-target file-name spellings (Linux port, 2026-10-05) ---------------
 -- Every postbuild line below names a built binary. A Windows target keeps its
@@ -97,12 +81,36 @@ function arcane_cmds(list)
     return out
 end
 
+-- The vendor runtime files a GPU-capable program stages beside itself, in ONE
+-- place (P3). Engine module DLLs and the prebuilt vendor modules (SDL3) are
+-- NOT here: arc_module_stage (build/modules.lua) stages a program's module
+-- closure. MoltenVK joins this list with the macOS package (P5).
+function arcane_vendor_runtime()
+    return arcane_cmds {
+        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
+        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
+        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"'),
+        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"'),
+        -- Linux/macOS: the same service dlopen()s libdxcompiler (+ libdxil on
+        -- Linux), staged when present (arcane_stage_dxc above).
+        arcane_stage_dxc(),
+        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
+        -- reads the exe's exported D3D12SDKPath (".\D3D12\", see each main.cpp /
+        -- test_main.cpp) and looks there for D3D12Core.dll to unlock enhanced
+        -- barriers / ID3D12Device10+ in NRI's D3D12 backend.
+        arcane_win('{MKDIR} "%{cfg.buildtarget.directory}/D3D12"'),
+        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"'),
+        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"'),
+    }
+end
+
 -- imgui's IMGUI_API spelling per target. __declspec is a PE/COFF-only
 -- keyword: GCC rejects it outright on ELF and Clang needs -fdeclspec. ELF
 -- exports every default-visibility symbol (no import decoration exists), so
 -- the empty spelling is exact there while the workspace keeps default
--- visibility (no -fvisibility=hidden).
-if ARCANE_WINDOWS then
+-- visibility (no -fvisibility=hidden). The monolithic layout links ImGui
+-- statically into one image: empty everywhere.
+if ARCANE_WINDOWS and _OPTIONS.layout ~= "monolithic" then
     ARCANE_IMGUI_EXPORT = "__declspec(dllexport)"
     ARCANE_IMGUI_IMPORT = "__declspec(dllimport)"
 else
@@ -115,7 +123,7 @@ end
 -- overridable with ARCANE_MAC_ARCH=arm64|x86_64 (e.g. to cross-generate from
 -- Linux with --os=macosx). Every other target keeps "x64". premake reports
 -- ARM64 as %{cfg.architecture} = "AARCH64", so the Mac bin dirs are
--- bin/<Config>-macosx-AARCH64-md (scripts/arcane-bin-dir.sh spells it once).
+-- Binaries/<Config>-macosx-AARCH64-md (scripts/arcane-bin-dir.sh spells it once).
 -- build/arcane.lua carries the same rule so a game module matches its engine.
 function arcane_mac_architecture()
     local want = os.getenv("ARCANE_MAC_ARCH")
@@ -133,10 +141,39 @@ function arcane_mac_architecture()
 end
 ARCANE_ARCH = (os.target() == "macosx") and arcane_mac_architecture() or "x64"
 
+newoption {
+    trigger = "layout",
+    value = "LAYOUT",
+    description = "Engine link layout",
+    allowed = { { "modular" }, { "monolithic" } },
+    default = "modular",
+}
+
+-- The monolithic layout (engine modularization s2.5/s3.3): every Runtime and
+-- Client module as a static library, plus ArcaneRuntimeHost -- the pieces a
+-- packaged game links (`arcbuild package`). Generated under Intermediate/Mono/
+-- (ARC_MONOLITHIC_PROJECTS below), so neither layout overwrites the other;
+-- outputs land in Binaries/<cfg>-<sys>-<arch>-mono/. Programs, tests and fixtures
+-- are modular only.
+ARC_MONOLITHIC_LAYOUT = (_OPTIONS.layout == "monolithic")
+-- Where the monolithic layout's workspace + project files go (gitignored): a
+-- separate tree, because gmake names every project file Makefile and the
+-- workspace's Makefile sits at the root -- generated in place they would
+-- overwrite the modular ones. Sources are located by module root (modules.lua).
+ARC_MONOLITHIC_PROJECTS = ARC_MONOLITHIC_LAYOUT and "Intermediate/Mono" or nil
+-- The repo root as the engine's paths spell it: %{wks.location} in the modular
+-- layout (its generated files sit at the root), the absolute root in the
+-- monolithic one (whose workspace lives in Intermediate/Mono).
+ARC_ROOT = ARC_MONOLITHIC_LAYOUT and _MAIN_SCRIPT_DIR or "%{wks.location}"
+
 workspace "Arcane"
     architecture(ARCANE_ARCH)
     startproject "ArcaneTests"
     configurations { "Debug", "Release", "Dist" }
+    if ARC_MONOLITHIC_LAYOUT then
+        defines { "ARC_MONOLITHIC" }
+        location(ARC_MONOLITHIC_PROJECTS)
+    end
     multiprocessorcompile "On"
 
     -- MSVC: /utf-8 ensures source + execution charsets are UTF-8.
@@ -166,7 +203,7 @@ workspace "Arcane"
         buildoptions { "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer" }
         -- $ORIGIN FIRST: the staged layout (libArcaneCore.so/libArcaneClient.so
         -- beside the exe) must win, exactly as the PE loader searches the exe
-        -- directory first -- otherwise the dev-tree bin/<cfg>/ArcaneCore copy
+        -- directory first -- otherwise the dev-tree Binaries/<cfg>/ArcaneCore copy
         -- loads and the injected-module census calls the engine foreign.
         -- runpathdirs (unlike linkoptions) is emitted AHEAD of the
         -- ../ArcaneCore-style entries premake adds for linked siblings, which
@@ -196,21 +233,22 @@ workspace "Arcane"
     defines { "ARC_MODULE_NAME=%{prj.name}" }
 
     -- "-md" suffix keeps ThirdParty wrapper outputs (each dep builds into
-    -- bin/ under its own dir) separate from the static-CRT flavors the
+    -- Binaries/ under its own dir) separate from the static-CRT flavors the
     -- Server workspace builds from the same wrapper scripts.
-    outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
+    outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-" ..
+        (_OPTIONS.layout == "monolithic" and "mono" or "md")
 
     -- Shared ThirdParty wrappers read these; their defaults preserve the
     -- Server/Tools behavior (static CRT, vcxproj in the dep root).
     THIRDPARTY_STATICRUNTIME    = "off"
-    THIRDPARTY_PROJECT_LOCATION = "ide-md"
+    THIRDPARTY_PROJECT_LOCATION = ARC_MONOLITHIC_LAYOUT and "ide-mono" or "ide-md"
     -- imgui wrapper: SDL3 backend includes come from the same vcpkg -md install
     -- used by the rest of the workspace (identical path to IncludeDir["SDL3"]).
     THIRDPARTY_SDL3_INCLUDE     = SDL3_INCLUDE_DIR
     -- imgui lives inside ArcaneClient.dll (ImGuiLayer + the frame graph's ImGuiNriNode).
     -- Export it so GImGui and the sdl3 backend symbols live in ONE module:
     -- the imgui static lib builds with dllexport, the DLL's own TUs match,
-    -- and consumers (ArcaneTests/ArcaneRuntime) import. Without this each module
+    -- and consumers (ArcaneTests, ArcaneRuntime) import. Without this each module
     -- keeps its own null GImGui and ShowDemoWindow() from the test exe asserts.
     THIRDPARTY_IMGUI_API        = ARCANE_IMGUI_EXPORT
     -- imgui-node-editor links into ArcaneEditor.exe, which IMPORTS imgui from
@@ -218,230 +256,234 @@ workspace "Arcane"
     THIRDPARTY_NODE_EDITOR_IMGUI_API = ARCANE_IMGUI_IMPORT
 
     IncludeDir = {}
-    IncludeDir["ArcaneCore"]       = "%{wks.location}/ArcaneCore/src"
-    IncludeDir["ArcaneAssetPipeline"] = "%{wks.location}/ArcaneAssetPipeline/src"
-    IncludeDir["nlohmann"]         = "%{wks.location}/ThirdParty/nlohmann"
-    IncludeDir["picosha2"]         = "%{wks.location}/ThirdParty/picosha2"
-    IncludeDir["spdlog"]           = "%{wks.location}/ThirdParty/spdlog/include"
-    IncludeDir["Catch2"]           = "%{wks.location}/ThirdParty/Catch2/src"
-    IncludeDir["rapidcheck"]       = "%{wks.location}/ThirdParty/rapidcheck/include"
-    IncludeDir["rapidcheck_catch"] = "%{wks.location}/ThirdParty/rapidcheck/extras/catch/include"
-    IncludeDir["glm"]              = "%{wks.location}/ThirdParty/glm"
-    IncludeDir["stb"]              = "%{wks.location}/ThirdParty/stb"
-    IncludeDir["miniaudio"]        = "%{wks.location}/ThirdParty/miniaudio"
-    IncludeDir["Astra"]            = "%{wks.location}/ThirdParty/Astra/include"
-    IncludeDir["enkiTS"]           = "%{wks.location}/ThirdParty/enkiTS/src"
-    IncludeDir["tracy"]            = "%{wks.location}/ThirdParty/tracy/public"
-    IncludeDir["freetype"]         = "%{wks.location}/ThirdParty/freetype/include"
-    IncludeDir["msdfgen"]          = "%{wks.location}/ThirdParty/msdfgen"
-    IncludeDir["NRI"]              = "%{wks.location}/ThirdParty/NRI/Include"
-    IncludeDir["VulkanHeaders"]    = "%{wks.location}/ThirdParty/Vulkan-Headers/include"
-    IncludeDir["DirectXHeaders"]   = "%{wks.location}/ThirdParty/DirectX-Headers/include"
-    IncludeDir["VMA"]              = "%{wks.location}/ThirdParty/VMA/include"
-    IncludeDir["D3D12MA"]          = "%{wks.location}/ThirdParty/D3D12MA/include"
+    IncludeDir["nlohmann"]         = ARC_ROOT .. "/ThirdParty/nlohmann"
+    IncludeDir["picosha2"]         = ARC_ROOT .. "/ThirdParty/picosha2"
+    IncludeDir["spdlog"]           = ARC_ROOT .. "/ThirdParty/spdlog/include"
+    IncludeDir["Catch2"]           = ARC_ROOT .. "/ThirdParty/Catch2/src"
+    IncludeDir["rapidcheck"]       = ARC_ROOT .. "/ThirdParty/rapidcheck/include"
+    IncludeDir["rapidcheck_catch"] = ARC_ROOT .. "/ThirdParty/rapidcheck/extras/catch/include"
+    IncludeDir["glm"]              = ARC_ROOT .. "/ThirdParty/glm"
+    IncludeDir["stb"]              = ARC_ROOT .. "/ThirdParty/stb"
+    IncludeDir["miniaudio"]        = ARC_ROOT .. "/ThirdParty/miniaudio"
+    IncludeDir["Astra"]            = ARC_ROOT .. "/ThirdParty/Astra/include"
+    IncludeDir["enkiTS"]           = ARC_ROOT .. "/ThirdParty/enkiTS/src"
+    IncludeDir["tracy"]            = ARC_ROOT .. "/ThirdParty/tracy/public"
+    IncludeDir["freetype"]         = ARC_ROOT .. "/ThirdParty/freetype/include"
+    IncludeDir["msdfgen"]          = ARC_ROOT .. "/ThirdParty/msdfgen"
+    IncludeDir["NRI"]              = ARC_ROOT .. "/ThirdParty/NRI/Include"
+    IncludeDir["VulkanHeaders"]    = ARC_ROOT .. "/ThirdParty/Vulkan-Headers/include"
+    IncludeDir["DirectXHeaders"]   = ARC_ROOT .. "/ThirdParty/DirectX-Headers/include"
+    IncludeDir["VMA"]              = ARC_ROOT .. "/ThirdParty/VMA/include"
+    IncludeDir["D3D12MA"]          = ARC_ROOT .. "/ThirdParty/D3D12MA/include"
     IncludeDir["SDL3"]             = SDL3_INCLUDE_DIR
-    IncludeDir["imgui"]            = "%{wks.location}/ThirdParty/imgui"
-    IncludeDir["imguinodeeditor"]  = "%{wks.location}/ThirdParty/imgui-node-editor"
-    IncludeDir["Manifold2D"]       = "%{wks.location}/ThirdParty/Manifold2D/include"
-    IncludeDir["Mosaic"]           = "%{wks.location}/ThirdParty/Mosaic/include"
-    IncludeDir["bc7enc_rdo"]       = "%{wks.location}/ThirdParty/bc7enc_rdo"
-    IncludeDir["cgltf"]            = "%{wks.location}/ThirdParty/cgltf"
-    IncludeDir["meshoptimizer"]    = "%{wks.location}/ThirdParty/meshoptimizer/src"
+    IncludeDir["imgui"]            = ARC_ROOT .. "/ThirdParty/imgui"
+    IncludeDir["imguinodeeditor"]  = ARC_ROOT .. "/ThirdParty/imgui-node-editor"
+    IncludeDir["Manifold2D"]       = ARC_ROOT .. "/ThirdParty/Manifold2D/include"
+    IncludeDir["Mosaic"]           = ARC_ROOT .. "/ThirdParty/Mosaic/include"
+    IncludeDir["bc7enc_rdo"]       = ARC_ROOT .. "/ThirdParty/bc7enc_rdo"
+    IncludeDir["cgltf"]            = ARC_ROOT .. "/ThirdParty/cgltf"
+    IncludeDir["meshoptimizer"]    = ARC_ROOT .. "/ThirdParty/meshoptimizer/src"
 
-group "Dependencies"
-    include "ThirdParty/Catch2"
-    include "ThirdParty/rapidcheck"
+    local engine_modules = arc_modules_load {
+        "Source", "ThirdParty/imgui/ImGui.arcmodule", "ThirdParty/imgui-node-editor/ImGuiNodeEditor.arcmodule",
+        "ThirdParty/SDL3/SDL3.arcmodule",
+    }
+    -- ARC_GAME_DEFAULT_MODULES (a descriptor-less game's set) and the game
+    -- descriptor reader (arc_game_descriptor) live in build/modules.lua, shared
+    -- with build/arcane.lua; the game-type fixtures below read their own
+    -- .arcmodule through it (game_fixture_modules).
+
+-- Vendor static libraries share the "ThirdParty" folder with the vendor modules.
+group "ThirdParty"
+    -- Test and asset-pipeline vendors are modular-only (no package links them).
+    if not ARC_MONOLITHIC_LAYOUT then
+        include "ThirdParty/Catch2"
+        include "ThirdParty/rapidcheck"
+    end
     include "ThirdParty/enkiTS"
     include "ThirdParty/tracy"
     include "ThirdParty/freetype"
     include "ThirdParty/msdfgen"
     include "ThirdParty/NRI"
-    include "ThirdParty/imgui"
-    include "ThirdParty/imgui-node-editor"
     include "ThirdParty/Manifold2D"
-    include "ThirdParty/bc7enc_rdo"
-    include "ThirdParty/meshoptimizer"
+    if not ARC_MONOLITHIC_LAYOUT then
+        include "ThirdParty/bc7enc_rdo"
+        include "ThirdParty/meshoptimizer"
+    end
 group ""
 
 
-group "Engine"
--- ============================================================================
--- ArcaneCore: THE shared engine DLL (spec docs/specs/2026-09-15-core-dll-split-
--- design.md). Presentation-free -- Base/Config/Jobs/Material/Mesh/Plugin/
--- Project/Scene/Serialization/Sim/Sprite/Assets, none of which reach
--- Render/Nri/Platform/ImGui/Input/Audio/Host. Every exe stages ArcaneCore.dll
--- beside itself and every module (ArcaneClient.dll, the hosts, arccook/
--- arcbuild, ArcaneTests, game modules) links the import lib, so there is
--- exactly ONE copy per process BY CONSTRUCTION. Also consumed FROM SOURCE by
--- the Server workspace with an explicit file list (Plan 2 retires that).
--- ============================================================================
-project "ArcaneCore"
-    location "ArcaneCore"
-    kind "SharedLib"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
+-- Descriptor-driven module projects. Every build-only exception lives here.
+local function module_defaults()
     floatingpoint "Strict"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "%{prj.location}/src/**.hpp",
-        "%{prj.location}/src/**.cpp",
-    }
-
-    includedirs {
-        "%{prj.location}/src",
-        "%{IncludeDir.nlohmann}",
-        "%{IncludeDir.picosha2}",
-        "%{IncludeDir.spdlog}",
-        -- M6 physics module (Arcane/Physics/) uses glm for vec2/mat. glm is
-        -- header-only; adding it here keeps ArcaneCore presentation-free.
-        "%{IncludeDir.glm}",
-        -- Core-DLL split: Assets/ decodes images (stb_image, whose one
-        -- implementation TU Assets/StbImpl.cpp moved here with it).
-        "%{IncludeDir.stb}",
-        -- Core-DLL split: Scene/ + Serialization/ are Astra-typed (Registry,
-        -- reflection); Jobs/JobSystem.cpp instantiates enkiTS.
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        -- Phase 2 lift: ArcaneCore's still-resident Physics/Geometry will
-        -- include Manifold2D/Core primitives (FunctionRef/BitSet/Simd/
-        -- WorkScheduler) ahead of the Task 2 move.
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.Mosaic}",
-    }
-
-    -- enkiTS: Jobs/JobSystem.cpp instantiates a TaskScheduler. Manifold2D:
-    -- Scene/PhysicsSystem.hpp is header-only today, but the link belongs on
-    -- this DLL from the start -- it is where the physics world will live.
-    links { "enkiTS", "Manifold2D" }
-
-    defines {
-        "ARC_CORE_API_EXPORTS",
-        "_CRT_SECURE_NO_WARNINGS",
-        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-        "NOMINMAX",
-        "WIN32_LEAN_AND_MEAN",
-    }
-
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "NOMINMAX", "WIN32_LEAN_AND_MEAN" }
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-        -- dbghelp: MiniDumpWriteDump + StackWalk64/Sym* behind
-        -- Arcane/Base/Diagnostics.cpp (crash + hang post-mortem capture),
-        -- which moved into this DLL with the rest of Base/.
-        -- user32/gdi32: Platform/NativeWindow.cpp (crash window plan 2) --
-        -- explicit rather than inherited from the VS default list.
-        links { "dbghelp", "user32", "gdi32" }
-        -- The POSIX backend of Diagnostics (signals, the snapshot signal, the
-        -- Breakpad-format minidump) never builds into a PE image.
-        removefiles { "%{prj.location}/src/Arcane/Base/Posix/**" }
-
-    -- ELF: dlopen/dladdr (Module, ForeignModules) and threads; -z defs makes
-    -- an unresolved symbol a link error HERE, not at the first exe link.
-    -- Hidden visibility (inventory G1): the PE model, where a DLL exports
-    -- ONLY what ARCANE_CORE_API marks and every header-defined static (the
-    -- spdlog registry, Logger's sink stack, Astra's per-module statics) is
-    -- the module's own. With default visibility ELF exported ~59k symbols
-    -- and silently unified those statics across the exe and both engine
-    -- .so's -- state the engine's Windows-designed cross-module seams
-    -- (SharedTypeContext, Log::Engine) assume is per-module.
+        fatalwarnings { "4715" }
     filter "system:not windows"
-        links { "dl", "pthread" }
-        visibility "Hidden"
+        if not ARC_MONOLITHIC_LAYOUT then links { "dl", "pthread" } end   -- a package links them once
         inlinesvisibility "Hidden"
-    -- Mach-O's ld64 already refuses undefined symbols in a dylib by default
-    -- (-undefined error); -z defs is a GNU ld spelling it rejects.
     filter "system:linux"
         linkoptions { "-Wl,-z,defs" }
-
+    -- A package links with --gc-sections / -dead_strip: per-function sections
+    -- make the stripping function-granular (the MSVC twin is /Gy, on by default).
+    if ARC_MONOLITHIC_LAYOUT then
+        filter "system:not windows"
+            buildoptions { "-ffunction-sections", "-fdata-sections" }
+    end
+    filter { "system:not windows", "toolset:gcc" }
+        buildoptions { "-fno-gnu-unique" }
     filter "configurations:Debug"
         defines { "ARC_BUILD_DEBUG" }
         runtime "Debug"
         symbols "on"
-
     filter "configurations:Release"
         defines { "ARC_BUILD_RELEASE", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "on"
-
     filter "configurations:Dist"
         defines { "ARC_BUILD_DIST", "NDEBUG" }
         runtime "Release"
         optimize "speed"
         symbols "off"
+    filter {}
+end
+
+ARC_MODULE_EXTRAS = {}
+for _, name in ipairs(engine_modules.order) do ARC_MODULE_EXTRAS[name] = module_defaults end
+ARC_MODULE_EXTRAS.ArcaneCore = function()
+    module_defaults()
+    -- System libraries live in the descriptors (platforms.<os>.links): a
+    -- monolithic static module must not absorb them (the package links them once).
+    filter "system:windows"
+        removefiles { ARC_MODULE_ROOT .. "/src/Arcane/Base/Posix/**" }
+    filter {}
+end
+ARC_MODULE_EXTRAS.ArcaneRender = function()
+    module_defaults()
+    defines { "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1" }
+    includedirs { "%{IncludeDir.DirectXHeaders}/directx" }
+    filter "system:windows"
+        defines { "VK_USE_PLATFORM_WIN32_KHR" }
+        prebuildcommands { 'call "' .. ARC_ROOT .. '/data/shaders/compile-shaders.bat"' }
+    filter "system:not windows"
+        prebuildcommands { 'sh "' .. ARC_ROOT .. '/data/shaders/compile-shaders.sh"' }
+        removefiles { ARC_MODULE_ROOT .. "/src/Arcane/Render/DeviceCreationD3D12.cpp", ARC_MODULE_ROOT .. "/src/Arcane/Render/GpuCrashD3D12.cpp" }
+    filter "system:linux"
+        includedirs { ARC_ROOT .. "/ThirdParty/tools/dxc-linux/include/dxc" }
+    filter "system:macosx"
+        includedirs { ARC_ROOT .. "/ThirdParty/tools/dxc-macos/include/dxc" }
+    filter {}
+end
+ARC_MODULE_EXTRAS.ArcaneAssetPipeline = function()
+    module_defaults()
+    -- cgltf's entry points ArcaneTests calls directly (CgltfImpl.cpp's note).
+    filter "system:windows"
+        linkoptions { "/EXPORT:cgltf_parse", "/EXPORT:cgltf_validate", "/EXPORT:cgltf_free" }
+    filter {}
+end
+ARC_MODULE_EXTRAS.ImGui = function()
+    -- The vendor DLL: Dear ImGui's core only, exporting IMGUI_API (GImGui and the
+    -- whole API live in ONE image; replaces ArcaneClient's /WHOLEARCHIVE:imgui
+    -- re-export). The SDL3 platform backend compiles into ArcaneImGui, the one
+    -- module that drives it, so this DLL does not depend on SDL3.
+    module_defaults()
+    cppdialect "C++17"
+    local r = ARC_MODULE_ROOT
+    files { r .. "/imgui.cpp", r .. "/imgui_draw.cpp", r .. "/imgui_tables.cpp", r .. "/imgui_widgets.cpp", r .. "/imgui_demo.cpp" }
+    includedirs { r }
+    defines { "IMGUI_API=" .. ARCANE_IMGUI_EXPORT }
+    filter "system:not windows"
+        visibility "Default"   -- IMGUI_API is empty off-Windows: export by default visibility
+    filter {}
+end
+ARC_MODULE_EXTRAS.ImGuiNodeEditor = function()
+    module_defaults()
+    cppdialect "C++17"
+    local r = ARC_MODULE_ROOT
+    files { r .. "/imgui_node_editor.cpp", r .. "/imgui_node_editor_api.cpp", r .. "/imgui_canvas.cpp", r .. "/crude_json.cpp" }
+    includedirs { r }
+    defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "IMGUI_NODE_EDITOR_API=" .. ARCANE_IMGUI_EXPORT }
+    filter "system:not windows"
+        visibility "Default"
+    filter {}
+end
+ARC_MODULE_EXTRAS.ArcaneImGui = function()
+    module_defaults()
+    -- imgui's SDL3 platform backend lives here (see ImGui above); IMGUI_IMPL_API
+    -- empty = module-internal, while the core API is imported from ImGui.dll.
+    files { ARC_ROOT .. "/ThirdParty/imgui/backends/imgui_impl_sdl3.cpp" }
+    defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT, "IMGUI_IMPL_API=" }
+end
+ARC_MODULE_EXTRAS.ArcaneClient = module_defaults
+-- What a package can link (s3.2: Developer and Editor modules never reach a
+-- game), so the only modules the monolithic layout builds.
+local function packageable(mod)
+    return mod.type == "Runtime" or mod.type == "Client"
+end
+for _, name in ipairs(engine_modules.order) do
+    local mod = engine_modules.byName[name]
+    if not mod.prebuilt and (not ARC_MONOLITHIC_LAYOUT or packageable(mod)) then
+        group(mod.vendor and "ThirdParty" or mod.type)
+        arc_module_project(engine_modules, name)
+    end
+end
+group ""
 
 -- ============================================================================
--- ArcaneAssetPipeline: offline asset-cook artifact library (F2b Task 1).
--- Presentation-free, no Client/editor deps -- reads/writes the .arcart
--- artifact formats (texture now, mesh in F2c). arccook (later tasks) links
--- this alongside ArcaneCore to produce cooked content; this lib only
--- INCLUDES ArcaneCore headers (Guid) and does not link ArcaneCore itself.
--- Same warnings/flags shape as ArcaneCore's block above (server-style), but a
--- StaticLib -- ArcaneCore itself is the shared DLL (Core-DLL split, 2026-09-15).
+-- ArcaneRuntimeHost: the standalone host's whole body (RuntimeApp, the frame
+-- body, Arcane::RuntimeHost::Run) as a static library, built in BOTH layouts
+-- (engine modularization s3.3). Modular: linked by ArcaneRuntime.exe with the
+-- verification vehicle (ArcaneVerify; ARC_RUNTIME_HOST_VERIFY). Monolithic:
+-- linked by every packaged <Game>.exe, without it -- a package never links a
+-- Developer module (s3.2), so --headless/--report/--compare are refused there.
 -- ============================================================================
-project "ArcaneAssetPipeline"
-    location "ArcaneAssetPipeline"
+group "Programs"
+project "ArcaneRuntimeHost"
+    arc_module_consumer(engine_modules,
+        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui" },
+        { stage = false })
+    location(ARC_MONOLITHIC_PROJECTS and path.join(ARC_MONOLITHIC_PROJECTS, "ArcaneRuntimeHost") or "Source/Programs/ArcaneRuntimeHost")
     kind "StaticLib"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    floatingpoint "Strict"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "%{prj.location}/src/**.hpp",
-        "%{prj.location}/src/**.cpp",
-    }
-
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+    files { "Source/Programs/ArcaneRuntimeHost/src/**.cpp", "Source/Programs/ArcaneRuntimeHost/src/**.hpp" }
     includedirs {
-        "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.nlohmann}",   -- Task 3: TextureMetaSettings::FromMetaJson/ToMetaJson
-        "%{IncludeDir.stb}",        -- Task 3: TextureImporter decode (stb_image) + StbImpl.cpp
-        "%{IncludeDir.bc7enc_rdo}", -- Task 4: TextureImporter BC7 encode (bc7enc.h)
-        "%{IncludeDir.spdlog}",     -- I1 fix (final-review wave): TextureMetaSettings' WARN
-        "%{IncludeDir.cgltf}",          -- F2c Task 1: MeshImporter cgltf_parse/cgltf_validate + CgltfImpl.cpp
-        "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: MeshImporter remap/optimize/simplify (meshoptimizer.h)
-        "%{IncludeDir.glm}",            -- F2c Task 7: MeshImporter's bake math (node-transform
-                                         -- composition, inverse-transpose normals, winding-flip
-                                         -- cross/dot). Header-only -- no link.
-        "%{IncludeDir.Astra}",          -- settings arc S6-6: TextureMetaSettings is a reflected settings struct
-        "%{IncludeDir.Mosaic}",         -- ...and Astra's platform layer
+        "Source/Programs/ArcaneRuntimeHost/src",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.imgui}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        -- HEADERS ONLY (see ArcaneRuntime's note below): Manifold2D-typed
+        -- engine roster, Mosaic's scheduler alias, NRI-typed NriGraphContext.
+        "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
+        "%{IncludeDir.NRI}",
     }
-
-    defines {
-        "_CRT_SECURE_NO_WARNINGS",
-        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-    }
-
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
+    if not ARC_MONOLITHIC_LAYOUT then defines { "ARC_RUNTIME_HOST_VERIFY" } end
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+    filter "configurations:Debug"    defines { "ARC_BUILD_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
+group ""
 
-    filter "configurations:Debug"
-        defines { "ARC_BUILD_DEBUG" }
-        runtime "Debug"
-        symbols "on"
-
-    filter "configurations:Release"
-        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "on"
-
-    filter "configurations:Dist"
-        defines { "ARC_BUILD_DIST", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "off"
+-- The monolithic layout stops here: programs, tests and fixtures are modular only.
+if ARC_MONOLITHIC_LAYOUT then return end
+-- Programs (Source/Programs/<Program>/), the test exe (Tests/ArcaneTests/) and
+-- its fixtures (Tests/Fixtures/<Fixture>/): every project below names its own
+-- solution folder right before it, and the last one resets the group.
 
 -- ============================================================================
 -- arccook: the offline asset cook CLI (F2b Task 5). Cooks a project's Content/
@@ -455,15 +497,17 @@ project "ArcaneAssetPipeline"
 -- ArcaneTests) `dependson` this project and runs it in its own postbuild
 -- BEFORE staging Content -- see those projects' postbuildcommands below.
 -- ============================================================================
+group "Programs"
 project "arccook"
-    location "arccook"
+    arc_module_consumer(engine_modules, { "ArcaneAssetPipeline" })
+    location "Source/Programs/arccook"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -472,8 +516,6 @@ project "arccook"
 
     includedirs {
         "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.ArcaneAssetPipeline}",
         -- CookSession.hpp pulls in TextureMetaSettings.hpp (a public
         -- ArcaneAssetPipeline header), which needs <Json.hpp>.
         "%{IncludeDir.nlohmann}",
@@ -481,21 +523,12 @@ project "arccook"
         "%{IncludeDir.Mosaic}",     -- ...and Astra's platform layer
     }
 
-    -- bc7enc_rdo: ArcaneAssetPipeline's TextureImporter calls into it for the BC7 encode
-    -- path -- a static lib doesn't transitively pull its own links, so any consumer
-    -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as
-    -- ArcaneEditor's/ArcaneTests' own links line.
-    -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline's MeshImporter calls into it --
-    -- same transitive-link reasoning as bc7enc_rdo above. cgltf is header-only (its
-    -- one implementation TU, CgltfImpl.cpp, source-compiles into ArcaneAssetPipeline
-    -- itself), so it needs no links entry of its own.
-    links { "ArcaneCore", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
+    -- bc7enc_rdo/meshoptimizer link into ArcaneAssetPipeline.dll itself now (P2).
     dependson { "ArcaneAssetPipeline" }
 
     -- Core-DLL split: ArcaneCore is a DLL now, loaded from this exe's own
-    -- directory (dev bin layout: bin/<cfg>/arccook/).
+    -- directory (dev bin layout: Binaries/<cfg>/arccook/).
     postbuildcommands(arcane_cmds {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
     })
 
     defines {
@@ -541,15 +574,17 @@ project "arccook"
 -- (Request.cpp, Slot.cpp, Compose.cpp) is ALSO source-compiled into
 -- ArcaneTests ([build]).
 -- ============================================================================
+group "Programs"
 project "arcbuild"
-    location "arcbuild"
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto" })
+    location "Source/Programs/arcbuild"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -558,7 +593,6 @@ project "arcbuild"
 
     includedirs {
         "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
         -- Project.hpp's include closure (ProjectManifest -> <Json.hpp> + glm;
         -- Diagnostics -> spdlog/Mosaic): headers only, same set ArcaneRuntime
         -- takes minus imgui/NRI.
@@ -570,7 +604,6 @@ project "arcbuild"
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "ArcaneCore" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -578,10 +611,9 @@ project "arcbuild"
     }
 
     -- The driver loads ArcaneCore.dll from its own directory (dev bin
-    -- layout: bin/<cfg>/arcbuild/); a packaged layout ships it beside the
+    -- layout: Binaries/<cfg>/arcbuild/); a packaged layout ships it beside the
     -- editor, where the DLL already is.
     postbuildcommands(arcane_cmds {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
     })
 
     filter "system:windows"
@@ -625,15 +657,17 @@ project "arcbuild"
 -- gated the same way.
 -- ============================================================================
 if os.target() == "windows" then
+group "Tests/Fixtures"
 project "arcbuild-process-fixture"
-    location "ArcaneTests/process-fixture"
+    arc_module_consumer(engine_modules, { "ArcaneCore" })
+    location "Tests/Fixtures/arcbuild-process-fixture"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/ProcessFixtureMain.cpp",
@@ -678,27 +712,27 @@ end   -- arcbuild-process-fixture: Windows target only (Task 6)
 -- its `--reporter`/`--monitor` hand-off stays Windows-only (below), because
 -- ArcaneCrashReporter does.
 -- ============================================================================
+group "Tests/Fixtures"
 project "death-fixture"
-    location "ArcaneTests/death-fixture"
+    arc_module_consumer(engine_modules, { "ArcaneCore" })
+    location "Tests/Fixtures/death-fixture"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/DeathFixtureMain.cpp",
     }
 
     includedirs {
-        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "ArcaneCore" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -752,9 +786,8 @@ project "death-fixture"
     -- The fixture loads ArcaneCore.dll from its own directory, same as every
     -- other consumer (mirrors ArcaneTests' matching postbuild line).
     postbuildcommands(arcane_cmds {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
     })
 
 -- ============================================================================
@@ -775,15 +808,17 @@ project "death-fixture"
 -- today, and dbgeng/dbghelp have no counterpart elsewhere.
 -- ============================================================================
 if os.target() == "windows" then
+group "Programs"
 project "ArcaneCrashReporter"
-    location "ArcaneCrashReporter"
+    arc_module_consumer(engine_modules, { "ArcaneCore" })
+    location "Source/Programs/ArcaneCrashReporter"
     kind "WindowedApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.hpp",
@@ -801,18 +836,17 @@ project "ArcaneCrashReporter"
 
     includedirs {
         "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.spdlog}",     -- Log.hpp
         "%{IncludeDir.Mosaic}",     -- Assert.hpp
         "%{IncludeDir.nlohmann}",   -- Monitor.cpp reads the host's session record (task 9)
         "%{wks.location}/ThirdParty/imgui",
         "%{wks.location}/ThirdParty/imgui/backends",
-        "%{wks.location}/ArcaneEditor/src",   -- Widgets/EditorTheme.hpp, header-only
+        "%{wks.location}/Source/Programs/ArcaneEditor/src",   -- Widgets/EditorTheme.hpp, header-only
     }
 
     -- No dwmapi: nothing in the reporter calls Dwm*; imgui_impl_win32.cpp
     -- pragma-links it for its own use.
-    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32", "d3d11", "dxgi" }
+    links { "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32", "d3d11", "dxgi" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -825,7 +859,6 @@ project "ArcaneCrashReporter"
     -- The reporter loads ArcaneCore.dll from its own directory, same as every
     -- other consumer (arcbuild's matching postbuild line is the template).
     postbuildcommands(arcane_cmds {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
     })
 
     filter "system:windows"
@@ -839,186 +872,6 @@ project "ArcaneCrashReporter"
 end   -- ArcaneCrashReporter: Windows target only
 
 -- ============================================================================
--- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
--- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
--- SDL3 links INTO this DLL; consumers link only the import lib.
--- Second namespaced include root: src/Arcane/{Base,Platform,Render} --
--- relative paths are disjoint from ArcaneCore's root (Net/Crypto/Types/Util),
--- so <Arcane/...> resolves unambiguously across both.
--- ============================================================================
-project "ArcaneClient"
-    location "ArcaneClient"
-    kind "SharedLib"
-    language "C++"
-    cppdialect "C++23"
-    staticruntime "off"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "%{prj.location}/src/**.hpp",
-        "%{prj.location}/src/**.cpp",
-    }
-
-    -- Shaders are data: compiled at build time, loaded by name at runtime,
-    -- hot-reloadable. The script is the single swap point for ShaderMake.
-    -- Windows: compile-shaders.bat over the vendored dxc.exe. Elsewhere its
-    -- POSIX twin (same entry points, same flags) over a Linux dxc -- see that
-    -- script's header for how it resolves the binary.
-    filter "system:windows"
-        prebuildcommands {
-            'call "%{wks.location}/data/shaders/compile-shaders.bat"',
-        }
-    filter "system:not windows"
-        prebuildcommands {
-            'sh "%{wks.location}/data/shaders/compile-shaders.sh"',
-        }
-        -- The two D3D12-only TUs (device creation + the DRED crash backend)
-        -- include <d3d12.h>/<dxgi1_6.h> unconditionally; a Vulkan-only (non-
-        -- Windows) build does not compile them. DeviceRemovedD3D12Stub.cpp is
-        -- their link-time twin there.
-        removefiles {
-            "%{prj.location}/src/Arcane/Render/DeviceCreationD3D12.cpp",
-            "%{prj.location}/src/Arcane/Render/GpuCrashD3D12.cpp",
-        }
-    filter {}
-
-    includedirs {
-        "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.nlohmann}",
-        "%{IncludeDir.picosha2}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.NRI}",
-        "%{IncludeDir.VulkanHeaders}",
-        "%{IncludeDir.DirectXHeaders}",
-        "%{IncludeDir.DirectXHeaders}/directx",
-        "%{IncludeDir.SDL3}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.stb}",
-        "%{IncludeDir.miniaudio}",
-        "%{IncludeDir.msdfgen}",
-        "%{IncludeDir.freetype}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.Mosaic}",
-    }
-
-    links { "ArcaneCore", "NRI", "msdfgen", "freetype", "imgui", "enkiTS", "Manifold2D" }
-
-    -- Force EVERY imgui object (incl. imgui_demo's ShowDemoWindow) into the
-    -- DLL so their dllexport symbols are emitted: a dllexport in a static-lib
-    -- object only produces an export when the linker actually pulls that
-    -- object in, and the DLL itself references only a subset of the imgui API.
-    -- /WHOLEARCHIVE exports the full surface for consumers (tests/ArcaneRuntime).
-    -- NOTE: Linux port needs --whole-archive/-l imgui --no-whole-archive instead.
-    filter "system:windows"
-        linkoptions { "/WHOLEARCHIVE:imgui" }
-    -- ELF twin of /WHOLEARCHIVE: the archive path is spelled out because
-    -- --whole-archive applies to the inputs that FOLLOW it on the command line.
-    -- -z defs: an ELF shared object otherwise links with undefined symbols
-    -- and they surface only at the exe link (84 SDL_* did, inventory A11).
-    filter "system:linux"
-        linkoptions {
-            "-Wl,--whole-archive",
-            "%{wks.location}/ThirdParty/imgui/bin/" .. outputdir .. "/imgui/libimgui.a",
-            "-Wl,--no-whole-archive",
-            "-Wl,-z,defs",
-        }
-    -- Mach-O twin: ld64's -force_load takes the archive as its argument
-    -- (undefined symbols are already a dylib link error by default there).
-    -- SDL3 is a from-source dylib whose install name is @rpath/libSDL3.0.dylib,
-    -- so the dylib that links it carries an rpath to its lib dir; dyld resolves
-    -- @rpath through every image on the load chain, so the hosts need nothing.
-    filter "system:macosx"
-        linkoptions {
-            "-Wl,-force_load,%{wks.location}/ThirdParty/imgui/bin/" .. outputdir .. "/imgui/libimgui.a",
-        }
-        if SDL3_LIB_DIR then linkoptions { "-Wl,-rpath," .. SDL3_LIB_DIR } end
-    filter "system:not windows"
-        -- SDL3 (shared, from the system -- see SDL3_INCLUDE_DIR at the top),
-        -- dlopen/dladdr, threads.
-        links { "SDL3", "dl", "pthread" }
-        -- Hidden visibility, as ArcaneCore (inventory G1): only ARCANE_API
-        -- leaves the .so. imgui is unaffected -- its objects are compiled in
-        -- the imgui static lib at default visibility and pulled in whole, so
-        -- GImGui and the full API still export (the /WHOLEARCHIVE contract).
-        visibility "Hidden"
-        inlinesvisibility "Hidden"
-        if SDL3_LIB_DIR then libdirs { SDL3_LIB_DIR } end
-        -- dxcapi.h + its WinAdapter.h COM shim for the runtime ShaderCompiler
-        -- (the Windows SDK supplies dxcapi.h there). From the Linux DXC
-        -- release that scripts/fetch-dxc-linux.sh drops in place; on macOS
-        -- the Vulkan SDK's copy (scripts/fetch-vulkan-sdk-macos.sh links it
-        -- into ThirdParty/tools/dxc-macos/).
-    filter "system:linux"
-        includedirs { "%{wks.location}/ThirdParty/tools/dxc-linux/include/dxc" }
-    filter "system:macosx"
-        includedirs { "%{wks.location}/ThirdParty/tools/dxc-macos/include/dxc" }
-    filter {}
-
-    defines {
-        "ARC_API_EXPORTS",
-        "_CRT_SECURE_NO_WARNINGS",
-        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
-        "VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1",
-        "NOMINMAX",
-        "WIN32_LEAN_AND_MEAN",
-        -- This DLL's own TUs include imgui.h; they must export the same
-        -- IMGUI_API as the imgui static lib's object files (set via the
-        -- THIRDPARTY_IMGUI_API workspace global). IMGUI_IMPL_API follows.
-        "IMGUI_API=" .. ARCANE_IMGUI_EXPORT,
-    }
-
-    filter "system:windows"
-        systemversion "latest"
-        buildoptions { "/Zc:__cplusplus", "/bigobj" }
-        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
-        defines { "VK_USE_PLATFORM_WIN32_KHR" }
-        -- d3d12/dxgi/dxguid: D3D12 backend. SDL3-static + system libs:
-        -- the platform layer (list mirrors SDL3's pkgconfig Libs line).
-        links {
-            "d3d12", "dxgi", "dxguid",
-            "SDL3-static",
-            "user32", "gdi32", "winmm", "imm32", "ole32", "oleaut32",
-            "version", "uuid", "advapi32", "setupapi", "shell32", "dinput8",
-            -- dbghelp: MiniDumpWriteDump + StackWalk64/Sym* behind
-            -- Arcane/Base/Diagnostics.cpp (crash + hang post-mortem capture).
-            "dbghelp",
-        }
-
-    filter { "system:windows", "configurations:Debug" }
-        libdirs { (VCPKG_INSTALLED_MD or "") .. "/debug/lib" }   -- nil off-Windows; the filter never matches there
-    filter { "system:windows", "configurations:Release or configurations:Dist" }
-        libdirs { (VCPKG_INSTALLED_MD or "") .. "/lib" }
-
-    filter "configurations:Debug"
-        defines { "ARC_BUILD_DEBUG" }
-        runtime "Debug"
-        symbols "on"
-
-    filter "configurations:Release"
-        -- NDEBUG must match every other statically-linked dependency in this
-        -- workspace, in particular NRI's Release build (ThirdParty/NRI/premake5.lua
-        -- defines NDEBUG in Release): NRI's D3D12 Agility SDK path and Vulkan
-        -- dispatch tables carry NDEBUG-gated layout risk, so a mismatch between
-        -- ArcaneClient.dll and the statically-linked NRI causes a function-pointer
-        -- lookup to read the wrong offset.
-        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "on"
-
-    filter "configurations:Dist"
-        defines { "ARC_BUILD_DIST", "NDEBUG" }
-        runtime "Release"
-        optimize "speed"
-        symbols "off"
-
--- ============================================================================
 -- ArcaneServer: the Core-only dedicated-server host (ArcaneServer.exe). Core-DLL
 -- split (spec docs/specs/2026-09-15-core-dll-split-design.md s6, plan 1 Task 6):
 -- opens a project, loads its game module, and ticks a fixed-step loop headless --
@@ -1027,18 +880,21 @@ project "ArcaneClient"
 -- see the postbuild copy's matching comment for why ArcaneClient.dll is still
 -- STAGED beside this exe despite never being linked).
 -- ============================================================================
+group "Programs"
 project "ArcaneServer"
-    location "ArcaneServer"
+    -- Links Engine/Net/Crypto ONLY (P10) but STAGES a game module's full set: the
+    -- loader must resolve every module DLL a game module imports to MAP it at all.
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto" }, { stage = ARC_GAME_DEFAULT_MODULES })
+    location "Source/Programs/ArcaneServer"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
     includedirs {
         "%{prj.location}/src",
-        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.glm}",
@@ -1054,29 +910,16 @@ project "ArcaneServer"
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
     }
-    -- ArcaneCore ONLY -- see this project's header comment. NOT ArcaneClient:
-    -- that link line is the whole point of this task.
-    links { "ArcaneCore" }
-    -- R30 (crash window plan 2, task 4): a REAL build-order defect, fixed here
-    -- because this task edits the postbuild block below anyway. This exe links
-    -- ArcaneCore ONLY, so nothing ordered its ArcaneClient.dll copy (see that
-    -- line's own comment) after ArcaneClient's LINK -- on a fresh parallel
-    -- build the copy ran before the DLL existed, failed, and was hidden behind
-    -- the later successful copies in the same multi-line command. The staged
-    -- server slot then had no ArcaneClient.dll, which makes ArcaneServer unable
-    -- to MAP any SDK-built game module at all (diagnosed on a clean worktree:
-    -- the [witness][server] lane failed until the DLL was staged by hand).
-    -- A link edge would be the wrong fix -- P10 is that this exe links Core
-    -- only -- so the ordering is stated directly.
-    dependson { "ArcaneClient" }
+    -- Links the Engine/Net/Crypto closure ONLY (P10: never a Client module). R30's
+    -- build-order fix (a staged-but-unlinked DLL must be built before the copy)
+    -- is arc_module_stage's dependson on every staged module now.
     if os.target() == "windows" then
         dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
     end
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
     postbuildcommands(arcane_cmds {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         -- P10: the game module (ReferenceGame.dll et al) links BOTH ArcaneCore's
         -- and ArcaneClient's import libs -- it is built as an engine-as-SDK
         -- consumer against the FULL surface, the same DLL a windowed host loads
@@ -1085,7 +928,6 @@ project "ArcaneServer"
         -- references it. The census (clientDllLoadedAtBoot/clientDllLoadedAfterModule)
         -- reports whether it was ever actually loaded, rather than this postbuild
         -- silently hiding the module's own dependency.
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/' .. arcane_shlib("ArcaneClient") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneClient") .. '"',
         arcane_copydir("%{wks.location}/data/EngineConfig", "%{cfg.buildtarget.directory}/data/EngineConfig"),
         -- Same staging pair ArcaneRuntime's/ArcaneEditor's postbuild carries (see
         -- ArcaneRuntime's matching comment for the full "mirror deletions" reasoning):
@@ -1118,19 +960,24 @@ project "ArcaneServer"
 -- beside the exe, so `ArcaneRuntime --project ReferenceProject --frames N` is
 -- the scripted GPU-verify. Folded from "Loom" 2026-07-29.
 -- ============================================================================
+group "Programs"
 project "ArcaneRuntime"
-    location "ArcaneRuntime"
+    -- The host's body (RuntimeApp & co.); this exe is main.cpp + the staging
+    -- below. FIRST: GNU ld resolves left to right, and under --as-needed a
+    -- module .so listed before the archive that references it is dropped.
+    links { "ArcaneRuntimeHost" }
+    includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
+    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
+    location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.cpp", "%{prj.location}/src/**.hpp" }
     includedirs {
         "%{prj.location}/src",           -- RuntimeApp.hpp (self-resolving quoted include; kept for any future local header)
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.glm}",
@@ -1158,7 +1005,6 @@ project "ArcaneRuntime"
     -- ArcaneCore is a DLL since the Core-DLL split: exactly one copy per
     -- process BY CONSTRUCTION, and it is ArcaneCore.dll. Both links below are
     -- import libs; this exe stages both DLLs beside itself (postbuild).
-    links { "ArcaneCore", "ArcaneClient" }
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
     dependson { "arccook" }
     if os.target() == "windows" then
@@ -1172,12 +1018,10 @@ project "ArcaneRuntime"
         -- Safe by construction: the cook is idempotent by hash (a second run is free)
         -- and concurrent same-key writes are atomic-rename + deterministic (identical
         -- bytes, last rename wins -- see ArtifactStore.hpp's concurrency contract).
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/' .. arcane_shlib("ArcaneClient") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneClient") .. '"',
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -1225,23 +1069,8 @@ project "ArcaneRuntime"
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         arcane_copydir("%{wks.location}/ReferenceProject", "%{cfg.buildtarget.directory}/ReferenceProject"),
-        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
-        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"'),
-        -- Linux: the same runtime compile service dlopen()s libdxcompiler.so
-        -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
-        -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
-        -- gitignored); staged when present, so a box without it still builds.
-        arcane_stage_dxc(),
-        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
-        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
-        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
-        -- ID3D12Device10+ in NRI's D3D12 backend.
-        arcane_win('{MKDIR} "%{cfg.buildtarget.directory}/D3D12"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"'),
     })
+    postbuildcommands(arcane_vendor_runtime())
     filter "system:windows"
         systemversion "latest"
         -- /bigobj (2026-09-16): RuntimeApp.cpp's own VerifySharedTypeContext call
@@ -1262,29 +1091,29 @@ project "ArcaneRuntime"
 -- exported ARC_API from ArcaneClient.dll, same as ArcaneRuntime) rather than source-
 -- compiling its own copy. Consumes only ARC_API otherwise.
 -- ============================================================================
+group "Programs"
 project "ArcaneEditor"
-    location "ArcaneEditor"
+    arc_module_consumer(engine_modules, engine_modules.order)
+    location "Source/Programs/ArcaneEditor"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
         -- node-page phase s8.1: the crash viewer source-compiles the reporter's
         -- pure model (third consumer = promote to Core, spec 9.27 #12).
-        "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/ReporterArgs.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/SymbolizedText.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/ReportView.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/LogTail.cpp",
     }
     includedirs {
         "%{prj.location}/src",
-        "%{wks.location}/ArcaneCrashReporter/src",
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src",
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.spdlog}",
         "%{IncludeDir.glm}",
@@ -1305,15 +1134,8 @@ project "ArcaneEditor"
         "%{IncludeDir.NRI}",
         -- Task 12's in-process cook (later F2b task) calls into the asset
         -- pipeline directly from the editor.
-        "%{IncludeDir.ArcaneAssetPipeline}",
     }
-    -- bc7enc_rdo (Task 4): ArcaneAssetPipeline's TextureImporter now calls into it for the
-    -- BC7 encode path -- a static lib doesn't transitively pull its own links, so any consumer
-    -- linking ArcaneAssetPipeline links bc7enc_rdo alongside it, same reasoning as every other
-    -- ThirdParty static lib in this list.
-    -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline's MeshImporter calls into it, same
-    -- transitive-link reasoning as bc7enc_rdo above.
-    links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
+    -- bc7enc_rdo/meshoptimizer link into ArcaneAssetPipeline.dll itself now (P2).
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
     -- ArcaneServer: the play-mode picker's separate-server row resolves and spawns
     -- ../ArcaneServer/ArcaneServer.exe, so it has to be built beside this exe.
@@ -1326,12 +1148,10 @@ project "ArcaneEditor"
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
         -- shape as ArcaneRuntime's matching comment above (safe under /m: idempotent by
         -- hash, concurrent same-key writes atomic-rename + deterministic).
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/' .. arcane_shlib("ArcaneClient") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneClient") .. '"',
         -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
-        arcane_win('{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
+        arcane_win('{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"'),
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -1373,23 +1193,8 @@ project "ArcaneEditor"
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',
         '{COPYFILE} "%{wks.location}/data/images/arcane_logo.png" "%{cfg.buildtarget.directory}/data/images/arcane_logo.png"',
-        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
-        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"'),
-        -- Linux: the same runtime compile service dlopen()s libdxcompiler.so
-        -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
-        -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
-        -- gitignored); staged when present, so a box without it still builds.
-        arcane_stage_dxc(),
-        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
-        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see main.cpp)
-        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
-        -- ID3D12Device10+ in NRI's D3D12 backend.
-        arcane_win('{MKDIR} "%{cfg.buildtarget.directory}/D3D12"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"'),
     })
+    postbuildcommands(arcane_vendor_runtime())
     filter "system:windows"
         systemversion "latest"
         -- /bigobj (Task 3, F2a): EditorApp.cpp aggregates a wide include surface
@@ -1408,7 +1213,6 @@ project "ArcaneEditor"
     filter "configurations:Release"  defines { "ARC_BUILD_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
     filter "configurations:Dist"     defines { "ARC_BUILD_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
     filter {}
-group ""
 
 -- ============================================================================
 -- ArcaneTests: Catch2 + rapidcheck (Server conventions). ArcaneCore is a DLL
@@ -1416,21 +1220,21 @@ group ""
 -- it is ArcaneCore.dll -- the link below is its import lib, and this exe
 -- stages the DLL beside itself (postbuild).
 -- ============================================================================
--- Solution folder for the test exe + its three hot-reload fixture DLLs, so
--- the fixtures stop reading as top-level products. "Tests", not
--- "ArcaneTests": a folder with the same name as a sibling project collides
--- in the solution tree.
+-- Solution folder "Tests", not "ArcaneTests": a folder with the same name as
+-- a sibling project collides in the solution tree. Its fixtures (the
+-- hot-reload DLLs, the process/death fixtures, the game-module fixtures) sit
+-- in "Tests/Fixtures", so they never read as top-level products.
 group "Tests"
-
 project "ArcaneTests"
-    location "ArcaneTests"
+    arc_module_consumer(engine_modules, engine_modules.order)
+    location "Tests/ArcaneTests"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
 
     files {
         "%{prj.location}/src/**.cpp",
@@ -1442,113 +1246,113 @@ project "ArcaneTests"
         -- compiled. [host] round-trips HostConfig::Parse without loading ArcaneRuntime.exe.
         -- Task 3: ConsoleBuffer (Arcane Editor's log ring buffer) source-compiles into the
         -- test exe so the [editor] unit test drives it directly.
-        "%{wks.location}/ArcaneEditor/src/Panels/ConsoleBuffer.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/ConsoleBuffer.cpp",
         -- Task 4: ViewportInput (pure input-gating predicates for the scene-in-a-
         -- panel viewport) source-compiles into the test exe so the [editor] unit
         -- tests drive it directly, same pattern as ConsoleBuffer above.
-        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportInput.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Viewport/ViewportInput.cpp",
         -- Task 5: EntityList (entity enumeration for the Hierarchy panel)
         -- source-compiles into the test exe so the [editor] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
-        "%{wks.location}/ArcaneEditor/src/Panels/EntityList.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/EntityList.cpp",
         -- Task 6: InspectorFields (reflected field classification + pure write-backs
         -- for the Inspector panel) source-compiles into the test exe so the
         -- [editor] unit tests drive it directly -- no ImGui dependency, same
         -- pattern as ConsoleBuffer/ViewportInput/EntityList above.
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorFields.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorFields.cpp",
         -- Task 8: PlayMode (play-in-editor snapshot/restore state machine)
         -- source-compiles into the test exe so the [editor] round-trip test
         -- drives it directly against a real Arcane::Runtime, same pattern as
         -- ConsoleBuffer/ViewportInput/EntityList/InspectorFields above.
-        "%{wks.location}/ArcaneEditor/src/App/PlayMode.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/App/PlayMode.cpp",
         -- Shader-editor Slice 5: DocumentHost (open-document list + unsaved-
         -- close confirm state machine + asset->editor routing) source-compiles
         -- into the test exe so the [editor] units drive the PURE close flow
         -- with fake documents -- DrawAll (the only ImGui method) is not called.
-        "%{wks.location}/ArcaneEditor/src/Documents/DocumentHost.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/DocumentHost.cpp",
         -- Node page + editor upgrades s3.2: the pure PreviewStatus model.
-        "%{wks.location}/ArcaneEditor/src/Documents/PreviewStatus.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/PreviewStatus.cpp",
         -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
         -- the test exe so the [editor] units drive its HEADLESS halves directly
         -- (save-before-bind, parent-chain resolution, compile-result routing).
         -- Draw (the ImGui half) is never called; device-less services skip the
         -- preview resources in the ctor.
-        "%{wks.location}/ArcaneEditor/src/Documents/ShaderEditorDocument.cpp",
-        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsEditorModel.cpp",
-        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsDocument.cpp",
-        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/ShaderEditorDocument.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputActionsEditorModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputActionsDocument.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp",
         -- Input editor T7: InputActionsRows (the actions column as pure rows)
         -- source-compiles here for InputActionsRowsTest, and the rewritten
         -- InputActionsDocumentWidgets.cpp above links against it.
-        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsRows.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputActionsRows.cpp",
         -- Node-page phase s8.3: the pure pending add (add-and-listen), compiled for InputPendingAddTest
         -- and linked by InputActionsDocument/Widgets above.
-        "%{wks.location}/ArcaneEditor/src/Documents/InputPendingAdd.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputPendingAdd.cpp",
         -- Input editor T10: InputActionsInspectorPage is a LINK dependency of
         -- InputActionsDocument.cpp (Page/PageFor construct it); Draw is never
         -- called headlessly, same reason as EditorWidgets.cpp below.
-        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsInspectorPage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/InputActionsInspectorPage.cpp",
         -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
         -- system-managed hide-list + selection-aware missing counts) source-
         -- compiles into the test exe so the [editor] units drive it directly --
         -- no ImGui dependency, same pattern as EntityList/InspectorFields above.
-        "%{wks.location}/ArcaneEditor/src/Scene/ComponentCatalog.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Scene/ComponentCatalog.cpp",
         -- Scene authoring: SceneSession (scene identity + dirty state + the
         -- unsaved-changes confirm machine) source-compiles into the test exe so
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
-        "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Scene/SceneSession.cpp",
         -- editor.undo.* (T1-B10; S6-33): EditorUndoSettings + ReadUndoLimits, so
         -- [undo] drives the read and its range clamps without EditorApp.
-        "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/DocumentSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/App/UndoSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/AssetBrowserSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/AssetGraphSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/DocumentSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorConsoleSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorDocumentUiSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorGridSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorPlaySettings.cpp",
         -- astra.snapshot.compression (S6-45 fix): the Editor setting + its push into Runtime::SetSnapshotSaveConfig.
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorSnapshotSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/InspectorSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorUiStyleSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorViewportSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/AxisColors.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/ThemePresets.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/ThemePage.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/FontsPage.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/LayoutLibrary.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/LayoutSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/LayoutPage.cpp",
-        "%{wks.location}/ArcaneEditor/src/Input/EditorActions.cpp",
-        "%{wks.location}/ArcaneEditor/src/Input/EditorActionTable.cpp",
-        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportActions.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorSnapshotSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorThemeSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorThumbnailSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/GraphCanvasSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/GraphThemeSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/InspectorSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/AppearanceApplier.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorUiSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorUiStyleSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorViewportSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/AxisColors.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/ThemePresets.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/ThemePage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/ShortcutsPage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/FontsPage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/LayoutLibrary.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/LayoutSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/LayoutPage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Input/EditorActions.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Input/EditorActionTable.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Viewport/ViewportActions.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
         -- reads in the Inspector, and EditorPanels.cpp is not compiled here --
         -- so anything left in the draw loop would have no coverage at all.
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorMeta.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorMeta.cpp",
         -- Inspector ownership T2: InspectorHost (pure routing, no ImGui) source-
         -- compiles into the test exe so EditorInspectorHostTest drives it with
         -- fake sources. SceneInspectorSource.cpp stays OUT (it needs
         -- EditorPanels.cpp).
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorHost.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorKinds.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorHost.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorKinds.cpp",
         -- Arc-1 debt F: InspectorWindows (the Inspector windows + the
         -- [EditorInspector][Instances] ini handler) source-compiles into the
         -- test exe so EditorInspectorHostTest drives the handler on a bare
         -- ImGui context. It needs only InspectorHost + PropertyGrid (both
         -- compiled here) and the header-only EditorTheme; DrawInspectorWindows
         -- is never called headlessly.
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorWindows.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorWindows.cpp",
         -- F2b Task 13: TextureMetaPanel (the Inspector's texture-asset
         -- settings block's PURE half -- reading/merge-writing the ".meta"
         -- sidecar's "texture" block) source-compiles into the test exe so
@@ -1557,73 +1361,73 @@ project "ArcaneTests"
         -- applied to this problem. Its ImGui half (TextureImportSettings.cpp,
         -- the Asset page's import-settings block) IS compiled here since
         -- inspector filters Task 5 -- see the asset-panel entries below.
-        "%{wks.location}/ArcaneEditor/src/Panels/TextureMetaPanel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/TextureMetaPanel.cpp",
         -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
         -- framing math + the framing-bounds sweep) source-compiles into the
         -- test exe so the [editor] units drive the PURE math headlessly -- no
         -- ImGui and no engine calls in it, same pattern as SceneSession above.
-        "%{wks.location}/ArcaneEditor/src/Viewport/EditorCamera.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Viewport/EditorCamera.cpp",
         -- F4 plan 1 T7: ViewportSettings (the PURE [EditorViewport][Camera] ini
         -- line writer/reader + the --view-mode seed) source-compiles into the
         -- test exe so the [editor][settings] units drive the round-trip and the
         -- refusal table with a bare ImGuiTextBuffer (no context needed), same
         -- pattern as EditorCamera above.
-        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Viewport/ViewportSettings.cpp",
         -- F4 plan 1 T9: ViewportGrid (the PURE decade-level plan + the line
         -- draw through a ViewTransform into any Batcher2D) source-compiles into
         -- the test exe so the [editor][grid] units drive the LOD rule and the
         -- rect-clipped line counts against a recording batcher double -- no
         -- ImGui, no device, same pattern as EditorCamera above.
-        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportGrid.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Viewport/ViewportGrid.cpp",
         -- Widget layer: EditGesture's PURE decision core (gesture ownership +
         -- close-path verdicts) source-compiles into the test exe so the
         -- [editor] units drive the full decision table headlessly -- the ImGui
         -- skin in the same TU is never called, same pattern as
         -- ShaderEditorDocument above.
-        "%{wks.location}/ArcaneEditor/src/Scene/EditGesture.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Scene/EditGesture.cpp",
         -- Astra adoption Task 8: EditModeSchedule (the Edit-mode scheduler + the
         -- pending camera-frame request) source-compiles into the test exe so the
         -- [editor] units drive it headlessly -- ImGui-free by construction, same
         -- pattern as EditGesture/EditorCamera above.
-        "%{wks.location}/ArcaneEditor/src/Scene/EditModeSchedule.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Scene/EditModeSchedule.cpp",
         -- Widget layer: EditorWidgets is here as a LINK dependency, not a unit
         -- surface -- ShaderEditorDocument.cpp (compiled above) calls
         -- StableTextEdit for its four inline rename rows, and without this the
         -- test exe fails to link (LNK2019). Nothing in it is called headlessly;
         -- it is pure ImGui, like the skin half of EditGesture.cpp.
-        "%{wks.location}/ArcaneEditor/src/Widgets/EditorWidgets.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Widgets/EditorWidgets.cpp",
         -- Asset panel widget vocabulary Task 6: EditorFonts is here as a LINK
         -- dependency, not a unit surface, same reason as EditorWidgets.cpp
         -- above -- EditorWidgets.cpp's new AssetPill calls GetEditorFonts()
         -- for its 12px PushFont, and without this the test exe fails to link
         -- (LNK2019). InstallEditorFonts is never called headlessly; only the
         -- accessor's empty-set fallback is reachable, same as EditorWidgets.cpp.
-        "%{wks.location}/ArcaneEditor/src/Widgets/EditorFonts.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Widgets/EditorFonts.cpp",
         -- Colour pipeline + dense picker Task 7: ColorPickerPopup is here as a
         -- LINK dependency, not a unit surface, same reason as EditorWidgets.cpp
         -- above -- ShaderEditorDocument.cpp (compiled above) now calls
         -- ColorPopupId/ColorSwatchButton/ColorPopupBody for the material-param
         -- row and the ConstColor node, and without this the test exe fails to
         -- link (LNK2019). Nothing in it is called headlessly; it is pure ImGui.
-        "%{wks.location}/ArcaneEditor/src/Widgets/ColorPickerPopup.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Widgets/ColorPickerPopup.cpp",
         -- Inspector ownership T1: PropertyGrid (the shared page rows) source-
         -- compiles into the test exe: PropertyGridTest drives it under a real
         -- ImGui context, and InputActionsInspectorPage.cpp (T10) links against it.
-        "%{wks.location}/ArcaneEditor/src/Widgets/PropertyGrid.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Widgets/PropertyGrid.cpp",
         -- Node-page phase T2 (s4.5): GraphFit -- the capped frame-to-fit. Its pure
         -- maths + cvar are [graphfit]-tested, and ShaderEditorDocument.cpp
         -- (compiled above) calls GraphFitToContent, so it is a link dependency too.
-        "%{wks.location}/ArcaneEditor/src/Widgets/GraphFit.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Widgets/GraphFit.cpp",
         -- T3-D1: the shader graph's pin legend + its editor.graph.showPinLegend
         -- cvar. ShaderEditorDocument.cpp (compiled above) calls it, so it is a
         -- link dependency, and the cvar's default + toggle are unit-tested.
-        "%{wks.location}/ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the
         -- document closes). Draw (the only ImGui method) is never called --
         -- same precedent as ShaderEditorDocument above.
-        "%{wks.location}/ArcaneEditor/src/Documents/SpriteDocument.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/SpriteDocument.cpp",
         -- F2a, Task 9: MeshDocument source-compiles into the test exe so the
         -- [editor][mesh] units drive its HEADLESS halves directly (data/undo
         -- following SpriteDocument above; the offscreen-preview lifecycle
@@ -1631,7 +1435,7 @@ project "ArcaneTests"
         -- RenderPreview/DestroyPreviewContext). Draw (the ImGui half) is
         -- never called; device-less services skip the preview resources in
         -- the ctor, same precedent as ShaderEditorDocument above.
-        "%{wks.location}/ArcaneEditor/src/Documents/MeshDocument.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/MeshDocument.cpp",
         -- GPU crash diagnostics arc, Task 10: CrashReportDocument source-
         -- compiles into the test exe so the [editor][diag] units drive its
         -- PURE model half directly (construction from an already-loaded
@@ -1639,14 +1443,14 @@ project "ArcaneTests"
         -- sibling's parsed section inventory). Draw (the only ImGui method)
         -- is never called -- same precedent as ShaderEditorDocument/
         -- SpriteDocument above.
-        "%{wks.location}/ArcaneEditor/src/Documents/CrashReportDocument.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Documents/CrashReportDocument.cpp",
         -- Task 5 (runtime-host-fold arc): RuntimeLaunch's PURE candidate-list/
         -- argv builder (ExeCandidates/BuildArgs) source-compiles into the test
         -- exe so the [editor] units drive them directly. SpawnDetached (the
         -- one CreateProcessW call in the file) is compiled here too but never
         -- invoked by any test -- process creation is desk-verify territory,
         -- same "no spawn test" rule the task brief states outright.
-        "%{wks.location}/ArcaneEditor/src/Project/RuntimeLaunch.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/RuntimeLaunch.cpp",
         -- Core-DLL split Plan 1, Task 7: ServerLaunch -- the "Client + separate
         -- server process" play mode's exe-candidate list and argv builder. Same
         -- split, same reason as RuntimeLaunch.cpp directly above: ExeCandidates/
@@ -1656,19 +1460,19 @@ project "ArcaneTests"
         -- desk-verify territory. ServerProcess's DORMANT half (a never-spawned
         -- handle's IsRunning/Stop) IS covered, because the editor calls Stop()
         -- unconditionally after every Play->Stop.
-        "%{wks.location}/ArcaneEditor/src/Project/ServerLaunch.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ServerLaunch.cpp",
         -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
         -- publication-group replace semantics, filter/sort/count) source-compiles
         -- into the test exe so the [diagnostics] units drive it directly -- no
         -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
-        "%{wks.location}/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
         -- node-page phase s8.2: which Problems rows route, and how (pure, fake facts in LocatorRouteTest).
-        "%{wks.location}/ArcaneEditor/src/Panels/LocatorRoute.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/LocatorRoute.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
         -- "Subsystem: " log prefixes + identical-row collapsing) source-compiles
         -- into the test exe so the [editor] units drive the pure functions the
         -- Console panel draws with -- EditorPanels.cpp is not compiled here.
-        "%{wks.location}/ArcaneEditor/src/Panels/ConsoleModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/ConsoleModel.cpp",
         -- File -> Open Recent: RecentProjects source-compiles into the test exe
         -- so the [editor] units drive its PURE half directly -- parsing the
         -- Hub's shared recents.archub, ABI/current/missing selection, and the
@@ -1676,23 +1480,23 @@ project "ArcaneTests"
         -- model. No ImGui in it at all, same pattern as SceneSession/
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
-        "%{wks.location}/ArcaneEditor/src/Project/RecentProjects.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/RecentProjects.cpp",
         -- Node-page phase s8.4: the start page's pure model (relative times, rows, the
         -- dialog start dir), driven by StartPageModelTest. No ImGui in it.
-        "%{wks.location}/ArcaneEditor/src/Project/StartPageModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/StartPageModel.cpp",
         -- File -> Open Recent Scene: SceneRecents' pure list ops (Parse/
         -- Serialize/Push, and the file I/O around them) source-compile into
         -- the test exe so the [editor] units drive them directly. Unlike
         -- RecentProjects, this file has no "never clobber" contract to pin --
         -- it is the editor's own per-project file, not the Hub's shared one.
-        "%{wks.location}/ArcaneEditor/src/Project/SceneRecents.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/SceneRecents.cpp",
         -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (the SDK-root
         -- walk, the arcbuild.exe candidate list, the composed driver line)
         -- source-compile into the test exe so the [editor] units drive them
         -- directly. The Runner/_wpopen half and RunCapture are compiled too;
         -- no [editor] test invokes them -- only the opt-in [build-desk] cases
         -- (BuildDriverTest.cpp) run RunCapture, against the built driver.
-        "%{wks.location}/ArcaneEditor/src/Project/ModuleBuild.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ModuleBuild.cpp",
         -- Build -> Open Visual Studio / open-source-in-VS: IdeLaunch's PURE
         -- halves (the ROT moniker predicate, solution-path equivalence, the
         -- devenv argv, outcome wording) source-compile into the test exe so
@@ -1701,24 +1505,24 @@ project "ArcaneTests"
         -- reached ONLY by the opt-in [ide-desk] probe (SKIPs unless
         -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
         -- Runner and RuntimeLaunch's SpawnDetached above.
-        "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/IdeLaunch.cpp",
         -- T5 asset file ops (spec 2026-09-30 s7.3/s7.4): the pure planner, the
         -- executor and the undoable commands; AssetFileOpsTest.cpp drives them
         -- over fake facts and a real TempDir (Recycle faked, never the shell).
-        "%{wks.location}/ArcaneEditor/src/Project/AssetFileOps.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/AssetFileOps.cpp",
         -- Node-page phase T2 (s4.6): OsShell -- the one "open / show / open as
         -- text" path helper. Pure halves [editor]-tested; the ShellExecuteW half is
         -- compiled (CrashReportDocument.cpp above links it) but desk-verified.
-        "%{wks.location}/ArcaneEditor/src/Project/OsShell.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/OsShell.cpp",
         -- Assets -> Create -> C++ Class: ClassTemplates (name validation, the
         -- project-name -> namespace rule, the three rendered templates as
         -- strings) source-compiles into the test exe so the [editor] units
         -- drive the whole text half directly. Writing/registering/regenerating
         -- is EditorApp's (MintCppClass) and desk-verify.
-        "%{wks.location}/ArcaneEditor/src/Project/ClassTemplates.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ClassTemplates.cpp",
         -- Source include graph: ParseIncludeDirectives / ResolveSourceInclude
         -- are pure, so the [editor] units drive them directly.
-        "%{wks.location}/ArcaneEditor/src/Project/SourceIncludes.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/SourceIncludes.cpp",
         -- arcbuild (the game-project build driver, spec docs/specs/
         -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Action.cpp
         -- (host/action/backend policy), Request.cpp (CLI), Slot.cpp (s4.3 CRT
@@ -1731,35 +1535,35 @@ project "ArcaneTests"
         -- NOT compiled here; the opt-in [build-desk] cases run the built
         -- arcbuild.exe instead. `--engine` (spec §6) will add a sibling TU,
         -- not grow Slot.cpp.
-        "%{wks.location}/arcbuild/src/Action.cpp",
-        "%{wks.location}/arcbuild/src/Request.cpp",
-        "%{wks.location}/arcbuild/src/Slot.cpp",
-        "%{wks.location}/arcbuild/src/ProjectLayout.cpp",
-        "%{wks.location}/arcbuild/src/Compose.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Action.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Request.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Slot.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/ProjectLayout.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Compose.cpp",
         -- Orchestration correctness-stage seams: source-compile the bootstrap,
         -- output, probe, pipeline, and filesystem cleaner into the tests so
         -- [build] can drive them through narrow recording fakes. main.cpp
         -- (argv parsing + the real entry point) remains excluded.
-        "%{wks.location}/arcbuild/src/Bootstrap.cpp",
-        "%{wks.location}/arcbuild/src/Environment.cpp",
-        "%{wks.location}/arcbuild/src/Output.cpp",
-        "%{wks.location}/arcbuild/src/Pipeline.cpp",
-        "%{wks.location}/arcbuild/src/Probe.cpp",
-        "%{wks.location}/arcbuild/src/ProjectCleaner.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Bootstrap.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Environment.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Output.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Pipeline.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Probe.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/ProjectCleaner.cpp",
         -- Multibackend hardening review F4: the Ninja single-slot staging
         -- copy (Stage.cpp -- a filesystem op driven over a temp dir) and
         -- BuildExecutor.cpp, whose Build() now runs it after a successful
         -- Ninja plan; the executor is driven through the FakeProcessRunner
         -- + a fake ninja.exe on an overridden PATH, so it still spawns
         -- nothing.
-        "%{wks.location}/arcbuild/src/Stage.cpp",
-        "%{wks.location}/arcbuild/src/BuildExecutor.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Stage.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/BuildExecutor.cpp",
         -- Multibackend hardening Task 3: BackendResolver wraps Arcane::
         -- Toolchain's real tool discovery in std::expected, no process spawn
         -- of its own, so it source-compiles the same "pure logic" way as its
         -- siblings above -- BuildDriverTest.cpp's backend-resolver [build]
         -- units drive it directly.
-        "%{wks.location}/arcbuild/src/Backend.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Backend.cpp",
         -- Multibackend hardening Task 5: Process.cpp (the real Windows
         -- ProcessRunner + ExecutePlan) DOES now source-compile into the test
         -- exe, unlike its siblings above -- its own [build] cases are
@@ -1770,7 +1574,7 @@ project "ArcaneTests"
         -- (this workspace's own build output, never an external tool) to
         -- prove real CreateProcessW quoting/streaming/handle-inheritance
         -- behavior end to end.
-        "%{wks.location}/arcbuild/src/Process.cpp",
+        "%{wks.location}/Source/Programs/arcbuild/src/Process.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-
@@ -1782,9 +1586,9 @@ project "ArcaneTests"
         -- ArcaneServer.exe instead (ServerWitnessTest.cpp), same "no spawn
         -- test" split ModuleBuild.cpp/RuntimeLaunch.cpp/arcbuild's own
         -- main.cpp already establish.
-        "%{wks.location}/ArcaneServer/src/ServerConfig.cpp",
-        "%{wks.location}/ArcaneServer/src/ServerReport.cpp",
-        "%{wks.location}/ArcaneServer/src/ServerAdminConsole.cpp",
+        "%{wks.location}/Source/Programs/ArcaneServer/src/ServerConfig.cpp",
+        "%{wks.location}/Source/Programs/ArcaneServer/src/ServerReport.cpp",
+        "%{wks.location}/Source/Programs/ArcaneServer/src/ServerAdminConsole.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/
@@ -1793,20 +1597,20 @@ project "ArcaneTests"
         -- as ModuleBuild.cpp above (Runner's own std::thread half there has
         -- the analogous split; here it is JobSystem::Submit, tested for real
         -- threading separately in JobSystemSubmitTest.cpp).
-        "%{wks.location}/ArcaneEditor/src/Project/CookQueue.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/CookQueue.cpp",
         -- F2b desk-checkpoint fix: ContentDiscovery (the mid-session
         -- Content/-drop discovery probe -- recursive .png enumeration plus
         -- the known-paths set difference) source-compiles into the test exe
         -- so the [editor][cook] units drive its PURE halves directly with a
         -- real temp-dir fixture, same pattern as CookQueue.cpp above.
-        "%{wks.location}/ArcaneEditor/src/Project/ContentDiscovery.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ContentDiscovery.cpp",
         -- F2c Task 13 (embedded-texture extraction at discovery, s5.5/A4):
         -- MeshImportWave (UniqueSiblingPath/ImageFileStem/ExtractEmbeddedTextures)
         -- source-compiles into the test exe so the [editor] units drive it directly
         -- with real temp-dir fixtures and the data/gltf corpus -- no ImGui, no
         -- Project, no device in it at all, same "pure logic" pattern as
         -- CookQueue/ContentDiscovery above.
-        "%{wks.location}/ArcaneEditor/src/Project/MeshImportWave.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/MeshImportWave.cpp",
         -- F2c Plan 2 final-review C1: MaterialPreviewHarvester source-compiles
         -- into the test exe so MeshThumbnailHarvestTest.cpp can drive TWO REAL
         -- mesh harvests through ONE preview vehicle on a real adapter. NOT a
@@ -1818,14 +1622,14 @@ project "ArcaneTests"
         -- outside its own TU is engine-side (Batcher2D, MeshMaterialCache,
         -- NriGraphContext, ShaderCompiler, Assets) or already listed here
         -- (MeshImportWave), so the link closed with nothing else added.
-        "%{wks.location}/ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp",
         -- Asset-manager arc (Plan 1, Task 4): AssetPanelModel (the cached,
         -- foldable model behind the Assets panel's Browse lens) source-
         -- compiles into the test exe so the [editor] units drive it directly
         -- with fake provider lambdas -- no ImGui and no engine facade in it
         -- at all, same "pure logic" pattern as CookQueue/ContentDiscovery
         -- above.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetPanelModel.cpp",
         -- Asset-manager arc (Plan 2, Task 3): AssetReferenceIndex (the pure
         -- inverted-reference index over ListAssetReferences answers --
         -- inbound counts, tombstones, dangling targets) source-compiles
@@ -1833,16 +1637,16 @@ project "ArcaneTests"
         -- hand-built AssetRef lists, no ImGui and no engine facade in it at
         -- all, same "pure logic" pattern as AssetPanelModel.cpp above. Its
         -- test (AssetReferenceIndexTest.cpp) is globbed already via
-        -- ArcaneTests/src/**.cpp above, same as every other test file.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceIndex.cpp",
+        -- Tests/ArcaneTests/src/**.cpp above, same as every other test file.
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetReferenceIndex.cpp",
         -- Asset-manager arc (Plan 2, Task 5): AssetActivityLog (the session-
         -- only ring behind the Assets panel's activity feed -- spec s9.2)
         -- source-compiles into the test exe so the [editor] units drive it
         -- directly with a synthetic clock, no ImGui and no engine facade in
         -- it at all, same "pure logic" pattern as AssetPanelModel.cpp/
         -- AssetReferenceIndex.cpp above. Its test (globbed already via
-        -- ArcaneTests/src/**.cpp above) is AssetActivityLogTest.cpp.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetActivityLog.cpp",
+        -- Tests/ArcaneTests/src/**.cpp above) is AssetActivityLogTest.cpp.
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetActivityLog.cpp",
         -- Asset-manager arc (Plan 3, Task 2): AssetGraphViewModel (the Graph
         -- lens's pure projection -- scoped/layered/breadth-capped nodes and
         -- edges over an injected entries map + AssetReferenceIndex) source-
@@ -1850,9 +1654,9 @@ project "ArcaneTests"
         -- with a hand-built entries map and index, no ImGui and no engine
         -- facade in it at all, same "pure logic" pattern as AssetPanelModel/
         -- AssetReferenceIndex/AssetActivityLog above. Its test (globbed
-        -- already via ArcaneTests/src/**.cpp above) is
+        -- already via Tests/ArcaneTests/src/**.cpp above) is
         -- AssetGraphViewModelTest.cpp.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphViewModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetGraphViewModel.cpp",
         -- Asset-manager arc (Plan 3, Task 3 -> panel-split Task 7): the three
         -- ASSET PANELS plus their shared unit. NOT pure-logic units like
         -- every entry above them: they are here so AssetsGraphCanvasTest.cpp
@@ -1878,22 +1682,22 @@ project "ArcaneTests"
         -- Panel-split Task 7 removed AssetsPanel.cpp's entry from here with
         -- the file itself: the one "Assets" shell is now three windows, each
         -- owning its own Begin/toolbar/body/bottom bar.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelCommon.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetPanelCommon.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
         -- T3-D4: the create dialog's unit, for MakeCreateDialogState (the
         -- request -> the dialog's starting state, BeginCreateAsset's whole
         -- seeding), which CreateAssetDialogTest.cpp pins. Its other
         -- dependencies (AssetPanelModel, EditorWidgets, ClassTemplates) are
         -- already compiled here.
-        "%{wks.location}/ArcaneEditor/src/Panels/CreateAssetDialog.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/CreateAssetDialog.cpp",
         -- Inspector filters Task 5: the asset source + its page (the old
         -- preview pane's content) and the texture import settings block it
         -- draws. AssetInspectorSourceTest.cpp drives DrawAssetPage through
         -- device-less ImGui frames, the same reason as the panels above.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetInspectorSource.cpp",
-        "%{wks.location}/ArcaneEditor/src/Panels/TextureImportSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetInspectorSource.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/TextureImportSettings.cpp",
         -- 2D physics wiring Plan 2 (FieldKind::Vector): InspectorView -- the
         -- Inspector's reflected-field visitor, the ImGui half whose PURE
         -- halves (InspectorFields, InspectorMeta) are listed above. NOT a
@@ -1906,23 +1710,23 @@ project "ArcaneTests"
         -- ColorPickerPopup/EditGesture/AssetPanelModel) or header-inline
         -- (CreateAssetDialog.hpp's pill text, AssetPanelModel.hpp's three
         -- field-name heuristics).
-        "%{wks.location}/ArcaneEditor/src/Panels/InspectorView.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/InspectorView.cpp",
         -- Node page + editor upgrades s4.2: the shared asset-reference field
         -- (its pure halves here; the cell joins in T2-B2). InspectorView's
         -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
         -- Settings arc S3: the settings windows' model/edit/apply/rows/window/host/pages, driven headless by the [settings-ui] units.
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsModel.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsEdit.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsApply.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsRows.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsWindow.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/SettingsHost.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/ProjectSettingsPage.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorRestart.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsModel.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsEdit.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsApply.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsRows.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsWindow.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/SettingsHost.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/ProjectSettingsPage.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorRestart.cpp",
         -- S6-5: assets.sprite.* (Editor audience), read by SpriteDocument::NewSpriteData above.
-        "%{wks.location}/ArcaneEditor/src/Settings/AssetsSpriteSettings.cpp",
-        "%{wks.location}/ArcaneEditor/src/Settings/EditorPerfSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/AssetsSpriteSettings.cpp",
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Settings/EditorPerfSettings.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
@@ -1938,18 +1742,16 @@ project "ArcaneTests"
         -- is the MODEL and its TEXT only; Symbolizer.cpp -- the dbgeng half --
         -- stays out, and the reporter PROJECT above is what carries the
         -- Windows gate.
-        "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/HangSession.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/MonitorRule.cpp",
-        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",   -- std-only; CrashReportDocument reads the log tail (node-page phase s8.1)
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/ReporterArgs.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/SymbolizedText.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/ReportView.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/HangSession.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/MonitorRule.cpp",
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src/LogTail.cpp",   -- std-only; CrashReportDocument reads the log tail (node-page phase s8.1)
     }
 
     includedirs {
-        "%{IncludeDir.ArcaneCore}",
-        "%{wks.location}/ArcaneClient/src",
-        "%{wks.location}/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
+        "%{wks.location}/Source/Programs/ArcaneEditor/src",  -- ConsoleBuffer.hpp for the [editor] test
         "%{IncludeDir.nlohmann}",
         "%{IncludeDir.picosha2}",
         "%{IncludeDir.spdlog}",
@@ -1968,13 +1770,12 @@ project "ArcaneTests"
         "%{IncludeDir.imguinodeeditor}",   -- ShaderEditorDocument.cpp (graph canvas, Slice 9)
         "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
-        "%{IncludeDir.ArcaneAssetPipeline}",   -- Task 1: AssetPipelineFormatTest.cpp drives ArtifactFormat.hpp directly
         "%{IncludeDir.bc7enc_rdo}",   -- Task 4: AssetPipelineImporterTest.cpp drives bc7decomp.h directly for the decode-block sanity test
         "%{IncludeDir.cgltf}",          -- F2c Task 1: VendorSmokeTest.cpp drives cgltf_parse/cgltf_validate directly
         "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: VendorSmokeTest.cpp drives meshopt_generateVertexRemap/optimizeVertexCache directly
-        "%{wks.location}/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
-        "%{wks.location}/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
-        "%{wks.location}/ArcaneCrashReporter/src",   -- ReporterArgs.hpp for the [reporter] units (crash window plan 2, Task 4)
+        "%{wks.location}/Source/Programs/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
+        "%{wks.location}/Source/Programs/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
+        "%{wks.location}/Source/Programs/ArcaneCrashReporter/src",   -- ReporterArgs.hpp for the [reporter] units (crash window plan 2, Task 4)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -1995,7 +1796,7 @@ project "ArcaneTests"
     -- meshoptimizer (F2c Task 1): ArcaneAssetPipeline links it transitively (same
     -- reasoning), and VendorSmokeTest.cpp's own arrival-gate cases call
     -- meshopt_generateVertexRemap/optimizeVertexCache directly.
-    links { "ArcaneCore", "ArcaneClient", "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
+    links { "Catch2", "rapidcheck", "enkiTS", "freetype", "msdfgen", "NRI", "Manifold2D", "bc7enc_rdo", "meshoptimizer" }
 
     -- MOSAIC_ENSURE/MOSAIC_ENSURE_ALWAYS (most of AssertRoutingTest.cpp) are
     -- defined UNCONDITIONALLY, outside the MOSAIC_ASSERTS_ACTIVE gate this
@@ -2050,10 +1851,8 @@ project "ArcaneTests"
         -- Unlike those two hosts, this project does NOT blanket-copy the whole
         -- ReferenceProject tree (see the targeted Verify/-only COPYDIR below), so this
         -- line is this exe's ONLY source of a staged Intermediate/Artifacts.
-        '"%{wks.location}/bin/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
+        '"%{wks.location}/Binaries/' .. outputdir .. '/arccook/' .. arcane_exe("arccook") .. '" --project "%{wks.location}/ReferenceProject"',
         arcane_copydir("%{wks.location}/ReferenceProject/Intermediate/Artifacts", "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"),
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/' .. arcane_shlib("ArcaneCore") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneCore") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/' .. arcane_shlib("ArcaneClient") .. '" "%{cfg.buildtarget.directory}/' .. arcane_shlib("ArcaneClient") .. '"',
         arcane_copydir("%{wks.location}/data/shaders/generated", "%{cfg.buildtarget.directory}/data/shaders"),
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -2076,18 +1875,18 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
         '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/' .. arcane_module("HotReloadPluginV1") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV1") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/' .. arcane_module("HotReloadPluginV2") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV2") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/' .. arcane_module("HotReloadPluginBad") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginBad") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginInitFail/' .. arcane_module("HotReloadPluginInitFail") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginInitFail") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ReferenceGameUnderTest/' .. arcane_module("ReferenceGameUnderTest") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("ReferenceGameUnderTest") .. '"',
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/TemplateSmokePlugin/' .. arcane_module("TemplateSmokePlugin") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("TemplateSmokePlugin") .. '"',
-        -- Test data fixtures: copy ArcaneTests/data's CONTENTS into the test output
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginV1/' .. arcane_module("HotReloadPluginV1") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV1") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginV2/' .. arcane_module("HotReloadPluginV2") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginV2") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginBad/' .. arcane_module("HotReloadPluginBad") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginBad") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/HotReloadPluginInitFail/' .. arcane_module("HotReloadPluginInitFail") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("HotReloadPluginInitFail") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/ReferenceGameUnderTest/' .. arcane_module("ReferenceGameUnderTest") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("ReferenceGameUnderTest") .. '"',
+        '{COPYFILE} "%{wks.location}/Binaries/' .. outputdir .. '/TemplateSmokePlugin/' .. arcane_module("TemplateSmokePlugin") .. '" "%{cfg.buildtarget.directory}/' .. arcane_module("TemplateSmokePlugin") .. '"',
+        -- Test data fixtures: copy Tests/ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the
         -- lines above create. (The M6 physics_oracle fixtures were retired in
         -- v2 T8; physics_feel_reference/ now holds the Phase-B Lua feel traces.)
-        arcane_copydir("%{wks.location}/ArcaneTests/data", "%{cfg.buildtarget.directory}/data"),
+        arcane_copydir("%{wks.location}/Tests/ArcaneTests/data", "%{cfg.buildtarget.directory}/data"),
         -- Playwright's own image-comparison fixture corpus (Task 6): the
         -- CONFORMANCE ORACLE for ImageCompare. ImageCompareConformanceTest.cpp
         -- walks this tree by a RELATIVE path from the exe's own directory.
@@ -2119,28 +1918,13 @@ project "ArcaneTests"
         -- images under this same Verify/ tree, this one line already covers
         -- them -- no further widening needed.
         arcane_copydir("%{wks.location}/ReferenceProject/Verify", "%{cfg.buildtarget.directory}/ReferenceProject/Verify"),
-        -- Vendored dxc trio (minus dxc.exe): the runtime compile service
-        -- (ShaderCompiler) LoadLibrary's these from the exe directory.
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxcompiler.dll" "%{cfg.buildtarget.directory}/dxcompiler.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/tools/dxc/dxil.dll" "%{cfg.buildtarget.directory}/dxil.dll"'),
-        -- Linux: the same runtime compile service dlopen()s libdxcompiler.so
-        -- (+ libdxil.so) from the exe directory. Not vendored (scripts/
-        -- fetch-dxc-linux.sh drops the release into ThirdParty/tools/dxc-linux/,
-        -- gitignored); staged when present, so a box without it still builds.
-        arcane_stage_dxc(),
-        -- Agility SDK redistributable (NRI Phase 1 Task 3): the D3D12 loader
-        -- reads this exe's exported D3D12SDKPath (".\D3D12\", see test_main.cpp)
-        -- and looks there for D3D12Core.dll to unlock enhanced barriers /
-        -- ID3D12Device10+ in NRI's D3D12 backend.
-        arcane_win('{MKDIR} "%{cfg.buildtarget.directory}/D3D12"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/D3D12Core.dll" "%{cfg.buildtarget.directory}/D3D12/D3D12Core.dll"'),
-        arcane_win('{COPYFILE} "%{wks.location}/ThirdParty/AgilitySDK/x64/d3d12SDKLayers.dll" "%{cfg.buildtarget.directory}/D3D12/d3d12SDKLayers.dll"'),
         -- The exclusion list is repo-level config that BOTH consumers read: this
         -- suite (ExclusionExpiryTest) and golden-gate.ps1. Staged beside the exe
         -- because tests run FROM the exe dir. An edit therefore needs a rebuild
         -- to take effect here, same as data/ and playwright-fixtures/ above.
         '{COPYFILE} "%{wks.location}/scripts/automation-exclusions.json" "%{cfg.buildtarget.directory}/automation-exclusions.json"',
     })
+    postbuildcommands(arcane_vendor_runtime())
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
@@ -2220,9 +2004,28 @@ local function macos_unloadable_module()
     filter {}
 end
 
+-- A game-type fixture's engine surface, from its .arcmodule descriptor through
+-- the SAME reader build/arcane.lua uses for a real game (engine modularization
+-- s4): link + include only the descriptor's closure, ARC_GAME_HAS_IMGUI and the
+-- ImGui import decoration only when ImGui is in it. Call inside a project.
+local function game_fixture_modules(descriptor, sourceRoot)
+    local game = arc_game_descriptor(engine_modules, path.join(_MAIN_SCRIPT_DIR, descriptor), path.join(_MAIN_SCRIPT_DIR, sourceRoot))
+    if not game then error("[arcmodule] schema: missing game descriptor " .. descriptor, 0) end
+    arc_module_consumer(engine_modules, game.modules, { stage = false })   -- loaded by a host that carries the modules
+    for _, include in ipairs(game.thirdPartyIncludes) do includedirs { "%{wks.location}/" .. include } end
+    if arc_closure_contains(engine_modules, game.modules, "ImGui") then
+        -- IMGUI_API=dllimport: adopt ImGui.dll's single GImGui, exactly as
+        -- arcane.lua does for a real module.
+        defines { "ARC_GAME_HAS_IMGUI", "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
+    end
+end
+
 local function test_plugin(name, defs)
+    group "Tests/Fixtures"
     project(name)
-        location "ArcaneTests/plugins"
+        -- One descriptor for the four builds of the one source.
+        game_fixture_modules("Tests/Fixtures/HotReloadPlugin/HotReloadPlugin.arcmodule", "Tests/Fixtures/HotReloadPlugin")
+        location "Tests/Fixtures/HotReloadPlugin"
         kind "SharedLib"
         language "C++"
         cppdialect "C++23"
@@ -2249,27 +2052,12 @@ local function test_plugin(name, defs)
             buildoptions { "-fno-gnu-unique" }
         filter {}
         macos_unloadable_module()
-        targetdir ("bin/" .. outputdir .. "/" .. name)
-        objdir ("bin-int/" .. outputdir .. "/" .. name)
+        targetdir ("Binaries/" .. outputdir .. "/" .. name)
+        objdir ("Intermediate/Build/" .. outputdir .. "/" .. name)
         files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/HotReloadShared.hpp" }
-        -- The include surface a game module gets from build/arcane.lua, minus the
-        -- project's own Source/: GameModule.hpp pulls Log.hpp (spdlog) and imgui.h
-        -- (the ABI v2 handoff) on top of what Runtime.hpp already needed.
-        includedirs {
-            "%{wks.location}/ArcaneClient/src",
-            "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
-            "%{IncludeDir.glm}",
-            "%{IncludeDir.Astra}",
-            "%{IncludeDir.enkiTS}",
-            "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)
-            "%{IncludeDir.imgui}",
-            "%{IncludeDir.spdlog}",
-        }
-        links { "ArcaneCore", "ArcaneClient" }
-        -- IMGUI_API=dllimport: adopt ArcaneClient.dll's single GImGui, exactly as
-        -- arcane.lua does for a real module.
+        -- The include surface is the descriptor closure's (game_fixture_modules
+        -- above), exactly what build/arcane.lua gives a game module.
         defines (defs)
-        defines { "IMGUI_API=" .. ARCANE_IMGUI_IMPORT }
         filter "system:windows"
             systemversion "latest"
             buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }   -- /utf-8: spdlog/fmt via Log.hpp, as arcane.lua sets
@@ -2289,13 +2077,16 @@ test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_
 -- ReferenceGameUnderTest: ReferenceProject's REAL game-module sources
 -- (ReferenceProject/Source/Game/**), compiled as a test plugin with the
 -- include surface build/arcane.lua gives a game module. The [trajectory]
--- case (ArcaneTests/src/ReferencePlayerTrajectoryTest.cpp) loads it through a
+-- case (Tests/ArcaneTests/src/ReferencePlayerTrajectoryTest.cpp) loads it through a
 -- real PluginHost and replays a scripted input run. Because it compiles the
 -- sources IN PLACE, the same unchanged test proves a rewrite of those
 -- sources kept the gameplay bit-identical (input-seam spec s8 T6).
 -- ============================================================================
+group "Tests/Fixtures"
 project "ReferenceGameUnderTest"
-    location "ArcaneTests/plugins"
+    -- ReferenceProject's OWN descriptor: the fixture links what the real game links.
+    game_fixture_modules("ReferenceProject/Source/Game/ReferenceGame.arcmodule", "ReferenceProject/Source/Game")
+    location "Tests/Fixtures/ReferenceGameUnderTest"   -- the project file only: it compiles ReferenceProject/Source/Game in place
     kind "SharedLib"
     language "C++"
     cppdialect "C++23"
@@ -2312,28 +2103,14 @@ project "ReferenceGameUnderTest"
         buildoptions { "-fno-gnu-unique" }
     filter {}
     macos_unloadable_module()
-    targetdir ("bin/" .. outputdir .. "/ReferenceGameUnderTest")
-    objdir ("bin-int/" .. outputdir .. "/ReferenceGameUnderTest")
+    targetdir ("Binaries/" .. outputdir .. "/ReferenceGameUnderTest")
+    objdir ("Intermediate/Build/" .. outputdir .. "/ReferenceGameUnderTest")
     files {
         "%{wks.location}/ReferenceProject/Source/Game/**.cpp",
         "%{wks.location}/ReferenceProject/Source/Game/**.hpp",
     }
-    includedirs {
-        "%{wks.location}/ReferenceProject/Source/Game",
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-        "%{IncludeDir.nlohmann}",
-    }
-    links { "ArcaneCore", "ArcaneClient" }
+    includedirs { "%{wks.location}/ReferenceProject/Source/Game" }   -- engine + vendor roots: the descriptor closure
     defines {
-        "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }
@@ -2349,17 +2126,19 @@ project "ReferenceGameUnderTest"
     filter {}
 
 -- ============================================================================
--- TemplateSmokePlugin: the editor's C++ class templates (ArcaneEditor/src/
+-- TemplateSmokePlugin: the editor's C++ class templates (Source/Programs/ArcaneEditor/src/
 -- Project/ClassTemplates.cpp) rendered for Component SmokeComponent + System
 -- SmokeSystem in project TemplateSmoke, checked in under
--- ArcaneTests/plugins/TemplateSmoke and compiled as a real game module with
+-- Tests/Fixtures/TemplateSmokePlugin and compiled as a real game module with
 -- the include surface build/arcane.lua gives one. ClassTemplatesTest asserts
 -- those files ARE Render(...)'s output byte for byte, so a template that
 -- stops compiling fails THIS build (input-seam spec s8 T8), and loads + runs
 -- the module through a real PluginHost.
 -- ============================================================================
+group "Tests/Fixtures"
 project "TemplateSmokePlugin"
-    location "ArcaneTests/plugins"
+    game_fixture_modules("Tests/Fixtures/TemplateSmokePlugin/TemplateSmokePlugin.arcmodule", "Tests/Fixtures/TemplateSmokePlugin")
+    location "Tests/Fixtures/TemplateSmokePlugin"
     kind "SharedLib"
     language "C++"
     cppdialect "C++23"
@@ -2376,28 +2155,14 @@ project "TemplateSmokePlugin"
         buildoptions { "-fno-gnu-unique" }
     filter {}
     macos_unloadable_module()
-    targetdir ("bin/" .. outputdir .. "/TemplateSmokePlugin")
-    objdir ("bin-int/" .. outputdir .. "/TemplateSmokePlugin")
+    targetdir ("Binaries/" .. outputdir .. "/TemplateSmokePlugin")
+    objdir ("Intermediate/Build/" .. outputdir .. "/TemplateSmokePlugin")
     files {
-        "%{wks.location}/ArcaneTests/plugins/TemplateSmoke/**.cpp",
-        "%{wks.location}/ArcaneTests/plugins/TemplateSmoke/**.hpp",
+        "%{prj.location}/**.cpp",
+        "%{prj.location}/**.hpp",
     }
-    includedirs {
-        "%{wks.location}/ArcaneTests/plugins/TemplateSmoke",
-        "%{wks.location}/ArcaneClient/src",
-        "%{IncludeDir.ArcaneCore}",
-        "%{IncludeDir.glm}",
-        "%{IncludeDir.Astra}",
-        "%{IncludeDir.enkiTS}",
-        "%{IncludeDir.Manifold2D}",
-        "%{IncludeDir.imgui}",
-        "%{IncludeDir.spdlog}",
-        "%{IncludeDir.Mosaic}",
-        "%{IncludeDir.nlohmann}",
-    }
-    links { "ArcaneCore", "ArcaneClient" }
+    includedirs { "%{prj.location}" }   -- engine + vendor roots: the descriptor closure
     defines {
-        "IMGUI_API=" .. ARCANE_IMGUI_IMPORT,
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }

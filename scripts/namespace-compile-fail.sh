@@ -4,12 +4,14 @@ set -euo pipefail
 
 root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 compiler=${CXX:-c++}
-cases="$root/ArcaneTests/compile-fail/namespace"
+cases="$root/Tests/ArcaneTests/compile-fail/namespace"
 log=$(mktemp)
 trap 'rm -f -- "$log"' EXIT
 
-includes=(
-  -I"$root/ArcaneCore/src"
+# Every Runtime module's include root (Source/Runtime/<Module>/src).
+includes=()
+for d in "$root"/Source/Runtime/*/src; do includes+=(-I"$d"); done
+includes+=(
   -I"$root/ThirdParty/nlohmann"
   -I"$root/ThirdParty/picosha2"
   -I"$root/ThirdParty/spdlog/include"

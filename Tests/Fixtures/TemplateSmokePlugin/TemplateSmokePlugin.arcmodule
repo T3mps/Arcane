@@ -1,0 +1,6 @@
+{
+  "name": "TemplateSmokePlugin",
+  "type": "Game",
+  "dependencies": { "public": [], "private": ["ArcaneEngine", "ArcaneInput", "ArcaneScene"] },
+  "thirdParty": { "public": [], "private": [] }
+}

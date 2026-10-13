@@ -14,7 +14,7 @@
 //
 // CURVE IS MIRRORED in two other places -- keep all three in step:
 //   Tests/src/TonemapTest.cpp   (CPU golden reference, same branchless form)
-//   ArcaneEditor/src/EditorWidgets.cpp (LinearToSrgb, branching form)
+//   Source/Programs/ArcaneEditor/src/EditorWidgets.cpp (LinearToSrgb, branching form)
 
 struct VSOutput
 {
