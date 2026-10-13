@@ -1,7 +1,7 @@
 # Arcane public distribution: Hub engine manager, R2 releases, signing, SDK packaging
 
 **Date:** 2026-10-12 · **Base:** `main` 946092fb · **Branch:** `docs/distribution-design`
-**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); awaiting written-spec review
+**Status:** design approved in conversation (decisions, sections 1-9, the Arcane-side review fold-ins, conflicts 1 and 2); written-spec review round 1 folded in (packaged-game writes, logs, premake, notices, manifest expiry, release image, PR packaging check, SAC and local modules); awaiting approval
 
 ## 0. Status and context
 
@@ -186,6 +186,13 @@ today. The Linux build runs in plan A's content-addressed image
 (`ghcr.io/starworksdev/arcane-ci@sha256:<digest>`), so a release is built by
 exactly the toolchain CI tests.
 
+The release workflow never builds that image. It computes the tag with
+`scripts/ci/image-tag.sh`, requires `ghcr.io/starworksdev/arcane-ci:<tag>` to
+be published already (by `ci.yml`'s `ci-image` job on `main`), and pins the
+digest it reads from that tag. If the tag isn't published, the run fails
+closed. The release workflow holds `packages: read` only; `packages: write`
+stays with `ci-image` alone (plan A, `docs/ci.md`).
+
 **Workflow rules** (plan A's `ci-image` rules and roadmap D26):
 - Triggered only by a tag push or a manual dispatch from `main`. Nothing in it
   is reachable from a pull request: no `pull_request` or `pull_request_target`
@@ -204,9 +211,12 @@ exactly the toolchain CI tests.
 2. Split symbols (s7.3). Check that every binary's PDB GUID + age (Windows)
    or GNU build-id (Linux) matches its debug file. A mismatch stops the run.
 3. Run `--print-engine-info` and the test suite against the built binaries.
-4. Sign every Windows `.exe` and `.dll` with Artifact Signing.
+4. Sign every Windows `.exe` and `.dll` with Artifact Signing, then run
+   `--print-engine-info` again on the signed binaries. It is cheap, and it
+   proves signing didn't break loading.
 5. Package, then record each file's size and SHA-256. The archive's LICENSE
-   carries that version's BSL change date.
+   carries that version's BSL change date; `THIRD_PARTY_NOTICES` is
+   generated (s7.6).
 6. Upload to R2 at `engine/<v>/arcane-<v>-<os>-<arch>.<ext>` and
    `engine/<v>/arcane-<v>-<os>-<arch>-symbols.<ext>`, refusing to overwrite
    anything already there. Uploads use the S3 API (aws-cli or rclone), not
@@ -229,10 +239,16 @@ exactly the toolchain CI tests.
   `releases.json`. The archives stay, so projects pinned to that version can
   still install it.
 
+**Re-signing.** A scheduled job re-signs `releases.json` every 30 days, even
+when nothing changed (s5). It runs in the `release` environment, so it waits
+for the owner's approval like any publish.
+
 **Safety**
 - The approval gate above.
-- A dry-run mode builds and packages without uploading anything (test key,
-  no `release` environment).
+- Pull requests check packaging on `ci.yml`'s existing Dist legs instead of
+  rebuilding Dist in a separate workflow (s10).
+- The release workflow has a dry-run mode for a manual dispatch: it builds and
+  packages without uploading anything (test key, no `release` environment).
 
 ## 5. Manifest and trust (design section 3)
 
@@ -264,7 +280,9 @@ exactly the toolchain CI tests.
 
 `build` is the release's full commit SHA (the probe's `commit`), not the
 probe's display string `build`. `change_date` is four years after
-`released_at`, per `LICENSE`.
+`released_at`, per `LICENSE`; for a stable version that had previews, four
+years after its first preview's `released_at` (s12, pending the legal
+review).
 
 How the Hub checks it:
 1. **Signature.** Verify the minisign signature against a public key built
@@ -272,9 +290,10 @@ How the Hub checks it:
 2. **No rollback.** Remember the highest serial seen, and reject any manifest
    with a lower one. This blocks a downgrade by replaying an old, validly
    signed manifest.
-3. **No stale lists.** Reject a manifest past its `expires`. CI re-signs it
-   every month even when nothing changed. When offline, installed engines
-   keep working.
+3. **No stale lists.** Reject a manifest past its `expires`, which is set
+   about **90 days** after signing. CI re-signs it every 30 days even when
+   nothing changed (s4, Re-signing), so two missed approvals in a row are
+   still survivable. When offline, installed engines keep working.
 4. **Every download.** Check its SHA-256 against this verified manifest before
    anything else touches it (s6).
 5. **Old Hubs.** If `min_supported` or `min_hub_version` is newer than the
@@ -343,7 +362,10 @@ deleted on the next start.
   same ABI.
 - The Hub always shows which engine a project uses and why.
 - The Hub sets `ARCANE_SDK` to the pinned engine's `sdk/` folder before
-  launching the editor or a build.
+  launching the editor or a build. Outside the Hub (a terminal, an IDE), you
+  set it yourself: each engine in the Engines view has **Copy environment**,
+  which copies the line for your shell (`set ARCANE_SDK=...` or
+  `export ARCANE_SDK=...`), and the download page's docs show the same.
 
 **Updates and settings**
 - The Hub checks for updates at launch and then every few hours. A new engine
@@ -365,6 +387,7 @@ arcane-0.3.1/
   data/         built-in assets
   sdk/          the installed SDK (below)
   LICENSE       BSL 1.1 + this version's change date
+  THIRD_PARTY_NOTICES   every redistributed dependency's licence (s7.6)
   manifest.txt  every file + SHA-256 (Verify)
   engine.json   { version, build, abi, channel }
 ```
@@ -389,7 +412,15 @@ included.
   public module depends on it publicly. Private dependencies' headers are not
   shipped. This replaces the hand-kept "list of public headers";
 - the header-only dependencies a public header reaches (`arcane_module_consumer`
-  names glm, Astra, enkiTS, Manifold2D and Mosaic today).
+  names glm, Astra, enkiTS, Manifold2D and Mosaic today);
+- **premake 5.0.0-beta8**, because `arcbuild` generates through premake. It
+  goes where `Arcane::Toolchain` looks for its bundled copy,
+  `sdk/ThirdParty/premake5/premake5[.exe]` (`Toolchain.hpp:65` and
+  `Toolchain.cpp:247` on `feat/modularization`). On Windows that is the
+  vendored `ThirdParty/premake5/premake5.exe`; on Linux it is the CI image's
+  copy (`/opt/arcane-tools`, plan A `docs/ci.md`, "Build driver"). Without
+  it, `arcbuild` falls back to a `premake5` on `PATH`, which an engine
+  download can't assume.
 
 Size: the static libraries dominate; expect **100+ MB** unpacked for the SDK
 on top of the ~43 MB runtime. Phase 1 measures the real figure. The per-file
@@ -415,7 +446,10 @@ configs against an installed SDK:
   layouts agree with the DLLs') is the one place this is enforced. Against an
   installed SDK it refuses, at generate time with a named error, any
   ABI-affecting change: a Debug config, the debug CRT, `_ITERATOR_DEBUG_LEVEL`
-  other than 0, or a missing `NDEBUG`/`ARC_BUILD_DIST`.
+  other than 0, a missing `NDEBUG`/`ARC_BUILD_DIST`, or, on Linux,
+  `_GLIBCXX_DEBUG` (libstdc++'s debug mode changes container layouts).
+  `_GLIBCXX_ASSERTIONS` is allowed: it adds checks without changing any
+  layout.
 - `ARC_ASSERT` follows `NDEBUG` (`MOSAIC_ASSERT`, `ThirdParty/Mosaic/include/Mosaic/Assert.hpp`),
   so it is off in both configs. Game code gets **`ARC_GAME_ASSERT`**, keyed to
   the module's own config: active in Development, compiled out in Release.
@@ -459,15 +493,34 @@ targets (verified on `main`):
   `<engineDir>/diagnostics` (`ArcaneCore/src/Arcane/Platform/Paths.cpp:180`),
   and the reporter's fallback report folder is `<exeDir>/diagnostics`
   (`ArcaneCore/src/Arcane/Base/Diagnostics.cpp:2661`).
-- **Logs** beside the exe: a derived log folder follows the report folder, so
-  it lands in that same `diagnostics/`.
+- **`Logs/`** beside the exe: with no configured log folder, the log goes to
+  the report folder's *parent* plus `Logs` (`Diagnostics.cpp:2319`), so it
+  lands in a sibling `<exeDir>/Logs/`, next to `<exeDir>/diagnostics/`, not
+  inside it. Observed on the P6 Windows package boot as
+  `Binaries/Win64/Logs/ReferenceProject.log`. It is its own target.
 - **Packaged games** under `<Project>/Binaries/<Platform>/` (`Win64`, `Linux`,
-  `Mac`; `build/arcane.lua` on `feat/modularization`): a game installed under
-  Program Files must not write there either.
+  `Mac`; `build/arcane.lua` on `feat/modularization`). Here the project's
+  `Saved/` is inside the install folder: the P6 Windows package boot wrote
+  `ReferenceProject/Saved/Logs/` and `Saved/Diagnostics/` inside `Packages/...`,
+  and a Program Files install would do the same.
 
-These move to the per-user data folder (`%LOCALAPPDATA%\Arcane\...`, the XDG
-state folder on Linux) or the project's `Saved/`. A CI test runs the editor,
-runtime and a packaged game from a read-only copy and fails on any write.
+Where each write goes:
+- **The editor** (and the runtime run against a project): the project's
+  `Saved/` or the per-user data folder (`%LOCALAPPDATA%\Arcane\...`, the XDG
+  state folder on Linux). The project is a user-owned folder, so its
+  `Saved/` is writable.
+- **A packaged game, in every config:** a per-user folder, never the
+  project's `Saved/`. Dist packages already resolve one: `GameUserDir` is
+  `%LOCALAPPDATA%\<Company>\<Game>` (`$XDG_CONFIG_HOME/<Company>/<Game>` on
+  Linux) and Dist diagnostics go below it (`Paths.cpp`, `ResolveGameUserDir`;
+  settings spec S7, "the Dist user directory"). A non-Dist package resolves
+  `Saved/` and diagnostics through the project folder instead, and that is
+  the case to fix. Unreal does the same: a packaged game's `Saved/` is
+  `%LOCALAPPDATA%\<Project>\Saved`.
+
+**The test.** CI runs the editor, the runtime, and a **Release and a Dist**
+packaged game from a read-only copy, and fails on any write. Both package
+configs are covered because Dist and non-Dist resolve paths differently.
 
 ### 7.5 Linux
 
@@ -483,6 +536,29 @@ runtime and a packaged game from a read-only copy and fails on any write.
   (`registry.gitlab.steamos.cloud/steamrt/sniper/sdk`, glibc 2.31), produced
   through plan A's content-addressed images, so packaged games run on older
   systems and in the Steam runtime.
+
+### 7.6 Third-party notices
+
+The engine archive and the SDK redistribute third-party code, including
+SDL3, ImGui, FreeType, msdfgen, NRI, enkiTS, spdlog, nlohmann, glm, DXC, the
+D3D12 Agility SDK and, on Linux, the Vulkan loader. Each has its `LICENSE` in
+`ThirdParty/<name>/`, indexed by `ThirdParty/README.md`. Two of them come with
+conditions:
+- **FreeType** (FTL) requires an acknowledgment in the documentation.
+- **The Agility SDK and DXC** are under Microsoft's redistribution terms.
+
+What ships:
+- **`THIRD_PARTY_NOTICES`** at the archive root, generated at packaging time
+  from the vendor modules in the module graph plus the runtime dependencies
+  in `bin/`. Each entry has the name, the version and the licence text
+  verbatim. A dependency that isn't redistributed (Catch2, rapidcheck, the
+  Playwright fixtures) is left out.
+- **Packaged games** carry the notices for whatever they link.
+  `arcbuild package` stages a `THIRD_PARTY_NOTICES` beside the game, built
+  from the same data for that game's modules.
+- The download page and the Hub's About link to the notices.
+
+The notice list goes to the legal review (s12).
 
 ## 8. Website (design section 6)
 
@@ -530,8 +606,9 @@ runtime and a packaged game from a read-only copy and fails on any write.
 | Removing an engine an editor is running from | Blocked. The Hub finds running editors through each project's `Saved/editor.lock` (`{pid, creation time}`, `ArcaneHub/src-tauri/src/editorlock.rs`) and its own spawn map, and compares each live editor's executable path with the engine folder; the lock itself does not name an engine. |
 | Installed SDK and an ABI-affecting module config | Generation fails with a named error (s7.2). |
 
-**CI fails closed.** A tag that doesn't match `Version.hpp`, a failing test, a
-symbol-match failure, a signing failure, an object that already exists, a
+**CI fails closed.** A tag that doesn't match `Version.hpp`, an unpublished
+Linux image tag, a failing test, a symbol-match failure, a signing failure, a
+probe that fails on the signed binaries, an object that already exists, a
 failing read-only audit, or a manifest that won't verify all stop the run
 before `releases.json` is touched. Any archives already uploaded stay
 unreferenced, and a cleanup step lists them.
@@ -553,18 +630,24 @@ signature means the build fails.
   - UI states of the Engines view.
 - **Engine**
   - Archive layout, `manifest.txt` completeness, `engine.json` matching the
-    probe, the LICENSE.
+    probe, the LICENSE, `THIRD_PARTY_NOTICES` covering every redistributed
+    dependency, premake present in the SDK.
   - Symbol match: PDB GUID + age / build-id per binary.
   - SDK smoke test: build the ReferenceProject game module, in Development and
     Release, against an *extracted archive*, then `arcbuild package` it, on
     Windows and Linux.
-  - The installed SDK refuses a Debug config and a debug CRT.
-  - Read-only install test (s7.4).
+  - The installed SDK refuses a Debug config, a debug CRT and
+    `_GLIBCXX_DEBUG`.
+  - Read-only install test: the editor, the runtime, and a Release and a
+    Dist package (s7.4).
 - **Release workflow**
-  - A dry run on pull requests (test key, no `release` environment, nothing
-    uploaded).
+  - On pull requests, a packaging step on `ci.yml`'s existing Dist legs
+    (Windows and Linux), reusing the build they already make: package,
+    `manifest.txt`, the symbol split and match, `engine.json` against the
+    probe. No signing, no upload, no `release` environment. Dist is never
+    rebuilt for this.
   - Unit tests for the manifest generator, the refusal to overwrite, the yank
-    workflow and the re-sign workflow.
+    workflow and the re-sign workflow (including the 90-day expiry).
 - **Website**
   - Loader tests: signature, fallback, bad signature.
   - Playwright: download buttons per OS, the macOS note, release anchors, the
@@ -573,6 +656,9 @@ signature means the build fails.
   - A clean Windows 11 VM with Smart App Control on, and Ubuntu 24.04.
   - Install the Hub; install an engine in both scopes; open a project; build a
     module; fetch symbols; update the Hub; remove everything.
+  - The specific risk this pass checks: whether Smart App Control lets the
+    signed editor load the developer's own unsigned, freshly built game
+    module (s12).
 
 ## 11. Phases (design section 9)
 
@@ -580,18 +666,22 @@ Engine work starts after modularization lands (its P6 and P7). Phase 2 needs
 no engine changes and may be prepared in parallel with it.
 
 1. **Engine release-readiness** (after modularization P6/P7). Real semver in
-   `Version.hpp`; the probe's `version` and `commit`; the read-only audit and
-   its test; public headers generated from the module graph; the installed-SDK
+   `Version.hpp`; the probe's `version` and `commit`; the read-only audit
+   (including per-user folders for packaged games in every config) and its
+   test; public headers generated from the module graph; the installed-SDK
    mode in `arcane.lua`, with the Development/Release configs, `ARC_GAME_ASSERT`
-   and the refusal; Dist debug info, the symbol split and the reporter's symbol
-   cache path; the packaging script and its self-test. Result: a standalone
-   engine archive and its symbols archive.
+   and the refusal; premake in the SDK; Dist debug info, the symbol split and
+   the reporter's symbol cache path; `THIRD_PARTY_NOTICES` and its staging by
+   `arcbuild package`; the packaging script and its self-test, and the
+   packaging step on `ci.yml`'s Dist legs. Result: a standalone engine
+   archive and its symbols archive.
 2. **Pipeline and hosting** (may run in parallel with modularization). R2 and
    `downloads.starworks.dev` with the Cache Rules; Artifact Signing and its
    OIDC federation; the keys and their backups; the scoped R2 token; the
-   release workflow scaffolding (dry run, then publish behind approval); the
-   manifest generator, the yank and re-sign workflows, and the GitHub Release;
-   the deploy hook. Result: pushing `v0.2.0` publishes a release (once phase 1
+   release workflow scaffolding (dry run, then publish behind approval), with
+   the Linux image resolved, never built; the manifest generator, the yank
+   workflow, the 30-day re-sign behind approval, and the GitHub Release; the
+   deploy hook; the legal review (s12). Result: pushing `v0.2.0` publishes a release (once phase 1
    has landed).
 3. **The Hub as engine manager.** Manifest trust; the Engines view; install
    scopes and the UAC helper; pinning, upgrades and follow patches; symbols;
@@ -635,6 +725,27 @@ no engine changes and may be prepared in parallel with it.
   binary in an archive is signed, and the first release is tested by hand
   with Smart App Control on. A signing outage blocks releases (CI fails
   closed) rather than shipping unsigned files.
+- **Smart App Control and locally built game modules.** The core workflow has
+  the signed editor load the developer's own game module DLL, which is
+  unsigned and newly built, so it has no cloud reputation either. Field
+  reports show SAC blocking freshly built and unsigned native binaries,
+  including DLLs loaded by signed hosts, with no "run anyway". Microsoft
+  doesn't document how SAC treats a locally compiled DLL, so this is
+  unverified. The manual VM pass (s10) checks it directly.
+  **Fallback, decided now:** if SAC blocks local modules, the docs and the
+  Hub say that game development needs Smart App Control turned off on that
+  machine, as other native development tools do. Players are unaffected:
+  a shipped game is signed by its developer, or not, and that's between the
+  developer and SAC. The Hub detects SAC's state and shows the note before the
+  first build instead of after a confusing failure.
+- **Legal review before the first public release.** No review is recorded
+  yet. It covers:
+  - Arcane's BSL 1.1 parameters and change dates;
+  - whether a preview (such as `0.4.0-preview.2`) counts as the "first public
+    distribution" that starts `0.4.0`'s four-year clock. Previews are public
+    downloads, so the safe reading is yes;
+  - the third-party notices (s7.6), with FreeType's acknowledgment and
+    Microsoft's terms for the Agility SDK and DXC.
 - **A lost key strands installed Hubs.** A Hub trusts only the manifest keys
   it embeds and the Tauri key it was built with. Lose the minisign key and
   installed Hubs reject every new manifest; lose the Tauri key and they can
@@ -657,7 +768,10 @@ no engine changes and may be prepared in parallel with it.
   distribution, so the date must be provable. Three independent records back
   `released_at`: the git tag, the GitHub Release timestamp, and the R2 upload
   time. `released_at` is **never rewritten**, not by the yank workflow, not by
-  a monthly re-sign, not by a fix to the notes.
+  a 30-day re-sign, not by a fix to the notes. Until the legal review answers
+  the preview question, `change_date` for a stable version is computed from its
+  **first preview's** `released_at` when it had one. If that reading is wrong,
+  the result is an earlier MIT date, which errs toward the user.
 - **The modularization dependency.** Phase 1 cannot start until P6/P7 land;
   if the module layout changes in its wholesale test, the SDK contents
   follow it (s7.1 is stated in terms of "every descriptor" and the module graph
@@ -683,6 +797,11 @@ Research from 2026-10-12.
 - minisign: [jedisct1.github.io/minisign](https://jedisct1.github.io/minisign/).
 - Microsoft: [Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/overview),
   [Smart App Control](https://support.microsoft.com/en-us/topic/what-is-smart-app-control-285ea03d-fa88-4d56-882e-6698afdb7003),
+  [Q&A: signed binaries still blocked on reputation](https://learn.microsoft.com/en-us/answers/questions/5791210/application-signed-and-blocked-by-smart-app-contro);
+  field reports of SAC blocking freshly built or unsigned native binaries:
+  [rebuilt executables](https://blog.devgenius.io/smart-app-control-may-blocked-your-app-the-fix-was-to-stop-rebuilding-it-5676f69ec3bc),
+  [an unsigned DLL in a signed tool](https://abp.io/support/questions/10365/ABP-Studio-Blocked-by-Windows-Smart-App-Control-and-Cannot-Launch-on-Windows-11),
+  [an unsigned native addon](https://discuss.ai.google.dev/t/bug-smart-app-control-blocks-vscode-policy-watcher-node-part-of-this-app-was-blocked-windows-11-ide-2-5-5/178683),
   [Azure login with OpenID Connect](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect),
   [`azure/login`](https://github.com/Azure/login).
 - GitHub: [security hardening for Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions),
