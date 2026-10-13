@@ -392,7 +392,11 @@ namespace Arcane
 
         [[nodiscard]] operator RenderGraphConfig() const noexcept
         {
+#if !defined(ARC_BUILD_DIST)
             return { backend, vsync, maxFrames, pickProbe, pickProbeX, pickProbeY };
+#else
+            return { backend, vsync, maxFrames };   // the pick probe is a dev-only automation flag
+#endif
         }
     };
 
