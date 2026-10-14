@@ -640,6 +640,75 @@ project "arcbuild"
     filter {}
 
 -- ============================================================================
+-- Servitor (servitor): the loopback CLI that attaches to running engine hosts
+-- (spec docs/superpowers/specs/2026-10-05-arc-cli-design.md, plan rev 8.3).
+-- The client is program code (namespace Servitor, no export macro) and links
+-- ONLY ArcaneCore, ArcaneNet and ArcaneRemoteProtocol (spec AM9, ruling V5):
+-- never ArcaneRemote or ArcaneEngine. arc_module_consumer stages that closure
+-- beside the exe (and adds the modules' public vendor include dirs), so there
+-- is no DLL copy here; ServitorBoundaryTest.cpp ([servitor][boundary]) checks
+-- the staged folder holds nothing else. The client sources (src/Servitor/**)
+-- also source-compile into ArcaneTests, the arcbuild precedent; main.cpp is
+-- the exe's alone. SERVITOR_OUTPUTDIR (V7) lets HostsDir map a source-checkout
+-- --engine root to this configuration's Binaries folder. Never on PATH: P0
+-- runs it from Binaries/.
+-- ============================================================================
+group "Programs"
+project "Servitor"
+    arc_module_consumer(engine_modules, { "ArcaneCore", "ArcaneNet", "ArcaneRemoteProtocol" })
+    location "Source/Programs/Servitor"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetname "servitor"
+
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/main.cpp",
+        "%{prj.location}/src/Servitor/**.hpp",
+        "%{prj.location}/src/Servitor/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+    }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "SERVITOR_OUTPUTDIR=\"" .. outputdir .. "\"",
+    }
+
+    postbuildcommands(arcane_cmds {
+    })
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARC_BUILD_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- arcbuild-process-fixture: a tiny, dependency-free console app Task 5's
 -- ProcessRunner spawns directly (Process.cpp's [build] integration tests,
 -- BuildDriverTest.cpp) to prove real CreateProcessW behavior end to end --
@@ -1573,6 +1642,13 @@ project "ArcaneTests"
         -- prove real CreateProcessW quoting/streaming/handle-inheritance
         -- behavior end to end.
         "%{wks.location}/Source/Programs/arcbuild/src/Process.cpp",
+        -- Servitor P0 Task 14 (rev 8.3 V3): the Servitor client (namespace
+        -- Servitor -- Format, Client, Verbs and every later client TU) source-
+        -- compiles into the test exe the way arcbuild's core does above, so the
+        -- [servitor][client] units drive Render/ParseGlobals/Call directly. The
+        -- glob covers later client files with no further premake edit;
+        -- Source/Programs/Servitor/src/main.cpp sits outside it (the exe's own).
+        "%{wks.location}/Source/Programs/Servitor/src/Servitor/**.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-
@@ -1774,6 +1850,7 @@ project "ArcaneTests"
         "%{wks.location}/Source/Programs/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
         "%{wks.location}/Source/Programs/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
         "%{wks.location}/Source/Programs/ArcaneCrashReporter/src",   -- ReporterArgs.hpp for the [reporter] units (crash window plan 2, Task 4)
+        "%{wks.location}/Source/Programs/Servitor/src",   -- <Servitor/*.hpp> for the [servitor] units (Servitor P0 Task 14, rev 8.3 V3)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -1809,14 +1886,21 @@ project "ArcaneTests"
     -- their normal per-config behaviour.
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
+    -- The source-compiled Servitor client reads the same define the Servitor
+    -- exe does (rev 8.3 V7: HostsDir's source-checkout mapping).
+    defines { "SERVITOR_OUTPUTDIR=\"" .. outputdir .. "\"" }
+
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    -- Servitor (Servitor P0 Task 14) must be built and its closure staged before
+    -- ServitorBoundaryTest.cpp ([servitor][boundary]) lists ../Servitor/.
     -- arcbuild-process-fixture (Task 5, multibackend hardening) must exist
     -- before the [build] process-fixture integration tests can spawn it --
     -- this is the ONLY thing that makes that happen for a
     -- `/t:arcbuild,ArcaneTests` build (the fixture is not itself a named
     -- target there).
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
-                "HotReloadPluginInitFail", "ReferenceGameUnderTest", "TemplateSmokePlugin", "arccook" }
+                "HotReloadPluginInitFail", "ReferenceGameUnderTest", "TemplateSmokePlugin", "arccook",
+                "Servitor" }
 
     -- Task 6 (multibackend hardening): the fixture project exists only for a
     -- Windows target (see its own gate below), so only a Windows generation
