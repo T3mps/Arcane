@@ -1,6 +1,6 @@
 # arc CLI (D27) -- design
 
-**Naming (AM7, 2026-10-13):** the tool is now Servitor and the engine side is ArcaneRemote; see s0.29 AM7 for the mapping. The body below keeps its original `arc` spellings.
+**Naming (AM7, 2026-10-13):** the tool is now Servitor and the engine side is ArcaneRemote; see s0.29 AM7 for the mapping. AM8 (exit 9, engine root) and AM9 (an engine-version-independent client) follow it. The body below keeps its original `arc` spellings.
 
 **APPROVED 2026-10-09 (user): every recommended pick in s0 (0.1-0.28) plus amendments AM1-AM6 (s0.29). Build scope now: P0 + `play|stop|pause|resume|step` pulled forward from P1 (s13). Branch `feat/arc-cli`.** Drafted 2026-10-05.
 
@@ -194,6 +194,35 @@ Most of that review is already covered here: the Origin/Host checks and the head
 - **AM5, descriptor permissions.** The descriptor holds the token. On Windows it is created with an owner-only DACL (the current user plus SYSTEM); on POSIX it is created 0600. It is written under the same rule to its temp file before the rename.
 - **AM6, exit codes 5 vs 7 stated.** 5 means `host.busy`: the request was provably not run, and retrying at the same target is safe. 7 means the host is unreachable, died or is restarting: rediscover first (`arc status`), then retry against the new pid. Every `host.busy{state}` (including 0.27's minimized state and the queue-full state) is exit 5.
 - **AM7 (2026-10-13, user): naming.** The client tool is **Servitor** (`servitor` / `servitor.exe`, premake project `Servitor` at `Source/Programs/Servitor`, output `Binaries/<cfg>/Servitor/`). It is the user-facing remote-control client and will be the first Hub package. The engine side keeps a generic name, the same rule as `--offscreen`: the Runtime module is `ArcaneRemote` (`Source/Runtime/ArcaneRemote/`, `ARC_REMOTE_API`, namespace `Arcane::Remote`, headers `<Arcane/Remote/...>`, client code `Arcane::Remote::Cli`), the wire paths are `/remote/v1/...`, the headers `X-Remote-*`, the host flags `--remote`, `--remote-descriptor`, `--remote-idle`, the descriptor dir `<project>/Saved/Remote/`, the cvars `editor.remote.enable`, `remote.server.frameBudgetMs`, `remote.server.queueDepth`, `log.remote.ringLines`, the read-only env var `ARC_REMOTE_READ_ONLY`, error codes `remote.*`, and Catch2 tags `[remote]` (client cases `[servitor][client]`). P2 scenario files are `.servitor`. `arc` / `ARC_` is reserved for engine macros (`ARC_*`) and backstage tools (`arcbuild`, `arccook`); a stutter such as `ARC_ARC_*` must never exist. Every `arc` in this spec's body that names the tool reads as Servitor, and every engine-side `arc` spelling reads as the mapping above. The full mapping is `.superpowers/sdd/2026-10-09-arc-cli-p0/RENAME-SERVITOR.md`; the P0 plan (rev 8.2) applies it.
+- **AM8 (2026-10-13, Hub packages spec, agreed with the distribution lane): exit 9 and the engine root.**
+  - **Exit 9 is reserved for the Hub's PATH launcher** (Hub packages spec s5), which runs Servitor and passes Servitor's exit code through. The launcher exits 9 when it cannot run Servitor:
+    - `engine.not-found`: no engine is registered, or the chosen engine's folder is gone.
+    - `package.not-installed`: the engine exists, but Servitor is not installed on it.
+    - `package.incompatible` (reserved for a later user-scope install): the installed Servitor does not speak the engine's remote protocol major.
+  - **The launcher's output.** The sentence goes to stderr. Under `--json` or `--format json|ndjson`, a minimal envelope (`ok:false`, `errors:[{code, message}]`) also goes to stdout; ndjson carries it inside the final result frame.
+  - **Servitor never exits 9.** The static manifest (`servitor commands --format json`) lists 9 with these codes, marked launcher-only.
+  - **Engine root.** Hosts to launch, and their exe-relative log and diagnostics directories, resolve in this order, first match wins:
+    1. `--engine <root>`;
+    2. `SERVITOR_ENGINE`;
+    3. the source layout: `../ArcaneEditor`, `../ArcaneRuntime`, `../ArcaneServer` beside `Binaries/<Config>-<os>-<arch>-md/Servitor/`;
+    4. the package layout: `<exeDir>/../../sdk/sdk.json` exists, and hosts are at `<root>/Binaries/<engineConfig>-<os>-<arch>-md/<Host>/`, with `engineConfig` read from that file.
+  - **Roots without a usable answer.** A root with no `sdk/sdk.json` is a source checkout, which uses Servitor's own build configuration. A package root whose `sdk.json` lacks `engineConfig`, or no root at all, is `engine.unresolved` (exit 4) with remediation, never a guess.
+  - **The launcher passes the root through the environment.** It sets `SERVITOR_ENGINE` in the child's environment and never edits argv, so a user's own `--engine` wins.
+  - Descriptor discovery (`<project>/Saved/Remote/`) does not depend on the layout.
+- **AM9 (2026-10-14, user): the client is engine-version-independent.** Servitor's code must not depend on the engine build it ships beside, so one Servitor can talk to any host that speaks a protocol major it supports.
+  - **Boundary.** `servitor` links ArcaneCore, ArcaneNet and the wire-protocol module `ArcaneRemoteProtocol` only. That module holds the envelope, the error and exit tables, the descriptor and redaction, and depends on ArcaneCore alone. Servitor never links the host side of ArcaneRemote, ArcaneEngine, ArcaneScene, ArcaneSim, ArcaneAssets or ArcaneCrypto. A test checks Servitor's staged library closure. Process identity (`{pid, start}` liveness) is ArcaneCore's `Platform::IsProcessLive`; `EditorLock::IsLive` wraps it.
+  - **The wire is the contract.** The client builds request `args` as JSON by field name and never includes a host command's args struct or registry.
+  - **Versions.**
+    - The protocol has a major (1) and a minor (0). The minor rises with each additive change. `GET /status` and the envelope carry `protocolMinor`; an absent `protocolMinor` reads 0.
+    - The engine advertises both numbers in `Source/Runtime/ArcaneRemote/remote-protocol.json`, which a test pins to the C++ constants. The Hub reads that file in source checkouts, and installed engines copy it into `sdk/sdk.json` as `remoteProtocol: {major, minor}`.
+  - **Compatibility within a major.**
+    - Changes are additive.
+    - Both sides ignore unknown fields in the envelope, its `host` block, `data` and `GET /status`.
+    - New request fields go inside `options`, whose unknown keys the host ignores. Unknown top-level request keys and unknown `args` keys stay refusals (s6.2).
+    - The client declares the majors it supports (P0: `{1}`). Any other major is `protocol.mismatch` (exit 4) with remediation.
+    - Features are discovered from the host's catalog, never inferred from version numbers. A verb whose command the host lacks gets `command.unknown` (exit 2), with remediation naming the command and the host's `major.minor`.
+  - **Servitor's own version.** Servitor has its own semver, starting at 0.1.0. `servitor --version` and the static manifest print it with the supported majors.
+  - **Distribution.** In Hub v1, Servitor still ships per engine, in the engine-scoped package shape (Hub packages spec). A later one-per-user install (scope `user`) needs no change to this spec.
 
 ---
 
