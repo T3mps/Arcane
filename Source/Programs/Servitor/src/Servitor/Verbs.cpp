@@ -2,6 +2,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Servitor/Commands.hpp>
 #include <Servitor/Discover.hpp>
 #include <Servitor/Launch.hpp>
 
@@ -54,7 +55,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 5> kVerbs = {{
+const std::array<VerbRow, 10> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -67,6 +68,16 @@ const std::array<VerbRow, 5> kVerbs = {{
     // mode advances it once per loop pass, whatever its sub-steps.
     {"wait", "host.wait", &WaitArgs, nullptr, {}, false, &WaitAwaitsHost,
      "ready|settled|frames N|reload|state <s>   (frames counts host.frame: sim advances, not rendered frames)"},
+    // Task 17. commands prints the static manifest with no host; list reads
+    // GET /remote/v1/catalog; describe and schema post catalog.describe and
+    // schema.type; call posts any command by name (client-side: the command
+    // is the first token).
+    {"commands", nullptr, nullptr, &CommandsVerb},
+    {"list", nullptr, nullptr, &ListVerb},
+    {"describe", "catalog.describe", &DescribeArgs, nullptr, {}, false, nullptr, "<command>"},
+    {"schema", "schema.type", &SchemaArgs, nullptr, {}, false, nullptr, "component|resource <Name>"},
+    {"call", nullptr, &CallArgs, &CallVerb, CallFlags(), false, nullptr,
+     "<command> [name=value ...] [--args-json <json> | --args-file <path>]"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)

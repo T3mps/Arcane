@@ -5,6 +5,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Http.hpp>
@@ -76,8 +77,10 @@ bool HostSession::Start()
     registry.SetHostKind(m_config.kind); // ruling F-1; Stop restores m_kindBefore (ruling S3-9)
     // Ruling F12: the host's own remote commands register here, before the
     // gate reads the registry generation and the first catalogue is published.
-    // Teardown releases them.
+    // Teardown releases the session commands; the catalogue commands hold no
+    // pointer, so they stay registered for the process.
     RegisterSessionCommands(this, &m_jobs); // host.quit, host.wait (Task 16)
+    RegisterCatalogCommands();              // catalog.describe, schema.type (Task 17, ruling F13)
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;

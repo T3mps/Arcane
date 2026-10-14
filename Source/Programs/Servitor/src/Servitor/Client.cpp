@@ -212,9 +212,14 @@ void ExplainUnknownCommand(const std::string& command, Arcane::Remote::Envelope&
 {
     if (env.errors.empty() || env.errors.front().code != "command.unknown")
         return;
+    // catalog.describe names the command it could not find in detail.name.
+    const nlohmann::json& detail = env.errors.front().detail;
+    const std::string missing = detail.is_object() && detail.contains("name") && detail.at("name").is_string()
+                                    ? detail.at("name").get<std::string>()
+                                    : command;
     auto& remediation = env.errors.front().remediation;
     const std::string note = "the host (remote protocol " + std::to_string(env.protocol) + "." +
-                             std::to_string(env.protocolMinor) + ") has no command " + command +
+                             std::to_string(env.protocolMinor) + ") has no command " + missing +
                              "; update the host or use a servitor that matches it";
     remediation = remediation.empty() ? note : remediation + "; " + note;
 }
