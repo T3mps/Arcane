@@ -15,6 +15,7 @@
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Protocol.hpp>
+#include <Arcane/Remote/TickGate.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -29,7 +30,6 @@
 namespace Arcane::Remote
 {
 
-class TickGate; // TickGate.hpp, Task 12
 class RequestQueue;     // Listener.hpp
 class RemoteListener;   // Listener.hpp
 struct ListenerAtoms;   // Listener.hpp
@@ -54,7 +54,7 @@ public:
         std::filesystem::path descriptorOverride;
         std::uint32_t idleExitSeconds = 600;
         bool readOnly = false;
-        bool holdSim = false;          // Task 12: --remote && maxFrames == 0
+        bool holdSim = false;          // Task 12: --remote && maxFrames == 0; Start leaves Tick() Idle
         std::vector<std::string> capabilities;
         // Appended by later tasks, kept last so the fields above keep their
         // positions. Each task that appends a field also wires, in Start, the
@@ -110,7 +110,10 @@ public:
     HostGate& Gate();
     const HostGate& Gate() const;       // ruling F9: WaitPoll reads it through a const session
     const Config& GetConfig() const;    // ruling F9: the const hooks accessor (dirty, settled, hookUser, ...)
-    TickGate& Tick();                   // defined in Task 12; declare it now
+    // AM1: the fixed-tick hosts' run/pause/step gate. Start sets it from
+    // Config::holdSim: held = not running and paused (Consume is Idle until a
+    // play command), otherwise running (Consume is Run, the pre-remote loop).
+    TickGate& Tick();
     // ruling F10: the host passes its own m_plugin->Generation(); HostSession holds no PluginHost
     void NoteReload(std::uint32_t generation, bool ok, std::string reason, std::uint64_t frame);
     std::uint16_t Port() const;          // 0 unless started
@@ -125,6 +128,7 @@ private:
 
     Config m_config;
     HostGate m_gate;
+    TickGate m_tick;
     JobTable m_jobs;
     std::unique_ptr<ListenerAtoms> m_atoms;
     std::unique_ptr<RequestQueue> m_queue;       // sized by Start (QueueDepthSetting)

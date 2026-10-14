@@ -180,6 +180,7 @@ namespace Arcane::Server
             rc.projectRoot        = proj->Root();
             rc.descriptorOverride = m_cfg.remoteDescriptor;
             rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
+            rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
             m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
             if (!m_remote->Start())
@@ -221,11 +222,25 @@ namespace Arcane::Server
                 ARC_INFO("ArcaneServer: stopping on {} after {} tick(s)", m_remote->ExitReason(), rep.framesTicked);
                 break;
             }
+            // AM1 tick gate: a held --remote server (open-ended) runs no tick until
+            // a play command; an Idle iteration still polls, serves the console,
+            // publishes, beats and sleeps below. No remote: Run, as before.
+            const auto decision = m_remote ? m_remote->Tick().Consume() : Arcane::Remote::TickDecision::Run;
+            const bool advance  = decision != Arcane::Remote::TickDecision::Idle;
+#else
+            constexpr bool advance = true;
 #endif
-            m_runtime->EnsurePhysics();
-            m_runtime->Loop().Advance(m_cfg.fixedDtSeconds,
-                                      [&](double dt) { m_plugin->FixedUpdateAll(dt); },
-                                      [&](double dt, double a) { m_plugin->UpdateAll(dt, a); });
+            if (advance)
+            {
+                m_runtime->EnsurePhysics();
+                m_runtime->Loop().Advance(m_cfg.fixedDtSeconds,
+                                          [&](double dt) { m_plugin->FixedUpdateAll(dt); },
+                                          [&](double dt, double a) { m_plugin->UpdateAll(dt, a); });
+#if !defined(ARC_BUILD_DIST)
+                if (m_remote) m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim ticks only (AM1)
+#endif
+                ++rep.framesTicked;
+            }
             m_plugin->Poll();
             if (m_adminConsole)
             {
@@ -242,7 +257,6 @@ namespace Arcane::Server
             // setting set by the module or a console is in effect from the next tick.
             Arcane::CVarRegistry::Get().Publish();
             Arcane::Diagnostics::Heartbeat();
-            ++rep.framesTicked;
             std::this_thread::sleep_until(start + std::chrono::duration<double>(m_cfg.fixedDtSeconds));
         }
 

@@ -11,6 +11,7 @@
 #include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Config/CVarConfig.hpp>  // CommandLineCVarContext (integration ruling I3)
+#include <Arcane/Config/CVarRegistry.hpp>  // Publish on a held (AM1 Idle) iteration, MainLoop
 #if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
@@ -827,6 +828,7 @@ void RuntimeApp::MainLoop()
             rc.projectRoot    = proj->Root();
         rc.descriptorOverride = m_config.remoteDescriptor;
         rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
+        rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
@@ -874,11 +876,39 @@ void RuntimeApp::MainLoop()
 #endif
         if (io.skipFrame) continue;
 
-        // Per-frame timing + input sampling + the fixed-step sim advance.
-        // io.quit covers the Pressed("quit") input-action exit, the one quit
-        // path PumpAndResize's own return does not cover.
-        Arcane::RuntimeFrame::AdvanceSim(io);
-        if (io.quit) break;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // AM1 tick gate: a held --remote run (no --frames) advances no sim until
+        // a play command. No remote: Run, as before.
+        const bool advance = !m_remote || m_remote->Tick().Consume() != Arcane::Remote::TickDecision::Idle;
+#else
+        constexpr bool advance = true;
+#endif
+        if (advance)
+        {
+            // Per-frame timing + input sampling + the fixed-step sim advance.
+            // io.quit covers the Pressed("quit") input-action exit, the one quit
+            // path PumpAndResize's own return does not cover.
+            Arcane::RuntimeFrame::AdvanceSim(io);
+            if (io.quit) break;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+            if (m_remote) m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim advances only (AM1)
+#endif
+        }
+        else
+        {
+            // An Idle iteration still renders (a capture retires on a render
+            // ticket, not a sim tick) with the clock frozen, as --settle's hold
+            // freezes it: no frameDt reaches the material globals. It keeps
+            // AdvanceSim's per-frame bookkeeping -- the cvar publish (a remote
+            // `cvar set` lands while held) and the perf window -- and restamps
+            // the wall clock, so the first windowed step after a hold is not
+            // handed the whole held interval as its dt.
+            Arcane::CVarRegistry::Get().Publish();
+            io.perf.FrameStart();
+            io.lastFrameDt   = 0.0;
+            io.simPrev       = std::chrono::steady_clock::now();
+            io.lastFrameTime = io.simPrev;
+        }
 
         // ImGui BeginFrame + the host HUD + DrawUIAll...
         Arcane::RuntimeFrame::BuildHud(io);

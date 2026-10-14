@@ -100,6 +100,11 @@ bool HostSession::Start()
     const char* envReadOnly = std::getenv("ARC_REMOTE_READ_ONLY");
     const bool readOnly = m_config.readOnly || (envReadOnly != nullptr && std::strcmp(envReadOnly, "1") == 0);
     m_gate.readOnly.store(readOnly, std::memory_order_release);
+    // AM1: an open-ended --remote run holds its sim until a play command
+    // (Consume is Idle); a --frames N run keeps running so the scripted run
+    // still finishes.
+    m_tick.SetRunning(!m_config.holdSim);
+    m_tick.SetPaused(m_config.holdSim);
 
     m_atoms = std::make_unique<ListenerAtoms>();
     m_queue = std::make_unique<RequestQueue>(QueueDepthSetting());
@@ -256,6 +261,11 @@ const HostGate& HostSession::Gate() const
 const HostSession::Config& HostSession::GetConfig() const
 {
     return m_config;
+}
+
+TickGate& HostSession::Tick()
+{
+    return m_tick;
 }
 
 void HostSession::NoteReload(std::uint32_t generation, bool ok, std::string reason, std::uint64_t frame)
