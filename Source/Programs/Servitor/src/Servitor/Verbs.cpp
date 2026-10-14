@@ -55,7 +55,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 10> kVerbs = {{
+const std::array<VerbRow, 11> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -78,6 +78,9 @@ const std::array<VerbRow, 10> kVerbs = {{
     {"schema", "schema.type", &SchemaArgs, nullptr, {}, false, nullptr, "component|resource <Name>"},
     {"call", nullptr, &CallArgs, &CallVerb, CallFlags(), false, nullptr,
      "<command> [name=value ...] [--args-json <json> | --args-file <path>]"},
+    // Task 19. world list posts world.list; --world <name> (a global flag)
+    // names a world for every world-taking command.
+    {"world list", "world.list", nullptr, nullptr},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)

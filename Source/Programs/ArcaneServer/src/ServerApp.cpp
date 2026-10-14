@@ -182,6 +182,14 @@ namespace Arcane::Server
             rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
             rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
+            // Task 19 (ruling F16): the server's one world.
+            rc.worlds.user        = this;
+            rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
+                auto* app = static_cast<ServerApp*>(user);
+                if (!app->m_runtime)
+                    return {};
+                return { { "main", Arcane::ToString(app->m_runtime->Mode()), &app->m_runtime->Registry() } };
+            };
             m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
             if (!m_remote->Start())
                 m_remote.reset();   // Start logged why; the server carries on without remote

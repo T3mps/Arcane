@@ -7,6 +7,7 @@
 
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
+#include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Http.hpp>
 #include <Arcane/Remote/Listener.hpp>
@@ -81,6 +82,8 @@ bool HostSession::Start()
     // pointer, so they stay registered for the process.
     RegisterSessionCommands(this, &m_jobs); // host.quit, host.wait (Task 16)
     RegisterCatalogCommands();              // catalog.describe, schema.type (Task 17, ruling F13)
+    SetCommandWorlds(m_config.worlds);      // the one world table (Task 19, ruling F16); Teardown clears it
+    RegisterWorldCommands();                // world.list (Task 19); reads CommandWorlds(), holds no pointer
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -105,6 +108,14 @@ bool HostSession::Start()
     m_gate.pid = self.pid;
     m_gate.catalog = registry.Generation();
     m_gate.SetState("ready");
+    // The s6.3 host block's `world`: the host's default world, the one a call
+    // without --world resolves to (ResolveWorld with an empty name). A host
+    // with several worlds, or none, has no default and leaves it empty.
+    if (m_config.worlds.fn != nullptr) {
+        const std::vector<WorldInfo> worlds = m_config.worlds.fn(m_config.worlds.user);
+        if (worlds.size() == 1)
+            m_gate.world = worlds.front().name;
+    }
     const char* envReadOnly = std::getenv("ARC_REMOTE_READ_ONLY");
     const bool readOnly = m_config.readOnly || (envReadOnly != nullptr && std::strcmp(envReadOnly, "1") == 0);
     m_gate.readOnly.store(readOnly, std::memory_order_release);
@@ -242,6 +253,12 @@ void HostSession::Teardown()
     m_atoms.reset();
     m_cataloguePublished = false;
     ReleaseSessionCommands(this); // a stopped session's commands answer host.unavailable
+    // The world table names this host's objects (user = the app): a stopped
+    // session leaves world-taking commands answering host.unavailable. Like
+    // ReleaseSessionCommands, a table another session installed since is left alone.
+    const WorldTable installed = CommandWorlds();
+    if (installed.fn == m_config.worlds.fn && installed.user == m_config.worlds.user)
+        SetCommandWorlds(WorldTable{});
     if (m_descriptorWritten) {
         std::error_code ec;
         std::filesystem::remove(m_descriptorPath, ec);

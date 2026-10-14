@@ -16,6 +16,7 @@
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Arcane/Remote/TickGate.hpp>
+#include <Arcane/Remote/Worlds.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -71,6 +72,12 @@ public:
         bool (*dirty)(void*) = nullptr;    // unsaved changes: host.quit answers host.busy{state:"modal"}
         bool (*settled)(void*) = nullptr;  // wait settled: SettleConverged and ShaderCompiler::IsIdle (editor, runtime)
         void* hookUser = nullptr;
+        // Task 19 (ruling F16): the host's worlds, read by world.list and every
+        // world-taking command through CommandWorlds(). Start installs it with
+        // SetCommandWorlds; Stop installs an empty table. fn is called on the
+        // main thread only (Start and inside Drain). P0 hosts list one world,
+        // {"main", ToString(mode), &registry}, with user = the host app.
+        WorldTable worlds;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

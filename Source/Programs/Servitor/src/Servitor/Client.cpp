@@ -178,6 +178,10 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
             if (!value(v))
                 return false;
             out.engine = v;
+        } else if (flag == "--world") {
+            if (!value(v))
+                return false;
+            out.world = v;
         } else if (flag == "--all") {
             // --all [editor|runtime|server]: the token after it is a kind filter
             // only when it spells one (a verb word is never a kind).
@@ -377,7 +381,7 @@ int PrintUsage(const std::string& problem)
         }
     }
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
-            "--host editor|runtime|server, --pid <n>, --engine <root>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
+            "--host editor|runtime|server, --pid <n>, --engine <root>, --world <name>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
             "--retry-on-death, --verbose, --version\n";
     Write(stderr, text);
     return 2;
@@ -430,6 +434,8 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
     };
     if (opt.readOnly)
         body["options"]["readOnly"] = true;   // ruling F15
+    if (!opt.world.empty())
+        body["options"]["world"] = opt.world; // ruling F14; the listener copies it onto Call::world
     const std::string payload = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     Arcane::Remote::ClientBlock local;
     if (client == nullptr)

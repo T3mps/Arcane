@@ -838,6 +838,14 @@ void RuntimeApp::MainLoop()
             auto* app = static_cast<RuntimeApp*>(user);
             return app->m_remoteSettle.Observe(app->m_frameCount, app->m_shaderCompiler.IsIdle());
         };
+        // Task 19 (ruling F16): the runtime's one world.
+        rc.worlds.user        = this;
+        rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
+            auto* app = static_cast<RuntimeApp*>(user);
+            if (!app->m_runtime)
+                return {};
+            return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
+        };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
             m_remote.reset();   // Start logged why

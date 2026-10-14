@@ -1789,6 +1789,15 @@ namespace Arcane::Editor
                                                           harvesterPending);
             return app->m_remoteSettle.Observe(app->m_frameCount, idle);
         };
+        // Task 19 (ruling F16): the editor's one world, read per call so a
+        // play session's registry swap is what world-taking commands see.
+        rc.worlds.user        = this;
+        rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
+            auto* app = static_cast<EditorApp*>(user);
+            if (!app->m_runtime)
+                return {};
+            return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
+        };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
         {

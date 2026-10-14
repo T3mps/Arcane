@@ -56,6 +56,7 @@ struct GlobalOptions {
     std::string hostKind;       // editor | runtime | server, optional
     std::uint32_t pid = 0;
     std::string engine;         // --engine <root>; rev 8.3 V7 (HostsDir)
+    std::string world;          // --world <name>; Call posts it as options.world when non-empty (ruling F14)
     bool all = false;           // --all: fan the command out to every matching live host (spec AM2)
     std::string allKind;        // --all editor|runtime|server: the token after --all when it is a kind
 };
@@ -91,7 +92,7 @@ struct ExchangeResult {
 
 using ExchangeFn = ExchangeResult (*)(const std::string& requestBody, void* user);
 
-// Posts {id, command, args, options:{timeoutMs[, readOnly]}} through `exchange`,
+// Posts {id, command, args, options:{timeoutMs[, readOnly][, world]}} through `exchange`,
 // retries a provably-not-run busy answer with backoff until opt.timeoutMs, checks
 // the reply's protocol major, and renders it. Opens no socket itself.
 // *finalEnvelope (when non-null) receives the envelope it rendered.
