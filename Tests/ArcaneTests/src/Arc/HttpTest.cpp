@@ -47,6 +47,44 @@ TEST_CASE("parser reports partial reads, bounds on headers, and content type", "
     CHECK(err == "content-type");
 }
 
+TEST_CASE("parser refuses malformed and smuggling shapes", "[arc][http]") {
+    std::string err;
+    auto refused = [&](const std::string& raw, const char* why) {
+        err.clear();
+        CHECK_FALSE(Arcane::Arc::ParseHttpRequest(raw, &err));
+        CHECK(err == why);
+    };
+    const std::string pre = "POST /arc/v1/call HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\n";
+
+    // whitespace before the colon / obs-fold
+    refused("GET / HTTP/1.1\r\nHost: h\r\nOrigin : x\r\n\r\n", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding : chunked\r\n\r\n", "malformed");
+    refused(pre + "Content-Length : 2\r\n\r\n{}", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\n foo: bar\r\n\r\n", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\nX-A: b\r\n\tfolded\r\n\r\n", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\nBad Name: x\r\n\r\n", "malformed");
+
+    // Content-Length
+    refused(pre + "Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}x", "malformed");
+    auto agree = Arcane::Arc::ParseHttpRequest(pre + "Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", &err);
+    REQUIRE(agree);
+    CHECK(agree->body == "{}");
+    refused(pre + "Content-Length: 2a\r\n\r\n{}", "malformed");
+    refused(pre + "Content-Length: -2\r\n\r\n{}", "malformed");
+    refused(pre + "Content-Length:\r\n\r\n{}", "malformed");
+    refused(pre + "Content-Length: 12345678901\r\n\r\n", "bounds");
+
+    // Transfer-Encoding of any value
+    refused(pre + "Transfer-Encoding: gzip\r\nContent-Length: 2\r\n\r\n{}", "chunked");
+
+    // request line and header line shape
+    refused("GET /x\r\nHost: h\r\n\r\n", "malformed");
+    refused("GET  HTTP/1.1\r\nHost: h\r\n\r\n", "malformed");
+    refused(" / HTTP/1.1\r\nHost: h\r\n\r\n", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\nNoColonHere\r\n\r\n", "malformed");
+    refused("GET / HTTP/1.1\r\nHost: h\r\n: empty\r\n\r\n", "malformed");
+}
+
 TEST_CASE("a good token does not survive Origin or a foreign Host", "[arc][http]") {
     const std::string token = Arcane::Arc::MakeToken();
     REQUIRE(token.size() == 64);

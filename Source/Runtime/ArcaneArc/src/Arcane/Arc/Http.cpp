@@ -46,6 +46,17 @@ bool IsHex(char c)
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
+// RFC 9110 tchar: ALPHA / DIGIT / one of !#$%&'*+-.^_`|~
+bool IsTokenChar(char c)
+{
+    if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return true;
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'': case '*': case '+':
+        case '-': case '.': case '^': case '_': case '`': case '|': case '~': return true;
+        default: return false;
+    }
+}
+
 std::string_view Trim(std::string_view s)
 {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
@@ -107,8 +118,12 @@ std::optional<HttpRequest> ParseHttpRequest(std::string_view bytes, std::string*
         if (next == std::string_view::npos) next = head.size();
         const std::string_view line = head.substr(pos, next - pos);
         pos = next + 2;
+        // A line that starts with SP or HT is obs-fold (refused, RFC 9112 s5.2).
+        if (!line.empty() && (line.front() == ' ' || line.front() == '\t')) return Fail(error, "malformed");
         const std::size_t colon = line.find(':');
         if (colon == std::string_view::npos || colon == 0) return Fail(error, "malformed");
+        for (char c : line.substr(0, colon))
+            if (!IsTokenChar(c)) return Fail(error, "malformed");
         req.headers.emplace_back(ToLower(line.substr(0, colon)), std::string(Trim(line.substr(colon + 1))));
     }
 
