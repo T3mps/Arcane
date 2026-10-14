@@ -47,8 +47,10 @@ ARC_REMOTE_API NameResolution PickComponent(const std::vector<std::string>& qual
 ARC_REMOTE_API void RegisterEcsCommands();
 
 // Where ecs.query writes rows that exceed the inline cap (one `kind:"ecs"`
-// artifact). Empty: no artifact; the rows are dropped with warning
-// ecs.no-artifact-dir. Safe to call twice; a later call replaces the directory.
+// artifact), and resource.get a value that does (`kind:"resource"`, Task 24;
+// the directory lives in CommandSupport). Empty: no artifact; the rows are
+// dropped with warning ecs.no-artifact-dir. Safe to call twice; a later call
+// replaces the directory.
 ARC_REMOTE_API void SetEcsArtifactDir(const std::filesystem::path& dir);
 // Clears the directory only when it is still `dir` (a later session's is left alone).
 ARC_REMOTE_API void ReleaseEcsArtifactDir(const std::filesystem::path& dir);

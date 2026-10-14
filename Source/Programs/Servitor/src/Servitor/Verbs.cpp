@@ -62,6 +62,7 @@ bool ProblemsArgs(std::span<const std::string> rest, nlohmann::json& out, std::s
 int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
 bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 
 // Task 23. Repeated list flags accumulate; each value may also be comma-separated.
 constexpr VerbFlag kEntityGetFlags[] = {
@@ -94,7 +95,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 22> kVerbs = {{
+const std::array<VerbRow, 24> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -142,6 +143,9 @@ const std::array<VerbRow, 22> kVerbs = {{
      "--with A,B [--without C] [--fields A.x,B] [--limit N] [--no-strict]"},
     {"ecs stats", "ecs.stats", nullptr, nullptr},
     {"ecs archetypes", "ecs.archetypes", nullptr, nullptr},
+    // Task 24. Read-only; each resolves --world on the host.
+    {"resource list", "resource.list", nullptr, nullptr},
+    {"resource get", "resource.get", &ResourceGetArgs, nullptr, {}, false, nullptr, "<Name>   (from resource list)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -287,6 +291,19 @@ bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::
         AppendList(value, components);
     if (!components.empty())
         out["components"] = std::move(components);
+    return true;
+}
+
+// resource get <Name> -> {name}. The verb declares no flag: a "--x" token is
+// the SplitVerbTokens refusal (usage exit 2).
+bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("resource get"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() != 1)
+        return Fail(error, "resource get needs one resource name (servitor resource list names them)");
+    out = {{"name", tokens.positional.front()}};
     return true;
 }
 

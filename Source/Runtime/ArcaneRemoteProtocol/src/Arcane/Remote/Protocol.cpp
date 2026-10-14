@@ -24,7 +24,7 @@ int ExitForCode(const std::string& code)
     if (code == "internal") return 1;
     if (OneOf(code, { "arg.invalid", "arg.unknown", "arg.missing", "arg.inapplicable", "command.unknown",
                       "command.unavailable", "command.host-kind", "target.ambiguous", "component.ambiguous",
-                      "entity.ambiguous", "capture.no-renderer" }))
+                      "entity.ambiguous", "resource.ambiguous", "capture.no-renderer" }))
         return 2;
     if (OneOf(code, { "auth.denied", "auth.throttled", "permission.denied", "permission.read-only", "cvar.protected" }))
         return 3;
@@ -32,7 +32,7 @@ int ExitForCode(const std::string& code)
     if (OneOf(code, { "host.busy", "capture.minimized", "host.unavailable" })) return 5;
     if (OneOf(code, { "entity.not-found", "component.unknown", "component.absent", "compare.missing-reference",
                       "capture.no-frame", "cvar.unknown", "cvar.type-mismatch", "cvar.refused-weaker", "cvar.refused",
-                      "reflect.unreadable", "ecs.artifact-failed" }))
+                      "reflect.unreadable", "ecs.artifact-failed", "resource.artifact-failed" }))
         return 6;
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;

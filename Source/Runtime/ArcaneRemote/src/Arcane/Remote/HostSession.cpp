@@ -11,6 +11,7 @@
 #include <Arcane/Remote/Commands/EcsCommands.hpp>
 #include <Arcane/Remote/Commands/LogCommands.hpp>
 #include <Arcane/Remote/Commands/ProblemCommands.hpp>
+#include <Arcane/Remote/Commands/ResourceCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
@@ -121,6 +122,11 @@ bool HostSession::Start()
     // directory (ecs.query rows over the inline cap) is set with the dispatcher
     // below and released in Teardown.
     RegisterEcsCommands();
+    // resource.list, resource.get (Task 24): like the ECS commands they read
+    // CommandWorlds() and hold no pointer, and resource.get shares ecs.query's
+    // artifact directory (set below, released in Teardown), so nothing of
+    // theirs is released.
+    RegisterResourceCommands();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;

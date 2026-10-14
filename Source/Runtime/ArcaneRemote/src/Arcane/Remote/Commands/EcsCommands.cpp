@@ -2,9 +2,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
-// Crypto.hpp before Log.hpp: it includes Util/Logger.hpp, which defines
-// SPDLOG_ACTIVE_LEVEL and must run before spdlog is first included.
-#include <Arcane/Crypto/Crypto.hpp>
+#include <Arcane/Remote/Commands/CommandSupport.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Remote/Worlds.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -17,16 +15,11 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <fstream>
 #include <initializer_list>
 #include <limits>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <set>
-#include <system_error>
 #include <utility>
 
 namespace Arcane::Remote
@@ -67,8 +60,11 @@ ARC_REFLECT_TYPE_END()
 namespace
 {
 
-ARC_CONSTANT("spec s4.8: ECS dumps over 256 KiB go to an artifact, never inline in the envelope")
-constexpr std::size_t kInlineCapBytes = 262144;
+using Detail::CheckKeys;
+using Detail::ErrorEnvelope;
+using Detail::kInlineCapBytes;
+using Detail::MakeIssue;
+using Detail::PickRegistry;
 ARC_CONSTANT("main-thread bound: ecs.query builds at most this many rows in one Drain; a larger --limit is clamped")
 constexpr std::uint64_t kMaxQueryLimit = 10000;
 
@@ -78,17 +74,6 @@ constexpr std::string_view kQueryUsage =
     "pass with/without/fields: arrays of component names (fields as Component.member), limit, strict";
 constexpr std::string_view kNoArgsUsage = "takes no arguments; --world <name> picks one of the host's worlds";
 constexpr std::string_view kComponentHint = "servitor ecs archetypes lists the components in this world";
-
-struct ArtifactDirState {
-    std::mutex mutex;
-    std::filesystem::path dir;
-};
-
-ArtifactDirState& ArtifactDir()
-{
-    static ArtifactDirState state;
-    return state;
-}
 
 // One component type the world knows: its qualified name (the reflected type
 // name, the scene file's key) and its descriptor.
@@ -112,24 +97,6 @@ std::vector<ComponentEntry> WorldComponents(const Astra::Registry& reg)
     return entries;
 }
 
-// args must be an object (null reads as empty) whose keys are all in `known`.
-std::optional<Envelope> CheckKeys(const Call& call, std::initializer_list<std::string_view> known,
-                                  std::string_view usage)
-{
-    if (call.args.is_null())
-        return std::nullopt;
-    if (!call.args.is_object())
-        return MakeError(call.command, "arg.invalid", call.command + " args must be a JSON object",
-                         std::string(usage));
-    for (const auto& [key, value] : call.args.items()) {
-        (void)value;
-        if (std::find(known.begin(), known.end(), std::string_view(key)) == known.end())
-            return MakeError(call.command, "arg.unknown", call.command + " has no argument '" + key + "'",
-                             std::string(usage));
-    }
-    return std::nullopt;
-}
-
 // An optional array of non-empty strings.
 std::optional<Envelope> ReadNames(const Call& call, const char* key, std::string_view usage,
                                   std::vector<std::string>& out)
@@ -147,32 +114,6 @@ std::optional<Envelope> ReadNames(const Call& call, const char* key, std::string
     for (const nlohmann::json& item : v)
         out.push_back(item.get<std::string>());
     return std::nullopt;
-}
-
-// The registry --world names; the pick's refusal otherwise (arg.missing,
-// arg.unknown, host.unavailable).
-Astra::Registry* PickRegistry(const Call& call, Envelope& refusal)
-{
-    PickedWorld picked = ResolveWorld(CommandWorlds(), call.world);
-    if (picked.pick != WorldPick::Ok) {
-        refusal = std::move(picked.error);   // the dispatcher stamps call.command
-        return nullptr;
-    }
-    if (picked.world.registry == nullptr) {
-        refusal = MakeError(call.command, "host.unavailable", "world '" + picked.world.name + "' has no registry yet",
-                            "retry once the host has loaded its scene");
-        return nullptr;
-    }
-    return picked.world.registry;
-}
-
-Error MakeIssue(std::string code, std::string message, std::string remediation)
-{
-    Error e;
-    e.code = std::move(code);
-    e.message = std::move(message);
-    e.remediation = std::move(remediation);
-    return e;
 }
 
 // Resolves one requested component name. Ok: the entry. Otherwise the issue
@@ -200,13 +141,6 @@ const ComponentEntry* ResolveComponent(const std::vector<ComponentEntry>& entrie
     }
     issue->detail["name"] = requested;
     return nullptr;
-}
-
-Envelope ErrorEnvelope(const Call& call, Error issue)
-{
-    Envelope env = MakeError(call.command, issue.code, issue.message, issue.remediation);
-    env.errors.front() = std::move(issue);
-    return env;
 }
 
 nlohmann::json GuidJson(const Guid& guid)
@@ -476,49 +410,6 @@ bool RowLess(const QueryRow& a, const QueryRow& b)
     return a.entity.GetValue() < b.entity.GetValue();
 }
 
-// Writes `json` to <dir>/ecs.query-<unix ms>-<n>.json through a temporary file
-// and a rename; nullopt (with *why) when it cannot.
-std::optional<Artifact> WriteArtifact(const std::filesystem::path& dir, const std::string& json, std::string& why)
-{
-    static std::atomic<std::uint64_t> serial{0};
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    const auto unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
-    const std::string stem = "ecs.query-" + std::to_string(unixMs) + "-" + std::to_string(++serial);
-    const std::filesystem::path file = dir / (stem + ".json");
-    const std::filesystem::path temp = dir / (stem + ".json.tmp");
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        if (out.is_open())
-            out.write(json.data(), static_cast<std::streamsize>(json.size()));
-        // close() flushes: a failed flush (disk full) sets failbit here, so a
-        // short file is never renamed and reported with the full size and hash.
-        const bool opened = out.is_open();
-        out.close();
-        if (!opened || out.fail()) {
-            std::filesystem::remove(temp, ec);
-            why = "cannot write " + temp.string();
-            return std::nullopt;
-        }
-    }
-    std::filesystem::rename(temp, file, ec);
-    if (ec) {
-        std::filesystem::remove(temp, ec);
-        why = "cannot rename into " + file.string();
-        return std::nullopt;
-    }
-    Artifact artifact;
-    artifact.kind = "ecs";
-    const std::u8string utf8 = file.generic_u8string();
-    artifact.path.assign(utf8.begin(), utf8.end());
-    artifact.bytes = json.size();
-    artifact.sha256 = Crypto::Sha256Hex(json);
-    artifact.format = "json";
-    return artifact;
-}
-
 CommandResult EcsQuery(const Call& call, void* /*user*/)
 {
     CommandResult result;
@@ -717,12 +608,7 @@ CommandResult EcsQuery(const Call& call, void* /*user*/)
     const std::string inlineJson = rows.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     if (inlineJson.size() > kInlineCapBytes) {
         // Spec s4.8: never stream megabytes into the envelope.
-        std::filesystem::path dir;
-        {
-            ArtifactDirState& state = ArtifactDir();
-            std::lock_guard lock(state.mutex);
-            dir = state.dir;
-        }
+        const std::filesystem::path dir = Detail::ArtifactDir();
         if (dir.empty()) {
             // No artifact directory (no session armed one): the rows are not
             // returned at all; count and truncated still describe the match.
@@ -737,8 +623,8 @@ CommandResult EcsQuery(const Call& call, void* /*user*/)
         } else {
             const nlohmann::json file = {{"count", count}, {"truncated", truncated}, {"rows", rows}};
             std::string why;
-            std::optional<Artifact> artifact =
-                WriteArtifact(dir, file.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), why);
+            std::optional<Artifact> artifact = Detail::WriteArtifact(
+                dir, "ecs.query", "ecs", file.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), why);
             if (!artifact) {
                 // A real write or rename failure is an error, never ok with empty rows.
                 result.envelope = MakeError(call.command, "ecs.artifact-failed",
@@ -880,19 +766,15 @@ void RegisterEcsCommands()
                 Astra::GetMeta<EcsNoArgs>(), &EcsArchetypes);
 }
 
+// The directory is shared with resource.get (CommandSupport.hpp).
 void SetEcsArtifactDir(const std::filesystem::path& dir)
 {
-    ArtifactDirState& state = ArtifactDir();
-    std::lock_guard lock(state.mutex);
-    state.dir = dir;
+    Detail::SetArtifactDir(dir);
 }
 
 void ReleaseEcsArtifactDir(const std::filesystem::path& dir)
 {
-    ArtifactDirState& state = ArtifactDir();
-    std::lock_guard lock(state.mutex);
-    if (state.dir == dir)
-        state.dir.clear();
+    Detail::ReleaseArtifactDir(dir);
 }
 
 } // namespace Arcane::Remote
