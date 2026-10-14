@@ -4,6 +4,8 @@
 #include <Servitor/FanOut.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -166,6 +168,58 @@ TEST_CASE("--all parses with an optional host kind", "[servitor][client]") {
     CHECK(opt.allKind == "editor");
     REQUIRE(parse({"servitor", "stats", "frame"}, opt, &err));
     CHECK_FALSE(opt.all);
+}
+
+TEST_CASE("--all call is a drive: refused without --yes, fans out with it, --pid narrows", "[servitor][client]") {
+    Servitor::Scan scan;
+    scan.live = {MakeHost(1, Arcane::Remote::HostKind::Runtime), MakeHost(2, Arcane::Remote::HostKind::Server),
+                 MakeHost(3, Arcane::Remote::HostKind::Server)};
+    struct Seen { std::mutex m; std::vector<std::uint32_t> pids; std::vector<std::string> commands; } seen;
+    auto post = [](const Arcane::Remote::Descriptor& d, const nlohmann::json& call, Arcane::Remote::Envelope* out,
+                   void* user) {
+        auto& s = *static_cast<Seen*>(user);
+        std::lock_guard lock(s.m);
+        s.pids.push_back(d.pid);
+        s.commands.push_back(call.value("command", std::string{}));
+        *out = Arcane::Remote::MakeOk("stats.frame", nlohmann::json::object(), {});
+        return 0;
+    };
+    const Servitor::VerbRow* call = Servitor::FindVerb("call");
+    REQUIRE(call != nullptr);
+    const std::vector<std::string> rest = {"stats.frame"};   // an observe command
+
+    Servitor::GlobalOptions opt;
+    opt.all = true;
+    Servitor::FanOutResult result;
+    CHECK(Servitor::FanOutVerb(*call, rest, opt, scan, post, &seen, &result) == 2);
+    CHECK(seen.pids.empty());
+    CHECK(result.text.find("arg.inapplicable") != std::string::npos);
+
+    opt.yes = true;
+    CHECK(Servitor::FanOutVerb(*call, rest, opt, scan, post, &seen, &result) == 0);
+    CHECK(seen.pids.size() == 3);
+    CHECK(seen.commands.front() == "stats.frame");
+
+    seen.pids.clear();
+    opt.pid = 2;
+    CHECK(Servitor::FanOutVerb(*call, rest, opt, scan, post, &seen, &result) == 0);
+    REQUIRE(seen.pids.size() == 1);
+    CHECK(seen.pids.front() == 2);
+
+    seen.pids.clear();
+    opt.pid = 0;
+    opt.allKind = "server";
+    CHECK(Servitor::FanOutVerb(*call, rest, opt, scan, post, &seen, &result) == 0);
+    CHECK(seen.pids.size() == 2);
+
+    // A posting observe row needs no --yes.
+    seen.pids.clear();
+    opt.yes = false;
+    opt.allKind.clear();
+    const Servitor::VerbRow* stats = Servitor::FindVerb("stats frame");
+    REQUIRE(stats != nullptr);
+    CHECK(Servitor::FanOutVerb(*stats, {}, opt, scan, post, &seen, &result) == 0);
+    CHECK(seen.pids.size() == 3);
 }
 
 #endif

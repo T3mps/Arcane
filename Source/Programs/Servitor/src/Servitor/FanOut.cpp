@@ -213,6 +213,25 @@ int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const Globa
     if (words == "status" || words == "commands")
         return row.local(rest, opt);
 
+    Arcane::Remote::Envelope refusal;
+    const auto dir = RemoteDirFor(opt, &refusal);
+    if (!dir) {
+        refusal.command = std::string(words);
+        Arcane::Remote::ClientBlock client;
+        client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+        return PrintEnvelope(refusal, client, opt);
+    }
+    Scan scan = ScanDirectory(*dir);
+    LiveCtx ctx;
+    ctx.scan = &scan;   // PostLive looks hosts up in the same scan FanOutVerb narrows
+    ctx.opt = opt;
+    return FanOutVerb(row, rest, opt, scan, &PostLive, &ctx, nullptr);
+}
+
+int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt, const Scan& scan,
+               FanOutPost post, void* user, FanOutResult* captured)
+{
+    const std::string_view words = row.words;
     CallRequest req;
     std::string error;
     if (words == "call") {
@@ -228,25 +247,19 @@ int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const Globa
         return PrintUsage("--all does not apply to " + std::string(words));
     }
 
-    Arcane::Remote::Envelope refusal;
-    const auto dir = RemoteDirFor(opt, &refusal);
-    if (!dir) {
-        refusal.command = req.command;
-        Arcane::Remote::ClientBlock client;
-        client.exitCode = Arcane::Remote::ExitFromHost(refusal);
-        return PrintEnvelope(refusal, client, opt);
-    }
-    Scan scan = ScanDirectory(*dir);
+    Scan narrowed = scan;
     if (opt.pid != 0)
-        std::erase_if(scan.live, [&](const LiveHost& h) { return h.descriptor.pid != opt.pid; });
+        std::erase_if(narrowed.live, [&](const LiveHost& h) { return h.descriptor.pid != opt.pid; });
     const std::string& kind = opt.allKind.empty() ? opt.hostKind : opt.allKind;
 
     const nlohmann::json call = {{"command", req.command}, {"args", req.args}};
-    const bool drive = IsDriveCommand(call) || VerbIsDrive(words);
-    LiveCtx ctx;
-    ctx.scan = &scan;
-    ctx.opt = opt;
-    const FanOutResult result = FanOut(scan, kind, kind.empty(), call, drive, opt.yes, opt.format, &PostLive, &ctx);
+    // Fail closed: `call` names any host command, so under --all it is always a drive.
+    const bool drive = words == "call" || IsDriveCommand(call) || VerbIsDrive(words);
+    const FanOutResult result = FanOut(narrowed, kind, kind.empty(), call, drive, opt.yes, opt.format, post, user);
+    if (captured != nullptr) {
+        *captured = result;
+        return result.exitCode;
+    }
     Printed printed;
     printed.stdoutText = result.text;
     printed.stderrText = result.diagnostics;

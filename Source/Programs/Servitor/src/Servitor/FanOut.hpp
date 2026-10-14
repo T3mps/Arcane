@@ -47,6 +47,12 @@ FanOutResult FanOut(const Scan& scan, std::string_view hostKindFilter, bool allK
 // FanOuts through the live transport, prints, and returns the worst exit.
 int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt);
 
+// RunFanOut after discovery: parses the verb's args, applies --pid / --host /
+// --all <kind>, decides drive (a `call` is always a drive under --all: it can
+// name any host command), FanOuts through `post`, and prints. captured non-null: stores the result instead of printing (the test seam).
+int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt, const Scan& scan,
+               FanOutPost post, void* user, FanOutResult* captured = nullptr);
+
 } // namespace Servitor
 
 #endif
