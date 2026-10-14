@@ -605,7 +605,15 @@ namespace Arcane::Editor
             if (ChromeGraph() && !ChromeGraph()->IsOffscreen())
                 ChromeGraph()->Resize(events.width, events.height);
         }
-        if (m_gpu->Win().IsMinimized())
+        const bool minimized = m_gpu->Win().IsMinimized();
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0 (Task 13): the gate learns the same predicate that skips
+        // the frame, every loop, so MainLoop's Drain (which still runs before
+        // the SkipFrame continue) refuses needsFrame commands while minimized.
+        if (m_remote)
+            m_remote->NoteMinimized(minimized);
+#endif
+        if (minimized)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return FramePump::SkipFrame;

@@ -248,6 +248,13 @@ bool HostSession::IdleExpired() const
     return std::chrono::steady_clock::now() - m_lastActivity >= std::chrono::seconds(m_config.idleExitSeconds);
 }
 
+void HostSession::NoteMinimized(bool minimized)
+{
+    if (!m_started)
+        return;
+    m_gate.minimized.store(minimized, std::memory_order_release);
+}
+
 HostGate& HostSession::Gate()
 {
     return m_gate;

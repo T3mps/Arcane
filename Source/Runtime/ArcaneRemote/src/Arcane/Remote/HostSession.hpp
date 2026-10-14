@@ -107,6 +107,11 @@ public:
     // idleExitSeconds > 0 and the last completed command (or Start, if none) is
     // older than that. 0 never expires. False before Start.
     bool IdleExpired() const;
+    // Main thread, once per loop iteration, from the predicate the host's own
+    // pump uses to skip a frame (the editor's IsMinimized()): publishes it as
+    // the gate's `minimized`, so Drain refuses needsFrame commands with
+    // host.busy{state:"minimized"} while the rest still run. A no-op before Start.
+    void NoteMinimized(bool minimized);
     HostGate& Gate();
     const HostGate& Gate() const;       // ruling F9: WaitPoll reads it through a const session
     const Config& GetConfig() const;    // ruling F9: the const hooks accessor (dirty, settled, hookUser, ...)
