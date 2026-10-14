@@ -1,0 +1,26 @@
+{
+  "name": "ArcaneImGui",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneClient",
+      "ArcaneCore",
+      "ArcaneRender",
+      "ArcaneSim",
+      "ImGui"
+    ],
+    "private": [
+      "ArcaneInput",
+      "ArcaneWindow",
+      "SDL3"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "NRI",
+      "glm"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

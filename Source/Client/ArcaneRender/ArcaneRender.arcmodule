@@ -1,0 +1,41 @@
+{
+  "name": "ArcaneRender",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneAssets",
+      "ArcaneCore",
+      "ArcanePhysics2D",
+      "ArcaneScene",
+      "ArcaneWindow"
+    ],
+    "private": [
+      "SDL3"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "NRI",
+      "VulkanHeaders",
+      "glm"
+    ],
+    "private": [
+      "D3D12MA",
+      "DirectXHeaders",
+      "VMA",
+      "freetype",
+      "msdfgen",
+      "stb"
+    ]
+  },
+  "platforms": {
+    "windows": {
+      "links": [
+        "d3d12",
+        "dxgi",
+        "dxguid"
+      ]
+    }
+  }
+}

@@ -10,8 +10,10 @@ $vs = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudi
 if (-not $vs) { Write-Host 'namespace-compile-fail: no Visual Studio with the C++ tools' -ForegroundColor Red; exit 2 }
 $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 
-$incNames = @(
-    'ArcaneCore\src',
+# Every Runtime module's include root (Source\Runtime\<Module>\src).
+$moduleIncs = Get-ChildItem -Directory (Join-Path $Root 'Source\Runtime') |
+    ForEach-Object { 'Source\Runtime\' + $_.Name + '\src' }
+$incNames = @($moduleIncs) + @(
     'ThirdParty\nlohmann',
     'ThirdParty\picosha2',
     'ThirdParty\spdlog\include',
@@ -25,7 +27,7 @@ $incNames = @(
 $inc = ($incNames | ForEach-Object { '/I"' + (Join-Path $Root $_) + '"' }) -join ' '
 $flags = "/nologo /std:c++latest /Zc:__cplusplus /EHsc /MD /c /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_CRT_SECURE_NO_WARNINGS $inc"
 
-$dir = Join-Path $Root 'ArcaneTests\compile-fail\namespace'
+$dir = Join-Path $Root 'Tests\ArcaneTests\compile-fail\namespace'
 $bat = Join-Path $env:TEMP 'namespace-compile-fail.bat'
 $log = Join-Path $env:TEMP 'namespace-compile-fail.log'
 $lines = New-Object System.Collections.Generic.List[string]

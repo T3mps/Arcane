@@ -1,0 +1,21 @@
+{
+  "name": "ArcaneVerify",
+  "type": "Developer",
+  "dependencies": {
+    "public": [
+      "ArcaneClient",
+      "ArcaneCore",
+      "ArcaneRender"
+    ],
+    "private": [
+      "ArcaneAssets"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

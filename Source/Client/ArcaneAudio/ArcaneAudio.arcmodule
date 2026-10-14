@@ -1,0 +1,19 @@
+{
+  "name": "ArcaneAudio",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": [
+      "ArcaneAssets"
+    ]
+  },
+  "thirdParty": {
+    "public": [],
+    "private": [
+      "miniaudio"
+    ]
+  },
+  "platforms": {}
+}

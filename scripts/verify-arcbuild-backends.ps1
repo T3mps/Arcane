@@ -25,7 +25,7 @@
 # its own clear message, never a single generic "compiler missing".
 #
 # UNIQUE TEMP DIRECTORIES ONLY, VALIDATED BEFORE DELETE. Every backend run
-# and every edge case copies the committed, input-only ArcaneTests/data/
+# and every edge case copies the committed, input-only Tests/ArcaneTests/data/
 # arcbuild-fixture/ into its own directory under the SYSTEM temp root
 # (never generates in place, never mutates the committed fixture). Cleanup
 # (New-VerifyTempDir's caller always wraps its work in try/finally) resolves
@@ -89,15 +89,15 @@ $env:Path = $env:Path + ';' +
 
 $repoRoot      = Split-Path -Parent $PSScriptRoot
 $configDirName = "$Configuration-windows-x86_64-md"
-$arcbuildExe   = Join-Path $repoRoot "bin\$configDirName\arcbuild\arcbuild.exe"
-$fixtureSource = Join-Path $repoRoot 'ArcaneTests\data\arcbuild-fixture'
+$arcbuildExe   = Join-Path $repoRoot "Binaries\$configDirName\arcbuild\arcbuild.exe"
+$fixtureSource = Join-Path $repoRoot 'Tests\ArcaneTests\data\arcbuild-fixture'
 
 Write-Host "=== verify-arcbuild-backends: $Configuration ===" -ForegroundColor Cyan
 Write-Host "repo    : $repoRoot"
 Write-Host "arcbuild: $arcbuildExe"
 
 if (-not (Test-Path $fixtureSource)) {
-    Write-Error "fixture not found at '$fixtureSource' -- is this run from a checkout with ArcaneTests/data/arcbuild-fixture/ committed?"
+    Write-Error "fixture not found at '$fixtureSource' -- is this run from a checkout with Tests/ArcaneTests/data/arcbuild-fixture/ committed?"
     exit 2
 }
 
@@ -105,7 +105,7 @@ if (-not (Test-Path $arcbuildExe)) {
     Write-Error @"
 arcbuild.exe not found at '$arcbuildExe'.
 Build it first (docs/specs/2026-09-13-arcbuild-driver-design.md's Build section), e.g.:
-  msbuild arcbuild\arcbuild.vcxproj /p:Configuration=$Configuration /p:Platform=x64 /p:SolutionDir=$repoRoot\ /m /nologo /v:minimal
+  msbuild Source\Programs\arcbuild\arcbuild.vcxproj /p:Configuration=$Configuration /p:Platform=x64 /p:SolutionDir=$repoRoot\ /m /nologo /v:minimal
 "@
     exit 2
 }

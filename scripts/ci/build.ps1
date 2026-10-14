@@ -38,7 +38,7 @@ function Step([string]$Name, [string]$Log, [string]$File, [string[]]$Arguments) 
 
 Step 'generate' 'build-generate.log' 'cmd.exe' @('/c', (Join-Path $root 'GenerateProjects.bat'))
 Step 'engine' 'build-engine.log' $msbuild @($solution, "/p:Configuration=$Config", $m, '/nologo', '/v:minimal')
-Step 'game' 'build-referencegame.log' (Join-Path $root "bin\$Config-windows-x86_64-md\arcbuild\arcbuild.exe") `
+Step 'game' 'build-referencegame.log' (Join-Path $root "Binaries\$Config-windows-x86_64-md\arcbuild\arcbuild.exe") `
     @('build', '--project', (Join-Path $root 'ReferenceProject'), '--config', $Config, '--sdk', $root)
 Step 'hosts' 'build-tests.log' $msbuild @($solution, "/p:Configuration=$Config", $m, '/nologo', '/v:minimal')
 Write-Host "build: $Config ok"

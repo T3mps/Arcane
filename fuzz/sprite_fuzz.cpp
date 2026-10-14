@@ -1,4 +1,4 @@
-// libFuzzer harness: .arcsprite loading (ArcaneCore/src/Arcane/Sprite) and the
+// libFuzzer harness: .arcsprite loading (Source/Runtime/ArcaneAssets/src/Arcane/Sprite) and the
 // Guid text parser every asset JSON id goes through -- the .arcsprite "id" and
 // "texture" fields, native-JSON "id"s and imported-asset .meta sidecars'
 // "guid" (AssetRegistry.cpp reads those with the same Guid::FromString).

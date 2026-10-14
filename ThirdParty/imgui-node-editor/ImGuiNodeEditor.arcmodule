@@ -1,0 +1,16 @@
+{
+  "name": "ImGuiNodeEditor",
+  "type": "Editor",
+  "vendor": true,
+  "dependencies": {
+    "public": [
+      "ImGui"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [],
+    "private": []
+  },
+  "platforms": {}
+}

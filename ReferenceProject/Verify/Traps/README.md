@@ -52,7 +52,7 @@ would be a no-op); this paragraph and its fresh third-run proof are the resoluti
 
 ## should-fail/wrong-normal-matrix
 
-**What was broken:** `ArcaneClient/src/Arcane/Render/Nri/nodes/MeshNode.cpp:867`'s call
+**What was broken:** `Source/Client/ArcaneRender/src/Arcane/Render/Nri/nodes/MeshNode.cpp:867`'s call
 site, temporarily changed from
 
 ```cpp

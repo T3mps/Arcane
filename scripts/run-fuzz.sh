@@ -16,7 +16,7 @@
 #   FUZZ_OUT     build/work dir (default fuzz/build, gitignored)
 #   LLVM_COV / LLVM_PROFDATA   coverage tools matching $CXX (default llvm-cov-19 / llvm-profdata-19)
 #
-# Each harness compiles standalone against the ArcaneCore headers plus only the
+# Each harness compiles standalone against the Runtime module headers plus only the
 # .cpp files it needs -- no premake, no engine build -- so this works from
 # `main` on any Linux box with clang + compiler-rt (libclang-rt-19-dev).
 set -euo pipefail
@@ -26,8 +26,10 @@ OUT="${FUZZ_OUT:-$ROOT/fuzz/build}"
 CXX="${CXX:-$(command -v clang++-19 || command -v clang++)}"
 ALL_TARGETS=(protocol artifact scene sprite cli)
 
-INCLUDES=(
-    -I"$ROOT/ArcaneCore/src"
+# Every Runtime module's include root (Source/Runtime/<Module>/src).
+INCLUDES=()
+for d in "$ROOT"/Source/Runtime/*/src; do INCLUDES+=(-I"$d"); done
+INCLUDES+=(
     -I"$ROOT/ThirdParty/nlohmann"
     -I"$ROOT/ThirdParty/spdlog/include"
     -I"$ROOT/ThirdParty/glm"
@@ -44,10 +46,10 @@ CXXFLAGS=(-std=c++23 -g -O1 -fno-omit-frame-pointer
 sources_for() {
     case "$1" in
         protocol) ;;                                                # header-only
-        artifact) echo "ArcaneCore/src/Arcane/Assets/ArtifactReader.cpp ArcaneCore/src/Arcane/Guid.cpp" ;;
-        scene)    echo "ArcaneCore/src/Arcane/Guid.cpp fuzz/support/DiagnosticsStub.cpp fuzz/support/LogStub.cpp" ;;
-        sprite)   echo "ArcaneCore/src/Arcane/Sprite/SpriteAsset.cpp ArcaneCore/src/Arcane/Guid.cpp fuzz/support/LogStub.cpp" ;;
-        cli)      echo "ArcaneCore/src/Arcane/Cli/Cli.cpp ArcaneServer/src/ServerConfig.cpp" ;;
+        artifact) echo "Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactReader.cpp Source/Runtime/ArcaneCore/src/Arcane/Guid.cpp" ;;
+        scene)    echo "Source/Runtime/ArcaneCore/src/Arcane/Guid.cpp fuzz/support/DiagnosticsStub.cpp fuzz/support/LogStub.cpp" ;;
+        sprite)   echo "Source/Runtime/ArcaneAssets/src/Arcane/Sprite/SpriteAsset.cpp Source/Runtime/ArcaneCore/src/Arcane/Guid.cpp fuzz/support/LogStub.cpp" ;;
+        cli)      echo "Source/Runtime/ArcaneCore/src/Arcane/Cli/Cli.cpp Source/Programs/ArcaneServer/src/ServerConfig.cpp" ;;
         *) echo "unknown target '$1' (known: ${ALL_TARGETS[*]})" >&2; return 1 ;;
     esac
 }
@@ -125,7 +127,7 @@ regress() {
     echo "[run-fuzz] $t: ${#inputs[@]} inputs OK" >&2
 }
 
-# Source-based coverage (no sanitizers) of the ArcaneCore files a target
+# Source-based coverage (no sanitizers) of the Runtime-module files a target
 # exercises, from replaying a corpus once. Reported per engine file.
 coverage() {
     local t="$1"; shift
@@ -143,7 +145,7 @@ coverage() {
     (cd "$OUT/cov" && LLVM_PROFILE_FILE="$OUT/cov/$t.%p.profraw" ./"${t}_cov" -runs=0 "${dirs[@]}" >/dev/null 2>&1) || true
     "${LLVM_PROFDATA:-llvm-profdata-19}" merge -sparse "$OUT/cov/$t".*.profraw -o "$OUT/cov/$t.profdata"
     "${LLVM_COV:-llvm-cov-19}" report "$OUT/cov/${t}_cov" -instr-profile="$OUT/cov/$t.profdata" \
-        "$ROOT/ArcaneCore/src/Arcane" "$ROOT/ArcaneServer/src"
+        "$ROOT"/Source/Runtime/*/src/Arcane "$ROOT/Source/Programs/ArcaneServer/src"
 }
 
 targets_of() { if [[ "$1" == all ]]; then echo "${ALL_TARGETS[@]}"; else echo "$1"; fi; }

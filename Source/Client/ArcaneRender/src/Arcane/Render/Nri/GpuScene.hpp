@@ -1,0 +1,355 @@
+#pragma once
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+
+// GpuScene -- the device half of the GPU scene (F3, spec s5): the ONE
+// persistent instance buffer (GpuInstance rows, DEVICE memory, doubling
+// growth), per-frame-slot indirect-args and visible-index buffers, and a
+// SCRATCH row region per slot for registry-less callers (MeshDocument's
+// preview, the thumbnail harvester, the [gpu] tests -- MeshSceneDesc::
+// instances). Owned by NriGraphContext beside NriMeshBufferCache.
+//
+// Everything here is written by GpuSceneSyncNode::Record through the upload
+// ring + CmdCopyBuffer -- NO compute (the UE vet: prev is CPU history).
+//
+// GROWTH HAPPENS AT DECLARATION TIME, NOT INSIDE RECORD (plan 1 T6, ruling
+// R-B). AddGpuSceneSyncNode calls Reserve() BEFORE it imports the buffers
+// into the graph, so every imported handle names the FINAL buffer and the
+// graph's copy -> read barriers land on it. Reserve creates the new buffer +
+// view, retires the old pair, bumps InstanceBufferGeneration() (MeshNode
+// rewrites its per-slot structured view when it changes), and -- unless the
+// stage is a full rebuild -- leaves a PENDING GROW-COPY for Apply: the live
+// rows are copied old -> new on the command list at record time, behind an
+// explicit barrier on the OLD buffer (the graph never saw that buffer; the
+// NEW one is already in CopyDst by then). The old buffer stays alive until
+// the fence this frame's submit signals retires -- see FlushGraves.
+//
+// THE BURIAL SEAM. Graveyard::Bury requires NONDECREASING fence values, and
+// RenderGraph::Execute buries at DebugSubmitCount() (the LAST submitted
+// value) while it runs -- so nothing may bury at "this frame's" value,
+// DebugSubmitCount() + 1 (NriGraphContext::CurrentFence), BEFORE Execute
+// returns. Reserve therefore PARKS its retirements, stamped with that value,
+// and NriGraphContext::FlushGraves-es them right after a successful Execute,
+// at which point the stamp equals DebugSubmitCount() and the lane's order
+// holds. A failed or skipped Execute leaves them parked for the next one.
+//
+// Include order: NRI headers first, ALWAYS (NriCommon.hpp) -- and
+// NRIDeviceCreation.h explicitly, because GpuSceneTypes.hpp reaches
+// <windows.h> (Astra's Base.hpp -> Log.hpp) and its ERROR macro would
+// corrupt nri::Message::ERROR in any later include of that header.
+#include <NRI.h>
+#include <Extensions/NRIDeviceCreation.h>
+
+#include <Arcane/Modules/ArcaneRenderApi.hpp>
+#include <Arcane/Render/FramePacing.hpp>      // kMaxFramesInFlight, FramesInFlight()
+#include <Arcane/Render/GpuSceneTypes.hpp>
+#include <Arcane/Render/Nri/RenderGraph.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <utility>
+#include <vector>
+
+namespace Arcane
+{
+    class Graveyard;
+    class NriDevice;
+
+    class ARC_RENDER_API GpuScene
+    {
+    public:
+        // Latches render.gpuScene.initialRows and .scratchRowsPerFrame
+        // (Restart) for this object's life: InitialRows() / ScratchRows().
+        static std::unique_ptr<GpuScene> Create(NriDevice& device);
+        ~GpuScene();
+        GpuScene(const GpuScene&)            = delete;
+        GpuScene& operator=(const GpuScene&) = delete;
+
+        // DECLARATION time, from AddGpuSceneSyncNode, BEFORE the imports (the
+        // header block above). Grows the instance buffer to the frame's row
+        // capacity (doubling) and this slot's args / visible-index buffers to
+        // the frame's counts; `fence` stamps whatever it retires (see
+        // FlushGraves). `adHocCount` is the ad-hoc instance count the record
+        // will be handed -- it decides the one-shot scratch-overflow WARN here,
+        // where the drop is decided. False (logged) if a buffer could not be
+        // created; the previous buffers stay in place, but registry consumers
+        // are suppressed for this frame.
+        bool Reserve(const GpuSceneFrame* frame, std::size_t adHocCount, std::uint32_t frameSlot,
+                     std::uint64_t fence);
+
+        // RECORD time, from GpuSceneSyncNode's exec fn. Issues the pending
+        // grow-copy (if Reserve left one), copies the staged rows and the
+        // scratch rows through the ring, copies this slot's args + visible
+        // indices + cull batches, and stamps the synced generation. The result
+        // reports registry and ad-hoc readiness independently. Every registry
+        // refusal resets SyncedGeneration() to 0, so the host's next
+        // GpuSceneSync sees a generation it never acknowledged and stages a
+        // full rebuild: the dropped stage's once-staged rows (a spawn, a
+        // material change) have no re-dirty to rescue them.
+        GpuSceneApplyResult Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc,
+                                  std::uint32_t frameSlot, RenderGraphNodeContext& ctx);
+
+        // AFTER a successful Execute (NriGraphContext, beside the mesh cache's
+        // eviction): buries everything Reserve retired, at the fence values it
+        // stamped them with. A no-op when nothing is parked.
+        void FlushGraves(Graveyard& graves);
+
+        [[nodiscard]] nri::Buffer*     Instances() const noexcept { return m_instances; }
+        [[nodiscard]] nri::Descriptor* InstancesView() const noexcept { return m_instancesView; }   // STRUCTURED_BUFFER, stride 240
+        [[nodiscard]] nri::Buffer*     Args(std::uint32_t slot) const noexcept { return m_args[slot]; }
+        [[nodiscard]] nri::Descriptor* ArgsStorageView(std::uint32_t slot) const noexcept { return m_argsStorageView[slot]; }
+        [[nodiscard]] nri::Buffer*     VisibleIndices(std::uint32_t slot) const noexcept { return m_visible[slot]; }
+        [[nodiscard]] nri::Descriptor* VisibleIndicesView(std::uint32_t slot) const noexcept { return m_visibleView[slot]; }   // STRUCTURED_BUFFER, stride 4
+        [[nodiscard]] nri::Descriptor* VisibleIndicesStorageView(std::uint32_t slot) const noexcept { return m_visibleStorageView[slot]; }
+        [[nodiscard]] nri::Buffer*     CullBatches(std::uint32_t slot) const noexcept { return m_cullBatches[slot]; }
+        [[nodiscard]] nri::Descriptor* CullBatchesView(std::uint32_t slot) const noexcept { return m_cullBatchesView[slot]; }
+        [[nodiscard]] std::uint32_t    RowCapacity() const noexcept { return m_rowCapacity; }
+        [[nodiscard]] std::uint32_t    ScratchFirstRow(std::uint32_t slot) const noexcept { return m_rowCapacity + slot * m_scratchRows; }
+        // The instance capacity Create started with (it grows by doubling).
+        [[nodiscard]] std::uint32_t    InitialRows() const noexcept { return m_initialRows; }
+        // Scratch rows per frame slot; ad-hoc instances beyond this are dropped with one WARN.
+        [[nodiscard]] std::uint32_t    ScratchRows() const noexcept { return m_scratchRows; }
+        [[nodiscard]] std::uint64_t    InstanceBufferGeneration() const noexcept { return m_instanceGeneration; }   // bumps on every grow
+        [[nodiscard]] std::uint64_t    SyncedGeneration() const noexcept { return m_syncedGeneration; }   // the mirror generation the last SUCCESSFUL Apply stamped; 0 after a refusal (or never)
+        void SetSyncedGeneration(std::uint64_t g) noexcept { m_syncedGeneration = g; }
+        [[nodiscard]] std::uint64_t    InstanceBytes() const noexcept;                     // the whole buffer incl. scratch
+        [[nodiscard]] std::uint64_t    ArgBytes(std::uint32_t slot) const noexcept;        // the slot's args buffer, whole
+        [[nodiscard]] std::uint64_t    VisibleBytes(std::uint32_t slot) const noexcept;    // the slot's visible-index buffer, whole
+        [[nodiscard]] std::uint64_t    CullBatchBytes(std::uint32_t slot) const noexcept;
+
+        void Release(Graveyard& graves, std::uint64_t fence);
+
+        // ==================== TEST-ONLY: the instance readback ====================
+        // The [gpu][gpuscene] round trip (NriGraphPixelTest.cpp) reads the
+        // instance buffer back through these. Off by default and never armed
+        // by production code: EnableDebugReadback() makes AddMeshNode declare
+        // a "gpuscene-readback" Copy node after the mesh node, which copies the
+        // imported instances handle into a HOST_READBACK buffer sized to
+        // InstanceBytes() (re-created on growth, the old one retired like any
+        // other); ReadDebugInstances idles the device and maps it.
+        bool EnableDebugReadback();
+        [[nodiscard]] bool DebugReadbackEnabled() const noexcept { return m_debugReadbackEnabled; }
+        bool EnsureDebugReadback(std::uint64_t fence);   // declaration time, after Reserve: grow to InstanceBytes()
+        [[nodiscard]] nri::Buffer*  DebugReadbackBuffer() const noexcept { return m_debugReadback; }
+        [[nodiscard]] std::uint64_t DebugReadbackBytes() const noexcept { return m_debugReadbackBytes; }
+        void RecordDebugReadback(RenderGraphNodeContext& ctx, RgBuffer instances, RgBuffer readback);
+        bool ReadDebugInstances(std::vector<std::uint8_t>& out);
+
+        // ============ OPT-IN: THE DELAYED VISIBILITY READBACK RING =========
+        // What the GPU cull ACTUALLY wrote, off the device, WITHOUT A WAIT --
+        // the exact opposite of ReadDebugInstances above, which idles the
+        // device and is why it can never be on a production path.
+        //
+        // ARMED BY A CALL, never by default (EnableVisibilityReadback): an
+        // unarmed frame declares no copy node and pays nothing. The runtime
+        // host arms it on every run (its HUD shows the count); the editor only
+        // under --report; the oracle test arms it to compare exact row sets
+        // against the CPU's GpuSceneFrame::oracleVisibleIndices.
+        //
+        // THE RING, per frame slot: EnsureVisibilityReadback sizes (and grows)
+        // that slot's HOST_READBACK buffer at DECLARATION time -- the same rule
+        // Reserve follows -- and the record callback copies this slot's args and
+        // visible indices into it, stamping the declaration it copied for. A
+        // declaration that was never recorded (a REFUSED frame: Reserve or
+        // Apply said no) publishes nothing, so LatestVisibility() keeps the
+        // last result that was real -- a refused frame has no GPU answer.
+        // NOTHING here waits, flushes or idles.
+        //
+        // A FRAME WITH NO EMITTED BATCH IS NOT A REFUSED FRAME. When the frame
+        // emits no indirect batch (every opaque/masked row culled coarsely, a
+        // scene of only transparent rows, or no rows at all), the cull pass has
+        // nothing it could have incremented, so the GPU's answer for that frame
+        // is determined -- zero -- before any dispatch. PublishEmptyVisibility
+        // publishes exactly that, AT DECLARATION, as a result of its own (a
+        // seq from the same counter, this frame's fence, empty args and
+        // indices), so the HUD and a --report read zero for such a frame and
+        // never an older frame's count. It maps no buffer and adds no wait.
+        // This is still never a CPU count standing in for a GPU one: the CPU
+        // is not asserting what the GPU saw, only that no batch was submitted
+        // for it to count.
+        //
+        // TWO PUBLICATION PATHS for a RECORDED copy, because one is not enough
+        // on the PRESENT path:
+        //
+        //   1. ON SLOT REUSE, synchronously, inside the record callback: before
+        //      re-recording a slot, whatever that slot recorded LAST and has
+        //      not published yet is read out and published. This needs no wait
+        //      of its own -- the executor's frameSlot contract already
+        //      guarantees the previous frame on this slot has retired (it is
+        //      about to reset that slot's command allocator), and this frame's
+        //      own copy has not been submitted yet, let alone run.
+        //
+        //   2. FROM THE GRAVEYARD: EnsureVisibilityReadback also PARKS a publish
+        //      thunk stamped with the fence THIS frame's submit will signal, so
+        //      a later frame's Reap runs it once the owning frame has retired.
+        //      This is what publishes the LAST frames of a run, whose slots are
+        //      never reused.
+        //
+        // WHY BOTH. RenderGraph::Execute reaps at its TOP, and on the present
+        // path the wait that makes a slot reusable lives INSIDE
+        // NriSwapChain::AcquireNextTexture, which Execute calls AFTER that reap.
+        // So when the GPU is the bottleneck, frame N's fence completes only at
+        // that acquire -- too late for this Execute's reap and, by the next one,
+        // frame N's slot has already been re-recorded, which invalidates the
+        // parked thunk's own seq check. Path 2 alone therefore FREEZES the
+        // windowed HUD on the last landed count under exactly the load a human
+        // reads it under. (The offscreen path waits before declaration instead,
+        // so its reap always wins the race and path 1 finds the result already
+        // published -- which is why no --report run, and no offscreen test,
+        // exhibits the freeze.)
+        //
+        // ONE ORDER FOR EVERY PUBLICATION. Every declaration -- a recorded copy
+        // or an empty frame -- takes its seq from the one counter
+        // (m_visibilitySeq), in frame order. Every publication, whichever path
+        // delivers it, must CLAIM its seq against the ring-global high-water
+        // mark `publishedMaxSeq`: a seq at or below the mark is refused. So a
+        // frame is never counted twice, and `latest` never moves backwards --
+        // BY CONSTRUCTION, not by an argument about reap order: an older
+        // frame's late publish (its thunk running after a newer frame's
+        // slot-reuse publish, or after a newer empty frame published at
+        // declaration) finds the mark already past it and does nothing.
+        //
+        // The ring's state is held through a shared_ptr so a thunk the
+        // graveyard still holds can outlive this GpuScene: Release() and the
+        // destructor mark it released and a late thunk then does nothing
+        // instead of mapping a destroyed buffer.
+        bool EnableVisibilityReadback();
+        [[nodiscard]] bool VisibilityReadbackEnabled() const noexcept { return m_visibility != nullptr; }
+        bool EnsureVisibilityReadback(std::uint32_t slot, std::uint32_t argCount, std::uint32_t visibleCount,
+                                      std::uint64_t fence);
+        // The batch-less frame's publication (the ring block above): an empty
+        // result for THIS frame, sequenced like any other, published now.
+        // `fence` is the value this frame's submit will signal, recorded on
+        // the result as every publication's is. No buffer is mapped.
+        void PublishEmptyVisibility(std::uint64_t fence);
+        [[nodiscard]] nri::Buffer*  VisibilityReadbackBuffer(std::uint32_t slot) const noexcept;
+        [[nodiscard]] std::uint64_t VisibilityReadbackBytes(std::uint32_t slot) const noexcept;
+        void RecordVisibilityReadback(RenderGraphNodeContext& ctx, RgBuffer args, RgBuffer visibleIndices,
+                                      std::uint32_t slot);
+        // The most recently COMPLETED result, or null while none has landed --
+        // NEVER a CPU count standing in for one.
+        [[nodiscard]] const GpuVisibilityReadback* LatestVisibility() const noexcept;
+
+    private:
+        GpuScene() = default;
+        bool CreateInstances(std::uint32_t rowCapacity);            // buffer + view for rowCapacity + ScratchRows() * frames
+        bool CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount);
+        bool EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount, std::uint64_t fence);
+        bool CopyRows(RenderGraphNodeContext& ctx, std::span<const std::uint32_t> rows,
+                      std::span<const GpuInstance> values, std::uint32_t firstRowOverride, bool contiguous);
+        void Park(std::uint64_t fence, std::function<void()> destroy);
+
+        NriDevice*       m_device = nullptr;
+        nri::Buffer*     m_instances = nullptr;
+        nri::Descriptor* m_instancesView = nullptr;
+        std::uint32_t    m_rowCapacity = 0;
+        std::uint32_t    m_initialRows = 0;   // render.gpuScene.initialRows, latched by Create
+        std::uint32_t    m_scratchRows = 0;   // render.gpuScene.scratchRowsPerFrame, latched by Create
+        std::uint64_t    m_instanceGeneration = 1;
+        std::uint64_t    m_syncedGeneration = 0;
+        nri::Buffer*     m_args[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_argsStorageView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_argCapacity[kMaxFramesInFlight] = {};
+        nri::Buffer*     m_visible[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_visibleView[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_visibleStorageView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_visibleCapacity[kMaxFramesInFlight] = {};
+        nri::Buffer*     m_cullBatches[kMaxFramesInFlight] = {};
+        nri::Descriptor* m_cullBatchesView[kMaxFramesInFlight] = {};
+        std::uint32_t    m_cullBatchCapacity[kMaxFramesInFlight] = {};
+        bool             m_warnedScratchOverflow = false;
+
+        // The grow-copy Reserve leaves for Apply: the retired buffer holding
+        // the live rows, and how many rows it holds. The buffer is parked
+        // (below), so it is alive until this frame's fence retires. A second
+        // growth before Apply ran keeps the ORIGINAL source: it is the one
+        // that still holds the rows.
+        struct PendingGrowCopy
+        {
+            nri::Buffer*  source = nullptr;
+            std::uint32_t rows   = 0;
+        };
+        PendingGrowCopy m_pendingGrowCopy;
+
+        // Retirements stamped with the fence value the frame that retired them
+        // will signal -- buried by FlushGraves after that frame's Execute.
+        std::vector<std::pair<std::uint64_t, std::function<void()>>> m_parked;
+
+        bool          m_debugReadbackEnabled = false;
+        nri::Buffer*  m_debugReadback        = nullptr;
+        std::uint64_t m_debugReadbackBytes   = 0;
+        bool          m_debugReadbackRecorded = false;
+        bool          m_warnedVisibilityClamp = false;   // EnsureVisibilityReadback: a declaration larger than the slot's buffers, once
+
+        // The visibility ring's state (the API block above states the whole
+        // contract). Null until EnableVisibilityReadback arms it, which is
+        // also what VisibilityReadbackEnabled() answers.
+        struct VisibilityRing
+        {
+            // A COPY THAT WAS RECORDED AND NOT YET PUBLISHED, with everything
+            // needed to read it. Snapshotted at record time on purpose: by the
+            // time it is published, the slot's own fields describe the NEXT
+            // declaration (which may have different counts, or a grown buffer).
+            struct Pending
+            {
+                nri::Buffer*  buffer       = nullptr;
+                std::uint64_t argRegion    = 0;
+                std::uint32_t argCount     = 0;
+                std::uint32_t visibleCount = 0;
+                std::uint64_t fence        = 0;
+                std::uint64_t seq          = 0;   // 0 == nothing pending
+            };
+            struct Slot
+            {
+                nri::Buffer*  buffer        = nullptr;
+                std::uint64_t bytes         = 0;   // the buffer's whole size
+                std::uint64_t argBytes      = 0;   // this declaration's args region, at offset 0
+                std::uint64_t argRegion     = 0;   // ...aligned up: where the visible-index region starts
+                std::uint64_t visibleBytes  = 0;
+                std::uint64_t declaredSeq   = 0;   // the declaration this slot was last sized for
+                std::uint64_t declaredFence = 0;   // ...and the fence value that declaration's frame signals
+                std::uint64_t recordedSeq   = 0;   // the declaration its exec fn actually copied
+                Pending       pending;             // recorded, not published: the slot-reuse path's input
+            };
+            const nri::CoreInterface* core = nullptr;
+            Slot                      slots[kMaxFramesInFlight];
+            bool                      released = false;
+            // THE RING-GLOBAL HIGH-WATER MARK (the ring block's "one order"):
+            // the newest seq any publication has claimed, across every slot
+            // and every path. Claimed by ClaimVisibilitySeq and nowhere else.
+            std::uint64_t             publishedMaxSeq = 0;
+            GpuVisibilityReadback     latest;
+        };
+        std::shared_ptr<VisibilityRing> m_visibility;
+        std::uint64_t                   m_visibilitySeq = 0;   // the ONE seq counter: ++ at every declaration, in frame order
+
+        // THE ONE GUARD every publication passes (the ring block above): true,
+        // and the mark advanced, when `seq` is newer than everything claimed
+        // so far; false -- publish nothing -- when it is 0, already claimed,
+        // or older than a claimed one. Claiming happens BEFORE the result is
+        // read, so a frame whose read then fails is still consumed (never
+        // retried against a buffer a growth may since have retired).
+        static bool ClaimVisibilitySeq(VisibilityRing& ring, std::uint64_t seq) noexcept;
+
+        // THE PUBLISHER OF RECORDED COPIES, which both the slot-reuse path and
+        // the graveyard path call. Claims `seq` (above), then reads `argCount`
+        // args from offset 0 and `visibleCount` indices from `argRegion` out of
+        // `buffer` into `ring.latest`. Static because the parked thunk holds
+        // only the ring, never the GpuScene that made it.
+        static void PublishVisibility(VisibilityRing& ring, std::uint64_t seq, std::uint64_t fence,
+                                      nri::Buffer* buffer, std::uint64_t argRegion,
+                                      std::uint32_t argCount, std::uint32_t visibleCount);
+    };
+
+    // The NRI-free host seams (Host/GpuSceneHost.hpp re-declares them
+    // identically): the mirror generation the device last acknowledged, 0 for
+    // no device scene; the visibility ring's arming call; and the most
+    // recently completed GPU-visible row count, nullopt while none has landed.
+    // Exported from ArcaneClient.dll.
+    ARC_RENDER_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
+    ARC_RENDER_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
+    [[nodiscard]] ARC_RENDER_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
+}

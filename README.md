@@ -34,7 +34,7 @@ been hand-verified on Linux or macOS.
 ### ECS
 
 The ECS is [Astra](ThirdParty/Astra), vendored under `ThirdParty/Astra`.
-Game code never includes `Astra::`. [`Arcane/Ecs.hpp`](ArcaneCore/src/Arcane/Ecs.hpp)
+Game code never includes `Astra::`. [`Arcane/Ecs.hpp`](Source/Runtime/ArcaneScene/src/Arcane/Ecs.hpp)
 is the facade: `Arcane::View`, `Arcane::Res`, `Arcane::ResMut`,
 `Arcane::Commands`, `Arcane::Entity`, `Arcane::SystemTraits`,
 `Arcane::Before`, and `Arcane::After`. `Arcane::Registry` is the Astra
@@ -60,7 +60,7 @@ The flat-API contract is
 ### 2D physics
 
 2D physics is [Manifold2D](ThirdParty/Manifold2D). Game code includes
-[`Arcane/Physics2D.hpp`](ArcaneCore/src/Arcane/Physics2D.hpp) and talks to
+[`Arcane/Physics2D.hpp`](Source/Runtime/ArcanePhysics2D/src/Arcane/Physics2D.hpp) and talks to
 `Arcane::PhysicsWorld2D`, `Arcane::PhysicsSystem2D`, `Arcane::RigidBody2D`,
 and `Arcane::Collider2D`.
 
@@ -181,7 +181,8 @@ structs are part of the same system. Design (implemented):
 A game module subclasses `Arcane::GameModule` and exports its entry
 points with `ARC_GAME_MODULE`. The host checks `kGamePluginABIVersion`
 and refuses a mismatch. The current version lives in
-[`PluginABI.hpp`](ArcaneCore/src/Arcane/Plugin/PluginABI.hpp). Bumping it
+[`AbiVersion.hpp`](Source/Runtime/ArcaneCore/src/Arcane/Core/AbiVersion.hpp); its history is in
+[`PluginABI.hpp`](Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp). Bumping it
 is normal during engine development.
 
 ```cpp
@@ -226,7 +227,7 @@ own reader. It does not link `ArcaneAssetPipeline` (that static library
 is the cook side, used by `arccook` and the editor cook queue).
 
 ```bat
-bin\Debug-windows-x86_64-md\arccook\arccook.exe --project ReferenceProject --check
+Binaries\Debug-windows-x86_64-md\arccook\arccook.exe --project ReferenceProject --check
 ```
 
 `--check` exits 0 when nothing is stale and 2 when something is.
@@ -245,7 +246,7 @@ They choose which systems run. They do not replicate entities.
 
 `INetDriver` is the transport seam (`IsActive()`). No production driver
 ships. A length-framed JSON protocol over TCP
-([`Net/Protocol.hpp`](ArcaneCore/src/Arcane/Net/Protocol.hpp)) is what
+([`Net/Protocol.hpp`](Source/Runtime/ArcaneNet/src/Arcane/Net/Protocol.hpp)) is what
 the protocol fuzzer exercises.
 
 `ArcaneServer` is a dedicated-server host. It links `ArcaneCore` and not
@@ -288,7 +289,7 @@ planned and not built.
 | Graphics in CI | The CPU suite. Real GPU is the Jenkins agent. | `[gpu]` on lavapipe, GCC 14 Debug only | `[gpu]` on MoltenVK, Debug only |
 | Renderer you can select | D3D12 and Vulkan | Vulkan | Vulkan (MoltenVK) |
 | Default `arcbuild` action | `vs2026` | `gmake` | `gmake` (`xcode4` remains available) |
-| Output directory | `bin\Debug-windows-x86_64-md` | `bin/Debug-linux-x86_64-md` | `bin/Debug-macosx-AARCH64-md` |
+| Output directory | `Binaries\Debug-windows-x86_64-md` | `Binaries/Debug-linux-x86_64-md` | `Binaries/Debug-macosx-AARCH64-md` |
 
 Toolchains below the CI pins do not build the engine. GCC 13 lacks the
 C++23 feature set the code uses. Clang needs libstdc++ from GCC 14.
@@ -319,16 +320,11 @@ the C++ solution.
 
 | Path | What it is |
 |---|---|
-| `ArcaneCore/` | Shared library. Headless engine: ECS facade, scene, 2D physics, reflection, cvars, assets reader, the net seam, logging. Include root `#include <Arcane/...>`. No game references. |
-| `ArcaneClient/` | Shared library. SDL3, NRI, the render graph, Batcher2D, audio, ImGui, input, the plugin host's client side. |
-| `ArcaneAssetPipeline/` | Static library. Cook importers. Used by `arccook` and the editor. |
-| `arccook/` | Command-line cooker. |
-| `arcbuild/` | Game-project build driver (Premake, then MSBuild, Make, Ninja, or xcodebuild). |
-| `ArcaneRuntime/` | Windowed runtime host. Opens an `.arcproj` and runs its module. |
-| `ArcaneEditor/` | Editor host. |
-| `ArcaneServer/` | Dedicated server host. Links `ArcaneCore` only. |
-| `ArcaneCrashReporter/` | Windows-only crash and hang reporter. |
-| `ArcaneTests/` | Catch2 suite and hot-reload fixture modules. |
+| `Source/Runtime/` | Runtime module DLLs, every host (servers included): `ArcaneCore` (Base, Config, Jobs, Platform, Cli, reflection), `ArcaneNet`, `ArcaneCrypto`, `ArcaneAssets`, `ArcaneScene`, `ArcanePhysics2D`, `ArcaneSim`, `ArcaneEngine` (runtime, plugin host, projects). Include root `#include <Arcane/...>`. No game references. |
+| `Source/Client/` | Client module DLLs, windowed hosts: `ArcaneWindow`, `ArcaneInput`, `ArcaneAudio`, `ArcaneRender` (NRI, the render graph, Batcher2D), `ArcaneImGui`, `ArcaneClient`. |
+| `Source/Developer/`, `Source/Editor/` | `ArcaneAssetPipeline` (cook importers), `ArcaneVerify` (the verify harness), `ArcaneEdit`. |
+| `Source/Programs/` | `arccook` (command-line cooker), `arcbuild` (game-project build driver: Premake, then MSBuild, Make, Ninja, or xcodebuild), `ArcaneRuntime` (windowed runtime host), `ArcaneEditor` (editor host), `ArcaneServer` (dedicated server host, Runtime modules only), `ArcaneCrashReporter` (Windows-only crash and hang reporter). |
+| `Tests/` | `ArcaneTests` (Catch2 suite, its data and reference images) and `Fixtures/` (hot-reload modules, process/death fixtures, game-module fixtures). |
 | `ArcaneHub/` | Tauri and Svelte launcher. Recents, and on Windows the `.arcproj` file association. |
 | `ReferenceProject/` | Sample game. Builds to `Binaries/ReferenceGame.dll` (`.so` / `.dylib` off Windows). |
 | `ThirdParty/` | Vendored dependencies. See [NOTICE.md](NOTICE.md). |
@@ -367,7 +363,8 @@ msbuild Arcane.slnx /p:Configuration=Debug /m
 ```
 
 `setup-vcpkg-deps.bat` installs SDL3 with the overlay triplet in
-`vcpkg-triplets/` (dynamic CRT).
+`vcpkg-triplets/` (dynamic CRT; SDL3 itself as `SDL3.dll`, staged beside
+every program -- `ThirdParty/SDL3/SDL3.arcmodule`).
 
 CPU tests, from the exe directory, two equivalent doors:
 
@@ -376,7 +373,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-tests.ps1 Debug 
 ```
 
 ```bat
-cd bin\Debug-windows-x86_64-md\ArcaneTests
+cd Binaries\Debug-windows-x86_64-md\ArcaneTests
 ArcaneTests.exe ~[gpu] --rng-seed 1
 ```
 
@@ -500,7 +497,7 @@ Paths below are the Windows Debug layout. On Linux and macOS drop
 ### Editor
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject
+Binaries\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject
 ```
 
 Headless captures used by the golden gate add `--headless`, `--backend`
@@ -511,7 +508,7 @@ is also set.
 ### Runtime
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject
 ```
 
 `--frames N` runs N frames and exits. That is the scripted GPU check.
@@ -522,7 +519,7 @@ than the project boot scene.
 ### Server
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneServer\ArcaneServer.exe --project ReferenceProject --frames 300 --report server.json
+Binaries\Debug-windows-x86_64-md\ArcaneServer\ArcaneServer.exe --project ReferenceProject --frames 300 --report server.json
 ```
 
 The process ticks until `--frames` completes, or until Ctrl-C when
@@ -565,6 +562,69 @@ or `MyGame.dylib`. The manifest may still say `MyGame.dll`.
 
 `ReferenceProject/premake5.lua` is the worked example. Inside this repo
 it locates the SDK itself when `ARCANE_SDK` is unset.
+
+### Declare the engine modules the game uses
+
+`<sourceDir>/MyGame.arcmodule` names the engine modules the game links.
+The SDK links and includes their closure and nothing else, so including
+a header from an undeclared module is a missing-header error.
+`ReferenceProject/Source/Game/ReferenceGame.arcmodule`:
+
+```json
+{
+  "name": "ReferenceGame",
+  "type": "Game",
+  "dependencies": {
+    "public": [],
+    "private": ["ArcaneClient", "ArcaneCore", "ArcaneEngine", "ArcaneInput",
+                "ArcanePhysics2D", "ArcaneScene", "ArcaneSim"]
+  },
+  "thirdParty": { "public": [], "private": [] }
+}
+```
+
+`name` must equal the file stem and the `arcane_game_module` name. A game
+may depend on Runtime and Client modules only. `ImGui` and `ArcaneImGui`
+are modules too: list `ArcaneImGui` to draw from `OnDrawUI` (the macro
+adopts the host's ImGui context only when ImGui is in the closure).
+Without a descriptor a game gets every Runtime and Client module plus
+`ImGui` and `ArcaneImGui`. A new project and the editor's
+Create -> C++ Class write that default descriptor when none exists.
+
+A non-game consumer, such as a server executable, calls
+`arcane_module_consumer { "ArcaneCore", "ArcaneNet" }` inside its own
+`project` block and `arcane_stage_modules { ... }` to copy the module
+DLLs beside an executable.
+
+### Package a game as one executable
+
+`arcbuild package` links the engine, the standalone host and the game
+into one `<Project>.exe` and stages it with what it needs to run:
+
+```bat
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe package --project MyGame --config Release --sdk %ARCANE_SDK%
+```
+
+It builds the engine's monolithic layout (`premake5 --layout=monolithic`:
+every Runtime and Client module as a static library, in
+`Binaries/<cfg>-<sys>-<arch>-mono/`), regenerates the project with the same
+option (the game becomes a static library plus a `<Project>Package`
+executable, generated under `Intermediate/Package/Workspace/`), builds
+it, and stages `Packages/<Project>-<platform>-<config>/` in Unreal's layout:
+
+```
+<Project>.exe | <Project>.sh      launcher (Windows stub / Linux+macOS script)
+<Project>/
+  Binaries/<Win64|Linux|Mac>/     the game, SDL3, DXC, the Agility SDK, engine data/
+  <Project>.arcproj  Content/  Config/  Intermediate/Artifacts/
+```
+
+The launcher runs `<Project>/Binaries/<Platform>/<Project>` with the same
+arguments and returns its exit code; on Linux and macOS the game finds its
+shared libraries beside itself (`$ORIGIN` / `@executable_path`). Run it in
+place; it opens the staged project when no `--project` is given. A package never
+contains a Developer or Editor module, so the verification flags
+(`--headless`, `--report`, `--compare`) belong to `ArcaneRuntime.exe`.
 
 ### A module, a component, a system
 
@@ -683,12 +743,14 @@ generate and build a game module. Specs:
 [docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md](docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md).
 
 ```bat
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --config Debug --sdk %ARCANE_SDK%
-bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --config Debug --sdk %ARCANE_SDK%
+Binaries\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 ```
 
-Commands are `generate`, `build`, `rebuild`, `clean`, and `probe`.
+Commands are `generate`, `build`, `rebuild`, `clean`, `probe`, and
+`package` (the one-executable build above; MSBuild and Make actions, so
+set `MAKEFLAGS=-jN` for a parallel engine build).
 `probe` only inspects the manifest and the `Binaries/` slot. It needs
 no SDK. Other flags: `--action`, `--force-rebuild`, `--quiet`, `--set`.
 
@@ -731,7 +793,7 @@ does not run it.
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
-type bin\Debug-windows-x86_64-md\golden-gate-summary.json
+type Binaries\Debug-windows-x86_64-md\golden-gate-summary.json
 ```
 
 Assert `gatePassed` and each lane's `verdict`. Ignore the process exit
@@ -781,12 +843,12 @@ macOS editor goldens are exclusions rather than a new slot.
 is relative to the working directory. From the repo root the write
 lands in source `ReferenceProject/Verify/References`. From the host's
 exe directory (how the gate runs) it lands in the staged copy under
-`bin/<config>/<Host>/ReferenceProject`, and the next sample build
+`Binaries/<config>/<Host>/ReferenceProject`, and the next sample build
 overwrites that copy. Bless from the repo root, or copy the PNG back
 into source. `git status` should show the reference.
 
 ```bat
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
   --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
 ```
 

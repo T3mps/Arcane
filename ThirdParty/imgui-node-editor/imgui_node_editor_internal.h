@@ -481,7 +481,7 @@ struct Link final: Object
 
     void UpdateEndpoints();
 
-    ImCubicBezierPoints GetCurve() const;
+    IMGUI_NODE_EDITOR_API ImCubicBezierPoints GetCurve() const;
 
     virtual bool TestHit(const ImVec2& point, float extraThickness = 0.0f) const override final;
     virtual bool TestHit(const ImRect& rect, bool allowIntersect = true) const override final;
@@ -847,7 +847,7 @@ struct NavigateAction final: EditorAction
 
     virtual NavigateAction* AsNavigate() override final { return this; }
 
-    void NavigateTo(const ImRect& bounds, ZoomMode zoomMode, float duration = -1.0f, NavigationReason reason = NavigationReason::Unknown);
+    IMGUI_NODE_EDITOR_API void NavigateTo(const ImRect& bounds, ZoomMode zoomMode, float duration = -1.0f, NavigationReason reason = NavigationReason::Unknown);
     void StopNavigation();
     void FinishNavigation();
 
@@ -1382,16 +1382,16 @@ struct EditorContext
     Node*   CreateNode(NodeId id);
     Link*   CreateLink(LinkId id);
 
-    Node*   FindNode(NodeId id);
-    Pin*    FindPin(PinId id);
-    Link*   FindLink(LinkId id);
+    IMGUI_NODE_EDITOR_API Node*   FindNode(NodeId id);
+    IMGUI_NODE_EDITOR_API Pin*    FindPin(PinId id);
+    IMGUI_NODE_EDITOR_API Link*   FindLink(LinkId id);
     Object* FindObject(ObjectId id);
 
     Node*  GetNode(NodeId id);
     Pin*   GetPin(PinId id, PinKind kind);
     Link*  GetLink(LinkId id);
 
-    Link* FindLinkAt(const ImVec2& p);
+    IMGUI_NODE_EDITOR_API Link* FindLinkAt(const ImVec2& p);
 
     template <typename T>
     ImRect GetBounds(const std::vector<T*>& objects)

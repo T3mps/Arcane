@@ -1,0 +1,670 @@
+// Arcane::Project: open/create a project + resolve assets through its mounts. CPU-only.
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+#include <Arcane/Project/Project.hpp>
+
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- the mountDiagnostics case needs a REAL .arcdiag
+
+#include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Project/GameDescriptor.hpp>   // RenderDefaultGameDescriptor
+#include <Arcane/Project/ProjectPaths.hpp>   // kDistBuild
+
+#include <Json.hpp>
+
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+
+#include "Helpers/UserDataDirs.hpp"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>   // the zombie-lock case spawns a real short-lived child
+#endif
+
+namespace
+{
+    // The editor lock lives in <project>/Saved, which a Dist build does not
+    // have (spec s11.0); Dist ships no editor. There the lock has no file, so
+    // a project never reads as held, and the case stops.
+    void SkipEditorLockInDist(const std::filesystem::path& projectRoot)
+    {
+        if (!Arcane::kDistBuild) return;
+        CHECK(Arcane::EditorLock::FileFor(projectRoot).empty());
+        CHECK_FALSE(Arcane::EditorLock::ReadLive(projectRoot).has_value());
+        CHECK_FALSE(Arcane::EditorLock::RivalPid(projectRoot).has_value());
+        SKIP("Dist has no <project>/Saved, so no editor lock");
+    }
+
+    // A unique temp dir for a test, cleaned before use. (Date/random are unavailable
+    // in some sandboxes; a fixed per-test name + remove_all is deterministic.)
+    std::filesystem::path TempDir(const char* leaf)
+    {
+        std::filesystem::path d = std::filesystem::temp_directory_path() / "arcane_project_test" / leaf;
+        std::error_code ec;
+        std::filesystem::remove_all(d, ec);
+        std::filesystem::create_directories(d);
+        return d;
+    }
+
+    void WriteFile(const std::filesystem::path& p, const std::string& text)
+    {
+        std::filesystem::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << text;
+    }
+}
+
+TEST_CASE("Project::Open loads a folder's manifest and mounts game://", "[project]")
+{
+    const auto dir = TempDir("open_ok");
+    WriteFile(dir / "Aphelyon.arcproj",
+              R"({ "formatVersion": 1, "name": "Aphelyon", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().name == "Aphelyon");
+    CHECK(proj->Root() == dir);
+    CHECK(proj->Mounts().HasMount("game"));
+
+    auto p = proj->Mounts().Resolve("game://x.png");
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "x.png");
+}
+
+TEST_CASE("Project::Open forwards its progress callback to the game:// content scan", "[project]")
+{
+    // Proves the WIRING (Project::Open -> AssetRegistry::ScanContent), not
+    // just that ScanContent itself reports progress -- this is the exact
+    // seam project_open's boot-stage body (ProjectBoot.cpp) calls through
+    // (via Runtime::OpenProject), so a break here is a break in what a
+    // player/developer actually sees on the splash.
+    const auto dir = TempDir("open_progress");
+    WriteFile(dir / "P.arcproj", R"({ "formatVersion": 1, "name": "P", "engine": { "abi": 4 } })");
+    WriteFile(dir / "Content" / "a.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })");
+    WriteFile(dir / "Content" / "b.arcmat", R"({ "id": "bbbb2222-2222-4222-8222-222222222222" })");
+
+    std::size_t calls = 0;
+    std::size_t lastDone = 0, lastTotal = 0;
+    auto proj = Arcane::Project::Open(dir, [&](std::size_t done, std::size_t total)
+    {
+        ++calls;
+        lastDone = done;
+        lastTotal = total;
+    });
+
+    REQUIRE(proj.has_value());
+    CHECK(calls == 2);
+    CHECK(lastDone == lastTotal);
+    CHECK(lastTotal == 2);
+}
+
+TEST_CASE("Project::Open fails on missing or ambiguous manifest", "[project]")
+{
+    const auto none = TempDir("open_none");
+    CHECK_FALSE(Arcane::Project::Open(none).has_value());   // no .arcproj
+
+    const auto many = TempDir("open_many");
+    WriteFile(many / "A.arcproj", R"({ "formatVersion": 1, "name": "A", "engine": { "abi": 4 } })");
+    WriteFile(many / "B.arcproj", R"({ "formatVersion": 1, "name": "B", "engine": { "abi": 4 } })");
+    CHECK_FALSE(Arcane::Project::Open(many).has_value());   // ambiguous
+}
+
+TEST_CASE("Project::Open accepts a direct .arcproj file path", "[project]")
+{
+    const auto dir = TempDir("open_direct_file");
+    const auto manifestFile = dir / "Direct.arcproj";
+    WriteFile(manifestFile,
+              R"({ "formatVersion": 1, "name": "Direct", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    auto proj = Arcane::Project::Open(manifestFile);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().name == "Direct");
+    CHECK(proj->Root() == dir);
+    CHECK(proj->Mounts().HasMount("game"));
+
+    auto p = proj->Mounts().Resolve("game://x.png");
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "x.png");
+}
+
+TEST_CASE("Project::Open fails on a schema-invalid manifest", "[project]")
+{
+    const auto dir = TempDir("open_schema_invalid");
+    // Well-formed JSON, but missing the required "name" field.
+    WriteFile(dir / "Bad.arcproj", R"({ "formatVersion": 1, "engine": { "abi": 4 } })");
+
+    CHECK_FALSE(Arcane::Project::Open(dir).has_value());
+}
+
+TEST_CASE("Project::ResolveAsset maps a registered Guid to a file", "[project]")
+{
+    const auto dir = TempDir("resolve");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    // A native asset with a stable embedded id -> the registry keys it on Open.
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "thing.json",
+              R"({ "id": "a5e0c1de-1111-4222-8333-444455556666", "type": "t" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    const auto g = Arcane::Guid::FromString("a5e0c1de-1111-4222-8333-444455556666");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "thing.json");
+
+    // A valid-but-unregistered Guid -> no resolution.
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId::FromGuid(Arcane::Guid::Generate())).has_value());
+    // Invalid id -> no resolution.
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId{}).has_value());
+}
+
+TEST_CASE("Project::RegisterAsset registers editor-created files incrementally", "[project]")
+{
+    const auto dir = TempDir("register_asset");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Registry().Count() == 0);   // empty Content at open
+
+    // A material created AFTER the open-time scan (the editor's New Material).
+    WriteFile(dir / "Content" / "mats" / "new.arcmat",
+              R"({ "id": "e7e0c1de-4444-4555-8666-777788889999", "snippet": "x" })");
+    const auto g = proj->RegisterAsset(dir / "Content" / "mats" / "new.arcmat");
+    REQUIRE(g.has_value());
+    CHECK(g->ToString() == "e7e0c1de-4444-4555-8666-777788889999");
+    CHECK(proj->Registry().Count() == 1);
+
+    // Immediately resolvable (browser + GUID loads see it now, not on reopen).
+    const auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "mats" / "new.arcmat");
+
+    // Idempotent re-registration (the document Save path).
+    CHECK(proj->RegisterAsset(dir / "Content" / "mats" / "new.arcmat").has_value());
+    CHECK(proj->Registry().Count() == 1);
+
+    // Missing id: minted and written back, then registered.
+    WriteFile(dir / "Content" / "noid.arcmat", R"({ "snippet": "y" })");
+    const auto minted = proj->RegisterAsset(dir / "Content" / "noid.arcmat");
+    REQUIRE(minted.has_value());
+    CHECK(minted->IsValid());
+    CHECK(proj->Registry().Count() == 2);
+
+    // Outside every content root -> refused (warn), not registered.
+    WriteFile(dir / "outside.arcmat", R"({ "id": "f8e0c1de-5555-4666-8777-888899990000", "snippet": "z" })");
+    CHECK_FALSE(proj->RegisterAsset(dir / "outside.arcmat").has_value());
+    // Untracked extension -> refused.
+    WriteFile(dir / "Content" / "notes.txt", "hello");
+    CHECK_FALSE(proj->RegisterAsset(dir / "Content" / "notes.txt").has_value());
+    CHECK(proj->Registry().Count() == 2);
+}
+
+TEST_CASE("Project::Open mints a .meta sidecar for an imported binary original", "[project]")
+{
+    const auto dir = TempDir("meta_mint");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    // A binary original (extension routes it to the sidecar path) with NO .meta yet ->
+    // auto-import mints one on Open. Contents are never parsed for binaries.
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "textures" / "hero.png", "not-really-a-png");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    // The sidecar was written beside the original: hero.png -> hero.png.meta (appended,
+    // not extension-replaced, so "a.png"/"a.wav" would not collide on "a.meta").
+    const auto meta = dir / "Content" / "textures" / "hero.png.meta";
+    REQUIRE(std::filesystem::is_regular_file(meta));
+
+    // The minted guid resolves back to the ORIGINAL file, not the .meta.
+    std::ifstream in(meta, std::ios::binary);
+    auto sidecar = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+    REQUIRE(sidecar.is_object());
+    const auto g = Arcane::Guid::FromString(sidecar.value("guid", std::string{}));
+    REQUIRE(g.has_value());
+    REQUIRE(g->IsValid());
+
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "textures" / "hero.png");
+
+    // Re-opening is stable: the persisted guid is reused, not regenerated.
+    auto proj2 = Arcane::Project::Open(dir);
+    REQUIRE(proj2.has_value());
+    auto p2 = proj2->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p2.has_value());
+    CHECK(*p2 == dir / "Content" / "textures" / "hero.png");
+}
+
+TEST_CASE("Project::Open reads an existing .meta sidecar's guid", "[project]")
+{
+    const auto dir = TempDir("meta_existing");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+    WriteFile(dir / "Content" / "music.wav", "RIFF-WAVE-bytes");
+    WriteFile(dir / "Content" / "music.wav.meta",
+              R"({ "guid": "b6f1d2ef-2222-4333-8444-555566667777", "version": 1 })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    const auto g = Arcane::Guid::FromString("b6f1d2ef-2222-4333-8444-555566667777");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Content" / "music.wav");
+}
+
+TEST_CASE("Project::Open mounts + registers an enabled project plugin", "[project]")
+{
+    const auto dir = TempDir("plugin_enabled");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "fx", "enabled": true } ] })");
+    // The plugin: a <name>.arcplugin descriptor (same shape as .arcproj) + a content asset.
+    WriteFile(dir / "Plugins" / "fx" / "fx.arcplugin",
+              R"({ "formatVersion": 1, "name": "fx", "engine": { "abi": 5 } })");
+    WriteFile(dir / "Plugins" / "fx" / "Content" / "spark.json",
+              R"({ "id": "c7a2e3f0-3333-4444-8555-666677778888", "type": "vfx" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Mounts().HasMount("plugin/fx"));
+
+    // The plugin asset resolves by its Guid, exactly like a game asset -> Plugins/fx/Content.
+    const auto g = Arcane::Guid::FromString("c7a2e3f0-3333-4444-8555-666677778888");
+    REQUIRE(g.has_value());
+    auto p = proj->ResolveAsset(Arcane::AssetId::FromGuid(*g));
+    REQUIRE(p.has_value());
+    CHECK(*p == dir / "Plugins" / "fx" / "Content" / "spark.json");
+}
+
+TEST_CASE("Project::Open skips a disabled plugin", "[project]")
+{
+    const auto dir = TempDir("plugin_disabled");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "fx", "enabled": false } ] })");
+    WriteFile(dir / "Plugins" / "fx" / "fx.arcplugin",
+              R"({ "formatVersion": 1, "name": "fx", "engine": { "abi": 5 } })");
+    WriteFile(dir / "Plugins" / "fx" / "Content" / "spark.json",
+              R"({ "id": "c7a2e3f0-3333-4444-8555-666677778888", "type": "vfx" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK_FALSE(proj->Mounts().HasMount("plugin/fx"));
+    const auto g = Arcane::Guid::FromString("c7a2e3f0-3333-4444-8555-666677778888");
+    REQUIRE(g.has_value());
+    CHECK_FALSE(proj->ResolveAsset(Arcane::AssetId::FromGuid(*g)).has_value());
+}
+
+TEST_CASE("Project::Open skips an enabled plugin with no descriptor but still opens", "[project]")
+{
+    const auto dir = TempDir("plugin_no_descriptor");
+    WriteFile(dir / "Game.arcproj",
+              R"({ "formatVersion": 1, "name": "Game", "engine": { "abi": 5 },)"
+              R"( "plugins": [ { "name": "ghost", "enabled": true } ] })");
+    // Plugins/ghost/ has content but NO ghost.arcplugin descriptor -> the plugin is
+    // disabled, but the project still opens.
+    WriteFile(dir / "Plugins" / "ghost" / "Content" / "x.json",
+              R"({ "id": "d8b3f401-4444-4555-8666-777788889999" })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK_FALSE(proj->Mounts().HasMount("plugin/ghost"));
+}
+
+TEST_CASE("Project::Create scaffolds the skeleton, manifest, and .gitignore", "[project]")
+{
+    const auto dir = TempDir("create");
+
+    auto proj = Arcane::Project::Create(dir, "Aphelyon");
+    REQUIRE(proj.has_value());
+
+    // Skeleton dirs.
+    CHECK(std::filesystem::is_directory(dir / "Source"));
+    CHECK(std::filesystem::is_directory(dir / "Content"));
+    CHECK(std::filesystem::is_directory(dir / "Config"));
+    CHECK(std::filesystem::is_directory(dir / "Plugins"));
+    // Manifest + gitignore.
+    CHECK(std::filesystem::is_regular_file(dir / "Aphelyon.arcproj"));
+    CHECK(std::filesystem::is_regular_file(dir / ".gitignore"));
+    // The game descriptor (engine modularization s4): the default module set
+    // under Source/, named for the project -- byte-equal to the renderer's.
+    {
+        std::ifstream in(dir / "Source" / "Aphelyon.arcmodule", std::ios::binary);
+        REQUIRE(in.good());
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(text == Arcane::RenderDefaultGameDescriptor("Aphelyon"));
+    }
+
+    // The created project is valid and re-openable.
+    CHECK(proj->Manifest().name == "Aphelyon");
+    CHECK(proj->Manifest().engineAbi == static_cast<int>(Arcane::kGamePluginABIVersion));
+    CHECK(Arcane::Project::Open(dir).has_value());
+
+    // Born with its durable identity: a valid guid, stamped at create time so
+    // the Open() self-heal never has cause to rewrite a fresh project.
+    CHECK(Arcane::Guid::FromString(proj->Manifest().guid).has_value());
+}
+
+TEST_CASE("Project::Open self-heals a manifest without a guid", "[project]")
+{
+    const auto dir = TempDir("guid_heal");
+    const auto file = dir / "Legacy.arcproj";
+    WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 } })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    // The in-memory manifest and the FILE both carry the stamped guid -- the
+    // Hub reads the file, so an in-memory-only guid would be invisible to it.
+    REQUIRE(Arcane::Guid::FromString(proj->Manifest().guid).has_value());
+    std::ifstream in(file, std::ios::binary);
+    const auto doc = nlohmann::json::parse(in);
+    CHECK(doc["guid"].get<std::string>() == proj->Manifest().guid);
+    // The rewrite touched the guid (and, as every rewrite does, upgraded the
+    // format stamp to the one this engine writes); the rest is intact.
+    CHECK(doc["name"] == "Legacy");
+    CHECK(doc["formatVersion"] == Arcane::ProjectManifest::kFormatVersion);
+    CHECK(doc["engine"]["abi"] == 4);
+}
+
+TEST_CASE("Project::Open migrates a v1 gravity stamp and leaves an identity-only manifest", "[project]")
+{
+    // The migration preserves the v1 +Y-down meaning in Config/physics.json,
+    // removes the stray store, and upgrades the identity manifest to v2.
+    const auto dir = TempDir("format_upgrade");
+    const auto file = dir / "Legacy.arcproj";
+    WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 },)"
+                    R"( "physics": { "gravity": [0.0, 9.81] } })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    {
+        std::ifstream in(file, std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        CHECK(doc["formatVersion"] == 2);
+        CHECK_FALSE(doc.contains("physics"));
+    }
+    {
+        std::ifstream in(dir / "Config" / "physics.json", std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        CHECK(doc["gravity"][1].get<double>() == Catch::Approx(-9.81));
+    }
+    auto again = Arcane::Project::Open(dir);
+    REQUIRE(again.has_value());
+    CHECK(again->Manifest().formatVersion == 2);
+    CHECK(again->Manifest().legacySettings.empty());
+}
+
+TEST_CASE("Project::Open keeps an existing guid and is stable across opens", "[project]")
+{
+    const auto dir = TempDir("guid_stable");
+    const char* kGuid = "a5e0c1de-1111-4222-8333-444455556666";
+    WriteFile(dir / "G.arcproj",
+              R"({ "formatVersion": 1, "name": "G", "engine": { "abi": 4 }, "guid": ")"
+                  + std::string(kGuid) + R"(" })");
+
+    auto first = Arcane::Project::Open(dir);
+    REQUIRE(first.has_value());
+    CHECK(first->Manifest().guid == kGuid);
+
+    // A second open must see the SAME identity -- re-stamping per open would
+    // make the guid useless as a durable key.
+    auto second = Arcane::Project::Open(dir);
+    REQUIRE(second.has_value());
+    CHECK(second->Manifest().guid == kGuid);
+}
+
+TEST_CASE("Project::Create refuses a non-empty target directory", "[project]")
+{
+    const auto dir = TempDir("create_nonempty");
+    WriteFile(dir / "existing.txt", "x");
+    CHECK_FALSE(Arcane::Project::Create(dir, "X").has_value());
+}
+
+TEST_CASE("Project::Create refuses a name containing a path separator", "[project]")
+{
+    const auto dir = TempDir("create_bad_name");
+    CHECK_FALSE(Arcane::Project::Create(dir, "a/b").has_value());
+
+    // The bad name must be rejected before any skeleton is created on disk.
+    CHECK(std::filesystem::is_empty(dir));
+}
+
+TEST_CASE("EditorLock JSON round-trips and rejects malformed shapes", "[project]")
+{
+    // MIRRORED FORMAT with the Hub's editorlock.rs -- these cases pin it.
+    const Arcane::EditorLock::Info info{4242, 0x1234'5678'9ABC'DEF0ull};
+    const auto back = Arcane::EditorLock::Parse(Arcane::EditorLock::ToJson(info));
+    REQUIRE(back.has_value());
+    CHECK(back->pid == 4242);
+    CHECK(back->start == 0x1234'5678'9ABC'DEF0ull);
+
+    CHECK_FALSE(Arcane::EditorLock::Parse("not json").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse("{}").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse(R"({"pid":0})").has_value());
+    CHECK_FALSE(Arcane::EditorLock::Parse(R"({"pid":-3})").has_value());
+    // A missing start degrades to 0 ("no time recorded"), not a refusal.
+    const auto noStart = Arcane::EditorLock::Parse(R"({"pid":7})");
+    REQUIRE(noStart.has_value());
+    CHECK(noStart->start == 0);
+}
+
+TEST_CASE("EditorLock: a live lock names this process; a dead one is ignored", "[project]")
+{
+    const auto dir = TempDir("editor_lock");
+    SkipEditorLockInDist(dir);
+
+    // No lock file -> not running.
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+
+    // Written by THIS process -> live, with our own pid.
+    Arcane::EditorLock::Write(dir);
+    const auto live = Arcane::EditorLock::ReadLive(dir);
+    REQUIRE(live.has_value());
+    CHECK(*live == Arcane::EditorLock::Self().pid);
+
+    // The staleness defeat: same pid, WRONG creation time -- the process the
+    // lock described no longer exists, so it must read as not running. This
+    // is the exact false-"already open" failure Unity's lockfile is hated
+    // for, pinned here so it can never ship.
+    auto stale = Arcane::EditorLock::Self();
+    stale.start ^= 1;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+
+    // Clear removes the file; a cleared project is not running.
+    Arcane::EditorLock::Write(dir);
+    Arcane::EditorLock::Clear(dir);
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(std::filesystem::exists(Arcane::EditorLock::FileFor(dir)));
+}
+
+TEST_CASE("EditorLock::RivalPid exempts this process and ignores stale locks", "[project]")
+{
+    const auto dir = TempDir("editor_lock_rival");
+    SkipEditorLockInDist(dir);
+
+    // No lock -> no rival.
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+
+    // OUR OWN live lock is not a rival: SwitchProject back to the project we
+    // already hold must sail past our own claim, not refuse over it.
+    Arcane::EditorLock::Write(dir);
+    REQUIRE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+
+    // A stale lock (same pid, wrong birth = a dead session) is no rival
+    // either -- same defeat ReadLive is pinned on. The live-rival positive
+    // path shares ReadLive's tested machinery; forging one would need a
+    // second live process, which is desk territory.
+    auto stale = Arcane::EditorLock::Self();
+    stale.start ^= 1;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(stale));
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+}
+
+#ifdef _WIN32
+TEST_CASE("EditorLock: a lock held by an exited process is stale, even while a handle keeps the pid reserved", "[project]")
+{
+    // The 2026-09-08 desk-pass zombie. A Windows process OBJECT outlives the
+    // process itself for as long as ANY handle to it stays open, and the pid
+    // stays reserved with it -- so the parent that spawned an editor (the Hub)
+    // and kept `hProcess` around made OpenProcess keep succeeding, with the
+    // ORIGINAL creation time intact, long after the editor was gone. Both of
+    // ReadLive's old tells (pid opens, birth matches) therefore passed and the
+    // project read as "already open" forever.
+    //
+    // This spawns exactly that shape: a child that exits immediately, whose
+    // handle this test keeps open across the assertions.
+    const auto dir = TempDir("editor_lock_zombie");
+    SkipEditorLockInDist(dir);
+
+    wchar_t cmdline[] = L"cmd.exe /c exit 0";   // CreateProcessW may write to this buffer
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    REQUIRE(::CreateProcessW(nullptr, cmdline, nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi) != 0);
+    ::CloseHandle(pi.hThread);
+
+    // The zombie's LAST handle, and the whole point of the fixture: it must
+    // outlive every assertion below (that is what keeps the pid reserved) and
+    // must be released however the test leaves -- a failing REQUIRE throws, so
+    // a trailing CloseHandle would be skipped exactly when the suite is
+    // already unhappy.
+    struct HandleGuard
+    {
+        HANDLE h;
+        ~HandleGuard() { ::CloseHandle(h); }
+    } zombieHandle{ pi.hProcess };
+
+    REQUIRE(::WaitForSingleObject(pi.hProcess, 30000) == WAIT_OBJECT_0);
+
+    // The lock body names the REAL pid and the REAL creation time -- nothing
+    // here is forged, which is what makes the exit time the only discriminator.
+    FILETIME created{}, exited{}, kernel{}, user{};
+    REQUIRE(::GetProcessTimes(pi.hProcess, &created, &exited, &kernel, &user) != 0);
+    REQUIRE((exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0));   // it really did exit
+
+    Arcane::EditorLock::Info zombie;
+    zombie.pid   = static_cast<uint32_t>(pi.dwProcessId);
+    zombie.start = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    WriteFile(Arcane::EditorLock::FileFor(dir), Arcane::EditorLock::ToJson(zombie));
+
+    CHECK_FALSE(Arcane::EditorLock::ReadLive(dir).has_value());
+    CHECK_FALSE(Arcane::EditorLock::RivalPid(dir).has_value());
+}
+#endif
+
+// The verify-capture determinism defect: the editor's Assets panel enumerates
+// <root>/Saved/Diagnostics -- a directory the editor ITSELF writes crash and
+// hang captures into -- so the golden reference image moved with the machine's
+// failure history (24 anti-aliased pixels of the Assets scrollbar thumb, at
+// byte-identical coordinates on both backends). ProjectOpenOptions is the
+// per-open opt-out; see ProjectOpenOptions.hpp for why it lives in the engine.
+//
+// Asserts on BOTH halves of Project.cpp's diag:// branch: one `if` guards a
+// Mounts().Mount AND a Registry().AddContent. HasMount() alone CANNOT tell
+// "gated both" from "gated only the Mount" -- and AddContent is the half that
+// actually feeds the Assets panel, i.e. the half the golden image sees. The
+// Registry().Resolve check below is therefore the load-bearing one.
+TEST_CASE("Project::Open honours mountDiagnostics", "[project]")
+{
+    const auto dir = TempDir("open_diag_opt_out");
+    WriteFile(dir / "Aphelyon.arcproj",
+              R"({ "formatVersion": 1, "name": "Aphelyon", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+
+    // A REAL report on disk, exactly as Diagnostics::WriteReportImpl leaves one.
+    // An empty Saved/Diagnostics would mount but register nothing, and so could
+    // not distinguish the two halves of the branch at all. Dist keeps it in the
+    // per-user <game>/Diagnostics instead (spec s11.0).
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
+    std::filesystem::create_directories(diagDir);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    // Default: the mount IS registered, and the report IS in the registry.
+    auto withDiag = Arcane::Project::Open(dir);
+    REQUIRE(withDiag.has_value());
+    CHECK(withDiag->Mounts().HasMount("diag"));
+    CHECK(withDiag->Registry().Resolve(env.guid).has_value());
+
+    // Opted out: neither, even though the directory -- and a report inside it --
+    // is right there. This is what makes the editor's verify capture independent
+    // of the machine's crash history.
+    Arcane::ProjectOpenOptions opts;
+    opts.mountDiagnostics = false;
+    auto without = Arcane::Project::Open(dir, {}, opts);
+    REQUIRE(without.has_value());
+    CHECK_FALSE(without->Mounts().HasMount("diag"));
+    CHECK_FALSE(without->Registry().Resolve(env.guid).has_value());
+
+    // The opt-out is SCOPED to diag:// -- game:// must be unaffected, or the
+    // fix has broken asset resolution rather than narrowed it.
+    CHECK(without->Mounts().HasMount("game"));
+    std::error_code ec;
+    std::filesystem::remove_all(diagDir, ec);   // Dist: it sits outside the project
+}
+
+// S7-DIST: Open resolves diag:// with the OPENED project's identity. In Dist,
+// DiagnosticsDir is <per-user>/<Company>/<Game>/Diagnostics, and a Runtime
+// opens the project before it configures Paths for it, so Paths::Current()
+// still names the previous project (or none). Simulated in any build: a
+// preset Paths dist naming another game, and a scratch per-user base.
+TEST_CASE("Project::Open mounts diag:// from the opened project's own per-user folder when Paths resolves the Dist way", "[project][paths]")
+{
+    const Arcane::Paths::Config saved = Arcane::Paths::Current();
+    struct RestorePaths
+    {
+        Arcane::Paths::Config config;
+        ~RestorePaths() { Arcane::Paths::Configure(config); }
+    } restore{ saved };
+    const auto base = TempDir("open_diag_dist_base");
+    const Arcane::Test::ScopedUserDataBase userData(base);
+    REQUIRE(userData.Ok());
+    Arcane::Paths::Config previous = saved;
+    previous.dist = true;
+    previous.projectDir.reset();
+    previous.companyName = "Elsewhere";
+    previous.gameName = "PreviousGame";
+    Arcane::Paths::Configure(previous);
+
+    const auto dir = TempDir("open_diag_dist");
+    WriteFile(dir / "DistDiag.arcproj",
+              R"({ "formatVersion": 2, "name": "DistDiag", "company": "Starworks QA", "engine": { "abi": 4 } })");
+    std::filesystem::create_directories(dir / "Content");
+    const std::filesystem::path diagDir = Arcane::Test::DiagnosticsDirFor(dir);
+    REQUIRE(diagDir.lexically_normal() == (base / "Starworks QA" / "DistDiag" / "Diagnostics").lexically_normal());
+    std::filesystem::create_directories(diagDir);
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "gpu-stall";
+    REQUIRE(Arcane::Diag::WriteFile(env, diagDir / "x.arcdiag"));
+
+    auto opened = Arcane::Project::Open(dir);
+    REQUIRE(opened.has_value());
+    CHECK(opened->Mounts().HasMount("diag"));
+    CHECK(opened->Registry().Resolve(env.guid).has_value());
+}

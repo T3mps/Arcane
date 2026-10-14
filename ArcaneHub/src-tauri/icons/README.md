@@ -4,7 +4,7 @@ All of these come from `Arcane/data/images/arcane_logo.png` — the same source
 the editor's icon is built from, so the Hub and `ArcaneEditor.exe` show one mark
 in Explorer, the taskbar and Alt-Tab.
 
-`icon.ico` is a **byte-for-byte copy** of `Arcane/ArcaneEditor/resources/arcane.ico`
+`icon.ico` is a **byte-for-byte copy** of `Arcane/Source/Programs/ArcaneEditor/resources/arcane.ico`
 rather than a fresh render of the logo. It is the file Windows shows for the
 executable, and copying it means the two binaries carry the identical icon
 instead of two lookalikes that could drift apart the next time either is
@@ -35,7 +35,7 @@ sizes = {
 }
 for name, n in sizes.items():
     src.resize((n, n), Image.LANCZOS).save(out / name, "PNG")
-shutil.copyfile("ArcaneEditor/resources/arcane.ico", out / "icon.ico")
+shutil.copyfile("Source/Programs/ArcaneEditor/resources/arcane.ico", out / "icon.ico")
 ```
 
 Run it from `Arcane/`.
@@ -49,7 +49,7 @@ old icon in a build that otherwise looks completely fresh.
 
 `cargo clean -p arcane_hub` does **not** fix this. It was tried: it removed
 3.4 GB and the very next build still produced the old icon, because it leaves
-`bin-int/hub-cargo/release/build/arcane_hub-*/out/` in place. Check that
+`Intermediate/Build/hub-cargo/release/build/arcane_hub-*/out/` in place. Check that
 directory's `resource.lib` timestamp if an icon change seems not to take.
 
 The in-app titlebar mark is separate — that is `Hub/static/logo.png`, a copy of

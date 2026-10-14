@@ -430,7 +430,24 @@ function Resolve-MSBuild {
     return $found
 }
 
+# The DLL names under `dumpbin /dependents`' "Image has the following
+# dependencies:" heading, up to the blank line that ends the list -- never
+# the "Dump of file <path>" header, whose path may itself say Arcane.
+function Get-DumpbinDependents {
+    param([AllowEmptyString()][string[]]$Lines = @())
+    $in = $false
+    $seen = $false
+    foreach ($line in $Lines) {
+        if ($line -match 'has the following (delay load )?dependencies:') { $in = $true; continue }
+        if (-not $in) { continue }
+        $t = $line.Trim()
+        if ($t -eq '') { if ($seen) { $in = $false; $seen = $false }; continue }
+        $seen = $true
+        $t
+    }
+}
+
 Export-ModuleMember -Function Resolve-LocalRuns, Get-SeedList, Get-LinuxJobCount, ConvertTo-Bytes, Get-LfCheckoutPaths,
     Set-WslConfigLimits, Test-WslConfigLimits, Get-Catch2Totals, Get-JUnitTotals, Compare-JUnitDirs,
     Get-BuildErrorLines, Read-LegStatus, Write-LegStatus, New-LegResult, Format-LocalSummary,
-    Invoke-NativeLogged, Invoke-NativeQuiet, Resolve-MSBuild
+    Invoke-NativeLogged, Invoke-NativeQuiet, Resolve-MSBuild, Get-DumpbinDependents

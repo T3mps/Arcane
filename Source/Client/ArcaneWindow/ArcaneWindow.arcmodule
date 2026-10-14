@@ -1,0 +1,20 @@
+{
+  "name": "ArcaneWindow",
+  "type": "Client",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": [
+      "ArcaneAssets",
+      "SDL3"
+    ]
+  },
+  "thirdParty": {
+    "public": [],
+    "private": [
+      "stb"
+    ]
+  },
+  "platforms": {}
+}
