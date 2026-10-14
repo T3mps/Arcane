@@ -6,6 +6,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
+#include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
@@ -13,6 +14,7 @@
 #include <Arcane/Remote/Listener.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Project/Project.hpp> // EditorLock::Self: this process's pid + creation stamp
@@ -84,6 +86,11 @@ bool HostSession::Start()
     RegisterCatalogCommands();              // catalog.describe, schema.type (Task 17, ruling F13)
     SetCommandWorlds(m_config.worlds);      // the one world table (Task 19, ruling F16); Teardown clears it
     RegisterWorldCommands();                // world.list (Task 19); reads CommandWorlds(), holds no pointer
+    // cvar.get/set/list/explain (Task 20): the process registry every host's
+    // cvars live in, asked in this host's context. Teardown releases the user.
+    m_cvarUser = {&CVarRegistry::Get(), m_config.cvarContext};
+    SetCvarCommandUser(&m_cvarUser);
+    RegisterCvarCommands();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -253,6 +260,7 @@ void HostSession::Teardown()
     m_atoms.reset();
     m_cataloguePublished = false;
     ReleaseSessionCommands(this); // a stopped session's commands answer host.unavailable
+    ReleaseCvarCommandUser(&m_cvarUser); // likewise cvar.*; another session's user is left alone
     // The world table names this host's objects (user = the app): a stopped
     // session leaves world-taking commands answering host.unavailable. Like
     // ReleaseSessionCommands, a table another session installed since is left alone.

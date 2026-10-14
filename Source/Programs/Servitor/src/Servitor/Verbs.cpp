@@ -47,6 +47,9 @@ constexpr VerbFlag kQuitFlags[] = {
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt);
 bool WaitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool CvarNameArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool CvarSetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool CvarListArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 
 // Only `wait ready` waits for a host to appear (spec s4.4).
 bool WaitAwaitsHost(const nlohmann::json& args)
@@ -55,7 +58,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 11> kVerbs = {{
+const std::array<VerbRow, 15> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -81,6 +84,12 @@ const std::array<VerbRow, 11> kVerbs = {{
     // Task 19. world list posts world.list; --world <name> (a global flag)
     // names a world for every world-taking command.
     {"world list", "world.list", nullptr, nullptr},
+    // Task 20 (ruling F18). set sends the value as console text, exactly as
+    // typed; the host parses it as the cvar's type (cvar.type-mismatch, exit 6).
+    {"cvar get", "cvar.get", &CvarNameArgs, nullptr, {}, false, nullptr, "<name>"},
+    {"cvar set", "cvar.set", &CvarSetArgs, nullptr, {}, false, nullptr, "<name> <value>"},
+    {"cvar list", "cvar.list", &CvarListArgs, nullptr, {}, false, nullptr, "[prefix]"},
+    {"cvar explain", "cvar.explain", &CvarNameArgs, nullptr, {}, false, nullptr, "<name>"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -142,6 +151,45 @@ bool WaitArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
         return true;
     }
     return Fail(error, usage + ", got " + what);
+}
+
+// cvar get <name> / cvar explain <name> -> {name}. No cvar verb declares a
+// flag, so any "--x" token is the SplitVerbTokens refusal (usage exit 2).
+bool CvarNameArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("cvar get"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() != 1)
+        return Fail(error, "cvar get and cvar explain need one cvar name (servitor cvar list shows them)");
+    out = {{"name", tokens.positional.front()}};
+    return true;
+}
+
+// cvar set <name> <value> -> {name, value}: value is console text (a vector is
+// one quoted token, "1 2 3", or "[1,2,3]").
+bool CvarSetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("cvar set"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() != 2)
+        return Fail(error, "cvar set needs a cvar name and one value (quote a value with spaces)");
+    out = {{"name", tokens.positional[0]}, {"value", tokens.positional[1]}};
+    return true;
+}
+
+// cvar list [prefix] -> {} or {prefix}.
+bool CvarListArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("cvar list"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() > 1)
+        return Fail(error, "cvar list takes at most one dotted prefix, got " + tokens.positional[1]);
+    out = tokens.positional.empty() ? nlohmann::json::object()
+                                    : nlohmann::json{{"prefix", tokens.positional.front()}};
+    return true;
 }
 
 // quit: posts host.quit. With --force (spec s4.7) it then watches the target

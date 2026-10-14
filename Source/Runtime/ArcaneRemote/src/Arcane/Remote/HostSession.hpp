@@ -12,6 +12,7 @@
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
 #include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Core/NetMode.hpp>
+#include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Protocol.hpp>
@@ -146,6 +147,9 @@ private:
     void Teardown(); // the shared tail of Stop and of a failed Start
 
     Config m_config;
+    // Task 20 (ruling F12): the cvar.* commands' user, {CVarRegistry::Get(),
+    // config.cvarContext}; Start installs it, Teardown releases it.
+    CvarCommandUser m_cvarUser;
     HostGate m_gate;
     TickGate m_tick;
     JobTable m_jobs;
