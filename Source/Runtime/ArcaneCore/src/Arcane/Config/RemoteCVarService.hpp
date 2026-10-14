@@ -47,7 +47,7 @@ namespace Arcane
     {
         bool ok = false;
         std::string text;
-        // Structured form (arc CLI P0). valueJson is the JSON text "null" when
+        // Structured form (Servitor P0). valueJson is the JSON text "null" when
         // there is no value; the other strings are empty when not filled.
         std::string valueJson = "null";
         std::string type;

@@ -1,5 +1,5 @@
 {
-  "name": "ArcaneArc",
+  "name": "ArcaneRemote",
   "type": "Runtime",
   "dependencies": {
     "public": [

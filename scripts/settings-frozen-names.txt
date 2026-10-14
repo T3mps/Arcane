@@ -462,11 +462,11 @@ input.tapSeconds
 jobs.externalThreads
 jobs.shaderCompileThreads
 jobs.workerThreads
-log.arc.ringLines
 log.dir
 log.file.flushLevel
 log.file.keepCount
 log.level
+log.remote.ringLines
 log.server.consoleLevel
 log.server.file.maxBytes
 log.server.file.maxFiles

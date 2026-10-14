@@ -1,4 +1,4 @@
-// Sequenced log ring (arc CLI P0 task 2). Separate from the crash backlog in
+// Sequenced log ring (Servitor P0 task 2). Separate from the crash backlog in
 // Log.cpp: this ring is mutexed, holds structured records, and has
 // subscribers. Log.cpp attaches MakeRingSink() inside Log::Init's dist sink.
 
@@ -19,12 +19,12 @@ namespace Arcane::Log
 {
     namespace
     {
-        ARC_CONSTANT("the log.arc.ringLines default: one spelling, shared with the ARC_CVAR below (ruling B-1)")
+        ARC_CONSTANT("the log.remote.ringLines default: one spelling, shared with the ARC_CVAR below (ruling B-1)")
         constexpr std::uint32_t kDefaultRingLines = 4096u;
 
-        ARC_CVAR(cvar_logArcRingLines, "log.arc.ringLines", std::uint32_t, kDefaultRingLines,
+        ARC_CVAR(cvar_logRemoteRingLines, "log.remote.ringLines", std::uint32_t, kDefaultRingLines,
                  .min = 1u, .flags = CVarFlags::Dev, .audience = Audience::Editor,
-                 .scope = SettingScope::PreferencesMachine, .help = "How many log lines arc logs retains.");
+                 .scope = SettingScope::PreferencesMachine, .help = "How many log lines the remote log ring retains.");
 
         struct Subscriber
         {
@@ -55,7 +55,7 @@ namespace Arcane::Log
         // keeps the current capacity.
         void RefreshCapacity(Ring& ring)
         {
-            const std::uint32_t want = cvar_logArcRingLines.Get();
+            const std::uint32_t want = cvar_logRemoteRingLines.Get();
             if (want == 0u)
                 return;
             ring.capacity = want;

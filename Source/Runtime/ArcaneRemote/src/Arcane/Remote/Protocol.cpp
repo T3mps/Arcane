@@ -1,4 +1,4 @@
-#include <Arcane/Arc/Protocol.hpp>
+#include <Arcane/Remote/Protocol.hpp>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -7,7 +7,7 @@
 #include <string_view>
 #include <utility>
 
-namespace Arcane::Arc
+namespace Arcane::Remote
 {
 
 namespace
@@ -334,6 +334,6 @@ int WorstExit(std::span<const int> codes)
     return worst;
 }
 
-} // namespace Arcane::Arc
+} // namespace Arcane::Remote
 
 #endif

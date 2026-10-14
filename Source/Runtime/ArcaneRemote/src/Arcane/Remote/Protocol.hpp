@@ -1,5 +1,5 @@
 #pragma once
-#include <Arcane/Modules/ArcaneArcApi.hpp>
+#include <Arcane/Modules/ArcaneRemoteApi.hpp>
 #include <Arcane/Core/Constant.hpp>
 #include <Json.hpp>
 #include <cstdint>
@@ -10,10 +10,10 @@
 
 #if !defined(ARC_BUILD_DIST)
 
-namespace Arcane::Arc
+namespace Arcane::Remote
 {
 
-ARC_CONSTANT("wire protocol: arc protocol major (spec s6)")
+ARC_CONSTANT("wire protocol: remote protocol major (spec s6)")
 inline constexpr std::uint32_t kProtocol = 1;
 ARC_CONSTANT("wire protocol: s10.1 request body bound")
 inline constexpr std::uint32_t kMaxBodyBytes = 4u * 1024u * 1024u;
@@ -23,11 +23,11 @@ ARC_CONSTANT("capacity: s10.1 connection cap, under Winsock FD_SETSIZE (64); POS
 inline constexpr std::uint32_t kMaxConnections = 16;
 ARC_CONSTANT("capacity: s10.1 SSE subscriber cap")
 inline constexpr std::uint32_t kMaxSseSubscribers = 8;
-ARC_CONSTANT("a change would be a bug: the one spelling of arc.server.queueDepth's default")
+ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.queueDepth's default")
 inline constexpr std::uint32_t kQueueDepthDefault = 64;
 ARC_CONSTANT("capacity hint: s4.3 default commands drained per tick")
 inline constexpr std::uint32_t kFrameBudgetCommands = 8;
-ARC_CONSTANT("a change would be a bug: the one spelling of arc.server.frameBudgetMs' default")
+ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.frameBudgetMs' default")
 inline constexpr double kFrameBudgetMs = 4.0;
 ARC_CONSTANT("wire protocol: s10.1 idle connection close")
 inline constexpr std::uint32_t kIdleConnectionSeconds = 30;
@@ -124,18 +124,18 @@ struct HostStatus {
     bool minimized = false;
 };
 
-ARC_ARC_API const char* ToString(HostKind kind);
-ARC_ARC_API nlohmann::json ToJson(const Envelope& env);
-ARC_ARC_API nlohmann::json ToJson(const HostStatus& status); // no token field exists on HostStatus
-ARC_ARC_API Envelope ParseEnvelope(const nlohmann::json& j);
-ARC_ARC_API std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j); // nullopt when malformed
-ARC_ARC_API Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host);
-ARC_ARC_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
-ARC_ARC_API int ExitFromHost(const Envelope& env);
-ARC_ARC_API int WorstExit(std::span<const int> codes);
+ARC_REMOTE_API const char* ToString(HostKind kind);
+ARC_REMOTE_API nlohmann::json ToJson(const Envelope& env);
+ARC_REMOTE_API nlohmann::json ToJson(const HostStatus& status); // no token field exists on HostStatus
+ARC_REMOTE_API Envelope ParseEnvelope(const nlohmann::json& j);
+ARC_REMOTE_API std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j); // nullopt when malformed
+ARC_REMOTE_API Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host);
+ARC_REMOTE_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
+ARC_REMOTE_API int ExitFromHost(const Envelope& env);
+ARC_REMOTE_API int WorstExit(std::span<const int> codes);
 
-} // namespace Arcane::Arc
+} // namespace Arcane::Remote
 
 #else
-// Dist builds compile arc out; this empty branch keeps the include legal.
+// Dist builds compile the remote surface out; this empty branch keeps the include legal.
 #endif

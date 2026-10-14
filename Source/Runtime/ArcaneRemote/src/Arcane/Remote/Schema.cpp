@@ -1,4 +1,4 @@
-#include <Arcane/Arc/Schema.hpp>
+#include <Arcane/Remote/Schema.hpp>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -122,7 +122,7 @@ void ApplySchemaAdapter(nlohmann::json& schema, const Astra::TypeMeta& meta) {
 
 }  // namespace
 
-nlohmann::json Arcane::Arc::SchemaFor(const Astra::TypeMeta& meta)
+nlohmann::json Arcane::Remote::SchemaFor(const Astra::TypeMeta& meta)
 {
     Astra::JsonSchemaGenerator gen;
     nlohmann::json schema = nlohmann::json::parse(gen.Generate(meta));

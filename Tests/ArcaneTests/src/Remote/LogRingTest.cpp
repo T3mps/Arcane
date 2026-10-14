@@ -10,12 +10,12 @@ namespace
     int g_hits = 0;
     void OnLog(const Arcane::LogRecord& rec, void*)
     {
-        if (rec.text.find("arc-ring-line") != std::string::npos)
+        if (rec.text.find("remote-ring-line") != std::string::npos)
             ++g_hits;
     }
 }
 
-TEST_CASE("Subscribe observes a line and ReadSince resumes from seq", "[arc]")
+TEST_CASE("Subscribe observes a line and ReadSince resumes from seq", "[remote]")
 {
     g_hits = 0;
     // Anchor on the newest seq first (ruling F3): a full-suite run leaves
@@ -23,8 +23,8 @@ TEST_CASE("Subscribe observes a line and ReadSince resumes from seq", "[arc]")
     // OLDEST n of them.
     const std::uint64_t base = Arcane::Log::LatestSeq();
     const auto sub = Arcane::Log::Subscribe(&OnLog, nullptr);
-    Arcane::Log::Engine()->info("arc-ring-line one");
-    Arcane::Log::Engine()->info("arc-ring-line two");
+    Arcane::Log::Engine()->info("remote-ring-line one");
+    Arcane::Log::Engine()->info("remote-ring-line two");
     CHECK(g_hits == 2);
     // Another thread may log in between, so find our lines by text, never by
     // a fixed offset from base.
@@ -35,8 +35,8 @@ TEST_CASE("Subscribe observes a line and ReadSince resumes from seq", "[arc]")
         return std::uint64_t{0};
     };
     const auto mine = Arcane::Log::ReadSince(base, 64);
-    const std::uint64_t one = findText(mine, "arc-ring-line one");
-    const std::uint64_t two = findText(mine, "arc-ring-line two");
+    const std::uint64_t one = findText(mine, "remote-ring-line one");
+    const std::uint64_t two = findText(mine, "remote-ring-line two");
     REQUIRE(one > base);
     REQUIRE(two > one);
     CHECK(Arcane::Log::LatestSeq() >= two);
@@ -45,9 +45,9 @@ TEST_CASE("Subscribe observes a line and ReadSince resumes from seq", "[arc]")
     CHECK(tail.front().seq == one + 1);
     Arcane::Log::Unsubscribe(sub);
     const int frozen = g_hits;
-    Arcane::Log::Engine()->info("arc-ring-line three");
+    Arcane::Log::Engine()->info("remote-ring-line three");
     CHECK(g_hits == frozen);
     const auto after = Arcane::Log::ReadSince(two, 64);
-    CHECK(findText(after, "arc-ring-line three") > two);
+    CHECK(findText(after, "remote-ring-line three") > two);
 }
 #endif

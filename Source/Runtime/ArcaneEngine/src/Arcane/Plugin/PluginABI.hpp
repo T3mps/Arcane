@@ -1176,7 +1176,7 @@ namespace Arcane
     //     (image-less) form -- layout. A game links only its .arcmodule
     //     descriptor's closure. ReferenceProject.arcproj and the arcbuild
     //     fixture restamped (Aphelyon.arcproj restamps in P7).
-    // v60 (2026-10-13, arc CLI P0 -- RemoteCVarService context):
+    // v60 (2026-10-13, Servitor P0 -- RemoteCVarService context):
     //     Next ABI after main at execution time (main was 59, re-read at
     //     execution; this constant is that value plus one).
     //     RemoteCVarRequest gained `context` (CVarContext, default ServerAdmin)

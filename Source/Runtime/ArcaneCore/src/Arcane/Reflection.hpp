@@ -40,9 +40,9 @@ namespace Arcane::Attr
     using ::Astra::AliasName;
     using ::Astra::Precision;
     // FIELD attribute: the field may be omitted, so a JSON Schema leaves it out
-    // of `required` (arc args structs). Local until the vendored Astra declares
+    // of `required` (remote command args structs). Local until the vendored Astra declares
     // `struct Optional`; that sync replaces this with `using ::Astra::Optional;`
-    // (arc CLI P0 Task 4 fallback).
+    // (Servitor P0 Task 4 fallback).
     struct Optional : ::Astra::AttributeBase<Optional>
     {
         constexpr Optional() noexcept = default;

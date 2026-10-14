@@ -1,11 +1,11 @@
-#include <Arcane/Arc/Registry.hpp>
+#include <Arcane/Remote/Registry.hpp>
 
 #if !defined(ARC_BUILD_DIST)
 
 #include <cstddef>
 #include <utility>
 
-namespace Arcane::Arc
+namespace Arcane::Remote
 {
 
 namespace
@@ -223,7 +223,7 @@ CommandResult CommandRegistry::Invoke(const Call& call)
         return result;
     }
     result.envelope = MakeError(call.command, "command.unknown",
-                                "no command named '" + call.command + "' on this host", "arc commands");
+                                "no command named '" + call.command + "' on this host", "servitor commands");
     result.envelope.errors[0].candidates = std::move(candidates);
     return result;
 }
@@ -238,6 +238,6 @@ HostKind CommandRegistry::GetHostKind() const
     return m_hostKind.load(std::memory_order_acquire);
 }
 
-} // namespace Arcane::Arc
+} // namespace Arcane::Remote
 
 #endif

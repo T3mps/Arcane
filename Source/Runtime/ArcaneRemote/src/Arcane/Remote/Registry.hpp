@@ -1,6 +1,6 @@
 #pragma once
-#include <Arcane/Arc/Protocol.hpp>
-#include <Arcane/Arc/Schema.hpp>
+#include <Arcane/Remote/Protocol.hpp>
+#include <Arcane/Remote/Schema.hpp>
 #include <Astra/Reflection/MetaRegistry.hpp>
 
 #if !defined(ARC_BUILD_DIST)
@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Arcane::Arc {
+namespace Arcane::Remote {
 
 struct Call {
     std::string id;
@@ -52,10 +52,10 @@ struct Desc {
     Access (*accessFor)(const Call& call) = nullptr;
 };
 
-// The process's arc command table (spec s5.1). One instance lives in ArcaneArc,
+// The process's remote command table (spec s5.1). One instance lives in ArcaneRemote,
 // so a registration from any module's static initializer lands here. Commands
 // run on the host main thread; the listener thread never touches the registry.
-class ARC_ARC_API CommandRegistry {
+class ARC_REMOTE_API CommandRegistry {
 public:
     static CommandRegistry& Get();
 
@@ -89,10 +89,10 @@ private:
 };
 
 #define ARC_REMOTE_COMMAND(ident, nameLit, summaryLit, access, mutates, play, thread, ArgsType, fn) \
-    static const bool ident = ::Arcane::Arc::CommandRegistry::Get().Register( \
-        ::Arcane::Arc::Desc{(nameLit), (summaryLit), (access), (mutates), (play), (thread), \
+    static const bool ident = ::Arcane::Remote::CommandRegistry::Get().Register( \
+        ::Arcane::Remote::Desc{(nameLit), (summaryLit), (access), (mutates), (play), (thread), \
                             false, {}, ::Astra::GetMeta<ArgsType>(), (fn), nullptr}, nullptr)
 
-} // namespace Arcane::Arc
+} // namespace Arcane::Remote
 
 #endif

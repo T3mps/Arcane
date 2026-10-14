@@ -1,14 +1,14 @@
-#include <Arcane/Arc/Http.hpp>
+#include <Arcane/Remote/Http.hpp>
 
 #if !defined(ARC_BUILD_DIST)
 
-#include <Arcane/Arc/Protocol.hpp>
+#include <Arcane/Remote/Protocol.hpp>
 #include <Arcane/Crypto/Crypto.hpp>
 
 #include <cstddef>
 #include <cstdint>
 
-namespace Arcane::Arc
+namespace Arcane::Remote
 {
 
 namespace
@@ -78,12 +78,12 @@ std::string HttpResponse::Serialize() const
     bool hasType = false;
     for (const auto& [name, value] : headers) {
         const std::string lower = ToLower(name);
-        if (lower == "content-length" || lower == "x-arc-protocol") continue; // written below
+        if (lower == "content-length" || lower == "x-remote-protocol") continue; // written below
         if (lower == "content-type") hasType = true;
         out += name + ": " + value + "\r\n";
     }
     if (!hasType) out += "Content-Type: application/json\r\n";
-    out += "X-Arc-Protocol: " + std::to_string(kProtocol) + "\r\n";
+    out += "X-Remote-Protocol: " + std::to_string(kProtocol) + "\r\n";
     out += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
     out += body;
     return out;
@@ -127,7 +127,7 @@ std::optional<HttpRequest> ParseHttpRequest(std::string_view bytes, std::string*
         req.headers.emplace_back(ToLower(line.substr(0, colon)), std::string(Trim(line.substr(colon + 1))));
     }
 
-    // Any Transfer-Encoding is refused as "chunked": arc never frames a body that way, and a
+    // Any Transfer-Encoding is refused as "chunked": the remote protocol never frames a body that way, and a
     // Transfer-Encoding beside Content-Length is a request-smuggling shape.
     for (const auto& h : req.headers)
         if (h.first == "transfer-encoding") return Fail(error, "chunked");
@@ -240,6 +240,6 @@ std::string MakeToken()
     return Crypto::GenerateSecureToken(kTokenBytes);
 }
 
-} // namespace Arcane::Arc
+} // namespace Arcane::Remote
 
 #endif

@@ -202,7 +202,7 @@ The freeze binds names, audiences, scopes and apply modes. These rows changed af
 | (none) | `server.cheats`, `server.cheatsAllowed`, `server.allowClientSetServer` | the spec's engine knobs (s3.2, s9), registered by the registry since S1 | S6-45 |
 | (none) | `editor.settings.saveDebounceMs`, `.openAtBoot`, `.openCategory`, `.keysConflictsOnly` | the settings windows' own cvars (S3, S4-14) | S6-45 |
 | (none) | `physics.events.hitThreshold` | 2D physics hit threshold; PhysicsSystem reads it Live (spec 2026-10-08 s7.5) | task A3, 2026-10-08 |
-| (none) | `log.arc.ringLines` | how many log lines arc logs retains (the sequenced log ring, LogRing.cpp; Dev) | arc CLI P0 task 2, 2026-10-13 |
+| (none) | `log.remote.ringLines` | how many log lines the remote log ring retains (the sequenced log ring, LogRing.cpp; Dev) | Servitor P0 task 2, 2026-10-13 |
 
 Frozen names S6-45 registered in code (no inventory change): `editor.camera.floor` (S6-30 spelled it `speedFloor`), `editor.preview.light.colour` (was `.color`), `editor.shader.previewCheckerLight` / `previewCheckerSpriteScale` (were `editor.preview.checkerLight` / `checkerExtent`), `editor.graph.nodePreviewMinPx` / `dragSpeed` / `rangeDragSpeed` (were under `editor.shader.*`), `editor.mesh.primitiveRanges.*` (were `editor.mesh.subdivMax` ...; the minima are now settings too, each floored at ValidateMeshAsset's rule), and the rows no sweep had converted: `astra.snapshot.compression`, `editor.gizmo.color.*`, `editor.graph.const*Width` / `paramNameFieldWidth` / `passNameFieldWidth` / `swizzleFieldWidth`, `editor.shader.chainLayout.*`, `editor.shader.passThumbPx`, `editor.crash.initialSize` (a Vec2) / `textRows`, `editor.ui.toolbar.logoScale` / `brandScale`, `editor.viewport.grid.fadeInPx` / `fadeFullPx`.
 
@@ -223,7 +223,7 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 | Core/Config/CVarTypes.hpp:67-73 | SetBy rung ordinals | 10..70 | CONSTANT | — | — | — | — | — | — | N | layer-precedence contract |
 | Core/Base/Log.cpp:258-263 | `log.level` default | Init(level), info by default (Log.hpp:25) | SETTING | log.level | LogSettings | Game | Pref-P | Live | [0,6] | N | already a cvar (R1: the ARC_CVAR spans Log.cpp:258-263) |
 | Core/Base/Log.cpp:262-263 | `log.level` min/max | 0..6 | CONSTANT | — | — | — | — | — | — | N | spdlog level enum |
-| Core/Base/LogRing.cpp | arc log ring capacity | 4096 (lines) | SETTING | log.arc.ringLines | (ARC_CVAR) | Editor Dev | Pref-M | Live | [1,max] | N | how many log lines arc logs retains; read when the ring is first touched and on each publish |
+| Core/Base/LogRing.cpp | remote log ring capacity | 4096 (lines) | SETTING | log.remote.ringLines | (ARC_CVAR) | Editor Dev | Pref-M | Live | [1,max] | N | how many log lines the remote log ring retains; read when the ring is first touched and on each publish |
 
 ### Base / Diagnostics / Log
 

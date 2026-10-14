@@ -1,15 +1,15 @@
 #if !defined(ARC_BUILD_DIST)
 #include <catch2/catch_test_macros.hpp>
-#include <Arcane/Arc/Protocol.hpp>
+#include <Arcane/Remote/Protocol.hpp>
 #include <vector>
 
-using namespace Arcane::Arc;
+using namespace Arcane::Remote;
 
 static Envelope Err(const char* code) {
     return MakeError("cvar.get", code, "m", "r");
 }
 
-TEST_CASE("exit table matches s6.6, AM1, and AM6", "[arc][protocol]") {
+TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("internal")) == 1);
     CHECK(ExitFromHost(Err("capture.no-renderer")) == 2);
     CHECK(ExitFromHost(Err("arg.unknown")) == 2);
@@ -56,7 +56,7 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[arc][protocol]") {
     CHECK(ExitFromHost(timed) == 8);
 }
 
-TEST_CASE("ToJson is the s6.3 object and omits client and exitCode", "[arc][protocol]") {
+TEST_CASE("ToJson is the s6.3 object and omits client and exitCode", "[remote][protocol]") {
     HostBlock host;
     host.kind = "editor";
     host.pid = 23180;
@@ -106,18 +106,18 @@ TEST_CASE("ToJson is the s6.3 object and omits client and exitCode", "[arc][prot
     CHECK(ju["undo"]["reason"] == "not-undoable-command");
 
     UndoBlock recorded;
-    recorded.label = "arc: cvar.set";
+    recorded.label = "remote: cvar.set";
     recorded.undoable = true;
     recorded.transaction = 412;
     env.undo = recorded;
     const auto jb = ToJson(env);
-    CHECK(jb["undo"]["label"] == "arc: cvar.set");
+    CHECK(jb["undo"]["label"] == "remote: cvar.set");
     CHECK(jb["undo"]["undoable"] == true);
     CHECK(jb["undo"]["transaction"] == 412);
     CHECK_FALSE(jb["undo"].contains("reason"));
 }
 
-TEST_CASE("WorstExit ranks a dead host above a busy host", "[arc][protocol]") {
+TEST_CASE("WorstExit ranks a dead host above a busy host", "[remote][protocol]") {
     CHECK(WorstExit(std::vector<int>{0, 5, 7}) == 7);
     CHECK(WorstExit(std::vector<int>{8, 6}) == 6);
     CHECK(WorstExit(std::vector<int>{5, 8, 4}) == 8);
@@ -125,7 +125,7 @@ TEST_CASE("WorstExit ranks a dead host above a busy host", "[arc][protocol]") {
     CHECK(WorstExit(std::vector<int>{}) == 0);
 }
 
-TEST_CASE("MakeOk never carries errors", "[arc][protocol]") {
+TEST_CASE("MakeOk never carries errors", "[remote][protocol]") {
     const Envelope env = MakeOk("status", nlohmann::json::object(), HostBlock{});
     CHECK(env.ok);
     CHECK(env.errors.empty());
@@ -133,12 +133,12 @@ TEST_CASE("MakeOk never carries errors", "[arc][protocol]") {
     CHECK(kIdleConnectionSeconds == 30);
 }
 
-TEST_CASE("Indeterminate verdict exits 8", "[arc][protocol]") {
+TEST_CASE("Indeterminate verdict exits 8", "[remote][protocol]") {
     auto env = MakeOk("capture.compare", nlohmann::json{{"verdict", "Indeterminate"}}, HostBlock{});
     CHECK(ExitFromHost(env) == 8);
 }
 
-TEST_CASE("TryParseEnvelope rejects malformed replies", "[arc][protocol]") {
+TEST_CASE("TryParseEnvelope rejects malformed replies", "[remote][protocol]") {
     const auto good = ToJson(MakeOk("status", nlohmann::json::object(), HostBlock{}));
     const auto parsed = TryParseEnvelope(good);
     REQUIRE(parsed.has_value());

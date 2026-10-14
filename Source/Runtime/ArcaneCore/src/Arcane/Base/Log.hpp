@@ -25,9 +25,9 @@
 
 namespace Arcane
 {
-    // One retained log line (the arc log ring, LogRing.cpp). Separate from the
+    // One retained log line (the remote log ring, LogRing.cpp). Separate from the
     // crash backlog below: this ring is mutexed, holds structured records, and
-    // is read by arc and any host.
+    // is read by the remote surface and any host.
     struct LogRecord
     {
         std::uint64_t seq = 0;     // starts at 1; never repeats in-process
@@ -98,9 +98,9 @@ namespace Arcane::Log
     // ARC_INTERNAL_END
 
     // ------------------------------------------------------------------
-    // Sequenced log ring (arc CLI P0 task 2). Every line the engine logger
+    // Sequenced log ring (Servitor P0 task 2). Every line the engine logger
     // emits is pushed as a LogRecord; overflow drops the oldest. Capacity is
-    // the log.arc.ringLines cvar (default 4096).
+    // the log.remote.ringLines cvar (default 4096).
     ARC_CORE_API LogSubscription Subscribe(LogSinkFn fn, void* user);
     ARC_CORE_API void Unsubscribe(LogSubscription sub);
     // The OLDEST maxLines retained records with seq > seqExclusive, in order.
