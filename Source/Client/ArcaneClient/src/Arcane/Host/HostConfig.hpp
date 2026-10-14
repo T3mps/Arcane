@@ -378,6 +378,26 @@ namespace Arcane
         bool            pickProbe  = false;
         std::int32_t    pickProbeX = 0;   // canvas px, y-down; only read when pickProbe
         std::int32_t    pickProbeY = 0;
+
+        // Servitor P0 (Task 10): the remote surface. --remote arms the
+        // loopback listener a Servitor client attaches to (the host wiring is
+        // HostSession, Task 11; the editor can also be armed by its
+        // editor.remote.enable cvar). With --remote set, --headless no longer
+        // requires --frames: the refusal's reason ("no way to stop itself")
+        // is gone, because `servitor quit` is a stop path, and an abandoned
+        // host ends itself after remoteIdleExitSeconds without a request.
+        //
+        // --remote-descriptor <path>: write the attach descriptor here instead
+        // of <project>/Saved/Remote/. --remote-idle-exit <seconds>: 0 = never.
+        // remoteIdleExitSupplied is true only when the flag was typed (the
+        // fixedDtSupplied pattern above). DEV ONLY like the rest of this
+        // block: a Dist Parse refuses all three spellings with exit 2, and
+        // SanitizeRelaunchLine strips them (a relaunch is a fresh session,
+        // and the descriptor path is not the reporter's to repeat).
+        bool            remote = false;
+        std::string     remoteDescriptor;
+        std::uint32_t   remoteIdleExitSeconds = 600;
+        bool            remoteIdleExitSupplied = false;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the

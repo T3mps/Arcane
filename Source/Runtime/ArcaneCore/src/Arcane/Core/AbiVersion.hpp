@@ -7,6 +7,6 @@
 namespace Arcane
 {
     ARC_CONSTANT("ABI: the game-module ABI version; the host refuses a mismatched module")
-    inline constexpr std::uint32_t kGamePluginABIVersion = 60;
+    inline constexpr std::uint32_t kGamePluginABIVersion = 61;
     ARC_CORE_API std::uint32_t PluginABIVersion();
 }
