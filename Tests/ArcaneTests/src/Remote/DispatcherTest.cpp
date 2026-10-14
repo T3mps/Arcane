@@ -8,7 +8,10 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <Arcane/Remote/Http.hpp> // MakeToken
+#include "../Helpers/SettingsSweep.hpp" // Arcane::Test::ScopedCodeRung
 #include "RemoteDemoArgs.hpp"
+#include "RemoteTestHttp.hpp"
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -400,6 +403,123 @@ TEST_CASE("construction prunes the out directory to the newest 200 files", "[rem
     CHECK(fs::exists(dir / "out" / "shot-5.png"));
     CHECK(fs::exists(dir / "out" / "shot-204.png"));
     fs::remove_all(dir);
+}
+
+// --- Fix round 1 (review of 2b9901f1) ---
+
+TEST_CASE("a job-completed parked answer carries the request id and non-zero timing", "[remote][dispatch]") {
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::Desc slow = MakeDesc("demo.slow", Arcane::Remote::Access::Observe,
+                                      Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any);
+    slow.thread = Arcane::Remote::ExecThread::Job;
+    slow.fn = &ArmThree;
+    slow.user = &jobs;
+    std::string err;
+    REQUIRE(reg.Register(slow, &err));
+
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::ListenerAtoms atoms;
+    auto snap = std::make_shared<Arcane::Remote::HostStatus>();
+    snap->state = "ready";
+    atoms.status.store(snap);
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+    listener.Start();
+    REQUIRE(listener.Port() != 0);
+    Arcane::Remote::HostGate gate;
+    const auto audit = std::filesystem::temp_directory_path() / "remote-dispatch-parked" / "audit.ndjson";
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, audit);
+
+    const std::string payload = R"({"id":"r-job","command":"demo.slow","args":{}})";
+    const SocketType sock = RemoteTest::ConnectLoopback(listener.Port());
+    RemoteTest::SendAll(sock, "POST /remote/v1/call HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(listener.Port()) +
+        "\r\nAuthorization: Bearer " + listener.Token() + "\r\nContent-Type: application/json\r\nContent-Length: " +
+        std::to_string(payload.size()) + "\r\n\r\n" + payload);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (queue.Depth() == 0 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(queue.Depth() == 1);
+
+    // Drain 1 arms the job and binds the waiter; drains 2-4 step it to Done,
+    // and StepAll Completes the parked key with the job's own envelope.
+    for (int i = 0; i < 4; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        dispatcher.Drain(1000.0, 8);
+    }
+    const std::string raw = RemoteTest::RecvUntil(sock, "\x01", std::chrono::seconds(3)); // until the listener closes
+    CloseSocket(sock);
+    listener.Stop();
+
+    const auto at = raw.find("\r\n\r\n");
+    REQUIRE(at != std::string::npos);
+    CHECK(raw.find("HTTP/1.1 200") != std::string::npos);
+    const Arcane::Remote::Envelope env = Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(at + 4)));
+    CHECK(env.ok);
+    CHECK(env.data["done"] == 3);
+    CHECK(env.id == "r-job");
+    CHECK(env.timing.queuedMs > 0.0);   // push -> the arming drain's pop
+    CHECK(env.timing.ranMs > 0.0);      // pop -> the third step's Complete (three drains, 5 ms apart)
+}
+
+TEST_CASE("a non-positive remote.server.frameBudgetMs still drains", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.look", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto audit = std::filesystem::temp_directory_path() / "remote-dispatch-zero-budget" / "audit.ndjson";
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, audit);
+    Arcane::Remote::Call look;
+    look.command = "demo.look";
+    {
+        Arcane::Test::ScopedCodeRung zero("remote.server.frameBudgetMs", Arcane::CVarValue::Float64(0.0));
+        CHECK(Arcane::Remote::FrameBudgetMsSetting() == 0.0);
+        REQUIRE(queue.TryPush(1, look));
+        dispatcher.Drain(0.0, 0);   // both budgets from settings: 0 ms reads as kFrameBudgetMs
+        CHECK(dispatcher.LastDrainRan() == 1);
+        Arcane::Remote::CommandResult out;
+        REQUIRE(queue.TryTake(1, out));
+        CHECK(out.envelope.ok);
+    }
+    {
+        Arcane::Test::ScopedCodeRung negative("remote.server.frameBudgetMs", Arcane::CVarValue::Float64(-5.0));
+        REQUIRE(queue.TryPush(2, look));
+        dispatcher.Drain(0.0, 0);
+        Arcane::Remote::CommandResult out;
+        CHECK(queue.TryTake(2, out));
+    }
+    CHECK(g_ran == 2);
+}
+
+TEST_CASE("a zero remote.server.queueDepth still queues one call", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.look", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Test::ScopedCodeRung zero("remote.server.queueDepth", Arcane::CVarValue::UInt32(0));
+    CHECK(Arcane::Remote::QueueDepthSetting() == 0u);
+    Arcane::Remote::RequestQueue queue(Arcane::Remote::QueueDepthSetting());   // as HostSession sizes it
+    Arcane::Remote::Call look;
+    look.command = "demo.look";
+    REQUIRE(queue.TryPush(1, look));
+    CHECK_FALSE(queue.TryPush(2, look));   // clamped to one, not unbounded
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto audit = std::filesystem::temp_directory_path() / "remote-dispatch-zero-depth" / "audit.ndjson";
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, audit);
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult out;
+    REQUIRE(queue.TryTake(1, out));
+    CHECK(out.envelope.ok);
+    CHECK(g_ran == 1);
+    REQUIRE(queue.TryPush(3, look));   // room again once drained
 }
 
 #endif

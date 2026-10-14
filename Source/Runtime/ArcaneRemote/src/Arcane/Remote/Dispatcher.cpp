@@ -186,7 +186,10 @@ void RemoteDispatcher::Drain(double budgetMs, std::uint32_t budgetCommands)
 
     // 2. Queued calls until the queue is empty, the command budget is spent, or
     // the time budget has elapsed (checked before each command starts).
-    const double budget = budgetMs > 0.0 ? budgetMs : FrameBudgetMsSetting();
+    // The cvar declaration carries no minimum, so it is sanitized here: a
+    // non-positive (or NaN) published value reads as the default, never as "drain nothing".
+    const double setting = FrameBudgetMsSetting();
+    const double budget = budgetMs > 0.0 ? budgetMs : (setting > 0.0 ? setting : kFrameBudgetMs);
     const std::uint32_t maxCommands = budgetCommands != 0 ? budgetCommands : kFrameBudgetCommands;
     const Clock::time_point start = Clock::now();
     while (m_lastDrainRan < maxCommands && MsBetween(start, Clock::now()) < budget)

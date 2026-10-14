@@ -26,6 +26,15 @@ namespace Arcane::Remote
 // True only for an IPv4 peer at 127.0.0.1.
 ARC_REMOTE_API bool PeerIsLoopback(const sockaddr_in& peer);
 
+// When the queue saw one call (steady clock). `popped` stays default when the
+// call was Completed before a dispatcher popped it (Stop's host.died).
+struct RequestTimes
+{
+    std::chrono::steady_clock::time_point pushed{};
+    std::chrono::steady_clock::time_point popped{};
+    std::chrono::steady_clock::time_point completed{};
+};
+
 // The listener -> main-thread hand-off (spec s4.3). The listener pushes each
 // accepted /call under a monotonic key; the host's dispatcher pops, runs, and
 // Completes it; the listener takes the published result without waiting.
@@ -33,7 +42,7 @@ ARC_REMOTE_API bool PeerIsLoopback(const sockaddr_in& peer);
 class ARC_REMOTE_API RequestQueue
 {
 public:
-    explicit RequestQueue(std::size_t depth = kQueueDepthDefault);
+    explicit RequestQueue(std::size_t depth = kQueueDepthDefault); // depth 0 holds one call
     RequestQueue(const RequestQueue&) = delete;
     RequestQueue& operator=(const RequestQueue&) = delete;
 
@@ -50,7 +59,10 @@ public:
     // Takes the result once published; false after `timeout`. A zero timeout
     // returns at once. The listener thread never calls it.
     bool Wait(std::uint64_t id, CommandResult& out, std::chrono::milliseconds timeout);
-    bool TryTake(std::uint64_t id, CommandResult& out); // never waits; false if that id is not complete
+    // Never waits; false if that id is not complete. `times` (optional) receives
+    // the id's push / pop / Complete times, which the listener stamps onto a
+    // parked answer whose timing is unset (a job's final envelope).
+    bool TryTake(std::uint64_t id, CommandResult& out, RequestTimes* times = nullptr);
     std::uint64_t OldestPendingId() const;              // earliest TryPush id not yet Complete; 0 if none
     using WakeFn = void (*)(void* user);
     // Complete calls fn after publishing; null is legal. Once SetWake returns,
@@ -63,7 +75,6 @@ private:
     {
         std::uint64_t id = 0;
         Call call;
-        std::chrono::steady_clock::time_point queuedAt{};
     };
 
     mutable std::mutex m_mutex;
@@ -72,6 +83,7 @@ private:
     std::deque<Entry> m_queue;
     std::set<std::uint64_t> m_pending;
     std::map<std::uint64_t, CommandResult> m_results;
+    std::map<std::uint64_t, RequestTimes> m_times; // from TryPush until the result is taken
 
     std::mutex m_wakeMutex;
     WakeFn m_wake = nullptr;

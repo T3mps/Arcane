@@ -54,6 +54,7 @@ struct Conn
     std::string inbuf;
     std::string outbuf;
     std::uint64_t callId = 0;
+    std::string callRequestId; // the parked /call's wire id, stamped on its answer when the envelope has none
     std::uint64_t subscriberId = 0;
     std::string sseTopic;
     std::chrono::steady_clock::time_point lastRead{};
@@ -179,6 +180,28 @@ bool IsServedTopic(std::string_view topic)
     return true;
 }
 
+// The single path every parked answer takes (the dispatcher's, a job's finish,
+// Stop's host.died). A job's final envelope carries neither the request id
+// nor timing, so both are filled here when unset: queuedMs is push -> pop and
+// ranMs pop -> Complete (push -> Complete as queuedMs when it never popped).
+void StampParkedAnswer(Envelope& env, const std::string& requestId, const RequestTimes& times)
+{
+    if (env.id.empty())
+        env.id = requestId;
+    if (env.timing.queuedMs != 0.0 || env.timing.ranMs != 0.0)
+        return;
+    using Ms = std::chrono::duration<double, std::milli>;
+    const std::chrono::steady_clock::time_point none{};
+    if (times.pushed == none || times.completed == none)
+        return;
+    if (times.popped == none) {
+        env.timing.queuedMs = Ms(times.completed - times.pushed).count();
+        return;
+    }
+    env.timing.queuedMs = Ms(times.popped - times.pushed).count();
+    env.timing.ranMs = Ms(times.completed - times.popped).count();
+}
+
 Envelope Busy(std::string command, const char* state, const char* message)
 {
     Envelope env = MakeError(std::move(command), "host.busy", message, "retry; the host refused before running anything");
@@ -197,8 +220,10 @@ bool PeerIsLoopback(const sockaddr_in& peer)
 // RequestQueue
 // ---------------------------------------------------------------------------
 
+// A depth of 0 (remote.server.queueDepth carries no minimum) would refuse every
+// push; the queue holds at least one call.
 RequestQueue::RequestQueue(std::size_t depth)
-    : m_capacity(depth)
+    : m_capacity(std::max<std::size_t>(depth, 1))
 {
 }
 
@@ -207,8 +232,9 @@ bool RequestQueue::TryPush(std::uint64_t id, Call call)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_queue.size() >= m_capacity || m_pending.contains(id) || m_results.contains(id))
         return false;
-    m_queue.push_back(Entry{ id, std::move(call), std::chrono::steady_clock::now() });
+    m_queue.push_back(Entry{ id, std::move(call) });
     m_pending.insert(id);
+    m_times[id] = RequestTimes{ std::chrono::steady_clock::now(), {}, {} };
     return true;
 }
 
@@ -219,8 +245,10 @@ bool RequestQueue::TryPop(std::uint64_t& id, Call& call, std::chrono::steady_clo
         return false;
     id = m_queue.front().id;
     call = std::move(m_queue.front().call);
+    RequestTimes& times = m_times[id];
+    times.popped = std::chrono::steady_clock::now();
     if (queuedAt != nullptr)
-        *queuedAt = m_queue.front().queuedAt;
+        *queuedAt = times.pushed;
     m_queue.pop_front();
     return true;
 }
@@ -237,6 +265,7 @@ void RequestQueue::Complete(std::uint64_t id, CommandResult result)
         if (queued != m_queue.end())
             m_queue.erase(queued);
         m_results[id] = std::move(result);
+        m_times[id].completed = std::chrono::steady_clock::now();
     }
     m_published.notify_all();
     std::lock_guard<std::mutex> wake(m_wakeMutex);
@@ -252,10 +281,11 @@ bool RequestQueue::Wait(std::uint64_t id, CommandResult& out, std::chrono::milli
     auto it = m_results.find(id);
     out = std::move(it->second);
     m_results.erase(it);
+    m_times.erase(id);
     return true;
 }
 
-bool RequestQueue::TryTake(std::uint64_t id, CommandResult& out)
+bool RequestQueue::TryTake(std::uint64_t id, CommandResult& out, RequestTimes* times)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_results.find(id);
@@ -263,6 +293,13 @@ bool RequestQueue::TryTake(std::uint64_t id, CommandResult& out)
         return false;
     out = std::move(it->second);
     m_results.erase(it);
+    const auto stamp = m_times.find(id);
+    if (stamp != m_times.end())
+    {
+        if (times != nullptr)
+            *times = stamp->second;
+        m_times.erase(stamp);
+    }
     return true;
 }
 
@@ -511,7 +548,9 @@ void LoopbackHttpTransport::Impl::Iterate()
         if (c->dead || c->state != ConnState::Parked)
             continue;
         CommandResult result;
-        if (queue.TryTake(c->callId, result)) {
+        RequestTimes times;
+        if (queue.TryTake(c->callId, result, &times)) {
+            StampParkedAnswer(result.envelope, c->callRequestId, times);
             Respond(*c, 200, "OK", result.envelope);
             FlushConn(*c);
         }
@@ -918,6 +957,7 @@ void LoopbackHttpTransport::Impl::HandleCall(Conn& c, const HttpRequest& req)
     // Parked before this thread polls again: Depth() == 1 means this
     // connection is already waiting for its answer.
     c.callId = key;
+    c.callRequestId = id;
     c.state = ConnState::Parked;
 }
 
@@ -930,8 +970,11 @@ void LoopbackHttpTransport::Impl::Shutdown()
                 continue;
             queue.Complete(c->callId, CommandResult{ MakeError("", "host.died", "listener stopped", "relaunch") });
             CommandResult result;
-            if (queue.TryTake(c->callId, result))
+            RequestTimes times;
+            if (queue.TryTake(c->callId, result, &times)) {
+                StampParkedAnswer(result.envelope, c->callRequestId, times);
                 Respond(*c, 200, "OK", result.envelope);
+            }
         }
     }
     // Flush what is queued (the host.died answers) for a bounded time.

@@ -54,7 +54,8 @@ public:
     RemoteDispatcher& operator=(const RemoteDispatcher&) = delete;
 
     // A positive argument wins; budgetMs <= 0 reads remote.server.frameBudgetMs
-    // and budgetCommands == 0 means kFrameBudgetCommands.
+    // (itself <= 0 reads as kFrameBudgetMs) and budgetCommands == 0 means
+    // kFrameBudgetCommands.
     void Drain(double budgetMs, std::uint32_t budgetCommands);
     std::uint32_t LastDrainRan() const; // commands invoked by the last Drain (gate refusals excluded)
 
