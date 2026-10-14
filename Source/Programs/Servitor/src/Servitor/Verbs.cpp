@@ -50,6 +50,7 @@ bool WaitArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
 bool CvarNameArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool CvarSetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool CvarListArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool ConsoleArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 
 // Only `wait ready` waits for a host to appear (spec s4.4).
 bool WaitAwaitsHost(const nlohmann::json& args)
@@ -58,7 +59,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 15> kVerbs = {{
+const std::array<VerbRow, 16> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -90,6 +91,9 @@ const std::array<VerbRow, 15> kVerbs = {{
     {"cvar set", "cvar.set", &CvarSetArgs, nullptr, {}, false, nullptr, "<name> <value>"},
     {"cvar list", "cvar.list", &CvarListArgs, nullptr, {}, false, nullptr, "[prefix]"},
     {"cvar explain", "cvar.explain", &CvarNameArgs, nullptr, {}, false, nullptr, "<name>"},
+    // Task 21. The tokens join into one console line; the host runs it through
+    // the remote cvar service (ServerCanExecute commands, cvar reads and sets).
+    {"console", "console.exec", &ConsoleArgs, nullptr, {}, false, nullptr, "<line>   (quote it, or pass its words)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -189,6 +193,23 @@ bool CvarListArgs(std::span<const std::string> rest, nlohmann::json& out, std::s
         return Fail(error, "cvar list takes at most one dotted prefix, got " + tokens.positional[1]);
     out = tokens.positional.empty() ? nlohmann::json::object()
                                     : nlohmann::json{{"prefix", tokens.positional.front()}};
+    return true;
+}
+
+// console <line...> -> {line}: the positional tokens joined by one space, so
+// `console cvar_explain x` and `console "cvar_explain x"` post the same line.
+// The verb declares no flag: a "--x" token is the SplitVerbTokens refusal.
+bool ConsoleArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("console"), rest, &tokens))
+        return Fail(error, *problem);
+    std::string line;
+    for (const std::string& token : tokens.positional)
+        line += (line.empty() ? "" : " ") + token;
+    if (line.find_first_not_of(" \t") == std::string::npos)
+        return Fail(error, "console needs a console line, such as cvarlist or render.vsync false");
+    out = {{"line", line}};
     return true;
 }
 

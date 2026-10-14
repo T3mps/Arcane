@@ -6,6 +6,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
+#include <Arcane/Remote/Commands/ConsoleCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
@@ -91,6 +92,10 @@ bool HostSession::Start()
     m_cvarUser = {&CVarRegistry::Get(), m_config.cvarContext};
     SetCvarCommandUser(&m_cvarUser);
     RegisterCvarCommands();
+    // console.exec (Task 21): the same user, so a console line is asked in the
+    // same registry and context as cvar.*. Teardown releases it.
+    SetConsoleCommandUser(&m_cvarUser);
+    RegisterConsoleCommand();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -261,6 +266,7 @@ void HostSession::Teardown()
     m_cataloguePublished = false;
     ReleaseSessionCommands(this); // a stopped session's commands answer host.unavailable
     ReleaseCvarCommandUser(&m_cvarUser); // likewise cvar.*; another session's user is left alone
+    ReleaseConsoleCommandUser(&m_cvarUser); // and console.exec, by the same rule
     // The world table names this host's objects (user = the app): a stopped
     // session leaves world-taking commands answering host.unavailable. Like
     // ReleaseSessionCommands, a table another session installed since is left alone.
