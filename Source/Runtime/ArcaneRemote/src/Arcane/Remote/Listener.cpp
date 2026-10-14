@@ -55,6 +55,7 @@ struct Conn
     std::string outbuf;
     std::uint64_t callId = 0;
     std::string callRequestId; // the parked /call's wire id, stamped on its answer when the envelope has none
+    std::string callCommand;   // the parked /call's command, stamped on its answer when the envelope has none
     std::uint64_t subscriberId = 0;
     std::string sseTopic;
     std::chrono::steady_clock::time_point lastRead{};
@@ -182,12 +183,16 @@ bool IsServedTopic(std::string_view topic)
 
 // The single path every parked answer takes (the dispatcher's, a job's finish,
 // Stop's host.died). A job's final envelope carries neither the request id
-// nor timing, so both are filled here when unset: queuedMs is push -> pop and
-// ranMs pop -> Complete (push -> Complete as queuedMs when it never popped).
-void StampParkedAnswer(Envelope& env, const std::string& requestId, const RequestTimes& times)
+// nor timing, and Stop's host.died names no command, so all three are filled
+// here when unset: queuedMs is push -> pop and ranMs pop -> Complete (push ->
+// Complete as queuedMs when it never popped).
+void StampParkedAnswer(Envelope& env, const std::string& requestId, const std::string& command,
+                       const RequestTimes& times)
 {
     if (env.id.empty())
         env.id = requestId;
+    if (env.command.empty())
+        env.command = command;
     if (env.timing.queuedMs != 0.0 || env.timing.ranMs != 0.0)
         return;
     using Ms = std::chrono::duration<double, std::milli>;
@@ -550,7 +555,7 @@ void LoopbackHttpTransport::Impl::Iterate()
         CommandResult result;
         RequestTimes times;
         if (queue.TryTake(c->callId, result, &times)) {
-            StampParkedAnswer(result.envelope, c->callRequestId, times);
+            StampParkedAnswer(result.envelope, c->callRequestId, c->callCommand, times);
             Respond(*c, 200, "OK", result.envelope);
             FlushConn(*c);
         }
@@ -958,6 +963,7 @@ void LoopbackHttpTransport::Impl::HandleCall(Conn& c, const HttpRequest& req)
     // connection is already waiting for its answer.
     c.callId = key;
     c.callRequestId = id;
+    c.callCommand = command;
     c.state = ConnState::Parked;
 }
 
@@ -972,7 +978,7 @@ void LoopbackHttpTransport::Impl::Shutdown()
             CommandResult result;
             RequestTimes times;
             if (queue.TryTake(c->callId, result, &times)) {
-                StampParkedAnswer(result.envelope, c->callRequestId, times);
+                StampParkedAnswer(result.envelope, c->callRequestId, c->callCommand, times);
                 Respond(*c, 200, "OK", result.envelope);
             }
         }

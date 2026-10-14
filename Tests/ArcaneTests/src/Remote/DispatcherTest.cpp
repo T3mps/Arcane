@@ -522,4 +522,42 @@ TEST_CASE("a zero remote.server.queueDepth still queues one call", "[remote][dis
     REQUIRE(queue.TryPush(3, look));   // room again once drained
 }
 
+// --- Task 19 fix round 1: the dispatcher stamps the call's command ---
+
+static Arcane::Remote::CommandResult Nameless(const Arcane::Remote::Call&, void*) {
+    Arcane::Remote::CommandResult r;
+    r.envelope = Arcane::Remote::MakeError({}, "arg.unknown", "a helper's refusal names no command", "fix it");
+    return r;
+}
+
+TEST_CASE("a drained envelope with no command is stamped with the call's", "[remote][dispatch]") {
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    Arcane::Remote::Desc nameless = MakeDesc("demo.nameless", Arcane::Remote::Access::Observe,
+                                             Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any);
+    nameless.fn = &Nameless;
+    std::string err;
+    REQUIRE(reg.Register(nameless, &err));
+    REQUIRE(reg.Register(MakeDesc("demo.look", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto audit = std::filesystem::temp_directory_path() / "remote-dispatch-stamp" / "audit.ndjson";
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, audit);
+    Arcane::Remote::Call call;
+    call.command = "demo.nameless";
+    REQUIRE(queue.TryPush(1, call));
+    call.command = "demo.look";
+    REQUIRE(queue.TryPush(2, call));
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult stamped;
+    REQUIRE(queue.TryTake(1, stamped));
+    CHECK(stamped.envelope.command == "demo.nameless");
+    CHECK(stamped.envelope.errors[0].code == "arg.unknown");
+    Arcane::Remote::CommandResult own;
+    REQUIRE(queue.TryTake(2, own));
+    CHECK(own.envelope.command == "demo.look");   // a command that names itself keeps its name
+}
+
 #endif

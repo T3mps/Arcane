@@ -49,13 +49,11 @@ CommandResult WorldListCommand(const Call& call, void* /*user*/)
     if (!call.world.empty()) {
         PickedWorld picked = ResolveWorld(table, call.world);
         if (picked.pick != WorldPick::Ok) {
-            picked.error.command = call.command;
-            result.envelope = std::move(picked.error);
+            result.envelope = std::move(picked.error);   // the dispatcher stamps call.command
             return result;
         }
     }
     result.envelope = WorldList(table);
-    result.envelope.command = call.command;
     return result;
 }
 

@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -605,6 +606,34 @@ TEST_CASE("a leftover --flag after the verb is refused with usage exit 2", "[ser
     std::filesystem::remove(file);
     CHECK(code == 2);
     CHECK(usage.find("servitor: unknown flag --bogus") != std::string::npos);
+}
+
+// Task 19 fix round 1 (Rule 3): Run refuses a host-scoped global on a verb
+// that posts no call, before discovery, with usage exit 2.
+TEST_CASE("Run refuses --world and --read-only on a verb that posts no call", "[servitor][client]") {
+    const std::vector<std::pair<std::vector<std::string>, std::string>> cases = {
+        {{"servitor", "--world", "main", "status"}, "servitor: --world does not apply to status"},
+        {{"servitor", "list", "--read-only"}, "servitor: --read-only does not apply to list"},
+    };
+    for (const auto& [words, expected] : cases) {
+        INFO(expected);
+        std::vector<std::string> copy = words;
+        std::vector<char*> argv;
+        for (auto& w : copy)
+            argv.push_back(w.data());
+        const auto file = std::filesystem::temp_directory_path() /
+                          ("servitor-unused-global-" + std::to_string(Arcane::EditorLock::Self().pid) + ".txt");
+        int code = 0;
+        std::string usage;
+        {
+            DiscoverStderrCapture capture(file);
+            code = Servitor::Run(static_cast<int>(argv.size()), argv.data());
+            usage = capture.Take();
+        }
+        std::filesystem::remove(file);
+        CHECK(code == 2);
+        CHECK(usage.find(expected) != std::string::npos);
+    }
 }
 
 #endif

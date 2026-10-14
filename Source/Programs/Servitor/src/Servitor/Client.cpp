@@ -505,6 +505,9 @@ int Run(int argc, char** argv)
         return PrintUsage(*problem);
     if (row->args == nullptr && !rest.empty())
         return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front());
+    // Rule 3: --world / --read-only on a verb that posts no call is refused, never dropped.
+    if (const auto problem = UnusedGlobal(*row, opt))
+        return PrintUsage(*problem);
     if (opt.all)
         return RunFanOut(*row, rest, opt);   // spec AM2: one command to every matching live host
     if (row->local != nullptr)

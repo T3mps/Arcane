@@ -58,6 +58,14 @@ std::span<const VerbRow> VerbTable(); // Servitor/Verbs.cpp: one static array
 const VerbRow* MatchVerb(std::span<const std::string> tokens, std::size_t* consumed);
 // The row whose words are exactly `words`; null when none.
 const VerbRow* FindVerb(std::string_view words);
+// True when the verb posts a /call (its row names a command, or it is `call`),
+// so the call's options carry --world and --read-only to the host.
+bool PostsCall(const VerbRow& row);
+// Spec s4.6 Rule 3 for the host-scoped globals: --world and --read-only ride a
+// /call's options, so a verb that posts none (status, launch, commands, list)
+// would drop them silently. The usage problem "--world does not apply to
+// <verb>" (or --read-only) for the first one given to such a verb; nullopt otherwise.
+std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt);
 
 // The tokens after a verb, split by the row's declared flags.
 struct VerbTokens {

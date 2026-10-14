@@ -248,6 +248,10 @@ void RemoteDispatcher::RunOne(std::uint64_t key, const Call& call, Clock::time_p
     }
 
     result.envelope.id = call.id;
+    // A command may answer with a helper's envelope that names no command
+    // (ResolveWorld's refusals, Task 19): the call's command is stamped here, once.
+    if (result.envelope.command.empty())
+        result.envelope.command = call.command;
     result.envelope.host = m_gate.Block();
     result.envelope.timing.queuedMs = queuedMs;
     result.envelope.timing.ranMs = ranMs;

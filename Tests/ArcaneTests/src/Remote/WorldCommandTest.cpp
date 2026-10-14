@@ -4,12 +4,14 @@
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Servitor/Client.hpp>
+#include <Servitor/Verbs.hpp>
 #include <Arcane/Core/NetMode.hpp>
 #include <Json.hpp>
 #include "RemoteTestSupport.hpp"
 #include <Arcane/Remote/HostSession.hpp>
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -126,8 +128,7 @@ TEST_CASE("world.list refuses a --world it does not run", "[remote][world]") {
     call.command = "world.list";
     call.world = "nope";
     const auto bad = Arcane::Remote::CommandRegistry::Get().Invoke(call);
-    REQUIRE_FALSE(bad.envelope.ok);
-    CHECK(bad.envelope.command == "world.list");
+    REQUIRE_FALSE(bad.envelope.ok);   // Invoke is below the dispatcher, which stamps the command
     CHECK(bad.envelope.errors[0].code == "arg.unknown");
     CHECK(bad.envelope.errors[0].candidates == std::vector<std::string>{"main", "other"});
     CHECK(Arcane::Remote::ExitFromHost(bad.envelope) == 2);
@@ -165,6 +166,37 @@ TEST_CASE("HostSession installs its worlds at Start and clears them at Stop", "[
     CHECK(Arcane::Remote::CommandWorlds().fn == nullptr);
     const auto stopped = Arcane::Remote::CommandRegistry::Get().Invoke(call);
     CHECK(stopped.envelope.errors[0].code == "host.unavailable");
+}
+
+// --- Task 19 fix round 1: Rule 3 for the host-scoped globals ---
+
+TEST_CASE("--world and --read-only are refused by verbs that post no call", "[remote][world]") {
+    // The verbs that never post a /call, so would drop options.world / readOnly.
+    const std::set<std::string> local = {"status", "launch", "commands", "list"};
+    Servitor::GlobalOptions world;
+    world.world = "main";
+    Servitor::GlobalOptions readOnly;
+    readOnly.readOnly = true;
+    std::size_t refused = 0;
+    for (const Servitor::VerbRow& row : Servitor::VerbTable()) {
+        INFO(row.words);
+        const bool drops = local.count(row.words) != 0;
+        CHECK(Servitor::PostsCall(row) == !drops);
+        const auto w = Servitor::UnusedGlobal(row, world);
+        const auto r = Servitor::UnusedGlobal(row, readOnly);
+        CHECK(w.has_value() == drops);
+        CHECK(r.has_value() == drops);
+        CHECK_FALSE(Servitor::UnusedGlobal(row, Servitor::GlobalOptions{}).has_value());
+        if (drops) {
+            ++refused;
+            CHECK(*w == "--world does not apply to " + std::string(row.words));
+            CHECK(*r == "--read-only does not apply to " + std::string(row.words));
+        }
+    }
+    CHECK(refused == local.size());
+    // The posting verbs keep both: world list, call, quit, describe, ...
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("world list"), world).has_value());
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("call"), readOnly).has_value());
 }
 
 #endif

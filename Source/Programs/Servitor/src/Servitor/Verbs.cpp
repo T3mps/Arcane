@@ -260,6 +260,22 @@ const VerbRow* FindVerb(std::string_view words)
     return nullptr;
 }
 
+bool PostsCall(const VerbRow& row)
+{
+    return row.command != nullptr || std::string_view(row.words) == "call";
+}
+
+std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt)
+{
+    if (PostsCall(row))
+        return std::nullopt;
+    if (!opt.world.empty())
+        return "--world does not apply to " + std::string(row.words);
+    if (opt.readOnly)
+        return "--read-only does not apply to " + std::string(row.words);
+    return std::nullopt;
+}
+
 std::optional<std::string> SplitVerbTokens(const VerbRow& row, std::span<const std::string> rest, VerbTokens* out)
 {
     VerbTokens local;

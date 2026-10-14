@@ -618,6 +618,7 @@ TEST_CASE("Stop answers a parked call host.died", "[remote][listener]") {
     listener.Stop();
     const std::string raw = RemoteTest::RecvUntil(sock, "host.died", std::chrono::seconds(2));
     CHECK(raw.find("\"code\":\"host.died\"") != std::string::npos);
+    CHECK(raw.find("\"command\":\"demo.look\"") != std::string::npos);   // stamped from the parked call
     CHECK(RemoteExitOf(raw) == 7);
     CHECK(queue.Depth() == 0); // a completed call is never run
     CHECK(queue.OldestPendingId() == 0);
