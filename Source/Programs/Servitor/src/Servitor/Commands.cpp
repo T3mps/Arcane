@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -63,8 +64,8 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"selection", "Print the editor's selection", "observe"},
     {"stats", "Print the host's frame statistics", "observe"},
     {"screenshot", "Capture the viewport or the window to a PNG", "observe"},
-    {"compare", "Compare a capture against a reference image (--bless writes the reference and drives)",
-     "observe"},
+    {"compare", "Compare a capture against a reference image (--bless writes the reference, a drive)",
+     "per-command"},
     {"play", "Enter play mode", "drive"},
     {"stop", "Leave play mode", "drive"},
     {"pause", "Pause the simulation", "drive"},
@@ -103,10 +104,21 @@ std::string Pad(std::string_view text, std::size_t width)
     return out;
 }
 
-void Write(const std::string& text)
+void Write(std::FILE* stream, const std::string& text)
 {
-    std::fputs(text.c_str(), stdout);
-    std::fflush(stdout);
+    if (!text.empty()) {
+        std::fwrite(text.data(), 1, text.size(), stream);
+        std::fflush(stream);
+    }
+}
+
+// A string member of a catalogue row; "" when the row or member is not one.
+std::string Str(const nlohmann::json& row, const char* key)
+{
+    if (!row.is_object())
+        return {};
+    const auto it = row.find(key);
+    return it != row.end() && it->is_string() ? it->get<std::string>() : std::string{};
 }
 
 // The selected host's identity for an envelope's `host` block.
@@ -122,14 +134,13 @@ Arcane::Remote::HostBlock BlockOf(const Arcane::Remote::Descriptor& d)
 
 std::string HumanCatalogue(const nlohmann::json& catalogue)
 {
-    std::string text = "ok list\ngeneration: " + Dump(catalogue.value("generation", nlohmann::json(0))) + "\n";
+    const auto generation = catalogue.find("generation");
+    std::string text = "ok list\ngeneration: " + (generation != catalogue.end() ? Dump(*generation) : "0") + "\n";
     std::size_t width = 0;
     for (const nlohmann::json& row : catalogue.at("commands"))
-        width = std::max(width, row.value("name", std::string{}).size());
-    for (const nlohmann::json& row : catalogue.at("commands")) {
-        text += "  " + Pad(row.value("name", std::string{}), width + 2) +
-                Pad(row.value("access", std::string{}), 9) + row.value("summary", std::string{}) + "\n";
-    }
+        width = std::max(width, Str(row, "name").size());
+    for (const nlohmann::json& row : catalogue.at("commands"))
+        text += "  " + Pad(Str(row, "name"), width + 2) + Pad(Str(row, "access"), 9) + Str(row, "summary") + "\n";
     return text;
 }
 
@@ -274,48 +285,81 @@ int CommandsVerb(std::span<const std::string> /*rest: Run refuses any; the row t
     return PrintStaticManifest(opt);
 }
 
-int ListVerb(std::span<const std::string> /*rest: Run refuses any; the row takes none*/, const GlobalOptions& opt)
+std::optional<nlohmann::json> LiveCatalog(const Arcane::Remote::Descriptor& desc, std::uint32_t timeoutMs,
+                                          Arcane::Remote::Envelope* error, void* /*user*/)
 {
-    Arcane::Remote::ClientBlock client;
-    Arcane::Remote::Envelope env;
-    std::optional<LiveHost> host;
-    if (const auto dir = RemoteDirFor(opt, &env))
-        host = Select(ScanDirectory(*dir), opt, &env);
-    if (!host) {
-        env.command = "list";
-        client.exitCode = Arcane::Remote::ExitFromHost(env);
-        return PrintEnvelope(env, client, opt);
-    }
-    client.token = host->descriptor.token;   // print-time redaction only; never printed
-    client.descriptor = PathUtf8(host->path);
-    Arcane::Remote::HostBlock block = BlockOf(host->descriptor);
+    return GetJson(desc, "/remote/v1/catalog", timeoutMs, error);
+}
 
+Printed ListCatalogue(const LiveHost& host, const GlobalOptions& opt, CatalogFetchFn fetch, void* user,
+                      Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope)
+{
+    Arcane::Remote::ClientBlock local;
+    if (client == nullptr)
+        client = &local;
+    client->token = host.descriptor.token;   // print-time redaction only; never printed
+    client->descriptor = PathUtf8(host.path);
+    client->retried = false;
+    Arcane::Remote::HostBlock block = BlockOf(host.descriptor);
+
+    Arcane::Remote::Envelope env;
     Arcane::Remote::Envelope failure;
-    const std::optional<nlohmann::json> catalogue =
-        GetJson(host->descriptor, "/remote/v1/catalog", opt.timeoutMs, &failure);
-    if (!catalogue) {
-        failure.command = "list";
-        if (failure.host.pid == 0)
-            failure.host = block;
-        client.exitCode = Arcane::Remote::ExitFromHost(failure);
-        return PrintEnvelope(failure, client, opt);
+    const std::optional<nlohmann::json> catalogue = fetch(host.descriptor, opt.timeoutMs, &failure, user);
+    const nlohmann::json* commands = nullptr;
+    if (catalogue && catalogue->is_object()) {
+        const auto it = catalogue->find("commands");
+        if (it != catalogue->end() && it->is_array())
+            commands = &*it;
     }
-    const auto commands = catalogue->find("commands");
-    if (!catalogue->is_object() || commands == catalogue->end() || !commands->is_array()) {
+    if (!catalogue) {
+        env = std::move(failure);
+        if (env.errors.empty())   // a fetch that failed without saying why
+            env = Arcane::Remote::MakeError("list", "internal", "the catalogue could not be read",
+                                            "check the host with servitor status");
+        env.command = "list";
+        if (env.host.pid == 0)
+            env.host = block;
+    } else if (commands == nullptr) {
         env = Arcane::Remote::MakeError("list", "internal", "the host's catalogue has no commands array",
                                         "report the host build; GET /remote/v1/catalog is malformed");
         env.host = block;
-        client.exitCode = Arcane::Remote::ExitFromHost(env);
-        return PrintEnvelope(env, client, opt);
+    } else {
+        const auto generation = catalogue->find("generation");
+        if (generation != catalogue->end() && generation->is_number_integer() && generation->get<std::int64_t>() >= 0 &&
+            generation->get<std::int64_t>() <= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
+            block.catalog = static_cast<std::uint32_t>(generation->get<std::int64_t>());
+        env = Arcane::Remote::MakeOk("list", *catalogue, block);
     }
-    block.catalog = catalogue->value("generation", 0u);
-    env = Arcane::Remote::MakeOk("list", *catalogue, block);
-    client.exitCode = Arcane::Remote::ExitFromHost(env);
-    if (opt.format == Format::Human) {
-        Write(Arcane::Remote::RedactSecrets(HumanCatalogue(*catalogue), client.token));
-        return client.exitCode;
+    client->exitCode = Arcane::Remote::ExitFromHost(env);
+    if (finalEnvelope != nullptr)
+        *finalEnvelope = env;
+    if (env.ok && opt.format == Format::Human) {
+        Printed printed;
+        printed.stdoutText = Arcane::Remote::RedactSecrets(HumanCatalogue(*catalogue), client->token);
+        return printed;
     }
-    return PrintEnvelope(env, client, opt);
+    RenderOptions ro;
+    ro.format = opt.format;
+    ro.tty = opt.tty;
+    return Render(env, *client, ro);
+}
+
+int ListVerb(std::span<const std::string> /*rest: Run refuses any; the row takes none*/, const GlobalOptions& opt)
+{
+    Arcane::Remote::ClientBlock client;
+    Arcane::Remote::Envelope refusal;
+    std::optional<LiveHost> host;
+    if (const auto dir = RemoteDirFor(opt, &refusal))
+        host = Select(ScanDirectory(*dir), opt, &refusal);
+    if (!host) {
+        refusal.command = "list";
+        client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+        return PrintEnvelope(refusal, client, opt);
+    }
+    const Printed printed = ListCatalogue(*host, opt, &LiveCatalog, nullptr, &client);
+    Write(stdout, printed.stdoutText);
+    Write(stderr, printed.stderrText);
+    return client.exitCode;
 }
 
 int CallVerb(std::span<const std::string> rest, const GlobalOptions& opt)

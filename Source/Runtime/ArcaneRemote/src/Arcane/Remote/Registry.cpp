@@ -223,7 +223,7 @@ CommandResult CommandRegistry::Invoke(const Call& call)
         return result;
     }
     result.envelope = MakeError(call.command, "command.unknown",
-                                "no command named '" + call.command + "' on this host", "servitor commands");
+                                "no command named '" + call.command + "' on this host", "servitor list");
     result.envelope.errors[0].candidates = std::move(candidates);
     return result;
 }

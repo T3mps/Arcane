@@ -3,12 +3,16 @@
 #include <Servitor/Client.hpp>
 #include <Servitor/Verbs.hpp>
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
+#include <Arcane/Remote/Descriptor.hpp>
+#include <Arcane/Remote/HostSession.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Json.hpp>
 #include "RemoteDemoArgs.hpp"
+#include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -94,6 +98,9 @@ TEST_CASE("the static manifest lists every exit code and every table verb", "[se
         CHECK((access == "observe" || access == "drive" || access == "per-command" || access == "none"));
     }
     CHECK(names.size() == 27);
+    for (const auto& row : manifest.at("verbs"))
+        if (row.at("name") == "compare")
+            CHECK(row.at("access") == "per-command");   // --bless drives
     // Drift guard: every verb the table dispatches is in the manifest.
     for (const Servitor::VerbRow& row : Servitor::VerbTable()) {
         const std::string words = row.words;
@@ -287,6 +294,152 @@ TEST_CASE("describe and schema build their wire args", "[servitor][client]") {
     REQUIRE(Servitor::FindVerb("commands") != nullptr);
     REQUIRE(Servitor::FindVerb("list") != nullptr);
     REQUIRE(Servitor::FindVerb("call") != nullptr);
+}
+
+namespace
+{
+struct FakeCatalog {
+    std::optional<nlohmann::json> reply;
+    Arcane::Remote::Envelope error;
+    std::uint32_t seenTimeoutMs = 0;
+    std::uint16_t seenPort = 0;
+};
+
+std::optional<nlohmann::json> FakeFetch(const Arcane::Remote::Descriptor& desc, std::uint32_t timeoutMs,
+                                        Arcane::Remote::Envelope* error, void* user)
+{
+    auto& fake = *static_cast<FakeCatalog*>(user);
+    fake.seenTimeoutMs = timeoutMs;
+    fake.seenPort = desc.port;
+    if (!fake.reply && error != nullptr)
+        *error = fake.error;
+    return fake.reply;
+}
+
+Servitor::LiveHost FakeHost()
+{
+    Servitor::LiveHost host;
+    host.descriptor.hostKind = Arcane::Remote::HostKind::Runtime;
+    host.descriptor.pid = 4242;
+    host.descriptor.port = 50123;
+    host.descriptor.state = "ready";
+    host.descriptor.frame = 9;
+    host.descriptor.token = std::string(64, 'f');
+    host.path = std::filesystem::path("Saved") / "Remote" / "runtime-4242.json";
+    return host;
+}
+} // namespace
+
+TEST_CASE("servitor list renders the host catalogue, a failed fetch and a malformed one", "[servitor][client]") {
+    const Servitor::LiveHost host = FakeHost();
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.timeoutMs = 1234;
+
+    // Happy path: MakeOk("list", catalogue), host.catalog = generation.
+    FakeCatalog fake;
+    fake.reply = nlohmann::json{
+        {"generation", 7},
+        {"commands", nlohmann::json::array({{{"name", "a.b"}, {"access", "observe"}, {"summary", "does a"}},
+                                            {{"name", "host.quit"}, {"access", "drive"}, {"summary", "quits"}}})}};
+    Arcane::Remote::ClientBlock client;
+    Arcane::Remote::Envelope env;
+    auto printed = Servitor::ListCatalogue(host, opt, &FakeFetch, &fake, &client, &env);
+    CHECK(fake.seenTimeoutMs == 1234);
+    CHECK(fake.seenPort == 50123);
+    CHECK(client.exitCode == 0);
+    CHECK(env.ok);
+    CHECK(env.command == "list");
+    CHECK(env.host.kind == "runtime");
+    CHECK(env.host.pid == 4242u);
+    CHECK(env.host.catalog == 7u);
+    CHECK(env.data["commands"].size() == 2);
+    const auto json = nlohmann::json::parse(printed.stdoutText);
+    CHECK(json["client"]["exitCode"] == 0);
+    CHECK(json["client"]["descriptor"] == "Saved/Remote/runtime-4242.json");
+    CHECK(json["data"]["commands"][1]["name"] == "host.quit");
+    CHECK(printed.stdoutText.find(host.descriptor.token) == std::string::npos);
+
+    Servitor::GlobalOptions human = opt;
+    human.format = Servitor::Format::Human;
+    printed = Servitor::ListCatalogue(host, human, &FakeFetch, &fake, &client);
+    CHECK(client.exitCode == 0);
+    CHECK(printed.stdoutText.starts_with("ok list\ngeneration: 7\n"));
+    CHECK(printed.stdoutText.find("host.quit") != std::string::npos);
+    CHECK(printed.stdoutText.find("drive") != std::string::npos);
+    CHECK(printed.stderrText.empty());
+
+    // The GET failed: its envelope, as command "list", with the selected host.
+    FakeCatalog down;
+    down.error = Arcane::Remote::MakeError("", "host.unreachable", "could not connect", "servitor status");
+    printed = Servitor::ListCatalogue(host, opt, &FakeFetch, &down, &client, &env);
+    CHECK(client.exitCode == 7);
+    CHECK_FALSE(env.ok);
+    CHECK(env.command == "list");
+    CHECK(env.errors.at(0).code == "host.unreachable");
+    CHECK(env.host.pid == 4242u);
+    CHECK(nlohmann::json::parse(printed.stdoutText)["client"]["exitCode"] == 7);
+    printed = Servitor::ListCatalogue(host, human, &FakeFetch, &down, &client);
+    CHECK(printed.stdoutText.starts_with("error host.unreachable"));
+    CHECK(printed.stderrText.find("could not connect") != std::string::npos);
+
+    // A fetch that failed without an envelope is still an error, never ok.
+    FakeCatalog silent;
+    (void)Servitor::ListCatalogue(host, opt, &FakeFetch, &silent, &client, &env);
+    CHECK(client.exitCode == 1);
+    CHECK(env.errors.at(0).code == "internal");
+
+    // Malformed catalogues: internal, exit 1.
+    for (const nlohmann::json& bad : {nlohmann::json::object(), nlohmann::json{{"commands", "x"}},
+                                      nlohmann::json::array(), nlohmann::json("text")}) {
+        INFO(bad.dump());
+        FakeCatalog broken;
+        broken.reply = bad;
+        (void)Servitor::ListCatalogue(host, human, &FakeFetch, &broken, &client, &env);
+        CHECK(client.exitCode == 1);
+        CHECK_FALSE(env.ok);
+        CHECK(env.command == "list");
+        CHECK(env.errors.at(0).code == "internal");
+        CHECK(env.host.pid == 4242u);
+    }
+    // Rows that are not objects do not throw in the human table.
+    FakeCatalog odd;
+    odd.reply = nlohmann::json{{"generation", 1}, {"commands", nlohmann::json::array({1, nullptr, {{"name", 3}}})}};
+    printed = Servitor::ListCatalogue(host, human, &FakeFetch, &odd, &client);
+    CHECK(client.exitCode == 0);
+}
+
+TEST_CASE("servitor list reads a live host's catalogue over the wire", "[servitor][client]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    Arcane::Test::TempDir tmp("servitor-list-live");
+    Arcane::Remote::HostSession::Config cfg;
+    cfg.kind = Arcane::Remote::HostKind::Runtime;
+    cfg.projectRoot = tmp.path;
+    Arcane::Remote::HostSession session(cfg);
+    REQUIRE(session.Start());
+    const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+    REQUIRE(desc);
+    Servitor::LiveHost host;
+    host.descriptor = *desc;
+    host.path = session.DescriptorFile();
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.timeoutMs = 5000;
+    Arcane::Remote::ClientBlock client;
+    Arcane::Remote::Envelope env;
+    const auto printed = Servitor::ListCatalogue(host, opt, &Servitor::LiveCatalog, nullptr, &client, &env);
+    CHECK(client.exitCode == 0);
+    REQUIRE(env.ok);
+    std::set<std::string> names;
+    for (const auto& row : env.data.at("commands"))
+        names.insert(row.at("name").get<std::string>());
+    CHECK(names.contains("catalog.describe"));   // HostSession::Start registers both (ruling F13)
+    CHECK(names.contains("schema.type"));
+    CHECK(names.contains("host.quit"));
+    CHECK(env.host.kind == "runtime");
+    CHECK(env.host.catalog == Arcane::Remote::CommandRegistry::Get().Generation());
+    CHECK(printed.stdoutText.find(desc->token) == std::string::npos);
+    session.Stop("test");
 }
 
 #endif

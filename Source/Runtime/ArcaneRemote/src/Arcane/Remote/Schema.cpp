@@ -120,12 +120,46 @@ void ApplySchemaAdapter(nlohmann::json& schema, const Astra::TypeMeta& meta) {
         schema.erase("$defs");
 }
 
+// ---- Vendored Astra (c46a90ed) literal bug: JsonSchema.hpp:50 ("$schema"),
+// :56 (top-level "type") and :276 (array "items" "type") pass a string
+// literal to WriteProperty, and const char* -> bool beats the string_view
+// overload, so Astra writes `true` ("accept anything") where it means a
+// string. Remove RepairAstraBoolLiterals and its call in SchemaFor once an
+// Astra sync passes those literals as strings.
+void RepairItems(nlohmann::json& node) {
+    if (node.is_array()) {
+        for (auto& child : node)
+            RepairItems(child);
+        return;
+    }
+    if (!node.is_object())
+        return;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        // :276 means "any element type" (its comment), so the bogus key goes:
+        // `items: {}` accepts anything, as the generator intends.
+        if (it.key() == "items" && it->is_object() && it->contains("type") && (*it)["type"].is_boolean())
+            it->erase("type");
+        RepairItems(*it);
+    }
+}
+
+void RepairAstraBoolLiterals(nlohmann::json& schema) {
+    if (!schema.is_object())
+        return;
+    if (schema.contains("$schema") && schema["$schema"].is_boolean())
+        schema["$schema"] = "https://json-schema.org/draft/2020-12/schema";   // JsonSchema.hpp:50
+    if (schema.contains("type") && schema["type"].is_boolean())
+        schema["type"] = "object";                                            // JsonSchema.hpp:56
+    RepairItems(schema);
+}
+
 }  // namespace
 
 nlohmann::json Arcane::Remote::SchemaFor(const Astra::TypeMeta& meta)
 {
     Astra::JsonSchemaGenerator gen;
     nlohmann::json schema = nlohmann::json::parse(gen.Generate(meta));
+    RepairAstraBoolLiterals(schema);
     ApplySchemaAdapter(schema, meta);
     if (meta.isDefaultConstructible && meta.defaultConstruct)
     {

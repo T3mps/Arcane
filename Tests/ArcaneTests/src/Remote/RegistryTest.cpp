@@ -134,7 +134,7 @@ TEST_CASE("catalogue is sorted and command.unknown lists same-group candidates",
     const auto missing = reg.Invoke(call);
     REQUIRE(missing.envelope.errors.size() == 1);
     CHECK(missing.envelope.errors[0].code == "command.unknown");
-    CHECK(missing.envelope.errors[0].remediation == "servitor commands");
+    CHECK(missing.envelope.errors[0].remediation == "servitor list");
     CHECK(missing.envelope.errors[0].candidates == std::vector<std::string>{"cattest.alpha", "cattest.zeta"});
 
     reg.UnregisterModule("cattest");
@@ -204,6 +204,44 @@ TEST_CASE("fallback adapter drops Optional from required and emits one $defs obj
     const auto& innerReq = schema["$defs"]["RemoteSchemaInner"];
     REQUIRE(innerReq.contains("required")); // ruling S3-2: no `if`
     CHECK(innerReq["required"].dump().find("\"n\"") != std::string::npos);
+}
+
+struct RemoteSchemaList {
+    std::vector<std::string> names;
+    int count = 2;
+};
+ARC_REFLECT_TYPE(RemoteSchemaList)
+    ARC_REFLECT_FIELD(RemoteSchemaList, names)
+    ARC_REFLECT_FIELD(RemoteSchemaList, count)
+ARC_REFLECT_TYPE_END()
+
+TEST_CASE("schema repairs Astra's literal-to-bool keys and leaves property types alone", "[remote][registry]") {
+    // Vendored Astra writes "$schema", the top-level "type" and array "items"
+    // "type" as `true` (JsonSchema.hpp:50/:56/:276); SchemaFor restores them.
+    for (const Astra::TypeMeta* meta : {Astra::GetMeta<RemoteDemoArgs>(), Astra::GetMeta<RemoteSchemaOuter>(),
+                                        Astra::GetMeta<RemoteSchemaList>()}) {
+        REQUIRE(meta != nullptr);
+        const auto schema = Arcane::Remote::SchemaFor(*meta);
+        INFO(schema.dump());
+        REQUIRE(schema["$schema"].is_string());
+        CHECK(schema["$schema"] == "https://json-schema.org/draft/2020-12/schema");
+        REQUIRE(schema["type"].is_string());
+        CHECK(schema["type"] == "object");
+        CHECK(schema.dump().find(":true") == std::string::npos); // no boolean schema anywhere ("default":true aside, none here)
+    }
+    const auto demo = Arcane::Remote::SchemaFor(*Astra::GetMeta<RemoteDemoArgs>());
+    CHECK(demo["properties"]["n"]["type"] == "integer");
+    CHECK(demo["properties"]["position"]["type"] == "array");
+    CHECK(demo["properties"]["position"]["items"]["type"] == "number");   // glm rewrite untouched
+    const auto outer = Arcane::Remote::SchemaFor(*Astra::GetMeta<RemoteSchemaOuter>());
+    CHECK(outer["properties"]["plain"]["type"] == "integer");
+    CHECK(outer["$defs"]["RemoteSchemaInner"]["type"] == "object");      // the fallback's nested def
+    CHECK(outer["$defs"]["RemoteSchemaInner"]["properties"]["n"]["default"] == 4);
+    const auto list = Arcane::Remote::SchemaFor(*Astra::GetMeta<RemoteSchemaList>());
+    CHECK(list["properties"]["names"]["type"] == "array");
+    REQUIRE(list["properties"]["names"]["items"].is_object());
+    CHECK_FALSE(list["properties"]["names"]["items"].contains("type"));  // any element, as :276 intends
+    CHECK(list["properties"]["count"]["type"] == "integer");
 }
 
 #endif

@@ -6,8 +6,14 @@
 // ArcaneRemote host header (V3): the catalogue and schemas come from the host
 // over the wire (GET /remote/v1/catalog, catalog.describe, schema.type).
 #include <Servitor/Client.hpp>
+#include <Servitor/Discover.hpp>
+#include <Servitor/Format.hpp>
 #include <Servitor/Verbs.hpp>
+#include <Arcane/Remote/Descriptor.hpp>
+#include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -48,9 +54,27 @@ bool CallArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
 // Client-side verb rows (ruling F17).
 // commands: PrintStaticManifest; no host, no project, no ScanProject.
 int CommandsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
-// list: discovery (no host is target.none, exit 4), then GET /remote/v1/catalog;
-// prints MakeOk("list", {generation, commands}).
+// list: discovery (no host is target.none, exit 4), then ListCatalogue over
+// LiveCatalog; prints what it renders and returns client.exitCode.
 int ListVerb(std::span<const std::string> rest, const GlobalOptions& opt);
+
+// Reads a host's catalogue for `list`: the seam ListCatalogue takes (tests
+// substitute it). nullopt fills *error (when non-null) with the reason.
+using CatalogFetchFn = std::optional<nlohmann::json> (*)(const Arcane::Remote::Descriptor& desc,
+                                                         std::uint32_t timeoutMs, Arcane::Remote::Envelope* error,
+                                                         void* user);
+// The live fetch: GET /remote/v1/catalog through GetJson (Transport.hpp).
+std::optional<nlohmann::json> LiveCatalog(const Arcane::Remote::Descriptor& desc, std::uint32_t timeoutMs,
+                                          Arcane::Remote::Envelope* error, void* user);
+// list for a selected host, rendered in opt's format; prints nothing. A fetch
+// that fails is its envelope (host.unreachable exit 7, ...) as command "list";
+// a catalogue that is not an object with a commands array is internal (exit
+// 1); otherwise MakeOk("list", catalogue) with host.catalog = its generation.
+// Human output of an ok answer is a name/access/summary table. *client gets
+// exitCode, descriptor and the token (redaction only); *finalEnvelope (when
+// non-null) the envelope.
+Printed ListCatalogue(const LiveHost& host, const GlobalOptions& opt, CatalogFetchFn fetch, void* user,
+                      Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope = nullptr);
 // call: ParseCallTokens, then PostVerb (the same discovery, busy retry,
 // options.readOnly and target watch as every posting verb; the host's gate
 // decides read-only and drive access).
