@@ -47,6 +47,7 @@
 #include <atomic>   // g_cleanExitRequested -- the clean-exit hook's latch
 #include <chrono>
 #include <cstdint>
+#include <cstdio>   // std::fputs: the monolithic --remote refusal (Run)
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -803,6 +804,32 @@ void RuntimeApp::MainLoop()
         .lastShaderPoll  = lastShaderPoll,
     };
 
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // Servitor P0 (Task 11): --remote arms the loopback surface once the render
+    // vehicle exists, so the first status already reads "ready". A client-mode
+    // primary world never arms (Arming::Allow). The idle exit applies only to
+    // an open-ended headless run (spec s4.7); a windowed or --frames N run ends
+    // by its own means. A listener that cannot start leaves the game running
+    // without remote.
+    if (m_config.remote && Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, true))
+    {
+        Arcane::Remote::HostSession::Config rc;
+        rc.kind               = Arcane::Remote::HostKind::Runtime;
+        rc.cvarContext        = Arcane::CVarContext::LocalHost;
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            rc.projectRoot    = proj->Root();
+        rc.descriptorOverride = m_config.remoteDescriptor;
+        rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
+        rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
+        m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+        m_remote->Start();
+        if (m_remote->Port() == 0)
+            m_remote.reset();   // Start logged why
+        else
+            m_remote->Gate().pluginGeneration = m_plugin->Generation();   // the boot load is not a reload
+    }
+#endif
+
     while (running)
     {
         // The OS asked for this session to end -- Ctrl-C, the console close
@@ -822,6 +849,24 @@ void RuntimeApp::MainLoop()
         // the device was lost; io.skipFrame (minimized window) asks for the
         // ordinary `continue` a bare bool return cannot express by itself.
         if (Arcane::RuntimeFrame::PumpAndResize(io)) break;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // Remote commands run after the pump and before the sim advance, on
+        // every iteration including a minimized one. A module reload the last
+        // frame performed (CaptureTail's Poll, the reload_plugin actions) is
+        // noted first, from this host's own PluginHost (ruling F10).
+        if (m_remote)
+        {
+            if (const std::uint32_t generation = m_plugin->Generation();
+                generation != m_remote->Gate().pluginGeneration)
+                m_remote->NoteReload(generation, true, "reloaded", m_remote->Gate().frame.load());
+            m_remote->Drain();
+            if (m_remote->TakeQuit() || m_remote->IdleExpired())
+            {
+                ARC_INFO("ArcaneRuntime: exiting on a remote {}", m_remote->TakeQuit() ? "quit" : "idle timeout");
+                break;
+            }
+        }
+#endif
         if (io.skipFrame) continue;
 
         // Per-frame timing + input sampling + the fixed-step sim advance.
@@ -857,6 +902,15 @@ void RuntimeApp::MainLoop()
     // code -- read AFTER the last NRI object is gone, so a teardown-only
     // validation error still fails the run.
     ShutdownGraphPath();
+
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // After ShutdownGraphPath: its --report exitReason reads TakeQuit/IdleExpired.
+    if (m_remote)
+    {
+        m_remote->Stop(m_remote->TakeQuit() ? "remote-quit" : m_remote->IdleExpired() ? "remote-idle" : "exit");
+        m_remote.reset();
+    }
+#endif
 }
 
 void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
@@ -1322,6 +1376,15 @@ void RuntimeApp::ShutdownGraphPath()
             exitReason = "compare-blessed";
         else if (compareWriteFailed)
             exitReason = "compare-failed";
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // Servitor P0 (Task 11): the loop broke on a remote quit (host.quit) or
+        // on the --remote-idle-exit timeout. m_remote is still alive here;
+        // MainLoop stops it after this function.
+        else if (m_remote && m_remote->TakeQuit())
+            exitReason = "remote-quit";
+        else if (m_remote && m_remote->IdleExpired())
+            exitReason = "remote-idle";
+#endif
         else if (!completedAllFrames)
             exitReason = "stopped-early";
 
@@ -1595,6 +1658,16 @@ void RuntimeApp::Shutdown()
 
 int RuntimeApp::Run()
 {
+#if defined(ARC_MONOLITHIC) && !defined(ARC_BUILD_DIST)
+    // Ruling D-1: a package links no ArcaneRemote, even in a non-Dist
+    // configuration, so --remote is a usage refusal before anything boots.
+    if (m_config.remote)
+    {
+        std::fputs("the remote surface is not linked into packaged games\n", stderr);
+        return 2;
+    }
+#endif
+
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime     = nullptr;              // stages populate as they go
     ctx.gpu         = nullptr;

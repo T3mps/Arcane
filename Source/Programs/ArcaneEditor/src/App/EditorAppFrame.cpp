@@ -364,6 +364,27 @@ namespace Arcane::Editor
             {
                 break;
             }
+#if !defined(ARC_BUILD_DIST)
+            // Servitor P0 (Task 11): remote commands run after the pump and
+            // before the frame's phases, on every iteration including a
+            // minimized one (which the SkipFrame continue below would skip).
+            UpdateRemoteSession();
+            if (m_remote)
+            {
+                // A module reload since the last drain (EndFrame's Poll, a
+                // module rebuild's re-engage), from this host's own PluginHost
+                // (ruling F10).
+                if (const std::uint32_t generation = m_plugin ? m_plugin->Generation() : 0u;
+                    generation != m_remote->Gate().pluginGeneration)
+                    m_remote->NoteReload(generation, true, "reloaded", m_remote->Gate().frame.load());
+                m_remote->Drain();
+                if (m_remote->TakeQuit() || m_remote->IdleExpired())
+                {
+                    ARC_INFO("ArcaneEditor: exiting on a remote {}", m_remote->TakeQuit() ? "quit" : "idle timeout");
+                    break;
+                }
+            }
+#endif
             if (pump == FramePump::SkipFrame)
             {
                 continue;
@@ -508,6 +529,15 @@ namespace Arcane::Editor
             EndFrame(ls);
         }
 
+#if !defined(ARC_BUILD_DIST)
+        // The frame loop is over: parked remote calls answer host.died and the
+        // descriptor goes now, not at ~EditorApp after the whole teardown.
+        if (m_remote)
+        {
+            m_remote->Stop(m_remote->TakeQuit() ? "remote-quit" : m_remote->IdleExpired() ? "remote-idle" : "exit");
+            m_remote.reset();
+        }
+#endif
     }
 
     // Phase 1: pump the window/OS event queue. Must stay first -- everything
@@ -1639,6 +1669,17 @@ namespace Arcane::Editor
                  .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesProject,
                  .help = "Windowed --screenshot captures the composited editor frame (the presented "
                          "backbuffer: chrome, panels, viewport) instead of the viewport texture");
+
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0 (Task 11): the editor's remote surface switch. Machine-wide
+        // preference, Dev (never in Dist), read once per frame by
+        // UpdateRemoteSession below.
+        ARC_CVAR(cvar_editorRemoteEnable, "editor.remote.enable", bool, true,
+            .flags = ::Arcane::CVarFlags::Dev,
+            .audience = ::Arcane::Audience::Editor,
+            .scope = ::Arcane::SettingScope::PreferencesMachine,
+            .help = "Serve the remote-control surface on 127.0.0.1.");
+#endif
     }
 
     static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
@@ -1647,6 +1688,80 @@ namespace Arcane::Editor
             return false;   // --headless already captures the composited frame, offscreen
         return cvar_windowedFrameCapture.Get();
     }
+
+#if !defined(ARC_BUILD_DIST)
+    // Arms, disarms or re-arms the remote session once per frame, before the
+    // drain (MainLoop). Cheap when nothing changes: one published-cvar read and
+    // a path compare.
+    //
+    // THE ARMING CONDITION (spec 0.4(b), s4.7; controller ruling on Task 11):
+    // the editor is armed by its cvar, default on, OR by --remote (servitor
+    // launch passes it), and only when Arming::Allow passes. A published
+    // true -> false stops a running session ("remote-disabled") and keeps it
+    // down, --remote or not, until the cvar is published true again.
+    void EditorApp::UpdateRemoteSession()
+    {
+        const bool enabled    = cvar_editorRemoteEnable.Get();
+        const bool turnedOff  = m_remoteCvarKnown && m_remoteCvarLast && !enabled;
+        const bool turnedOn   = m_remoteCvarKnown && !m_remoteCvarLast && enabled;
+        m_remoteCvarKnown = true;
+        m_remoteCvarLast  = enabled;
+        if (turnedOff)
+        {
+            if (m_remote)
+            {
+                m_remote->Stop("remote-disabled");
+                m_remote.reset();
+            }
+            m_remoteArmBlocked = true;   // until the cvar is true again
+            return;
+        }
+        if (turnedOn)
+            m_remoteArmBlocked = false;   // a cvar cycle also retries a failed start
+
+        const std::filesystem::path projectRoot =
+            (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                        : std::filesystem::path{};
+        // A project switch moves the descriptor (and the audit log) to the new
+        // project's Saved/Remote, so the session follows it.
+        if (m_remote && m_remote->GetConfig().projectRoot != projectRoot)
+        {
+            m_remote->Stop("project-switched");
+            m_remote.reset();
+        }
+        const bool wanted = enabled || m_config.remote;
+        if (m_remote || m_remoteArmBlocked || !wanted || !m_runtime)
+            return;
+
+        // The editor arms in its edit-mode topology; a play session that later
+        // makes the primary world a Client keeps the session (CVarContext::Editor).
+        if (!Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, wanted))
+        {
+            m_remoteArmBlocked = true;
+            return;
+        }
+
+        Arcane::Remote::HostSession::Config rc;
+        rc.kind               = Arcane::Remote::HostKind::Editor;
+        rc.cvarContext        = Arcane::CVarContext::Editor;
+        rc.projectRoot        = projectRoot;
+        rc.descriptorOverride = m_config.remoteDescriptor;
+        // The idle exit is for an abandoned open-ended headless editor only
+        // (spec s4.7); an interactive editor never ends itself.
+        rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
+        rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
+                                  "problems", "scene", "selection", "stats" };
+        m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+        m_remote->Start();
+        if (m_remote->Port() == 0)
+        {
+            m_remote.reset();   // Start logged why; not retried until the cvar cycles
+            m_remoteArmBlocked = true;
+            return;
+        }
+        m_remote->Gate().pluginGeneration = m_plugin ? m_plugin->Generation() : 0u;   // the current module is not a reload
+    }
+#endif
 
     void EditorApp::RenderSceneToViewport()
     {

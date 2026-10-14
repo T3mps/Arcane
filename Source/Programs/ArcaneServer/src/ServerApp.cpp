@@ -162,6 +162,30 @@ namespace Arcane::Server
             ARC_INFO("ArcaneServer: admin console on stdin (get/set/list/explain; 'help')");
         }
 
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0 (Task 11): --remote arms the loopback surface, after the
+        // admin console and outside it (RemoteCVarService above exists only when
+        // the console is on). A listener that cannot start leaves the server
+        // running without remote. The idle exit applies only to an open-ended
+        // run (spec s4.7): a --frames N run ends by itself.
+        if (m_cfg.remote && Arcane::Remote::Arming::Allow(m_runtime->Mode(), false, true))
+        {
+            Arcane::Remote::HostSession::Config rc;
+            rc.kind               = Arcane::Remote::HostKind::Server;
+            rc.cvarContext        = Arcane::CVarContext::ServerAdmin;
+            rc.projectRoot        = proj->Root();
+            rc.descriptorOverride = m_cfg.remoteDescriptor;
+            rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
+            rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
+            m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+            m_remote->Start();
+            if (m_remote->Port() == 0)
+                m_remote.reset();   // Start logged why; the server carries on without remote
+            else
+                m_remote->Gate().pluginGeneration = m_plugin->Generation();   // the boot load is not a reload
+        }
+#endif
+
         // Fixed-step tick, forever or --frames N. Wall-clock paced by sleeping the
         // remainder of each step (spec s6: tick rate is a RUNTIME value); the loop
         // is unpaused (fresh).
@@ -187,6 +211,24 @@ namespace Arcane::Server
             }
 
             const auto start = std::chrono::steady_clock::now();
+#if !defined(ARC_BUILD_DIST)
+            // AM1: remote commands run BEFORE the tick advances, never beside the
+            // admin stdin block below. A module reload the previous tick's Poll
+            // performed is noted first, so this drain's status already carries it.
+            if (m_remote)
+            {
+                if (const std::uint32_t generation = m_plugin->Generation();
+                    generation != m_remote->Gate().pluginGeneration)
+                    m_remote->NoteReload(generation, true, "reloaded", m_remote->Gate().frame.load());
+                m_remote->Drain();
+                if (m_remote->TakeQuit() || m_remote->IdleExpired())
+                {
+                    ARC_INFO("ArcaneServer: stopping on a remote {} after {} tick(s)",
+                             m_remote->TakeQuit() ? "quit" : "idle timeout", rep.framesTicked);
+                    break;
+                }
+            }
+#endif
             m_runtime->EnsurePhysics();
             m_runtime->Loop().Advance(m_cfg.fixedDtSeconds,
                                       [&](double dt) { m_plugin->FixedUpdateAll(dt); },
@@ -233,6 +275,22 @@ namespace Arcane::Server
         // "clean-exit" is a SUCCESSFUL stop (exit code 0) that simply is not
         // "frames-complete": the run was asked to end and did, which a census
         // reader must be able to tell from a budget that ran out.
-        return Finish(rep, stoppedByCleanExit ? "clean-exit" : "frames-complete", 0);
+        std::string exitReason = stoppedByCleanExit ? "clean-exit" : "frames-complete";
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0: a remote quit or an idle timeout is a clean stop too (exit 0).
+        if (m_remote && !stoppedByCleanExit)
+        {
+            if (m_remote->TakeQuit())
+                exitReason = "remote-quit";
+            else if (m_remote->IdleExpired())
+                exitReason = "remote-idle";
+        }
+        if (m_remote)
+        {
+            m_remote->Stop(exitReason);   // the descriptor is deleted before the census is written
+            m_remote.reset();
+        }
+#endif
+        return Finish(rep, std::move(exitReason), 0);
     }
 }

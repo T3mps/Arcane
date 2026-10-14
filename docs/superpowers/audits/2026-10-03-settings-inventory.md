@@ -205,6 +205,7 @@ The freeze binds names, audiences, scopes and apply modes. These rows changed af
 | (none) | `log.remote.ringLines` | how many log lines the remote log ring retains (the sequenced log ring, LogRing.cpp; Dev) | Servitor P0 task 2, 2026-10-13 |
 | (none) | `remote.server.frameBudgetMs` | milliseconds of remote commands a host drains per tick (the remote dispatcher, Dispatcher.cpp; Dev; spec s4.3) | Servitor P0 task 8, 2026-10-14 |
 | (none) | `remote.server.queueDepth` | remote requests a host queues before it answers host.busy queue-full (Dispatcher.cpp; Dev; ruling B-1) | Servitor P0 task 8, 2026-10-14 |
+| (none) | `editor.remote.enable` | whether the editor serves the remote-control surface on 127.0.0.1 (EditorAppFrame.cpp; Dev; spec 0.4(b)). Inventoried as an "Existing cvars (e)" row beside `editor.automation.windowedFrameCapture`, not as a frozen name: ArcaneTests does not compile EditorAppFrame.cpp, and the forward sweep-coverage case requires every frozen name to be registered in the test process (Task 11 controller ruling A) | Servitor P0 task 11, 2026-10-14 |
 
 Frozen names S6-45 registered in code (no inventory change): `editor.camera.floor` (S6-30 spelled it `speedFloor`), `editor.preview.light.colour` (was `.color`), `editor.shader.previewCheckerLight` / `previewCheckerSpriteScale` (were `editor.preview.checkerLight` / `checkerExtent`), `editor.graph.nodePreviewMinPx` / `dragSpeed` / `rangeDragSpeed` (were under `editor.shader.*`), `editor.mesh.primitiveRanges.*` (were `editor.mesh.subdivMax` ...; the minima are now settings too, each floored at ValidateMeshAsset's rule), and the rows no sweep had converted: `astra.snapshot.compression`, `editor.gizmo.color.*`, `editor.graph.const*Width` / `paramNameFieldWidth` / `passNameFieldWidth` / `swizzleFieldWidth`, `editor.shader.chainLayout.*`, `editor.shader.passThumbPx`, `editor.crash.initialSize` (a Vec2) / `textRows`, `editor.ui.toolbar.logoScale` / `brandScale`, `editor.viewport.grid.fadeInPx` / `fadeFullPx`.
 
@@ -400,7 +401,7 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 
 ### Remote (Servitor P0)
 
-Path prefix: `Remote/` = `Source/Runtime/ArcaneRemote/src/Arcane/Remote/`. Each default is the one spelling in `ArcaneRemoteProtocol`'s `Protocol.hpp` (`kFrameBudgetMs`, `kQueueDepthDefault`, ARC_CONSTANT-marked).
+Path prefix: `Remote/` = `Source/Runtime/ArcaneRemote/src/Arcane/Remote/`. Each default is the one spelling in `ArcaneRemoteProtocol`'s `Protocol.hpp` (`kFrameBudgetMs`, `kQueueDepthDefault`, ARC_CONSTANT-marked). The editor's `editor.remote.enable` is in Part 3's "Existing cvars (e)" table.
 
 | file:line | symbol | value (unit) | verdict | proposed cvar name | struct | audience | scope | apply | range | det | why |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1633,6 +1634,7 @@ Tunables inside the stores that are not already listed under the viewport and la
 | editor.graph.fitMaxZoom | Widgets/GraphFit.cpp:24 | Float32 1.0, 0.1..2.0 | Archive | :54 | shadow fallback at :54 |
 | editor.graph.fitMinZoom | Widgets/GraphFit.cpp:35 | Float32 0.5, 0.1..2.0 | Archive | :55 | shadow at :55 |
 | editor.automation.windowedFrameCapture | App/EditorAppFrame.cpp:1608-1620 (CVarDesc) | Bool false | Dev \| UserSettable | :1628 | correctly not Archive; "UserSettable" becomes the PlayerSafe derivation, which looks wrong for an Editor-audience automation switch |
+| editor.remote.enable | App/EditorAppFrame.cpp:1677 (ARC_CVAR; Editor audience, PreferencesMachine scope) | Bool true | Dev | EditorApp::UpdateRemoteSession, each frame | added post-freeze (Servitor P0 task 11): arms the editor's remote surface (or --remote does); a published true -> false stops it until true again. Not a frozen name: ArcaneTests does not compile its file |
 | console.historySize | ArcaneCore/src/Arcane/Config/CVarRegistry.cpp:123 | Int32 64, 1..1024 | Archive | ConsoleModel | module "engine"; it is an editor-console preference |
 | log.level | ArcaneCore/src/Arcane/Base/Log.cpp:258 | Int32 = Init arg, 0..6 | Archive \| Dev | callback | fine |
 | diagnostics.drawMarkers | ArcaneClient/src/Arcane/Render/GpuInstrumentation.cpp:27 | Bool false | Dev | GpuDrawMarkersEnabled | no consumer scope yet (per its comment) |
@@ -1724,4 +1726,4 @@ Tunables inside the stores that are not already listed under the viewport and la
   - Theme: 31 tokens (27 SETTING, 3 DERIVED aliases, 1 CONSTANT), plus about 27 domain-palette and alpha rows.
   - Style metrics: 5.
   - Stores: 4 ImGui ini sections, plus user cvar archive, recents, scene recents, texture `.meta`, Hub settings, and caches.
-  - Existing cvars: 16, of which 10 are editor-declared.
+  - Existing cvars: 17, of which 11 are editor-declared (`editor.remote.enable` added post-freeze, Servitor P0 task 11).

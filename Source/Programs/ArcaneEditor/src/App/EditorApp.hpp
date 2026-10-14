@@ -26,6 +26,9 @@
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
+#if !defined(ARC_BUILD_DIST)
+#include <Arcane/Remote/HostSession.hpp>      // Servitor P0: the editor's remote surface (m_remote)
+#endif
 #include "Panels/AssetActivityLog.hpp"
 #include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState (m_assetBrowserUi)
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState (m_assetGraphUi) + the canvas teardown seam
@@ -2185,6 +2188,28 @@ namespace Arcane::Editor
         // trigger, honoured by both hosts. Same fired-once shape as
         // m_gpuFaultFired directly above.
         bool                                      m_hangMainFired = false;
+
+        // ---- Servitor remote surface (P0 Task 11) ----------------------------
+        // Armed when editor.remote.enable is published true OR --remote was
+        // given (spec 0.4(b): the editor is armed by its cvar, default on;
+        // servitor launch passes --remote), and the primary world is not a
+        // Client (Arming::Allow). Drained once per frame between the event
+        // pump's Exit break and its SkipFrame continue (EditorAppFrame.cpp).
+        // The cvar going true -> false stops it ("remote-disabled") until it
+        // is true again. A project switch re-arms it so the descriptor follows
+        // the open project. Main thread only. The condition lives in
+        // UpdateRemoteSession, beside the cvar in EditorAppFrame.cpp.
+        void UpdateRemoteSession();
+        std::unique_ptr<Arcane::Remote::HostSession> m_remote;
+        // A start that failed (or was not allowed), or a cvar switched off, is
+        // not retried every frame: only the cvar being published true again
+        // (after a false) clears this.
+        bool                                      m_remoteArmBlocked = false;
+        // The last published editor.remote.enable UpdateRemoteSession saw, so
+        // only a true -> false TRANSITION stops the session (a false at boot
+        // with --remote still arms).
+        bool                                      m_remoteCvarKnown = false;
+        bool                                      m_remoteCvarLast  = false;
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

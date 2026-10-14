@@ -443,7 +443,7 @@ group ""
 group "Programs"
 project "ArcaneRuntimeHost"
     arc_module_consumer(engine_modules,
-        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui" },
+        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui", "ArcaneRemote" },
         { stage = false })
     location(ARC_MONOLITHIC_PROJECTS and path.join(ARC_MONOLITHIC_PROJECTS, "ArcaneRuntimeHost") or "Source/Programs/ArcaneRuntimeHost")
     kind "StaticLib"
@@ -882,9 +882,12 @@ end   -- ArcaneCrashReporter: Windows target only
 -- ============================================================================
 group "Programs"
 project "ArcaneServer"
-    -- Links Engine/Net/Crypto ONLY (P10) but STAGES a game module's full set: the
+    -- Links Engine/Net/Crypto ONLY (P10), plus ArcaneRemote (the Servitor listener,
+    -- a Runtime module, so still no Client module), but STAGES a game module's full set: the
     -- loader must resolve every module DLL a game module imports to MAP it at all.
-    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto" }, { stage = ARC_GAME_DEFAULT_MODULES })
+    -- The stage list names ArcaneRemote too: the game set's closure does not hold
+    -- it (or ArcaneRemoteProtocol), and the exe imports it.
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" }, { stage = table.join(ARC_GAME_DEFAULT_MODULES, { "ArcaneRemote" }) })
     location "Source/Programs/ArcaneServer"
     kind "ConsoleApp"
     language "C++"
@@ -967,7 +970,7 @@ project "ArcaneRuntime"
     -- module .so listed before the archive that references it is dropped.
     links { "ArcaneRuntimeHost" }
     includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
-    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
+    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" })
     location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
