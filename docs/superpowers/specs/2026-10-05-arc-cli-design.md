@@ -222,6 +222,7 @@ Most of that review is already covered here: the Origin/Host checks and the head
     - The client declares the majors it supports (P0: `{1}`). Any other major is `protocol.mismatch` (exit 4) with remediation.
     - Features are discovered from the host's catalog, never inferred from version numbers. A verb whose command the host lacks gets `command.unknown` (exit 2), with remediation naming the command and the host's `major.minor`.
   - **Servitor's own version.** Servitor has its own semver, starting at 0.1.0. `servitor --version` and the static manifest print it with the supported majors.
+  - **Supersedes.** AM7's "client code `Arcane::Remote::Cli`" (the client is the Servitor program's own code, namespace `Servitor`) and the body's hard-coded sibling launch (the engine root follows AM8). Exit 4 also covers `engine.unresolved`.
   - **Distribution.** In Hub v1, Servitor still ships per engine, in the engine-scoped package shape (Hub packages spec). A later one-per-user install (scope `user`) needs no change to this spec.
 
 ---
@@ -533,6 +534,7 @@ POST /arc/v1/call
 | 6 | the host answered and the operation failed (`errors[]` set; verdict `Errored`) |
 | 7 | host unreachable or died mid-command (with a `.arcdiag` path when one exists); retryable only with `--retry-on-death` |
 | 8 | a check ran and did not pass: test failures, `compare.failed`, a wait condition false at timeout, a scenario expectation, or verdict `Failed`/`Indeterminate` |
+| 9 | reserved for the Hub's PATH launcher (AM8): `engine.not-found`, `package.not-installed`, `package.incompatible`; `servitor` itself never returns it |
 | 130 / 143 | SIGINT / SIGTERM |
 
 - **Retry rule:** the client retries automatically (twice, with backoff) only when the request was provably not run: `host.busy`, or a connection refused before the body was sent. `--no-retry` disables it.
