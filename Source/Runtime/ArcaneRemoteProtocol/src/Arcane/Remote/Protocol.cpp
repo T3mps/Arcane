@@ -156,6 +156,7 @@ nlohmann::json ToJson(const Envelope& env)
     nlohmann::json j;
     j["ok"] = env.ok;
     j["protocol"] = env.protocol;
+    j["protocolMinor"] = env.protocolMinor;
     j["id"] = env.id;
     j["command"] = env.command;
     j["host"] = {
@@ -193,6 +194,7 @@ nlohmann::json ToJson(const HostStatus& s)
 {
     return {
         { "protocol", s.protocol },
+        { "protocolMinor", s.protocolMinor },
         { "kind", ToString(s.hostKind) },
         { "pid", s.pid },
         { "processStart", s.processStart },
@@ -219,6 +221,7 @@ Envelope ExtractEnvelope(const nlohmann::json& j)
     if (!j.is_object()) return env;
     env.ok = Get<bool>(j, "ok", false);
     env.protocol = Get<int>(j, "protocol", 1);
+    env.protocolMinor = Get<std::uint32_t>(j, "protocolMinor", 0); // absent is an older host: 0, never the struct default
     env.id = Get<std::string>(j, "id", {});
     env.command = Get<std::string>(j, "command", {});
     if (const auto it = j.find("host"); it != j.end() && it->is_object()) {
@@ -258,6 +261,10 @@ bool WellFormed(const nlohmann::json& j)
     if (ok == j.end() || !ok->is_boolean()) return false;
     const auto protocol = j.find("protocol");
     if (protocol == j.end() || !protocol->is_number_integer() || protocol->get<long long>() < 0) return false;
+    // protocolMinor is optional (an older host omits it); when present it follows protocol's rule.
+    if (const auto minor = j.find("protocolMinor"); minor != j.end()) {
+        if (!minor->is_number_integer() || minor->get<long long>() < 0) return false;
+    }
     if (const auto errors = j.find("errors"); errors != j.end()) {
         if (!errors->is_array()) return false;
         for (const auto& e : *errors) {

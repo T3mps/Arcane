@@ -16,8 +16,6 @@ namespace
 
 ARC_CONSTANT("crypto: 32 random bytes = 256 bits of bearer token entropy (64 hex chars)")
 constexpr std::size_t kTokenBytes = 32;
-ARC_CONSTANT("wire protocol: a bearer token is 64 hex chars")
-constexpr std::size_t kTokenHexChars = 64;
 ARC_CONSTANT("wire protocol: a Content-Length value longer than 10 digits exceeds any body bound")
 constexpr std::size_t kMaxLengthDigits = 10;
 
@@ -39,11 +37,6 @@ bool EqualsNoCase(std::string_view a, std::string_view b)
     for (std::size_t i = 0; i < a.size(); ++i)
         if (Lower(a[i]) != Lower(b[i])) return false;
     return true;
-}
-
-bool IsHex(char c)
-{
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
 // RFC 9110 tchar: ALPHA / DIGIT / one of !#$%&'*+-.^_`|~
@@ -193,45 +186,6 @@ TransportCheck CheckTransport(const HttpRequest& req, std::string_view portDecim
     const std::string got = Header(req, "authorization");
     if (tokenHex.empty() || !Crypto::HexEquals(got, expected))
         return refuse(TransportRefuse::Auth, "bearer token missing or invalid");
-    return out;
-}
-
-std::string RedactSecrets(std::string_view text, std::string_view tokenHex)
-{
-    std::string stage;
-    stage.reserve(text.size());
-    if (tokenHex.empty()) {
-        stage = std::string(text);
-    } else {
-        std::size_t i = 0;
-        while (i < text.size()) {
-            const std::size_t hit = text.find(tokenHex, i);
-            if (hit == std::string_view::npos) { stage.append(text.substr(i)); break; }
-            stage.append(text.substr(i, hit - i));
-            stage += "<redacted>";
-            i = hit + tokenHex.size();
-        }
-    }
-
-    constexpr std::string_view kBearer = "Bearer ";
-    std::string out;
-    out.reserve(stage.size());
-    std::size_t i = 0;
-    while (i < stage.size()) {
-        const std::size_t hit = stage.find(kBearer, i);
-        if (hit == std::string::npos) { out.append(stage, i, std::string::npos); break; }
-        out.append(stage, i, hit - i);
-        std::size_t run = hit + kBearer.size();
-        const std::size_t runStart = run;
-        while (run < stage.size() && IsHex(stage[run])) ++run;
-        if (run - runStart >= kTokenHexChars) {
-            out += "Bearer <redacted>";
-            i = run;
-        } else {
-            out.append(kBearer);
-            i = hit + kBearer.size();
-        }
-    }
     return out;
 }
 

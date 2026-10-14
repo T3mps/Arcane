@@ -4,7 +4,8 @@
   "dependencies": {
     "public": [
       "ArcaneCore",
-      "ArcaneNet"
+      "ArcaneNet",
+      "ArcaneRemoteProtocol"
     ],
     "private": [
       "ArcaneAssets",

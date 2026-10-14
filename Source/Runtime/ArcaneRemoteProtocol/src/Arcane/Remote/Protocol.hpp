@@ -1,5 +1,5 @@
 #pragma once
-#include <Arcane/Modules/ArcaneRemoteApi.hpp>
+#include <Arcane/Modules/ArcaneRemoteProtocolApi.hpp>
 #include <Arcane/Core/Constant.hpp>
 #include <Json.hpp>
 #include <cstdint>
@@ -15,6 +15,8 @@ namespace Arcane::Remote
 
 ARC_CONSTANT("wire protocol: remote protocol major (spec s6)")
 inline constexpr std::uint32_t kProtocol = 1;
+ARC_CONSTANT("remote protocol minor; raised on every additive wire change (spec AM9); remote-protocol.json mirrors it")
+inline constexpr std::uint32_t kProtocolMinor = 0;
 ARC_CONSTANT("wire protocol: s10.1 request body bound")
 inline constexpr std::uint32_t kMaxBodyBytes = 4u * 1024u * 1024u;
 ARC_CONSTANT("wire protocol: s10.1 header block bound (16 KiB)")
@@ -84,6 +86,7 @@ struct Timing {
 struct Envelope {
     bool ok = false;
     int protocol = 1;
+    std::uint32_t protocolMinor = kProtocolMinor;
     std::string id;
     std::string command;
     HostBlock host;
@@ -105,6 +108,7 @@ struct ClientBlock {
 
 struct HostStatus {
     std::uint32_t protocol = kProtocol;
+    std::uint32_t protocolMinor = kProtocolMinor;
     HostKind hostKind = HostKind::Editor;
     std::uint32_t pid = 0;
     std::uint64_t processStart = 0;
@@ -124,15 +128,15 @@ struct HostStatus {
     bool minimized = false;
 };
 
-ARC_REMOTE_API const char* ToString(HostKind kind);
-ARC_REMOTE_API nlohmann::json ToJson(const Envelope& env);
-ARC_REMOTE_API nlohmann::json ToJson(const HostStatus& status); // no token field exists on HostStatus
-ARC_REMOTE_API Envelope ParseEnvelope(const nlohmann::json& j);
-ARC_REMOTE_API std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j); // nullopt when malformed
-ARC_REMOTE_API Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host);
-ARC_REMOTE_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
-ARC_REMOTE_API int ExitFromHost(const Envelope& env);
-ARC_REMOTE_API int WorstExit(std::span<const int> codes);
+ARC_REMOTE_PROTOCOL_API const char* ToString(HostKind kind);
+ARC_REMOTE_PROTOCOL_API nlohmann::json ToJson(const Envelope& env);
+ARC_REMOTE_PROTOCOL_API nlohmann::json ToJson(const HostStatus& status); // no token field exists on HostStatus
+ARC_REMOTE_PROTOCOL_API Envelope ParseEnvelope(const nlohmann::json& j);
+ARC_REMOTE_PROTOCOL_API std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j); // nullopt when malformed
+ARC_REMOTE_PROTOCOL_API Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host);
+ARC_REMOTE_PROTOCOL_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
+ARC_REMOTE_PROTOCOL_API int ExitFromHost(const Envelope& env);
+ARC_REMOTE_PROTOCOL_API int WorstExit(std::span<const int> codes);
 
 } // namespace Arcane::Remote
 

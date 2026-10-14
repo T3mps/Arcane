@@ -1,6 +1,12 @@
 #if !defined(ARC_BUILD_DIST)
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Remote/Protocol.hpp>
+#include <Arcane/Remote/HttpClient.hpp>
+#include <Arcane/Remote/Http.hpp> // ParseHttpRequest, CheckTransport, HttpResponse (the host half)
+#include "../Helpers/ConstantScan.hpp"
+#include <cstdint>
+#include <fstream>
+#include <string>
 #include <vector>
 
 using namespace Arcane::Remote;
@@ -159,5 +165,145 @@ TEST_CASE("TryParseEnvelope rejects malformed replies", "[remote][protocol]") {
     CHECK_FALSE(TryParseEnvelope(noCode).has_value());
     auto badHost = good; badHost["host"] = 3;
     CHECK_FALSE(TryParseEnvelope(badHost).has_value());
+}
+
+TEST_CASE("HostStatus ToJson carries protocolMinor", "[remote][protocol]") {
+    HostStatus status;
+    status.hostKind = HostKind::Runtime;
+    status.state = "ready";
+    CHECK(status.protocolMinor == kProtocolMinor);
+    const auto j = ToJson(status);
+    CHECK(j.at("protocol") == kProtocol);
+    CHECK(Arcane::Remote::ToJson(status).at("protocolMinor") == Arcane::Remote::kProtocolMinor);
+}
+
+TEST_CASE("remote-protocol.json matches the protocol constants", "[remote][protocol]") {
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source" / "Runtime" / "ArcaneRemoteProtocol" / "remote-protocol.json");
+    REQUIRE(in.good());
+    const auto j = nlohmann::json::parse(in);
+    CHECK(j.at("major").get<std::uint32_t>() == Arcane::Remote::kProtocol);
+    CHECK(j.at("minor").get<std::uint32_t>() == Arcane::Remote::kProtocolMinor);
+}
+
+TEST_CASE("ArcaneRemoteProtocol depends on ArcaneCore only", "[remote][protocol]") {
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source" / "Runtime" / "ArcaneRemoteProtocol" / "ArcaneRemoteProtocol.arcmodule");
+    REQUIRE(in.good());
+    const auto j = nlohmann::json::parse(in);
+    CHECK(j.at("dependencies").at("public") == nlohmann::json::array({"ArcaneCore"}));
+    CHECK(j.at("dependencies").at("private").empty());
+    CHECK(j.at("thirdParty").at("public") == nlohmann::json::array({"nlohmann"}));
+    CHECK(j.at("thirdParty").at("private").empty());
+}
+
+TEST_CASE("envelopes carry protocolMinor and tolerate unknown fields", "[remote][protocol]") {
+    auto env = Arcane::Remote::MakeOk("x.y", nlohmann::json{{"a", 1}}, {});
+    auto j = Arcane::Remote::ToJson(env);
+    CHECK(j.at("protocolMinor") == Arcane::Remote::kProtocolMinor);
+    // A newer host: a later minor, plus fields this build has never heard of.
+    j["protocolMinor"] = 7;
+    j["futureTopLevel"] = "x";
+    j["host"]["futureHostField"] = 3;
+    j["data"]["futureDataField"] = true;
+    const auto parsed = Arcane::Remote::TryParseEnvelope(j);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->ok);
+    CHECK(parsed->protocolMinor == 7);
+    CHECK(parsed->data.at("a") == 1);
+    // An older host: no protocolMinor at all reads 0.
+    j.erase("protocolMinor");
+    const auto older = Arcane::Remote::TryParseEnvelope(j);
+    REQUIRE(older.has_value());
+    CHECK(older->protocolMinor == 0);
+    // A present non-integer is malformed.
+    j["protocolMinor"] = "seven";
+    CHECK_FALSE(Arcane::Remote::TryParseEnvelope(j).has_value());
+}
+
+TEST_CASE("BuildPost passes the host's transport checks", "[remote][protocol]") {
+    const std::string token(64, 'a');
+    const std::string body = R"({"id":"r-1","command":"status","args":{}})";
+    const std::string wire = BuildPost("/remote/v1/call", 51234, token, body);
+    std::string err;
+    const auto req = ParseHttpRequest(wire, &err);
+    REQUIRE(req.has_value());
+    CHECK(req->method == "POST");
+    CHECK(req->target == "/remote/v1/call");
+    CHECK(Header(*req, "content-type") == "application/json");
+    CHECK(Header(*req, "connection") == "close");
+    CHECK(req->body == body);
+    CHECK(CheckTransport(*req, "51234", token).refuse == TransportRefuse::None);
+    CHECK(CheckTransport(*req, "51235", token).refuse == TransportRefuse::Host);
+    CHECK(CheckTransport(*req, "51234", std::string(64, 'b')).refuse == TransportRefuse::Auth);
+
+    const std::string get = BuildGet("/remote/v1/status", 51234, token);
+    const auto greq = ParseHttpRequest(get, &err);
+    REQUIRE(greq.has_value());
+    CHECK(greq->method == "GET");
+    CHECK(greq->target == "/remote/v1/status");
+    CHECK(Header(*greq, "content-length") == "0");
+    CHECK(greq->body.empty());
+    CHECK(CheckTransport(*greq, "51234", token).refuse == TransportRefuse::None);
+}
+
+TEST_CASE("ParseHttpReply reads a serialized HttpResponse back", "[remote][protocol]") {
+    HttpResponse resp;
+    resp.status = 503;
+    resp.reason = "Service Unavailable";
+    resp.headers.emplace_back("X-Extra", "1");
+    resp.body = R"({"ok":false,"protocol":1})";
+    const std::string wire = resp.Serialize();
+
+    std::string err;
+    const auto reply = ParseHttpReply(wire, false, &err);
+    REQUIRE(reply.has_value());
+    CHECK(reply->status == 503);
+    CHECK(reply->body == resp.body);
+    bool sawExtra = false;
+    for (const auto& [name, value] : reply->headers)
+        if (name == "x-extra" && value == "1") sawExtra = true;
+    CHECK(sawExtra);
+    CHECK(ParseHttpReply(wire, true, &err).has_value());
+
+    // A prefix that stops inside the body: more bytes may come, unless the host already closed.
+    const std::string prefix = wire.substr(0, wire.size() - 3);
+    err.clear();
+    CHECK_FALSE(ParseHttpReply(prefix, false, &err).has_value());
+    CHECK(err == "partial");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply(prefix, true, &err).has_value());
+    CHECK(err == "truncated");
+    // The same inside the header block.
+    const std::string head = wire.substr(0, 10);
+    err.clear();
+    CHECK_FALSE(ParseHttpReply(head, false, &err).has_value());
+    CHECK(err == "partial");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply(head, true, &err).has_value());
+    CHECK(err == "truncated");
+}
+
+TEST_CASE("ParseHttpReply refuses chunked and malformed replies", "[remote][protocol]") {
+    std::string err;
+    CHECK_FALSE(ParseHttpReply("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n", true, &err).has_value());
+    CHECK(err == "malformed");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply("garbage\r\n\r\n", true, &err).has_value());
+    CHECK(err == "malformed");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply("HTTP/1.1 2x0 OK\r\nContent-Length: 0\r\n\r\n", true, &err).has_value());
+    CHECK(err == "malformed");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply("HTTP/1.1 200 OK\r\nContent-Length: 1x\r\n\r\n", true, &err).has_value());
+    CHECK(err == "malformed");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\n{}", true, &err).has_value());
+    CHECK(err == "malformed");
+    err.clear();
+    CHECK_FALSE(ParseHttpReply("HTTP/1.1 200 OK\r\nNoColon\r\nContent-Length: 0\r\n\r\n", true, &err).has_value());
+    CHECK(err == "malformed");
+    const auto empty = ParseHttpReply("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n", false, &err);
+    REQUIRE(empty.has_value());
+    CHECK(empty->status == 204);
+    CHECK(empty->body.empty());
 }
 #endif

@@ -1,5 +1,6 @@
 #pragma once
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
+#include <Arcane/Remote/Redact.hpp> // RedactSecrets moved to ArcaneRemoteProtocol (spec AM9)
 #include <optional>
 #include <string>
 #include <string_view>
@@ -41,7 +42,6 @@ ARC_REMOTE_API std::optional<HttpRequest> ParseHttpRequest(std::string_view byte
 ARC_REMOTE_API TransportCheck CheckTransport(const HttpRequest& req, std::string_view portDecimal,
                                           std::string_view tokenHex);
 ARC_REMOTE_API std::string Header(const HttpRequest& req, std::string_view nameLower);
-ARC_REMOTE_API std::string RedactSecrets(std::string_view text, std::string_view tokenHex);
 ARC_REMOTE_API std::string MakeToken(); // Arcane::Crypto::GenerateSecureToken(32); 64 hex chars
 
 } // namespace Arcane::Remote
