@@ -133,7 +133,7 @@ TEST_CASE("wait ready, frames, state and settled complete on their conditions", 
     Arcane::Remote::WaitArgs ready;
     ready.what = "ready";
     CHECK(Arcane::Remote::WaitPoll(session, ready, 0, 0, true, now).data.value("done", false));
-    session.Gate().SetState("stopping");
+    session.Gate().SetState("shutting-down");
     CHECK_FALSE(Arcane::Remote::WaitPoll(session, ready, 0, 0, true, now).data.value("done", false));
     session.Gate().SetState("paused");
     CHECK(Arcane::Remote::WaitPoll(session, ready, 0, 0, true, now).data.value("done", false));
@@ -197,6 +197,8 @@ TEST_CASE("host.wait refuses a missing, unknown or ill-typed argument", "[remote
     CHECK(Arcane::Remote::ExitFromHost(missing) == 2);
     CHECK(Invoke("host.wait", {{"what", "frames"}}).errors[0].code == "arg.missing");
     CHECK(Invoke("host.wait", {{"what", "state"}}).errors[0].code == "arg.missing");
+    CHECK(Invoke("host.wait", {{"what", "state"}, {"state", "stopping"}}).errors[0].code == "arg.invalid");   // s4.3: shutting-down
+    CHECK(Invoke("host.wait", {{"what", "state"}, {"state", "shutting-down"}}).ok);
     CHECK(Invoke("host.wait", {{"what", "soon"}}).errors[0].code == "arg.invalid");
     CHECK(Invoke("host.wait", {{"what", "frames"}, {"frames", -1}}).errors[0].code == "arg.invalid");
     CHECK(Invoke("host.wait", {{"what", "frames"}, {"frames", "2"}}).errors[0].code == "arg.invalid");
@@ -212,7 +214,7 @@ TEST_CASE("host.wait refuses a missing, unknown or ill-typed argument", "[remote
     session.Stop("test");
 }
 
-TEST_CASE("host.quit requests the quit; a dirty host answers host.busy modal unless forced or discarding", "[remote][host]") {
+TEST_CASE("host.quit requests the quit; a dirty host answers host.busy modal unless discarding", "[remote][host]") {
     RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
     Arcane::Test::TempDir tmp("remote-quit");
     {
@@ -242,7 +244,13 @@ TEST_CASE("host.quit requests the quit; a dirty host answers host.busy modal unl
         cfg.dirty = &RemoteDirtyAlways;
         Arcane::Remote::HostSession session(cfg);
         REQUIRE(session.Start());
-        CHECK(Invoke("host.quit", {{"force", true}}).ok);
+        // force is the client's (it ends the process after --timeout); it does
+        // not answer the unsaved-changes guard (spec s4.7 lists them apart).
+        const auto forced = Invoke("host.quit", {{"force", true}});
+        REQUIRE_FALSE(forced.errors.empty());
+        CHECK(forced.errors[0].detail["state"] == "modal");
+        CHECK_FALSE(session.TakeQuit());
+        CHECK(Invoke("host.quit", {{"force", true}, {"discardChanges", true}}).ok);
         CHECK(session.TakeQuit());
         session.Stop("test");
     }

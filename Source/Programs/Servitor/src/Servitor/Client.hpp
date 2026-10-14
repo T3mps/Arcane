@@ -89,10 +89,16 @@ using ExchangeFn = ExchangeResult (*)(const std::string& requestBody, void* user
 // Posts {id, command, args, options:{timeoutMs[, readOnly]}} through `exchange`,
 // retries a provably-not-run busy answer with backoff until opt.timeoutMs, checks
 // the reply's protocol major, and renders it. Opens no socket itself.
+// *finalEnvelope (when non-null) receives the envelope it rendered.
 Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchange, void* user,
-             Arcane::Remote::ClientBlock* client);
+             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope = nullptr);
 // servitor.exe's main calls this.
 int Run(int argc, char** argv);
+
+// The newest *.arcdiag directly under `dir` written strictly after
+// requestUnixMs; equal mtimes break on the greater generic_string(). Empty
+// when none qualifies (or `dir` is empty).
+std::filesystem::path NewestReportAfter(const std::filesystem::path& dir, std::int64_t requestUnixMs);
 
 struct TargetWatch {
     std::string command;

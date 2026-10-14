@@ -332,6 +332,48 @@ TEST_CASE("host.unavailable is exit 5 and is not retried", "[servitor][client]")
     CHECK(nlohmann::json::parse(printed.stdoutText)["errors"][0]["code"] == "host.unavailable");
 }
 
+static Servitor::ExchangeResult ModalQuitExchange(const std::string& body, void* user) {
+    auto* host = static_cast<UnavailableHost*>(user);
+    ++host->posts;
+    const auto cmd = nlohmann::json::parse(body).at("command").get<std::string>();
+    Servitor::ExchangeResult result;
+    result.envelope = Arcane::Remote::MakeError(cmd, "host.busy", "the host has unsaved changes",
+                                                "save them first, or pass --discard-changes");
+    result.envelope.errors.front().detail["state"] = "modal";
+    return result;
+}
+
+TEST_CASE("host.quit's modal answer is exit 5 at once, not retried for --timeout", "[servitor][client]") {
+    // Fix round 1: the unsaved-changes guard waits on a person, so the busy
+    // loop answers it once, like host.unavailable.
+    UnavailableHost host;
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.timeoutMs = 30000;
+    Servitor::CallRequest quit;
+    quit.command = "host.quit";
+    Arcane::Remote::ClientBlock client;
+    const auto started = std::chrono::steady_clock::now();
+    const auto printed = Servitor::Call(quit, opt, &ModalQuitExchange, &host, &client);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+    CHECK(client.exitCode == 5);
+    CHECK(client.retried == false);
+    CHECK(host.posts == 1);
+    const auto json = nlohmann::json::parse(printed.stdoutText);
+    CHECK(json["errors"][0]["detail"]["state"] == "modal");
+    CHECK(json["errors"][0]["remediation"].get<std::string>().find("--discard-changes") != std::string::npos);
+
+    // Any other command's modal busy keeps the retry (provably not run).
+    UnavailableHost other;
+    Servitor::CallRequest cvar;
+    cvar.command = "cvar.set";
+    opt.timeoutMs = 200;
+    Arcane::Remote::ClientBlock otherClient;
+    (void)Servitor::Call(cvar, opt, &ModalQuitExchange, &other, &otherClient);
+    CHECK(otherClient.retried);
+    CHECK(other.posts > 1);
+}
+
 static std::int64_t UnixMs(std::chrono::system_clock::time_point tp) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
 }

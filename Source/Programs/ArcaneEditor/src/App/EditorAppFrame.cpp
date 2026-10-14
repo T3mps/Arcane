@@ -543,7 +543,7 @@ namespace Arcane::Editor
             // the session goes.
             if (m_remote->ExitReason() != nullptr)
                 m_remoteExitReason = m_remote->ExitReason();
-            m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "stopping" first
+            m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "shutting-down" first
             m_remote.reset();
         }
 #endif

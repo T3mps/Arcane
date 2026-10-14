@@ -938,7 +938,7 @@ void RuntimeApp::MainLoop()
     // validation error still fails the run.
 #if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
     if (m_remote)
-        m_remote->MarkStopping();   // clients read "stopping" through the vehicle teardown
+        m_remote->MarkStopping();   // clients read "shutting-down" through the vehicle teardown
 #endif
     ShutdownGraphPath();
 

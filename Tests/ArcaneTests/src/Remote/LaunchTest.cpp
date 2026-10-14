@@ -3,16 +3,33 @@
 #include <Servitor/Discover.hpp>
 #include <Servitor/Launch.hpp>
 #include <Servitor/Verbs.hpp>
+#include <Arcane/Platform/Process.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
+#include "RemoteTestHttp.hpp"   // UnusedLoopbackPort
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
+#endif
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -76,7 +93,10 @@ TEST_CASE("launch plans --project and --remote and passes the host flags through
     const auto plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, hostArgs, &err);
     REQUIRE(plan.has_value());
     CHECK(plan->exe == exe);
-    CHECK(plan->log == exe.parent_path() / "ArcaneRuntime.servitor-launch.log");
+    // One log per launch (ruling E-2): opened under servitor's pid, renamed to the child's after the spawn.
+    CHECK(plan->log.parent_path() == exe.parent_path());
+    CHECK(plan->log.filename().string().starts_with("ArcaneRuntime.servitor-launch-"));
+    CHECK(plan->projectRoot == std::filesystem::absolute(project));
     CHECK(plan->descriptorDir == Arcane::Remote::DescriptorDir(std::filesystem::absolute(project), false));
     CHECK(plan->descriptor.empty());   // <descriptorDir>/runtime-<pid>.json once the pid is known
     CHECK(plan->hideConsole);          // --headless
@@ -138,10 +158,15 @@ TEST_CASE("a launched host that exits before it is ready is host.died exit 7, an
     REQUIRE_FALSE(out.errors.empty());
     CHECK(out.errors[0].code == "host.died");
     CHECK(out.command == "launch");
-    const auto log = exe.parent_path() / "ArcaneServer.servitor-launch.log";
-    CHECK(std::filesystem::exists(log));
+    const auto pid = out.errors[0].detail["pid"].get<std::uint32_t>();
+    CHECK(pid != 0);
+    const auto log = exe.parent_path() / ("ArcaneServer.servitor-launch-" + std::to_string(pid) + ".log");
+    CHECK(std::filesystem::exists(log));   // per launch, named for the child's pid
     CHECK(out.errors[0].detail["log"] == Servitor::PathUtf8(log));
-    CHECK(out.errors[0].detail["pid"].get<std::uint32_t>() != 0);
+    // spec s4.7: the exit code (observed on both platforms) and the last state seen.
+    CHECK(out.errors[0].detail.contains("exitCode"));
+    CHECK(out.errors[0].detail["lastState"] == "");   // it never wrote a descriptor
+    CHECK_FALSE(out.errors[0].detail.contains("arcdiag"));   // no crash report was written
 }
 
 TEST_CASE("verb rows declare their flags; unknown ones are refused and launch passes -- through", "[servitor][client]") {
@@ -182,7 +207,10 @@ TEST_CASE("verb rows declare their flags; unknown ones are refused and launch pa
     CHECK(args == nlohmann::json{{"force", true}, {"discardChanges", false}});
     REQUIRE(quit->args(std::vector<std::string>{"--discard-changes"}, args, &error));
     CHECK(args == nlohmann::json{{"force", false}, {"discardChanges", true}});
-    CHECK(Servitor::SplitVerbTokens(*quit, std::vector<std::string>{"--report", "r.json"}, nullptr).has_value());
+    // quit --report stays refused (controller ruling); the problem says where --report goes.
+    const auto report = Servitor::SplitVerbTokens(*quit, std::vector<std::string>{"--report", "r.json"}, nullptr);
+    REQUIRE(report.has_value());
+    CHECK(report->find("pass --report at launch: servitor launch <kind> -- --report <path>") != std::string::npos);
     CHECK_FALSE(quit->args(std::vector<std::string>{"now"}, args, &error));
 
     REQUIRE(wait->args(std::vector<std::string>{"frames", "10"}, args, &error));
@@ -198,9 +226,16 @@ TEST_CASE("verb rows declare their flags; unknown ones are refused and launch pa
     CHECK_FALSE(wait->args(std::vector<std::string>{"frames", "x"}, args, &error));
     CHECK_FALSE(wait->args(std::vector<std::string>{"frames", "-1"}, args, &error));
     CHECK_FALSE(wait->args(std::vector<std::string>{"state"}, args, &error));
+    CHECK_FALSE(wait->args(std::vector<std::string>{"state", "stopping"}, args, &error));   // spec s4.3: shutting-down
+    CHECK(error.find("shutting-down") != std::string::npos);
+    REQUIRE(wait->args(std::vector<std::string>{"state", "compiling-shaders"}, args, &error));
     CHECK_FALSE(wait->args(std::vector<std::string>{"soon"}, args, &error));
     CHECK_FALSE(wait->args(std::vector<std::string>{"ready", "now"}, args, &error));
-    CHECK(wait->awaitsHost);   // wait ready on a host that is still booting finds it within --timeout
+    // Only `wait ready` waits for a host to appear (spec s4.4); quit and the other waits do not.
+    REQUIRE(wait->awaitsHost != nullptr);
+    CHECK(wait->awaitsHost(nlohmann::json{{"what", "ready"}}));
+    CHECK_FALSE(wait->awaitsHost(nlohmann::json{{"what", "settled"}}));
+    CHECK(quit->awaitsHost == nullptr);
 }
 
 TEST_CASE("global flags after a bare -- belong to the host, not to servitor", "[servitor][client]") {
@@ -214,6 +249,74 @@ TEST_CASE("global flags after a bare -- belong to the host, not to servitor", "[
     CHECK(opt.json);
     CHECK(opt.project.empty());
     CHECK(opt.timeoutMs == 30000);
+}
+
+TEST_CASE("quit --force terminates a host that does not answer, once --timeout is spent", "[servitor][client]") {
+    // The "host": a live sleeper process behind a descriptor whose port no one
+    // listens on, so host.quit can never be delivered (every connect is refused).
+    Arcane::Test::TempDir tmp("servitor-quit-force");
+    const auto project = MakeProject(tmp.path / "Game");
+    Arcane::Remote::Descriptor desc;
+#if defined(_WIN32)
+    wchar_t sys[MAX_PATH];
+    REQUIRE(::GetSystemDirectoryW(sys, MAX_PATH) > 0);
+    std::wstring cmd = std::wstring(L"\"") + sys + L"\\ping.exe\" 127.0.0.1 -n 30";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    REQUIRE(::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                             &si, &pi));
+    ::CloseHandle(pi.hThread);
+    FILETIME created{}, exited{}, kernel{}, user{};
+    REQUIRE(::GetProcessTimes(pi.hProcess, &created, &exited, &kernel, &user));
+    desc.pid = pi.dwProcessId;
+    desc.processStart = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+#else
+    std::string exe = "/bin/sleep";
+    std::string arg = "30";
+    char* argv[] = {exe.data(), arg.data(), nullptr};
+    pid_t child = 0;
+    REQUIRE(::posix_spawn(&child, exe.c_str(), nullptr, nullptr, argv, environ) == 0);
+    desc.pid = static_cast<std::uint32_t>(child);
+    for (int i = 0; i < 100 && desc.processStart == 0; ++i) {
+        desc.processStart = Arcane::Platform::QueryProcess(desc.pid).start;
+        if (desc.processStart == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(desc.processStart != 0);
+#endif
+    desc.hostKind = Arcane::Remote::HostKind::Runtime;
+    desc.port = RemoteTest::UnusedLoopbackPort();
+    desc.token = std::string(64, 'a');
+    desc.project = Servitor::PathUtf8(project);
+    desc.state = "ready";
+    desc.heartbeatUnixMs = Servitor::NowUnixMs();
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(Arcane::Remote::DescriptorPath(project, desc.hostKind, desc.pid), desc));
+
+    Servitor::GlobalOptions opt;
+    opt.project = project.string();
+    opt.format = Servitor::Format::Json;
+    opt.timeoutMs = 1000;
+    const Servitor::VerbRow* quit = Servitor::FindVerb("quit");
+    REQUIRE(quit != nullptr);
+    REQUIRE(quit->local != nullptr);
+    const auto started = std::chrono::steady_clock::now();
+    const int code = quit->local(std::vector<std::string>{"--force"}, opt);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    CHECK(code == 0);                                             // the host is gone: exit 0, data.forced
+    CHECK(elapsed >= std::chrono::milliseconds(900));             // it waited out --timeout first
+    CHECK(elapsed < std::chrono::seconds(10));
+    CHECK_FALSE(Arcane::Platform::IsProcessLive(desc.pid, desc.processStart));
+    CHECK_FALSE(std::filesystem::exists(Arcane::Remote::DescriptorPath(project, desc.hostKind, desc.pid)));   // stale: removed
+#if defined(_WIN32)
+    if (::WaitForSingleObject(pi.hProcess, 0) != WAIT_OBJECT_0)
+        ::TerminateProcess(pi.hProcess, 1);   // never leave the sleeper behind
+    ::CloseHandle(pi.hProcess);
+#else
+    ::kill(child, SIGKILL);
+    int status = 0;
+    ::waitpid(child, &status, 0);
+#endif
 }
 
 #endif

@@ -272,7 +272,7 @@ namespace Arcane::Server
         Arcane::Diagnostics::RequestCleanExit();
 #if !defined(ARC_BUILD_DIST)
         if (m_remote)
-            m_remote->MarkStopping();   // /status and the descriptor read "stopping" through the census
+            m_remote->MarkStopping();   // /status and the descriptor read "shutting-down" through the census
 #endif
 
         rep.fixedUpdate = m_runtime->Schedulers().fixedUpdate.Size();

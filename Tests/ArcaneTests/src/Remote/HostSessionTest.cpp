@@ -132,10 +132,10 @@ TEST_CASE("HostSession: DrainFrame adopts the boot generation, notes a reload, a
     CHECK(std::string(session.ExitReason()) == "remote-quit");
 
     session.MarkStopping();                             // the host leaves its loop
-    CHECK(session.Gate().State() == "stopping");
+    CHECK(session.Gate().State() == "shutting-down");
     const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
     REQUIRE(desc);
-    CHECK(desc->state == "stopping");
+    CHECK(desc->state == "shutting-down");
     session.Stop(session.ExitReason());
     CHECK_FALSE(std::filesystem::exists(session.DescriptorFile()));
 }

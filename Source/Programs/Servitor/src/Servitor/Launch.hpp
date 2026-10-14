@@ -30,7 +30,9 @@ std::optional<std::filesystem::path> HostExePath(Arcane::Remote::HostKind kind, 
 // Everything Launch decides before it spawns, so it can be checked without a child.
 struct LaunchPlan {
     std::filesystem::path exe;            // HostExePath, gated by Arcane::CheckLaunchPath
-    std::filesystem::path log;            // <exe dir>/<Host>.servitor-launch.log, truncated per launch
+    std::filesystem::path log;            // <exe dir>/<Host>.servitor-launch-starting-<servitor pid>.log; Launch
+                                          // renames it <Host>.servitor-launch-<child pid>.log after the spawn
+    std::filesystem::path projectRoot;    // the host's project (ProjectRootFor); empty = projectless
     std::filesystem::path descriptorDir;  // where the host writes <kind>-<pid>.json (its project's Saved/Remote)
     std::filesystem::path descriptor;     // --remote-descriptor among the host flags (absolute); empty = the default
     std::vector<std::string> argv;        // the child's arguments after the exe
@@ -47,12 +49,13 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
                                      std::span<const std::string> hostArgs, Arcane::Remote::Envelope* error);
 
 // Spawns detached (ruling E-2) with --remote (+ --remote-descriptor when given), then polls the
-// descriptor until it is not IsStale and its state is "ready", or opt.timeoutMs (host.busy, exit 5).
-// Returns the exit code and fills *out.
+// descriptor until it is not IsStale and its state is ready (Arcane::Remote::IsReadyState: ready,
+// playing or paused), or opt.timeoutMs (host.busy, exit 5). Returns the exit code and fills *out.
 //  - ok: MakeOk("launch", {pid, port, descriptor, hostKind, log, exe}) with the host block (exit 0);
-//  - the child exits before it is ready: host.died (exit 7), detail {pid, log[, exitCode]};
+//  - the child exits before it is ready: host.died (exit 7), detail {pid, log, descriptor,
+//    lastState[, exitCode][, arcdiag]} (spec s4.7: the newest .arcdiag written after the spawn);
 //  - the spawn itself fails: internal (exit 1) with the OS error.
-// The child keeps running on a timeout: detail.pid names it.
+// The child keeps running on a timeout: detail.pid names it, and the remediation says not to relaunch.
 int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<const std::string> hostArgs,
            Arcane::Remote::Envelope* out);
 

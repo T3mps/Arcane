@@ -221,18 +221,23 @@ void ExplainUnknownCommand(const std::string& command, Arcane::Remote::Envelope&
 
 // Only a transient, provably-not-run exit 5 is retried. host.unavailable is
 // also exit 5 but means a host hook was never installed: it answers at once.
-bool TransientBusy(const ExchangeResult& r)
+// So does host.quit's unsaved-changes guard (host.busy{state:"modal"}): it
+// waits on a person, not on time, so retrying it only burns --timeout.
+bool TransientBusy(const std::string& command, const ExchangeResult& r)
 {
     if (r.connectionRefusedBeforeBody)
         return true;
     if (r.envelope.errors.empty())
         return false;
-    const std::string& code = r.envelope.errors.front().code;
-    return code == "host.busy" || code == "capture.minimized";
+    const Arcane::Remote::Error& e = r.envelope.errors.front();
+    if (command == "host.quit" && e.code == "host.busy" && e.detail.is_object() &&
+        e.detail.value("state", std::string{}) == "modal")
+        return false;
+    return e.code == "host.busy" || e.code == "capture.minimized";
 }
 
-// The newest *.arcdiag directly under dir written strictly after requestUnixMs;
-// equal mtimes break on the greater generic_string(). Empty when none qualifies.
+} // namespace
+
 // FileTimeToSys, not clock_cast: libc++ (macOS) has no clock_cast (R8-7).
 std::filesystem::path NewestReportAfter(const std::filesystem::path& dir, std::int64_t requestUnixMs)
 {
@@ -265,6 +270,8 @@ std::filesystem::path NewestReportAfter(const std::filesystem::path& dir, std::i
     }
     return best;
 }
+
+namespace {
 
 #if defined(_WIN32)
 // The exit code of {pid, processStart} once that exact process has exited.
@@ -396,7 +403,7 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 }
 
 Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchange, void* user,
-             Arcane::Remote::ClientBlock* client)
+             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope)
 {
     nlohmann::json body = {
         {"id", "c1"},
@@ -424,7 +431,7 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
         if (!last.connectionRefusedBeforeBody)
             CheckProtocol(req.command, last.envelope);
         const int code = last.connectionRefusedBeforeBody ? 5 : Arcane::Remote::ExitFromHost(last.envelope);
-        const bool busy = code == 5 && !opt.noRetry && TransientBusy(last);
+        const bool busy = code == 5 && !opt.noRetry && TransientBusy(req.command, last);
         const bool death = code == 7 && opt.retryOnDeath;
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count();
@@ -438,6 +445,8 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
         break;
     }
     ExplainUnknownCommand(req.command, last.envelope);
+    if (finalEnvelope != nullptr)
+        *finalEnvelope = last.envelope;
     RenderOptions ro;
     ro.format = opt.format;
     ro.tty = opt.tty;
@@ -479,58 +488,68 @@ int Run(int argc, char** argv)
     req.command = row->command;
     if (row->args != nullptr && !row->args(rest, req.args, &error))
         return PrintUsage(error);
+    const PostedCall posted = PostVerb(*row, req, opt, false);
+    return PrintEnvelope(posted.envelope, posted.client, opt);
+}
 
-    Arcane::Remote::ClientBlock client;
+PostedCall PostVerb(const VerbRow& row, const CallRequest& req, GlobalOptions opt, bool noReplyGrace)
+{
+    PostedCall posted;
     // Discovery (spec s4.4): the project's descriptors, then exactly one host.
-    // An awaitsHost row (wait) keeps looking for up to --timeout while there
-    // is no host yet, so `wait ready` right after a launch finds it booting;
-    // the call then gets what is left of the budget.
+    // Only a row whose awaitsHost predicate accepts these args (`wait ready`)
+    // keeps looking for up to --timeout while there is no host yet, so a wait
+    // right after a launch finds it booting; the call then gets what is left
+    // of the budget. Every other verb with no host is target.none at once.
+    const bool awaits = row.awaitsHost != nullptr && row.awaitsHost(req.args);
     Arcane::Remote::Envelope refusal;
-    std::optional<LiveHost> host;
     const auto discoveryStart = std::chrono::steady_clock::now();
     for (;;) {
         refusal = Arcane::Remote::Envelope{};
         if (const auto dir = RemoteDirFor(opt, &refusal))
-            host = Select(ScanDirectory(*dir), opt, &refusal);
-        const bool none = !host && !refusal.errors.empty() && refusal.errors.front().code == "target.none";
+            posted.host = Select(ScanDirectory(*dir), opt, &refusal);
+        const bool none = !posted.host && !refusal.errors.empty() && refusal.errors.front().code == "target.none";
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - discoveryStart).count();
-        if (!row->awaitsHost || !none || elapsed + kDiscoveryPollMs >= static_cast<long long>(opt.timeoutMs))
+        if (!awaits || !none || elapsed + kDiscoveryPollMs >= static_cast<long long>(opt.timeoutMs))
             break;
         std::this_thread::sleep_for(std::chrono::milliseconds(kDiscoveryPollMs));
     }
-    if (host && row->awaitsHost) {
+    if (posted.host && awaits) {
         const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - discoveryStart).count();
         opt.timeoutMs = static_cast<std::uint32_t>(std::max<long long>(1, static_cast<long long>(opt.timeoutMs) - spent));
     }
-    if (!host) {
+    if (!posted.host) {
         refusal.command = req.command;
-        client.exitCode = Arcane::Remote::ExitFromHost(refusal);
-        return PrintEnvelope(refusal, client, opt);
+        posted.client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+        posted.envelope = std::move(refusal);
+        return posted;
     }
 
+    const LiveHost& host = *posted.host;
     LiveTarget target;
-    target.descriptor = host->descriptor;
+    target.descriptor = host.descriptor;
     target.timeoutMs = opt.timeoutMs;
+    if (noReplyGrace)
+        target.replyGraceMs = 0;
     target.watch.command = req.command;
-    target.watch.pid = host->descriptor.pid;
-    target.watch.processStart = host->descriptor.processStart;
-    target.watch.descriptorPath = host->path;
+    target.watch.pid = host.descriptor.pid;
+    target.watch.processStart = host.descriptor.processStart;
+    target.watch.descriptorPath = host.path;
     // The host's report directory (ruling AX (2)): <project>/Saved/Diagnostics
     // when the descriptor names a project, else the exe-relative one.
-    if (!host->descriptor.project.empty()) {
-        const std::string& p = host->descriptor.project;
+    if (!host.descriptor.project.empty()) {
+        const std::string& p = host.descriptor.project;
         const std::filesystem::path project(std::u8string(reinterpret_cast<const char8_t*>(p.data()), p.size()));
         target.watch.diagnosticsDir =
             Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(project));
     } else {
-        target.watch.diagnosticsDir = HostDiagnosticsDir(host->descriptor.hostKind, opt);
+        target.watch.diagnosticsDir = HostDiagnosticsDir(host.descriptor.hostKind, opt);
     }
-    client.token = host->descriptor.token;   // print-time redaction only; never printed
-    client.descriptor = PathUtf8(host->path);
-    const Printed printed = Call(req, opt, &LiveExchange, &target, &client);
-    return Emit(printed, client.exitCode);
+    posted.client.token = host.descriptor.token;   // print-time redaction only; never printed
+    posted.client.descriptor = PathUtf8(host.path);
+    (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope);
+    return posted;
 }
 
 std::optional<Arcane::Remote::Envelope> ObserveTarget(const TargetWatch& watch, std::int64_t nowUnixMs)

@@ -2,10 +2,12 @@
 #include <Arcane/Modules/ArcaneRemoteProtocolApi.hpp>
 #include <Arcane/Core/Constant.hpp>
 #include <Json.hpp>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane::Remote
@@ -44,6 +46,25 @@ ARC_CONSTANT("wire protocol: s10.1 idle connection close")
 inline constexpr std::uint32_t kIdleConnectionSeconds = 30;
 
 enum class HostKind : std::uint8_t { Editor, Runtime, Server };
+
+// spec s4.3: the host-state vocabulary HostStatus.state, the descriptor and
+// host.wait `state` speak. A state outside it is a usage error (exit 2).
+inline constexpr std::array<std::string_view, 10> kHostStateNames = {
+    "booting", "ready", "reloading", "compiling-shaders", "building",
+    "modal", "playing", "paused", "minimized", "shutting-down",
+};
+inline bool IsHostStateName(std::string_view state)
+{
+    for (const std::string_view name : kHostStateNames)
+        if (name == state)
+            return true;
+    return false;
+}
+// The one "serves commands" predicate (servitor launch, wait ready).
+inline bool IsReadyState(std::string_view state)
+{
+    return state == "ready" || state == "playing" || state == "paused";
+}
 enum class HostState : std::uint8_t { Starting, Ready, Playing, Paused, Reloading, Stopping, Hung };
 enum class Access : std::uint8_t { Observe, Drive };
 enum class Mutates : std::uint8_t { None, Scene, Project, Preferences, PlayMode };

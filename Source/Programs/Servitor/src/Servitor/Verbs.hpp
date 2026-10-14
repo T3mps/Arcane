@@ -2,6 +2,7 @@
 // The ONE Servitor verb table (ruling F17). Every task that adds a CLI verb
 // adds its row to Verbs.cpp; main.cpp and Run never change for a new verb.
 #include <Servitor/Client.hpp>
+#include <Servitor/Discover.hpp>
 #include <Json.hpp>
 #include <cstddef>
 #include <optional>
@@ -20,6 +21,9 @@ namespace Servitor {
 struct VerbFlag {
     const char* name;     // spelled with its dashes: "--force"
     bool takesValue;      // the next token is its value; it must exist and must not start with "--"
+    // Non-null: a flag the verb knowingly refuses (usage exit 2); this is the
+    // whole problem text, naming what to do instead (quit --report).
+    const char* refused = nullptr;
 };
 
 // One row of the Servitor verb table.
@@ -40,9 +44,11 @@ struct VerbRow {
     // A bare "--" ends the verb's own tokens; everything after it is handed
     // over verbatim (launch's host flags). Without it a bare "--" is refused.
     bool passThrough = false;
-    // Discovery waits up to --timeout for a host to appear instead of
-    // answering target.none at once (wait: a host that is still booting).
-    bool awaitsHost = false;
+    // Non-null and true for these args: discovery waits up to --timeout for a
+    // host to appear instead of answering target.none at once (`wait ready`
+    // only: a host that is still booting). Every other call is target.none,
+    // exit 4, immediately (spec s4.4).
+    bool (*awaitsHost)(const nlohmann::json& args) = nullptr;
     // The argument synopsis the usage text prints after `words`; null = none.
     const char* usage = nullptr;
 };
@@ -63,6 +69,18 @@ struct VerbTokens {
 // its value) or, for a passThrough row, the bare "--" separator. Otherwise the
 // usage problem ("unknown flag --x", "--x needs a value"). `out` may be null.
 std::optional<std::string> SplitVerbTokens(const VerbRow& row, std::span<const std::string> rest, VerbTokens* out);
+
+// Run's path for a posting row, shared with client verbs that post and then
+// act on the answer (quit --force).
+struct PostedCall {
+    Arcane::Remote::Envelope envelope;    // the final envelope (a discovery refusal, or the call's answer)
+    Arcane::Remote::ClientBlock client;   // exitCode, retried, descriptor
+    std::optional<LiveHost> host;         // the selected target; nullopt when discovery refused
+};
+// Discovery (an awaitsHost row may wait for a host to appear), then Call
+// through LiveExchange. Prints nothing. noReplyGrace: stop reading at
+// --timeout instead of --timeout + kReplyGraceMs (quit --force acts then).
+PostedCall PostVerb(const VerbRow& row, const CallRequest& req, GlobalOptions opt, bool noReplyGrace);
 
 } // namespace Servitor
 

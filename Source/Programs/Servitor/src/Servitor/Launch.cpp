@@ -5,11 +5,13 @@
 #include <Servitor/Discover.hpp>
 
 #include <Arcane/Platform/LaunchPath.hpp>
+#include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Platform/Process.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -78,11 +80,33 @@ bool Fail(std::string* error, std::string text)
 }
 
 // The spawned child: its pid and the creation stamp Platform::IsProcessLive
-// and the descriptor's processStart use (0 when the OS would not say).
+// and the descriptor's processStart use (0 when the OS would not say). On
+// Windows the process handle stays open until Launch's poll ends, so an exit
+// before "ready" can report its exit code (spec s4.7); it closes with the
+// last copy of this struct.
 struct Child {
     std::uint32_t pid = 0;
     std::uint64_t start = 0;
+#if defined(_WIN32)
+    std::shared_ptr<void> process;
+#endif
 };
+
+std::uint32_t SelfPid()
+{
+#if defined(_WIN32)
+    return static_cast<std::uint32_t>(::GetCurrentProcessId());
+#else
+    return static_cast<std::uint32_t>(::getpid());
+#endif
+}
+
+// <exe dir>/<Host>.servitor-launch-<pid>.log: one log per launch (ruling E-2),
+// so two launches of the same host kind never write one file.
+fs::path LaunchLogFor(const fs::path& exe, Arcane::Remote::HostKind kind, std::uint32_t pid)
+{
+    return exe.parent_path() / (std::string(HostName(kind)) + ".servitor-launch-" + std::to_string(pid) + ".log");
+}
 
 #if defined(_WIN32)
 std::wstring Widen(const std::string& utf8)
@@ -114,8 +138,9 @@ std::string LastErrorText(DWORD code)
 // must not stay open in a host that outlives servitor). A headless host or
 // the server gets CREATE_NO_WINDOW; a windowed host is DETACHED_PROCESS, so
 // it never shares servitor's console (closing the terminal must not end it).
-// Its working directory is its own folder (the RuntimeLaunch pattern). Both
-// process handles close once the pid and creation time are read.
+// Its working directory is its own folder (the RuntimeLaunch pattern). The
+// thread handle closes at once; the process handle rides in Child until the
+// poll ends (its exit code, s4.7).
 std::optional<Child> Spawn(const LaunchPlan& plan, std::string* error)
 {
     std::wstring cmd = Arcane::QuoteWindowsArg(plan.exe.wstring());
@@ -188,15 +213,21 @@ std::optional<Child> Spawn(const LaunchPlan& plan, std::string* error)
     if (::GetProcessTimes(pi.hProcess, &created, &exited, &kernel, &user))
         child.start = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
     ::CloseHandle(pi.hThread);
-    ::CloseHandle(pi.hProcess);
+    child.process = std::shared_ptr<void>(pi.hProcess, [](void* h) { ::CloseHandle(static_cast<HANDLE>(h)); });
     return child;
 }
 
-// Both handles are closed (the detached shape), so the exit code is not
-// observable here; IsProcessLive's pid + creation stamp is.
-bool StillRunning(const Child& child, std::optional<int>* /*exitCode*/)
+// The open process handle answers both: signalled = exited, and its code.
+bool StillRunning(const Child& child, std::optional<int>* exitCode)
 {
-    return Arcane::Platform::IsProcessLive(child.pid, child.start);
+    if (!child.process)
+        return Arcane::Platform::IsProcessLive(child.pid, child.start);
+    if (::WaitForSingleObject(static_cast<HANDLE>(child.process.get()), 0) != WAIT_OBJECT_0)
+        return true;
+    DWORD code = 0;
+    if (exitCode != nullptr && ::GetExitCodeProcess(static_cast<HANDLE>(child.process.get()), &code))
+        *exitCode = static_cast<int>(code);
+    return false;
 }
 #else
 // posix_spawn, no shell (ruling E-2): the child's fd 1 and 2 on the truncated
@@ -255,9 +286,41 @@ bool StillRunning(const Child& child, std::optional<int>* exitCode)
             *exitCode = 128 + WTERMSIG(status);
         return false;
     }
-    return r == 0 && Arcane::Platform::IsProcessLive(child.pid, child.start);
+    if (r == 0)
+        return true;
+    // -1 (ECHILD: already reaped, or not ours after all): the process table answers.
+    return Arcane::Platform::IsProcessLive(child.pid, child.start);
 }
 #endif
+
+// The newest *.arcdiag written after the spawn, from the two places a host
+// writes one: the open project's Saved/Diagnostics (Paths::DiagnosticsDir) and
+// the exe-relative <host>/diagnostics (HostDiagnosticsDir; a death before the
+// project opened). Empty when neither has one.
+fs::path NewestLaunchReport(Arcane::Remote::HostKind kind, const GlobalOptions& opt, const fs::path& projectRoot,
+                            std::int64_t spawnUnixMs)
+{
+    std::vector<fs::path> found;
+    if (!projectRoot.empty()) {
+        found.push_back(NewestReportAfter(
+            Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(projectRoot)),
+            spawnUnixMs));
+    }
+    found.push_back(NewestReportAfter(HostDiagnosticsDir(kind, opt), spawnUnixMs));
+    fs::path best;
+    fs::file_time_type bestTime{};
+    for (const fs::path& p : found) {
+        std::error_code ec;
+        if (p.empty())
+            continue;
+        const auto t = fs::last_write_time(p, ec);
+        if (!ec && (best.empty() || t > bestTime)) {
+            best = p;
+            bestTime = t;
+        }
+    }
+    return best;
+}
 
 } // namespace
 
@@ -305,7 +368,10 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
 
     LaunchPlan plan;
     plan.exe = *exe;
-    plan.log = exe->parent_path() / (std::string(HostName(kind)) + ".servitor-launch.log");
+    // Opened under this servitor's pid; Launch renames it to the child's pid
+    // once the child exists (LaunchLogFor), so concurrent launches never share one.
+    plan.log = exe->parent_path() / (std::string(HostName(kind)) + ".servitor-launch-starting-" +
+                                     std::to_string(SelfPid()) + ".log");
 
     std::vector<std::string> argv(hostArgs.begin(), hostArgs.end());
     bool hasRemote = false;
@@ -345,6 +411,7 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
         if (!root)
             return std::nullopt;
     }
+    plan.projectRoot = *root;
     plan.descriptorDir = root->empty() ? Arcane::Remote::DescriptorDir({}, true)
                                        : Arcane::Remote::DescriptorDir(*root, false);
     if (descriptorAt) {
@@ -377,8 +444,11 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
     }
 
     std::string spawnError;
+    const std::int64_t spawnUnixMs = NowUnixMs();
     const auto child = Spawn(*plan, &spawnError);
     if (!child) {
+        std::error_code ec;
+        fs::remove(plan->log, ec);   // the never-used launch log
         *out = Arcane::Remote::MakeError("launch", "internal", "could not start " + PathUtf8(plan->exe) + ": " + spawnError,
                                          "check that the host binary runs on this machine");
         return Arcane::Remote::ExitFromHost(*out);
@@ -389,10 +459,22 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
                                     : plan->descriptorDir / (std::string(Arcane::Remote::ToString(kind)) + "-" +
                                                              std::to_string(child->pid) + ".json");
     const std::string host = std::string(HostName(kind)) + " (pid " + std::to_string(child->pid) + ")";
+    // One log per launch: the child already writes the file, and it was
+    // opened shareable for delete, so it can take its pid name now. A failed
+    // rename leaves the starting name, which the envelope then reports.
+    fs::path log = plan->log;
+    {
+        const fs::path named = LaunchLogFor(plan->exe, kind, child->pid);
+        std::error_code ec;
+        fs::remove(named, ec);   // an older launch's log under a recycled pid
+        fs::rename(plan->log, named, ec);
+        if (!ec)
+            log = named;
+    }
     const auto fillDetail = [&](Arcane::Remote::Envelope& env) {
         auto& detail = env.errors.front().detail;
         detail["pid"] = child->pid;
-        detail["log"] = PathUtf8(plan->log);
+        detail["log"] = PathUtf8(log);
         detail["descriptor"] = PathUtf8(descriptor);
     };
 
@@ -406,7 +488,7 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
             desc && desc->pid == child->pid &&
             (child->start == 0 || desc->processStart == 0 || desc->processStart == child->start)) {
             lastState = desc->state;
-            if (!Arcane::Remote::IsStale(*desc) && desc->state == "ready") {
+            if (!Arcane::Remote::IsStale(*desc) && Arcane::Remote::IsReadyState(desc->state)) {
                 Arcane::Remote::HostBlock block;
                 block.kind = Arcane::Remote::ToString(kind);
                 block.pid = desc->pid;
@@ -417,7 +499,7 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
                                                {"port", desc->port},
                                                {"descriptor", PathUtf8(descriptor)},
                                                {"hostKind", Arcane::Remote::ToString(kind)},
-                                               {"log", PathUtf8(plan->log)},
+                                               {"log", PathUtf8(log)},
                                                {"exe", PathUtf8(plan->exe)}},
                                               std::move(block));
                 return 0;
@@ -427,11 +509,17 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
         if (!StillRunning(*child, &exitCode)) {
             *out = Arcane::Remote::MakeError("launch", "host.died",
                                              host + " exited before it was ready; its output is in " +
-                                                 PathUtf8(plan->log),
+                                                 PathUtf8(log),
                                              "read the log, then fix the host flags or the project");
             fillDetail(*out);
+            // What s4.7 asks a death to name: the exit code if observed, the
+            // last state seen, and a crash report written after the spawn.
+            auto& detail = out->errors.front().detail;
             if (exitCode)
-                out->errors.front().detail["exitCode"] = *exitCode;
+                detail["exitCode"] = *exitCode;
+            detail["lastState"] = lastState;
+            if (const fs::path report = NewestLaunchReport(kind, opt, plan->projectRoot, spawnUnixMs); !report.empty())
+                detail["arcdiag"] = PathUtf8(report);
             out->host.pid = child->pid;
             out->host.kind = Arcane::Remote::ToString(kind);
             return Arcane::Remote::ExitFromHost(*out);
@@ -440,7 +528,8 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
             *out = Arcane::Remote::MakeError("launch", "host.busy",
                                              host + " did not report ready within " +
                                                  std::to_string(opt.timeoutMs) + " ms; it is still running",
-                                             "raise --timeout, or read " + PathUtf8(plan->log));
+                                             "do not relaunch; servitor wait ready --pid " + std::to_string(child->pid) +
+                                                 " (its output is in " + PathUtf8(log) + ")");
             fillDetail(*out);
             out->errors.front().detail["state"] = lastState.empty() ? std::string("starting") : lastState;
             out->host.pid = child->pid;

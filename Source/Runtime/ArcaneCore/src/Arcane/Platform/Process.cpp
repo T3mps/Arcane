@@ -2,12 +2,16 @@
 
 #include <Arcane/Platform/Process.hpp>
 
+#include <Arcane/Core/Constant.hpp>
+
 #include <cstdlib>
 
 #if ARC_PLATFORM_WINDOWS
     #include <windows.h>
 #else
     #include <dlfcn.h>
+    #include <signal.h>     // kill(SIGKILL): TerminateProcess
+    #include <sys/types.h>
     #include <unistd.h>
     #include <climits>
     #include <cstdlib>
@@ -213,6 +217,36 @@ namespace Arcane::Platform
         if (st.exited)
             return false;
         return true;
+#endif
+    }
+
+    bool TerminateProcess(std::uint32_t pid, std::uint64_t start)
+    {
+        if (pid == 0 || start == 0)
+            return false;   // no stamp to check: never kill on a bare pid
+#if ARC_PLATFORM_WINDOWS
+        ARC_CONSTANT("the exit code a forced kill leaves, SIGKILL's number, so a log reads it as a kill")
+        constexpr UINT kForcedExitCode = 9;
+        HANDLE h = ::OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!h)
+            return false;
+        FILETIME created{}, exited{}, kernel{}, user{};
+        bool killed = false;
+        if (::GetProcessTimes(h, &created, &exited, &kernel, &user))
+        {
+            const std::uint64_t created64 = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) |
+                                            created.dwLowDateTime;
+            const bool hasExited = exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0;
+            if (created64 == start && !hasExited)
+                killed = ::TerminateProcess(h, kForcedExitCode) != FALSE;
+        }
+        ::CloseHandle(h);
+        return killed;
+#else
+        const ProcessStat st = QueryProcess(pid);
+        if (!st.found || st.exited || st.start != start)
+            return false;
+        return ::kill(static_cast<pid_t>(pid), SIGKILL) == 0;
 #endif
     }
 

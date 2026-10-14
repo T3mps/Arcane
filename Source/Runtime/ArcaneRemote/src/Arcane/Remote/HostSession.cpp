@@ -211,7 +211,7 @@ void HostSession::MarkStopping()
 {
     if (!m_started)
         return;
-    m_gate.SetState("stopping");
+    m_gate.SetState("shutting-down");
     const std::int64_t now = NowUnixMs();
     PublishStatus(now);
     TouchHeartbeat(m_descriptorPath, now, m_gate.State(), m_gate.frame.load(std::memory_order_acquire));
@@ -222,7 +222,7 @@ void HostSession::Stop(std::string exitReason)
     if (!m_started)
         return;
     m_started = false;
-    m_gate.SetState("stopping");
+    m_gate.SetState("shutting-down");
     PublishStatus(NowUnixMs());
     ARC_INFO("remote: {} stopping ({})", ToString(m_config.kind), exitReason);
     Teardown();

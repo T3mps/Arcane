@@ -23,8 +23,8 @@ namespace Arcane::Remote
 // The wire args of the two commands, reflected for their schema (spec s5.3).
 // Each command reads its args JSON itself and refuses unknown keys.
 struct HostQuitArgs {
-    bool force = false;            // quit even with unsaved changes
-    bool discardChanges = false;   // the same, spelled as the editor's guard asks for it
+    bool force = false;            // the client ends the process after --timeout (spec s4.7); the host quits as usual
+    bool discardChanges = false;   // quit even with unsaved changes
 };
 ARC_REFLECT_TYPE(HostQuitArgs)
     ARC_REFLECT_FIELD(HostQuitArgs, force)
@@ -113,6 +113,14 @@ std::optional<Envelope> ReadBool(const Call& call, const char* key, bool& out)
     return std::nullopt;
 }
 
+std::string StateUsage()
+{
+    std::string text = "pass state: one of";
+    for (const std::string_view name : kHostStateNames)
+        text += " " + std::string(name);
+    return text;
+}
+
 constexpr std::string_view kQuitUsage = "pass force or discardChanges (both optional booleans)";
 constexpr std::string_view kWaitUsage = "pass what: ready, settled, frames (with frames: N), reload or state (with state: <s>)";
 
@@ -149,13 +157,12 @@ std::optional<Envelope> ParseWait(const Call& call, WaitArgs& out)
         if (w != "state")
             return MakeError(call.command, "arg.inapplicable", "state applies to what: state only",
                              std::string(kWaitUsage));
-        if (!state->is_string() || state->get<std::string>().empty())
-            return MakeError(call.command, "arg.invalid", "state must be a non-empty string",
-                             "pass state: ready, playing, paused or stopping");
+        if (!state->is_string() || !IsHostStateName(state->get<std::string>()))
+            return MakeError(call.command, "arg.invalid", "state must be a host state (spec s4.3)",
+                             StateUsage());
         out.state = state->get<std::string>();
     } else if (w == "state") {
-        return MakeError(call.command, "arg.missing", "what: state needs state: <s>",
-                         "pass state: ready, playing, paused or stopping");
+        return MakeError(call.command, "arg.missing", "what: state needs state: <s>", StateUsage());
     }
     return std::nullopt;
 }
@@ -182,9 +189,12 @@ CommandResult HostQuit(const Call& call, void* /*user*/)
 
     // The editor's unsaved-changes guard (spec s4.7): a dirty host does not
     // quit unless the caller says to drop the changes. Nothing has run.
+    // `force` is the client's (it ends the process after --timeout); it does
+    // not answer the guard -- the spec lists --discard-changes separately.
+    (void)force;
     const HostSession::Config& config = s.session->GetConfig();
     const bool dirty = config.dirty != nullptr && config.dirty(config.hookUser);
-    if (dirty && !force && !discardChanges) {
+    if (dirty && !discardChanges) {
         result.envelope = MakeError(call.command, "host.busy",
                                     "the host has unsaved changes; quitting now would drop them",
                                     "save them first, or pass --discard-changes");
@@ -278,7 +288,7 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
 
     if (args.what == "ready") {
         const std::string state = gate.State();
-        done = state == "ready" || state == "playing" || state == "paused";
+        done = IsReadyState(state);
         data["state"] = state;
     } else if (args.what == "settled") {
         if (!hasRenderer)
@@ -298,6 +308,9 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
         done = gate.pluginGeneration != generationAtArm;
         data["pluginGeneration"] = gate.pluginGeneration;
     } else if (args.what == "state") {
+        if (!IsHostStateName(args.state))
+            return MakeError(command, "arg.invalid", "'" + args.state + "' is not a host state (spec s4.3)",
+                             StateUsage());
         const std::string state = gate.State();
         done = state == args.state;
         data["state"] = state;

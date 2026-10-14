@@ -104,7 +104,7 @@ public:
     // remote surface. Latched at the break site, so a later Ctrl-C or a long
     // teardown is never relabelled.
     const char* ExitReason() const;
-    // The host is leaving its loop: state "stopping" is published to /status
+    // The host is leaving its loop: state "shutting-down" (spec s4.3) is published to /status
     // and to the descriptor at once, so a client polling a shutting-down host
     // does not read "ready". Stop follows later.
     void MarkStopping();
