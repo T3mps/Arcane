@@ -172,7 +172,15 @@ namespace Arcane::Platform
         //   3. it has NOT exited -- zero exit time.
         HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if (!h)
-            return false;
+        {
+            // Access denied means the pid names a RUNNING process this
+            // caller may not query (an elevated host seen from a normal
+            // user, a SYSTEM service). Its start time cannot be compared,
+            // so it counts as live: a record of a live process must never
+            // read as dead (a dead read lets a caller delete it). Every
+            // other failure (no such pid) is not live.
+            return ::GetLastError() == ERROR_ACCESS_DENIED;
+        }
         FILETIME created{}, exited{}, kernel{}, user{};
         const bool ok = ::GetProcessTimes(h, &created, &exited, &kernel, &user);
         ::CloseHandle(h);

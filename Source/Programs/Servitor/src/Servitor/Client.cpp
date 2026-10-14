@@ -185,12 +185,7 @@ void CheckProtocol(const std::string& command, Arcane::Remote::Envelope& env)
 {
     if (SpeaksProtocolMajor(env.protocol))
         return;
-    const std::string host = std::to_string(env.protocol);
-    auto mismatch = Arcane::Remote::MakeError(
-        command, "protocol.mismatch",
-        "the host speaks remote protocol " + host + "; this servitor speaks " + ProtocolMajorsText(),
-        "use a servitor that speaks remote protocol " + host + ", or a host that speaks remote protocol " +
-            ProtocolMajorsText());
+    auto mismatch = ProtocolMismatch(command, env.protocol);
     mismatch.protocol = env.protocol;
     mismatch.protocolMinor = env.protocolMinor;
     mismatch.id = env.id;
@@ -221,12 +216,6 @@ bool TransientBusy(const ExchangeResult& r)
         return false;
     const std::string& code = r.envelope.errors.front().code;
     return code == "host.busy" || code == "capture.minimized";
-}
-
-std::string PathUtf8(const std::filesystem::path& p)
-{
-    const auto u8 = p.generic_u8string();
-    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
 }
 
 // The newest *.arcdiag directly under dir written strictly after requestUnixMs;
@@ -296,7 +285,48 @@ void Write(std::FILE* stream, const std::string& text)
     }
 }
 
+int Emit(const Printed& printed, int exitCode)
+{
+    Write(stdout, printed.stdoutText);
+    Write(stderr, printed.stderrText);
+    return exitCode;
+}
+
 } // namespace
+
+std::int64_t NowUnixMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+std::string PathUtf8(const std::filesystem::path& p)
+{
+    const auto u8 = p.generic_u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+Arcane::Remote::Envelope ProtocolMismatch(const std::string& command, std::int64_t hostMajor)
+{
+    const std::string host = std::to_string(hostMajor);
+    auto env = Arcane::Remote::MakeError(
+        command, "protocol.mismatch",
+        "the host speaks remote protocol " + host + "; this servitor speaks " + ProtocolMajorsText(),
+        "use a servitor that speaks remote protocol " + host + ", or a host that speaks remote protocol " +
+            ProtocolMajorsText());
+    env.protocol = static_cast<int>(hostMajor);
+    return env;
+}
+
+int PrintEnvelope(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client,
+                  const GlobalOptions& opt)
+{
+    RenderOptions ro;
+    ro.format = opt.format;
+    ro.tty = opt.tty;
+    return Emit(Render(env, client, ro), client.exitCode);
+}
 
 int PrintUsage(const std::string& problem)
 {
@@ -432,15 +462,7 @@ int Run(int argc, char** argv)
     if (row->args != nullptr && !row->args(rest, req.args, &error))
         return PrintUsage(error);
 
-    RenderOptions ro;
-    ro.format = opt.format;
-    ro.tty = opt.tty;
     Arcane::Remote::ClientBlock client;
-    const auto print = [&](const Printed& printed) {
-        Write(stdout, printed.stdoutText);
-        Write(stderr, printed.stderrText);
-        return client.exitCode;
-    };
     // Discovery (spec s4.4): the project's descriptors, then exactly one host.
     Arcane::Remote::Envelope refusal;
     std::optional<LiveHost> host;
@@ -449,7 +471,7 @@ int Run(int argc, char** argv)
     if (!host) {
         refusal.command = req.command;
         client.exitCode = Arcane::Remote::ExitFromHost(refusal);
-        return print(Render(refusal, client, ro));
+        return PrintEnvelope(refusal, client, opt);
     }
 
     LiveTarget target;
@@ -471,7 +493,8 @@ int Run(int argc, char** argv)
     }
     client.token = host->descriptor.token;   // print-time redaction only; never printed
     client.descriptor = PathUtf8(host->path);
-    return print(Call(req, opt, &LiveExchange, &target, &client));
+    const Printed printed = Call(req, opt, &LiveExchange, &target, &client);
+    return Emit(printed, client.exitCode);
 }
 
 std::optional<Arcane::Remote::Envelope> ObserveTarget(const TargetWatch& watch, std::int64_t nowUnixMs)

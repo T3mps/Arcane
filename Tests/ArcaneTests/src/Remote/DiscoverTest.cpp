@@ -13,27 +13,29 @@
 #include <Arcane/Project/Project.hpp>   // EditorLock::Self (ArcaneEngine)
 #include <Json.hpp>
 #include "RemoteDemoArgs.hpp"
+#include "RemoteTestHttp.hpp"
 #include "RemoteTestSupport.hpp"
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#if defined(_WIN32)
+#include <io.h>        // _dup, _dup2, _open, _close, _fileno
+#else
+#include <unistd.h>    // dup, dup2, close
+#endif
 
 #if !defined(ARC_BUILD_DIST)
-
-namespace {
-
-std::int64_t DiscoverNowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-}
-
-}  // namespace
 
 TEST_CASE("two live hosts without --pid are ambiguous and a stale file is removed", "[servitor][client]") {
     const auto root = std::filesystem::temp_directory_path() / "remote-scan";
@@ -150,7 +152,7 @@ TEST_CASE("a newer protocol major reaches Select and is protocol.mismatch, not t
     d.processStart = Arcane::EditorLock::Self().start;
     d.port = 7;
     d.token = "t";
-    d.heartbeatUnixMs = DiscoverNowMs();
+    d.heartbeatUnixMs = Servitor::NowUnixMs();
     REQUIRE(Arcane::Remote::WriteDescriptorAtomic(
         Arcane::Remote::DescriptorPath(root, d.hostKind, d.pid), d));
     const auto scan = Servitor::ScanProject(root);
@@ -173,7 +175,7 @@ TEST_CASE("--host and --pid that match no live host are target.none naming the c
     d.processStart = Arcane::EditorLock::Self().start;
     d.port = 5;
     d.token = "t";
-    d.heartbeatUnixMs = DiscoverNowMs();
+    d.heartbeatUnixMs = Servitor::NowUnixMs();
     REQUIRE(Arcane::Remote::WriteDescriptorAtomic(
         Arcane::Remote::DescriptorPath(root, d.hostKind, d.pid), d));
     const auto scan = Servitor::ScanProject(root);
@@ -268,7 +270,7 @@ Servitor::LiveTarget DiscoverTarget(const std::filesystem::path& dir, std::uint1
     t.descriptor.port = port;
     t.descriptor.token = std::move(token);
     t.descriptor.state = "ready";
-    t.descriptor.heartbeatUnixMs = DiscoverNowMs();
+    t.descriptor.heartbeatUnixMs = Servitor::NowUnixMs();
     const auto path = Arcane::Remote::DescriptorPath(dir, t.descriptor.hostKind, t.descriptor.pid);
     REQUIRE(Arcane::Remote::WriteDescriptorAtomic(path, t.descriptor));
     t.watch.command = "discover.noop";
@@ -358,7 +360,8 @@ TEST_CASE("LiveExchange returns the command's envelope; a wrong token is auth.de
     const auto refused = DiscoverExchange(gone, body, nullptr);
     CHECK(refused.connectionRefusedBeforeBody);
     REQUIRE_FALSE(refused.envelope.errors.empty());       // a real envelope with a code
-    CHECK_FALSE(refused.envelope.errors[0].code.empty());
+    CHECK(refused.envelope.errors[0].code == "host.busy");
+    CHECK(refused.envelope.errors[0].detail["state"] == "connection-refused");
     CHECK(Arcane::Remote::ExitFromHost(refused.envelope) == 5);
     fs::remove_all(dir);
 }
@@ -367,8 +370,8 @@ TEST_CASE("LiveExchange answers host.died before connecting when the watched pro
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / ("servitor-live-died-" + std::to_string(Arcane::EditorLock::Self().pid));
     fs::remove_all(dir);
-    auto target = DiscoverTarget(dir, 1, "t");
-    target.watch.processStart += 1;   // not this process any more
+    auto target = DiscoverTarget(dir, RemoteTest::UnusedLoopbackPort(), "t");
+    target.watch.processStart += 1;   // not this process any more (a single exchange, no retry)
     const auto r = DiscoverExchange(target, R"({"id":"d","command":"discover.noop","args":{}})", nullptr);
     CHECK_FALSE(r.connectionRefusedBeforeBody);
     REQUIRE_FALSE(r.envelope.errors.empty());
@@ -377,7 +380,188 @@ TEST_CASE("LiveExchange answers host.died before connecting when the watched pro
     fs::remove_all(dir);
 }
 
+namespace {
+
+// The watch is live for the first sample (before the connect) and dead for
+// every later one: a host that dies while the connect is being refused.
+std::atomic<int> g_discoverSamples{0};
+std::optional<Arcane::Remote::Envelope> DiesAfterFirstSample(const Servitor::TargetWatch& watch, std::int64_t) {
+    if (g_discoverSamples.fetch_add(1) == 0)
+        return std::nullopt;
+    return Arcane::Remote::MakeError(watch.command, "host.died", "host process exited during the call", "relaunch");
+}
+
+std::optional<Arcane::Remote::Envelope> AlwaysLive(const Servitor::TargetWatch&, std::int64_t) {
+    return std::nullopt;
+}
+
+// A target for a CannedServer: no descriptor file, a watch that never objects.
+Servitor::LiveTarget CannedTarget(std::uint16_t port) {
+    Servitor::LiveTarget t;
+    t.descriptor.hostKind = Arcane::Remote::HostKind::Runtime;
+    t.descriptor.pid = Arcane::EditorLock::Self().pid;
+    t.descriptor.port = port;
+    t.descriptor.token = "t";
+    t.watch.command = "discover.noop";
+    t.observe = &AlwaysLive;
+    t.timeoutMs = 5000;
+    return t;
+}
+
+const std::string kDiscoverBody = R"({"id":"d","command":"discover.noop","args":{}})";
+
+}  // namespace
+
+TEST_CASE("a host that dies while the connect is refused is host.died exit 7, not a retryable busy", "[servitor][client]") {
+    g_discoverSamples = 0;
+    auto target = CannedTarget(RemoteTest::UnusedLoopbackPort());
+    target.observe = &DiesAfterFirstSample;
+    const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+    CHECK(g_discoverSamples.load() >= 2);   // sampled before the connect, and again after it failed
+    CHECK_FALSE(r.connectionRefusedBeforeBody);
+    REQUIRE_FALSE(r.envelope.errors.empty());
+    CHECK(r.envelope.errors[0].code == "host.died");
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 7);
+}
+
+TEST_CASE("a reply body that is not an envelope is internal exit 1", "[servitor][client]") {
+    {
+        RemoteTest::CannedServer host("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+        auto target = CannedTarget(host.Port());
+        const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+        CHECK_FALSE(r.connectionRefusedBeforeBody);
+        REQUIRE_FALSE(r.envelope.errors.empty());
+        CHECK(r.envelope.errors[0].code == "internal");
+        CHECK(r.envelope.errors[0].message == "malformed host reply");
+        CHECK(r.envelope.errors[0].detail["reason"] == "not-json");
+        CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
+    }
+    {
+        RemoteTest::CannedServer host("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 7\r\n\r\n{\"x\":1}");
+        auto target = CannedTarget(host.Port());
+        const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+        REQUIRE_FALSE(r.envelope.errors.empty());
+        CHECK(r.envelope.errors[0].code == "internal");
+        CHECK(r.envelope.errors[0].detail["reason"] == "not-an-envelope");
+        CHECK(r.envelope.errors[0].detail["httpStatus"] == 503);
+        CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
+    }
+}
+
+TEST_CASE("a reply past the byte cap is refused as internal exit 1", "[servitor][client]") {
+    const std::string body(4096, 'x');
+    RemoteTest::CannedServer host("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n" + body);
+    auto target = CannedTarget(host.Port());
+    target.maxReplyBytes = 1024;   // the production cap is kMaxReplyBytes (64 MiB)
+    const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+    REQUIRE_FALSE(r.envelope.errors.empty());
+    CHECK(r.envelope.errors[0].code == "internal");
+    CHECK(r.envelope.errors[0].detail["reason"] == "too-large");
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
+}
+
+TEST_CASE("a host that never replies is host.unreachable exit 7 at the call's deadline", "[servitor][client]") {
+    RemoteTest::CannedServer host("", /*holdOpen=*/true);
+    auto target = CannedTarget(host.Port());
+    target.timeoutMs = 200;
+    target.replyGraceMs = 0;
+    const auto started = std::chrono::steady_clock::now();
+    const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+    const auto tookMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    CHECK_FALSE(r.connectionRefusedBeforeBody);
+    REQUIRE_FALSE(r.envelope.errors.empty());
+    CHECK(r.envelope.errors[0].code == "host.unreachable");
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 7);
+    CHECK(tookMs >= 150);
+    CHECK(tookMs < 3000);
+    // A second exchange of the same call shares the spent budget: it does not
+    // wait another 200 ms for a reply.
+    RemoteTest::CannedServer again("", /*holdOpen=*/true);
+    target.descriptor.port = again.Port();
+    const auto second = std::chrono::steady_clock::now();
+    const auto r2 = Servitor::LiveExchange(kDiscoverBody, &target);
+    REQUIRE_FALSE(r2.envelope.errors.empty());   // refused or unreachable: either way, at once
+    CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - second).count() < 150);
+}
+
+TEST_CASE("--project resolves a directory up to its .arcproj, like the working directory", "[servitor][client]") {
+    namespace fs = std::filesystem;
+    const fs::path proj = fs::temp_directory_path() / ("servitor-project-" + std::to_string(Arcane::EditorLock::Self().pid));
+    fs::remove_all(proj);
+    fs::create_directories(proj / "Content" / "scenes");
+    { std::ofstream(proj / "Demo.arcproj") << "{}"; }
+    const auto expected = Arcane::Remote::DescriptorDir(proj, false);
+    Servitor::GlobalOptions opt;
+    Arcane::Remote::Envelope err;
+    opt.project = (proj / "Content" / "scenes").string();
+    CHECK(Servitor::RemoteDirFor(opt, &err) == expected);   // walks up
+    opt.project = (proj / "Demo.arcproj").string();
+    CHECK(Servitor::RemoteDirFor(opt, &err) == expected);   // the file's folder
+    opt.project = proj.string();
+    CHECK(Servitor::RemoteDirFor(opt, &err) == expected);
+    opt.project = (proj / "missing").string();
+    CHECK_FALSE(Servitor::RemoteDirFor(opt, &err).has_value());
+    CHECK(err.errors[0].code == "arg.invalid");
+    CHECK(Arcane::Remote::ExitFromHost(err) == 2);
+    fs::remove_all(proj);
+}
+
 // --- Run's flag rules (Task 14 review carries) ------------------------------
+
+namespace {
+
+// Points fd 2 at a file for its lifetime, so Run's usage text is captured
+// rather than printed into the suite's output.
+class DiscoverStderrCapture {
+public:
+    explicit DiscoverStderrCapture(const std::filesystem::path& file) : m_file(file) {
+        std::fflush(stderr);
+#if defined(_WIN32)
+        m_saved = ::_dup(2);
+        const int fd = ::_wopen(file.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+        if (fd >= 0) {
+            ::_dup2(fd, 2);
+            ::_close(fd);
+        }
+#else
+        m_saved = ::dup(2);
+        const int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) {
+            ::dup2(fd, 2);
+            ::close(fd);
+        }
+#endif
+    }
+    ~DiscoverStderrCapture() { Restore(); }
+    // Restores fd 2 and returns what was written to it.
+    std::string Take() {
+        Restore();
+        std::ifstream in(m_file, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    DiscoverStderrCapture(const DiscoverStderrCapture&) = delete;
+    DiscoverStderrCapture& operator=(const DiscoverStderrCapture&) = delete;
+
+private:
+    void Restore() {
+        if (m_saved < 0)
+            return;
+        std::fflush(stderr);
+#if defined(_WIN32)
+        ::_dup2(m_saved, 2);
+        ::_close(m_saved);
+#else
+        ::dup2(m_saved, 2);
+        ::close(m_saved);
+#endif
+        m_saved = -1;
+    }
+    std::filesystem::path m_file;
+    int m_saved = -1;
+};
+
+}  // namespace
 
 TEST_CASE("a value flag refuses a value that is itself a flag", "[servitor][client]") {
     std::vector<std::string> words = {"servitor", "--project", "--json", "status"};
@@ -409,7 +593,18 @@ TEST_CASE("a leftover --flag after the verb is refused with usage exit 2", "[ser
     std::vector<char*> argv;
     for (auto& w : words)
         argv.push_back(w.data());
-    CHECK(Servitor::Run(static_cast<int>(argv.size()), argv.data()) == 2);
+    const auto file = std::filesystem::temp_directory_path() /
+                      ("servitor-usage-" + std::to_string(Arcane::EditorLock::Self().pid) + ".txt");
+    int code = 0;
+    std::string usage;
+    {
+        DiscoverStderrCapture capture(file);
+        code = Servitor::Run(static_cast<int>(argv.size()), argv.data());
+        usage = capture.Take();
+    }
+    std::filesystem::remove(file);
+    CHECK(code == 2);
+    CHECK(usage.find("servitor: unknown flag --bogus") != std::string::npos);
 }
 
 #endif

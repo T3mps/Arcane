@@ -57,6 +57,28 @@ TEST_CASE("Self is live and a flipped start time is not", "[remote][descriptor]"
     CHECK_FALSE(Arcane::Platform::IsProcessLive(self.pid, self.start + 1));
 }
 
+#ifdef _WIN32
+TEST_CASE("a running process this user may not query is live, never deletable", "[remote][descriptor]") {
+    // An elevated host (or a SYSTEM service) refuses OpenProcess with
+    // ERROR_ACCESS_DENIED to a normal user. Find one such pid by probing the
+    // pid space (Windows pids are multiples of 4); an elevated test run may
+    // open every process, so none is found and the case is skipped.
+    std::uint32_t denied = 0;
+    for (std::uint32_t pid = 4; pid < 1u << 18 && denied == 0; pid += 4) {
+        const HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (h != nullptr)
+            ::CloseHandle(h);
+        else if (::GetLastError() == ERROR_ACCESS_DENIED)
+            denied = pid;
+    }
+    if (denied == 0)
+        SKIP("every process opened: the run is elevated, so no access-denied pid exists to probe");
+    CHECK(Arcane::Platform::IsProcessLive(denied, 0));
+    CHECK(Arcane::Platform::IsProcessLive(denied, 12345)); // its start cannot be compared
+    CHECK_FALSE(Arcane::Platform::IsProcessLive(0, 0));
+}
+#endif
+
 TEST_CASE("descriptor write is atomic, owner-only, and a stale pid is not live", "[remote][descriptor]") {
     const auto dir = std::filesystem::temp_directory_path() / "remote-desc-test";
     std::filesystem::create_directories(dir);

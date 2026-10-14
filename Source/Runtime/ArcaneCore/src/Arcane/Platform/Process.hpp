@@ -45,6 +45,9 @@ namespace Arcane::Platform
     //      handle cannot fake; POSIX: not a zombie awaiting its reap).
     // `start` is the stamp EditorLock::Self records: the creation FILETIME as
     // u64 on Windows, QueryProcess's start on POSIX. Pid 0 is never live.
+    // Windows: an OpenProcess refused with ERROR_ACCESS_DENIED is a running
+    // process the caller may not query (elevated, another user, SYSTEM); it
+    // is live, and tells 2-3 cannot be checked for it.
     ARC_CORE_API bool IsProcessLive(std::uint32_t pid, std::uint64_t start);
 
 #if ARC_PLATFORM_POSIX

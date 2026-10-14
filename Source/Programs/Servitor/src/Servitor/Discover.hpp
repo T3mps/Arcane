@@ -46,11 +46,12 @@ Scan ScanProject(const std::filesystem::path& projectRoot);
 // is deleted and listed in removedStale; a hung one (IsHung) stays, hung = true.
 // A missing directory is an empty scan.
 Scan ScanDirectory(const std::filesystem::path& remoteDir);
-// The descriptor directory `opt` names: --project (a directory, or an .arcproj
-// file's folder), else the nearest ancestor of the working directory holding
-// an .arcproj, else the projectless editor's <EditorUserDir>/Remote.
-// nullopt fills *error (when non-null) with arg.invalid (exit 2) for a
-// --project that names neither.
+// The descriptor directory `opt` names (spec s4.4): --project as an .arcproj
+// file's folder, or as a directory resolved up to its nearest .arcproj; with
+// no --project, the nearest ancestor of the working directory holding an
+// .arcproj, else the projectless editor's <EditorUserDir>/Remote. nullopt
+// fills *error (when non-null) with arg.invalid (exit 2) for a --project that
+// is neither an .arcproj nor inside a project.
 std::optional<std::filesystem::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::Envelope* error);
 
 // Zero live hosts (after --host / --pid) -> target.none (4); two or more ->

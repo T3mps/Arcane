@@ -2,14 +2,11 @@
 
 #if !defined(ARC_BUILD_DIST)
 
-#include <Servitor/Format.hpp>
-
 #include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Platform/Process.hpp>
 
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -24,19 +21,6 @@ namespace Servitor {
 namespace {
 
 namespace fs = std::filesystem;
-
-std::int64_t NowUnixMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
-
-std::string PathUtf8(const fs::path& p)
-{
-    const auto u8 = p.generic_u8string();
-    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
-}
 
 // Why a descriptor ReadDescriptor rejected could not be read. An elevated
 // host's descriptor is owner-only (AM5), so a non-elevated servitor is denied.
@@ -133,14 +117,6 @@ std::optional<fs::path> NearestProject(fs::path start)
     return std::nullopt;
 }
 
-void Write(std::FILE* stream, const std::string& text)
-{
-    if (!text.empty()) {
-        std::fwrite(text.data(), 1, text.size(), stream);
-        std::fflush(stream);
-    }
-}
-
 } // namespace
 
 Scan ScanProject(const fs::path& projectRoot)
@@ -189,20 +165,22 @@ std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::E
 {
     std::error_code ec;
     if (!opt.project.empty()) {
-        const fs::path project(opt.project);
-        fs::path root;
-        if (fs::is_directory(project, ec))
-            root = project;
-        else if (project.extension() == ".arcproj" && fs::is_regular_file(project, ec))
+        // An .arcproj names its folder; a directory resolves like the working
+        // directory does, up to the nearest .arcproj (spec s4.4).
+        const fs::path project = fs::absolute(fs::path(opt.project), ec);
+        std::optional<fs::path> root;
+        if (project.extension() == ".arcproj" && fs::is_regular_file(project, ec))
             root = project.parent_path();
-        if (root.empty()) {
+        else if (fs::is_directory(project, ec))
+            root = NearestProject(project);
+        if (!root) {
             Fill(error, Arcane::Remote::MakeError("", "arg.invalid",
                                                   "--project " + opt.project +
-                                                      " names neither a project directory nor an .arcproj file",
+                                                      " is neither an .arcproj file nor inside a project directory",
                                                   "pass the project's folder or its .arcproj"));
             return std::nullopt;
         }
-        return Arcane::Remote::DescriptorDir(fs::absolute(root, ec), false);
+        return Arcane::Remote::DescriptorDir(*root, false);
     }
     const fs::path cwd = fs::current_path(ec);
     if (!ec) {
@@ -256,14 +234,7 @@ std::optional<LiveHost> Select(const Scan& scan, const GlobalOptions& opt, Arcan
 
     const LiveHost& chosen = *matches.front();
     if (!SpeaksProtocolMajor(chosen.descriptor.protocol)) {
-        const std::string host = std::to_string(chosen.descriptor.protocol);
-        auto env = Arcane::Remote::MakeError(
-            "", "protocol.mismatch",
-            "the host " + Candidate(chosen) + " speaks remote protocol " + host + "; this servitor speaks " +
-                ProtocolMajorsText(),
-            "use a servitor that speaks remote protocol " + host + ", or a host that speaks remote protocol " +
-                ProtocolMajorsText());
-        env.protocol = static_cast<int>(chosen.descriptor.protocol);
+        auto env = ProtocolMismatch("", chosen.descriptor.protocol);
         env.host.pid = chosen.descriptor.pid;
         env.host.kind = Arcane::Remote::ToString(chosen.descriptor.hostKind);
         Fill(error, std::move(env));
@@ -363,10 +334,8 @@ std::filesystem::path HostDiagnosticsDir(Arcane::Remote::HostKind kind, const Gl
     return *bin / folder / "diagnostics";
 }
 
-int StatusVerb(std::span<const std::string> rest, const GlobalOptions& opt)
+int StatusVerb(std::span<const std::string> /*rest: Run refuses any; the row takes none*/, const GlobalOptions& opt)
 {
-    if (!rest.empty())
-        return PrintUsage("status takes no arguments, got " + rest.front());
     Arcane::Remote::ClientBlock client;
     Arcane::Remote::Envelope env;
     if (const auto dir = RemoteDirFor(opt, &env)) {
@@ -375,13 +344,7 @@ int StatusVerb(std::span<const std::string> rest, const GlobalOptions& opt)
         env.command = "status";
     }
     client.exitCode = Arcane::Remote::ExitFromHost(env);
-    RenderOptions ro;
-    ro.format = opt.format;
-    ro.tty = opt.tty;
-    const Printed printed = Render(env, client, ro);
-    Write(stdout, printed.stdoutText);
-    Write(stderr, printed.stderrText);
-    return client.exitCode;
+    return PrintEnvelope(env, client, opt);
 }
 
 } // namespace Servitor

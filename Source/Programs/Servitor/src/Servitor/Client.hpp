@@ -31,6 +31,16 @@ std::string VersionText();
 std::string ProtocolMajorsText();
 // True when `major` is in kProtocolMajors.
 bool SpeaksProtocolMajor(std::int64_t major);
+// protocol.mismatch (exit 4) for a host speaking `hostMajor`; the message and
+// remediation name both sides (rev 8.3 V6). One wording for the reply check
+// and for Select's descriptor check.
+Arcane::Remote::Envelope ProtocolMismatch(const std::string& command, std::int64_t hostMajor);
+
+// system_clock milliseconds since the epoch: the one clock for heartbeats,
+// IsHung and requestUnixMs.
+std::int64_t NowUnixMs();
+// A path as UTF-8 with forward slashes, for envelopes.
+std::string PathUtf8(const std::filesystem::path& p);
 
 struct GlobalOptions {
     Format format = Format::Human; // TTY default; non-TTY default is Json
@@ -59,6 +69,9 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
 // Prints "servitor: <problem>" and the usage text to stderr; returns 2.
 int PrintUsage(const std::string& problem);
+// Renders `env` in opt's format (stdout, diagnostics on stderr); returns client.exitCode.
+int PrintEnvelope(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client,
+                  const GlobalOptions& opt);
 
 struct CallRequest {
     std::string command;

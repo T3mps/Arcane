@@ -6,8 +6,10 @@
 #include <Arcane/Remote/HttpClient.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <span>
+#include <thread>
 #include <utility>
 
 namespace Servitor {
@@ -20,18 +22,26 @@ ARC_CONSTANT("recv chunk size: one loopback read")
 constexpr std::size_t kRecvChunkBytes = 16u * 1024u;
 ARC_CONSTANT("send() takes an int length on Winsock: one call never passes more than 1 GiB")
 constexpr std::size_t kMaxSendChunk = static_cast<std::size_t>(1) << 30;
-
-std::int64_t NowUnixMs()
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
+ARC_CONSTANT("poll(2)/select failing for a reason other than EINTR: back off this long between tries")
+constexpr int kPollErrorBackoffMs = 10;
+ARC_CONSTANT("consecutive poll failures (not EINTR) before the connection counts as unreachable")
+constexpr int kMaxPollErrors = 20;
 
 bool SocketsReady()
 {
     static const bool ready = Arcane::InitSockets();   // WSAStartup once per process (no-op on POSIX)
     return ready;
+}
+
+// The last socket call was interrupted by a signal (POSIX EINTR; the 130/143
+// signal path makes it real): the call is retried, never read as a failure.
+bool Interrupted()
+{
+#if defined(_WIN32)
+    return ::WSAGetLastError() == WSAEINTR;
+#else
+    return errno == EINTR;
+#endif
 }
 
 // Linux: no SIGPIPE from a send to a closed peer (MSG_NOSIGNAL). macOS sets
@@ -56,17 +66,36 @@ void NoSigPipe(SocketType sock)
 #endif
 }
 
-// Every byte or false. The socket is still blocking here.
-bool SendEvery(SocketType sock, const std::string& bytes)
+int WaitMs(Clock::time_point deadline)
+{
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+    return static_cast<int>(std::clamp<long long>(left, 0, kWatchPollMs));
+}
+
+// Every byte before `deadline`, or false. The socket is non-blocking: a full
+// send buffer waits on PollSockets(write) in slices of at most kWatchPollMs.
+bool SendUntil(SocketType sock, const std::string& bytes, Clock::time_point deadline)
 {
     std::size_t sent = 0;
     while (sent < bytes.size()) {
-        const std::size_t left = bytes.size() - sent;
-        const int chunk = static_cast<int>(std::min(left, kMaxSendChunk));
+        const int chunk = static_cast<int>(std::min(bytes.size() - sent, kMaxSendChunk));
         const auto n = ::send(sock, bytes.data() + sent, chunk, SendFlags());
-        if (n <= 0)
+        if (n > 0) {
+            sent += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n < 0 && Interrupted())
+            continue;
+        if (n == 0 || !Arcane::IsSocketTimeoutError())
+            return false;   // reset or refused mid-send
+        if (Clock::now() >= deadline)
             return false;
-        sent += static_cast<std::size_t>(n);
+        Arcane::PollInterest interest;
+        interest.socket = sock;
+        interest.wantWrite = true;
+        if (Arcane::PollSockets(std::span<Arcane::PollInterest>(&interest, 1), WaitMs(deadline)) < 0 &&
+            !Interrupted())
+            std::this_thread::sleep_for(std::chrono::milliseconds(kPollErrorBackoffMs));
     }
     return true;
 }
@@ -82,7 +111,7 @@ struct SocketGuard {
     }
 };
 
-enum class ReadEnd { Reply, Closed, Truncated, Malformed, TooLarge, Deadline, Observed };
+enum class ReadEnd { Reply, Closed, Truncated, Malformed, TooLarge, Deadline, PollFailed, Observed };
 
 struct ReadOutcome {
     ReadEnd end = ReadEnd::Deadline;
@@ -90,25 +119,29 @@ struct ReadOutcome {
     Arcane::Remote::Envelope observed;
 };
 
-// One recv on a non-blocking socket. >0 bytes appended, 0 EOF (or a reset),
-// -1 nothing available yet.
+// One recv on a non-blocking socket, EINTR retried. >0 bytes appended, 0 EOF
+// (or a reset), -1 nothing available yet.
 int RecvSome(SocketType sock, std::string& buf)
 {
     char chunk[kRecvChunkBytes];
-    const auto n = ::recv(sock, chunk, static_cast<int>(sizeof(chunk)), 0);
-    if (n > 0) {
-        buf.append(chunk, chunk + n);
-        return static_cast<int>(n);
+    for (;;) {
+        const auto n = ::recv(sock, chunk, static_cast<int>(sizeof(chunk)), 0);
+        if (n > 0) {
+            buf.append(chunk, chunk + n);
+            return static_cast<int>(n);
+        }
+        if (n < 0 && Interrupted())
+            continue;
+        if (n == 0 || !Arcane::IsSocketTimeoutError())
+            return 0;   // the peer closed, or the connection was reset
+        return -1;
     }
-    if (n == 0 || !Arcane::IsSocketTimeoutError())
-        return 0;   // the peer closed, or the connection was reset
-    return -1;
 }
 
 // What the bytes so far say: a reply, malformed, too large, or nullopt (more needed).
-std::optional<ReadEnd> Judge(const std::string& buf, bool eof, ReadOutcome& out)
+std::optional<ReadEnd> Judge(const std::string& buf, bool eof, std::size_t maxBytes, ReadOutcome& out)
 {
-    if (buf.size() > kMaxReplyBytes)
+    if (buf.size() > maxBytes)
         return ReadEnd::TooLarge;
     std::string why;
     if (auto reply = Arcane::Remote::ParseHttpReply(buf, eof, &why)) {
@@ -122,30 +155,36 @@ std::optional<ReadEnd> Judge(const std::string& buf, bool eof, ReadOutcome& out)
     return std::nullopt;
 }
 
-// Reads one response: bounded by kMaxReplyBytes and by `deadline`; the host
-// closes after every response, so EOF ends it too. With a target, every
-// wake (a timeout included) samples ObserveTarget before the socket is read;
-// a verdict still keeps a complete response that is already buffered.
-ReadOutcome ReadReply(SocketType sock, Clock::time_point deadline, const LiveTarget* target)
+// Reads one response: bounded by maxBytes and by `deadline`; the host closes
+// after every response, so EOF ends it too. With a target, every wake (a
+// timeout included) samples its watch before the socket is read; a verdict
+// still keeps a complete response that is already buffered.
+ReadOutcome ReadReply(SocketType sock, Clock::time_point deadline, std::size_t maxBytes, const LiveTarget* target)
 {
     ReadOutcome out;
     std::string buf;
+    int pollErrors = 0;
     for (;;) {
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
-        const int waitMs = static_cast<int>(std::clamp<long long>(left, 0, kWatchPollMs));
         Arcane::PollInterest interest;
         interest.socket = sock;
         interest.wantRead = true;
-        const int rc = Arcane::PollSockets(std::span<Arcane::PollInterest>(&interest, 1), waitMs);
+        const int rc = Arcane::PollSockets(std::span<Arcane::PollInterest>(&interest, 1), WaitMs(deadline));
+        const bool interrupted = rc < 0 && Interrupted();
 
-        if (target != nullptr) {
-            if (auto verdict = ObserveTarget(target->watch, NowUnixMs())) {
+        if (target != nullptr && target->observe != nullptr) {
+            if (auto verdict = target->observe(target->watch, NowUnixMs())) {
                 // Drain what is already there; a complete reply wins over the verdict.
-                for (int n = RecvSome(sock, buf); n > 0 && buf.size() <= kMaxReplyBytes; n = RecvSome(sock, buf)) {
+                bool eof = false;
+                for (;;) {
+                    const int n = RecvSome(sock, buf);
+                    if (n == 0)
+                        eof = true;
+                    if (n <= 0 || buf.size() > maxBytes)
+                        break;
                 }
                 std::string why;
-                if (buf.size() <= kMaxReplyBytes) {
-                    if (auto reply = Arcane::Remote::ParseHttpReply(buf, false, &why)) {
+                if (buf.size() <= maxBytes) {
+                    if (auto reply = Arcane::Remote::ParseHttpReply(buf, eof, &why)) {
                         out.reply = std::move(*reply);
                         out.end = ReadEnd::Reply;
                         return out;
@@ -157,10 +196,20 @@ ReadOutcome ReadReply(SocketType sock, Clock::time_point deadline, const LiveTar
             }
         }
 
+        if (rc < 0 && !interrupted) {
+            // Not a signal: back off instead of spinning, and give up when it persists.
+            if (++pollErrors >= kMaxPollErrors) {
+                out.end = ReadEnd::PollFailed;
+                return out;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kPollErrorBackoffMs));
+        } else if (rc >= 0) {
+            pollErrors = 0;
+        }
         if (rc > 0 && (interest.readable || interest.hungup)) {
             const int n = RecvSome(sock, buf);
             if (n != -1) {
-                if (const auto end = Judge(buf, n == 0, out)) {
+                if (const auto end = Judge(buf, n == 0, maxBytes, out)) {
                     out.end = *end;
                     return out;
                 }
@@ -179,13 +228,16 @@ void StampHost(Arcane::Remote::Envelope& env, const Arcane::Remote::Descriptor& 
     env.host.kind = Arcane::Remote::ToString(desc.hostKind);
 }
 
-Arcane::Remote::Envelope Internal(const std::string& command, const Arcane::Remote::Descriptor& desc, int httpStatus)
+Arcane::Remote::Envelope Internal(const std::string& command, const Arcane::Remote::Descriptor& desc, int httpStatus,
+                                  const char* reason)
 {
     auto env = Arcane::Remote::MakeError(command, "internal", "malformed host reply",
                                          "the host's reply is not a remote envelope; rerun with --verbose and "
                                          "report the servitor and host versions");
+    auto& detail = env.errors.front().detail;
+    detail["reason"] = reason;
     if (httpStatus != 0)
-        env.errors.front().detail["httpStatus"] = httpStatus;
+        detail["httpStatus"] = httpStatus;
     StampHost(env, desc);
     return env;
 }
@@ -219,16 +271,42 @@ Arcane::Remote::Envelope EnvelopeOf(const std::string& command, const Arcane::Re
 {
     const auto json = nlohmann::json::parse(reply.body, nullptr, /*allow_exceptions=*/false);
     if (json.is_discarded())
-        return Internal(command, desc, reply.status);
+        return Internal(command, desc, reply.status, "not-json");
     auto env = Arcane::Remote::TryParseEnvelope(json);
     if (!env)
-        return Internal(command, desc, reply.status);
+        return Internal(command, desc, reply.status, "not-an-envelope");
     return std::move(*env);
 }
 
 std::string Endpoint(const Arcane::Remote::Descriptor& desc)
 {
     return "127.0.0.1:" + std::to_string(desc.port);
+}
+
+// The envelope one read ended in.
+Arcane::Remote::Envelope FromReadEnd(ReadOutcome& read, const std::string& command,
+                                     const Arcane::Remote::Descriptor& desc, long long waitedMs)
+{
+    switch (read.end) {
+        case ReadEnd::Reply:
+            return EnvelopeOf(command, desc, read.reply);
+        case ReadEnd::Observed:
+            return std::move(read.observed);
+        case ReadEnd::Malformed:
+            return Internal(command, desc, 0, "malformed-http");
+        case ReadEnd::TooLarge:
+            return Internal(command, desc, 0, "too-large");
+        case ReadEnd::Closed:
+            return Unreachable(command, desc, "the host at " + Endpoint(desc) + " closed the connection without replying");
+        case ReadEnd::Truncated:
+            return Unreachable(command, desc, "the host at " + Endpoint(desc) + " closed the connection mid-reply");
+        case ReadEnd::PollFailed:
+            return Unreachable(command, desc, "waiting on the connection to " + Endpoint(desc) + " kept failing");
+        case ReadEnd::Deadline:
+            break;
+    }
+    return Unreachable(command, desc,
+                       "no reply from the host at " + Endpoint(desc) + " within " + std::to_string(waitedMs) + " ms");
 }
 
 } // namespace
@@ -244,76 +322,67 @@ ExchangeResult LiveExchange(const std::string& requestBody, void* user)
     }
     const Arcane::Remote::Descriptor& desc = target->descriptor;
     const std::string& command = target->watch.command;
+    const auto observe = [&]() -> std::optional<Arcane::Remote::Envelope> {
+        if (target->observe == nullptr)
+            return std::nullopt;
+        return target->observe(target->watch, NowUnixMs());
+    };
 
-    // Taken once, when the call's first exchange starts (before the first
-    // sample and before the body is written); a busy retry keeps it, so a
-    // report written since the call began is still found.
+    // Stamped once, when the call's first exchange starts (before the first
+    // sample and before the body is written). A busy retry keeps both: a
+    // report written since the call began is still found, and every attempt
+    // shares the one --timeout budget.
     if (target->watch.requestUnixMs == 0)
         target->watch.requestUnixMs = NowUnixMs();
-    if (auto verdict = ObserveTarget(target->watch, NowUnixMs())) {
+    if (target->started == Clock::time_point{})
+        target->started = Clock::now();
+    const Clock::time_point budgetEnd = target->started + std::chrono::milliseconds(target->timeoutMs);
+    const Clock::time_point deadline = budgetEnd + std::chrono::milliseconds(target->replyGraceMs);
+
+    if (auto verdict = observe()) {
         result.envelope = std::move(*verdict);
         return result;
     }
+    // Not sent. A host that died or hung meanwhile is named (exit 7; a refused
+    // loopback connect alone takes ~2 s on Windows); otherwise the answer is
+    // provably-not-run and retryable (exit 5).
+    const auto notSent = [&](const char* state, std::string message) {
+        if (auto verdict = observe()) {
+            result.envelope = std::move(*verdict);
+            return result;
+        }
+        result.connectionRefusedBeforeBody = true;
+        result.envelope = NotSent(command, desc, state, std::move(message));
+        return result;
+    };
 
     if (!SocketsReady()) {
         result.envelope = Arcane::Remote::MakeError(command, "internal", "the socket layer did not start",
                                                     "check the machine's network stack");
         return result;
     }
+    const auto budgetLeft = std::chrono::duration_cast<std::chrono::milliseconds>(budgetEnd - Clock::now()).count();
+    const int connectMs = static_cast<int>(std::clamp<long long>(budgetLeft, 1, kConnectTimeoutMs));
     SocketGuard guard;
-    guard.sock = Arcane::ConnectSocketWithTimeout(
-        "127.0.0.1", desc.port, static_cast<int>(std::min(target->timeoutMs, kConnectTimeoutMs)));
-    if (guard.sock == INVALID_SOCK) {
-        result.connectionRefusedBeforeBody = true;
-        result.envelope = NotSent(command, desc, "connection-refused",
-                                  "could not connect to the host at " + Endpoint(desc));
-        return result;
-    }
+    guard.sock = Arcane::ConnectSocketWithTimeout("127.0.0.1", desc.port, connectMs);
+    if (guard.sock == INVALID_SOCK)
+        return notSent("connection-refused", "could not connect to the host at " + Endpoint(desc));
     NoSigPipe(guard.sock);
     const std::string request = Arcane::Remote::BuildPost("/remote/v1/call", desc.port, desc.token, requestBody);
-    if (!SendEvery(guard.sock, request)) {
-        result.connectionRefusedBeforeBody = true;
-        result.envelope = NotSent(command, desc, "connection-reset",
-                                  "the host at " + Endpoint(desc) + " dropped the connection before the request was sent");
-        return result;
-    }
-    if (!Arcane::SetNonBlocking(guard.sock, true)) {
-        result.envelope = Unreachable(command, desc, "could not read from the host at " + Endpoint(desc));
-        return result;
-    }
+    if (!Arcane::SetNonBlocking(guard.sock, true) || !SendUntil(guard.sock, request, deadline))
+        return notSent("connection-reset",
+                       "the host at " + Endpoint(desc) + " did not take the whole request; it was not run");
 
-    const auto deadline = Clock::now() + std::chrono::milliseconds(
-                                             static_cast<std::int64_t>(target->timeoutMs) + kReplyGraceMs);
-    ReadOutcome read = ReadReply(guard.sock, deadline, target);
-    switch (read.end) {
-        case ReadEnd::Reply:
-            result.envelope = EnvelopeOf(command, desc, read.reply);
-            break;
-        case ReadEnd::Observed:
-            result.envelope = std::move(read.observed);
-            break;
-        case ReadEnd::Malformed:
-        case ReadEnd::TooLarge:
-            result.envelope = Internal(command, desc, 0);
-            break;
-        case ReadEnd::Closed:
-        case ReadEnd::Truncated:
-            // A host that died or hung is named as such; otherwise it is unreachable.
-            if (auto verdict = ObserveTarget(target->watch, NowUnixMs()))
-                result.envelope = std::move(*verdict);
-            else
-                result.envelope = Unreachable(command, desc,
-                                              read.end == ReadEnd::Closed
-                                                  ? "the host at " + Endpoint(desc) + " closed the connection without replying"
-                                                  : "the host at " + Endpoint(desc) + " closed the connection mid-reply");
-            break;
-        case ReadEnd::Deadline:
-            result.envelope = Unreachable(command, desc,
-                                          "no reply from the host at " + Endpoint(desc) + " within " +
-                                              std::to_string(static_cast<std::int64_t>(target->timeoutMs) + kReplyGraceMs) +
-                                              " ms");
-            break;
+    ReadOutcome read = ReadReply(guard.sock, deadline, target->maxReplyBytes, target);
+    if (read.end == ReadEnd::Closed || read.end == ReadEnd::Truncated) {
+        // A host that died or hung is named as such; otherwise it is unreachable.
+        if (auto verdict = observe()) {
+            result.envelope = std::move(*verdict);
+            return result;
+        }
     }
+    result.envelope = FromReadEnd(read, command, desc,
+                                  std::chrono::duration_cast<std::chrono::milliseconds>(deadline - target->started).count());
     return result;
 }
 
@@ -329,40 +398,29 @@ std::optional<nlohmann::json> GetJson(const Arcane::Remote::Descriptor& desc, st
     if (!SocketsReady())
         return fail(Arcane::Remote::MakeError(command, "internal", "the socket layer did not start",
                                               "check the machine's network stack"));
+    const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
     SocketGuard guard;
-    guard.sock = Arcane::ConnectSocketWithTimeout("127.0.0.1", desc.port,
-                                                  static_cast<int>(std::min(timeoutMs, kConnectTimeoutMs)));
+    guard.sock = Arcane::ConnectSocketWithTimeout(
+        "127.0.0.1", desc.port, static_cast<int>(std::clamp<std::uint32_t>(timeoutMs, 1, kConnectTimeoutMs)));
     if (guard.sock == INVALID_SOCK)
         return fail(Unreachable(command, desc, "could not connect to the host at " + Endpoint(desc)));
     NoSigPipe(guard.sock);
-    if (!SendEvery(guard.sock, Arcane::Remote::BuildGet(target, desc.port, desc.token)) ||
-        !Arcane::SetNonBlocking(guard.sock, true))
+    if (!Arcane::SetNonBlocking(guard.sock, true) ||
+        !SendUntil(guard.sock, Arcane::Remote::BuildGet(target, desc.port, desc.token), deadline))
         return fail(Unreachable(command, desc, "the host at " + Endpoint(desc) + " dropped the connection"));
 
-    const ReadOutcome read = ReadReply(guard.sock, Clock::now() + std::chrono::milliseconds(timeoutMs), nullptr);
-    switch (read.end) {
-        case ReadEnd::Reply: {
-            const auto json = nlohmann::json::parse(read.reply.body, nullptr, /*allow_exceptions=*/false);
-            if (read.reply.status == 200 && !json.is_discarded())
-                return json;
-            if (!json.is_discarded()) {
-                if (auto env = Arcane::Remote::TryParseEnvelope(json); env && !env->errors.empty())
-                    return fail(std::move(*env));
-            }
-            return fail(Internal(command, desc, read.reply.status));
+    ReadOutcome read = ReadReply(guard.sock, deadline, kMaxReplyBytes, nullptr);
+    if (read.end == ReadEnd::Reply) {
+        const auto json = nlohmann::json::parse(read.reply.body, nullptr, /*allow_exceptions=*/false);
+        if (read.reply.status == 200 && !json.is_discarded())
+            return json;
+        if (!json.is_discarded()) {
+            if (auto env = Arcane::Remote::TryParseEnvelope(json); env && !env->errors.empty())
+                return fail(std::move(*env));
         }
-        case ReadEnd::Malformed:
-        case ReadEnd::TooLarge:
-            return fail(Internal(command, desc, 0));
-        case ReadEnd::Closed:
-        case ReadEnd::Truncated:
-            return fail(Unreachable(command, desc, "the host at " + Endpoint(desc) + " closed the connection without a reply"));
-        case ReadEnd::Deadline:
-        case ReadEnd::Observed:
-            break;
+        return fail(Internal(command, desc, read.reply.status, json.is_discarded() ? "not-json" : "not-an-envelope"));
     }
-    return fail(Unreachable(command, desc,
-                            "no reply from the host at " + Endpoint(desc) + " within " + std::to_string(timeoutMs) + " ms"));
+    return fail(FromReadEnd(read, command, desc, timeoutMs));
 }
 
 } // namespace Servitor
