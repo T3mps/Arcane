@@ -5,6 +5,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Http.hpp>
 #include <Arcane/Remote/Listener.hpp>
@@ -73,6 +74,10 @@ bool HostSession::Start()
     CommandRegistry& registry = CommandRegistry::Get();
     m_kindBefore = registry.GetHostKind();
     registry.SetHostKind(m_config.kind); // ruling F-1; Stop restores m_kindBefore (ruling S3-9)
+    // Ruling F12: the host's own remote commands register here, before the
+    // gate reads the registry generation and the first catalogue is published.
+    // Teardown releases them.
+    RegisterSessionCommands(this, &m_jobs); // host.quit, host.wait (Task 16)
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -233,6 +238,7 @@ void HostSession::Teardown()
     m_queue.reset();
     m_atoms.reset();
     m_cataloguePublished = false;
+    ReleaseSessionCommands(this); // a stopped session's commands answer host.unavailable
     if (m_descriptorWritten) {
         std::error_code ec;
         std::filesystem::remove(m_descriptorPath, ec);

@@ -45,6 +45,9 @@ namespace Servitor {
 
 namespace {
 
+ARC_CONSTANT("timing: how often an awaitsHost verb (wait) rescans for a host that has not written its descriptor yet")
+constexpr int kDiscoveryPollMs = 100;
+
 bool StdoutIsTty()
 {
 #if defined(_WIN32)
@@ -116,6 +119,16 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
     Format format = Format::Json;
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag = argv[i];
+        // A bare "--" ends servitor's own flags: it and every token after it
+        // belong to the verb, verbatim (launch's host flags, Task 16), so a
+        // host's --project or --timeout is never read as servitor's.
+        if (flag == "--") {
+            if (rest != nullptr) {
+                for (int j = i; j < argc; ++j)
+                    rest->emplace_back(argv[j]);
+            }
+            break;
+        }
         // A flag that takes a value reads the next token, which must exist and
         // must not itself be a flag (--project --json); a single '-' is a value.
         const auto value = [&](const char*& v) {
@@ -334,6 +347,10 @@ int PrintUsage(const std::string& problem)
     for (const VerbRow& row : VerbTable()) {
         text += "\n  ";
         text += row.words;
+        if (row.usage != nullptr) {
+            text += ' ';
+            text += row.usage;
+        }
     }
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
             "--host editor|runtime|server, --pid <n>, --engine <root>, --read-only, --yes, --no-retry, "
@@ -450,8 +467,9 @@ int Run(int argc, char** argv)
                                                           : "unknown verb " + tokens.front());
     const auto rest = std::span<const std::string>(tokens).subspan(consumed);
     // Every global flag was consumed above, so a leftover "--x" is unknown
-    // whichever verb follows (Task 14 review carry).
-    if (const auto problem = LeftoverFlag(rest))
+    // unless the verb's row declares it (Task 14 review carry; Task 16 rows
+    // declare their flags, and launch passes everything after "--" through).
+    if (const auto problem = SplitVerbTokens(*row, rest, nullptr))
         return PrintUsage(*problem);
     if (row->args == nullptr && !rest.empty())
         return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front());
@@ -464,10 +482,28 @@ int Run(int argc, char** argv)
 
     Arcane::Remote::ClientBlock client;
     // Discovery (spec s4.4): the project's descriptors, then exactly one host.
+    // An awaitsHost row (wait) keeps looking for up to --timeout while there
+    // is no host yet, so `wait ready` right after a launch finds it booting;
+    // the call then gets what is left of the budget.
     Arcane::Remote::Envelope refusal;
     std::optional<LiveHost> host;
-    if (const auto dir = RemoteDirFor(opt, &refusal))
-        host = Select(ScanDirectory(*dir), opt, &refusal);
+    const auto discoveryStart = std::chrono::steady_clock::now();
+    for (;;) {
+        refusal = Arcane::Remote::Envelope{};
+        if (const auto dir = RemoteDirFor(opt, &refusal))
+            host = Select(ScanDirectory(*dir), opt, &refusal);
+        const bool none = !host && !refusal.errors.empty() && refusal.errors.front().code == "target.none";
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - discoveryStart).count();
+        if (!row->awaitsHost || !none || elapsed + kDiscoveryPollMs >= static_cast<long long>(opt.timeoutMs))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kDiscoveryPollMs));
+    }
+    if (host && row->awaitsHost) {
+        const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - discoveryStart).count();
+        opt.timeoutMs = static_cast<std::uint32_t>(std::max<long long>(1, static_cast<long long>(opt.timeoutMs) - spent));
+    }
     if (!host) {
         refusal.command = req.command;
         client.exitCode = Arcane::Remote::ExitFromHost(refusal);

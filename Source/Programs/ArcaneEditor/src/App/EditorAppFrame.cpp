@@ -538,6 +538,11 @@ namespace Arcane::Editor
         // descriptor goes now, not at ~EditorApp after the whole teardown.
         if (m_remote)
         {
+            // The --report chain (ShutdownGraphPath, after this) reads the
+            // remote reason the loop broke on (Task 16): latched here, before
+            // the session goes.
+            if (m_remote->ExitReason() != nullptr)
+                m_remoteExitReason = m_remote->ExitReason();
             m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "stopping" first
             m_remote.reset();
         }
@@ -1765,6 +1770,25 @@ namespace Arcane::Editor
         rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
                                   "problems", "scene", "selection", "stats" };
+        // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the
+        // unsaved-changes guard host.quit honours: the scene (the same test the
+        // Exit intent's confirm modal parks on) or any open document. settled
+        // is `wait settled`: the --settle loop's producer conjunction, held
+        // across kRemoteSettleFrames rendered frames (RemoteSettleTracker).
+        rc.hookUser           = this;
+        rc.dirty              = [](void* user) -> bool {
+            const auto* app = static_cast<const EditorApp*>(user);
+            return (app->m_undo && app->m_scene.IsDirty(*app->m_undo)) || app->m_documents.AnyDirty();
+        };
+        rc.settled            = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            const bool shaderIdle       = app->m_shaderCompiler ? app->m_shaderCompiler->IsIdle() : true;
+            const bool cookPending      = app->m_cookQueue && app->m_cookQueue->CookPending();
+            const bool harvesterPending = app->m_materialThumbs && app->m_materialThumbs->PendingCount() != 0;
+            const bool idle = Arcane::SettleProducersIdle(shaderIdle, app->m_cookQueueSettling, cookPending,
+                                                          harvesterPending);
+            return app->m_remoteSettle.Observe(app->m_frameCount, idle);
+        };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
         {

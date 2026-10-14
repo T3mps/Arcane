@@ -326,6 +326,9 @@ private:
     // 2 when an open-ended --headless --remote run's surface did not start:
     // it has no other stop path, so Run() returns this instead of looping.
     int                                          m_remoteArmExit = 0;
+    // `wait settled`'s stability count (Task 16): the session's settled hook
+    // feeds it the shader compiler's idleness once per poll.
+    Arcane::RemoteSettleTracker                  m_remoteSettle;
 #endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,

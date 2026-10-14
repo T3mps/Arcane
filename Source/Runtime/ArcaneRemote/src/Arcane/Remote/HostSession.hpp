@@ -58,12 +58,19 @@ public:
         std::vector<std::string> capabilities;
         // Appended by later tasks, kept last so the fields above keep their
         // positions. Each task that appends a field also wires, in Start, the
-        // registration that reads it (ruling F12): Task 16 adds
-        // `bool (*dirty)(void*)`, `bool (*settled)(void*)` and the `void* hookUser`
-        // both receive; Task 19 adds `WorldTable worlds`; Task 22 adds
-        // `DiagnosticStore* problemStore`; Tasks 27-29 add their host hook
-        // structs. Session-owned state (the cvar command user, FrameStats)
-        // is a HostSession member added by the task that needs it.
+        // registration that reads it (ruling F12): Task 19 adds
+        // `WorldTable worlds`; Task 22 adds `DiagnosticStore* problemStore`;
+        // Tasks 27-29 add their host hook structs. Session-owned state (the
+        // cvar command user, FrameStats) is a HostSession member added by the
+        // task that needs it.
+        //
+        // Task 16 (host.quit / host.wait, Commands/SessionCommands.hpp), main
+        // thread, each called with hookUser. Plain function pointers, so a
+        // Client-module predicate reaches ArcaneRemote without a dependency
+        // on it (R8-2). Null = the host has none.
+        bool (*dirty)(void*) = nullptr;    // unsaved changes: host.quit answers host.busy{state:"modal"}
+        bool (*settled)(void*) = nullptr;  // wait settled: SettleConverged and ShaderCompiler::IsIdle (editor, runtime)
+        void* hookUser = nullptr;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

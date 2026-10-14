@@ -3293,6 +3293,14 @@ namespace Arcane::Editor
                 exitReason = "compare-blessed";
             else if (compareWriteFailed)
                 exitReason = "compare-failed";
+#if !defined(ARC_BUILD_DIST)
+            // Servitor P0 (Task 16): the loop broke on a remote quit
+            // (host.quit) or the --remote-idle-exit timeout, latched where it
+            // broke (HostSession::DrainFrame) and kept by MainLoop. Mirrors
+            // RuntimeApp::ShutdownGraphPath's place for it.
+            else if (!m_remoteExitReason.empty())
+                exitReason = m_remoteExitReason;
+#endif
             else if (!completedAllFrames)
                 exitReason = "stopped-early";
 

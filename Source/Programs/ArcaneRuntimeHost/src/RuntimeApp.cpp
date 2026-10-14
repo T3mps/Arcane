@@ -829,6 +829,15 @@ void RuntimeApp::MainLoop()
         rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
         rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
+        // Task 16 (ruling F12): `wait settled` -- the runtime's --settle
+        // producer conjunct is its shader compiler alone (SettleBound.hpp),
+        // held across kRemoteSettleFrames rendered frames. No dirty hook: a
+        // runtime has no unsaved documents.
+        rc.hookUser           = this;
+        rc.settled            = [](void* user) -> bool {
+            auto* app = static_cast<RuntimeApp*>(user);
+            return app->m_remoteSettle.Observe(app->m_frameCount, app->m_shaderCompiler.IsIdle());
+        };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
             m_remote.reset();   // Start logged why

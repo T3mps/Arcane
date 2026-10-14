@@ -161,7 +161,7 @@ Scan ScanDirectory(const fs::path& remoteDir)
     return scan;
 }
 
-std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::Envelope* error)
+std::optional<fs::path> ProjectRootFor(const GlobalOptions& opt, Arcane::Remote::Envelope* error)
 {
     std::error_code ec;
     if (!opt.project.empty()) {
@@ -180,14 +180,24 @@ std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::E
                                                   "pass the project's folder or its .arcproj"));
             return std::nullopt;
         }
-        return Arcane::Remote::DescriptorDir(*root, false);
+        return root;
     }
     const fs::path cwd = fs::current_path(ec);
     if (!ec) {
         if (auto root = NearestProject(cwd))
-            return Arcane::Remote::DescriptorDir(*root, false);
+            return root;
     }
-    return Arcane::Remote::DescriptorDir({}, true);   // a projectless editor's descriptors
+    return fs::path{};   // projectless
+}
+
+std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::Envelope* error)
+{
+    const auto root = ProjectRootFor(opt, error);
+    if (!root)
+        return std::nullopt;
+    if (root->empty())
+        return Arcane::Remote::DescriptorDir({}, true);   // a projectless editor's descriptors
+    return Arcane::Remote::DescriptorDir(*root, false);
 }
 
 std::optional<LiveHost> Select(const Scan& scan, const GlobalOptions& opt, Arcane::Remote::Envelope* error)

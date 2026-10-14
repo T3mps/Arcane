@@ -64,8 +64,9 @@ struct GlobalOptions {
 bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error);
 
 // The usage problem for the first token after the verb that starts with "--"
-// (an unknown flag; Run refuses it with exit 2 before any verb sees it).
-// A single '-' stays a value (negative numbers). nullopt: none.
+// (an unknown flag for a verb that declares none). Run checks the tokens
+// through SplitVerbTokens (Verbs.hpp), which applies the same rule to a row's
+// undeclared flags. A single '-' stays a value (negative numbers). nullopt: none.
 std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
 // Prints "servitor: <problem>" and the usage text to stderr; returns 2.
 int PrintUsage(const std::string& problem);
