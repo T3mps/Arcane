@@ -1,0 +1,25 @@
+{
+  "name": "ArcaneArc",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore",
+      "ArcaneNet"
+    ],
+    "private": [
+      "ArcaneAssets",
+      "ArcaneCrypto",
+      "ArcaneEngine",
+      "ArcaneScene",
+      "ArcaneSim"
+    ]
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}
