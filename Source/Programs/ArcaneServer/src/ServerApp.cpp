@@ -61,6 +61,13 @@ namespace Arcane::Server
     int ServerApp::Run()
     {
         ServerReport rep;   // every field defaulted honestly (opened=false, loaded=false, ...)
+#if !defined(ARC_BUILD_DIST)
+        // Task 22 fix round 1: before the project opens, so the remote session's
+        // problems.list sees every boot diagnostic (Diagnostics does not replay).
+        // Uninstalled once m_remote has stopped; ~DiagnosticStore covers an early Finish.
+        if (m_cfg.remote)
+            m_problems.InstallAsEngineSink();
+#endif
         // The exe's OWN imports, sampled BEFORE any module loads -- P10/S1: this
         // exe's link line never names ArcaneClient, so this must read false on a
         // clean build. If it ever reads true, a Core symbol's export/import got
@@ -182,6 +189,7 @@ namespace Arcane::Server
             rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
             rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
+            rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()
             // Task 19 (ruling F16): the server's one world.
             rc.worlds.user        = this;
             rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
@@ -305,6 +313,7 @@ namespace Arcane::Server
             m_remote->Stop(exitReason);   // the descriptor is deleted before the census is written
             m_remote.reset();
         }
+        m_problems.UninstallEngineSink();   // after the session that read it (identity-checked)
 #endif
         return Finish(rep, std::move(exitReason), 0);
     }

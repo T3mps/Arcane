@@ -829,6 +829,7 @@ void RuntimeApp::MainLoop()
         rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
         rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
+        rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()
         // Task 16 (ruling F12): `wait settled` -- the runtime's --settle
         // producer conjunct is its shader compiler alone (SettleBound.hpp),
         // held across kRemoteSettleFrames rendered frames. No dirty hook: a
@@ -957,6 +958,7 @@ void RuntimeApp::MainLoop()
         m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");
         m_remote.reset();
     }
+    m_problems.UninstallEngineSink();   // after the session that read it (identity-checked)
 #endif
 }
 
@@ -1712,6 +1714,14 @@ int RuntimeApp::Run()
         std::fputs("the remote surface is not linked into packaged games\n", stderr);
         return 2;
     }
+#endif
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // Task 22 fix round 1: before every boot stage, so the remote session's
+    // problems.list sees the diagnostics project open, plugin load and the boot
+    // scene publish (Diagnostics does not replay). MainLoop uninstalls it once
+    // m_remote has stopped; ~DiagnosticStore covers an early exit.
+    if (m_config.remote)
+        m_problems.InstallAsEngineSink();
 #endif
 
     Arcane::HostBoot::BootContext ctx{};

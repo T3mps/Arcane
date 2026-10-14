@@ -594,27 +594,48 @@ std::filesystem::path HostLogFile(Arcane::Remote::HostKind kind, const std::file
     return reports.parent_path() / "Logs" / (std::string(appName) + ".log");
 }
 
-void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env)
+void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env, std::size_t tailBytes)
 {
     // The notification names the file with native separators, as the host wrote it.
     const auto native = path.u8string();
     const std::string shown(reinterpret_cast<const char*>(native.data()), native.size());
-    std::ifstream in(path, std::ios::binary);
-    std::string text;
-    if (in.is_open())
-        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (!in.is_open() || in.bad()) {
+    const auto unreadable = [&] {
         env = Arcane::Remote::MakeError("log.read", "target.none",
                                         "no live host, and its log file " + shown + " could not be read",
                                         "launch the host (servitor launch editor|runtime|server)");
-        return;
+    };
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in.is_open())
+        return unreadable();
+    const std::streamoff end = in.tellg();
+    const std::uint64_t fileBytes = end > 0 ? static_cast<std::uint64_t>(end) : 0;
+    // A long file keeps its tail. One byte before the cut is read too, so a
+    // cut that lands on a line start keeps that line whole.
+    const bool cut = fileBytes > tailBytes;
+    in.seekg(cut ? static_cast<std::streamoff>(fileBytes - tailBytes - 1) : 0);
+    std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    if (in.bad())
+        return unreadable();
+    if (cut && !text.empty()) {
+        const std::size_t nl = text.find('\n');
+        text.erase(0, nl == std::string::npos ? 1 : nl + 1);   // drop the partial first line
     }
+    const std::uint64_t shownBytes = text.size();
     env = Arcane::Remote::MakeOk("log.read", {{"text", std::move(text)}, {"file", PathUtf8(path)}}, {});
     Arcane::Remote::Error note;
     note.code = "logs.from-file";
     note.message = shown;
     note.remediation = "no host is running: this is the last host's log file, not its live ring";
     env.notifications.push_back(std::move(note));
+    if (cut) {
+        Arcane::Remote::Error truncated;
+        truncated.code = "logs.truncated";
+        truncated.message = "showing the last " + std::to_string(shownBytes) + " bytes (whole lines) of " +
+                            std::to_string(fileBytes);
+        truncated.remediation = "open the file for the rest";
+        truncated.detail = {{"fileBytes", fileBytes}, {"shownBytes", shownBytes}};
+        env.notifications.push_back(std::move(truncated));
+    }
 }
 
 namespace {
@@ -630,6 +651,9 @@ BOOL WINAPI OnConsoleControl(DWORD type)
         case CTRL_BREAK_EVENT:
             g_interrupt.store(130, std::memory_order_release);
             return TRUE;
+        // Best-effort: Windows ends the process once the handler returns from
+        // these three (CTRL_CLOSE_EVENT after a short grace), so the stream loop
+        // may not get to print its 143 result frame.
         case CTRL_CLOSE_EVENT:
         case CTRL_LOGOFF_EVENT:
         case CTRL_SHUTDOWN_EVENT:

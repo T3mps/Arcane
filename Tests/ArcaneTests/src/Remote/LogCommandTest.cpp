@@ -2,6 +2,8 @@
 #include <Arcane/Remote/Commands/LogCommands.hpp>
 #include <Servitor/Client.hpp>
 #include <Servitor/Discover.hpp>   // HostDiagnosticsDir (Task 15)
+#include <Servitor/Verbs.hpp>      // FollowEventText (Task 22 fix round 1)
+#include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 #include <Arcane/Remote/Dispatcher.hpp>     // HostGate
 #include <Arcane/Remote/Follow.hpp>
 #include <Arcane/Remote/Http.hpp>           // MakeToken
@@ -145,6 +147,99 @@ TEST_CASE("HostLogFile picks the project log and falls back to the exe-dir log",
     opt.engine = broken.string();
     CHECK(Servitor::HostLogFile(Arcane::Remote::HostKind::Server, {}, opt).empty());
     std::filesystem::remove_all(broken);
+}
+
+// --- Task 22 fix round 1 ---
+
+TEST_CASE("ReadLogFile keeps a whole-line tail of a long log file", "[servitor][client]") {
+    Arcane::Test::TempDir dir("remote-logs-tail");
+    const auto small = dir.path / "small.log";
+    {
+        std::ofstream out(small, std::ios::binary);
+        for (int i = 0; i < 20; ++i)
+            out << "line-" << (100 + i) << "\n";   // 9 bytes a line, 180 bytes in all
+    }
+    Arcane::Remote::Envelope cut;
+    Servitor::ReadLogFile(small, cut, 50);   // 50 bytes from the end lands mid-line
+    REQUIRE(cut.ok);
+    const std::string text = cut.data["text"].get<std::string>();
+    CHECK(text.size() <= 50);
+    CHECK(text.starts_with("line-"));         // the partial first line was dropped
+    CHECK(text.ends_with("line-119\n"));      // the newest line is kept
+    CHECK(text.find("line-113") == std::string::npos);
+    REQUIRE(cut.notifications.size() == 2);
+    CHECK(cut.notifications[0].code == "logs.from-file");
+    CHECK(cut.notifications[1].code == "logs.truncated");
+    CHECK(cut.notifications[1].detail["fileBytes"] == 180);
+    CHECK(cut.notifications[1].detail["shownBytes"] == text.size());
+
+    Arcane::Remote::Envelope onBoundary;
+    Servitor::ReadLogFile(small, onBoundary, 45);   // 45 bytes from the end is exactly a line start
+    CHECK(onBoundary.data["text"].get<std::string>() == "line-115\nline-116\nline-117\nline-118\nline-119\n");
+
+    Arcane::Remote::Envelope whole;
+    Servitor::ReadLogFile(small, whole, 180);
+    CHECK(whole.data["text"].get<std::string>().size() == 180);
+    REQUIRE(whole.notifications.size() == 1);   // no logs.truncated
+
+    // The default cap: a file past Servitor::kLogFileTailBytes is cut to it.
+    const auto big = dir.path / "big.log";
+    {
+        std::ofstream out(big, std::ios::binary);
+        const std::string line(99, 'x');
+        for (std::size_t written = 0; written <= Servitor::kLogFileTailBytes + 4096; written += 100)
+            out << line << "\n";
+    }
+    Arcane::Remote::Envelope capped;
+    Servitor::ReadLogFile(big, capped);
+    REQUIRE(capped.ok);
+    CHECK(capped.data["text"].get<std::string>().size() <= Servitor::kLogFileTailBytes);
+    CHECK(capped.data["text"].get<std::string>().size() % 100 == 0);   // whole lines only
+    REQUIRE(capped.notifications.size() == 2);
+    CHECK(capped.notifications[1].code == "logs.truncated");
+}
+
+TEST_CASE("logs --follow applies --since and --level to each stream event", "[servitor][client]") {
+    const nlohmann::json args = {{"since", 10}, {"level", "warn"}};
+    const auto line = [&](const nlohmann::json& event, Servitor::Format format = Servitor::Format::Ndjson) {
+        return Servitor::FollowEventText("logs", event.dump(), args, format);
+    };
+    const auto record = [](std::uint64_t seq, const char* level, const char* text) {
+        return nlohmann::json{{"seq", seq}, {"time", 1}, {"level", level}, {"logger", "Arcane"}, {"text", text}};
+    };
+    CHECK(line(record(5, "warning", "old")).empty());        // seq <= since
+    CHECK(line(record(10, "error", "at-since")).empty());    // since is exclusive
+    CHECK(line(record(11, "info", "too-quiet")).empty());    // below --level warn
+    const std::string warn = line(record(12, "warning", "kept-warning"));
+    REQUIRE_FALSE(warn.empty());
+    const nlohmann::json frame = nlohmann::json::parse(warn);
+    CHECK(frame["type"] == "event");
+    CHECK(frame["topic"] == "logs");
+    CHECK(frame["data"]["text"] == "kept-warning");
+    CHECK_FALSE(line(record(13, "critical", "kept-critical")).empty());
+    CHECK_FALSE(line(nlohmann::json{{"dropped", 3}}).empty());   // the eviction notice always passes
+    CHECK(line(record(14, "error", "human-line"), Servitor::Format::Human) == "14 [error] Arcane: human-line\n");
+    // No filters: every record passes.
+    CHECK_FALSE(Servitor::FollowEventText("logs", record(1, "trace", "t").dump(), nlohmann::json::object(),
+                                          Servitor::Format::Json).empty());
+}
+
+TEST_CASE("problems --follow applies --severity and --search to each stream event", "[servitor][client]") {
+    const nlohmann::json args = {{"severity", "error"}, {"search", "NEEDLE"}};
+    const auto row = [](const char* severity, const char* code, const char* message, const char* detail) {
+        return nlohmann::json{{"severity", severity}, {"scope", "project"}, {"code", code}, {"message", message},
+                              {"detail", detail}, {"locator", nullptr}}.dump();
+    };
+    const auto shown = [&](const std::string& data) {
+        return !Servitor::FollowEventText("problems", data, args, Servitor::Format::Ndjson).empty();
+    };
+    CHECK(shown(row("error", "a.b", "has a needle inside", "")));       // case-insensitive, message
+    CHECK(shown(row("error", "x.needle.y", "nothing", "")));            // code
+    CHECK(shown(row("error", "a.b", "nothing", "detail Needle")));      // detail
+    CHECK_FALSE(shown(row("warning", "a.b", "has a needle", "")));      // severity is exact
+    CHECK_FALSE(shown(row("error", "a.b", "no match here", "")));       // search misses
+    CHECK(Servitor::FollowEventText("problems", row("error", "a.b", "needle", ""), args, Servitor::Format::Human) ==
+          "error a.b: needle\n");
 }
 
 #endif

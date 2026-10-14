@@ -7,6 +7,7 @@
 #include <Servitor/Launch.hpp>
 #include <Servitor/Transport.hpp>
 
+#include <Arcane/Base/DiagnosticStore.hpp> // MatchesDiagnosticFilter: the --follow --search rule
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Platform/Process.hpp>
 #include <Arcane/Remote/Redact.hpp>
@@ -386,6 +387,72 @@ bool ParseProblemsTokens(std::span<const std::string> rest, nlohmann::json& out,
     return true;
 }
 
+// A member of a JSON row as text (a string as is, anything else dumped); "" when absent or null.
+std::string Str(const nlohmann::json& row, const char* key)
+{
+    const auto it = row.is_object() ? row.find(key) : row.end();
+    if (!row.is_object() || it == row.end() || it->is_null())
+        return {};
+    return it->is_string() ? it->get<std::string>() : Dump(*it);
+}
+
+// A log level's rank (spdlog order); -1 for a name that is not one.
+int LevelRank(std::string_view name)
+{
+    if (name == "trace") return 0;
+    if (name == "debug") return 1;
+    if (name == "info") return 2;
+    if (name == "warn" || name == "warning") return 3;
+    if (name == "error" || name == "err") return 4;
+    if (name == "critical") return 5;
+    return -1;
+}
+
+// --since (seq <= N dropped) and --level (records ranked below it dropped) on
+// one log.follow event. The {"dropped": N} event carries no seq and always passes.
+bool PassesLogFilters(const nlohmann::json& record, const nlohmann::json& args)
+{
+    if (!record.is_object() || !record.contains("seq"))
+        return true;
+    const nlohmann::json& seq = record.at("seq");
+    if (const auto since = args.find("since");
+        since != args.end() && seq.is_number_unsigned() && seq.get<std::uint64_t>() <= since->get<std::uint64_t>())
+        return false;
+    if (const auto level = args.find("level"); level != args.end() && level->is_string()) {
+        const auto name = record.find("level");
+        const int rank = name != record.end() && name->is_string() ? LevelRank(name->get<std::string>()) : -1;
+        if (rank < LevelRank(level->get<std::string>()))
+            return false;
+    }
+    return true;
+}
+
+// --severity (exactly that severity) and --search on one problem.follow row:
+// the host's own rule, Arcane::MatchesDiagnosticFilter (case-insensitive, in the
+// message, code or detail), applied to the row's fields.
+bool PassesProblemFilters(const nlohmann::json& row, const nlohmann::json& args)
+{
+    if (!row.is_object())
+        return true;
+    Arcane::Diagnostic d;
+    const std::string severity = Str(row, "severity");
+    d.severity = severity == "error"     ? Arcane::DiagSeverity::Error
+                 : severity == "warning" ? Arcane::DiagSeverity::Warning
+                                         : Arcane::DiagSeverity::Info;
+    d.code = Str(row, "code");
+    d.message = Str(row, "message");
+    d.detail = Str(row, "detail");
+    Arcane::SeverityMask mask = Arcane::SeverityMask::All;
+    if (const auto wanted = args.find("severity"); wanted != args.end() && wanted->is_string()) {
+        const std::string& name = wanted->get_ref<const std::string&>();
+        mask = name == "error"     ? Arcane::SeverityMask::Error
+               : name == "warning" ? Arcane::SeverityMask::Warning
+                                   : Arcane::SeverityMask::Info;
+    }
+    const std::string search = args.value("search", std::string{});
+    return Arcane::MatchesDiagnosticFilter(d, mask, search);
+}
+
 // The --all path (FanOutVerb): one call per host, so a stream is refused.
 bool LogsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
 {
@@ -416,14 +483,6 @@ Arcane::Remote::HostBlock BlockOf(const Arcane::Remote::Descriptor& d)
     block.state = d.state;
     block.frame = d.frame;
     return block;
-}
-
-std::string Str(const nlohmann::json& row, const char* key)
-{
-    const auto it = row.is_object() ? row.find(key) : row.end();
-    if (!row.is_object() || it == row.end() || it->is_null())
-        return {};
-    return it->is_string() ? it->get<std::string>() : Dump(*it);
 }
 
 // One human line for a log.read record (also a log.follow event), or for the
@@ -491,25 +550,19 @@ int PrintRows(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientB
 struct FollowPrint {
     Format format = Format::Json;
     std::string topic;
-    std::string token;   // print-time redaction only; never printed
+    nlohmann::json args;      // the verb's filters (log.read / problems.list args), applied per event
+    std::string token;        // print-time redaction only; never printed
+    std::size_t printed = 0;  // events that passed the filters
 };
 
-// json / ndjson: {"type":"event","topic":...,"data":<the event's JSON>} per
-// line (spec s6.5's stream frame; a stream is never one JSON document, so
-// --format json prints ndjson too). human: one readable line per event.
+// One stream event through FollowEventText (filters + format), to stdout.
 void PrintFollowEvent(std::string_view data, void* user)
 {
-    const auto& ctx = *static_cast<const FollowPrint*>(user);
-    nlohmann::json parsed = nlohmann::json::parse(data, nullptr, false);
-    if (parsed.is_discarded())
-        parsed = std::string(data);
-    std::string line;
-    if (ctx.format != Format::Human)
-        line = Dump(nlohmann::json{{"type", "event"}, {"topic", ctx.topic}, {"data", parsed}}) + "\n";
-    else if (ctx.topic == "logs")
-        line = HumanLogLine(parsed);
-    else
-        line = HumanProblemLines(parsed);
+    auto& ctx = *static_cast<FollowPrint*>(user);
+    const std::string line = FollowEventText(ctx.topic, data, ctx.args, ctx.format);
+    if (line.empty())
+        return;
+    ++ctx.printed;
     Printed printed;
     printed.stdoutText = Arcane::Remote::RedactSecrets(line, ctx.token);
     (void)Emit(printed, 0);
@@ -518,9 +571,12 @@ void PrintFollowEvent(std::string_view data, void* user)
 // `logs --follow` / `problems --follow`: one SSE subscription to the selected
 // host until --timeout, the host closing it, or Ctrl+C / SIGTERM (exit 130 /
 // 143). It never posts log.read or problems.list with follow (ruling P2 (f)).
-// json / ndjson end with {"type":"result","count":<events>,"envelope":...}, so a
-// truncated stream is detectable; human prints only a failure.
-int FollowVerb(std::string_view words, const char* topic, const char* command, const GlobalOptions& opt)
+// The stream carries every record, so the verb's own filters (--since, --level,
+// --severity, --search) are applied here, per event (FollowEventText).
+// json / ndjson end with {"type":"result","count":<printed events>,"envelope":...},
+// so a truncated stream is detectable; human prints only a failure.
+int FollowVerb(std::string_view words, const char* topic, const char* command, const nlohmann::json& args,
+               const GlobalOptions& opt)
 {
     // Rule 3: a stream posts no call, so these globals would be dropped silently.
     if (!opt.world.empty())
@@ -549,6 +605,7 @@ int FollowVerb(std::string_view words, const char* topic, const char* command, c
     FollowPrint print;
     print.format = opt.format;
     print.topic = topic;
+    print.args = args;
     print.token = host->descriptor.token;
 
     StreamOutcome outcome;
@@ -557,7 +614,7 @@ int FollowVerb(std::string_view words, const char* topic, const char* command, c
         outcome = FollowStream(target, topic, &InterruptScope::Pending(), &PrintFollowEvent, &print);
     }
     const auto ended = [&](const char* reason) {
-        return Arcane::Remote::MakeOk(command, {{"events", outcome.events}, {"ended", reason}},
+        return Arcane::Remote::MakeOk(command, {{"events", outcome.events}, {"printed", print.printed}, {"ended", reason}},
                                       BlockOf(host->descriptor));
     };
     switch (outcome.end) {
@@ -589,7 +646,7 @@ int FollowVerb(std::string_view words, const char* topic, const char* command, c
     envelope["client"] = {{"exitCode", client.exitCode}, {"retried", false}, {"descriptor", client.descriptor}};
     Printed printed;
     printed.stdoutText = Arcane::Remote::RedactSecrets(
-        Dump(nlohmann::json{{"type", "result"}, {"count", outcome.events}, {"envelope", envelope}}) + "\n",
+        Dump(nlohmann::json{{"type", "result"}, {"count", print.printed}, {"envelope", envelope}}) + "\n",
         client.token);
     return Emit(printed, client.exitCode);
 }
@@ -650,7 +707,7 @@ int LogsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     if (!ParseLogsTokens(rest, req.args, follow, &error))
         return PrintUsage(error);
     if (follow)
-        return FollowVerb("logs", "logs", "log.follow", opt);
+        return FollowVerb("logs", "logs", "log.follow", req.args, opt);
 
     Arcane::Remote::Envelope refusal;
     Arcane::Remote::ClientBlock client;
@@ -694,7 +751,7 @@ int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     if (!ParseProblemsTokens(rest, req.args, follow, &error))
         return PrintUsage(error);
     if (follow)
-        return FollowVerb("problems", "problems", "problem.follow", opt);
+        return FollowVerb("problems", "problems", "problem.follow", req.args, opt);
     const PostedCall posted = PostVerb(*FindVerb("problems"), req, opt, false);
     return PrintRows(posted.envelope, posted.client, opt);
 }
@@ -715,6 +772,20 @@ std::size_t WordsMatched(std::string_view words, std::span<const std::string> to
 }
 
 } // namespace
+
+std::string FollowEventText(std::string_view topic, std::string_view data, const nlohmann::json& args, Format format)
+{
+    nlohmann::json parsed = nlohmann::json::parse(data, nullptr, false);
+    if (parsed.is_discarded())
+        parsed = std::string(data);
+    const bool logs = topic == "logs";
+    const nlohmann::json filters = args.is_object() ? args : nlohmann::json::object();
+    if (logs ? !PassesLogFilters(parsed, filters) : !PassesProblemFilters(parsed, filters))
+        return {};
+    if (format != Format::Human)
+        return Dump(nlohmann::json{{"type", "event"}, {"topic", std::string(topic)}, {"data", parsed}}) + "\n";
+    return logs ? HumanLogLine(parsed) : HumanProblemLines(parsed);
+}
 
 std::span<const VerbRow> VerbTable()
 {

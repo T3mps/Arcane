@@ -85,6 +85,17 @@ struct PostedCall {
     Arcane::Remote::ClientBlock client;   // exitCode, retried, descriptor
     std::optional<LiveHost> host;         // the selected target; nullopt when discovery refused
 };
+// One `logs --follow` / `problems --follow` stream event as servitor prints it
+// (Task 22 fix round 1): "" when the verb's filters drop it, else one line.
+// `args` is the log.read / problems.list args the verb's flags built; the stream
+// carries every record, so the filters run here. topic "logs": --since drops
+// seq <= N, --level drops records ranked below it (the {"dropped": N} event
+// always passes). topic "problems": --severity is exactly that severity and
+// --search is Arcane::MatchesDiagnosticFilter's rule over message, code and
+// detail. json / ndjson: {"type":"event","topic":...,"data":<event>}; human: a
+// readable line. A data line that is not JSON is carried as a string.
+std::string FollowEventText(std::string_view topic, std::string_view data, const nlohmann::json& args, Format format);
+
 // The mid-call target watch for `command` against `host` (Task 14): its pid,
 // creation stamp and descriptor, and its report directory (<project>/Saved/Diagnostics
 // when the descriptor names a project, else HostDiagnosticsDir). PostToHost and

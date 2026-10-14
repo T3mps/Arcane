@@ -39,6 +39,7 @@
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 #if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+#include <Arcane/Base/DiagnosticStore.hpp> // Servitor P0 --remote: problems.list's store (Task 22)
 #include <Arcane/Remote/HostSession.hpp>   // Servitor P0 --remote (ruling D-1: never in a package)
 #endif
 class RuntimeApp
@@ -322,6 +323,13 @@ private:
     // stopped once ShutdownGraphPath has read its quit/idle state for the
     // report. Compiled out of every package (ruling D-1): a monolithic build
     // links no ArcaneRemote, and its Run() refuses --remote at startup.
+    //
+    // Task 22 fix round 1: the store problems.list reads, as the editor's
+    // Problems panel store. Under --remote, Run() installs it as the engine's
+    // diagnostics sink before any boot stage, so project-open, plugin-load and
+    // scene-load diagnostics are in it when the session arms (Diagnostics does
+    // not replay). Declared before m_remote, so it outlives the session.
+    Arcane::DiagnosticStore                      m_problems;
     std::unique_ptr<Arcane::Remote::HostSession> m_remote;
     // 2 when an open-ended --headless --remote run's surface did not start:
     // it has no other stop path, so Run() returns this instead of looping.

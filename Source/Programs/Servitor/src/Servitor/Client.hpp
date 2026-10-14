@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -72,11 +73,17 @@ struct GlobalOptions {
 // Not Log::FileSinkPath(): in servitor that is servitor's own sink.
 std::filesystem::path HostLogFile(Arcane::Remote::HostKind kind, const std::filesystem::path& project = {},
                                   const GlobalOptions& opt = {});
+ARC_CONSTANT("spec: a command never streams megabytes into an envelope; logs' file fallback keeps this tail (bytes)")
+inline constexpr std::size_t kLogFileTailBytes = 1024u * 1024u;
 // `servitor logs` with no live host: the dead host's log file as log.read's
 // answer, ok with data {text, file} and the notification {code: "logs.from-file",
 // message: <path, native separators>}. It does not invent lines: a file that
-// cannot be read is target.none (exit 4) naming it.
-void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env);
+// cannot be read is target.none (exit 4) naming it. A file longer than
+// tailBytes keeps only its last tailBytes, cut to whole lines (a partial first
+// line is dropped), and adds the notification {code: "logs.truncated"} with
+// detail {fileBytes, shownBytes}.
+void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env,
+                 std::size_t tailBytes = kLogFileTailBytes);
 
 // While one is alive, SIGINT / SIGTERM (Windows: Ctrl+C / Ctrl+Break, and a
 // console close, logoff or shutdown) do not end the process: they set
