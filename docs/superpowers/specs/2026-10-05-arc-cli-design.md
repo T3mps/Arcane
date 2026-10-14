@@ -214,7 +214,7 @@ Most of that review is already covered here: the Origin/Host checks and the head
   - **The wire is the contract.** The client builds request `args` as JSON by field name and never includes a host command's args struct or registry.
   - **Versions.**
     - The protocol has a major (1) and a minor (0). The minor rises with each additive change. `GET /status` and the envelope carry `protocolMinor`; an absent `protocolMinor` reads 0.
-    - The engine advertises both numbers in `Source/Runtime/ArcaneRemote/remote-protocol.json`, which a test pins to the C++ constants. The Hub reads that file in source checkouts, and installed engines copy it into `sdk/sdk.json` as `remoteProtocol: {major, minor}`.
+    - The engine advertises both numbers in `Source/Runtime/ArcaneRemoteProtocol/remote-protocol.json`, which a test pins to the C++ constants. The Hub reads that file in source checkouts, and installed engines copy it into `sdk/sdk.json` as `remoteProtocol: {major, minor}`.
   - **Compatibility within a major.**
     - Changes are additive.
     - Both sides ignore unknown fields in the envelope, its `host` block, `data` and `GET /status`.
