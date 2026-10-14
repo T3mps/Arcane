@@ -125,7 +125,7 @@ namespace Arcane
 #if defined(ARC_BUILD_DIST)
         if (NamesRemoteFlag(argc, argv))
         {
-            std::fprintf(stderr, "servitor is compiled out of Dist builds\n");
+            std::fprintf(stderr, "Servitor is compiled out of Dist builds\n");
             return { std::nullopt, 2 };
         }
 #endif

@@ -1267,7 +1267,7 @@ TEST_CASE("Dist refuses the remote flags at parse", "[host][dist]")
         CHECK(o.outcome.exitCode == 2);
         std::string err = o.err;
         std::erase(err, '\r');   // text-mode capture, as above
-        CHECK(err == "servitor is compiled out of Dist builds\n");
+        CHECK(err == "Servitor is compiled out of Dist builds\n");
     }
 }
 #endif

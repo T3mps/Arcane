@@ -75,16 +75,13 @@ private:
     bool m_auditWarned = false;
 };
 
-} // namespace Arcane::Remote
-
-#endif
-
-namespace Arcane::Remote
-{
-
-// Declared in every configuration: Dist's registry refuses these Dev cvars and
-// the handles read the declared defaults.
+// The published values of the two dispatcher cvars. Dist-guarded like the rest
+// of this header: the cvars themselves are still REGISTERED in Dist
+// (Dispatcher.cpp, so Dist's registry refuses the Dev names), but a Dist
+// ArcaneRemote exports nothing except its module anchor (Task 10 export gate).
 ARC_REMOTE_API double FrameBudgetMsSetting();     // published remote.server.frameBudgetMs
 ARC_REMOTE_API std::uint32_t QueueDepthSetting(); // published remote.server.queueDepth; HostSession (Task 11) sizes its RequestQueue with it
 
 } // namespace Arcane::Remote
+
+#endif

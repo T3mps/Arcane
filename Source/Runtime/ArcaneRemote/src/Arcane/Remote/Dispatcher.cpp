@@ -8,8 +8,10 @@ namespace Arcane::Remote
 namespace
 {
 
-// Declared outside the Dist guard (Dispatcher.hpp): Dist's registry refuses Dev
-// cvars by name and the handles read these defaults.
+// Registered outside the Dist guard: Dist's registry refuses Dev cvars by name
+// (Dist [sweep][coverage] sees them), and the handles read these defaults. The
+// accessors below are NOT: a Dist ArcaneRemote exports nothing but its module
+// anchor (the Task 10 export gate), and every caller is Dist-guarded.
 ARC_CVAR(cvar_remoteServerFrameBudgetMs, "remote.server.frameBudgetMs", double, kFrameBudgetMs,
     .flags = CVarFlags::Dev, .audience = Audience::Server, .scope = SettingScope::Project,
     .help = "Milliseconds of remote commands drained before the next tick.");
@@ -19,6 +21,7 @@ ARC_CVAR(cvar_remoteServerQueueDepth, "remote.server.queueDepth", std::uint32_t,
 
 } // namespace
 
+#if !defined(ARC_BUILD_DIST)
 double FrameBudgetMsSetting()
 {
     return cvar_remoteServerFrameBudgetMs.Get();
@@ -28,6 +31,7 @@ std::uint32_t QueueDepthSetting()
 {
     return cvar_remoteServerQueueDepth.Get();
 }
+#endif
 
 } // namespace Arcane::Remote
 
