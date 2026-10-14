@@ -157,6 +157,57 @@ namespace Arcane::Platform
     }
 #endif
 
+    bool IsProcessLive(std::uint32_t pid, std::uint64_t start)
+    {
+        // Pid 0 names no process a record could describe (on macOS
+        // proc_pidinfo answers for kernel_task there).
+        if (pid == 0)
+            return false;
+#if ARC_PLATFORM_WINDOWS
+        // The validation that defeats staleness, in THREE tells -- all of
+        // which must hold before the record is believed:
+        //   1. the pid still OPENS (a pid nobody holds is simply gone),
+        //   2. its creation time MATCHES what the record holds (a recycled
+        //      pid has a different birth; a crashed process has none), and
+        //   3. it has NOT exited -- zero exit time.
+        HANDLE h = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!h)
+            return false;
+        FILETIME created{}, exited{}, kernel{}, user{};
+        const bool ok = ::GetProcessTimes(h, &created, &exited, &kernel, &user);
+        ::CloseHandle(h);
+        if (!ok)
+            return false;
+        const std::uint64_t created64 = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) |
+                                        created.dwLowDateTime;
+        if (start != 0 && start != created64)
+            return false;
+        // Tell 3, and why tells 1+2 alone were not enough (2026-09-08 desk
+        // pass): a process OBJECT outlives its process for as long as any
+        // handle to it survives, and the pid is reserved that whole time.
+        // A parent holding a dead editor's handle -- the Hub does exactly
+        // this -- kept OpenProcess succeeding with the ORIGINAL creation
+        // time intact, so the project read as "already open" forever. Exit
+        // time is the tell that cannot be faked by a lingering handle:
+        // nonzero means it exited, however many handles remain.
+        if (exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0)
+            return false;
+        return true;
+#else
+        // The same three tells via the OS process table (QueryProcess): the
+        // pid still has a stat entry, its start time matches, and it is not
+        // a zombie -- the POSIX twin of Windows' lingering process OBJECT.
+        const ProcessStat st = QueryProcess(pid);
+        if (!st.found)
+            return false;
+        if (start != 0 && start != st.start)
+            return false;
+        if (st.exited)
+            return false;
+        return true;
+#endif
+    }
+
 #if ARC_PLATFORM_MACOS
     ImageExtent MachImageExtent(const void* machHeader, std::intptr_t slide) noexcept
     {
