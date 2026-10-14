@@ -2210,6 +2210,9 @@ namespace Arcane::Editor
         // with --remote still arms).
         bool                                      m_remoteCvarKnown = false;
         bool                                      m_remoteCvarLast  = false;
+        // 2 when an open-ended --headless --remote run lost (or never had) its
+        // remote surface: it has no other stop path, so Main() returns this.
+        int                                       m_remoteArmExit   = 0;
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

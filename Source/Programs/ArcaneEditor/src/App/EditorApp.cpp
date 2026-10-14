@@ -2700,6 +2700,10 @@ namespace Arcane::Editor
         if (!CreateGraphVehicles())
             return 1;
         MainLoop();
+#if !defined(ARC_BUILD_DIST)
+        if (m_remoteArmExit != 0)
+            return m_remoteArmExit;   // an open-ended headless --remote run with no remote surface (MainLoop logged why)
+#endif
         return 0;
     }
 

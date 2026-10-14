@@ -72,15 +72,35 @@ public:
 
     // Sets the registry's host kind (remembering the previous one), starts the
     // listener on 127.0.0.1, publishes status + catalogue and writes the
-    // descriptor. A listener that could not bind (Port() == 0 afterwards) or a
-    // descriptor that could not be written is a failed start: logged, nothing
-    // left running, the host kind restored, and the host carries on without
-    // remote. A second Start while started does nothing.
-    void Start();
+    // descriptor; true when the session is live. A listener that could not
+    // bind (Port() == 0 afterwards) or a descriptor that could not be written
+    // is a failed start: logged, nothing left running, the host kind
+    // restored, false returned, and the host carries on without remote (or,
+    // for an open-ended headless run, exits 2: it has no other stop path). A
+    // session object starts at most once: a second Start (while live, after
+    // Stop, or after a failed Start) is refused with false and a log line;
+    // a host that wants a new session makes a new object.
+    bool Start();
     // One main-loop iteration's work: dispatcher.Drain within the frame budget,
     // then HostStatus and the catalogue republished into the listener atoms,
     // and the descriptor heartbeat touched once a second. Never sleeps.
     void Drain();
+    // The host's whole per-iteration remote step, one spelling for every host:
+    // notes a module reload when `pluginGeneration` (the host's own
+    // m_plugin->Generation(), ruling F10) differs from the last one seen,
+    // Drains, then checks for a remote quit and the idle timeout. The first
+    // generation it sees is adopted silently (the module the host booted with). True means
+    // the host should leave its loop now; the reason is latched (ExitReason).
+    bool DrainFrame(std::uint32_t pluginGeneration);
+    // The reason DrainFrame latched when it told the host to stop:
+    // "remote-quit" or "remote-idle". Null when the loop did not end on the
+    // remote surface. Latched at the break site, so a later Ctrl-C or a long
+    // teardown is never relabelled.
+    const char* ExitReason() const;
+    // The host is leaving its loop: state "stopping" is published to /status
+    // and to the descriptor at once, so a client polling a shutting-down host
+    // does not read "ready". Stop follows later.
+    void MarkStopping();
     // Stops the listener (parked calls answer host.died), deletes the
     // descriptor and restores the registry's host kind. Idempotent.
     void Stop(std::string exitReason);
@@ -117,6 +137,9 @@ private:
     std::vector<std::string> m_capabilities;     // config.capabilities, sorted
     HostKind m_kindBefore = HostKind::Editor;    // restored by Stop (ruling S3-9)
     bool m_started = false;
+    bool m_startAttempted = false;               // a session object starts at most once
+    const char* m_exitReason = nullptr;          // latched by DrainFrame
+    bool m_generationKnown = false;              // DrainFrame's first generation is the boot module
     bool m_descriptorWritten = false;            // Teardown deletes only a descriptor this session wrote
 
     bool m_reloadOk = true;

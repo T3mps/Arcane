@@ -1726,4 +1726,4 @@ Tunables inside the stores that are not already listed under the viewport and la
   - Theme: 31 tokens (27 SETTING, 3 DERIVED aliases, 1 CONSTANT), plus about 27 domain-palette and alpha rows.
   - Style metrics: 5.
   - Stores: 4 ImGui ini sections, plus user cvar archive, recents, scene recents, texture `.meta`, Hub settings, and caches.
-  - Existing cvars: 17, of which 11 are editor-declared (`editor.remote.enable` added post-freeze, Servitor P0 task 11).
+  - Existing cvars: 17, of which 12 are editor-declared (`editor.remote.enable` added post-freeze, Servitor P0 task 11; the freeze-time "16, of which 10" undercounted the 11 editor rows).

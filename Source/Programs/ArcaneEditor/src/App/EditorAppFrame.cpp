@@ -369,20 +369,24 @@ namespace Arcane::Editor
             // before the frame's phases, on every iteration including a
             // minimized one (which the SkipFrame continue below would skip).
             UpdateRemoteSession();
-            if (m_remote)
+            // An open-ended headless run (only --remote lifts --headless's
+            // --frames requirement) whose remote surface is not up -- refused,
+            // failed to start, or switched off -- has no stop path left, so it
+            // exits 2 instead of running forever (Task 11 review ruling).
+            if (!m_remote && m_config.headless && m_config.maxFrames == 0)
             {
-                // A module reload since the last drain (EndFrame's Poll, a
-                // module rebuild's re-engage), from this host's own PluginHost
-                // (ruling F10).
-                if (const std::uint32_t generation = m_plugin ? m_plugin->Generation() : 0u;
-                    generation != m_remote->Gate().pluginGeneration)
-                    m_remote->NoteReload(generation, true, "reloaded", m_remote->Gate().frame.load());
-                m_remote->Drain();
-                if (m_remote->TakeQuit() || m_remote->IdleExpired())
-                {
-                    ARC_INFO("ArcaneEditor: exiting on a remote {}", m_remote->TakeQuit() ? "quit" : "idle timeout");
-                    break;
-                }
+                ARC_ERROR("ArcaneEditor: --headless --remote without --frames has no stop path while the "
+                          "remote surface is not up (see above); exiting 2");
+                m_remoteArmExit = 2;
+                break;
+            }
+            // DrainFrame notes a module reload since the last drain (EndFrame's
+            // Poll, a module rebuild's re-engage) from this host's own
+            // PluginHost (ruling F10).
+            if (m_remote && m_remote->DrainFrame(m_plugin ? m_plugin->Generation() : 0u))
+            {
+                ARC_INFO("ArcaneEditor: exiting on {}", m_remote->ExitReason());
+                break;
             }
 #endif
             if (pump == FramePump::SkipFrame)
@@ -534,7 +538,7 @@ namespace Arcane::Editor
         // descriptor goes now, not at ~EditorApp after the whole teardown.
         if (m_remote)
         {
-            m_remote->Stop(m_remote->TakeQuit() ? "remote-quit" : m_remote->IdleExpired() ? "remote-idle" : "exit");
+            m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "stopping" first
             m_remote.reset();
         }
 #endif
@@ -1737,6 +1741,8 @@ namespace Arcane::Editor
         // makes the primary world a Client keeps the session (CVarContext::Editor).
         if (!Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, wanted))
         {
+            ARC_WARN("ArcaneEditor: the remote surface is not armed: the primary world is a {} world, "
+                     "which never serves it", Arcane::ToString(m_runtime->Core().Mode()));
             m_remoteArmBlocked = true;
             return;
         }
@@ -1752,14 +1758,12 @@ namespace Arcane::Editor
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
                                   "problems", "scene", "selection", "stats" };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
-        m_remote->Start();
-        if (m_remote->Port() == 0)
+        if (!m_remote->Start())
         {
             m_remote.reset();   // Start logged why; not retried until the cvar cycles
             m_remoteArmBlocked = true;
             return;
         }
-        m_remote->Gate().pluginGeneration = m_plugin ? m_plugin->Generation() : 0u;   // the current module is not a reload
     }
 #endif
 

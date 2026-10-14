@@ -61,10 +61,14 @@ HostSession::~HostSession()
     Stop("destroyed");
 }
 
-void HostSession::Start()
+bool HostSession::Start()
 {
-    if (m_started)
-        return;
+    if (m_startAttempted) {
+        ARC_ERROR("remote: this {} session was already started once; a host makes a new session to re-arm",
+                  ToString(m_config.kind));
+        return false;
+    }
+    m_startAttempted = true;
 
     CommandRegistry& registry = CommandRegistry::Get();
     m_kindBefore = registry.GetHostKind();
@@ -107,7 +111,7 @@ void HostSession::Start()
     if (m_listener->Port() == 0) {
         ARC_ERROR("remote: the loopback listener did not start; this host runs without remote");
         Teardown();
-        return;
+        return false;
     }
 
     const std::int64_t now = NowUnixMs();
@@ -130,7 +134,7 @@ void HostSession::Start()
         ARC_ERROR("remote: could not write the descriptor {}; this host runs without remote",
                   Utf8(m_descriptorPath));
         Teardown();
-        return;
+        return false;
     }
 
     m_descriptorWritten = true;
@@ -139,6 +143,7 @@ void HostSession::Start()
     m_lastHeartbeat = m_lastActivity;
     ARC_INFO("remote: {} listening on 127.0.0.1:{} (descriptor {}){}", ToString(m_config.kind),
              m_listener->Port(), Utf8(m_descriptorPath), readOnly ? ", read-only" : "");
+    return true;
 }
 
 void HostSession::Drain()
@@ -164,6 +169,42 @@ void HostSession::Drain()
         TouchHeartbeat(m_descriptorPath, now, m_gate.State(), m_gate.frame.load(std::memory_order_acquire));
         m_jobs.Prune(now);
     }
+}
+
+bool HostSession::DrainFrame(std::uint32_t pluginGeneration)
+{
+    if (!m_started)
+        return false;
+    // The first generation seen is the module the host booted with, not a reload.
+    if (!m_generationKnown) {
+        m_gate.pluginGeneration = pluginGeneration;
+        m_generationKnown = true;
+    } else if (pluginGeneration != m_gate.pluginGeneration) {
+        NoteReload(pluginGeneration, true, "reloaded", m_gate.frame.load(std::memory_order_acquire));
+    }
+    Drain();
+    if (m_exitReason == nullptr) { // the first reason wins: it is what ended the loop
+        if (TakeQuit())
+            m_exitReason = "remote-quit";
+        else if (IdleExpired())
+            m_exitReason = "remote-idle";
+    }
+    return m_exitReason != nullptr;
+}
+
+const char* HostSession::ExitReason() const
+{
+    return m_exitReason;
+}
+
+void HostSession::MarkStopping()
+{
+    if (!m_started)
+        return;
+    m_gate.SetState("stopping");
+    const std::int64_t now = NowUnixMs();
+    PublishStatus(now);
+    TouchHeartbeat(m_descriptorPath, now, m_gate.State(), m_gate.frame.load(std::memory_order_acquire));
 }
 
 void HostSession::Stop(std::string exitReason)
@@ -220,6 +261,7 @@ const HostSession::Config& HostSession::GetConfig() const
 void HostSession::NoteReload(std::uint32_t generation, bool ok, std::string reason, std::uint64_t frame)
 {
     m_gate.pluginGeneration = generation; // main thread (Task 9 carry 4)
+    m_generationKnown = true;
     m_reloadOk = ok;
     m_reloadReason = std::move(reason);
     m_reloadAtFrame = frame;

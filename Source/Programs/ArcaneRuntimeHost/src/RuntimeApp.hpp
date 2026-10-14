@@ -323,6 +323,9 @@ private:
     // report. Compiled out of every package (ruling D-1): a monolithic build
     // links no ArcaneRemote, and its Run() refuses --remote at startup.
     std::unique_ptr<Arcane::Remote::HostSession> m_remote;
+    // 2 when an open-ended --headless --remote run's surface did not start:
+    // it has no other stop path, so Run() returns this instead of looping.
+    int                                          m_remoteArmExit = 0;
 #endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,

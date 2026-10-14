@@ -166,9 +166,13 @@ namespace Arcane::Server
         // Servitor P0 (Task 11): --remote arms the loopback surface, after the
         // admin console and outside it (RemoteCVarService above exists only when
         // the console is on). A listener that cannot start leaves the server
-        // running without remote. The idle exit applies only to an open-ended
-        // run (spec s4.7): a --frames N run ends by itself.
-        if (m_cfg.remote && Arcane::Remote::Arming::Allow(m_runtime->Mode(), false, true))
+        // running without remote: unlike the headless runtime and editor, an
+        // open-ended server is open-ended by design. The idle exit applies only
+        // to an open-ended run (spec s4.7): a --frames N run ends by itself.
+        if (m_cfg.remote && !Arcane::Remote::Arming::Allow(m_runtime->Mode(), false, true))
+            ARC_WARN("ArcaneServer: --remote ignored: the primary world is a {} world, which never serves "
+                     "the remote surface", Arcane::ToString(m_runtime->Mode()));
+        else if (m_cfg.remote)
         {
             Arcane::Remote::HostSession::Config rc;
             rc.kind               = Arcane::Remote::HostKind::Server;
@@ -178,11 +182,8 @@ namespace Arcane::Server
             rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
             m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
-            m_remote->Start();
-            if (m_remote->Port() == 0)
+            if (!m_remote->Start())
                 m_remote.reset();   // Start logged why; the server carries on without remote
-            else
-                m_remote->Gate().pluginGeneration = m_plugin->Generation();   // the boot load is not a reload
         }
 #endif
 
@@ -213,20 +214,12 @@ namespace Arcane::Server
             const auto start = std::chrono::steady_clock::now();
 #if !defined(ARC_BUILD_DIST)
             // AM1: remote commands run BEFORE the tick advances, never beside the
-            // admin stdin block below. A module reload the previous tick's Poll
-            // performed is noted first, so this drain's status already carries it.
-            if (m_remote)
+            // admin stdin block below. DrainFrame notes a module reload the
+            // previous tick's Poll performed, so this drain's status carries it.
+            if (m_remote && m_remote->DrainFrame(m_plugin->Generation()))
             {
-                if (const std::uint32_t generation = m_plugin->Generation();
-                    generation != m_remote->Gate().pluginGeneration)
-                    m_remote->NoteReload(generation, true, "reloaded", m_remote->Gate().frame.load());
-                m_remote->Drain();
-                if (m_remote->TakeQuit() || m_remote->IdleExpired())
-                {
-                    ARC_INFO("ArcaneServer: stopping on a remote {} after {} tick(s)",
-                             m_remote->TakeQuit() ? "quit" : "idle timeout", rep.framesTicked);
-                    break;
-                }
+                ARC_INFO("ArcaneServer: stopping on {} after {} tick(s)", m_remote->ExitReason(), rep.framesTicked);
+                break;
             }
 #endif
             m_runtime->EnsurePhysics();
@@ -263,6 +256,10 @@ namespace Arcane::Server
         // terminated with 12. Idempotent -- a Ctrl-C that already armed it
         // does not restamp the clock.
         Arcane::Diagnostics::RequestCleanExit();
+#if !defined(ARC_BUILD_DIST)
+        if (m_remote)
+            m_remote->MarkStopping();   // /status and the descriptor read "stopping" through the census
+#endif
 
         rep.fixedUpdate = m_runtime->Schedulers().fixedUpdate.Size();
         rep.update      = m_runtime->Schedulers().update.Size();
@@ -278,13 +275,9 @@ namespace Arcane::Server
         std::string exitReason = stoppedByCleanExit ? "clean-exit" : "frames-complete";
 #if !defined(ARC_BUILD_DIST)
         // Servitor P0: a remote quit or an idle timeout is a clean stop too (exit 0).
-        if (m_remote && !stoppedByCleanExit)
-        {
-            if (m_remote->TakeQuit())
-                exitReason = "remote-quit";
-            else if (m_remote->IdleExpired())
-                exitReason = "remote-idle";
-        }
+        // The reason was latched where the loop broke (DrainFrame), never re-derived here.
+        if (m_remote && m_remote->ExitReason() != nullptr)
+            exitReason = m_remote->ExitReason();
         if (m_remote)
         {
             m_remote->Stop(exitReason);   // the descriptor is deleted before the census is written
