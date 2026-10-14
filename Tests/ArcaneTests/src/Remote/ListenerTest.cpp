@@ -313,7 +313,8 @@ TEST_CASE("PollSockets reports one readable socket and times out the idle one", 
 #ifdef _WIN32
     CHECK(WSAGetLastError() == WSAEWOULDBLOCK);
 #else
-    CHECK(errno == EAGAIN || errno == EWOULDBLOCK);
+    const int err = errno;
+    CHECK((err == EAGAIN || err == EWOULDBLOCK));
 #endif
 
     Arcane::PollInterest idleOnly[1];
