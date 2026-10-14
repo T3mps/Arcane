@@ -432,4 +432,123 @@ TEST_CASE("servitor console joins its tokens into one line; --all console needs 
     }
 }
 
+// --- Task 21 fix round 1 ---
+
+TEST_CASE("console.exec set of a Protected cvar never echoes the new value", "[remote][console]") {
+    Arcane::CVarRegistry reg;
+    Arcane::CVarDesc text;
+    text.name = "test.secretKey";
+    text.type = Arcane::CVarType::String;
+    text.defaultValue = Arcane::CVarValue::String("hunter2");
+    text.audience = Arcane::Audience::Server;
+    text.flags = Arcane::CVarFlags::Protected;
+    text.help = "secret";
+    REQUIRE_FALSE(reg.Register(text).IsStale());
+    Arcane::CVarDesc pin;
+    pin.name = "test.secretPin";
+    pin.type = Arcane::CVarType::Int32;
+    pin.defaultValue = Arcane::CVarValue::Int32(1234);
+    pin.audience = Arcane::Audience::Server;
+    pin.flags = Arcane::CVarFlags::Protected;
+    pin.help = "secret pin";
+    REQUIRE_FALSE(reg.Register(pin).IsStale());
+    reg.Publish();
+    for (const Arcane::CVarContext context : {Arcane::CVarContext::ServerAdmin, Arcane::CVarContext::Editor}) {
+        Arcane::Remote::CvarCommandUser user{&reg, context};
+        RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetConsoleCommandUser, &user);
+        Arcane::Remote::RegisterConsoleCommand();
+        // The success path: the set lands, and only the mask is echoed.
+        const auto set = Exec("test.secretKey newSecretValue");
+        REQUIRE(set.ok);
+        CHECK(set.data["line"] == "test.secretKey <protected>");
+        CHECK(Arcane::Remote::ToJson(set).dump().find("newSecretValue") == std::string::npos);
+        const auto v = reg.Get(reg.Find("test.secretKey"));
+        REQUIRE(v.has_value());
+        CHECK(v->AsString() == "newSecretValue");
+        // The failure path: a value the cvar's type refuses is not echoed either.
+        const auto bad = Exec("test.secretPin s3cretXYZ");
+        CHECK_FALSE(bad.ok);
+        REQUIRE_FALSE(bad.errors.empty());
+        CHECK(bad.errors[0].code == "cvar.type-mismatch");
+        CHECK(bad.data["line"] == "test.secretPin <protected>");
+        CHECK(Arcane::Remote::ToJson(bad).dump().find("s3cretXYZ") == std::string::npos);
+    }
+}
+
+TEST_CASE("console.exec refuses a line holding a control character before anything runs", "[remote][console]") {
+    g_flush = 0;
+    g_secret = 0;
+    Arcane::CVarRegistry reg;
+    REQUIRE(reg.RegisterCommand("test.flush", Arcane::CVarFlags::ServerCanExecute, "flush", "remote-test", &FlushCmd,
+                                nullptr));
+    REQUIRE(reg.RegisterCommand("test.secret", Arcane::CVarFlags::None, "not remote", "remote-test", &SecretCmd,
+                                nullptr));
+    REQUIRE(reg.RegisterCommand("test.echo", Arcane::CVarFlags::ServerCanExecute, "echo", "remote-test", &EchoCmd,
+                                nullptr));
+    Arcane::Remote::CvarCommandUser user{&reg, Arcane::CVarContext::ServerAdmin};
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetConsoleCommandUser, &user);
+    Arcane::Remote::RegisterConsoleCommand();
+    for (const std::string line : {std::string("cvar_explain\r x"), std::string("test.secret\r now"),
+                                   std::string("test.flush\n"), std::string("test.flush\r"),
+                                   std::string("test.flush\x7f"), std::string("test.flush\x1b[2J"),
+                                   std::string("test.flush") + '\0' + "x"}) {
+        const auto env = Exec(line);
+        CHECK_FALSE(env.ok);
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "arg.invalid");
+        CHECK(env.errors[0].message.find("control characters") != std::string::npos);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 2);
+    }
+    CHECK(g_flush == 0);
+    CHECK(g_secret == 0);
+    // A tab is a word separator, not a control character to refuse.
+    g_seenArgs.clear();
+    const auto tabbed = Exec("test.echo\ta\tb");
+    REQUIRE(tabbed.ok);
+    CHECK(g_seenArgs == "a\tb");
+}
+
+static Arcane::CommandResult DeniedTextCmd(std::string_view, void*) {
+    return {false, "denied: this text names no permission rule"};
+}
+static Arcane::CommandResult NotRemoteTextCmd(std::string_view, void*) {
+    return {false, "command 'x' is not remotely executable"};
+}
+
+TEST_CASE("console.exec decides permission from the command's flags, never from its reply text", "[remote][console]") {
+    g_cheat = 0;
+    Arcane::CVarRegistry reg;
+    REQUIRE(reg.RegisterCommand("test.deniedText", Arcane::CVarFlags::ServerCanExecute, "fails", "remote-test",
+                                &DeniedTextCmd, nullptr));
+    REQUIRE(reg.RegisterCommand("test.notRemoteText", Arcane::CVarFlags::ServerCanExecute, "fails", "remote-test",
+                                &NotRemoteTextCmd, nullptr));
+    REQUIRE(reg.RegisterCommand("test.cheat", Arcane::CVarFlags::ServerCanExecute | Arcane::CVarFlags::Cheat, "cheat",
+                                "remote-test", &CheatCmd, nullptr));
+    {
+        Arcane::Remote::CvarCommandUser user{&reg, Arcane::CVarContext::LocalHost};
+        RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetConsoleCommandUser, &user);
+        Arcane::Remote::RegisterConsoleCommand();
+        // Allowed commands that ran and failed: their text is not a permission refusal.
+        for (const char* line : {"test.deniedText", "test.notRemoteText"}) {
+            const auto env = Exec(line);
+            REQUIRE_FALSE(env.errors.empty());
+            CHECK(env.errors[0].code == "cvar.refused");
+            CHECK(Arcane::Remote::ExitFromHost(env) == 6);
+        }
+        // Cheat outside the Editor without server.cheats: refused from the flags, not run.
+        const auto cheat = Exec("test.cheat");
+        REQUIRE_FALSE(cheat.errors.empty());
+        CHECK(cheat.errors[0].code == "permission.denied");
+        CHECK(cheat.errors[0].message == "denied: 'test.cheat' needs server.cheats");
+        CHECK(g_cheat == 0);
+    }
+    // In the Editor the Cheat gate does not apply (CVarRegistry::Execute's rule).
+    Arcane::Remote::CvarCommandUser editor{&reg, Arcane::CVarContext::Editor};
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> editorGuard(&Arcane::Remote::SetConsoleCommandUser, &editor);
+    const auto ran = Exec("test.cheat");
+    REQUIRE(ran.ok);
+    CHECK(ran.data["text"] == "cheated");
+    CHECK(g_cheat == 1);
+}
+
 #endif

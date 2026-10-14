@@ -321,7 +321,9 @@ TEST_CASE("accessFor makes a bless Drive: read-only refuses it and the audit rec
     CHECK(refused.envelope.errors[0].code == "permission.read-only");
     CHECK(ran.envelope.ok);
     CHECK(g_ran == 1);
-    // Not read-only: the bless runs and is audited as Drive; the plain compare is not audited.
+    // Not read-only: the bless runs and is audited as Drive; the plain compare
+    // is not audited. The read-only refusal above was audited too (s10.4:
+    // every Drive call, allowed or refused; Task 21 fix round 1), so two lines.
     gate.readOnly = false;
     REQUIRE(queue.TryPush(3, bless));
     REQUIRE(queue.TryPush(4, plain));
@@ -332,8 +334,64 @@ TEST_CASE("accessFor makes a bless Drive: read-only refuses it and the audit rec
     std::size_t lines = 0;
     for (char c : body)
         lines += c == '\n' ? 1u : 0u;
-    CHECK(lines == 1);
+    CHECK(lines == 2);
     CHECK(body.find("\"command\":\"demo.compare\"") != std::string::npos);
+    CHECK(body.find("\"outcome\":\"refused\"") != std::string::npos);
+    CHECK(body.find("\"outcome\":\"ok\"") != std::string::npos);
+}
+
+TEST_CASE("a read-only refusal of a Drive call writes one audit line; Observe stays unaudited", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.drive", Arcane::Remote::Access::Drive,
+                                  Arcane::Remote::Mutates::Preferences, Arcane::Remote::PlayPolicy::Any), &err));
+    REQUIRE(reg.Register(MakeDesc("demo.look", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    gate.pid = 77;
+    gate.readOnly = true;
+    Arcane::Remote::JobTable jobs;
+    const auto dir = std::filesystem::temp_directory_path() / "remote-dispatch-refused-audit";
+    std::filesystem::remove_all(dir);
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, dir / "audit.ndjson");
+    Arcane::Remote::Call drive;
+    drive.command = "demo.drive";
+    drive.callerId = "remote-test";
+    drive.args = nlohmann::json{{"secret", "hunter2"}};
+    Arcane::Remote::Call look;
+    look.command = "demo.look";
+    look.args = nlohmann::json{{"secret", "hunter2"}};
+    REQUIRE(queue.TryPush(1, drive));
+    REQUIRE(queue.TryPush(2, look));
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult refused;
+    Arcane::Remote::CommandResult looked;
+    REQUIRE(queue.TryTake(1, refused));
+    REQUIRE(queue.TryTake(2, looked));
+    CHECK(refused.envelope.errors[0].code == "permission.read-only");
+    CHECK(looked.envelope.ok);
+    CHECK(g_ran == 1);   // only the Observe call ran
+
+    std::ifstream in(dir / "audit.ndjson");
+    std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::size_t lines = 0;
+    for (char c : body)
+        lines += c == '\n' ? 1u : 0u;
+    REQUIRE(lines == 1);
+    const nlohmann::json line = nlohmann::json::parse(body.substr(0, body.find('\n')));
+    CHECK(line["command"] == "demo.drive");
+    CHECK(line["client"] == "remote-test");
+    CHECK(line["pid"] == 77);
+    CHECK(line["outcome"] == "refused");
+    CHECK(line["errorCode"] == "permission.read-only");
+    CHECK(line["argsDigest"] ==
+          Arcane::Crypto::Sha256Hex(drive.args.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)));
+    CHECK_FALSE(line.contains("args"));
+    CHECK(body.find("hunter2") == std::string::npos);
+    CHECK(body.find("demo.look") == std::string::npos);
 }
 
 // --- Cases beyond the brief (Task 8 implementer) ---

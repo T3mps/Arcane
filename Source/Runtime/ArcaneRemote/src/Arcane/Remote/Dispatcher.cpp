@@ -238,6 +238,8 @@ void RemoteDispatcher::RunOne(std::uint64_t key, const Call& call, Clock::time_p
     if (refusal)
     {
         result.envelope = std::move(*refusal);
+        if (drive)
+            Audit(call, result.envelope, true); // s10.4: a Drive call is audited allowed or refused
     }
     else
     {
@@ -249,7 +251,7 @@ void RemoteDispatcher::RunOne(std::uint64_t key, const Call& call, Clock::time_p
             ARC_WARN("remote: {} took {:.1f} ms, over {}x the {:.1f} ms frame budget", call.command, ranMs,
                      kSlowInvokeBudgets, budgetMs);
         if (drive)
-            Audit(call, result.envelope);
+            Audit(call, result.envelope, false);
     }
 
     result.envelope.id = call.id;
@@ -299,9 +301,11 @@ void RemoteDispatcher::Publish(std::uint64_t key, CommandResult result)
     m_queue.Complete(key, std::move(result));
 }
 
-void RemoteDispatcher::Audit(const Call& call, const Envelope& result)
+void RemoteDispatcher::Audit(const Call& call, const Envelope& result, bool refused)
 {
-    // s10.4: one ndjson line per invoked Drive command. The args are never
+    // s10.4: one ndjson line per Drive call, allowed or refused: invoked
+    // ("ok" / "error") or refused by the gate before it ran ("refused", with
+    // the gate's code). Observe calls are not audited. The args are never
     // written; argsDigest is SHA-256 of their canonical (sorted-key) dump.
     nlohmann::ordered_json line;
     line["time"] = NowUnixMs();
@@ -310,7 +314,7 @@ void RemoteDispatcher::Audit(const Call& call, const Envelope& result)
     line["command"] = call.command;
     line["argsDigest"] =
         Crypto::Sha256Hex(call.args.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
-    line["outcome"] = result.ok ? "ok" : "error";
+    line["outcome"] = refused ? "refused" : (result.ok ? "ok" : "error");
     line["errorCode"] = !result.ok && !result.errors.empty() ? result.errors.front().code : std::string();
     line["frame"] = m_gate.frame.load(std::memory_order_acquire);
 

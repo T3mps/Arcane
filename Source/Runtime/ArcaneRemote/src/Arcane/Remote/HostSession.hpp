@@ -147,8 +147,8 @@ private:
     void Teardown(); // the shared tail of Stop and of a failed Start
 
     Config m_config;
-    // Task 20 (ruling F12): the cvar.* commands' user, {CVarRegistry::Get(),
-    // config.cvarContext}; Start installs it, Teardown releases it.
+    // Task 20 (ruling F12): the user of the cvar.* commands and console.exec (Task 21),
+    // {CVarRegistry::Get(), config.cvarContext}; Start installs it, Teardown releases it.
     CvarCommandUser m_cvarUser;
     HostGate m_gate;
     TickGate m_tick;

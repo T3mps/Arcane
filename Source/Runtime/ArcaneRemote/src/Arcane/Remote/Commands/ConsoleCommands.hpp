@@ -30,7 +30,10 @@ namespace Arcane::Remote
 // context table or policy; exit 3), cvar.protected (exit 3), cvar.unknown,
 // cvar.type-mismatch, cvar.refused-weaker, cvar.refused (the command ran and
 // reported failure, or the registry rejected the set; exit 6), arg.missing /
-// arg.invalid / arg.unknown (exit 2), host.unavailable (no user; exit 5).
+// arg.invalid (also a line holding a control character other than tab) /
+// arg.unknown (exit 2), host.unavailable (no user; exit 5). A console
+// command's permission is decided from its flags before it runs; a set of a
+// Protected cvar echoes "<name> <protected>" in data.line, never the value.
 ARC_REMOTE_API void RegisterConsoleCommand();
 // Same user struct as Task 20. Safe to call twice; a later call replaces the
 // stored pointer (ruling F11). Null answers host.unavailable (exit 5).

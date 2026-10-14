@@ -41,7 +41,7 @@ struct CommandResult;  // Registry.hpp
 
 // The host main thread's half of the remote surface (spec s4.3, s7.7). Each
 // Drain steps every running job once, then pops queued calls within the frame
-// budget, applies the state gate, invokes, audits Drive commands and Completes
+// budget, applies the state gate, invokes, audits Drive calls (run or gate-refused) and Completes
 // each call's queue key (or binds it to the job the command armed). Main
 // thread only: it reads the gate's plain fields and the job table's rows.
 class ARC_REMOTE_API RemoteDispatcher {
@@ -62,7 +62,8 @@ public:
 private:
     void RunOne(std::uint64_t key, const Call& call, std::chrono::steady_clock::time_point queuedAt,
                 double budgetMs);
-    void Audit(const Call& call, const Envelope& result);
+    // refused: the gate answered and the command never ran (outcome "refused").
+    void Audit(const Call& call, const Envelope& result, bool refused);
     void Publish(std::uint64_t key, CommandResult result);
 
     RequestQueue& m_queue;
