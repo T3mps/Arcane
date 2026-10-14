@@ -195,10 +195,26 @@ bool PumpAndResize(FrameIo& io)
     return false;
 }
 
-void AdvanceSim(FrameIo& io)
+void AdvanceSim(FrameIo& io, SimPace pace)
 {
     Arcane::CVarRegistry::Get().Publish();
     io.perf.FrameStart();
+
+    // AM1 Hold (the remote tick gate is Idle): see SimPace's comment in the
+    // header. The host clock advances by wall time even under --headless (a
+    // held run has no fixed cadence to stand in for it), and the frame dt the
+    // material globals read is that same wall delta, so Time and DeltaTime
+    // stay consistent. No input, no RunLoop::Advance, no audio tick.
+    if (pace == SimPace::Hold)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const double wallDt = std::chrono::duration<double>(now - io.lastFrameTime).count();
+        io.lastFrameTime = now;
+        io.simPrev       = now;
+        io.lastFrameDt   = wallDt;
+        io.hostClock    += wallDt;
+        return;
+    }
 
     // --settle N (Task 10): once the ordinary --frames budget is spent,
     // FREEZE the render/sim clock instead of advancing it -- extra frames
@@ -280,7 +296,18 @@ void AdvanceSim(FrameIo& io)
         // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
         // stall to guard against.
         double simDt;
-        if (settleHold)
+        if (pace == SimPace::SingleTick)
+        {
+            // AM1 Step: exactly one canonical fixed step. RequestSingleStep runs
+            // one tick without touching the accumulator (RunLoop::StepFixed), so
+            // neither a wall-clock dt nor a leftover backlog nor the time scale
+            // can turn it into zero or two; Update sees one fixed dt.
+            io.runtime->Loop().RequestSingleStep();
+            simDt = 1.0 / io.runtime->Loop().FixedHz();
+            if (!io.config.headless)
+                io.simPrev = std::chrono::steady_clock::now();   // the next Run step starts from here
+        }
+        else if (settleHold)
         {
             simDt = 0.0;   // see settleHold's own comment above AdvanceSim's input block
         }
