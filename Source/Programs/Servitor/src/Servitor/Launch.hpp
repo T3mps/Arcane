@@ -30,7 +30,8 @@ std::optional<std::filesystem::path> HostExePath(Arcane::Remote::HostKind kind, 
 // Everything Launch decides before it spawns, so it can be checked without a child.
 struct LaunchPlan {
     std::filesystem::path exe;            // HostExePath, gated by Arcane::CheckLaunchPath
-    std::filesystem::path log;            // <exe dir>/<Host>.servitor-launch-starting-<servitor pid>.log; Launch
+    std::filesystem::path logDir;         // <descriptor dir>/logs (the project's Saved/Remote/logs; spec s4.7)
+    std::filesystem::path log;            // <logDir>/<Host>.servitor-launch-starting-<servitor pid>.log; Launch
                                           // renames it <Host>.servitor-launch-<child pid>.log after the spawn
     std::filesystem::path projectRoot;    // the host's project (ProjectRootFor); empty = projectless
     std::filesystem::path descriptorDir;  // where the host writes <kind>-<pid>.json (its project's Saved/Remote)

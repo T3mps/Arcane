@@ -101,11 +101,12 @@ std::uint32_t SelfPid()
 #endif
 }
 
-// <exe dir>/<Host>.servitor-launch-<pid>.log: one log per launch (ruling E-2),
-// so two launches of the same host kind never write one file.
-fs::path LaunchLogFor(const fs::path& exe, Arcane::Remote::HostKind kind, std::uint32_t pid)
+// <log dir>/<Host>.servitor-launch-<pid>.log: one log per launch, so two
+// launches of the same host kind never write one file. The log dir is the
+// descriptor's own directory + "logs" (spec s4.7), never the engine tree.
+fs::path LaunchLogFor(const fs::path& logDir, Arcane::Remote::HostKind kind, std::uint32_t pid)
 {
-    return exe.parent_path() / (std::string(HostName(kind)) + ".servitor-launch-" + std::to_string(pid) + ".log");
+    return logDir / (std::string(HostName(kind)) + ".servitor-launch-" + std::to_string(pid) + ".log");
 }
 
 #if defined(_WIN32)
@@ -368,11 +369,6 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
 
     LaunchPlan plan;
     plan.exe = *exe;
-    // Opened under this servitor's pid; Launch renames it to the child's pid
-    // once the child exists (LaunchLogFor), so concurrent launches never share one.
-    plan.log = exe->parent_path() / (std::string(HostName(kind)) + ".servitor-launch-starting-" +
-                                     std::to_string(SelfPid()) + ".log");
-
     std::vector<std::string> argv(hostArgs.begin(), hostArgs.end());
     bool hasRemote = false;
     bool headless = false;
@@ -419,6 +415,13 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
         plan.descriptor = fs::absolute(FromUtf8(argv[*descriptorAt]), ec);
         argv[*descriptorAt] = PathUtf8(plan.descriptor);
     }
+    // The log stays beside its descriptor, in a logs/ folder (spec s4.7): the
+    // engine tree is the Hub's to verify and holds no Servitor files. Opened
+    // under this servitor's pid; Launch renames it to the child's pid once the
+    // child exists (LaunchLogFor), so concurrent launches never share one.
+    plan.logDir = (descriptorAt ? plan.descriptor.parent_path() : plan.descriptorDir) / "logs";
+    plan.log = plan.logDir / (std::string(HostName(kind)) + ".servitor-launch-starting-" +
+                              std::to_string(SelfPid()) + ".log");
     if (!projectAt && !root->empty())
         argv.insert(argv.begin(), {"--project", PathUtf8(*root)});
     if (!hasRemote)
@@ -443,6 +446,10 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
         return Arcane::Remote::ExitFromHost(*out);
     }
 
+    {
+        std::error_code ec;
+        fs::create_directories(plan->logDir, ec);   // Spawn reports a log it still cannot open
+    }
     std::string spawnError;
     const std::int64_t spawnUnixMs = NowUnixMs();
     const auto child = Spawn(*plan, &spawnError);
@@ -464,7 +471,7 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
     // rename leaves the starting name, which the envelope then reports.
     fs::path log = plan->log;
     {
-        const fs::path named = LaunchLogFor(plan->exe, kind, child->pid);
+        const fs::path named = LaunchLogFor(plan->logDir, kind, child->pid);
         std::error_code ec;
         fs::remove(named, ec);   // an older launch's log under a recycled pid
         fs::rename(plan->log, named, ec);

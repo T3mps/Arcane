@@ -93,8 +93,11 @@ TEST_CASE("launch plans --project and --remote and passes the host flags through
     const auto plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, hostArgs, &err);
     REQUIRE(plan.has_value());
     CHECK(plan->exe == exe);
-    // One log per launch (ruling E-2): opened under servitor's pid, renamed to the child's after the spawn.
-    CHECK(plan->log.parent_path() == exe.parent_path());
+    // One log per launch: opened under servitor's pid, renamed to the child's after the spawn. It lives
+    // in the project's Saved/Remote/logs, never beside the host exe in the engine tree (spec s4.7).
+    CHECK(plan->logDir == Arcane::Remote::DescriptorDir(std::filesystem::absolute(project), false) / "logs");
+    CHECK(plan->log.parent_path() == plan->logDir);
+    CHECK(plan->log.parent_path() != exe.parent_path());
     CHECK(plan->log.filename().string().starts_with("ArcaneRuntime.servitor-launch-"));
     CHECK(plan->projectRoot == std::filesystem::absolute(project));
     CHECK(plan->descriptorDir == Arcane::Remote::DescriptorDir(std::filesystem::absolute(project), false));
@@ -111,11 +114,29 @@ TEST_CASE("launch plans --project and --remote and passes the host flags through
     const auto named = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, withDescriptor, &err);
     REQUIRE(named.has_value());
     CHECK(named->descriptor == std::filesystem::absolute("d/runtime.json"));
+    CHECK(named->logDir == std::filesystem::absolute("d") / "logs");   // beside its descriptor
+    CHECK(named->log.parent_path() == named->logDir);
     CHECK_FALSE(named->hideConsole);   // a windowed runtime keeps its console flags
     const std::vector<std::string> expectedNamed = {"--project", Servitor::PathUtf8(std::filesystem::absolute(project)),
                                                     "--remote", "--remote-descriptor",
                                                     Servitor::PathUtf8(std::filesystem::absolute("d/runtime.json"))};
     CHECK(named->argv == expectedNamed);
+
+    // Projectless: the projectless editor dir's Remote/logs (the descriptor family's own directory).
+    {
+        // No --project and a working directory outside any project (restored on exit).
+        const auto previous = std::filesystem::current_path();
+        std::filesystem::create_directories(tmp.path / "elsewhere");
+        std::filesystem::current_path(tmp.path / "elsewhere");
+        Servitor::GlobalOptions bare;
+        bare.engine = opt.engine;
+        const auto projectless = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, bare, {}, &err);
+        std::filesystem::current_path(previous);
+        REQUIRE(projectless.has_value());
+        CHECK(projectless->projectRoot.empty());
+        CHECK(projectless->logDir == Arcane::Remote::DescriptorDir({}, true) / "logs");
+        CHECK(projectless->log.parent_path() == projectless->logDir);
+    }
 
     // --project both before and after `--` is ambiguous: refused, nothing spawned.
     const std::vector<std::string> twice = {"--project", project.string()};
@@ -160,8 +181,10 @@ TEST_CASE("a launched host that exits before it is ready is host.died exit 7, an
     CHECK(out.command == "launch");
     const auto pid = out.errors[0].detail["pid"].get<std::uint32_t>();
     CHECK(pid != 0);
-    const auto log = exe.parent_path() / ("ArcaneServer.servitor-launch-" + std::to_string(pid) + ".log");
-    CHECK(std::filesystem::exists(log));   // per launch, named for the child's pid
+    const auto log = Arcane::Remote::DescriptorDir(std::filesystem::absolute(tmp.path / "Game"), false) / "logs" /
+                     ("ArcaneServer.servitor-launch-" + std::to_string(pid) + ".log");
+    CHECK(std::filesystem::exists(log));   // per launch, named for the child's pid, in the project
+    CHECK_FALSE(std::filesystem::exists(exe.parent_path() / log.filename()));   // nothing in the engine tree
     CHECK(out.errors[0].detail["log"] == Servitor::PathUtf8(log));
     // spec s4.7: the exit code (observed on both platforms) and the last state seen.
     CHECK(out.errors[0].detail.contains("exitCode"));
