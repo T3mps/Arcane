@@ -5,6 +5,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Net/TcpSocket.hpp>
 #include "RemoteTestHttp.hpp"
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -245,6 +246,8 @@ TEST_CASE("a refused request does not log the token", "[remote][listener]") {
     }
     CHECK(seen.find(forged) == std::string::npos);    // the refused bearer is never logged
     CHECK(seen.find(realToken) == std::string::npos); // nor is the listener's own token
+    // Not vacuous: the subscriber saw the listener's refusal line.
+    CHECK(seen.find("remote: refused (auth): auth.denied") != std::string::npos);
 }
 
 TEST_CASE("PollSockets reports one readable socket and times out the idle one", "[remote][listener]") {
@@ -591,7 +594,7 @@ TEST_CASE("the 17th connection is answered host.busy connections and closed", "[
     Arcane::SetSocketTimeout(extra, 2000);
     CHECK(static_cast<int>(::recv(extra, &byte, 1, 0)) == 0); // then closed
     CloseSocket(extra);
-    // A held connection still works once one slot frees.
+    // Closing one held connection frees a slot, and a NEW connection gets it.
     CloseSocket(held.back());
     held.pop_back();
     std::string ok;
@@ -731,6 +734,174 @@ TEST_CASE("Stop closes open SSE streams and reports them Closed", "[remote][list
     Arcane::SetSocketTimeout(client, 2000);
     CHECK(static_cast<int>(::recv(client, &byte, 1, 0)) == 0);
     CloseSocket(client);
+}
+
+static void RemoteShutdownSend(SocketType sock) {
+#ifdef _WIN32
+    ::shutdown(sock, SD_SEND);
+#else
+    ::shutdown(sock, SHUT_WR);
+#endif
+}
+
+static std::string RemoteStreamRequest(std::uint16_t port, const std::string& token, const std::string& topic) {
+    return "GET /remote/v1/stream?topics=" + topic + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
+        "\r\nAuthorization: Bearer " + token + "\r\n\r\n";
+}
+
+TEST_CASE("EnqueueSse racing Stop is clean", "[remote][listener]") {
+    // Several rounds: a thread spams EnqueueSse while this thread stops the
+    // listener (the wake write end is closed under the same lock Poke takes).
+    for (int round = 0; round < 8; ++round) {
+        Arcane::Remote::RequestQueue queue;
+        Arcane::Remote::ListenerAtoms atoms;
+        atoms.status.store(std::make_shared<const Arcane::Remote::HostStatus>());
+        Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+        listener.Start();
+        const SocketType client = RemoteTest::ConnectLoopback(listener.Port());
+        RemoteTest::SendAll(client, RemoteStreamRequest(listener.Port(), listener.Token(), "logs"));
+        REQUIRE(RemoteTest::RecvUntil(client, "\r\n\r\n", std::chrono::seconds(2)).find("200") != std::string::npos);
+        const auto opened = RemoteWaitSse(atoms, Arcane::Remote::SseLife::Opened);
+        REQUIRE(opened.size() == 1);
+        const std::uint64_t sub = opened[0].subscriberId;
+        std::atomic<bool> done{ false };
+        std::atomic<int> accepted{ 0 };
+        std::thread spam([&] {
+            while (!done.load(std::memory_order_acquire))
+                if (listener.EnqueueSse(sub, "spam"))
+                    accepted.fetch_add(1, std::memory_order_relaxed);
+        });
+        while (accepted.load(std::memory_order_relaxed) == 0)
+            std::this_thread::yield();
+        listener.Stop();
+        done.store(true, std::memory_order_release);
+        spam.join();
+        CHECK(accepted.load() > 0);
+        CHECK_FALSE(listener.EnqueueSse(sub, "after-stop"));
+        CloseSocket(client);
+    }
+}
+
+TEST_CASE("Stop answers an orphaned queued call so it never runs", "[remote][listener]") {
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::ListenerAtoms atoms;
+    atoms.status.store(std::make_shared<const Arcane::Remote::HostStatus>());
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+    listener.Start();
+    const SocketType sock = RemotePostCall(listener.Port(), listener.Token(), R"({"command":"demo.look"})");
+    REQUIRE(RemoteWaitDepth(queue, 1));
+    const std::uint64_t key = queue.OldestPendingId();
+    REQUIRE(key != 0);
+    CloseSocket(sock);
+    // Give the poll loop several iterations to see the drop (the call becomes an orphan).
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(queue.Depth() == 1); // the drop alone does not unqueue it
+    listener.Stop();
+    std::uint64_t popped = 0;
+    Arcane::Remote::Call call;
+    CHECK_FALSE(queue.TryPop(popped, call)); // never runs
+    CHECK(queue.Depth() == 0);
+    CHECK(queue.OldestPendingId() == 0);
+    Arcane::Remote::CommandResult left;
+    CHECK_FALSE(queue.TryTake(key, left)); // no result left behind
+}
+
+TEST_CASE("a client that drops while parked leaves no result behind", "[remote][listener]") {
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::ListenerAtoms atoms;
+    atoms.status.store(std::make_shared<const Arcane::Remote::HostStatus>());
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+    listener.Start();
+    const SocketType sock = RemotePostCall(listener.Port(), listener.Token(), R"({"command":"demo.look"})");
+    REQUIRE(RemoteWaitDepth(queue, 1));
+    std::uint64_t key = 0;
+    Arcane::Remote::Call call;
+    REQUIRE(queue.TryPop(key, call));
+    CloseSocket(sock);
+    // Let the loop see the drop first, so the Complete below finds no Conn.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Arcane::Remote::CommandResult done;
+    done.envelope = Arcane::Remote::MakeOk("demo.look", nlohmann::json::object(), {});
+    queue.Complete(key, done);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Arcane::Remote::CommandResult left;
+    CHECK_FALSE(queue.TryTake(key, left)); // the listener discarded it
+    CHECK(queue.OldestPendingId() == 0);
+    listener.Stop();
+}
+
+TEST_CASE("a half-closed client still gets its response", "[remote][listener]") {
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::ListenerAtoms atoms;
+    auto snap = std::make_shared<Arcane::Remote::HostStatus>();
+    snap->state = "ready";
+    atoms.status.store(snap);
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+    listener.Start();
+    const SocketType status = RemoteTest::ConnectLoopback(listener.Port());
+    RemoteTest::SendAll(status, "GET /remote/v1/status HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(listener.Port()) +
+        "\r\nAuthorization: Bearer " + listener.Token() + "\r\n\r\n");
+    RemoteShutdownSend(status);
+    const std::string answered = RemoteTest::RecvUntil(status, "\"state\":\"ready\"", std::chrono::seconds(2));
+    CHECK(answered.find("HTTP/1.1 200") != std::string::npos);
+    CHECK(answered.find("\"state\":\"ready\"") != std::string::npos);
+    CloseSocket(status);
+
+    // A half-closed /call is still read and queued (its bytes were complete),
+    // but EOF on a parked call is the client drop of the brief whichever read
+    // sees it: the connection closes with no answer, and the later result is
+    // discarded. Deterministic whether the FIN arrives with the request or after.
+    const SocketType sock = RemotePostCall(listener.Port(), listener.Token(), R"({"id":"r-half","command":"demo.look"})");
+    RemoteShutdownSend(sock);
+    REQUIRE(RemoteWaitDepth(queue, 1));
+    std::uint64_t key = 0;
+    Arcane::Remote::Call call;
+    REQUIRE(queue.TryPop(key, call));
+    CHECK(call.id == "r-half");
+    const std::string closed = RemoteTest::RecvUntil(sock, "\x01", std::chrono::seconds(2));
+    CHECK(closed.empty()); // closed, no bytes
+    Arcane::Remote::CommandResult done;
+    done.envelope = Arcane::Remote::MakeOk("demo.look", nlohmann::json::object(), {});
+    queue.Complete(key, done);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    Arcane::Remote::CommandResult left;
+    CHECK_FALSE(queue.TryTake(key, left));
+    CloseSocket(sock);
+    listener.Stop();
+}
+
+TEST_CASE("parked and streaming connections are not idle-closed", "[remote][listener]") {
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::ListenerAtoms atoms;
+    atoms.status.store(std::make_shared<const Arcane::Remote::HostStatus>());
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken(), std::chrono::milliseconds(200));
+    listener.Start();
+    const SocketType stream = RemoteTest::ConnectLoopback(listener.Port());
+    RemoteTest::SendAll(stream, RemoteStreamRequest(listener.Port(), listener.Token(), "state"));
+    REQUIRE(RemoteTest::RecvUntil(stream, "\r\n\r\n", std::chrono::seconds(2)).find("200") != std::string::npos);
+    const auto opened = RemoteWaitSse(atoms, Arcane::Remote::SseLife::Opened);
+    REQUIRE(opened.size() == 1);
+    const SocketType parked = RemotePostCall(listener.Port(), listener.Token(), R"({"id":"r-slow","command":"demo.look"})");
+    REQUIRE(RemoteWaitDepth(queue, 1));
+    std::uint64_t key = 0;
+    Arcane::Remote::Call call;
+    REQUIRE(queue.TryPop(key, call));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 2.5x the idle limit
+
+    CHECK(Arcane::Remote::TakeSseEvents(atoms).empty()); // the stream did not close
+    REQUIRE(listener.EnqueueSse(opened[0].subscriberId, "still-open"));
+    CHECK(RemoteTest::RecvUntil(stream, "still-open\n\n", std::chrono::seconds(2)).find("data: still-open") !=
+          std::string::npos);
+    Arcane::Remote::CommandResult done;
+    done.envelope = Arcane::Remote::MakeOk("demo.look", nlohmann::json::object(), {});
+    done.envelope.id = call.id;
+    queue.Complete(key, done);
+    const std::string reply = RemoteTest::RecvUntil(parked, "\"r-slow\"", std::chrono::seconds(2));
+    CHECK(reply.find("HTTP/1.1 200") != std::string::npos);
+    CHECK(reply.find("\"r-slow\"") != std::string::npos);
+    CloseSocket(parked);
+    CloseSocket(stream);
+    listener.Stop();
 }
 
 #endif

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <thread>
 #include <utility>
 
 namespace Arcane::Remote
@@ -34,6 +35,8 @@ ARC_CONSTANT("timing: Stop keeps flushing queued answers (host.died) this long (
 constexpr int kStopFlushMs = 500;
 ARC_CONSTANT("timing: one poll slice (ms) of Stop's flush")
 constexpr int kStopFlushSliceMs = 10;
+ARC_CONSTANT("timing: back-off (ms) after a hard accept or poll error, so a persistent one (EMFILE) cannot spin the loop")
+constexpr int kErrorBackoffMs = 20;
 ARC_CONSTANT("capacity hint: one recv chunk")
 constexpr std::size_t kRecvChunkBytes = 4096;
 
@@ -54,7 +57,8 @@ struct Conn
     std::uint64_t subscriberId = 0;
     std::string sseTopic;
     std::chrono::steady_clock::time_point lastRead{};
-    bool overflow = false; // an SSE backlog past the bound: the service thread drops it
+    bool peerClosed = false; // the client shut its write side (half-close); never read again
+    bool overflow = false;   // an SSE backlog past the bound: the service thread drops it
     bool dead = false;     // dropped at the end of this iteration
 };
 
@@ -308,7 +312,8 @@ struct LoopbackHttpTransport::Impl
 
     SocketType listenSock = INVALID_SOCK;
     SocketType wakeRead = INVALID_SOCK;
-    SocketType wakeWrite = INVALID_SOCK;
+    SocketType wakeWrite = INVALID_SOCK; // guarded by wakeMu once Start returns
+    std::mutex wakeMu;                   // Poke vs Stop: the write end is never used after it closes
     std::uint16_t port = 0;
     std::string portDecimal;
 
@@ -331,12 +336,20 @@ struct LoopbackHttpTransport::Impl
     static void WakeThunk(void* user) { static_cast<Impl*>(user)->Poke(); }
 
     // One byte on the wake pair. Would-block means a wake is already pending.
+    // Callable from any thread (queue Complete, EnqueueSse, Stop); wakeMu keeps
+    // it off a write end that Stop has closed (the handle could be reused).
     void Poke()
     {
+        std::lock_guard<std::mutex> lock(wakeMu);
         if (wakeWrite == INVALID_SOCK) return;
         const char byte = 'w';
         (void)SendSome(wakeWrite, &byte, 1);
     }
+
+    // Once-per-burst error logging and back-off for hard accept / poll errors.
+    std::chrono::steady_clock::time_point acceptPausedUntil{};
+    bool acceptErrorLogged = false;
+    bool pollErrorLogged = false;
 
     bool OpenWakePair();
     void Run();
@@ -439,7 +452,10 @@ void LoopbackHttpTransport::Impl::Iterate()
         PollInterest listenIn;
         // Up to kMaxConnections live connections plus the one being answered
         // host.busy; past that the backlog waits (no busy-spin on a readable listen socket).
-        listenIn.socket = conns.size() <= kMaxConnections ? listenSock : INVALID_SOCK;
+        // A hard accept error pauses accepting briefly (a persistent EMFILE
+        // leaves the listen socket readable forever).
+        const bool acceptPaused = std::chrono::steady_clock::now() < acceptPausedUntil;
+        listenIn.socket = conns.size() <= kMaxConnections && !acceptPaused ? listenSock : INVALID_SOCK;
         listenIn.wantRead = true;
         fds.push_back(listenIn);
         PollInterest wakeIn;
@@ -449,7 +465,7 @@ void LoopbackHttpTransport::Impl::Iterate()
         for (const auto& c : conns) {
             PollInterest in;
             in.socket = c->sock;
-            in.wantRead = c->state != ConnState::Sending;
+            in.wantRead = c->state != ConnState::Sending && !c->peerClosed;
             in.wantWrite = !c->outbuf.empty();
             fds.push_back(in);
             polled.push_back(c.get());
@@ -457,6 +473,16 @@ void LoopbackHttpTransport::Impl::Iterate()
     }
 
     const int ready = PollSockets(fds, kPollWaitMs);
+    if (ready < 0) {
+        // EINTR or a hard error: back off so a persistent one cannot spin, and
+        // log once per burst.
+        if (!pollErrorLogged)
+            LogInfo("remote: socket poll failed; the listener backs off and retries");
+        pollErrorLogged = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kErrorBackoffMs));
+        return;
+    }
+    pollErrorLogged = false;
 
     std::lock_guard<std::mutex> lock(connMu);
     if (ready > 0) {
@@ -467,6 +493,8 @@ void LoopbackHttpTransport::Impl::Iterate()
         for (std::size_t i = 0; i < polled.size(); ++i) {
             Conn& c = *polled[i];
             const PollInterest& in = fds[i + 2];
+            if (!c.dead && c.peerClosed && in.hungup)
+                Drop(c); // a reset after the half-close: nothing more will arrive
             if (!c.dead && (in.readable || in.hungup))
                 ReadConn(c);
             if (!c.dead && in.writable)
@@ -517,10 +545,16 @@ void LoopbackHttpTransport::Impl::Accept()
         socklen_t peerLen = sizeof(peer);
         const SocketType sock = ::accept(listenSock, reinterpret_cast<sockaddr*>(&peer), &peerLen);
         if (sock == INVALID_SOCK) {
-            if (!IsSocketTimeoutError())
-                LogInfo("remote: accept failed; the listener keeps running");
-            return; // would-block: the poll raced and there is no socket
+            if (IsSocketTimeoutError())
+                return; // would-block: the poll raced and there is no socket
+            // A hard error (EMFILE, ENFILE, ...): pause accepting, log once per burst.
+            if (!acceptErrorLogged)
+                LogInfo("remote: accept failed; the listener pauses accepting and retries");
+            acceptErrorLogged = true;
+            acceptPausedUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(kErrorBackoffMs);
+            return;
         }
+        acceptErrorLogged = false;
         // The peer check runs on the address of THIS accepted socket.
         sockaddr_in addr{};
         socklen_t addrLen = sizeof(addr);
@@ -551,6 +585,8 @@ void LoopbackHttpTransport::Impl::Accept()
 
 void LoopbackHttpTransport::Impl::ReadConn(Conn& c)
 {
+    if (c.peerClosed)
+        return; // half-closed: everything the client sent is already read
     char buf[kRecvChunkBytes];
     bool got = false;
     std::size_t taken = 0;
@@ -568,18 +604,27 @@ void LoopbackHttpTransport::Impl::ReadConn(Conn& c)
         }
         if (n < 0 && IsSocketTimeoutError())
             break; // would-block: everything available is read
+        if (n == 0 && c.state == ConnState::Reading) {
+            // Half-close: the request may already be complete in inbuf.
+            c.peerClosed = true;
+            break;
+        }
         Drop(c);   // the peer closed (0) or a hard error
         return;
     }
-    if (!got || c.state != ConnState::Reading)
+    if (c.state != ConnState::Reading || (!got && !c.peerClosed))
         return;
-    c.lastRead = std::chrono::steady_clock::now();
+    if (got)
+        c.lastRead = std::chrono::steady_clock::now();
 
     std::string error;
     const std::optional<HttpRequest> req = ParseHttpRequest(c.inbuf, &error);
     if (!req) {
-        if (error == "partial")
+        if (error == "partial") {
+            if (c.peerClosed)
+                Drop(c); // closed before a complete request
             return;
+        }
         if (error == "version")
             Refuse(c, 505, "HTTP Version Not Supported",
                    MakeError("", "arg.invalid", "only HTTP/1.1 is accepted", "send HTTP/1.1"), "version");
@@ -601,6 +646,14 @@ void LoopbackHttpTransport::Impl::ReadConn(Conn& c)
     }
     c.inbuf.clear(); // bytes past Content-Length are ignored: one request per connection
     HandleRequest(c, *req);
+    // A half-close is answered when the answer is inline (status, catalog, a
+    // refusal). A parked call or a stream on a closed read side is the brief's
+    // "client drop" whichever read saw the EOF first: the call stays queued
+    // (an orphan, its result discarded), the stream reports Closed.
+    if (!c.dead && c.peerClosed && (c.state == ConnState::Parked || c.state == ConnState::Streaming)) {
+        Drop(c);
+        return;
+    }
     if (!c.dead && !c.outbuf.empty())
         FlushConn(c);
 }
@@ -619,6 +672,10 @@ void LoopbackHttpTransport::Impl::FlushConn(Conn& c)
         return;
     }
     if (c.state == ConnState::Sending) {
+        if (c.peerClosed) {
+            Drop(c); // the client's FIN is already in: nothing to linger for
+            return;
+        }
         // One response per connection: shut the write side so the client reads
         // EOF, then linger for its FIN so unread request bytes never reset it.
         ShutdownSend(c.sock);
@@ -904,7 +961,10 @@ void LoopbackHttpTransport::Impl::Shutdown()
     for (const auto& c : conns)
         Drop(*c); // Streaming subscribers publish Closed
     conns.clear();
+    // Calls whose client left: answer them too, so one still queued is removed
+    // and never runs after the listener is gone, then discard the answer.
     for (std::uint64_t id : orphans) {
+        queue.Complete(id, CommandResult{ MakeError("", "host.died", "listener stopped", "relaunch") });
         CommandResult discarded;
         queue.TryTake(id, discarded);
     }
@@ -968,9 +1028,9 @@ void LoopbackHttpTransport::Stop()
     m->listenSock = INVALID_SOCK;
     CloseSocket(m->wakeRead);
     m->wakeRead = INVALID_SOCK;
-    const SocketType writer = m->wakeWrite;
+    std::lock_guard<std::mutex> lock(m->wakeMu); // no Poke is mid-send on this handle
+    CloseSocket(m->wakeWrite);
     m->wakeWrite = INVALID_SOCK;
-    CloseSocket(writer);
 }
 
 std::uint16_t LoopbackHttpTransport::Port() const
