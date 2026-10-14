@@ -512,6 +512,8 @@ physics.substepCount
 plugin.hotReload.copyRetries
 plugin.hotReload.copyRetryMs
 plugin.hotReload.settleMs
+remote.server.frameBudgetMs
+remote.server.queueDepth
 render.adapter
 render.allowTearing
 render.backend

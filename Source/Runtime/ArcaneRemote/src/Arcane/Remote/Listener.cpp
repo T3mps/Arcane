@@ -207,18 +207,20 @@ bool RequestQueue::TryPush(std::uint64_t id, Call call)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_queue.size() >= m_capacity || m_pending.contains(id) || m_results.contains(id))
         return false;
-    m_queue.push_back(Entry{ id, std::move(call) });
+    m_queue.push_back(Entry{ id, std::move(call), std::chrono::steady_clock::now() });
     m_pending.insert(id);
     return true;
 }
 
-bool RequestQueue::TryPop(std::uint64_t& id, Call& call)
+bool RequestQueue::TryPop(std::uint64_t& id, Call& call, std::chrono::steady_clock::time_point* queuedAt)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_queue.empty())
         return false;
     id = m_queue.front().id;
     call = std::move(m_queue.front().call);
+    if (queuedAt != nullptr)
+        *queuedAt = m_queue.front().queuedAt;
     m_queue.pop_front();
     return true;
 }

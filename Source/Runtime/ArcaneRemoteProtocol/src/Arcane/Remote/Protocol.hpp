@@ -8,6 +8,19 @@
 #include <string>
 #include <vector>
 
+namespace Arcane::Remote
+{
+
+// The two remote.server.* cvar defaults sit outside the Dist guard: Dispatcher.cpp
+// declares those Dev cvars in every configuration, so Dist's registry refuses
+// them by name (IsCompiledOut) instead of never seeing them.
+ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.queueDepth's default")
+inline constexpr std::uint32_t kQueueDepthDefault = 64;
+ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.frameBudgetMs' default")
+inline constexpr double kFrameBudgetMs = 4.0;
+
+} // namespace Arcane::Remote
+
 #if !defined(ARC_BUILD_DIST)
 
 namespace Arcane::Remote
@@ -25,12 +38,8 @@ ARC_CONSTANT("capacity: s10.1 connection cap, under Winsock FD_SETSIZE (64); POS
 inline constexpr std::uint32_t kMaxConnections = 16;
 ARC_CONSTANT("capacity: s10.1 SSE subscriber cap")
 inline constexpr std::uint32_t kMaxSseSubscribers = 8;
-ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.queueDepth's default")
-inline constexpr std::uint32_t kQueueDepthDefault = 64;
 ARC_CONSTANT("capacity hint: s4.3 default commands drained per tick")
 inline constexpr std::uint32_t kFrameBudgetCommands = 8;
-ARC_CONSTANT("a change would be a bug: the one spelling of remote.server.frameBudgetMs' default")
-inline constexpr double kFrameBudgetMs = 4.0;
 ARC_CONSTANT("wire protocol: s10.1 idle connection close")
 inline constexpr std::uint32_t kIdleConnectionSeconds = 30;
 

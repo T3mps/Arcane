@@ -38,7 +38,9 @@ public:
     RequestQueue& operator=(const RequestQueue&) = delete;
 
     bool TryPush(std::uint64_t id, Call call);          // false when full; does not run the command
-    bool TryPop(std::uint64_t& id, Call& call);
+    // queuedAt (optional) receives the steady-clock time TryPush accepted the
+    // call; the dispatcher's timing.queuedMs is measured from it.
+    bool TryPop(std::uint64_t& id, Call& call, std::chrono::steady_clock::time_point* queuedAt = nullptr);
     // Publishes the result of a pending id (one TryPush has not yet been
     // Completed), drops that id from the queue if it was never popped (a
     // completed call is never run), then calls the wake function. A Complete
@@ -61,6 +63,7 @@ private:
     {
         std::uint64_t id = 0;
         Call call;
+        std::chrono::steady_clock::time_point queuedAt{};
     };
 
     mutable std::mutex m_mutex;
