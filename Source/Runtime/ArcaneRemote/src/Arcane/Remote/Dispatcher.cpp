@@ -304,9 +304,15 @@ void RemoteDispatcher::Publish(std::uint64_t key, CommandResult result)
 void RemoteDispatcher::Audit(const Call& call, const Envelope& result, bool refused)
 {
     // s10.4: one ndjson line per Drive call, allowed or refused: invoked
-    // ("ok" / "error") or refused by the gate before it ran ("refused", with
-    // the gate's code). Observe calls are not audited. The args are never
-    // written; argsDigest is SHA-256 of their canonical (sorted-key) dump.
+    // ("ok" / "error") or refused by the gate's policy before it ran
+    // ("refused", with the gate's code: permission.*, arg.inapplicable, ...).
+    // A host.busy refusal is not audited (coordinator ruling, Task 21 fix
+    // round 1): it is transient, provably not run, and the client retries it,
+    // so it would write one line per retry. Observe calls are not audited. The
+    // args are never written; argsDigest is SHA-256 of their canonical
+    // (sorted-key) dump.
+    if (refused && !result.errors.empty() && result.errors.front().code == "host.busy")
+        return;
     nlohmann::ordered_json line;
     line["time"] = NowUnixMs();
     line["client"] = call.callerId;

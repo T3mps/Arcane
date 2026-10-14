@@ -62,7 +62,8 @@ public:
 private:
     void RunOne(std::uint64_t key, const Call& call, std::chrono::steady_clock::time_point queuedAt,
                 double budgetMs);
-    // refused: the gate answered and the command never ran (outcome "refused").
+    // refused: the gate answered and the command never ran (outcome "refused");
+    // a host.busy refusal writes nothing (transient, retried by the client).
     void Audit(const Call& call, const Envelope& result, bool refused);
     void Publish(std::uint64_t key, CommandResult result);
 

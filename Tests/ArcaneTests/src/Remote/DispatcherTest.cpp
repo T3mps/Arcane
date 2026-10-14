@@ -394,6 +394,49 @@ TEST_CASE("a read-only refusal of a Drive call writes one audit line; Observe st
     CHECK(body.find("demo.look") == std::string::npos);
 }
 
+TEST_CASE("a host.busy refusal of a Drive call writes no audit line", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.boom", Arcane::Remote::Access::Drive,
+                                  Arcane::Remote::Mutates::PlayMode, Arcane::Remote::PlayPolicy::PlayingOnly), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    gate.SetState("ready");   // a PlayingOnly command outside Play: host.busy, provably not run
+    Arcane::Remote::JobTable jobs;
+    const auto dir = std::filesystem::temp_directory_path() / "remote-dispatch-busy-audit";
+    std::filesystem::remove_all(dir);
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, dir / "audit.ndjson");
+    Arcane::Remote::Call call;
+    call.command = "demo.boom";
+    REQUIRE(queue.TryPush(1, call));
+    REQUIRE(queue.TryPush(2, call));   // a client retry of the same busy call
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult first;
+    Arcane::Remote::CommandResult retry;
+    REQUIRE(queue.TryTake(1, first));
+    REQUIRE(queue.TryTake(2, retry));
+    CHECK(first.envelope.errors[0].code == "host.busy");
+    CHECK(retry.envelope.errors[0].code == "host.busy");
+    CHECK(g_ran == 0);
+    CHECK_FALSE(std::filesystem::exists(dir / "audit.ndjson"));   // no line for either attempt
+
+    // Once the state admits it, the same call runs and is audited once.
+    gate.SetState("playing");
+    REQUIRE(queue.TryPush(3, call));
+    dispatcher.Drain(1000.0, 8);
+    CHECK(g_ran == 1);
+    std::ifstream in(dir / "audit.ndjson");
+    std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::size_t lines = 0;
+    for (char c : body)
+        lines += c == '\n' ? 1u : 0u;
+    CHECK(lines == 1);
+    CHECK(body.find("\"outcome\":\"ok\"") != std::string::npos);
+    CHECK(body.find("host.busy") == std::string::npos);
+}
+
 // --- Cases beyond the brief (Task 8 implementer) ---
 
 TEST_CASE("Sha256Hex matches the FIPS 180-2 vectors", "[remote][dispatch]") {
