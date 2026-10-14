@@ -50,6 +50,11 @@ struct Desc {
     // capture.compare answers Drive when --bless is set). Last field, so the
     // ARC_REMOTE_COMMAND brace below still compiles.
     Access (*accessFor)(const Call& call) = nullptr;
+    // Spec s4.6 Rule 3 (Task 20 fix round 1): true when the command reads
+    // Call::world (it resolves --world itself, ResolveWorld). The dispatcher
+    // refuses a non-empty world on every other command with arg.inapplicable
+    // (exit 2) and never invokes it, so --world is never silently dropped.
+    bool worldScoped = false;
 };
 
 // The process's remote command table (spec s5.1). One instance lives in ArcaneRemote,

@@ -90,34 +90,35 @@ nlohmann::json ParseField(const std::string& text)
 
 bool IsProtectedRefusal(const std::string& text)
 {
-    // "<name> is protected: never readable remotely" (the service) and
-    // "denied: '<name>' is protected" (the registry). Names have no spaces.
-    return text.find(" is protected") != std::string::npos;
+    return std::string_view(CvarRefusalCode(text)) == "cvar.protected";
 }
 
-// A refused Handle response mapped to its error (code, remediation).
+// A refused Handle response mapped to its error envelope (CvarRefusalCode).
 Envelope Refusal(const std::string& command, const std::string& name, const std::string& text)
 {
-    if (IsProtectedRefusal(text)) {
+    const std::string_view code = CvarRefusalCode(text);
+    if (code == "cvar.protected") {
         Envelope env = MakeError(command, "cvar.protected", text, "a Protected cvar is never readable remotely");
         env.data = {{"name", name}, {"value", nullptr}, {"masked", kMasked}};
         return env;
     }
-    if (text.starts_with("unknown"))   // "unknown cvar 'x'", "unknown 'x'" (absent in this context)
-        return MakeError(command, "cvar.unknown", text, "servitor cvar list shows the cvars this host knows");
-    if (text.starts_with("command '") || text.find("is a command") != std::string::npos)
+    if (code == "cvar.unknown" && (text.starts_with("command '") || text.find("is a command") != std::string::npos))
         return MakeError(command, "cvar.unknown", "'" + name + "' is a console command, not a cvar",
                          "run console commands with servitor console");
-    if (text.starts_with("expected ") || text == "type has no accessor")   // ParseCVarText's reasons
+    if (code == "cvar.unknown")
+        return MakeError(command, "cvar.unknown", text, "servitor cvar list shows the cvars this host knows");
+    if (code == "cvar.type-mismatch")
         return MakeError(command, "cvar.type-mismatch", text,
                          "pass a value of the cvar's type (servitor cvar explain " + name + " shows it)");
-    if (text.starts_with("denied"))
+    if (code == "permission.denied")
         return MakeError(command, "permission.denied", text, "this host's context or policy refuses it");
-    if (text.ends_with("missing value") || text.ends_with("missing name"))
+    if (code == "arg.missing")
         return MakeError(command, "arg.missing", text,
                          std::string(command == "cvar.set" ? kSetUsage : kNameUsage));
-    // "refused: a stronger source holds x", "rejected", ...: ran and failed (exit 6).
-    return MakeError(command, "cvar.refused", text, "servitor cvar explain " + name + " shows who holds it");
+    if (code == "cvar.refused-weaker")
+        return MakeError(command, "cvar.refused-weaker", text,
+                         "servitor cvar explain " + name + " shows the stronger source that holds it");
+    return MakeError(command, "cvar.refused", text, "servitor cvar explain " + name + " shows its state");
 }
 
 Envelope Unavailable(const std::string& command)
@@ -412,6 +413,27 @@ Desc MakeDesc(const char* name, const char* summary, Access access, Mutates muta
 
 } // namespace
 
+const char* CvarRefusalCode(std::string_view text)
+{
+    // "<name> is protected: never readable remotely" (the service) and
+    // "denied: '<name>' is protected" (the registry). Names have no spaces.
+    if (text.find(" is protected") != std::string_view::npos)
+        return "cvar.protected";
+    if (text.starts_with("unknown"))   // "unknown cvar 'x'", "unknown 'x'" (absent in this context)
+        return "cvar.unknown";
+    if (text.starts_with("command '") || text.find("is a command") != std::string_view::npos)
+        return "cvar.unknown";         // a console command is not a cvar
+    if (text.starts_with("expected ") || text == "type has no accessor")   // ParseCVarText's reasons
+        return "cvar.type-mismatch";
+    if (text.starts_with("denied"))   // the access table, a rung refusal, or the game's policy
+        return "permission.denied";
+    if (text.ends_with("missing value") || text.ends_with("missing name"))
+        return "arg.missing";
+    if (text.starts_with("refused: a stronger source holds"))   // SetResult::RefusedWeaker (spec s6.4)
+        return "cvar.refused-weaker";
+    return "cvar.refused";             // "rejected" (SetResult::Stale / TypeMismatch) and anything unrecognised
+}
+
 void SetCvarCommandUser(CvarCommandUser* user)
 {
     StoredUser() = user;
@@ -433,6 +455,10 @@ void RegisterCvarCommands()
     Desc descs[] = {
         MakeDesc("cvar.get", "Read one cvar's published value", Access::Observe, Mutates::None,
                  Astra::GetMeta<CvarGetArgs>(), &CvarGet),
+        // Preferences, though a remote set is the Console rung, which is never
+        // archived (WriteCVarArchive writes User/EditorUser only): no Mutates
+        // value means "runtime state", None is refused for Drive, and
+        // Preferences is the nearest -- it changes a setting the user owns.
         MakeDesc("cvar.set", "Set one cvar from console text and publish it", Access::Drive, Mutates::Preferences,
                  Astra::GetMeta<CvarSetArgs>(), &CvarSet),
         MakeDesc("cvar.list", "List the cvars visible to this host's context, optionally under a dotted prefix",

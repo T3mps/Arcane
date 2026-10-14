@@ -74,6 +74,7 @@ void RegisterWorldCommands()
     list.play = PlayPolicy::Any;
     list.thread = ExecThread::Main;
     list.needsFrame = false;
+    list.worldScoped = true;   // validates --world itself (ResolveWorld below)
     list.argsMeta = Astra::GetMeta<WorldListArgs>();
     list.fn = &WorldListCommand;
     std::string error;

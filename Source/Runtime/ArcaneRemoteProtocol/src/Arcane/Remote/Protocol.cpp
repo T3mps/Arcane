@@ -31,7 +31,8 @@ int ExitForCode(const std::string& code)
     if (OneOf(code, { "protocol.mismatch", "target.none", "engine.unresolved" })) return 4;
     if (OneOf(code, { "host.busy", "capture.minimized", "host.unavailable" })) return 5;
     if (OneOf(code, { "entity.not-found", "component.unknown", "component.absent", "compare.missing-reference",
-                      "capture.no-frame", "cvar.unknown", "cvar.type-mismatch", "reflect.unreadable" }))
+                      "capture.no-frame", "cvar.unknown", "cvar.type-mismatch", "cvar.refused-weaker", "cvar.refused",
+                      "reflect.unreadable" }))
         return 6;
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;

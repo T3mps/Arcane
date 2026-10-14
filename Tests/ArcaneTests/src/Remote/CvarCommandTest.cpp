@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
+#include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/HostSession.hpp>
+#include <Arcane/Remote/Worlds.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -9,11 +11,15 @@
 #include <Servitor/FanOut.hpp>
 #include <Servitor/Verbs.hpp>
 #include <Json.hpp>
+#include "RemoteTestHttp.hpp"
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 
+#include <chrono>
 #include <cstdint>
+#include <future>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -292,12 +298,23 @@ TEST_CASE("servitor cvar verbs build their args and refuse unknown flags", "[ser
     const char* argv[] = {"servitor", "cvar", "get", "render.vsync", "--bogus"};
     CHECK(Servitor::Run(5, const_cast<char**>(argv)) == 2);
 
-    // cvar verbs post a call, so --world and --read-only ride it.
+    // cvar verbs post a call, so the client forwards --world and --read-only
+    // and the HOST decides (Rule 3): --read-only refuses cvar.set at the gate,
+    // and --world is refused as arg.inapplicable because no cvar command is
+    // world-scoped (both asserted over a live session in "a read-only session
+    // refuses cvar.set ..." below).
     Servitor::GlobalOptions opt;
     opt.world = "main";
     opt.readOnly = true;
     for (const Servitor::VerbRow* row : {get, set, list, explain})
         CHECK_FALSE(Servitor::UnusedGlobal(*row, opt).has_value());
+    auto& registry = Arcane::Remote::CommandRegistry::Get();
+    Arcane::Remote::RegisterCvarCommands();
+    for (const char* command : {"cvar.get", "cvar.set", "cvar.list", "cvar.explain"}) {
+        const auto* d = registry.Find(command);
+        REQUIRE(d != nullptr);
+        CHECK_FALSE(d->worldScoped);
+    }
 }
 
 TEST_CASE("--all cvar set needs --yes; --all cvar get does not", "[servitor][cvar]") {
@@ -335,6 +352,141 @@ TEST_CASE("--all cvar set needs --yes; --all cvar get does not", "[servitor][cva
     const std::vector<std::string> getRest = {"render.vsync"};
     CHECK(Servitor::FanOutVerb(*Servitor::FindVerb("cvar get"), getRest, opt, scan, post, &seen, &result) == 0);
     CHECK(seen.commands == std::vector<std::string>{"cvar.get", "cvar.get"});
+}
+
+// --- Task 20 fix round 1 ---
+
+TEST_CASE("cvar refusal texts map to their codes; refused-weaker and refused are exit 6", "[remote][cvar]") {
+    using Arcane::Remote::CvarRefusalCode;
+    CHECK(std::string(CvarRefusalCode("refused: a stronger source holds render.vsync")) == "cvar.refused-weaker");
+    CHECK(std::string(CvarRefusalCode("rejected")) == "cvar.refused");
+    CHECK(std::string(CvarRefusalCode("render.secret is protected: never readable remotely")) == "cvar.protected");
+    CHECK(std::string(CvarRefusalCode("denied: 'render.secret' is protected")) == "cvar.protected");
+    CHECK(std::string(CvarRefusalCode("denied: 'x' by the game's policy")) == "permission.denied");
+    CHECK(std::string(CvarRefusalCode("denied")) == "permission.denied");
+    CHECK(std::string(CvarRefusalCode("unknown cvar 'protected.thing'")) == "cvar.unknown");
+    CHECK(std::string(CvarRefusalCode("command 'x' runs only via set")) == "cvar.unknown");
+    CHECK(std::string(CvarRefusalCode("expected true or false")) == "cvar.type-mismatch");
+    CHECK(std::string(CvarRefusalCode("set x: missing value")) == "arg.missing");
+    for (const char* code : {"cvar.refused-weaker", "cvar.refused"}) {
+        INFO(code);
+        const auto env = Arcane::Remote::MakeError("cvar.set", code, "m", "r");
+        CHECK(Arcane::Remote::ExitFromHost(env) == 6);
+    }
+}
+
+static int g_consoleRuns = 0;
+static Arcane::CommandResult CountRun(std::string_view, void*) {
+    ++g_consoleRuns;
+    return {true, "ran"};
+}
+
+TEST_CASE("cvar.set on a console command is cvar.unknown and never runs it", "[remote][cvar]") {
+    Arcane::CVarRegistry reg;
+    // ServerCanExecute: RemoteCVarService's op set WOULD run it; cvar.set must stop first.
+    REQUIRE(reg.RegisterCommand("tests.remote.flush", Arcane::CVarFlags::ServerCanExecute, "Flush.", "cvar-test",
+                                &CountRun, nullptr));
+    for (const auto context : {Arcane::CVarContext::Editor, Arcane::CVarContext::ServerAdmin}) {
+        g_consoleRuns = 0;
+        Arcane::Remote::CvarCommandUser user{&reg, context};
+        RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetCvarCommandUser, &user);
+        Arcane::Remote::RegisterCvarCommands();
+        Arcane::Remote::Call set;
+        set.command = "cvar.set";
+        set.args = nlohmann::json{{"name", "tests.remote.flush"}, {"value", "now"}};
+        const auto env = Arcane::Remote::CommandRegistry::Get().Invoke(set).envelope;
+        CHECK_FALSE(env.ok);
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "cvar.unknown");
+        CHECK(env.errors[0].message.find("console command") != std::string::npos);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 6);
+        CHECK(g_consoleRuns == 0);
+    }
+}
+
+TEST_CASE("cvar.set of a Game cvar outside the Editor is permission.denied exit 3", "[remote][cvar]") {
+    Arcane::CVarRegistry reg;
+    AddBool(reg, "physics.debugDraw", false, Arcane::Audience::Game, Arcane::ApplyMode::Live);
+    Arcane::Remote::CvarCommandUser user{&reg, Arcane::CVarContext::LocalHost};
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetCvarCommandUser, &user);
+    Arcane::Remote::RegisterCvarCommands();
+    Arcane::Remote::Call set;
+    set.command = "cvar.set";
+    set.args = nlohmann::json{{"name", "physics.debugDraw"}, {"value", true}};
+    const auto env = Arcane::Remote::CommandRegistry::Get().Invoke(set).envelope;
+    CHECK_FALSE(env.ok);
+    REQUIRE_FALSE(env.errors.empty());
+    CHECK(env.errors[0].code == "permission.denied");
+    CHECK(Arcane::Remote::ExitFromHost(env) == 3);
+    const auto v = reg.Get(reg.Find("physics.debugDraw"));
+    REQUIRE(v.has_value());
+    CHECK(v->AsBool() == false);   // nothing was written
+}
+
+static std::vector<Arcane::Remote::WorldInfo> MainWorld(void*) {
+    Arcane::Remote::WorldInfo w;
+    w.name = "main";
+    w.role = "Standalone";
+    return {w};
+}
+
+// One /call through a live session's listener while the "host loop" drains.
+static Arcane::Remote::Envelope PostLive(Arcane::Remote::HostSession& session, const std::string& token,
+                                         const std::string& body) {
+    const std::uint16_t port = session.Port();
+    auto reply = std::async(std::launch::async, [port, token, body] {
+        return RemoteTest::HttpExchange(port, token, "", "POST /remote/v1/call HTTP/1.1", body);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        session.DrainFrame(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE(reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    const std::string raw = reply.get();
+    const auto split = raw.find("\r\n\r\n");
+    REQUIRE(split != std::string::npos);
+    return Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+}
+
+TEST_CASE("a read-only session refuses cvar.set; --world is refused on cvar.* and kept on world.list", "[remote][cvar]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> userGuard(&Arcane::Remote::SetCvarCommandUser, nullptr);
+    Arcane::Test::TempDir root("remote-cvar-readonly");
+    Arcane::Remote::HostSession::Config cfg;
+    cfg.kind = Arcane::Remote::HostKind::Runtime;
+    cfg.cvarContext = Arcane::CVarContext::LocalHost;
+    cfg.projectRoot = root.path;
+    cfg.readOnly = true;
+    cfg.worlds.fn = &MainWorld;
+    Arcane::Remote::HostSession session(cfg);
+    REQUIRE(session.Start());
+    const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+    REQUIRE(desc);
+
+    const auto set = PostLive(session, desc->token,
+        R"({"id":"s1","command":"cvar.set","args":{"name":"render.vsync","value":"false"}})");
+    CHECK_FALSE(set.ok);
+    REQUIRE_FALSE(set.errors.empty());
+    CHECK(set.errors[0].code == "permission.read-only");
+    CHECK(Arcane::Remote::ExitFromHost(set) == 3);
+    CHECK(set.timing.ranMs == 0.0);   // the gate refused it: never invoked
+
+    const auto get = PostLive(session, desc->token,
+        R"({"id":"g1","command":"cvar.get","args":{"name":"render.vsync"},"options":{"world":"main"}})");
+    CHECK_FALSE(get.ok);
+    REQUIRE_FALSE(get.errors.empty());
+    CHECK(get.errors[0].code == "arg.inapplicable");
+    CHECK(get.errors[0].remediation.find("not world-scoped") != std::string::npos);
+    CHECK(Arcane::Remote::ExitFromHost(get) == 2);
+    CHECK(get.command == "cvar.get");
+
+    const auto worlds = PostLive(session, desc->token,
+        R"({"id":"w1","command":"world.list","args":{},"options":{"world":"main"}})");
+    CHECK(worlds.ok);
+    CHECK(Arcane::Remote::ExitFromHost(worlds) == 0);
+    session.Stop("test");
 }
 
 #endif

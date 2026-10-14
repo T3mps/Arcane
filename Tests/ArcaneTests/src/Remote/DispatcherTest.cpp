@@ -560,4 +560,50 @@ TEST_CASE("a drained envelope with no command is stamped with the call's", "[rem
     CHECK(own.envelope.command == "demo.look");   // a command that names itself keeps its name
 }
 
+
+TEST_CASE("--world on a command that is not world-scoped is arg.inapplicable and never runs", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.look", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Remote::Desc scoped = MakeDesc("demo.scoped", Arcane::Remote::Access::Observe,
+                                           Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::Any);
+    scoped.worldScoped = true;
+    REQUIRE(reg.Register(scoped, &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto audit = std::filesystem::temp_directory_path() / "remote-dispatch-world" / "audit.ndjson";
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, audit);
+    Arcane::Remote::Call look;
+    look.command = "demo.look";
+    look.world = "main";
+    Arcane::Remote::Call plain;
+    plain.command = "demo.look";            // no --world: runs as before
+    Arcane::Remote::Call world;
+    world.command = "demo.scoped";
+    world.world = "main";                   // a world-scoped command receives the world
+    REQUIRE(queue.TryPush(1, look));
+    REQUIRE(queue.TryPush(2, plain));
+    REQUIRE(queue.TryPush(3, world));
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult refused;
+    Arcane::Remote::CommandResult ran;
+    Arcane::Remote::CommandResult scopedRan;
+    REQUIRE(queue.TryTake(1, refused));
+    REQUIRE(queue.TryTake(2, ran));
+    REQUIRE(queue.TryTake(3, scopedRan));
+    REQUIRE_FALSE(refused.envelope.errors.empty());
+    CHECK(refused.envelope.errors[0].code == "arg.inapplicable");
+    CHECK(refused.envelope.errors[0].remediation == "demo.look is not world-scoped; drop --world");
+    CHECK(refused.envelope.command == "demo.look");
+    CHECK(Arcane::Remote::ExitFromHost(refused.envelope) == 2);
+    CHECK(refused.envelope.timing.ranMs == 0.0);
+    CHECK(ran.envelope.ok);
+    CHECK(scopedRan.envelope.ok);
+    CHECK(g_ran == 2);                      // the refused call never reached its fn
+}
+
 #endif

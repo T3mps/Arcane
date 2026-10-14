@@ -112,6 +112,11 @@ Envelope Busy(const std::string& command, const std::string& state, std::string 
 // The state gate (s4.3, ruling F19): a refusal means `fn` is never called.
 std::optional<Envelope> Gate(const Desc& desc, Access access, const Call& call, const HostGate& gate)
 {
+    // Spec s4.6 Rule 3: a flag is never ignored. --world means something only
+    // to a command that resolves a world; everywhere else it is a usage error.
+    if (!call.world.empty() && !desc.worldScoped)
+        return MakeError(call.command, "arg.inapplicable", call.command + " does not take --world",
+                         call.command + " is not world-scoped; drop --world");
     const bool hostReadOnly = gate.readOnly.load(std::memory_order_acquire);
     if (access == Access::Drive && (hostReadOnly || call.readOnly))
         return MakeError(call.command, "permission.read-only",

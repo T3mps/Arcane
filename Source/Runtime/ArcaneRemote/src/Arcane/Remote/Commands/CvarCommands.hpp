@@ -9,6 +9,8 @@
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
 #include <Arcane/Config/CVarTypes.hpp>
 
+#include <string_view>
+
 #if !defined(ARC_BUILD_DIST)
 
 namespace Arcane
@@ -45,9 +47,17 @@ ARC_REMOTE_API void ReleaseCvarCommandUser(const CvarCommandUser* user);
 // `value` is the console text (a JSON string, as servitor sends it) or a JSON
 // bool, number or number array, which is written as console text.
 // Refusals: cvar.protected (exit 3; data.value null, data.masked "<protected>"),
-// cvar.unknown and cvar.type-mismatch (exit 6), permission.denied (exit 3),
-// arg.missing / arg.unknown / arg.invalid (exit 2).
+// cvar.unknown, cvar.type-mismatch, cvar.refused-weaker and cvar.refused
+// (exit 6), permission.denied (exit 3), arg.missing / arg.unknown /
+// arg.invalid (exit 2). None of them is worldScoped: --world is refused by the
+// dispatcher (arg.inapplicable), since cvars are per process, not per world.
 ARC_REMOTE_API void RegisterCvarCommands();
+
+// The error code for a refused RemoteCVarService response's text:
+// cvar.protected, cvar.unknown (also a console command's name), cvar.type-mismatch,
+// permission.denied, arg.missing, cvar.refused-weaker ("refused: a stronger
+// source holds x", spec s6.4) or cvar.refused ("rejected" and anything else).
+ARC_REMOTE_API const char* CvarRefusalCode(std::string_view text);
 
 } // namespace Arcane::Remote
 
