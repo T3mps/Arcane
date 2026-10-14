@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -26,6 +27,10 @@ inline constexpr std::array<std::uint32_t, 1> kProtocolMajors = {1};
 
 // "Servitor <kVersion> (remote protocol <kProtocolMajors, comma-joined>)".
 std::string VersionText();
+// kProtocolMajors comma-joined ("1"), for remediation text.
+std::string ProtocolMajorsText();
+// True when `major` is in kProtocolMajors.
+bool SpeaksProtocolMajor(std::int64_t major);
 
 struct GlobalOptions {
     Format format = Format::Human; // TTY default; non-TTY default is Json
@@ -44,8 +49,16 @@ struct GlobalOptions {
 };
 
 // Starts from GlobalOptions{} and applies the global flags found anywhere in
-// argv[1..]. Any other token is left for the verb. False (exit 2) sets *error.
+// argv[1..]. Any other token is left for the verb. False (exit 2) sets *error,
+// including a value flag whose value starts with "--" (--project --json).
 bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error);
+
+// The usage problem for the first token after the verb that starts with "--"
+// (an unknown flag; Run refuses it with exit 2 before any verb sees it).
+// A single '-' stays a value (negative numbers). nullopt: none.
+std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
+// Prints "servitor: <problem>" and the usage text to stderr; returns 2.
+int PrintUsage(const std::string& problem);
 
 struct CallRequest {
     std::string command;

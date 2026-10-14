@@ -28,7 +28,7 @@ int ExitForCode(const std::string& code)
         return 2;
     if (OneOf(code, { "auth.denied", "auth.throttled", "permission.denied", "permission.read-only", "cvar.protected" }))
         return 3;
-    if (OneOf(code, { "protocol.mismatch", "target.none" })) return 4;
+    if (OneOf(code, { "protocol.mismatch", "target.none", "engine.unresolved" })) return 4;
     if (OneOf(code, { "host.busy", "capture.minimized", "host.unavailable" })) return 5;
     if (OneOf(code, { "entity.not-found", "component.unknown", "component.absent", "compare.missing-reference",
                       "capture.no-frame", "cvar.unknown", "cvar.type-mismatch", "reflect.unreadable" }))

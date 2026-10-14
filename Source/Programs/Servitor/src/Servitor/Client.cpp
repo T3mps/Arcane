@@ -2,9 +2,12 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Servitor/Discover.hpp>
+#include <Servitor/Transport.hpp>
 #include <Servitor/Verbs.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Platform/Paths.hpp>
 #include <Arcane/Platform/Process.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Redact.hpp>
@@ -113,10 +116,13 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
     Format format = Format::Json;
     for (int i = 1; i < argc; ++i) {
         const std::string_view flag = argv[i];
-        // A flag that takes a value reads the next token, which must exist.
+        // A flag that takes a value reads the next token, which must exist and
+        // must not itself be a flag (--project --json); a single '-' is a value.
         const auto value = [&](const char*& v) {
             if (i + 1 >= argc)
                 return Fail(error, std::string(flag) + " needs a value");
+            if (std::string_view(argv[i + 1]).starts_with("--"))
+                return Fail(error, std::string(flag) + " needs a value, got the flag " + argv[i + 1]);
             v = argv[++i];
             return true;
         };
@@ -173,35 +179,18 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
     return true;
 }
 
-std::string MajorsText()
-{
-    std::string text;
-    for (const std::uint32_t m : kProtocolMajors) {
-        if (!text.empty())
-            text += ", ";
-        text += std::to_string(m);
-    }
-    return text;
-}
-
-bool SpeaksMajor(int major)
-{
-    return major >= 0 && std::find(kProtocolMajors.begin(), kProtocolMajors.end(),
-                                   static_cast<std::uint32_t>(major)) != kProtocolMajors.end();
-}
-
 // A reply whose protocol major this client does not speak is protocol.mismatch
 // (exit 4), whatever it says; the remediation names both sides (rev 8.3 V6).
 void CheckProtocol(const std::string& command, Arcane::Remote::Envelope& env)
 {
-    if (SpeaksMajor(env.protocol))
+    if (SpeaksProtocolMajor(env.protocol))
         return;
     const std::string host = std::to_string(env.protocol);
     auto mismatch = Arcane::Remote::MakeError(
         command, "protocol.mismatch",
-        "the host speaks remote protocol " + host + "; this servitor speaks " + MajorsText(),
+        "the host speaks remote protocol " + host + "; this servitor speaks " + ProtocolMajorsText(),
         "use a servitor that speaks remote protocol " + host + ", or a host that speaks remote protocol " +
-            MajorsText());
+            ProtocolMajorsText());
     mismatch.protocol = env.protocol;
     mismatch.protocolMinor = env.protocolMinor;
     mismatch.id = env.id;
@@ -232,19 +221,6 @@ bool TransientBusy(const ExchangeResult& r)
         return false;
     const std::string& code = r.envelope.errors.front().code;
     return code == "host.busy" || code == "capture.minimized";
-}
-
-// Until host selection and the live transport exist (Task 15), a posted verb
-// has no host to reach: target.none (exit 4), the answer an empty scan gives.
-ExchangeResult NoHostExchange(const std::string& requestBody, void*)
-{
-    std::string command;
-    if (const auto body = nlohmann::json::parse(requestBody, nullptr, false); body.is_object())
-        command = body.value("command", std::string{});
-    ExchangeResult r;
-    r.envelope = Arcane::Remote::MakeError(command, "target.none", "no host to attach to",
-                                           "start a host with --remote");
-    return r;
 }
 
 std::string PathUtf8(const std::filesystem::path& p)
@@ -320,7 +296,9 @@ void Write(std::FILE* stream, const std::string& text)
     }
 }
 
-int Usage(const std::string& problem)
+} // namespace
+
+int PrintUsage(const std::string& problem)
 {
     std::string text = "servitor: " + problem + "\nusage: servitor [global flags] <verb> [args]\nverbs:";
     for (const VerbRow& row : VerbTable()) {
@@ -334,11 +312,35 @@ int Usage(const std::string& problem)
     return 2;
 }
 
-} // namespace
-
 std::string VersionText()
 {
-    return "Servitor " + std::string(kVersion) + " (remote protocol " + MajorsText() + ")";
+    return "Servitor " + std::string(kVersion) + " (remote protocol " + ProtocolMajorsText() + ")";
+}
+
+std::string ProtocolMajorsText()
+{
+    std::string text;
+    for (const std::uint32_t m : kProtocolMajors) {
+        if (!text.empty())
+            text += ", ";
+        text += std::to_string(m);
+    }
+    return text;
+}
+
+bool SpeaksProtocolMajor(std::int64_t major)
+{
+    return major >= 0 && std::find(kProtocolMajors.begin(), kProtocolMajors.end(),
+                                   static_cast<std::uint64_t>(major)) != kProtocolMajors.end();
+}
+
+std::optional<std::string> LeftoverFlag(std::span<const std::string> rest)
+{
+    for (const std::string& token : rest) {
+        if (token.starts_with("--"))
+            return "unknown flag " + token;
+    }
+    return std::nullopt;
 }
 
 bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
@@ -408,30 +410,68 @@ int Run(int argc, char** argv)
     std::string error;
     std::vector<std::string> tokens;
     if (!ParseArgs(argc, argv, opt, &error, &tokens))
-        return Usage(error);
+        return PrintUsage(error);
     if (tokens.empty())
-        return Usage("no verb given");
+        return PrintUsage("no verb given");
     std::size_t consumed = 0;
     const VerbRow* row = MatchVerb(tokens, &consumed);
     if (row == nullptr)
-        return Usage(tokens.front().starts_with("-") ? "unknown flag " + tokens.front()
-                                                     : "unknown verb " + tokens.front());
+        return PrintUsage(tokens.front().starts_with("-") ? "unknown flag " + tokens.front()
+                                                          : "unknown verb " + tokens.front());
     const auto rest = std::span<const std::string>(tokens).subspan(consumed);
+    // Every global flag was consumed above, so a leftover "--x" is unknown
+    // whichever verb follows (Task 14 review carry).
+    if (const auto problem = LeftoverFlag(rest))
+        return PrintUsage(*problem);
+    if (row->args == nullptr && !rest.empty())
+        return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front());
     if (row->local != nullptr)
         return row->local(rest, opt);
     CallRequest req;
     req.command = row->command;
-    if (row->args != nullptr) {
-        if (!row->args(rest, req.args, &error))
-            return Usage(error);
-    } else if (!rest.empty()) {
-        return Usage(std::string(row->words) + " takes no arguments, got " + rest.front());
-    }
+    if (row->args != nullptr && !row->args(rest, req.args, &error))
+        return PrintUsage(error);
+
+    RenderOptions ro;
+    ro.format = opt.format;
+    ro.tty = opt.tty;
     Arcane::Remote::ClientBlock client;
-    const Printed printed = Call(req, opt, &NoHostExchange, nullptr, &client);
-    Write(stdout, printed.stdoutText);
-    Write(stderr, printed.stderrText);
-    return client.exitCode;
+    const auto print = [&](const Printed& printed) {
+        Write(stdout, printed.stdoutText);
+        Write(stderr, printed.stderrText);
+        return client.exitCode;
+    };
+    // Discovery (spec s4.4): the project's descriptors, then exactly one host.
+    Arcane::Remote::Envelope refusal;
+    std::optional<LiveHost> host;
+    if (const auto dir = RemoteDirFor(opt, &refusal))
+        host = Select(ScanDirectory(*dir), opt, &refusal);
+    if (!host) {
+        refusal.command = req.command;
+        client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+        return print(Render(refusal, client, ro));
+    }
+
+    LiveTarget target;
+    target.descriptor = host->descriptor;
+    target.timeoutMs = opt.timeoutMs;
+    target.watch.command = req.command;
+    target.watch.pid = host->descriptor.pid;
+    target.watch.processStart = host->descriptor.processStart;
+    target.watch.descriptorPath = host->path;
+    // The host's report directory (ruling AX (2)): <project>/Saved/Diagnostics
+    // when the descriptor names a project, else the exe-relative one.
+    if (!host->descriptor.project.empty()) {
+        const std::string& p = host->descriptor.project;
+        const std::filesystem::path project(std::u8string(reinterpret_cast<const char8_t*>(p.data()), p.size()));
+        target.watch.diagnosticsDir =
+            Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(project));
+    } else {
+        target.watch.diagnosticsDir = HostDiagnosticsDir(host->descriptor.hostKind, opt);
+    }
+    client.token = host->descriptor.token;   // print-time redaction only; never printed
+    client.descriptor = PathUtf8(host->path);
+    return print(Call(req, opt, &LiveExchange, &target, &client));
 }
 
 std::optional<Arcane::Remote::Envelope> ObserveTarget(const TargetWatch& watch, std::int64_t nowUnixMs)

@@ -28,6 +28,7 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("cvar.protected")) == 3);
     CHECK(ExitFromHost(Err("protocol.mismatch")) == 4);
     CHECK(ExitFromHost(Err("target.none")) == 4);
+    CHECK(ExitFromHost(Err("engine.unresolved")) == 4);   // rev 8.3 V7
     CHECK(ExitFromHost(Err("host.busy")) == 5);
     auto minimized = Err("host.busy");
     minimized.errors[0].detail = nlohmann::json{{"state", "minimized"}};

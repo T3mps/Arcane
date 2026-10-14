@@ -2,6 +2,8 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Servitor/Discover.hpp>
+
 #include <array>
 #include <string_view>
 
@@ -10,7 +12,8 @@ namespace Servitor {
 namespace {
 
 // Tasks 15-29 add their rows here (ruling F17).
-constexpr std::array<VerbRow, 1> kVerbs = {{
+constexpr std::array<VerbRow, 2> kVerbs = {{
+    {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
 }};
 
