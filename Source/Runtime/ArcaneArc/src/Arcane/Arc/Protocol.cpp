@@ -211,7 +211,9 @@ nlohmann::json ToJson(const HostStatus& s)
     };
 }
 
-Envelope ParseEnvelope(const nlohmann::json& j)
+namespace
+{
+Envelope ExtractEnvelope(const nlohmann::json& j)
 {
     Envelope env;
     if (!j.is_object()) return env;
@@ -249,6 +251,37 @@ Envelope ParseEnvelope(const nlohmann::json& j)
     return env;
 }
 
+bool WellFormed(const nlohmann::json& j)
+{
+    if (!j.is_object()) return false;
+    const auto ok = j.find("ok");
+    if (ok == j.end() || !ok->is_boolean()) return false;
+    const auto protocol = j.find("protocol");
+    if (protocol == j.end() || !protocol->is_number_integer() || protocol->get<long long>() < 0) return false;
+    if (const auto errors = j.find("errors"); errors != j.end()) {
+        if (!errors->is_array()) return false;
+        for (const auto& e : *errors) {
+            if (!e.is_object()) return false;
+            const auto code = e.find("code");
+            if (code == e.end() || !code->is_string()) return false;
+        }
+    }
+    if (const auto host = j.find("host"); host != j.end() && !host->is_object()) return false;
+    return true;
+}
+} // namespace
+
+Envelope ParseEnvelope(const nlohmann::json& j)
+{
+    return ExtractEnvelope(j);
+}
+
+std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j)
+{
+    if (!WellFormed(j)) return std::nullopt;
+    return ExtractEnvelope(j);
+}
+
 Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host)
 {
     Envelope env;
@@ -280,7 +313,7 @@ int ExitFromHost(const Envelope& env)
     if (!env.ok) return 2;
     if (env.data.is_object()) {
         const auto verdict = env.data.find("verdict");
-        if (verdict != env.data.end() && verdict->is_string() && verdict->get<std::string>() == "Failed") return 8;
+        if (verdict != env.data.end() && verdict->is_string() && (verdict->get<std::string>() == "Failed" || verdict->get<std::string>() == "Indeterminate")) return 8;
         const auto timedOut = env.data.find("timedOut");
         if (timedOut != env.data.end() && timedOut->is_boolean() && timedOut->get<bool>()) return 8;
     }

@@ -128,6 +128,7 @@ ARC_ARC_API const char* ToString(HostKind kind);
 ARC_ARC_API nlohmann::json ToJson(const Envelope& env);
 ARC_ARC_API nlohmann::json ToJson(const HostStatus& status); // no token field exists on HostStatus
 ARC_ARC_API Envelope ParseEnvelope(const nlohmann::json& j);
+ARC_ARC_API std::optional<Envelope> TryParseEnvelope(const nlohmann::json& j); // nullopt when malformed
 ARC_ARC_API Envelope MakeOk(std::string command, nlohmann::json data, HostBlock host);
 ARC_ARC_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
 ARC_ARC_API int ExitFromHost(const Envelope& env);

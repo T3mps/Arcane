@@ -132,4 +132,32 @@ TEST_CASE("MakeOk never carries errors", "[arc][protocol]") {
     CHECK(env.protocol == 1);
     CHECK(kIdleConnectionSeconds == 30);
 }
+
+TEST_CASE("Indeterminate verdict exits 8", "[arc][protocol]") {
+    auto env = MakeOk("capture.compare", nlohmann::json{{"verdict", "Indeterminate"}}, HostBlock{});
+    CHECK(ExitFromHost(env) == 8);
+}
+
+TEST_CASE("TryParseEnvelope rejects malformed replies", "[arc][protocol]") {
+    const auto good = ToJson(MakeOk("status", nlohmann::json::object(), HostBlock{}));
+    const auto parsed = TryParseEnvelope(good);
+    REQUIRE(parsed.has_value());
+    CHECK(ToJson(*parsed) == ToJson(ParseEnvelope(good)));
+
+    CHECK_FALSE(TryParseEnvelope(nlohmann::json::array()).has_value());
+    auto noOk = good; noOk.erase("ok");
+    CHECK_FALSE(TryParseEnvelope(noOk).has_value());
+    auto badOk = good; badOk["ok"] = "yes";
+    CHECK_FALSE(TryParseEnvelope(badOk).has_value());
+    auto noProto = good; noProto.erase("protocol");
+    CHECK_FALSE(TryParseEnvelope(noProto).has_value());
+    auto badProto = good; badProto["protocol"] = -1;
+    CHECK_FALSE(TryParseEnvelope(badProto).has_value());
+    auto badErrors = good; badErrors["errors"] = "x";
+    CHECK_FALSE(TryParseEnvelope(badErrors).has_value());
+    auto noCode = good; noCode["errors"] = nlohmann::json::array({nlohmann::json::object()});
+    CHECK_FALSE(TryParseEnvelope(noCode).has_value());
+    auto badHost = good; badHost["host"] = 3;
+    CHECK_FALSE(TryParseEnvelope(badHost).has_value());
+}
 #endif
