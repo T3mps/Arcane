@@ -69,6 +69,8 @@ namespace
 
 ARC_CONSTANT("spec s4.8: ECS dumps over 256 KiB go to an artifact, never inline in the envelope")
 constexpr std::size_t kInlineCapBytes = 262144;
+ARC_CONSTANT("main-thread bound: ecs.query builds at most this many rows in one Drain; a larger --limit is clamped")
+constexpr std::uint64_t kMaxQueryLimit = 10000;
 
 constexpr std::string_view kEntityUsage =
     "pass entity: guid:<id> or name:<unique name>, and optionally components: [names]";
@@ -287,8 +289,19 @@ std::optional<LocatedEntity> Locate(const Call& call, const Astra::Registry& reg
         }
     }
 
+    using HandleType = Astra::Entity::StorageType;
+    bool outOfRange = false;
+    if constexpr (sizeof(HandleType) < sizeof(std::uint64_t))
+        outOfRange = handle && *handle > static_cast<std::uint64_t>(std::numeric_limits<HandleType>::max());
+    if (outOfRange) {
+        // Out of the handle type's range: never truncated onto a live entity.
+        refusal = MakeError(call.command, "entity.not-found", "no live entity has handle " + std::to_string(*handle),
+                            "address entities by guid:<id> or name:<name>; handles are diagnostic only");
+        refusal.errors.front().detail["handle"] = *handle;
+        return std::nullopt;
+    }
     if (handle) {
-        const Astra::Entity entity(static_cast<Astra::Entity::StorageType>(*handle));
+        const Astra::Entity entity(static_cast<HandleType>(*handle));
         if (!reg.IsValid(entity)) {
             refusal = MakeError(call.command, "entity.not-found", "no live entity has handle " + std::to_string(*handle),
                                 "address entities by guid:<id> or name:<name>; handles are diagnostic only");
@@ -478,8 +491,14 @@ std::optional<Artifact> WriteArtifact(const std::filesystem::path& dir, const st
     const std::filesystem::path temp = dir / (stem + ".json.tmp");
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        out.write(json.data(), static_cast<std::streamsize>(json.size()));
-        if (!out) {
+        if (out.is_open())
+            out.write(json.data(), static_cast<std::streamsize>(json.size()));
+        // close() flushes: a failed flush (disk full) sets failbit here, so a
+        // short file is never renamed and reported with the full size and hash.
+        const bool opened = out.is_open();
+        out.close();
+        if (!opened || out.fail()) {
+            std::filesystem::remove(temp, ec);
             why = "cannot write " + temp.string();
             return std::nullopt;
         }
@@ -544,6 +563,15 @@ CommandResult EcsQuery(const Call& call, void* /*user*/)
     const std::vector<ComponentEntry> entries = WorldComponents(reg);
 
     std::vector<Error> warnings;
+    if (limit > kMaxQueryLimit) {
+        Error w = MakeIssue("ecs.limit-clamped",
+                            "limit " + std::to_string(limit) + " was clamped to " + std::to_string(kMaxQueryLimit),
+                            "page with --with/--without, or narrow the query");
+        w.detail["requested"] = limit;
+        w.detail["limit"] = kMaxQueryLimit;
+        warnings.push_back(std::move(w));
+        limit = kMaxQueryLimit;
+    }
     bool matchNothing = false;
     // An ambiguous name is always an error; an unknown one is an error when
     // strict, else a warning (an unknown `with` then matches nothing).
@@ -695,19 +723,31 @@ CommandResult EcsQuery(const Call& call, void* /*user*/)
             std::lock_guard lock(state.mutex);
             dir = state.dir;
         }
-        const nlohmann::json file = {{"count", count}, {"truncated", truncated}, {"rows", rows}};
-        std::string why = "this host has no artifact directory";
-        std::optional<Artifact> artifact;
-        if (!dir.empty())
-            artifact = WriteArtifact(dir, file.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), why);
-        if (artifact) {
-            artifacts.push_back(std::move(*artifact));
-        } else {
+        if (dir.empty()) {
+            // No artifact directory (no session armed one): the rows are not
+            // returned at all; count and truncated still describe the match.
             Error w = MakeIssue("ecs.no-artifact-dir",
-                                "the rows exceed the inline cap and were not written: " + why,
+                                "the " + std::to_string(rows.size()) + " rows (" + std::to_string(inlineJson.size()) +
+                                    " bytes) exceed the inline cap and this host has no artifact directory, so no rows "
+                                    "were returned; count is the full match count",
                                 "narrow the query with --with, --fields or --limit");
             w.detail["bytes"] = inlineJson.size();
+            w.detail["rows"] = rows.size();
             warnings.insert(warnings.begin(), std::move(w));
+        } else {
+            const nlohmann::json file = {{"count", count}, {"truncated", truncated}, {"rows", rows}};
+            std::string why;
+            std::optional<Artifact> artifact =
+                WriteArtifact(dir, file.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), why);
+            if (!artifact) {
+                // A real write or rename failure is an error, never ok with empty rows.
+                result.envelope = MakeError(call.command, "ecs.artifact-failed",
+                                            "the rows exceed the inline cap and their artifact could not be written: " + why,
+                                            "free disk space or check Saved/Remote/out, or narrow the query");
+                result.envelope.errors.front().detail["bytes"] = inlineJson.size();
+                return result;
+            }
+            artifacts.push_back(std::move(*artifact));
         }
         rows = nlohmann::json::array();
         truncated = true;

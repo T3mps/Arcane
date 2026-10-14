@@ -6,10 +6,13 @@
 #include <Arcane/Remote/Worlds.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Astra/Registry/Registry.hpp>
+#include <Arcane/Reflection.hpp>
 #include <Servitor/Verbs.hpp>
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -18,6 +21,17 @@
 #if !defined(ARC_BUILD_DIST)
 
 using Catch::Approx;
+
+// A reflected plain struct (never registered as a component) whose short name
+// is Transform: schema.type's short-name resolver must not count it.
+namespace EcsTestShadow {
+struct Transform {
+    float x = 0.0f;
+};
+ARC_REFLECT_TYPE(Transform)
+    ARC_REFLECT_FIELD(Transform, x)
+ARC_REFLECT_TYPE_END()
+} // namespace EcsTestShadow
 
 // The one-row world table every world-taking command reads (Task 19, ruling F16).
 static std::vector<Arcane::Remote::WorldInfo> RemoteTestWorld(void* user) {
@@ -177,6 +191,12 @@ TEST_CASE("entity locators: guid, ambiguous name, raw handle, absent component",
     REQUIRE(handle.warnings.size() == 1);
     CHECK(handle.warnings[0].code == "entity.no-identity");
 
+    // A handle outside the handle type's range never aliases onto a live entity.
+    const std::uint64_t oversized = (std::uint64_t{1} << 40) + static_cast<std::uint64_t>(bare.GetValue());
+    const auto aliased = InvokeEcs("entity.get", {{"entity", oversized}});
+    CHECK(aliased.errors[0].code == "entity.not-found");
+    CHECK(Arcane::Remote::ExitFromHost(aliased) == 6);
+
     const auto noIdentity = InvokeEcs("entity.get", {{"entity", std::to_string(bare.GetValue())},
                                                     {"components", nlohmann::json::array({"Identity"})}});
     CHECK(noIdentity.errors[0].code == "component.absent");
@@ -211,6 +231,35 @@ TEST_CASE("entity locators: guid, ambiguous name, raw handle, absent component",
 
     const auto unknownArg = InvokeEcs("ecs.query", {{"wiht", nlohmann::json::array()}});
     CHECK(unknownArg.errors[0].code == "arg.unknown");
+
+    // An unknown --fields member: strict refuses (arg.invalid, exit 2, the
+    // members as candidates); non-strict warns and keeps the known member.
+    const auto badField = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"Transform"})},
+                                                 {"fields", nlohmann::json::array({"Transform.nope"})}});
+    REQUIRE_FALSE(badField.ok);
+    CHECK(badField.errors[0].code == "arg.invalid");
+    CHECK(Arcane::Remote::ExitFromHost(badField) == 2);
+    CHECK(std::find(badField.errors[0].candidates.begin(), badField.errors[0].candidates.end(), "position") !=
+          badField.errors[0].candidates.end());
+    const auto looseField = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"Transform"})},
+                                                   {"fields", nlohmann::json::array({"Transform.nope", "Transform.scale"})},
+                                                   {"strict", false}});
+    REQUIRE(looseField.ok);
+    REQUIRE(looseField.warnings.size() == 1);
+    CHECK(looseField.warnings[0].code == "arg.invalid");
+    CHECK(looseField.data["count"] == 3);
+    const auto& firstTransform = looseField.data["rows"][0]["components"]["Transform"];
+    CHECK(firstTransform.contains("scale"));
+    CHECK_FALSE(firstTransform.contains("position"));
+    CHECK_FALSE(firstTransform.contains("nope"));
+
+    // A limit over the main-thread bound is clamped, and the clamp is reported.
+    const auto clamped = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"Transform"})},
+                                                {"limit", std::uint64_t{1} << 40}});
+    REQUIRE(clamped.ok);
+    REQUIRE(clamped.warnings.size() == 1);
+    CHECK(clamped.warnings[0].code == "ecs.limit-clamped");
+    CHECK(clamped.data["rows"].size() == 3);
 }
 
 TEST_CASE("ecs.query over the inline cap writes the rows to one ecs artifact", "[remote][ecs]") {
@@ -247,6 +296,17 @@ TEST_CASE("ecs.query over the inline cap writes the rows to one ecs artifact", "
     CHECK(written["rows"][0]["components"]["Identity"].contains("name"));
     CHECK_FALSE(written["rows"][0]["components"]["Identity"].contains("id"));
 
+    // An artifact directory that cannot be written is an error, never ok with empty rows.
+    const std::filesystem::path notADir = out.path / "plain-file";
+    { std::ofstream(notADir) << "x"; }
+    Arcane::Remote::SetEcsArtifactDir(notADir);
+    const auto failed = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"Identity"})}, {"limit", 1000}});
+    Arcane::Remote::ReleaseEcsArtifactDir(notADir);
+    REQUIRE_FALSE(failed.ok);
+    CHECK(failed.errors[0].code == "ecs.artifact-failed");
+    CHECK(Arcane::Remote::ExitFromHost(failed) == 6);
+    CHECK(failed.artifacts.empty());
+
     // With no artifact directory the rows are dropped, not inlined, and a warning says so.
     const auto noDir = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"Identity"})}, {"limit", 1000}});
     REQUIRE(noDir.ok);
@@ -258,6 +318,9 @@ TEST_CASE("ecs.query over the inline cap writes the rows to one ecs artifact", "
 }
 
 TEST_CASE("schema.type resolves a short component name through PickComponent", "[remote][ecs]") {
+    Astra::Registry reg;   // registers Arcane::Transform as a component in this context
+    reg.AddComponent<Arcane::Transform>(reg.CreateEntity(), Arcane::Transform{});
+    REQUIRE(Astra::GetMetaByName("EcsTestShadow::Transform") != nullptr);   // the same-short-name plain struct
     Arcane::Remote::RegisterCatalogCommands();
     for (const char* name : {"Transform", "Arcane::Transform"}) {
         const auto typed = InvokeEcs("schema.type", {{"kind", "component"}, {"name", name}});

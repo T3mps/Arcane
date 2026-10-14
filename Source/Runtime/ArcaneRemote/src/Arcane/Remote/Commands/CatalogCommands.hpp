@@ -19,6 +19,7 @@ namespace Arcane::Remote
 //                                SchemaFor(*Astra::GetMetaByName(name)); a component
 //                                may be named short (Transform) or qualified
 //                                (Arcane::Transform), resolved by PickComponent
+//                                over the types registered as components
 //                                (EcsCommands.hpp; two short hits are
 //                                component.ambiguous, exit 2); an unknown name is
 //                                component.unknown / resource.not-found (exit 6)

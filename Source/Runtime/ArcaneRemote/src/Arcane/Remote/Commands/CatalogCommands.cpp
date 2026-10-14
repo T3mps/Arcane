@@ -128,10 +128,14 @@ CommandResult SchemaType(const Call& call, void* /*user*/)
     const Astra::TypeMeta* meta = Astra::GetMetaByName(name);
     if (meta == nullptr && kind == "component") {
         // A short component name (spec s7.2, Task 23): the one resolver
-        // entity.get and ecs.query use, over every reflected class type.
+        // entity.get and ecs.query use, over the reflected types linked to a
+        // ComponentID (a registry in this process registered them as
+        // components). A same-named plain struct (an args type, a settings
+        // block) is not a candidate, so it cannot make a component ambiguous.
         std::vector<std::string> names;
-        Astra::MetaRegistry::Instance().ForEachType([&](const Astra::TypeMeta& t) {
-            if (t.isClass)
+        Astra::MetaRegistry& metas = Astra::MetaRegistry::Instance();
+        metas.ForEachType([&](const Astra::TypeMeta& t) {
+            if (metas.GetComponentId(t.typeHash) != Astra::INVALID_COMPONENT)
                 names.emplace_back(t.typeName);
         });
         NameResolution res = PickComponent(names, name);
