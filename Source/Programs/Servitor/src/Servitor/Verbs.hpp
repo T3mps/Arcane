@@ -77,8 +77,12 @@ struct PostedCall {
     Arcane::Remote::ClientBlock client;   // exitCode, retried, descriptor
     std::optional<LiveHost> host;         // the selected target; nullopt when discovery refused
 };
-// Discovery (an awaitsHost row may wait for a host to appear), then Call
-// through LiveExchange. Prints nothing. noReplyGrace: stop reading at
+// The call half of PostVerb against ONE chosen host: Call through LiveExchange
+// with the busy retry and the target watch. Prints nothing; safe to run for
+// distinct hosts on distinct threads (--all).
+PostedCall PostToHost(const LiveHost& host, const CallRequest& req, GlobalOptions opt, bool noReplyGrace);
+// Discovery (an awaitsHost row may wait for a host to appear), then PostToHost.
+// Prints nothing. noReplyGrace: stop reading at
 // --timeout instead of --timeout + kReplyGraceMs (quit --force acts then).
 PostedCall PostVerb(const VerbRow& row, const CallRequest& req, GlobalOptions opt, bool noReplyGrace);
 

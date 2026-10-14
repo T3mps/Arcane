@@ -56,6 +56,8 @@ struct GlobalOptions {
     std::string hostKind;       // editor | runtime | server, optional
     std::uint32_t pid = 0;
     std::string engine;         // --engine <root>; rev 8.3 V7 (HostsDir)
+    bool all = false;           // --all: fan the command out to every matching live host (spec AM2)
+    std::string allKind;        // --all editor|runtime|server: the token after --all when it is a kind
 };
 
 // Starts from GlobalOptions{} and applies the global flags found anywhere in
@@ -70,6 +72,9 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
 // Prints "servitor: <problem>" and the usage text to stderr; returns 2.
 int PrintUsage(const std::string& problem);
+// Writes printed.stdoutText to stdout and printed.stderrText to stderr (main
+// thread only); returns exitCode.
+int Emit(const Printed& printed, int exitCode);
 // Renders `env` in opt's format (stdout, diagnostics on stderr); returns client.exitCode.
 int PrintEnvelope(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client,
                   const GlobalOptions& opt);

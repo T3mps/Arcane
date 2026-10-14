@@ -3,6 +3,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Servitor/Discover.hpp>
+#include <Servitor/FanOut.hpp>
 #include <Servitor/Transport.hpp>
 #include <Servitor/Verbs.hpp>
 
@@ -177,6 +178,17 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
             if (!value(v))
                 return false;
             out.engine = v;
+        } else if (flag == "--all") {
+            // --all [editor|runtime|server]: the token after it is a kind filter
+            // only when it spells one (a verb word is never a kind).
+            out.all = true;
+            if (i + 1 < argc) {
+                const std::string_view kind = argv[i + 1];
+                if (kind == "editor" || kind == "runtime" || kind == "server") {
+                    out.allKind = kind;
+                    ++i;
+                }
+            }
         } else if (rest != nullptr) {
             rest->emplace_back(flag);
         }
@@ -310,14 +322,14 @@ void Write(std::FILE* stream, const std::string& text)
     }
 }
 
+} // namespace
+
 int Emit(const Printed& printed, int exitCode)
 {
     Write(stdout, printed.stdoutText);
     Write(stderr, printed.stderrText);
     return exitCode;
 }
-
-} // namespace
 
 std::int64_t NowUnixMs()
 {
@@ -365,7 +377,7 @@ int PrintUsage(const std::string& problem)
         }
     }
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
-            "--host editor|runtime|server, --pid <n>, --engine <root>, --read-only, --yes, --no-retry, "
+            "--host editor|runtime|server, --pid <n>, --engine <root>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
             "--retry-on-death, --verbose, --version\n";
     Write(stderr, text);
     return 2;
@@ -487,6 +499,8 @@ int Run(int argc, char** argv)
         return PrintUsage(*problem);
     if (row->args == nullptr && !rest.empty())
         return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front());
+    if (opt.all)
+        return RunFanOut(*row, rest, opt);   // spec AM2: one command to every matching live host
     if (row->local != nullptr)
         return row->local(rest, opt);
     CallRequest req;
@@ -531,7 +545,13 @@ PostedCall PostVerb(const VerbRow& row, const CallRequest& req, GlobalOptions op
         return posted;
     }
 
-    const LiveHost& host = *posted.host;
+    return PostToHost(*posted.host, req, opt, noReplyGrace);
+}
+
+PostedCall PostToHost(const LiveHost& host, const CallRequest& req, GlobalOptions opt, bool noReplyGrace)
+{
+    PostedCall posted;
+    posted.host = host;
     LiveTarget target;
     target.descriptor = host.descriptor;
     target.timeoutMs = opt.timeoutMs;
