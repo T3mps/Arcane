@@ -2,6 +2,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/EcsCommands.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Remote/Schema.hpp>
 #include <Arcane/Base/Log.hpp>
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Arcane::Remote
 {
@@ -124,6 +126,26 @@ CommandResult SchemaType(const Call& call, void* /*user*/)
     }
 
     const Astra::TypeMeta* meta = Astra::GetMetaByName(name);
+    if (meta == nullptr && kind == "component") {
+        // A short component name (spec s7.2, Task 23): the one resolver
+        // entity.get and ecs.query use, over every reflected class type.
+        std::vector<std::string> names;
+        Astra::MetaRegistry::Instance().ForEachType([&](const Astra::TypeMeta& t) {
+            if (t.isClass)
+                names.emplace_back(t.typeName);
+        });
+        NameResolution res = PickComponent(names, name);
+        if (res.pick == NamePick::One) {
+            meta = Astra::GetMetaByName(res.qualified);
+        } else if (res.pick == NamePick::Many) {
+            result.envelope = MakeError(call.command, "component.ambiguous",
+                                        "component name '" + name + "' matches several types",
+                                        "pass the qualified name: one of the candidates");
+            result.envelope.errors.front().candidates = std::move(res.candidates);
+            result.envelope.errors.front().detail["name"] = name;
+            return result;
+        }
+    }
     if (meta == nullptr) {
         result.envelope = kind == "component"
             ? MakeError(call.command, "component.unknown", "no reflected component named '" + name + "'",

@@ -8,6 +8,7 @@
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Commands/ConsoleCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
+#include <Arcane/Remote/Commands/EcsCommands.hpp>
 #include <Arcane/Remote/Commands/LogCommands.hpp>
 #include <Arcane/Remote/Commands/ProblemCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
@@ -115,6 +116,11 @@ bool HostSession::Start()
     }
     SetProblemStore(problemStore);
     RegisterProblemCommand();
+    // entity.get, ecs.query, ecs.stats, ecs.archetypes (Task 23): they read
+    // CommandWorlds() like world.list and hold no pointer. The artifact
+    // directory (ecs.query rows over the inline cap) is set with the dispatcher
+    // below and released in Teardown.
+    RegisterEcsCommands();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -161,6 +167,8 @@ bool HostSession::Start()
     m_dispatcher = std::make_unique<RemoteDispatcher>(*m_queue, registry, m_gate, m_jobs,
                                                       remoteDir.empty() ? std::filesystem::path()
                                                                         : remoteDir / "audit.ndjson");
+    if (!remoteDir.empty())
+        SetEcsArtifactDir(remoteDir / "out");   // the dispatcher prunes this out/ to the newest 200 files
     m_listener = std::make_unique<RemoteListener>(*m_queue, *m_atoms, MakeToken());
     m_listener->Start();
     if (m_listener->Port() == 0) {
@@ -295,6 +303,13 @@ void HostSession::Teardown()
     ReleaseCvarCommandUser(&m_cvarUser); // likewise cvar.*; another session's user is left alone
     ReleaseConsoleCommandUser(&m_cvarUser); // and console.exec, by the same rule
     ReleaseLogJobs(&m_jobs);                // log.read (Task 22), by the same rule
+    // ecs.query's artifact directory (Task 23): the one Start set, recomputed
+    // from the same config; a directory another session set since is left alone.
+    {
+        const std::filesystem::path remoteDir = DescriptorDir(m_config.projectRoot, m_config.projectRoot.empty());
+        if (!remoteDir.empty())
+            ReleaseEcsArtifactDir(remoteDir / "out");
+    }
     // problems.list: the store this session installed (the editor's, or its own).
     ReleaseProblemStore(m_config.problemStore != nullptr ? m_config.problemStore : m_ownedStore.get());
     if (m_ownedStore) {

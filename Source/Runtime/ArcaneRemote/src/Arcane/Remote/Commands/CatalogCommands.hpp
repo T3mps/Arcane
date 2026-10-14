@@ -16,8 +16,12 @@ namespace Arcane::Remote
 //                                thread, needsFrame, module, schema: SchemaOf(name)};
 //                                an unregistered name is command.unknown (exit 2)
 //   schema.type {kind, name}  -> kind "component" or "resource"; data is
-//                                SchemaFor(*Astra::GetMetaByName(name)); an unknown
-//                                name is component.unknown / resource.not-found (exit 6)
+//                                SchemaFor(*Astra::GetMetaByName(name)); a component
+//                                may be named short (Transform) or qualified
+//                                (Arcane::Transform), resolved by PickComponent
+//                                (EcsCommands.hpp; two short hits are
+//                                component.ambiguous, exit 2); an unknown name is
+//                                component.unknown / resource.not-found (exit 6)
 ARC_REMOTE_API void RegisterCatalogCommands();
 
 } // namespace Arcane::Remote

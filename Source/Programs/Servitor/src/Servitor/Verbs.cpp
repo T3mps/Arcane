@@ -60,6 +60,20 @@ bool LogsArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
 int LogsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
 bool ProblemsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
+bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+
+// Task 23. Repeated list flags accumulate; each value may also be comma-separated.
+constexpr VerbFlag kEntityGetFlags[] = {
+    {"--component", true},  // a component name (short or qualified); repeat for more
+};
+constexpr VerbFlag kEcsQueryFlags[] = {
+    {"--with", true},       // components every row has (A,B)
+    {"--without", true},    // components no row has
+    {"--fields", true},     // Component.member or Component (A.x,B)
+    {"--limit", true},      // rows returned (default 100); data.count is the match count
+    {"--no-strict", false}, // an unknown component is a warning and an empty match, not exit 6
+};
 
 // Task 22. --follow opens the host's SSE stream instead of posting a call.
 constexpr VerbFlag kLogsFlags[] = {
@@ -80,7 +94,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 18> kVerbs = {{
+const std::array<VerbRow, 22> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -121,6 +135,13 @@ const std::array<VerbRow, 18> kVerbs = {{
      "[--since N] [--level info|warn|error] [--follow]   (--follow ends at --timeout or Ctrl+C)"},
     {"problems", "problems.list", &ProblemsArgs, &ProblemsVerb, kProblemsFlags, false, nullptr,
      "[--severity error|warning|info] [--search TEXT] [--follow]"},
+    // Task 23. Read-only ECS verbs; each resolves --world on the host.
+    {"entity get", "entity.get", &EntityGetArgs, nullptr, kEntityGetFlags, false, nullptr,
+     "guid:<id>|name:<unique name> [--component C ...]"},
+    {"ecs query", "ecs.query", &EcsQueryArgs, nullptr, kEcsQueryFlags, false, nullptr,
+     "--with A,B [--without C] [--fields A.x,B] [--limit N] [--no-strict]"},
+    {"ecs stats", "ecs.stats", nullptr, nullptr},
+    {"ecs archetypes", "ecs.archetypes", nullptr, nullptr},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -237,6 +258,73 @@ bool ConsoleArgs(std::span<const std::string> rest, nlohmann::json& out, std::st
     if (line.find_first_not_of(" \t") == std::string::npos)
         return Fail(error, "console needs a console line, such as cvarlist or render.vsync false");
     out = {{"line", line}};
+    return true;
+}
+
+// Appends the comma-separated, non-empty parts of `value` to `out`.
+void AppendList(const std::string& value, nlohmann::json& out)
+{
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t comma = std::min(value.find(',', start), value.size());
+        if (comma > start)
+            out.push_back(value.substr(start, comma - start));
+        start = comma + 1;
+    }
+}
+
+// entity get <ref> [--component C ...] -> {entity[, components]}.
+bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("entity get"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() != 1)
+        return Fail(error, "entity get needs one entity: guid:<id> or name:<unique name>");
+    out = {{"entity", tokens.positional.front()}};
+    nlohmann::json components = nlohmann::json::array();
+    for (const auto& [flag, value] : tokens.flags)
+        AppendList(value, components);
+    if (!components.empty())
+        out["components"] = std::move(components);
+    return true;
+}
+
+// ecs query --with A,B [--without C] [--fields A.x,B] [--limit N] [--no-strict]
+// -> {with, without?, fields?, limit?, strict?}.
+bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("ecs query"), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, "ecs query takes flags only (--with A,B), got " + tokens.positional.front());
+    nlohmann::json with = nlohmann::json::array();
+    nlohmann::json without = nlohmann::json::array();
+    nlohmann::json fields = nlohmann::json::array();
+    out = nlohmann::json::object();
+    for (const auto& [flag, value] : tokens.flags) {
+        if (flag == "--with") {
+            AppendList(value, with);
+        } else if (flag == "--without") {
+            AppendList(value, without);
+        } else if (flag == "--fields") {
+            AppendList(value, fields);
+        } else if (flag == "--limit") {
+            const bool digits = !value.empty() && value.size() <= 9 &&
+                                std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; });
+            if (!digits)
+                return Fail(error, "--limit needs a non-negative whole number, got " + value);
+            out["limit"] = std::stoul(value);
+        } else if (flag == "--no-strict") {
+            out["strict"] = false;
+        }
+    }
+    out["with"] = std::move(with);
+    if (!without.empty())
+        out["without"] = std::move(without);
+    if (!fields.empty())
+        out["fields"] = std::move(fields);
     return true;
 }
 
