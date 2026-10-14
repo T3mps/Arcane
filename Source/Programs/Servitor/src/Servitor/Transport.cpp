@@ -423,6 +423,188 @@ std::optional<nlohmann::json> GetJson(const Arcane::Remote::Descriptor& desc, st
     return fail(FromReadEnd(read, command, desc, timeoutMs));
 }
 
+namespace {
+
+// The status code of a response head ("HTTP/1.1 200 OK"); 0 when it is not one.
+int HeadStatus(std::string_view head)
+{
+    const std::size_t space = head.find(' ');
+    if (!head.starts_with("HTTP/") || space == std::string_view::npos || head.size() < space + 4)
+        return 0;
+    int status = 0;
+    for (std::size_t i = space + 1; i < space + 4; ++i) {
+        if (head[i] < '0' || head[i] > '9')
+            return 0;
+        status = status * 10 + (head[i] - '0');
+    }
+    return status;
+}
+
+// Splits complete lines off `buf` and hands each finished SSE event (its data:
+// lines joined with '\n') to onEvent; a partial line stays in `buf`. Comment
+// lines (':') and other fields are skipped (the host sends data: only).
+void TakeSseEvents(std::string& buf, std::string& data, bool& hasData, StreamOutcome& out, StreamEventFn onEvent,
+                   void* user)
+{
+    std::size_t start = 0;
+    for (;;) {
+        const std::size_t nl = buf.find('\n', start);
+        if (nl == std::string::npos)
+            break;
+        std::string_view line(buf.data() + start, nl - start);
+        start = nl + 1;
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        if (line.empty()) {
+            if (hasData) {
+                ++out.events;
+                if (onEvent != nullptr)
+                    onEvent(data, user);
+            }
+            data.clear();
+            hasData = false;
+            continue;
+        }
+        if (!line.starts_with("data:"))
+            continue;
+        line.remove_prefix(5);
+        if (line.starts_with(' '))
+            line.remove_prefix(1);
+        if (hasData)
+            data += '\n';
+        data.append(line);
+        hasData = true;
+    }
+    buf.erase(0, start);
+}
+
+} // namespace
+
+StreamOutcome FollowStream(LiveTarget& target, std::string_view topic, const std::atomic<int>* interrupt,
+                           StreamEventFn onEvent, void* user)
+{
+    StreamOutcome out;
+    const Arcane::Remote::Descriptor& desc = target.descriptor;
+    const std::string& command = target.watch.command;
+    const auto fail = [&out](Arcane::Remote::Envelope env) {
+        out.end = StreamOutcome::End::Failed;
+        out.failure = std::move(env);
+        return out;
+    };
+    const auto observe = [&target]() -> std::optional<Arcane::Remote::Envelope> {
+        if (target.observe == nullptr)
+            return std::nullopt;
+        return target.observe(target.watch, NowUnixMs());
+    };
+    const auto interrupted = [&out, interrupt] {
+        const int code = interrupt != nullptr ? interrupt->load(std::memory_order_acquire) : 0;
+        out.interrupt = code;
+        return code != 0;
+    };
+
+    if (target.watch.requestUnixMs == 0)
+        target.watch.requestUnixMs = NowUnixMs();
+    target.started = Clock::now();
+    const Clock::time_point deadline = target.started + std::chrono::milliseconds(target.timeoutMs);
+    if (auto verdict = observe())
+        return fail(std::move(*verdict));
+    if (!SocketsReady())
+        return fail(Arcane::Remote::MakeError(command, "internal", "the socket layer did not start",
+                                              "check the machine's network stack"));
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+    SocketGuard guard;
+    guard.sock = Arcane::ConnectSocketWithTimeout(
+        "127.0.0.1", desc.port, static_cast<int>(std::clamp<long long>(left, 1, kConnectTimeoutMs)));
+    if (guard.sock == INVALID_SOCK) {
+        if (auto verdict = observe())
+            return fail(std::move(*verdict));
+        return fail(Unreachable(command, desc, "could not connect to the host at " + Endpoint(desc)));
+    }
+    NoSigPipe(guard.sock);
+    const std::string path = "/remote/v1/stream?topics=" + std::string(topic);
+    if (!Arcane::SetNonBlocking(guard.sock, true) ||
+        !SendUntil(guard.sock, Arcane::Remote::BuildGet(path, desc.port, desc.token), deadline))
+        return fail(Unreachable(command, desc, "the host at " + Endpoint(desc) + " dropped the stream request"));
+
+    std::string buf;
+    std::string data;
+    bool hasData = false;
+    bool streaming = false;   // the 200 head has been read; buf now holds SSE lines
+    int refusedStatus = 0;    // a non-200 head: buf holds that one reply (-1: an unreadable head)
+    int pollErrors = 0;
+    for (;;) {
+        if (interrupted()) {
+            out.end = StreamOutcome::End::Interrupted;
+            return out;
+        }
+        Arcane::PollInterest interest;
+        interest.socket = guard.sock;
+        interest.wantRead = true;
+        const int rc = Arcane::PollSockets(std::span<Arcane::PollInterest>(&interest, 1), WaitMs(deadline));
+        if (rc < 0 && Interrupted())
+            continue;   // a signal: the interrupt check above decides
+        if (auto verdict = observe())
+            return fail(std::move(*verdict));
+        if (rc < 0) {
+            if (++pollErrors >= kMaxPollErrors)
+                return fail(Unreachable(command, desc, "waiting on the stream from " + Endpoint(desc) + " kept failing"));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kPollErrorBackoffMs));
+        } else {
+            pollErrors = 0;
+        }
+        bool eof = false;
+        if (rc > 0 && (interest.readable || interest.hungup)) {
+            for (;;) {
+                const int n = RecvSome(guard.sock, buf);
+                if (n == 0)
+                    eof = true;
+                if (n <= 0 || buf.size() > kMaxReplyBytes)
+                    break;
+            }
+        }
+        if (!streaming && refusedStatus == 0) {
+            const std::size_t headEnd = buf.find("\r\n\r\n");
+            if (headEnd != std::string::npos) {
+                const int status = HeadStatus(std::string_view(buf).substr(0, buf.find("\r\n")));
+                if (status == 200) {
+                    streaming = true;
+                    buf.erase(0, headEnd + 4);
+                } else {
+                    refusedStatus = status == 0 ? -1 : status;
+                }
+            }
+        }
+        if (refusedStatus != 0) {
+            // The host refused the stream (an unknown topic, its subscriber cap):
+            // one complete reply, then it closes.
+            std::string why;
+            if (auto reply = Arcane::Remote::ParseHttpReply(buf, eof, &why))
+                return fail(EnvelopeOf(command, desc, *reply));
+            if (why == "malformed" || eof || buf.size() > kMaxReplyBytes)
+                return fail(Internal(command, desc, refusedStatus > 0 ? refusedStatus : 0, "malformed-http"));
+        }
+        if (streaming)
+            TakeSseEvents(buf, data, hasData, out, onEvent, user);
+        if (buf.size() > kMaxReplyBytes)
+            return fail(Internal(command, desc, 0, "too-large"));
+        if (eof) {
+            if (!streaming && refusedStatus == 0)
+                return fail(Unreachable(command, desc,
+                                        "the host at " + Endpoint(desc) + " closed the stream without replying"));
+            // A host that died or hung is named; one that closed the stream (its
+            // listener stopping) is a normal end.
+            if (auto verdict = observe())
+                return fail(std::move(*verdict));
+            out.end = StreamOutcome::End::Closed;
+            return out;
+        }
+        if (Clock::now() >= deadline) {
+            out.end = StreamOutcome::End::Timeout;
+            return out;
+        }
+    }
+}
+
 } // namespace Servitor
 
 #endif

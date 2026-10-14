@@ -94,6 +94,20 @@ void JobTable::SetSubscriber(JobId id, std::uint64_t subscriberId)
     }
 }
 
+void JobTable::SetProgressDone(JobId id, std::uint64_t done)
+{
+    std::lock_guard lock(m_mutex);
+    for (Job& job : m_jobs)
+    {
+        if (job.id.value == id.value)
+        {
+            if (job.state == JobState::Running)
+                job.progress.done = done;
+            return;
+        }
+    }
+}
+
 void JobTable::CancelBySubscriber(std::uint64_t subscriberId)
 {
     if (subscriberId == 0)

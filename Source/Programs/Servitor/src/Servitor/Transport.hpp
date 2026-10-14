@@ -7,6 +7,7 @@
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,32 @@ struct LiveTarget {
 // no reply by the deadline is host.unreachable exit 7. EINTR is retried. Never half-closes the
 // connection: the host reads a half-close on a parked call as a drop.
 ExchangeResult LiveExchange(const std::string& requestBody, void* user); // user = LiveTarget*
+
+// One SSE subscription (spec s6.1 GET /remote/v1/stream?topics=<topic>; Task 22
+// `logs --follow` / `problems --follow`). How it ended:
+//   Timeout      target.timeoutMs (--timeout) passed since it started: a normal end;
+//   Closed       the host closed the stream and the target watch has no verdict;
+//   Interrupted  *interrupt turned non-zero (130 SIGINT / 143 SIGTERM, InterruptScope);
+//   Failed       `failure` holds the envelope: the host's refusal (a non-200 reply,
+//                e.g. host.busy when it holds its maximum subscribers), host.unreachable
+//                (exit 7), the watch's host.died / host.hung (exit 7), or internal.
+struct StreamOutcome {
+    enum class End { Timeout, Closed, Interrupted, Failed };
+    End end = End::Timeout;
+    Arcane::Remote::Envelope failure;
+    int interrupt = 0;          // the code *interrupt held, for End::Interrupted
+    std::size_t events = 0;     // SSE events delivered to onEvent
+};
+// One SSE event's data (its data: lines joined by newlines); called on the calling thread.
+using StreamEventFn = void (*)(std::string_view data, void* user);
+// Connects to 127.0.0.1:desc.port, sends GET /remote/v1/stream?topics=<topic>, and
+// delivers each event until one of the ends above. Never sends a body and never
+// half-closes (the host reads a half-close on a stream as the client leaving). Every
+// poll wake (at most kWatchPollMs apart) checks *interrupt (null: never) and samples
+// target.observe, so a host that dies mid-stream ends it with exit 7. target.watch.command
+// names the envelope. EINTR is retried after the interrupt check.
+StreamOutcome FollowStream(LiveTarget& target, std::string_view topic, const std::atomic<int>* interrupt,
+                           StreamEventFn onEvent, void* user);
 
 // GET /remote/v1/status and GET /remote/v1/catalog over the same codec. HTTP 200 with a JSON
 // body is that body; anything else fills *error (when non-null) and returns nullopt: the

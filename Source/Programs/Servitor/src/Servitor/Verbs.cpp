@@ -5,10 +5,13 @@
 #include <Servitor/Commands.hpp>
 #include <Servitor/Discover.hpp>
 #include <Servitor/Launch.hpp>
+#include <Servitor/Transport.hpp>
 
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Platform/Process.hpp>
+#include <Arcane/Remote/Redact.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -16,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -51,6 +55,22 @@ bool CvarNameArgs(std::span<const std::string> rest, nlohmann::json& out, std::s
 bool CvarSetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool CvarListArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ConsoleArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool LogsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+int LogsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
+bool ProblemsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
+
+// Task 22. --follow opens the host's SSE stream instead of posting a call.
+constexpr VerbFlag kLogsFlags[] = {
+    {"--since", true},    // a log seq, exclusive
+    {"--level", true},    // info | warn | error: drop records below it
+    {"--follow", false},  // GET /remote/v1/stream?topics=logs until --timeout or Ctrl+C
+};
+constexpr VerbFlag kProblemsFlags[] = {
+    {"--severity", true}, // error | warning | info: exactly that severity
+    {"--search", true},   // text in the message, code or detail (case-insensitive)
+    {"--follow", false},  // GET /remote/v1/stream?topics=problems until --timeout or Ctrl+C
+};
 
 // Only `wait ready` waits for a host to appear (spec s4.4).
 bool WaitAwaitsHost(const nlohmann::json& args)
@@ -59,7 +79,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 16> kVerbs = {{
+const std::array<VerbRow, 18> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -94,6 +114,12 @@ const std::array<VerbRow, 16> kVerbs = {{
     // Task 21. The tokens join into one console line; the host runs it through
     // the remote cvar service (ServerCanExecute commands, cvar reads and sets).
     {"console", "console.exec", &ConsoleArgs, nullptr, {}, false, nullptr, "<line>   (quote it, or pass its words)"},
+    // Task 22. Client-side rows: with no live host, logs reads the dead host's
+    // log file; --follow on either streams instead of posting (ruling P2 (f)).
+    {"logs", "log.read", &LogsArgs, &LogsVerb, kLogsFlags, false, nullptr,
+     "[--since N] [--level info|warn|error] [--follow]   (--follow ends at --timeout or Ctrl+C)"},
+    {"problems", "problems.list", &ProblemsArgs, &ProblemsVerb, kProblemsFlags, false, nullptr,
+     "[--severity error|warning|info] [--search TEXT] [--follow]"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -280,6 +306,397 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     }
     posted.client.exitCode = Arcane::Remote::ExitFromHost(env);
     return PrintEnvelope(env, posted.client, opt);
+}
+
+// ---------------------------------------------------------------------------
+// logs and problems (Task 22). Both rows are client-side: logs falls back to
+// the dead host's log file, and --follow on either opens the SSE stream
+// (GET /remote/v1/stream?topics=logs|problems) instead of posting a call. Under
+// --all the fan-out posts log.read / problems.list through LogsArgs /
+// ProblemsArgs, which refuse --follow.
+
+std::string Dump(const nlohmann::json& j)
+{
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
+// --since N: a log seq, a non-negative whole number.
+bool ParseSeq(const std::string& text, std::uint64_t& out)
+{
+    if (text.empty() || text[0] < '0' || text[0] > '9')
+        return false;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long v = std::strtoull(text.c_str(), &end, 10);
+    if (end != text.c_str() + text.size() || errno == ERANGE)
+        return false;
+    out = static_cast<std::uint64_t>(v);
+    return true;
+}
+
+// logs [--since N] [--level info|warn|error] [--follow] -> log.read {since?, level?}.
+bool ParseLogsTokens(std::span<const std::string> rest, nlohmann::json& out, bool& follow, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("logs"), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, "logs takes no arguments, got " + tokens.positional.front());
+    out = nlohmann::json::object();
+    follow = false;
+    for (const auto& [flag, value] : tokens.flags) {
+        if (flag == "--follow") {
+            follow = true;
+        } else if (flag == "--since") {
+            std::uint64_t seq = 0;
+            if (!ParseSeq(value, seq))
+                return Fail(error, "--since needs a log seq (a non-negative whole number), got '" + value + "'");
+            out["since"] = seq;
+        } else if (flag == "--level") {
+            if (value != "info" && value != "warn" && value != "error")
+                return Fail(error, "--level is info, warn or error, got '" + value + "'");
+            out["level"] = value;
+        }
+    }
+    return true;
+}
+
+// problems [--severity error|warning|info] [--search TEXT] [--follow] -> problems.list {severity?, search?}.
+bool ParseProblemsTokens(std::span<const std::string> rest, nlohmann::json& out, bool& follow, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("problems"), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, "problems takes no arguments, got " + tokens.positional.front() +
+                               " (quote a --search text with spaces)");
+    out = nlohmann::json::object();
+    follow = false;
+    for (const auto& [flag, value] : tokens.flags) {
+        if (flag == "--follow") {
+            follow = true;
+        } else if (flag == "--severity") {
+            if (value != "error" && value != "warning" && value != "info")
+                return Fail(error, "--severity is error, warning or info, got '" + value + "'");
+            out["severity"] = value;
+        } else if (flag == "--search") {
+            out["search"] = value;
+        }
+    }
+    return true;
+}
+
+// The --all path (FanOutVerb): one call per host, so a stream is refused.
+bool LogsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    bool follow = false;
+    if (!ParseLogsTokens(rest, out, follow, error))
+        return false;
+    if (follow)
+        return Fail(error, "logs --follow streams from one host; it does not combine with --all");
+    return true;
+}
+
+bool ProblemsArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    bool follow = false;
+    if (!ParseProblemsTokens(rest, out, follow, error))
+        return false;
+    if (follow)
+        return Fail(error, "problems --follow streams from one host; it does not combine with --all");
+    return true;
+}
+
+// The selected host's identity for a client-made envelope's `host` block.
+Arcane::Remote::HostBlock BlockOf(const Arcane::Remote::Descriptor& d)
+{
+    Arcane::Remote::HostBlock block;
+    block.kind = Arcane::Remote::ToString(d.hostKind);
+    block.pid = d.pid;
+    block.state = d.state;
+    block.frame = d.frame;
+    return block;
+}
+
+std::string Str(const nlohmann::json& row, const char* key)
+{
+    const auto it = row.is_object() ? row.find(key) : row.end();
+    if (!row.is_object() || it == row.end() || it->is_null())
+        return {};
+    return it->is_string() ? it->get<std::string>() : Dump(*it);
+}
+
+// One human line for a log.read record (also a log.follow event), or for the
+// {"dropped": N} event a follow publishes when the ring evicted lines first.
+std::string HumanLogLine(const nlohmann::json& record)
+{
+    if (record.is_object() && record.contains("dropped") && !record.contains("seq"))
+        return "(" + Str(record, "dropped") + " lines dropped: the host's ring evicted them first)\n";
+    return Str(record, "seq") + " [" + Str(record, "level") + "] " + Str(record, "logger") + ": " +
+           Str(record, "text") + "\n";
+}
+
+// One human line (and its indented detail and locator) for a problems.list row.
+std::string HumanProblemLines(const nlohmann::json& row)
+{
+    std::string text = Str(row, "severity") + " " + Str(row, "code") + ": " + Str(row, "message") + "\n";
+    if (const std::string detail = Str(row, "detail"); !detail.empty())
+        text += "  " + detail + "\n";
+    if (row.is_object() && row.contains("locator") && !row.at("locator").is_null())
+        text += "  at " + Dump(row.at("locator")) + "\n";
+    return text;
+}
+
+// Human output for log.read / problems.list: the summary line and diagnostics
+// as Render prints them, then one line per record or row (a file fallback's
+// text as it is); notifications as "note" lines on stderr. json and ndjson,
+// and any refusal, print through PrintEnvelope unchanged.
+int PrintRows(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client,
+              const GlobalOptions& opt)
+{
+    if (opt.format != Format::Human || !env.ok || !env.data.is_object())
+        return PrintEnvelope(env, client, opt);
+    Arcane::Remote::Envelope summary = env;
+    summary.data = nlohmann::json::object();
+    RenderOptions ro;
+    ro.format = Format::Human;
+    ro.tty = opt.tty;
+    Printed printed = Render(summary, client, ro);
+    std::string rows;
+    if (const auto text = env.data.find("text"); text != env.data.end() && text->is_string()) {
+        rows = text->get<std::string>();
+        if (!rows.empty() && rows.back() != '\n')
+            rows += '\n';
+    }
+    if (const auto records = env.data.find("records"); records != env.data.end() && records->is_array()) {
+        for (const nlohmann::json& record : *records)
+            rows += HumanLogLine(record);
+    }
+    if (const auto problems = env.data.find("problems"); problems != env.data.end() && problems->is_array()) {
+        for (const nlohmann::json& row : *problems)
+            rows += HumanProblemLines(row);
+    }
+    std::string notes;
+    if (const auto dropped = env.data.find("dropped");
+        dropped != env.data.end() && dropped->is_number_unsigned() && dropped->get<std::uint64_t>() > 0)
+        notes += "note: " + Dump(*dropped) + " older lines were already evicted from the host's ring\n";
+    for (const Arcane::Remote::Error& n : env.notifications)
+        notes += "note " + n.code + ": " + n.message + "\n";
+    printed.stdoutText += Arcane::Remote::RedactSecrets(rows, client.token);
+    printed.stderrText += Arcane::Remote::RedactSecrets(notes, client.token);
+    return Emit(printed, client.exitCode);
+}
+
+// What one follow prints per event, on the calling thread.
+struct FollowPrint {
+    Format format = Format::Json;
+    std::string topic;
+    std::string token;   // print-time redaction only; never printed
+};
+
+// json / ndjson: {"type":"event","topic":...,"data":<the event's JSON>} per
+// line (spec s6.5's stream frame; a stream is never one JSON document, so
+// --format json prints ndjson too). human: one readable line per event.
+void PrintFollowEvent(std::string_view data, void* user)
+{
+    const auto& ctx = *static_cast<const FollowPrint*>(user);
+    nlohmann::json parsed = nlohmann::json::parse(data, nullptr, false);
+    if (parsed.is_discarded())
+        parsed = std::string(data);
+    std::string line;
+    if (ctx.format != Format::Human)
+        line = Dump(nlohmann::json{{"type", "event"}, {"topic", ctx.topic}, {"data", parsed}}) + "\n";
+    else if (ctx.topic == "logs")
+        line = HumanLogLine(parsed);
+    else
+        line = HumanProblemLines(parsed);
+    Printed printed;
+    printed.stdoutText = Arcane::Remote::RedactSecrets(line, ctx.token);
+    (void)Emit(printed, 0);
+}
+
+// `logs --follow` / `problems --follow`: one SSE subscription to the selected
+// host until --timeout, the host closing it, or Ctrl+C / SIGTERM (exit 130 /
+// 143). It never posts log.read or problems.list with follow (ruling P2 (f)).
+// json / ndjson end with {"type":"result","count":<events>,"envelope":...}, so a
+// truncated stream is detectable; human prints only a failure.
+int FollowVerb(std::string_view words, const char* topic, const char* command, const GlobalOptions& opt)
+{
+    // Rule 3: a stream posts no call, so these globals would be dropped silently.
+    if (!opt.world.empty())
+        return PrintUsage("--world does not apply to " + std::string(words) +
+                          " --follow: the stream is the host's, not one world's");
+    if (opt.readOnly)
+        return PrintUsage("--read-only does not apply to " + std::string(words) + " --follow: a stream only reads");
+
+    Arcane::Remote::Envelope env;
+    Arcane::Remote::ClientBlock client;
+    std::optional<LiveHost> host;
+    if (const auto dir = RemoteDirFor(opt, &env))
+        host = Select(ScanDirectory(*dir), opt, &env);
+    if (!host) {
+        env.command = command;
+        client.exitCode = Arcane::Remote::ExitFromHost(env);
+        return PrintEnvelope(env, client, opt);
+    }
+
+    LiveTarget target;
+    target.descriptor = host->descriptor;
+    target.watch = WatchFor(*host, command, opt);
+    target.timeoutMs = opt.timeoutMs;
+    client.token = host->descriptor.token;
+    client.descriptor = PathUtf8(host->path);
+    FollowPrint print;
+    print.format = opt.format;
+    print.topic = topic;
+    print.token = host->descriptor.token;
+
+    StreamOutcome outcome;
+    {
+        InterruptScope interrupts;
+        outcome = FollowStream(target, topic, &InterruptScope::Pending(), &PrintFollowEvent, &print);
+    }
+    const auto ended = [&](const char* reason) {
+        return Arcane::Remote::MakeOk(command, {{"events", outcome.events}, {"ended", reason}},
+                                      BlockOf(host->descriptor));
+    };
+    switch (outcome.end) {
+        case StreamOutcome::End::Timeout:
+            env = ended("timeout");
+            client.exitCode = 0;
+            break;
+        case StreamOutcome::End::Closed:
+            env = ended("closed");
+            client.exitCode = 0;
+            break;
+        case StreamOutcome::End::Interrupted:
+            env = ended("interrupted");
+            client.exitCode = outcome.interrupt;
+            break;
+        case StreamOutcome::End::Failed:
+            env = std::move(outcome.failure);
+            if (env.command.empty())
+                env.command = command;
+            client.exitCode = Arcane::Remote::ExitFromHost(env);
+            break;
+    }
+    if (opt.format == Format::Human) {
+        if (env.ok)
+            return client.exitCode;
+        return PrintEnvelope(env, client, opt);
+    }
+    nlohmann::json envelope = Arcane::Remote::ToJson(env);
+    envelope["client"] = {{"exitCode", client.exitCode}, {"retried", false}, {"descriptor", client.descriptor}};
+    Printed printed;
+    printed.stdoutText = Arcane::Remote::RedactSecrets(
+        Dump(nlohmann::json{{"type", "result"}, {"count", outcome.events}, {"envelope", envelope}}) + "\n",
+        client.token);
+    return Emit(printed, client.exitCode);
+}
+
+// The newest existing log file of a dead host: the kinds --host names, else the
+// kinds of the stale descriptors this scan found (their names are <kind>-<pid>.json),
+// else all three; the project the scan was for, else the exe-relative logs.
+std::filesystem::path DeadHostLogFile(const Scan& scan, const GlobalOptions& opt)
+{
+    using Arcane::Remote::HostKind;
+    std::vector<HostKind> kinds;
+    const auto kindOf = [](std::string_view name) -> std::optional<HostKind> {
+        if (name == "editor") return HostKind::Editor;
+        if (name == "runtime") return HostKind::Runtime;
+        if (name == "server") return HostKind::Server;
+        return std::nullopt;
+    };
+    if (!opt.hostKind.empty()) {
+        if (const auto kind = kindOf(opt.hostKind))
+            kinds.push_back(*kind);
+    } else {
+        for (const auto* list : {&scan.removedStale, &scan.keptStale}) {
+            for (const std::filesystem::path& stale : *list) {
+                const std::string stem = stale.stem().string();
+                const auto kind = kindOf(std::string_view(stem).substr(0, stem.find('-')));
+                if (kind && std::find(kinds.begin(), kinds.end(), *kind) == kinds.end())
+                    kinds.push_back(*kind);
+            }
+        }
+        if (kinds.empty())
+            kinds = {HostKind::Editor, HostKind::Runtime, HostKind::Server};
+    }
+    const std::filesystem::path project = ProjectRootFor(opt, nullptr).value_or(std::filesystem::path{});
+    std::filesystem::path best;
+    std::filesystem::file_time_type bestTime{};
+    for (const HostKind kind : kinds) {
+        const std::filesystem::path file = HostLogFile(kind, project, opt);
+        if (file.empty())
+            continue;
+        std::error_code ec;
+        const auto written = std::filesystem::last_write_time(file, ec);
+        if (ec)
+            continue;   // no such file
+        if (best.empty() || written > bestTime) {
+            best = file;
+            bestTime = written;
+        }
+    }
+    return best;
+}
+
+int LogsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
+{
+    CallRequest req;
+    req.command = "log.read";
+    bool follow = false;
+    std::string error;
+    if (!ParseLogsTokens(rest, req.args, follow, &error))
+        return PrintUsage(error);
+    if (follow)
+        return FollowVerb("logs", "logs", "log.follow", opt);
+
+    Arcane::Remote::Envelope refusal;
+    Arcane::Remote::ClientBlock client;
+    Scan scan;
+    std::optional<LiveHost> host;
+    if (const auto dir = RemoteDirFor(opt, &refusal)) {
+        scan = ScanDirectory(*dir);
+        host = Select(scan, opt, &refusal);
+    }
+    if (host) {
+        const PostedCall posted = PostToHost(*host, req, opt, false);
+        return PrintRows(posted.envelope, posted.client, opt);
+    }
+    // No live host: the dead host's log file, when there is one (never invented lines).
+    const bool none = !refusal.errors.empty() && refusal.errors.front().code == "target.none";
+    if (none) {
+        if (const std::filesystem::path file = DeadHostLogFile(scan, opt); !file.empty()) {
+            Arcane::Remote::Envelope env;
+            ReadLogFile(file, env);
+            if (env.ok && !req.args.empty()) {
+                Arcane::Remote::Error warning;
+                warning.code = "logs.unfiltered";
+                warning.message = "--since and --level filter the live ring; the log file is printed whole";
+                env.warnings.push_back(std::move(warning));
+            }
+            client.exitCode = Arcane::Remote::ExitFromHost(env);
+            return PrintRows(env, client, opt);
+        }
+    }
+    refusal.command = req.command;
+    client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+    return PrintEnvelope(refusal, client, opt);
+}
+
+int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
+{
+    CallRequest req;
+    req.command = "problems.list";
+    bool follow = false;
+    std::string error;
+    if (!ParseProblemsTokens(rest, req.args, follow, &error))
+        return PrintUsage(error);
+    if (follow)
+        return FollowVerb("problems", "problems", "problem.follow", opt);
+    const PostedCall posted = PostVerb(*FindVerb("problems"), req, opt, false);
+    return PrintRows(posted.envelope, posted.client, opt);
 }
 
 // How many leading tokens spell `words` (space-separated); 0 when they do not.

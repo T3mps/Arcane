@@ -29,6 +29,11 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+namespace Arcane
+{
+class DiagnosticStore;  // Arcane/Base/DiagnosticStore.hpp
+}
+
 namespace Arcane::Remote
 {
 
@@ -79,6 +84,12 @@ public:
         // main thread only (Start and inside Drain). P0 hosts list one world,
         // {"main", ToString(mode), &registry}, with user = the host app.
         WorldTable worlds;
+        // Task 22 (ruling F12): the store problems.list and problem.follow
+        // read. The editor passes its Problems-panel store (already the
+        // engine's diagnostics sink). Null (runtime, server): Start creates a
+        // session-owned store and installs it as the engine sink; Stop
+        // uninstalls it. Main thread only.
+        DiagnosticStore* problemStore = nullptr;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started
@@ -150,6 +161,9 @@ private:
     // Task 20 (ruling F12): the user of the cvar.* commands and console.exec (Task 21),
     // {CVarRegistry::Get(), config.cvarContext}; Start installs it, Teardown releases it.
     CvarCommandUser m_cvarUser;
+    // Task 22: the store a runtime or server session owns (Config::problemStore
+    // null); Start installs it as the engine sink, Teardown uninstalls it.
+    std::unique_ptr<DiagnosticStore> m_ownedStore;
     HostGate m_gate;
     TickGate m_tick;
     JobTable m_jobs;

@@ -8,6 +8,7 @@
 #include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -59,6 +60,36 @@ struct GlobalOptions {
     std::string world;          // --world <name>; Call posts it as options.world when non-empty (ruling F14)
     bool all = false;           // --all: fan the command out to every matching live host (spec AM2)
     std::string allKind;        // --all editor|runtime|server: the token after --all when it is a kind
+};
+
+// The log file a host of `kind` writes (Task 22, ruling E-3 as amended in rev 8),
+// derived exactly as Diagnostics' AttachLogSink derives it: the report directory's
+// parent / Logs / <appName>.log, appName ArcaneEditor | ArcaneRuntime | ArcaneServer.
+// With a project: <project>/Saved/Diagnostics -> <project>/Saved/Logs/<appName>.log
+// (through Paths, as the report directory). Without: the exe-relative report
+// directory HostDiagnosticsDir(kind, opt) -> <exeDir>/Logs/<appName>.log; an
+// unresolved engine root (rev 8.3 V7) is an EMPTY path, never a relative one.
+// Not Log::FileSinkPath(): in servitor that is servitor's own sink.
+std::filesystem::path HostLogFile(Arcane::Remote::HostKind kind, const std::filesystem::path& project = {},
+                                  const GlobalOptions& opt = {});
+// `servitor logs` with no live host: the dead host's log file as log.read's
+// answer, ok with data {text, file} and the notification {code: "logs.from-file",
+// message: <path, native separators>}. It does not invent lines: a file that
+// cannot be read is target.none (exit 4) naming it.
+void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env);
+
+// While one is alive, SIGINT / SIGTERM (Windows: Ctrl+C / Ctrl+Break, and a
+// console close, logoff or shutdown) do not end the process: they set
+// Pending() to 130 / 143 and a stream loop (FollowStream) ends cleanly with that
+// exit code. The previous handlers come back when it is destroyed. One at a time.
+class InterruptScope {
+public:
+    InterruptScope();
+    ~InterruptScope();
+    InterruptScope(const InterruptScope&) = delete;
+    InterruptScope& operator=(const InterruptScope&) = delete;
+    // The flag FollowStream polls: 0, or 130 / 143 once a signal arrived.
+    static const std::atomic<int>& Pending();
 };
 
 // Starts from GlobalOptions{} and applies the global flags found anywhere in

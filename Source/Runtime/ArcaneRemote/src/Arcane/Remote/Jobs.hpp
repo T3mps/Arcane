@@ -61,6 +61,9 @@ public:
     // Task 8's Drain calls this with the queue key and the arming envelope's undo block (ruling F2).
     void BindWaiter(JobId id, std::uint64_t waiterId, std::optional<UndoBlock> undo = std::nullopt);
     void SetSubscriber(JobId id, std::uint64_t subscriberId);
+    // Sets a Running row's progress.done (a follow job starts at the newest
+    // record, Task 22 ruling F4); a row that is not Running is left alone.
+    void SetProgressDone(JobId id, std::uint64_t done);
     void CancelBySubscriber(std::uint64_t subscriberId); // Running rows with that id become Cancelled
     // Each Running job, at most one step; a finished step stamps gate.Block()
     // as the envelope's host, ends Done (envelope.ok) or Failed, and Completes its waiter.

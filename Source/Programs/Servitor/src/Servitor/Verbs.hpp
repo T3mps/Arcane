@@ -85,6 +85,11 @@ struct PostedCall {
     Arcane::Remote::ClientBlock client;   // exitCode, retried, descriptor
     std::optional<LiveHost> host;         // the selected target; nullopt when discovery refused
 };
+// The mid-call target watch for `command` against `host` (Task 14): its pid,
+// creation stamp and descriptor, and its report directory (<project>/Saved/Diagnostics
+// when the descriptor names a project, else HostDiagnosticsDir). PostToHost and
+// the --follow streams (Task 22) share it.
+TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt);
 // The call half of PostVerb against ONE chosen host: Call through LiveExchange
 // with the busy retry and the target watch. Prints nothing; safe to run for
 // distinct hosts on distinct threads (--all).

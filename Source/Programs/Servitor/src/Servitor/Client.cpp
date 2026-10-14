@@ -14,6 +14,7 @@
 #include <Arcane/Remote/Redact.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -21,6 +22,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string_view>
@@ -39,6 +42,7 @@
 #include <windows.h>
 #include <io.h>     // _isatty, _fileno
 #else
+#include <signal.h> // sigaction (InterruptScope)
 #include <unistd.h> // isatty, STDOUT_FILENO
 #endif
 
@@ -566,24 +570,137 @@ PostedCall PostToHost(const LiveHost& host, const CallRequest& req, GlobalOption
     target.timeoutMs = opt.timeoutMs;
     if (noReplyGrace)
         target.replyGraceMs = 0;
-    target.watch.command = req.command;
-    target.watch.pid = host.descriptor.pid;
-    target.watch.processStart = host.descriptor.processStart;
-    target.watch.descriptorPath = host.path;
+    target.watch = WatchFor(host, req.command, opt);
+    posted.client.token = host.descriptor.token;   // print-time redaction only; never printed
+    posted.client.descriptor = PathUtf8(host.path);
+    (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope);
+    return posted;
+}
+
+std::filesystem::path HostLogFile(Arcane::Remote::HostKind kind, const std::filesystem::path& project,
+                                  const GlobalOptions& opt)
+{
+    // The Diagnostics app names (ArcaneEditor main.cpp, RuntimeHost.cpp, ArcaneServer main.cpp).
+    const char* appName = kind == Arcane::Remote::HostKind::Editor   ? "ArcaneEditor"
+                          : kind == Arcane::Remote::HostKind::Server ? "ArcaneServer"
+                                                                     : "ArcaneRuntime";
+    // AttachLogSink: <report directory>/../Logs/<appName>.log.
+    const std::filesystem::path reports =
+        project.empty() ? HostDiagnosticsDir(kind, opt)
+                        : Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir,
+                                                 Arcane::Paths::ForProject(project));
+    if (reports.empty())
+        return {};   // rev 8.3 V7: an unresolved root has no log file, never a cwd-relative one
+    return reports.parent_path() / "Logs" / (std::string(appName) + ".log");
+}
+
+void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& env)
+{
+    // The notification names the file with native separators, as the host wrote it.
+    const auto native = path.u8string();
+    const std::string shown(reinterpret_cast<const char*>(native.data()), native.size());
+    std::ifstream in(path, std::ios::binary);
+    std::string text;
+    if (in.is_open())
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (!in.is_open() || in.bad()) {
+        env = Arcane::Remote::MakeError("log.read", "target.none",
+                                        "no live host, and its log file " + shown + " could not be read",
+                                        "launch the host (servitor launch editor|runtime|server)");
+        return;
+    }
+    env = Arcane::Remote::MakeOk("log.read", {{"text", std::move(text)}, {"file", PathUtf8(path)}}, {});
+    Arcane::Remote::Error note;
+    note.code = "logs.from-file";
+    note.message = shown;
+    note.remediation = "no host is running: this is the last host's log file, not its live ring";
+    env.notifications.push_back(std::move(note));
+}
+
+namespace {
+
+std::atomic<int> g_interrupt{0};
+static_assert(std::atomic<int>::is_always_lock_free, "a signal handler may only touch a lock-free atomic");
+
+#if defined(_WIN32)
+BOOL WINAPI OnConsoleControl(DWORD type)
+{
+    switch (type) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+            g_interrupt.store(130, std::memory_order_release);
+            return TRUE;
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            g_interrupt.store(143, std::memory_order_release);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+#else
+struct sigaction g_previousInt;
+struct sigaction g_previousTerm;
+
+// Async-signal-safe: one store to a lock-free atomic.
+void OnStopSignal(int sig)
+{
+    g_interrupt.store(sig == SIGINT ? 130 : 143, std::memory_order_release);
+}
+#endif
+
+} // namespace
+
+InterruptScope::InterruptScope()
+{
+    g_interrupt.store(0, std::memory_order_release);
+#if defined(_WIN32)
+    ::SetConsoleCtrlHandler(&OnConsoleControl, TRUE);
+#else
+    // No SA_RESTART: a blocked poll returns EINTR, so the loop sees the flag at once.
+    struct sigaction action {};
+    action.sa_handler = &OnStopSignal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    ::sigaction(SIGINT, &action, &g_previousInt);
+    ::sigaction(SIGTERM, &action, &g_previousTerm);
+#endif
+}
+
+InterruptScope::~InterruptScope()
+{
+#if defined(_WIN32)
+    ::SetConsoleCtrlHandler(&OnConsoleControl, FALSE);
+#else
+    ::sigaction(SIGINT, &g_previousInt, nullptr);
+    ::sigaction(SIGTERM, &g_previousTerm, nullptr);
+#endif
+}
+
+const std::atomic<int>& InterruptScope::Pending()
+{
+    return g_interrupt;
+}
+
+TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt)
+{
+    TargetWatch watch;
+    watch.command = command;
+    watch.pid = host.descriptor.pid;
+    watch.processStart = host.descriptor.processStart;
+    watch.descriptorPath = host.path;
     // The host's report directory (ruling AX (2)): <project>/Saved/Diagnostics
     // when the descriptor names a project, else the exe-relative one.
     if (!host.descriptor.project.empty()) {
         const std::string& p = host.descriptor.project;
         const std::filesystem::path project(std::u8string(reinterpret_cast<const char8_t*>(p.data()), p.size()));
-        target.watch.diagnosticsDir =
+        watch.diagnosticsDir =
             Arcane::Paths::Resolve(Arcane::Paths::Location::DiagnosticsDir, Arcane::Paths::ForProject(project));
     } else {
-        target.watch.diagnosticsDir = HostDiagnosticsDir(host.descriptor.hostKind, opt);
+        watch.diagnosticsDir = HostDiagnosticsDir(host.descriptor.hostKind, opt);
     }
-    posted.client.token = host.descriptor.token;   // print-time redaction only; never printed
-    posted.client.descriptor = PathUtf8(host.path);
-    (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope);
-    return posted;
+    return watch;
 }
 
 std::optional<Arcane::Remote::Envelope> ObserveTarget(const TargetWatch& watch, std::int64_t nowUnixMs)

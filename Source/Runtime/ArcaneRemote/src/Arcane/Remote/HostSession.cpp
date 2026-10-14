@@ -8,12 +8,16 @@
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Commands/ConsoleCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
+#include <Arcane/Remote/Commands/LogCommands.hpp>
+#include <Arcane/Remote/Commands/ProblemCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
+#include <Arcane/Remote/Follow.hpp>
 #include <Arcane/Remote/Http.hpp>
 #include <Arcane/Remote/Listener.hpp>
 #include <Arcane/Remote/Registry.hpp>
+#include <Arcane/Base/DiagnosticStore.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
@@ -96,6 +100,21 @@ bool HostSession::Start()
     // same registry and context as cvar.*. Teardown releases it.
     SetConsoleCommandUser(&m_cvarUser);
     RegisterConsoleCommand();
+    // log.read and problems.list (Task 22). The follow streams are armed by
+    // ApplyFollowEvents in Drain, never by a call. A runtime or server has no
+    // Problems store of its own, so the session owns one and makes it the
+    // engine's diagnostics sink; the editor passes the store it already
+    // installed. Teardown releases both pointers.
+    SetLogJobs(&m_jobs);
+    RegisterLogCommand();
+    DiagnosticStore* problemStore = m_config.problemStore;
+    if (problemStore == nullptr) {
+        m_ownedStore = std::make_unique<DiagnosticStore>();
+        m_ownedStore->InstallAsEngineSink();
+        problemStore = m_ownedStore.get();
+    }
+    SetProblemStore(problemStore);
+    RegisterProblemCommand();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -188,11 +207,15 @@ void HostSession::Drain()
         return;
 
     m_gate.catalog = CommandRegistry::Get().Generation();
-    // A call already queued counts as activity even if the gate refuses it.
+    // SSE subscribers opened or closed since the last Drain arm or cancel
+    // their follow jobs before the dispatcher steps the jobs (Task 22).
+    ApplyFollowEvents(m_jobs, *m_listener);
+    // A call already queued counts as activity even if the gate refuses it,
+    // and so does an open follow stream: a client is attached.
     const bool hadQueued = m_queue->Depth() > 0;
     m_dispatcher->Drain(FrameBudgetMsSetting(), kFrameBudgetCommands);
     const auto steadyNow = std::chrono::steady_clock::now();
-    if (hadQueued || m_dispatcher->LastDrainRan() > 0)
+    if (hadQueued || m_dispatcher->LastDrainRan() > 0 || m_jobs.AnyRunning({"log.follow", "problem.follow"}))
         m_lastActivity = steadyNow;
 
     const std::int64_t now = NowUnixMs();
@@ -256,8 +279,12 @@ void HostSession::Stop(std::string exitReason)
 
 void HostSession::Teardown()
 {
-    if (m_listener)
+    if (m_listener) {
         m_listener->Stop(); // answers every parked call host.died, joins the service thread
+        // Stop closed every stream (each published Closed): cancel their follow
+        // jobs now, so no job keeps a pointer to the listener reset below.
+        ApplyFollowEvents(m_jobs, *m_listener);
+    }
     m_listener.reset();
     m_dispatcher.reset();
     m_jobs.SetQueue(nullptr); // the queue goes next; no finish path may Complete into it
@@ -267,6 +294,13 @@ void HostSession::Teardown()
     ReleaseSessionCommands(this); // a stopped session's commands answer host.unavailable
     ReleaseCvarCommandUser(&m_cvarUser); // likewise cvar.*; another session's user is left alone
     ReleaseConsoleCommandUser(&m_cvarUser); // and console.exec, by the same rule
+    ReleaseLogJobs(&m_jobs);                // log.read (Task 22), by the same rule
+    // problems.list: the store this session installed (the editor's, or its own).
+    ReleaseProblemStore(m_config.problemStore != nullptr ? m_config.problemStore : m_ownedStore.get());
+    if (m_ownedStore) {
+        m_ownedStore->UninstallEngineSink(); // identity-checked: a later sink is left alone
+        m_ownedStore.reset();
+    }
     // The world table names this host's objects (user = the app): a stopped
     // session leaves world-taking commands answering host.unavailable. Like
     // ReleaseSessionCommands, a table another session installed since is left alone.

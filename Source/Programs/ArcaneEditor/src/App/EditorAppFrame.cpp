@@ -1798,7 +1798,10 @@ namespace Arcane::Editor
                 return {};
             return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
         };
-        m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+        // Task 22 (ruling F12): problems.list reads the Problems panel's store,
+        // the one ConsoleDiagnostics::Install made the engine's diagnostics sink.
+        rc.problemStore       = &m_consoleDiag.store;
+        m_remote =std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
         {
             m_remote.reset();   // Start logged why; not retried until the cvar cycles
