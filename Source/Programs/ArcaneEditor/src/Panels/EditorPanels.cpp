@@ -877,9 +877,10 @@ namespace Arcane::Editor
                 // a PluginHost that refused to attach it -- all of which leave
                 // the session in Edit, so the ONLY thing the user sees is a Play
                 // button that did not light. Publish one Problems row, keyed
-                // "editor:play" (this is its sole publisher, and the
-                // publication-group contract means the next successful Play's
-                // Clear retracts it).
+                // "editor:play" (this is its sole publisher; the next
+                // successful Play's Clear retracts it, and that Clear is
+                // EditorApp::AfterPlayFlip's, the one flip rule servitor play
+                // shares, so a Play from either side retracts the row).
                 const auto reportRefusal = [](const char* what)
                 {
                     Arcane::Diagnostic d;
@@ -895,10 +896,8 @@ namespace Arcane::Editor
                 const auto tryPlay = [&](PlayTopology topology, const char* what)
                 {
                     if (beforePlay) beforePlay();   // flush document gestures while still in Edit (s3.3b)
-                    if (play.Play(runtime, host, topology))
-                        Arcane::Diagnostics::Clear("editor:play");
-                    else
-                        reportRefusal(what);
+                    if (!play.Play(runtime, host, topology))
+                        reportRefusal(what);   // success: the app's AfterPlayFlip clears "editor:play"
                 };
                 switch (mode)
                 {

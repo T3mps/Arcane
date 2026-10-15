@@ -32,7 +32,7 @@ ARC_REFLECT_TYPE(PlayStartArgs)
 ARC_REFLECT_TYPE_END()
 
 struct PlayStepArgs {
-    std::uint32_t n = 1;   // fixed ticks to advance, 1..100000
+    std::uint32_t n = 1;   // host.frame advances to wait for, 1..100000 (AM1: sim ticks; loop passes on a running windowed runtime)
 };
 ARC_REFLECT_TYPE(PlayStepArgs)
     ARC_REFLECT_FIELD(PlayStepArgs, n)
@@ -52,7 +52,8 @@ ARC_CONSTANT("spec s7.3: play.step's upper bound; a larger N is arg.inapplicable
 constexpr std::int64_t kMaxSteps = 100000;
 
 constexpr std::string_view kStartUsage = "pass topology: standalone (the default), listen or client+server";
-constexpr std::string_view kStepUsage = "pass n: a whole number of fixed ticks from 1 to 100000 (default 1)";
+constexpr std::string_view kStepUsage =
+    "pass n: a whole number of sim advances (host.frame) from 1 to 100000 (default 1)";
 constexpr std::string_view kNoArgsUsage = "takes no arguments";
 constexpr std::string_view kDefaultTopology = "standalone";
 
@@ -173,13 +174,31 @@ CommandResult PlayStart(const Call& call, void* /*user*/)
         return Answer(std::move(*refusal));
 
     if (s.hooks.editor) {
-        // PlaySession::Play: a no-op success when already playing.
+        // Already playing (PlaySession::Play would be a no-op success): answer
+        // the topology that is ACTUALLY running, never the requested one, and
+        // refuse an explicit different one rather than ignore it (Rule 3).
+        const bool explicitTopology = call.args.is_object() && call.args.contains("topology");
+        if (s.hooks.editorPlaying != nullptr && s.hooks.editorTopology != nullptr &&
+            s.hooks.editorPlaying(s.hooks.editorUser)) {
+            const std::string running(s.hooks.editorTopology(s.hooks.editorUser));
+            if (explicitTopology && topology != running) {
+                Envelope refused = MakeError(call.command, "play.refused",
+                                             "the editor is already playing " + running + ", not " + topology,
+                                             "servitor stop, then servitor play --topology " + topology);
+                refused.errors.front().detail["running"] = running;
+                return Answer(std::move(refused));
+            }
+            return Done(call, {{"playing", true}, {"topology", running}, {"alreadyPlaying", true}});
+        }
         if (!s.hooks.editorPlay(s.hooks.editorUser, topology))
             return Answer(MakeError(call.command, "play.refused",
                                     "the editor refused Play (" + topology + "): the scene snapshot or the "
                                     "server world failed, and it stayed in Edit",
                                     "read servitor problems and servitor logs, fix the cause, then retry"));
-        return Done(call, {{"playing", true}, {"topology", topology}});
+        const std::string started = s.hooks.editorTopology != nullptr
+                                        ? std::string(s.hooks.editorTopology(s.hooks.editorUser))
+                                        : topology;
+        return Done(call, {{"playing", true}, {"topology", started}});
     }
 
     // Runtime and server: the topology was fixed at launch (Rule 3: a flag
@@ -266,8 +285,10 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
     PlayCommandState& s = State();
     const auto row = s.live.find(job.id.value);
     if (row == s.live.end()) {
-        // Released (RegisterPlayCommands moved on): never stepped again.
-        job.envelope = Unavailable(job.command);
+        // Released (RegisterPlayCommands moved on). Ticks may already have
+        // run, so this is play.stopped (exit 6), never host.unavailable
+        // (exit 5, which the client retries: a retried step would advance again).
+        job.envelope = StepsStopped("the step's host session ended before the requested steps ran");
         return true;
     }
     job.startedFrame = row->second;   // StepAll writes this copy back to the row
@@ -291,7 +312,7 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
             return true;
         }
         if (s.hooks.editorRequestSingleStep == nullptr) {
-            job.envelope = Unavailable(job.command);
+            job.envelope = StepsStopped("the editor's step hook went away before the requested steps ran");
             s.live.erase(job.id.value);
             return true;
         }
@@ -303,7 +324,7 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
     // Held with none left and still short (a free run cleared them, then a
     // pause held the gate) means no tick is coming for this job.
     if (s.hooks.gate == nullptr) {
-        job.envelope = Unavailable(job.command);
+        job.envelope = StepsStopped("the host's tick gate went away before the requested steps ran");
         s.live.erase(job.id.value);
         return true;
     }
@@ -413,8 +434,9 @@ void RegisterPlayCommands(JobTable* jobs)
     if (s.jobs != jobs) {
         // The previous table's steps will never be stepped against these
         // hooks again: finish them (a bound waiter is answered, none hangs).
-        FinishSteps(MakeError("play.step", "host.unavailable", "the step's host session ended",
-                              "retry once the host is armed again"),
+        // play.stopped (exit 6), not host.unavailable (exit 5): ticks may
+        // already have run, and the client retries exit 5.
+        FinishSteps(StepsStopped("the step's host session ended before the requested steps ran"),
                     JobState::Cancelled);
     }
     s.jobs = jobs;
@@ -426,7 +448,8 @@ void RegisterPlayCommands(JobTable* jobs)
                           Astra::GetMeta<PlayNoArgs>()));
     RegisterOnce(PlayDesc("play.resume", "Resume the simulation (also starts a host held at frame 0)", &PlayResume,
                           Astra::GetMeta<PlayNoArgs>()));
-    RegisterOnce(PlayDesc("play.step", "Advance the simulation by N fixed ticks; completes when host.frame moved N",
+    RegisterOnce(PlayDesc("play.step", "Advance the simulation N sim advances; completes when host.frame moved N "
+                          "(a fixed tick, or one loop pass on a running windowed runtime)",
                           &PlayStep, Astra::GetMeta<PlayStepArgs>(), ExecThread::Job));
 }
 

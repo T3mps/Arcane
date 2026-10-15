@@ -1489,6 +1489,33 @@ namespace Arcane::Editor
     // Phase 7: sim advance. The plugin's UpdateAll runs HERE, before the
     // pre-submit camera push below -- that ordering is what lets the editor
     // camera override a plugin that pushes its own every frame (Sandbox does).
+    // THE ONE PLAY/EDIT FLIP RULE (EditorApp.hpp). Before an Edit -> Play
+    // attempt: document gestures flush while still in Edit (s3.3b).
+    void EditorApp::BeforePlayStart()
+    {
+        m_documents.FlushGestures();
+    }
+
+    // After any Play or Stop call: the follow-ups PlanPlayFlip names for the
+    // flip that actually happened, then the re-derivation sec 1's rule
+    // requires of every mid-frame flip site. The epoch also bumps when the
+    // edit binding is stale (a flip earlier this frame that did not come
+    // through here), which is the toolbar site's original test.
+    void EditorApp::AfterPlayFlip(bool wasPlaying)
+    {
+        const bool nowPlaying = InPlayMode();
+        const Arcane::Editor::PlayFlipFollowUps f = Arcane::Editor::PlanPlayFlip(wasPlaying, nowPlaying);
+        if (f.stopServerProcess)
+            m_serverProcess.Stop();   // Stop is the end of the whole session, including the child process
+        if (f.settingsWorldCreated)
+            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
+        if (f.clearPlayRefusal)
+            Arcane::Diagnostics::Clear("editor:play");   // the toolbar publishes a refused Play there
+        if (f.sceneReplaced || m_editBinding.editMode == nowPlaying)
+            NoteSceneReplaced();
+        m_editBinding.editMode = !nowPlaying;
+    }
+
     void EditorApp::AdvanceSim(LoopState& ls)
     {
         // Sim advance through the RunLoop with the plugin callbacks interleaved.
@@ -1917,11 +1944,10 @@ namespace Arcane::Editor
         // same PlaySession and RunLoop the toolbar transport does
         // (DrawSimTimeToolbar), main thread inside Drain, user = this. The
         // loop is re-fetched per call (Stop's RestoreRegistry replaces it).
-        // Drain runs before this frame's play/edit re-derivation
-        // (m_editBinding.editMode), so a remote flip is followed by that same
-        // re-derivation; the flip's other follow-ups (NextWorld settings on
-        // Play, the scene epoch both ways, the separate server process on
-        // Stop) are the toolbar site's, repeated here.
+        // Play and Stop run the one flip rule the toolbar runs
+        // (BeforePlayStart / AfterPlayFlip, EditorApp.hpp), so a remote flip
+        // gets the same follow-ups, including the edit binding re-derivation
+        // and the "editor:play" retraction on a successful Play.
         rc.play.editor     = true;
         rc.play.undoReason = "play-mode";
         rc.play.editorUser = this;
@@ -1932,15 +1958,10 @@ namespace Arcane::Editor
                 return false;
             const bool wasPlaying = app->InPlayMode();
             if (!wasPlaying)
-                app->m_documents.FlushGestures();   // the toolbar's beforePlay (s3.3b)
-            if (!app->m_play.Play(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr, *topo))
-                return false;
-            if (!wasPlaying)
-            {
-                Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
-                app->NoteSceneReplaced();
-            }
-            return true;
+                app->BeforePlayStart();
+            const bool ok = app->m_play.Play(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr, *topo);
+            app->AfterPlayFlip(wasPlaying);   // the one flip rule, shared with the toolbar
+            return ok;
         };
         rc.play.editorStop = [](void* user) -> bool {
             auto* app = static_cast<EditorApp*>(user);
@@ -1948,12 +1969,11 @@ namespace Arcane::Editor
                 return false;
             const bool wasPlaying = app->InPlayMode();
             const bool ok = app->m_play.Stop(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr);
-            if (wasPlaying && !app->InPlayMode())
-            {
-                app->m_serverProcess.Stop();   // the session's other half; a no-op otherwise
-                app->NoteSceneReplaced();
-            }
+            app->AfterPlayFlip(wasPlaying);   // the one flip rule, shared with the toolbar
             return ok;
+        };
+        rc.play.editorTopology = [](void* user) -> std::string_view {
+            return Arcane::Editor::PlayTopologyRemoteName(static_cast<const EditorApp*>(user)->m_play.Topology());
         };
         rc.play.editorSetPaused = [](bool paused, void* user) {
             auto* app = static_cast<EditorApp*>(user);
@@ -2709,7 +2729,7 @@ namespace Arcane::Editor
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, playMode,
                                                ToolbarLogoTextureId(), stripStatus,
-                                               [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+                                               [this]() { BeforePlayStart(); });   // T1-B14's beforePlay (s3.3b)
         if (playMode != publishedPlayMode)
             Arcane::Editor::SetPlayLaunchMode(playMode);
         if (toolbar.launchStandalone)
@@ -2731,26 +2751,15 @@ namespace Arcane::Editor
             m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
             Arcane::Editor::SelectDockTab("Problems");
         }
-        // Stop is the end of the whole session, including the child process.
-        // A no-op on every topology that never spawned one.
-        if (wasPlaying && !InPlayMode())
-            m_serverProcess.Stop();
-        if (!wasPlaying && InPlayMode())
-            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
-        // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
-        // (sec 1's rule): re-derive so this frame's consume blocks and panels see
-        // the true state, not last frame's.
-        //
-        // A FLIP HERE ALSO REPLACES THE SCENE: both PlaySession::Play and
-        // ::Stop go through Runtime::Snapshot/RestoreRegistry, which destroys
-        // and replaces the registry OBJECT -- so a click-pick in flight names
-        // entities of a registry that no longer exists. Noted here rather than
-        // inside PlaySession because
-        // this is the ONE site that can flip the mode, and because the same
-        // line already exists to say exactly that.
-        if (m_editBinding.editMode == InPlayMode())
-            NoteSceneReplaced();
-        m_editBinding.editMode = !InPlayMode();
+        // The toolbar's Play/Stop click flips the mode mid-frame (sec 1's
+        // rule), so the shared flip follow-ups run here: the separate server
+        // process on Stop, NextWorld settings and the "editor:play" Problems
+        // retraction on Play, the scene epoch (both PlaySession::Play and
+        // ::Stop go through Runtime::Snapshot/RestoreRegistry, which replaces
+        // the registry OBJECT a click-pick in flight names) and the edit
+        // binding re-derivation, so this frame's consume blocks and panels see
+        // the true state. One rule with servitor play/stop (AfterPlayFlip).
+        AfterPlayFlip(wasPlaying);
         // ALWAYS consume the flag: on a Reset Layout frame a pending flag
         // would otherwise survive into the next frame and split the freshly
         // built default layout's browser node a second time.
@@ -3985,9 +3994,11 @@ namespace Arcane::Editor
                     // ClearSceneReferences, Exit ends the process, and a parked
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
-                    if (InPlayMode())
+                    const bool wasPlaying = InPlayMode();
+                    if (wasPlaying)
                         m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
-                    m_serverProcess.Stop();   // the session's other half; no-op otherwise
+                    AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
+                    m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
                     if (m_scene.Path().empty())
                     {
                         // Never saved: this needs a filename first. The intent

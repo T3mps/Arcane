@@ -70,7 +70,8 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"stop", "Leave play mode (editor), or hold the simulation (runtime, server)", "drive"},
     {"pause", "Pause the simulation", "drive"},
     {"resume", "Resume the simulation (also starts a host held at frame 0)", "drive"},
-    {"step", "Advance the simulation by N fixed ticks; returns when host.frame moved N", "drive"},
+    {"step", "Advance the simulation until host.frame moved N (fixed ticks; loop passes on a running windowed runtime)",
+     "drive"},
 };
 
 // One row of the manifest's exit table (spec s6.6 + AM1/AM6/AM8, rev 8.3 V7/V8).

@@ -1442,6 +1442,19 @@ namespace Arcane::Editor
         // Bumped from the two sites above; named so both read as one decision.
         void NoteSceneReplaced() noexcept { ++m_sceneEpoch; m_deferredPick.Reset(); }
 
+        // THE ONE PLAY/EDIT FLIP RULE (Servitor P0 Task 29 fix round 1). Every
+        // site that calls PlaySession Play or Stop -- the toolbar transport,
+        // servitor play/stop, the save modal's Stop, ClearSceneReferences --
+        // runs BeforePlayStart before an Edit -> Play attempt and
+        // AfterPlayFlip(wasPlaying) after it, so their follow-ups cannot drift:
+        // the separate server process on Stop, NextWorld settings and the
+        // "editor:play" Problems retraction on Play, the scene epoch and the
+        // m_editBinding.editMode re-derivation either way (PlanPlayFlip,
+        // PlayMode.hpp). EditorAppFrame.cpp. The shutdown Stop and the boot
+        // --play-as Play stay outside it (see their own comments).
+        void BeforePlayStart();
+        void AfterPlayFlip(bool wasPlaying);
+
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the
         // resolver's Refresh (phase 9) Polls/Drains it once per frame, offering

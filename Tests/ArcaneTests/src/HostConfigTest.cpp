@@ -1257,8 +1257,10 @@ TEST_CASE("--remote's help states the held start and how to leave it", "[remote]
     const std::string_view help = Arcane::kRemoteFlagHelp;
     CHECK(help.starts_with("DEV: arm the loopback remote surface"));
     CHECK(help.find("lifts --headless's --frames requirement") != std::string_view::npos);
-    CHECK(help.find("an open-ended run starts held at frame 0; use servitor play/resume, or pass --frames N")
+    CHECK(help.find("an open-ended runtime starts held at frame 0 (use servitor play/resume, or pass --frames N)")
           != std::string_view::npos);
+    // Fix round 1 (M4): the editor has no tick gate; it opens in Edit.
+    CHECK(help.find("the editor opens in Edit (servitor play enters Play)") != std::string_view::npos);
 }
 #else
 // Dist: the remote fields and the Remote module are compiled out, so each of

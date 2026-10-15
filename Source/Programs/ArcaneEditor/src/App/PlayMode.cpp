@@ -195,6 +195,28 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    std::string_view PlayTopologyRemoteName(PlayTopology topology)
+    {
+        switch (topology)
+        {
+            case PlayTopology::Standalone:     return "standalone";
+            case PlayTopology::ListenServer:   return "listen";
+            case PlayTopology::EmbeddedServer: return "client+server";
+            case PlayTopology::ClientOnly:     return "client";
+        }
+        return "standalone";
+    }
+
+    PlayFlipFollowUps PlanPlayFlip(bool wasPlaying, bool nowPlaying)
+    {
+        PlayFlipFollowUps f;
+        f.stopServerProcess    = wasPlaying && !nowPlaying;
+        f.settingsWorldCreated = !wasPlaying && nowPlaying;
+        f.clearPlayRefusal     = !wasPlaying && nowPlaying;
+        f.sceneReplaced        = wasPlaying != nowPlaying;
+        return f;
+    }
+
     bool CountsAsSimAdvance(bool playing, const Arcane::RunLoop& loop)
     {
         return playing && (!loop.IsPaused() || loop.SingleStepPending());

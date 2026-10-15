@@ -144,6 +144,21 @@ namespace Arcane::Editor
     // Standalone, listen -> ListenServer, client+server -> EmbeddedServer.
     // ClientOnly has no remote spelling in P0. nullopt for anything else.
     [[nodiscard]] std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling);
+    // The running topology as servitor reports it: the three spellings above,
+    // and "client" for ClientOnly (reported, never accepted as input in P0).
+    [[nodiscard]] std::string_view PlayTopologyRemoteName(PlayTopology topology);
+
+    // What follows a Play/Edit flip, wherever it happened: the toolbar, servitor
+    // play/stop, or a scene/save Stop (Task 29 fix round 1: one rule, so the
+    // sites cannot drift). EditorApp::AfterPlayFlip applies it.
+    struct PlayFlipFollowUps
+    {
+        bool stopServerProcess    = false;   // Play -> Edit: the separate server process is the session's other half
+        bool settingsWorldCreated = false;   // Edit -> Play: NextWorld settings apply with the new world (spec s6.5)
+        bool clearPlayRefusal     = false;   // Edit -> Play: retract the "editor:play" Problems row a refused Play left
+        bool sceneReplaced        = false;   // either way: Play and Stop swap the registry OBJECT (scene epoch)
+    };
+    [[nodiscard]] PlayFlipFollowUps PlanPlayFlip(bool wasPlaying, bool nowPlaying);
 
     // Whether this frame's RunLoop::Advance is a sim advance the remote
     // surface counts in host.frame (Task 29, ruling A; AM1): playing, and

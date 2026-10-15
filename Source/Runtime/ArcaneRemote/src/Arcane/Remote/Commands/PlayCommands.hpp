@@ -11,7 +11,9 @@
 // editor program installs (R8-2: this module includes no editor header).
 //
 // play.step N is a frame-spanning job (s7.7, 0.12): the command arms one job
-// and returns. It never calls Advance, AdvanceSim or RequestSingleStep itself.
+// and returns. N counts host.frame, the host's sim advances (AM1): one per
+// fixed tick on a server, a headless runtime or a step, and one per loop pass
+// on a windowed runtime that is running. It never calls Advance, AdvanceSim or RequestSingleStep itself.
 // Runtime and server: the command requests N gate steps and the host loop's
 // Consume performs one Advance per iteration. Editor: each job step (one per
 // Drain) requests one single step until the frame delta reaches N. The job
@@ -48,6 +50,12 @@ struct PlayHooks {
     // play.not-playing when it returns false, and a running step ends
     // play.stopped when Play ends under it. Null: not checked.
     bool (*editorPlaying)(void*) = nullptr;
+    // Task 29 fix round 1: the running Play session's topology in the CLI
+    // spelling (PlaySession::Topology; "client" for ClientOnly). Read only
+    // while editorPlaying is true: play.start on a playing editor answers the
+    // ACTUAL topology, and an explicit different one is play.refused with
+    // detail.running. Null: play.start always calls editorPlay.
+    std::string_view (*editorTopology)(void*) = nullptr;
 };
 
 // The CLI spellings of play.start's topology (spec s7.3): standalone (the
@@ -59,6 +67,7 @@ ARC_REMOTE_API bool IsPlayTopology(std::string_view topology);
 // host.unavailable (exit 5) without dereferencing it (ruling S3-9).
 // RegisterPlayCommands with a different table (nullptr included) finishes
 // every play.step job still running in the previous one (Cancelled,
+// play.stopped, exit 6: ticks may already have run, so never the retryable
 // host.unavailable), so no waiter is left parked on a table nobody steps.
 ARC_REMOTE_API void SetPlayHooks(PlayHooks hooks);
 ARC_REMOTE_API void SetPlayGate(HostGate* gate);       // the gate play.step reads its arm-time frame from

@@ -477,7 +477,7 @@ TEST_CASE("an editor in Edit refuses pause, resume and step, and a refused Play 
     CHECK(row->envelope.errors[0].code == "play.stopped");
 }
 
-TEST_CASE("play commands answer host.unavailable unarmed, and a new table cancels a running step", "[remote][play]") {
+TEST_CASE("play commands answer host.unavailable unarmed, and a new table ends a running step play.stopped", "[remote][play]") {
     Arcane::Remote::TickGate tick;
     tick.SetRunning(false);
     tick.SetPaused(true);
@@ -500,7 +500,12 @@ TEST_CASE("play commands answer host.unavailable unarmed, and a new table cancel
         Arcane::Remote::RegisterPlayCommands(&other);   // a later call replaces the table (ruling F11)
         Arcane::Remote::CommandResult out;
         REQUIRE(queue.TryTake(3, out));   // the step was finished, its call answered
-        CHECK(out.envelope.errors[0].code == "host.unavailable");
+        // Fix round 1 (M5): ticks may already have run, so the answer is
+        // play.stopped (exit 6), never host.unavailable (exit 5, which the
+        // client retries and would step again).
+        REQUIRE_FALSE(out.envelope.errors.empty());
+        CHECK(out.envelope.errors[0].code == "play.stopped");
+        CHECK(Arcane::Remote::ExitFromHost(out.envelope) == 6);
         CHECK(jobs.Find(Arcane::Remote::JobId{armed.completesJob})->state == Arcane::Remote::JobState::Cancelled);
         Arcane::Remote::RegisterPlayCommands(&jobs);    // back before `other` goes out of scope
         tick.ClearSteps();
@@ -596,6 +601,92 @@ TEST_CASE("a held runtime session starts held and play.start through its wiring 
     REQUIRE_FALSE(after.errors.empty());
     CHECK(after.errors[0].code == "host.unavailable");
     std::filesystem::remove_all(root);
+}
+
+namespace {
+
+std::string g_runningTopology = "standalone";
+int g_editorPlayCalls = 0;
+bool EditorPlayCounts(void*, std::string_view) { ++g_editorPlayCalls; return true; }
+std::string_view EditorRunningTopology(void*) { return g_runningTopology; }
+
+} // namespace
+
+// Fix round 1 (I2): an editor already in Play answers its ACTUAL topology and
+// refuses an explicit different one; PlaySession::Play is never re-called.
+TEST_CASE("play.start on a playing editor reports the running topology and refuses a different one", "[remote][play]") {
+    g_editorPlaying = true;
+    g_runningTopology = "standalone";
+    g_editorPlayCalls = 0;
+    Arcane::Remote::PlayHooks hooks;
+    hooks.editor = true;
+    hooks.editorPlay = &EditorPlayCounts;
+    hooks.editorPlaying = &EditorIsPlaying;
+    hooks.editorTopology = &EditorRunningTopology;
+    hooks.undoReason = "play-mode";
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::HostGate gate;
+    RemotePlayScope play(hooks, jobs, &gate);
+
+    const auto differs = InvokePlay("play.start", {{"topology", "listen"}}).envelope;
+    REQUIRE_FALSE(differs.errors.empty());
+    CHECK(differs.errors[0].code == "play.refused");
+    CHECK(Arcane::Remote::ExitFromHost(differs) == 6);
+    CHECK(differs.errors[0].detail.at("running") == "standalone");
+    CHECK(g_editorPlayCalls == 0);
+
+    for (const nlohmann::json& args : {nlohmann::json::object(), nlohmann::json{{"topology", "standalone"}}}) {
+        INFO(args.dump());
+        const auto same = InvokePlay("play.start", args).envelope;
+        CHECK(same.ok);
+        CHECK(same.data.at("topology") == "standalone");   // the running one, not a default or a request
+        CHECK(same.data.at("alreadyPlaying") == true);
+    }
+    g_runningTopology = "client+server";
+    const auto implicit = InvokePlay("play.start").envelope;   // no --topology: "standalone" is only the default
+    CHECK(implicit.ok);
+    CHECK(implicit.data.at("topology") == "client+server");
+    CHECK(g_editorPlayCalls == 0);
+
+    // In Edit, Play runs and the answer names what the session started.
+    g_editorPlaying = false;
+    g_runningTopology = "listen";
+    const auto started = InvokePlay("play.start", {{"topology", "listen"}}).envelope;
+    CHECK(started.ok);
+    CHECK(g_editorPlayCalls == 1);
+    CHECK(started.data.at("topology") == "listen");
+    CHECK_FALSE(started.data.contains("alreadyPlaying"));
+}
+
+// Fix round 1 (I1): the one flip rule every editor Play/Stop site runs
+// (EditorApp::AfterPlayFlip applies it; the toolbar, servitor play/stop, the
+// save modal and ClearSceneReferences all call that). Without the shared rule
+// a remote Play left the toolbar's "editor:play" row standing.
+TEST_CASE("the editor's flip rule names the same follow-ups for every Play and Stop site", "[remote][play][editor]") {
+    const auto play = Arcane::Editor::PlanPlayFlip(false, true);
+    CHECK(play.settingsWorldCreated);
+    CHECK(play.clearPlayRefusal);   // a successful Play retracts "editor:play", from the toolbar or servitor
+    CHECK(play.sceneReplaced);
+    CHECK_FALSE(play.stopServerProcess);
+    const auto stop = Arcane::Editor::PlanPlayFlip(true, false);
+    CHECK(stop.stopServerProcess);
+    CHECK(stop.sceneReplaced);
+    CHECK_FALSE(stop.settingsWorldCreated);
+    CHECK_FALSE(stop.clearPlayRefusal);
+    for (const bool mode : {false, true}) {   // a refused Play, or a Play/Stop no-op: nothing follows
+        const auto none = Arcane::Editor::PlanPlayFlip(mode, mode);
+        CHECK_FALSE(none.stopServerProcess);
+        CHECK_FALSE(none.settingsWorldCreated);
+        CHECK_FALSE(none.clearPlayRefusal);
+        CHECK_FALSE(none.sceneReplaced);
+    }
+    using Topo = Arcane::Editor::PlayTopology;
+    for (const Topo t : {Topo::Standalone, Topo::ListenServer, Topo::EmbeddedServer}) {
+        const std::string_view name = Arcane::Editor::PlayTopologyRemoteName(t);
+        CHECK(Arcane::Editor::PlayTopologyFromRemote(name) == t);   // the reported name round-trips
+    }
+    CHECK(Arcane::Editor::PlayTopologyRemoteName(Topo::ClientOnly) == "client");
+    CHECK_FALSE(Arcane::Remote::IsPlayTopology("client"));   // reported, never accepted in P0
 }
 
 TEST_CASE("servitor play, stop, pause, resume and step build their play.* calls", "[servitor][client]") {

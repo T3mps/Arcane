@@ -204,15 +204,16 @@ const std::array<VerbRow, 34> kVerbs = {{
     // Task 29. Drive commands (the host's read-only gate and audit apply; --all
     // needs --yes). An editor enters / leaves Play; a runtime or server runs or
     // holds its sim (an open-ended --remote run starts held at frame 0). step N
-    // is a job: it returns once host.frame has moved N sim ticks, so a large N
-    // needs a --timeout to match.
+    // is a job: it returns once host.frame has moved N (sim ticks; loop passes
+    // on a running windowed runtime, AM1), so a large N needs a --timeout to match.
     {"play", "play.start", &PlayArgs, nullptr, kPlayFlags, false, nullptr,
      "[--topology standalone|listen|client+server]   (--topology: editor only)"},
     {"stop", "play.stop", nullptr, nullptr},
     {"pause", "play.pause", nullptr, nullptr},
     {"resume", "play.resume", nullptr, nullptr},
     {"step", "play.step", &StepArgs, nullptr, {}, false, nullptr,
-     "[N]   (1 to 100000 fixed ticks, default 1; returns when host.frame moved N)"},
+     "[N]   (1 to 100000, default 1; returns when host.frame moved N: a fixed tick each, "
+     "or one loop pass each on a running windowed runtime)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -489,8 +490,8 @@ bool PlayArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
     return true;
 }
 
-// step [N] -> {} or {n}. N is a whole number; the host owns the 1..100000
-// range (arg.inapplicable, exit 2).
+// step [N] -> {} or {n}. N is a whole number of host.frame advances; the
+// host owns the 1..100000 range (arg.inapplicable, exit 2).
 bool StepArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
 {
     VerbTokens tokens;
@@ -505,7 +506,7 @@ bool StepArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
     const bool digits = !n.empty() && n.size() <= 9 &&
                         std::all_of(n.begin(), n.end(), [](char c) { return c >= '0' && c <= '9'; });
     if (!digits)
-        return Fail(error, "step needs a whole number of ticks N (1 to 100000), got '" + n + "'");
+        return Fail(error, "step needs a whole number N (1 to 100000), got '" + n + "'");
     out["n"] = std::stoul(n);
     return true;
 }
