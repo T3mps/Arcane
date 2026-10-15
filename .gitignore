@@ -4,8 +4,14 @@
 # =============================================================================
 
 # -- Build output --------------------------------------------------------------
-# All compiled output lands in bin/ and bin-int/ by premake5 convention.
+# The engine's compiled output: Binaries/<cfg>-<sys>-<arch>-md|mono/ and
+# Intermediate/Build/ (Intermediate/ is ignored below). Vendored ThirdParty
+# libraries still build into their own bin/ + bin-int/ (and a pre-rename
+# checkout keeps its old root bin/ + bin-int/).
+/Binaries/
 bin/
+# ...but not a Rust crate's src/bin/ (the arcrelease CLI)
+!ArcaneHub/crates/arcane_release/src/bin/
 bin-int/
 
 # -- Visual Studio generated files ---------------------------------------------
@@ -55,9 +61,10 @@ ReferenceProject/*.vcxproj*
 # `arcbuild generate --action gmake|ninja|xcode4 --project ReferenceProject`
 # drops these beside the .slnx above -- derived output, same as the .slnx/
 # .vcxproj rules, and the same shapes the arcbuild-fixture block below
-# ignores. Deliberately scoped to ReferenceProject/ (and the fixture): the
-# ENGINE tree must never have Make/Ninja output generated in place, so a
-# stray root-level Makefile/build.ninja stays visible to `git status`.
+# ignores. Scoped to ReferenceProject/ (and the fixture). The ENGINE tree's
+# own gmake/ninja output is covered at the bottom of this file: since the
+# Linux port (2026-10-05) a Linux generation of the engine workspace is a
+# supported in-place build, exactly like the .vcxproj files above.
 ReferenceProject/Makefile
 ReferenceProject/*.make
 ReferenceProject/build.ninja
@@ -66,34 +73,39 @@ ReferenceProject/*.xcodeproj/
 ReferenceProject/*.xcworkspace/
 ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
+# `arcbuild package` output (engine modularization s3.3).
+ReferenceProject/Packages/
+# The engine's monolithic layout's generated workspace + project files, and the
+# vendor wrappers' monolithic project files (premake5.lua ARC_MONOLITHIC_PROJECTS).
+/Intermediate/
+/ThirdParty/*/ide-mono/
 # Task 12a: a bless run points --project at this SOURCE tree, so a harvest
 # during a bless (MaterialPreviewHarvester's thumbnailDir) would otherwise
 # drop Saved/Thumbnails/<guid>.png here.
 ReferenceProject/Saved/
 
 # -- Stray MSBuild log dirs (txt/log pairs msbuild drops beside projects) ------
-ArcaneClient/ArcaneClient/
-ArcaneCore/ArcaneCore/
-ArcaneTests/ArcaneTests/
-arcbuild/arcbuild/
+Source/*/Arcane*/Arcane*/
+Source/Programs/arc*/arc*/
+Tests/ArcaneTests/ArcaneTests/
 
 # -- arcbuild-fixture generated backend artifacts (multibackend hardening) ----
-# ArcaneTests/data/arcbuild-fixture/ is a committed, input-only Premake
+# Tests/ArcaneTests/data/arcbuild-fixture/ is a committed, input-only Premake
 # project (Fixture.arcproj, premake5.lua, Source/) -- real generation always
 # happens against a unique temp copy (the [build-generator] test, scripts/
 # verify-arcbuild-backends.ps1, verify-arcbuild-posix.sh), never here. These
 # rules only guard against an accidental in-place `premake5 <action>` run
 # leaving stray gmake/ninja/xcode4 output half-tracked; they never match the
 # three committed input files above.
-ArcaneTests/data/arcbuild-fixture/Makefile
-ArcaneTests/data/arcbuild-fixture/*.make
-ArcaneTests/data/arcbuild-fixture/build.ninja
-ArcaneTests/data/arcbuild-fixture/*.ninja
-ArcaneTests/data/arcbuild-fixture/*.xcodeproj/
-ArcaneTests/data/arcbuild-fixture/*.xcworkspace/
-ArcaneTests/data/arcbuild-fixture/Binaries/
-ArcaneTests/data/arcbuild-fixture/Intermediate/
-ArcaneTests/data/arcbuild-fixture/obj/
+Tests/ArcaneTests/data/arcbuild-fixture/Makefile
+Tests/ArcaneTests/data/arcbuild-fixture/*.make
+Tests/ArcaneTests/data/arcbuild-fixture/build.ninja
+Tests/ArcaneTests/data/arcbuild-fixture/*.ninja
+Tests/ArcaneTests/data/arcbuild-fixture/*.xcodeproj/
+Tests/ArcaneTests/data/arcbuild-fixture/*.xcworkspace/
+Tests/ArcaneTests/data/arcbuild-fixture/Binaries/
+Tests/ArcaneTests/data/arcbuild-fixture/Intermediate/
+Tests/ArcaneTests/data/arcbuild-fixture/obj/
 
 # -- vcpkg in-tree clones ------------------------------------------------------
 # vcpkg lives outside the repo at $VCPKG_ROOT; the overlay triplet
@@ -119,3 +131,34 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 *.stackdump
+
+# -- Linux DXC (scripts/fetch-dxc-linux.sh) -----------------------------------
+# The Linux shader compiler release, fetched rather than vendored.
+ThirdParty/tools/dxc-linux/
+# The Linux/macOS premake5 (scripts/fetch-premake.sh), beside the vendored .exe.
+ThirdParty/premake5/premake5
+
+# -- macOS Vulkan SDK + DXC (scripts/fetch-vulkan-sdk-macos.sh) --------------
+# MoltenVK, the loader, the validation layer and DXC, installed per machine;
+# dxc-macos/ is the wrapper + symlinks into it.
+ThirdParty/tools/vulkan-sdk-macos/
+ThirdParty/tools/dxc-macos/
+
+# -- Test reports (scripts/run-tests.sh / run-tests.ps1) ---------------------
+/test-results/
+/logs/
+
+# -- Engine gmake/ninja outputs (Linux port, 2026-10-05) ----------------------
+# `premake5 gmake` writes the root Makefile plus one <Project>.make beside each
+# project's sources (premake's project location IS the source dir, as with the
+# .vcxproj files) -- derived output, regenerated per machine.
+/Makefile
+/build.ninja
+/Source/*/*/Makefile
+/Tests/*/Makefile
+/Tests/Fixtures/*/Makefile
+/ThirdParty/*/ide-md/Makefile
+*.make
+*.ninja
+.ninja_log
+.ninja_deps

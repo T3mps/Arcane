@@ -11,24 +11,22 @@ monorepo with full filtered history; docs under `docs/` may still cite
 pre-extraction paths (`Arcane/...`, `docs/superpowers/...`, `../ThirdParty`).
 
 ```
-ArcaneCore/        # the shared engine DLL (ArcaneCore.dll): Base/Config/Jobs/
-                   #   Material/Mesh/Plugin/Project/Scene/Serialization/Sim/
-                   #   Sprite/Assets (the headless engine layer) plus Net/
-                   #   Types/Logger + shared header-only utils. Presentation-
-                   #   free; every host, tool and game module links it
-                   #   (Core-DLL split, 2026-09-15). Namespaced include root
-                   #   ArcaneCore/src/Arcane -> #include <Arcane/...>. ZERO
+Source/<Type>/<Module>/  # the engine as module DLLs, one <Module>.arcmodule
+                   #   descriptor each (build/modules.lua reads them):
+                   #   Runtime/ (Core, Net, Crypto, Assets, Scene, Physics2D,
+                   #   Sim, Engine -- every host, servers included), Client/
+                   #   (Window, Input, Audio, Render, ImGui, Client), Developer/
+                   #   (AssetPipeline, Verify), Editor/ (Edit). Include roots
+                   #   Source/<Type>/<Module>/src -> #include <Arcane/...>. ZERO
                    #   game references -- keep it that way.
-ArcaneClient/      # the engine DLL: Base/Platform/Render/Host (SDL3, NRI on
-                   #   D3D12+Vulkan, Batcher2D, ACES tonemap, MSDF text, Assets,
-                   #   ImGui, enkiTS jobs, Astra ECS runtime, scene save/load,
-                   #   plugin host)
-ArcaneRuntime/     # standalone runtime host: opens an .arcproj, runs its game
-                   #   module; --frames N = scripted GPU-verify; F5/F6 hot reload
-ArcaneEditor/      # the ImGui-on-NRI editor host (namespace Arcane::Editor)
+Source/Programs/   # ArcaneRuntime (standalone runtime host; --frames N =
+                   #   scripted GPU-verify), ArcaneEditor (the ImGui-on-NRI
+                   #   editor host, namespace Arcane::Editor), ArcaneServer
+                   #   (headless host), ArcaneCrashReporter, arcbuild, arccook
 ArcaneHub/         # Tauri launcher (Rust): .arcproj association + recents
-ArcaneServer/      # server-side engine tooling (scaffold)
-ArcaneTests/       # Catch2 suite + HotReloadPluginV1/V2/Bad fixture DLLs
+ArcaneHub/crates/arcane_release/  # releases.json: schema, signing, verification, archives; `arcrelease` CLI (docs/releasing.md)
+Tests/             # ArcaneTests (Catch2 suite + data) and Fixtures/ (hot-reload
+                   #   plugin DLLs, process/death fixtures, game-module fixtures)
 ReferenceProject/  # in-repo sample game, built like an EXTERNAL project via the
                    #   SDK (build/arcane.lua) -> Binaries/ReferenceGame.dll
 ThirdParty/        # vendored deps (see NOTICE.md); premake5 + dxc binaries
@@ -36,7 +34,7 @@ build/arcane.lua   # the SDK premake module external games consume (ARCANE_SDK)
 data/              # shaders (HLSL sources -> compiled into data/shaders/generated/),
                    #   fonts, EngineConfig
 docs/              # specs, plans, audits (engine copy of the monorepo docs)
-vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset) for SDL3
+vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset; SDL3 as SDL3.dll)
 ```
 
 ## Build
@@ -45,8 +43,8 @@ vcpkg-triplets/    # x64-windows-static-md overlay triplet (v143 toolset) for SD
 scripts\setup-vcpkg-deps.bat   # once: SDL3 via the overlay triplet (VCPKG_ROOT required)
 GenerateProjects.bat            # premake5 -> Arcane.slnx
 msbuild Arcane.slnx /p:Configuration=Debug /m
-bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe             # run FROM the exe dir
-bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 180
+Binaries\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe             # run FROM the exe dir
+Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject --frames 180
 ```
 
 - Re-run `GenerateProjects.bat` whenever `premake5.lua`, any
@@ -81,11 +79,11 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   backbuffer. `kPxRange`/`kAtlasSize` are mirrored constants between
   `msdf.hlsl` and `TextSystem.cpp`.
 - **One TU per module owns the Vulkan-Hpp dynamic dispatcher storage** --
-  `ArcaneClient/src/Arcane/Render/VulkanDispatchStorage.cpp`. Projects define
+  `Source/Client/ArcaneRender/src/Arcane/Render/VulkanDispatchStorage.cpp`. Projects define
   `NDEBUG` in Release; vulkan.hpp's dispatcher layout is NDEBUG-conditional
   and must match the NRI static lib.
 - **ABI bumps are cheap** during engine dev -- never weaken a design to avoid
-  a `kGamePluginABIVersion` bump (`ArcaneClient/src/Arcane/Plugin/PluginABI.hpp`).
+  a `kGamePluginABIVersion` bump (`Source/Runtime/ArcaneCore/src/Arcane/Core/AbiVersion.hpp`; history in `Source/Runtime/ArcaneEngine/src/Arcane/Plugin/PluginABI.hpp`).
 - The 2D physics engine is **Manifold2D** (github.com/T3mps/Manifold2D),
   vendored at `ThirdParty/Manifold2D` (source-only sync: `include/`+`src/`;
   the vendored `premake5.lua` is THIS repo's consumer wrapper -- never
@@ -117,12 +115,15 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   plan 2's `MeshCullNode` is the tenth.
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
-  engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it
+  engine-owned world. Do not teach `Arcane::PhysicsSystem2D` to write 3D poses (it
   flattens out-of-plane rotation on purpose). Manifold3D is later and
   treats Box3D as the oracle -- Box3D already *is* Rubikon-Lite + Box2D.
   Binding: `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`.
 - The ECS is **Astra**, vendored at `ThirdParty/Astra` -- keep it current
-  with the standalone repo (commit there first, then sync).
+  with the standalone repo (commit there first, then
+  `scripts/sync-vendor.ps1 -Library Astra`; `scripts/sync-astra.ps1` is a
+  shim that calls that). Manifold2D and Mosaic use the same script
+  (`-Library Manifold2D`, `-Library Mosaic`).
 - **3D visual target is Deadlock / Source 2 the renderer, not Unreal.**
   Feature contract: `docs/research/2026-08-12-deadlock-render-target.md`.
   Ceiling, sequencing, and "weeks not department-years": the 2026-09-14
@@ -154,6 +155,9 @@ suite including `[gpu]`, golden-gate, `--frames 180`). **The job itself is
 not created by checking in this file** -- stand it up once per
 `ci/README.md` (Script Console: `ci/create-arcane-job.groovy`). GitHub
 Actions (`.github/workflows/ci.yml`) is the hosted `~[gpu]` lane only.
+Run the CI legs locally before pushing with `scripts\ci\local.ps1` (Windows
+natively, Linux in the CI image; one-time `scripts\ci\setup-desk.ps1`). The
+build steps live in `scripts/ci/build.{sh,ps1}`, not in the workflow YAML.
 
 ## Tests
 
@@ -197,25 +201,46 @@ a CLI client to an in-host listener, designed with the cvar/console build.
 ## Engine-as-SDK
 
 External projects set `ARCANE_SDK` to this repo root and consume
-`build/arcane.lua` (see README). The include surface is
-`$ARCANE_SDK/ArcaneClient/src` + `$ARCANE_SDK/ArcaneCore/src` + header-only
-ThirdParty; the import lib is
-`$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/ArcaneClient/ArcaneClient.lib`. The
+`build/arcane.lua` (see README). A game declares its engine modules in
+`<sourceDir>/<Game>.arcmodule` (type `Game`, Runtime/Client deps only;
+absent = the default set, `ARC_GAME_DEFAULT_MODULES` in `build/modules.lua`)
+and `arcane_game_module` links/includes only that closure; a non-game
+consumer (Aphelyon's Server) uses `arcane_module_consumer { ... }` +
+`arcane_stage_modules { ... }`. The include
+surface is each linked module's `$ARCANE_SDK/Source/<Type>/<Module>/src` +
+its public header-only ThirdParty; the import libs are
+`$ARCANE_SDK/Binaries/<cfg>-windows-x86_64-md/<Module>/<Module>.lib`.
+**Monolithic layout** (`premake5 --layout=monolithic`, engine modularization
+s3): Runtime + Client modules and `ArcaneRuntimeHost` (the standalone host's
+body, `Source/Programs/ArcaneRuntimeHost/`; `ArcaneRuntime.exe` is its modular
+main) as static libs in `Binaries/<cfg>-<sys>-<arch>-mono/`, generated as
+under `Intermediate/Mono/` (gitignored; gmake names every project file
+`Makefile`, so in place the layouts would overwrite each other).
+`arcbuild package` builds it, then the project's own premake5.lua with the
+same option (`arcane_game_module` -> game StaticLib + `arcane_package_exe`:
+`<Project>.exe`, generated `Intermediate/Package/PackageMain.cpp` +
+`stage.json`, workspace in `Intermediate/Package/Workspace/`), and stages
+`Packages/<Project>-<platform>-<cfg>/` (MSBuild or Make) in Unreal's layout:
+a root launcher (`<Project>.exe` stub from `Source/Programs/ArcanePackageLauncher`,
+or a generated `<Project>.sh`) + `<Project>/Binaries/<Win64|Linux|Mac>/` (the
+game, its runtime files, engine `data/`) beside the project folder. A package
+whole-archives every module (`arc_module_package`, build/modules.lua) and
+never links ArcaneVerify (`ARC_RUNTIME_HOST_VERIFY` is modular-only). The
 editor's Build -> Rebuild Game Module spawns `arcbuild.exe` (below); it no
-longer resolves premake/msbuild itself (`ArcaneEditor/src/Project/
+longer resolves premake/msbuild itself (`Source/Programs/ArcaneEditor/src/Project/
 ModuleBuild.cpp` only composes the `arcbuild` command line and streams its
 output).
 
 ## arcbuild -- the game-project build driver
 
-`arcbuild.exe` (built to `bin/<cfg>-windows-x86_64-md/arcbuild/`, not on
+`arcbuild.exe` (built to `Binaries/<cfg>-windows-x86_64-md/arcbuild/`, not on
 PATH; a packaged layout ships it beside `ArcaneEditor.exe`, and the editor
 looks in both places; specs
 `docs/specs/2026-09-13-arcbuild-driver-design.md` +
 `docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`, both
 **Implemented**) is the one entry point that drives Premake generation plus a
 backend-native build for an SDK-built game project (Aphelyon/Gacha's `Game/`,
-this repo's own `ReferenceProject/`, or the `ArcaneTests/data/arcbuild-
+this repo's own `ReferenceProject/`, or the `Tests/ArcaneTests/data/arcbuild-
 fixture/` test fixture) -- the editor, CI, and any script call the same exe
 instead of re-implementing premake+msbuild composition three times over.
 
@@ -225,6 +250,7 @@ arcbuild build    --project <dir|.arcproj> [--config Debug|Release|Dist] [--sdk 
 arcbuild rebuild   --project <dir|.arcproj> ...
 arcbuild clean     --project <dir|.arcproj> ...
 arcbuild probe     --project <dir|.arcproj>    # slot verdict only -- no SDK needed
+arcbuild package   --project <dir|.arcproj> [--config ...] [--sdk <root>]   # one-exe build + stage (MSBuild/Make)
 ```
 
 **Backends**, one per Premake action, each with a real resolve/compose/
@@ -250,13 +276,14 @@ actions.
 generate/build/rebuild/clean produce and remove `Binaries\Fixture.dll` (the
 slot is arcbuild's own staged copy of `Intermediate/<Config>/Ninja/Binaries/`,
 because beta8's ninja module cannot run a post-build command on Windows --
-see `arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
+see `Source/Programs/arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
 plus a MinGW-w64 GCC compile of the module; the link then fails because a
 GCC object cannot resolve the MSVC-built `ArcaneCore`/`ArcaneClient` import
 libraries (C++ mangling) -- a Make-built module needs the GCC-built engine of
-the Linux port, not an arcbuild fix. Linux has never generated or built
-anything (`scripts/verify-arcbuild-posix.sh` stage 2 waits on that port;
-stage 1, the POSIX runner's compile contract, passes). Xcode's contract is
+the Linux port, not an arcbuild fix. On Linux (the port, 2026-10-05) arcbuild
+generates and builds ReferenceProject with the Make backend against the
+GCC/Clang-built engine (`Binaries/ReferenceGame.so`), and
+`scripts/verify-arcbuild-posix.sh` passes both stages. Xcode's contract is
 unit-tested everywhere but **live `xcodebuild` execution needs macOS** --
 untested on this all-Windows desk, a standing live-validation limit, not a
 gap in the design.

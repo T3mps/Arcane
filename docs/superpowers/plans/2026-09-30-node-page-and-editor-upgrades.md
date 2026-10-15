@@ -96,7 +96,7 @@ Evidence lives in `.superpowers/critique-2026-09-30/`: `editor-critique-final.md
 **Astra and ABI**
 - **Astra first (s2.2).**
   1. Commit in `D:\dev\starworks\Astra` on branch `dev`, with its own tests. Build `Astra.slnx` and run `bin\Debug-windows-x86_64\AstraTest\AstraTest.exe`.
-  2. Run `scripts\sync-astra.ps1 -DryRun`, then `scripts\sync-astra.ps1`.
+  2. Run `scripts\sync-vendor.ps1 -Library Astra -DryRun`, then `scripts\sync-vendor.ps1 -Library Astra`.
   3. Stage the changed files BY NAME plus `ThirdParty/Astra/VENDORED.txt`. Never stage the CRLF-only fan-out (`reference_astra_sync_crlf_fanout.md`).
   4. Arcane never edits `ThirdParty/Astra` directly. T1's "now" batch (s3.4) is the only Astra work in this phase.
 - **ABI bumps (s2.3).**
@@ -226,7 +226,7 @@ Paths are relative to `D:\dev\starworks\Arcane` unless rooted. A file touched by
 | `D:\dev\starworks\Astra\include\Astra\Registry\{RelationshipGraph,Registry}.hpp` | Modify (Astra `dev`) | order-preserving `RemoveParent` (`Find`, no insert); `bool SetParent(child, parent, index = npos)`; `GetChildIndex`; `ParentChanged` only on a real change; `GetInstanceId()` |
 | `D:\dev\starworks\Astra\include\Astra\Commands\CommandBuffer.hpp` | Modify (Astra `dev`) | comment: recycling never reaches 0 |
 | `D:\dev\starworks\Astra\tests\Entity\{EntityTest,EntityManagerTest,EntityManagerSerializationTest}.cpp`, `tests\Registry\{RelationshipGraphTest,RelationshipGraphSerializationTest,RegistryTest}.cpp` | Modify (Astra `dev`) | retirement, Clear, Load, order, signal and instance-id cases; `EntityVersionWrap` rewritten to the retire rule |
-| `ThirdParty/Astra/**` (changed headers by name), `ThirdParty/Astra/VENDORED.txt` | Re-vendor | `sync-astra.ps1` output |
+| `ThirdParty/Astra/**` (changed headers by name), `ThirdParty/Astra/VENDORED.txt` | Re-vendor | `sync-vendor.ps1 -Library Astra` output |
 | `ArcaneCore/src/Arcane/Plugin/PluginABI.hpp`; `ReferenceProject/ReferenceProject.arcproj`; `D:\dev\starworks\Aphelyon\Aphelyon.arcproj` | Modify | ABI 46 -> 47 + history line; restamps |
 | `ArcaneTests/src/PreviewStatusTest.cpp` | Create | precedence tables |
 | `ArcaneTests/src/{EntityOpsTest,RegistryStateCommandTest,SelectionOpsTest,CommandStackTest,EditorSceneSessionTest,EditorPlayModeTest,InputActionsEditorModelTest,MeshDocumentTest,ShaderEditorDocumentTest,VerifyReportTest,EditorWitnessTest}.cpp` | Modify | s3.1-s3.3 cases; witness E8 (new) and the E5 `not-compiled-here` assertion |
@@ -4738,7 +4738,7 @@ git commit -m "chore(abi): kGamePluginABIVersion 46 -> 47 for T1 (ICommand vtabl
 **Spec:** `docs/superpowers/specs/2026-09-30-node-page-and-editor-upgrades-design.md`. Read s2 (plan-wide rules), s3.4, s9.18/9.19/9.26-9.28, s11 T1 and s12 R7/R17/R18/R19 before T1-C1.
 
 **Chunk constraints (on top of the plan's Global Constraints):**
-- **Astra first (s2.2).** T1-C1..C6 commit in `D:\dev\starworks\Astra` on branch `dev`. Arcane never edits `ThirdParty/Astra` by hand; T1-C7 re-vendors with `scripts\sync-astra.ps1`.
+- **Astra first (s2.2).** T1-C1..C6 commit in `D:\dev\starworks\Astra` on branch `dev`. Arcane never edits `ThirdParty/Astra` by hand; T1-C7 re-vendors with `scripts\sync-vendor.ps1 -Library Astra`.
 - **Astra working copy.** It holds untracked `bench-compare/*` files that belong to the user. Stage only the files each task names. The working copy is CRLF; keep each file's existing line endings.
 - **Astra test files.** `AstraTest` globs `tests/**.cpp` (`Astra/premake5.lua:66-70`). Every new test goes into an EXISTING file, so premake is never re-run. The tests are GoogleTest, not Catch2.
 - **Astra commands** (PowerShell, from `D:\dev\starworks\Astra`):
@@ -5858,7 +5858,7 @@ git -C D:/dev/starworks/Astra commit -m "feat(registry): GetInstanceId -- a per-
 ### Task T1-C7: Re-vendor Astra into Arcane; sibling order survives a delete
 
 **Files:**
-- Modify (by `scripts\sync-astra.ps1` only): `ThirdParty/Astra/VENDORED.txt` and `ThirdParty/Astra/include/Astra/`:
+- Modify (by `scripts\sync-vendor.ps1 -Library Astra` only): `ThirdParty/Astra/VENDORED.txt` and `ThirdParty/Astra/include/Astra/`:
   - `Entity/Entity.hpp`
   - `Entity/EntityIDStack.hpp`
   - `Entity/EntityManager.hpp`
@@ -5924,14 +5924,14 @@ Expected: the new case FAILS on the first `CHECK` (`{ a, e, c, d }`) against the
 
 From `D:\dev\starworks\Arcane`:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1 -DryRun
-powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1
+powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra -DryRun
+powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra
 git diff --ignore-cr-at-eol --stat ThirdParty/Astra/
 Select-String -Path ThirdParty\Astra\VENDORED.txt -Pattern '^commit'
 git -C D:\dev\starworks\Astra rev-parse HEAD
 ```
 Expected:
-- The dry run prints `DRY RUN -- nothing written. robocopy rc=1` (rc 1 means files would copy). sync-astra.ps1 passes `/NFL` to robocopy, so the dry run lists no file names. The `--ignore-cr-at-eol` diffstat after the real sync is the per-file check.
+- The dry run prints `DRY RUN -- nothing written. robocopy rc=1` (rc 1 means files would copy). `sync-vendor.ps1 -Library Astra` lists the would-copy files on a dry run; a real copy still passes `/NFL`. The `--ignore-cr-at-eol` diffstat after the real sync is the per-file check.
 - The `--ignore-cr-at-eol` diffstat names exactly those six headers plus `VENDORED.txt`. Every other ` M` is CRLF fan-out (R19).
 - `VENDORED.txt`'s `commit` equals the Astra `HEAD` (T1-C6's commit).
 

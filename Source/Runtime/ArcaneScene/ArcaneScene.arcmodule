@@ -1,0 +1,21 @@
+{
+  "name": "ArcaneScene",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneAssets",
+      "ArcaneCore",
+      "ArcaneSim"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "glm",
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

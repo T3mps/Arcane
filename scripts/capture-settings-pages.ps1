@@ -25,7 +25,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$exeDir = Join-Path $root "bin\$Configuration-windows-x86_64-md\ArcaneEditor"
+$exeDir = Join-Path $root "Binaries\$Configuration-windows-x86_64-md\ArcaneEditor"
 $exe = Join-Path $exeDir 'ArcaneEditor.exe'
 if (-not (Test-Path $exe)) { throw "capture-settings-pages: $exe is missing -- build $Configuration first." }
 New-Item -ItemType Directory -Force $OutDir | Out-Null

@@ -1,6 +1,6 @@
 # 2D physics events — Box2D-v3 event arrays upstream, pull-model windows in Arcane
 
-**Date:** 2026-10-08 · **Status:** Spec (awaiting user review) · **Arc:** physics events + joints, spec 1 of 3 (2: Astra typed relationship edges, upstream · 3: Joint2D on typed edges + editor, incl. joint-break events) · **Follows:** 2D physics wiring (docs/specs/2026-09-11-physics-2d-wiring-design.md), settings + cvar arc (merged 4db21698) · **ABI:** game module 54 → 55
+**Date:** 2026-10-08 · **Status:** Implemented (plan docs/plans/2026-10-08-physics-2d-events-plan.md; Manifold2D 5ef1a7acdd7f2b118f40fcc93191ccbbf3962398; Arcane 5a6fb8a6d1ac88a7dea30b755fafc8b5f814c73f) · **Arc:** physics events + joints, spec 1 of 3 (2: Astra typed relationship edges, upstream · 3: Joint2D on typed edges + editor, incl. joint-break events) · **Follows:** 2D physics wiring (docs/specs/2026-09-11-physics-2d-wiring-design.md), settings + cvar arc (merged 4db21698) · **ABI:** game module 54 → 55
 
 ## 1. What this is
 

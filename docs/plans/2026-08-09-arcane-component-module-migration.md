@@ -24,7 +24,7 @@
 ### Task 1: Branch, baseline, vendor sync
 
 **Files:**
-- Modify: `ThirdParty/Astra/**` (via `scripts/sync-astra.ps1` — never hand-edit)
+- Modify: `ThirdParty/Astra/**` (via `scripts/sync-vendor.ps1 -Library Astra` — never hand-edit)
 - No other files.
 
 **Interfaces:**
@@ -46,7 +46,7 @@ Record the exact pass count. If ANY test fails: status BLOCKED, report the failu
 
 ```bat
 cd D:\dev\starworks\Gacha
-powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1
+powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra
 ```
 
 Verify: `ThirdParty/Astra/VENDORED.txt` stamps commit `f8a75a920ad07a7e06af2936948f1ffa19463804` (dev, "fix(component): hoist alignment refusal above the meta phase..."); `ThirdParty/Astra/include/Astra/Component/ComponentModule.hpp` exists; `grep -rn ReRegisterComponent ThirdParty/Astra/include/` returns zero hits.

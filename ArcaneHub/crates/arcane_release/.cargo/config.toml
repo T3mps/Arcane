@@ -1,0 +1,4 @@
+# Cargo intermediates land under Arcane/Intermediate/Build/, beside the Hub's
+# (hub-cargo) and premake's objdirs (the modularization rename of bin-int/).
+[build]
+target-dir = "../../../Intermediate/Build/release-cargo"

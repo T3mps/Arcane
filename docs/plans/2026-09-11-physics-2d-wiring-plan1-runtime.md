@@ -241,12 +241,12 @@ In `Detail::MakeFieldInfo`, directly after the `info.isVector = ...;` statement,
 ### Task 2: Vendor + ABI 28 (spec §9)
 
 **Files:**
-- Modify (Arcane): `ThirdParty/Astra/include/**` + `ThirdParty/Astra/VENDORED.txt` (by `scripts/sync-astra.ps1`), `ArcaneClient/src/Arcane/Plugin/PluginABI.hpp` (v28 ledger + constant, directly above `kGamePluginABIVersion`, after the v27 entry), `ReferenceProject/ReferenceProject.arcproj` (`"abi": 27` → `28`)
+- Modify (Arcane): `ThirdParty/Astra/include/**` + `ThirdParty/Astra/VENDORED.txt` (by `scripts/sync-vendor.ps1 -Library Astra`), `ArcaneClient/src/Arcane/Plugin/PluginABI.hpp` (v28 ledger + constant, directly above `kGamePluginABIVersion`, after the v27 entry), `ReferenceProject/ReferenceProject.arcproj` (`"abi": 27` → `28`)
 - Test: `ArcaneTests/src/VendorSmokeTest.cpp` (one new `[vendor][astra]` case)
 
 **Interfaces:** Consumes Task 1's accessors. Produces: the vendored `FieldInfo` every later task compiles against; ABI 28.
 
-- [ ] **Step 1: Sync.** `cd D:\dev\starworks\Arcane && powershell -ExecutionPolicy Bypass -File scripts\sync-astra.ps1 -DryRun` (review — expect `FieldInfo.hpp` changed; ~63 false CRLF "modified" are the known fan-out, verify with `git diff --stat --ignore-cr-at-eol` that only `FieldInfo.hpp` + `VENDORED.txt` carry content), then without `-DryRun`. `VENDORED.txt` must record `branch : dev` and Task 1's SHA. Then `GenerateProjects.bat`.
+- [ ] **Step 1: Sync.** `cd D:\dev\starworks\Arcane && powershell -ExecutionPolicy Bypass -File scripts\sync-vendor.ps1 -Library Astra -DryRun` (review — expect `FieldInfo.hpp` changed; ~63 false CRLF "modified" are the known fan-out, verify with `git diff --stat --ignore-cr-at-eol` that only `FieldInfo.hpp` + `VENDORED.txt` carry content), then without `-DryRun`. `VENDORED.txt` must record `branch : dev` and Task 1's SHA. Then `GenerateProjects.bat`.
 - [ ] **Step 2: The smoke case** — append to `ArcaneTests/src/VendorSmokeTest.cpp` (it already includes `<Astra/Reflection/Reflection.hpp>`? check; add if not):
 
 ```cpp

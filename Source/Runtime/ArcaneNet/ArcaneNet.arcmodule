@@ -1,0 +1,17 @@
+{
+  "name": "ArcaneNet",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "nlohmann"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

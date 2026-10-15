@@ -1,0 +1,41 @@
+[package]
+name = "arcane_release"
+version = "0.1.0"
+description = "Arcane release manifest: schema, operations, signing, verification and archives (CI and the Hub)"
+authors = ["Starworks"]
+edition = "2021"
+publish = false
+
+[features]
+default = ["tools"]
+# CI-only: signing, archives and the arcrelease CLI. The Hub (phase 3) depends
+# on this crate with default-features = false: verification and manifest.txt
+# checks only.
+tools = ["dep:minisign", "dep:clap", "dep:anyhow", "dep:zip", "dep:tar", "dep:flate2"]
+
+[[bin]]
+name = "arcrelease"
+path = "src/bin/arcrelease.rs"
+required-features = ["tools"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: the manifest's bytes are what is signed; a stable field order
+# keeps a re-serialized manifest byte-identical (the goldens depend on it).
+serde_json = { version = "1", features = ["preserve_order"] }
+semver = "1"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+thiserror = "2"
+minisign-verify = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+walkdir = "2"
+minisign = { version = "=0.7.9", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { version = "1", optional = true }
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+tar = { version = "0.4", optional = true }
+flate2 = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

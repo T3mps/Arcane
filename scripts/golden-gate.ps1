@@ -37,7 +37,7 @@
 #   ArcaneEditor  --backend vulkan  --compare editor-material-page  --open-asset <materials/reference_mesh.arcmat>
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
-# EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
+# EXIT CODE ALONE (Source/Programs/ArcaneEditor/src/main.cpp's own exit-code table names the
 # collisions this works around): "compare-failed" is exit 3 for a genuine
 # mismatch but exit 4 for a bless-write I/O failure -- unreachable here since
 # this script never passes --bless, but the string is still what carries the
@@ -85,7 +85,7 @@
 #       $script:VerdictNames / $script:ReportSchemaMin / $script:ReportSchemaMax
 #       below. A missing ArcaneTests.exe FAILS the self-test rather than
 #       warning past it -- by that point this mode has already launched every
-#       lane's host out of the same bin/<Config>/ tree, so its absence means the
+#       lane's host out of the same Binaries/<Config>/ tree, so its absence means the
 #       build is incomplete, not that the check does not apply.
 #
 #       PRECONDITIONS. (1) ReferenceProject/ must be clean: this mode
@@ -127,8 +127,8 @@
 #         2. By hand, apply the exact -SelfTest edit -- MeshCube's
 #            Arcane::Transform position, first element, 0.4 -> 0.6 -- to
 #            BOTH staged scene copies, never the git-tracked source:
-#              bin\<Config>-windows-x86_64-md\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene
-#              bin\<Config>-windows-x86_64-md\ArcaneEditor\ReferenceProject\Content\scenes\main.arcscene
+#              Binaries\<Config>-windows-x86_64-md\ArcaneRuntime\ReferenceProject\Content\scenes\main.arcscene
+#              Binaries\<Config>-windows-x86_64-md\ArcaneEditor\ReferenceProject\Content\scenes\main.arcscene
 #         3. Bless three reference slots against that mutated render,
 #            running each host FROM ITS OWN EXE DIRECTORY with
 #            `--project ReferenceProject` (relative, so it resolves to the
@@ -212,7 +212,7 @@ Write-Host "=== golden-gate: $Configuration ===" -ForegroundColor Cyan
 # with an inverted one -- and every documented consumer of this gate is told to
 # assert on gatePassed in golden-gate-summary.json.
 $summaryFileName = if ($SelfTest) { 'golden-gate-selftest-summary.json' } else { 'golden-gate-summary.json' }
-$summaryPath = Join-Path $repoRoot "bin\$configDirName\$summaryFileName"
+$summaryPath = Join-Path $repoRoot "Binaries\$configDirName\$summaryFileName"
 
 # A GATE THAT REFUSES TO RUN MUST NOT LEAVE THE PREVIOUS RUN'S VERDICT ON DISK.
 # This script's own header tells consumers to assert on gatePassed and NEVER on
@@ -301,7 +301,7 @@ function Exit-GateRefusal {
 #     NotRun            -- rename a host exe aside; the preflight reports it up front
 #     Indeterminate     -- delete the lane's reference image, which makes the host
 #                          exit `compare-missing-reference`. IT MUST BE THE STAGED
-#                          COPY under bin/<config>/<host>/ReferenceProject/Verify/
+#                          COPY under Binaries/<config>/<host>/ReferenceProject/Verify/
 #                          References/, not the source tree: the hosts read the
 #                          staged references, so deleting the source alone changes
 #                          nothing. And EVERY LEVEL of the fallback chain must go:
@@ -400,7 +400,7 @@ $script:SelfTestExpect = @{}
 foreach ($c in $combos) { $script:SelfTestExpect["$($c.Host)/$($c.Backend)/$($c.Reference)"] = $c.SelfTestExpect }
 
 # THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
-# whose other half is Arcane::Verdict (ArcaneClient/src/Arcane/Host/Verdict.hpp),
+# whose other half is Arcane::Verdict (Source/Developer/ArcaneVerify/src/Arcane/Host/Verdict.hpp),
 # pinned by VerdictTest.cpp. PowerShell cannot include that header -- so the
 # [verdict] cases PUBLISH what Arcane::ToString actually produces into
 # automation-vocabulary.txt beside ArcaneTests.exe, and -SelfTest reads that
@@ -412,7 +412,7 @@ $script:VerdictNames = @(
 )
 # THE VERIFY-REPORT SCHEMA RANGE this script claims to understand -- the
 # PowerShell copy of VerifyReport::kOldestSupportedSchemaVersion and
-# kSchemaVersion (ArcaneClient/src/Arcane/Host/VerifyReport.hpp). Read at the
+# kSchemaVersion (Source/Developer/ArcaneVerify/src/Arcane/Host/VerifyReport.hpp). Read at the
 # report parse site below, so the range is a mechanism here and not only a
 # constant the header tests exercise. Pinned by -SelfTest against what the
 # engine actually publishes, exactly like $script:VerdictNames above -- these
@@ -494,7 +494,7 @@ Write-Host "-- ReferenceProject rebuilt for $Configuration --" -ForegroundColor 
 #      directory, lines 355 and 430) stage the WHOLE ReferenceProject tree --
 #      Binaries/ included -- beside each exe, and the hosts run with
 #      `--project ReferenceProject` from that exe directory, so
-#      bin/<Config>-windows-x86_64-md/<Host>/ReferenceProject/Binaries/
+#      Binaries/<Config>-windows-x86_64-md/<Host>/ReferenceProject/Binaries/
 #      ReferenceGame.dll is what actually gets LoadLibrary'd. That staged copy
 #      is refreshed only when the HOST project itself builds, so the rebuild
 #      above, on its own, leaves the precondition UNMET: measured on 2026-08-26,
@@ -608,7 +608,7 @@ if ($SelfTest) {
 # so the self-heal block can share them instead of duplicating the path.
 #
 # The two STAGED scene copies under
-# bin\<Config>-windows-x86_64-md\{ArcaneRuntime,ArcaneEditor}\ReferenceProject\Content\
+# Binaries\<Config>-windows-x86_64-md\{ArcaneRuntime,ArcaneEditor}\ReferenceProject\Content\
 # need no healing of their own: the staging loop below unconditionally
 # deletes and re-copies Content/ beside both hosts on every run, so any
 # stale staged copy is always overwritten before a single lane launches.
@@ -666,7 +666,7 @@ try {
     }
 
     foreach ($stageHost in @('ArcaneRuntime', 'ArcaneEditor')) {
-        $stagedBinaries = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Binaries"
+        $stagedBinaries = Join-Path $repoRoot "Binaries\$configDirName\$stageHost\ReferenceProject\Binaries"
         if (-not (Test-Path $stagedBinaries)) {
             New-Item -ItemType Directory -Path $stagedBinaries -Force | Out-Null
         }
@@ -706,7 +706,7 @@ try {
         #      at the top shifted every row below it and moved the editor-ui golden
         #      image by 8152 pixels, on both backends, deterministically. It cost a
         #      full desk round to find. Clearing first is what makes the claim true.
-        $stagedContent = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Content"
+        $stagedContent = Join-Path $repoRoot "Binaries\$configDirName\$stageHost\ReferenceProject\Content"
         if (Test-Path $stagedContent) {
             Remove-Item -Path $stagedContent -Recurse -Force
         }
@@ -748,7 +748,7 @@ try {
         #      narrowly for "the repo was just cloned and nothing has cooked ONCE yet", a
         #      state the postbuild cook step corrects on the very next build -- it is not
         #      a claim that an empty/missing Artifacts tree is harmless downstream.
-        $stagedArtifacts = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Intermediate\Artifacts"
+        $stagedArtifacts = Join-Path $repoRoot "Binaries\$configDirName\$stageHost\ReferenceProject\Intermediate\Artifacts"
         if (Test-Path $stagedArtifacts) {
             Remove-Item -Path $stagedArtifacts -Recurse -Force
         }
@@ -777,7 +777,7 @@ try {
         if (-not (Test-Path $sourceSeed)) {
             Exit-GateRefusal "restaging FAILED -- the committed layout seed $sourceSeed is missing; every headless editor lane pins it."
         }
-        $stagedSaved = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Saved"
+        $stagedSaved = Join-Path $repoRoot "Binaries\$configDirName\$stageHost\ReferenceProject\Saved"
         if (-not (Test-Path $stagedSaved)) {
             New-Item -ItemType Directory -Path $stagedSaved -Force | Out-Null
         }
@@ -864,7 +864,7 @@ try {
     $preflightFailures = @{}
     foreach ($combo in $combos) {
         $label = "$($combo.Host)/$($combo.Backend)/$($combo.Reference)"
-        $exeDir  = Join-Path $repoRoot "bin\$configDirName\$($combo.Host)"
+        $exeDir  = Join-Path $repoRoot "Binaries\$configDirName\$($combo.Host)"
         $exePath = Join-Path $exeDir $combo.Exe
         if (-not (Test-Path $exePath)) {
             $preflightFailures[$label] = "exe not found: $exePath"
@@ -887,7 +887,7 @@ try {
         $expectedLevel = $combo.ExpectedLevel
         $label = "$hostName/$backend/$reference"
 
-        $exeDir = Join-Path $repoRoot "bin\$configDirName\$hostName"
+        $exeDir = Join-Path $repoRoot "Binaries\$configDirName\$hostName"
         $exePath = Join-Path $exeDir $exeName
 
         Write-Host ""
@@ -1329,7 +1329,7 @@ try {
         # own verdict above -- the git restore is the one thing this block
         # must be trusted on.
         foreach ($h in @('ArcaneRuntime', 'ArcaneEditor')) {
-            $stagedRestoreDest = Join-Path $repoRoot "bin\$configDirName\$h\ReferenceProject\Content"
+            $stagedRestoreDest = Join-Path $repoRoot "Binaries\$configDirName\$h\ReferenceProject\Content"
             if (Test-Path $stagedRestoreDest) {
                 try {
                     Copy-Item -Path (Join-Path $referenceProjectDir 'Content\*') -Destination $stagedRestoreDest -Force -Recurse
@@ -1345,7 +1345,7 @@ try {
             # Artifacts block so the two never drift into opposite definitions of
             # "restored." Same tolerant shape as that block: an absent source just leaves
             # nothing to copy, never a refusal.
-            $stagedArtifactsRestoreDest = Join-Path $repoRoot "bin\$configDirName\$h\ReferenceProject\Intermediate\Artifacts"
+            $stagedArtifactsRestoreDest = Join-Path $repoRoot "Binaries\$configDirName\$h\ReferenceProject\Intermediate\Artifacts"
             $sourceArtifactsRestore = Join-Path $referenceProjectDir 'Intermediate\Artifacts'
             if ((Test-Path $stagedArtifactsRestoreDest) -and (Test-Path $sourceArtifactsRestore)) {
                 try {
@@ -1448,13 +1448,13 @@ if ($SelfTest) {
     # automation-vocabulary.txt beside the exe) and this reads it back and
     # diffs it, order included.
     $vocabOk = $true
-    $verdictProbe = Join-Path $repoRoot "bin\$configDirName\ArcaneTests\ArcaneTests.exe"
+    $verdictProbe = Join-Path $repoRoot "Binaries\$configDirName\ArcaneTests\ArcaneTests.exe"
     $probeDir     = Split-Path -Parent $verdictProbe
     $vocabFile    = Join-Path $probeDir 'automation-vocabulary.txt'
     if (-not (Test-Path $verdictProbe)) {
         # A MISSING SUITE IS A FAILURE, NOT AN EXEMPTION. By this point
         # -SelfTest has already launched every lane's host out of this same
-        # bin/$configDirName/ tree, so ArcaneTests.exe missing from it means the
+        # Binaries/$configDirName/ tree, so ArcaneTests.exe missing from it means the
         # BUILD IS INCOMPLETE -- not that the check does not apply here. This
         # used to print a yellow warning and leave $vocabOk true, so
         # "SELF-TEST PASSED" stayed reachable with the vocabulary never
@@ -1462,7 +1462,7 @@ if ($SelfTest) {
         # mode whose entire purpose is proving a check can bite.
         Write-Host ""
         Write-Host "SELF-TEST FAILED -- ArcaneTests.exe is absent at $verdictProbe, so the verdict vocabulary was NEVER cross-checked." -ForegroundColor Red
-        Write-Host "This mode already launched its hosts out of bin\$configDirName, so a missing suite there means the build is incomplete." -ForegroundColor Red
+        Write-Host "This mode already launched its hosts out of Binaries\$configDirName, so a missing suite there means the build is incomplete." -ForegroundColor Red
         Write-Host "Build first:  msbuild Arcane.slnx /p:Configuration=$Configuration /m" -ForegroundColor Yellow
         $vocabOk = $false
     } else {

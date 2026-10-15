@@ -1,0 +1,207 @@
+// InspectorMeta: the Inspector's PURE decisions -- what a field is called, what
+// category it belongs to, whether a filter matches it. No ImGui, so the whole
+// surface the user reads is pinned here rather than desk-verified.
+
+#include <catch2/catch_test_macros.hpp>
+
+#include "Panels/InspectorMeta.hpp"
+
+using namespace Arcane::Editor;
+
+TEST_CASE("DeriveDisplayName turns identifiers into words", "[editor]")
+{
+    CHECK(DeriveDisplayName("sortingLayer") == "Sorting Layer");
+    CHECK(DeriveDisplayName("orderInLayer") == "Order In Layer");
+    CHECK(DeriveDisplayName("order_in_layer") == "Order In Layer");
+    CHECK(DeriveDisplayName("size") == "Size");
+    CHECK(DeriveDisplayName("Position") == "Position");
+    CHECK(DeriveDisplayName("sourcePos") == "Source Pos");
+
+    // Acronym boundary: the run stays together and the next word splits off.
+    CHECK(DeriveDisplayName("HTTPServer") == "HTTP Server");
+    CHECK(DeriveDisplayName("useHDR") == "Use HDR");
+
+    // A digit ends a word, so a trailing number reads as its own token.
+    CHECK(DeriveDisplayName("vec2Field") == "Vec2 Field");
+
+    // Already-readable input must survive untouched rather than gain spaces.
+    CHECK(DeriveDisplayName("Already Spaced") == "Already Spaced");
+
+    // Degenerate input must not crash or produce stray spaces.
+    CHECK(DeriveDisplayName("") == "");
+    CHECK(DeriveDisplayName("_") == "");
+    CHECK(DeriveDisplayName("__a__b__") == "A B");
+}
+
+TEST_CASE("DisplayNameForComponent strips the namespace first", "[editor]")
+{
+    CHECK(DisplayNameForComponent("Arcane::SpriteRenderer") == "Sprite Renderer");
+    CHECK(DisplayNameForComponent("Arcane::Identity") == "Identity");
+    CHECK(DisplayNameForComponent("Transform") == "Transform");
+    // Nested namespaces: only the trailing type name matters.
+    CHECK(DisplayNameForComponent("A::B::PostProcess") == "Post Process");
+    CHECK(DisplayNameForComponent("") == "");
+}
+
+#include <Astra/Reflection/Reflection.hpp>
+
+#include <span>
+
+namespace
+{
+    // A throwaway reflected type carrying one of every attribute this module
+    // reads, plus a bare field, so both the present and absent paths are real
+    // rather than hand-built FieldInfo values.
+    struct MetaProbe
+    {
+        float ranged   = 0.0f;
+        int   locked   = 0;
+        int   secret   = 0;
+        float described = 0.0f;
+        int   bare     = 0;
+        float angled   = 0.0f;   // explicit AngleFormat(Radians) witness
+        int   unwritten = 0;     // Serializable(false) witness
+    };
+
+    ASTRA_REFLECT_TYPE(MetaProbe)
+        ASTRA_REFLECT_FIELD(MetaProbe, ranged)
+            ASTRA_REFLECT_ATTR(Range, 0.0, 10.0, 0.5)
+            ASTRA_REFLECT_ATTR(Category, "Bounds")
+        ASTRA_REFLECT_FIELD(MetaProbe, locked)
+            ASTRA_REFLECT_ATTR(ReadOnly)
+        ASTRA_REFLECT_FIELD(MetaProbe, secret)
+            ASTRA_REFLECT_ATTR(Hidden)
+        ASTRA_REFLECT_FIELD(MetaProbe, described)
+            ASTRA_REFLECT_ATTR(DisplayName, "Custom Label")
+            ASTRA_REFLECT_ATTR(Tooltip, "explains itself")
+        ASTRA_REFLECT_FIELD(MetaProbe, bare)
+        ASTRA_REFLECT_FIELD(MetaProbe, angled)
+            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
+        ASTRA_REFLECT_FIELD(MetaProbe, unwritten)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+    ASTRA_REFLECT_TYPE_END()
+
+    // The other half of the Arcane::Collider2D shape: a type whose ONLY reflected field
+    // is outside the serialization contract, so its Inspector section can never
+    // be anything but an empty header.
+    struct NothingDrawable
+    {
+        int hidden = 0;
+    };
+
+    ASTRA_REFLECT_TYPE(NothingDrawable)
+        ASTRA_REFLECT_FIELD(NothingDrawable, hidden)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+    ASTRA_REFLECT_TYPE_END()
+
+    const Astra::FieldInfo& ProbeField(std::string_view name)
+    {
+        const Astra::TypeMeta* meta = Astra::GetMeta<MetaProbe>();
+        REQUIRE(meta != nullptr);
+        for (const Astra::FieldInfo& f : meta->fields)
+            if (f.name == name) return f;
+        FAIL("no such field: " << std::string(name));
+        return meta->fields[0];   // unreachable; keeps the compiler happy
+    }
+}
+
+TEST_CASE("attributes are read when present", "[editor]")
+{
+    const auto range = RangeOfField(ProbeField("ranged"));
+    REQUIRE(range.has_value());
+    CHECK(range->min == 0.0);
+    CHECK(range->max == 10.0);
+    CHECK(range->step == 0.5);
+
+    CHECK(CategoryOfField(ProbeField("ranged")) == "Bounds");
+    CHECK(FieldIsReadOnly(ProbeField("locked")));
+    CHECK(FieldIsAttributeHidden(ProbeField("secret")));
+    CHECK(TooltipOfField(ProbeField("described")) == "explains itself");
+
+    // An explicit DisplayName beats derivation -- the author overriding it is
+    // the whole point of the attribute.
+    CHECK(DisplayNameForField(ProbeField("described")) == "Custom Label");
+
+    // An explicit AngleFormat(Radians) is honoured, not defaulted away.
+    CHECK(AngleUnitForField(ProbeField("angled")) == Astra::AngleFormat::Unit::Radians);
+}
+
+TEST_CASE("a field with no attributes falls back cleanly", "[editor]")
+{
+    const Astra::FieldInfo& bare = ProbeField("bare");
+    CHECK_FALSE(RangeOfField(bare).has_value());
+    CHECK(CategoryOfField(bare).empty());
+    CHECK(TooltipOfField(bare).empty());
+    CHECK_FALSE(FieldIsReadOnly(bare));
+    CHECK_FALSE(FieldIsAttributeHidden(bare));
+    CHECK(DisplayNameForField(bare) == "Bare");
+    // No AngleFormat attribute -> the attribute's OWN default (Degrees,
+    // Attribute.hpp), not an arbitrary fallback invented here.
+    CHECK(AngleUnitForField(bare) == Astra::AngleFormat::Unit::Degrees);
+}
+
+// FieldIsDrawable is what stands between a component and a header drawn over a
+// void: three sites in the draw loop ask it (the component sweep, the category
+// collection, and the empty-body check that draws the disabled hint row), and
+// EditorPanels.cpp is not compiled into this gate, so the predicate itself is
+// the only part of that chain a test can reach.
+TEST_CASE("FieldIsDrawable is both of the visitor's skips", "[editor]")
+{
+    // The ordinary field draws. So does a ReadOnly one -- ReadOnly means "shown
+    // but not editable", a different statement entirely, and confusing the two
+    // would hide every view-only row in the Inspector.
+    CHECK(FieldIsDrawable(ProbeField("bare")));
+    CHECK(FieldIsDrawable(ProbeField("locked")));
+
+    // Astra::Hidden -- dropped by the visitor itself (InspectorView.cpp).
+    CHECK_FALSE(FieldIsDrawable(ProbeField("secret")));
+    // Serializable(false) -- dropped one frame out, by Astra's VisitFields,
+    // before Visit() is ever called. Arcane::PhysicsBodyRef2D's two fields are the
+    // roster's case (Arcane::Collider2D::fixtures was, until 2D physics wiring Plan 1
+    // made it serializable again); missing it is what once left a component
+    // drawing an empty header.
+    CHECK_FALSE(FieldIsDrawable(ProbeField("unwritten")));
+}
+
+TEST_CASE("AnyFieldDrawable separates an empty section from a populated one", "[editor]")
+{
+    const Astra::TypeMeta* probe = Astra::GetMeta<MetaProbe>();
+    REQUIRE(probe != nullptr);
+    // MetaProbe carries undrawable fields AND drawable ones -- one undrawable
+    // field must not condemn the whole section.
+    CHECK(AnyFieldDrawable(probe->fields));
+
+    const Astra::TypeMeta* empty = Astra::GetMeta<NothingDrawable>();
+    REQUIRE(empty != nullptr);
+    // Every field undrawable: the caller draws the disabled hint row instead of
+    // opening a grid that would visit nothing. (Arcane::Collider2D's shape once; it
+    // draws a FieldKind::Vector list since 2D physics wiring Plan 2.)
+    CHECK_FALSE(AnyFieldDrawable(empty->fields));
+
+    // A type with no reflected fields at all answers the same way -- vacuously
+    // false, no special case at the call site.
+    CHECK_FALSE(AnyFieldDrawable(std::span<const Astra::FieldInfo>{}));
+}
+
+TEST_CASE("the Inspector filter matches either spelling", "[editor]")
+{
+    // Friendly name and raw identifier both hit, so it does not matter whether
+    // the user knows the code.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "sorting"));
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "sortingLayer"));
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Sorting Layer", "sortingLayer", "LAYER"));
+
+    // A component-name hit keeps every field, so searching "sprite" shows the
+    // whole component rather than none of it.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", "sprite"));
+    CHECK(ComponentMatchesFilter("Sprite Renderer", "sprite"));
+
+    // Empty query matches everything -- the unfiltered case is not special-cased
+    // at the call site.
+    CHECK(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", ""));
+    CHECK(ComponentMatchesFilter("Sprite Renderer", ""));
+
+    // A genuine miss.
+    CHECK_FALSE(MatchesInspectorFilter("Sprite Renderer", "Tint", "tint", "physics"));
+    CHECK_FALSE(ComponentMatchesFilter("Sprite Renderer", "physics"));
+}

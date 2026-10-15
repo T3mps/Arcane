@@ -1,0 +1,66 @@
+# Maintains releases.json (spec s4 "Re-signing" and "Channels and yanking"; s9).
+# The 1st of each month it re-signs production: the manifest expires 90 days
+# after signing, so two missed approvals are survivable. By hand: resign, yank
+# (the archives stay), init (the first publish only) or repair (restore
+# releases.json + its signature from the newest verified history/ copy).
+# Every run waits for the owner's approval in the `release` environment.
+name: manifest-admin
+
+on:
+  schedule:
+    - cron: '17 6 1 * *'
+  workflow_dispatch:
+    inputs:
+      op:
+        description: resign, yank, init (first publish only) or repair
+        type: choice
+        options: [resign, yank, init, repair]
+        default: resign
+      target:
+        description: production (the bucket root, the release key) or staging (staging/, the test key)
+        type: choice
+        options: [production, staging]
+        default: production
+      version:
+        description: 'yank only: the version'
+        type: string
+        required: false
+      reason:
+        description: 'yank only: the reason users see'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# No concurrency group: a newly queued run in a group cancels the one already
+# pending, so a dry run could silently cancel a release waiting behind an
+# approval. Writers are kept apart by R2's conditional writes instead: of two
+# runs, the later one fails before touching releases.json and says to re-run.
+
+jobs:
+  admin:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    env:
+      OP: ${{ inputs.op || 'resign' }}
+      TARGET: ${{ inputs.target || 'production' }}
+      VERSION: ${{ inputs.version }}
+      REASON: ${{ inputs.reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - name: Install the pinned aws-cli
+        run: bash scripts/release/install-aws-cli.sh
+      - name: ${{ env.OP }} ${{ env.TARGET }}
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: bash scripts/release/manifest-admin.sh "$OP" "$TARGET" "$VERSION" "$REASON"

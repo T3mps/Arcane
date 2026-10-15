@@ -1,0 +1,11 @@
+name: Install arcrelease
+description: Builds arcrelease (ArcaneHub/crates/arcane_release) from this checkout, Cargo.lock pinned, and puts it on PATH.
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+    - name: cargo install arcrelease
+      shell: bash
+      run: |
+        cargo install --path ArcaneHub/crates/arcane_release --locked --root "$RUNNER_TEMP/arcrelease"
+        echo "$RUNNER_TEMP/arcrelease/bin" >> "$GITHUB_PATH"

@@ -68,7 +68,7 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Could this run reach the editor's POST-BOOT meaning of exit code 3?
 ///
-/// THE COLLISION (ArcaneEditor/src/main.cpp's exit table states it in full):
+/// THE COLLISION (Source/Programs/ArcaneEditor/src/main.cpp's exit table states it in full):
 /// exit codes 2 and 3 mean different things depending on WHEN in the run they
 /// fire, and the wait thread's decoder only sees a number and a duration.
 ///
@@ -108,7 +108,7 @@ const BOOT_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(2);
 ///    their own, with no compare anywhere in sight:
 ///    `RuntimeApp.cpp`'s ShutdownGraphPath (`settleFailed && m_graphExit == 0`
 ///    `-> 3`) and `EditorApp.cpp`'s line-for-line twin. The editor's own exit
-///    table (`ArcaneEditor/src/main.cpp`) names `settle-not-converged` and
+///    table (`Source/Programs/ArcaneEditor/src/main.cpp`) names `settle-not-converged` and
 ///    `compare-failed` under the SAME code.
 ///
 /// CORRECTION, 2026-08-28 (final review). This comment, and the arc spec's

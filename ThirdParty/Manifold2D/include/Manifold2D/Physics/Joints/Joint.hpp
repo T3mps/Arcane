@@ -40,6 +40,11 @@ namespace Manifold2D
         // Baumgarte positional-correction factor folded into the joint velocity
         // constraints (Joints.lua BETA = 0.2). Shared by every joint type.
         inline constexpr Real kJointBeta = Real(0.2);
+        // Box2D v3 joint constraint softness (b2DefaultJointDef: constraintHertz 60,
+        // constraintDampingRatio 2; b2PrepareJoint clamps the hertz to 0.25 / h).
+        // Used by the revolute limit's soft push-out.
+        inline constexpr Real kJointConstraintHertz = Real(60);
+        inline constexpr Real kJointConstraintDampingRatio = Real(2);
 
         // Mouse-joint critically-damped spring constants (Joints.lua FREQ/ZETA).
         inline constexpr Real kMouseFreq = Real(5);
@@ -65,12 +70,20 @@ namespace Manifold2D
         // ----------------------------------------------------------------
         //
         // PORT mapping (Joints.make, Joints.lua:182-227):
-        //   Distance : length (defaults to current |B - A| if <= 0).
+        //   Distance : length (defaults to the current anchor-to-anchor distance
+        //              if <= 0); Box2D v3 b2DistanceJointDef's local anchors
+        //              (localAnchorA, localAnchorB), limit (enableLimit,
+        //              minLength, maxLength) and spring (enableSpring,
+        //              frequencyHz, dampingRatio). A rope is enableSpring with
+        //              frequencyHz 0 plus enableLimit [0, maxLength].
         //   Revolute : anchor (world point shared by A and B at creation).
         //   Weld     : anchor (as revolute) + the relative angle is locked to
         //              its value at creation.
         //   Prismatic: axis (world direction; B may only slide along it, with no
-        //              perpendicular drift and no relative rotation).
+        //              perpendicular drift and no relative rotation); Box2D v3
+        //              b2PrismaticJointDef's optional limit (enableLimit,
+        //              lowerTranslation, upperTranslation) and force-limited motor
+        //              (enableMotor, motorSpeed, maxMotorForce).
         //   Mouse    : target + maxForce (body B only; A is kInvalidSlot).
         // NEW:
         //   Wheel    : axis (suspension direction, local to A's frame at
@@ -80,6 +93,11 @@ namespace Manifold2D
         //              maxMotorTorque).
         //   Motor    : motorSpeed (target relative angular velocity of B vs A) +
         //              maxMotorTorque (impulse clamp).
+        //   Revolute (Box2D v3 b2RevoluteJointDef): referenceAngle + optional
+        //              limit (enableLimit, lowerAngle, upperAngle), spring
+        //              (enableSpring, frequencyHz, dampingRatio, targetAngle) and
+        //              motor (enableMotor, motorSpeed, maxMotorTorque as a torque
+        //              in N m: the impulse is clamped to h * maxMotorTorque).
         struct JointDef
         {
             JointKind  kind = JointKind::Distance;
@@ -88,12 +106,44 @@ namespace Manifold2D
 
             // Distance.
             Real length = Real(-1);    // <= 0 -> use the current separation
+            // Distance anchors, in each body's local frame (relative to its
+            // origin; Box2D localAnchorA/B). (0, 0) is the body origin.
+            Vec2 localAnchorA{ Real(0), Real(0) };
+            Vec2 localAnchorB{ Real(0), Real(0) };
+            // Distance limit (with enableLimit, and only while the spring is on):
+            // minLength <= length <= maxLength. Clamped to [kLinearSlop, 1e5].
+            Real minLength = Real(0);
+            Real maxLength = Real(100000);
 
             // Revolute / Weld / Wheel: world anchor point at creation.
             Vec2 anchor{ Real(0), Real(0) };
 
+            // Revolute: the joint angle is angleB - angleA - referenceAngle
+            // (Box2D's angle between the joint frames). Box2D's default is 0, so the
+            // joint angle is the raw relative angle; pass the creation-time relative
+            // angle to measure the limits and the spring from the pose at creation.
+            Real referenceAngle = Real(0);
+            // Revolute limit: lowerAngle <= joint angle <= upperAngle (radians;
+            // Box2D documents a usable range of about +-0.99 pi). enableLimit also
+            // switches on the Prismatic limit (lower/upperTranslation below) and
+            // the Distance limit (minLength/maxLength above).
+            bool enableLimit = false;
+            Real lowerAngle  = Real(0);
+            Real upperAngle  = Real(0);
+            // Revolute spring: drives the joint angle to targetAngle, soft at
+            // (frequencyHz, dampingRatio) below. enableSpring also switches on the
+            // Distance spring (rest length `length`; frequencyHz 0 = no length
+            // constraint).
+            bool enableSpring = false;
+            Real targetAngle  = Real(0);
+
             // Prismatic / Wheel: world axis (direction). Normalized at Prepare.
             Vec2 axis{ Real(1), Real(0) };
+            // Prismatic limit (b2PrismaticJointDef), on when enableLimit:
+            // lowerTranslation <= translation <= upperTranslation (m along the
+            // axis; the translation of B relative to A is zero at creation).
+            Real lowerTranslation = Real(0);
+            Real upperTranslation = Real(0);
 
             // Mouse: target + force clamp. Default is an MKS-honest "effectively unclamped"
             // value = Box2D's drag-sample convention 1000*mass*g (samples/sample.cpp:338)
@@ -102,16 +152,19 @@ namespace Manifold2D
             Vec2 target{ Real(0), Real(0) };
             Real maxForce = Real(1e6);
 
-            // Wheel suspension spring (b2WheelJoint). frequencyHz <= 0 -> a rigid
+            // Wheel suspension spring (b2WheelJoint), and the Revolute and
+            // Distance springs when enableSpring (NOTE: the default 4 Hz applies to
+            // them too; a Distance rope sets frequencyHz = 0). frequencyHz <= 0 -> a rigid
             // axis constraint (no suspension travel). dampingRatio is the spring's
             // zeta (1 = critically damped).
             Real frequencyHz  = Real(4);
             Real dampingRatio = Real(0.7);
 
-            // Wheel / Motor rotation drive.
-            bool enableMotor    = false;     // Wheel: drive the wheel's spin
-            Real motorSpeed     = Real(0);   // target relative angular velocity (rad/s)
+            // Wheel / Motor rotation drive; Prismatic translation drive.
+            bool enableMotor    = false;     // Wheel: drive the wheel's spin; Prismatic: drive the slide
+            Real motorSpeed     = Real(0);   // Wheel/Motor: rad/s; Prismatic: m/s along the axis
             Real maxMotorTorque = Real(0);    // impulse clamp magnitude (torque * dt)
+            Real maxMotorForce  = Real(0);    // Prismatic: the motor's force limit (N)
         };
 
         // ----------------------------------------------------------------
@@ -138,6 +191,14 @@ namespace Manifold2D
             // Apply one velocity-constraint solve pass. Ports the Lua :solve(w).
             virtual void SolveVelocity(PhysicsWorld& w) = 0;
 
+            // Called by the solver at the start of every sub-step, before that
+            // sub-step's first SolveVelocity. Impulse-clamped drives (the Motor
+            // and Wheel motors) reset their accumulated impulse here so the
+            // clamp maxMotorTorque * subDt is a per-SUB-STEP budget: the motor
+            // then delivers maxMotorTorque over the whole step, as Box2D's
+            // per-sub-step motor does. Default: nothing to reset.
+            virtual void BeginSubstep() noexcept {}
+
             // The two body slots (kInvalidSlot for a static-anchor / missing
             // body). The ISLAND pass reads these to keep jointed dynamic bodies
             // awake. Resolved at Prepare; kInvalidSlot before the first Prepare.
@@ -151,6 +212,63 @@ namespace Manifold2D
             // membership test (PhysicsWorld.lua:281-286).
             [[nodiscard]] virtual BodyHandle HandleA() const noexcept = 0;
             [[nodiscard]] virtual BodyHandle HandleB() const noexcept = 0;
+
+            // ---- reaction (Box2D v3 b2Joint_GetConstraintForce / _GetConstraintTorque)
+            //
+            // The force (N, world frame) and the torque (N m) this joint applied
+            // to body B over the last step it was solved in -- what a breakable
+            // joint compares against its threshold. The force is every linear
+            // impulse the joint's constraints put on B (point, axis, motor,
+            // spring); the torque is only its PURE angular impulses (an angle
+            // lock, a motor, a spring, a limit), not the moment r x F of the
+            // force about B's centre -- Box2D's split.
+            //
+            // DEFINITION: the total impulse delivered to B over the step, divided
+            // by the step dt. Box2D reports its accumulated impulse J times
+            // inv_h (the SUB-step inverse); that J is warm-started, i.e. applied
+            // in full again every sub-step, so over one step of N sub-steps the
+            // joint delivers sum_k J_k and sum_k J_k / (N h) is the mean of
+            // Box2D's per-sub-step reading -- equal to it when J is steady (a
+            // load at rest, a stalled motor) and smoothed over the step in a
+            // transient. This engine's Baumgarte joints carry no accumulated
+            // impulse (each pass applies a fresh one), so the delivered sum is
+            // the one definition that holds for every kind; it is pure
+            // bookkeeping and changes no solve.
+            //
+            // The world opens the window (BeginReactionWindow) for every joint it
+            // hands the solver; a sleeping joint keeps its last awake reading, as
+            // Box2D's keeps its impulses. Zero before the first solved step.
+            [[nodiscard]] Vec2 ReactionForce() const noexcept
+            {
+                const Real inv = m_reactionDt > Real(0) ? Real(1) / m_reactionDt : Real(0);
+                return Vec2(m_reactionImpulse.x * inv, m_reactionImpulse.y * inv);
+            }
+            [[nodiscard]] Real ReactionTorque() const noexcept
+            {
+                return m_reactionDt > Real(0) ? m_reactionAngularImpulse / m_reactionDt : Real(0);
+            }
+            // Reset the per-step sums for a step of length `dt` (called by
+            // PhysicsWorld before the solve, not by the solver).
+            void BeginReactionWindow(Real dt) noexcept
+            {
+                m_reactionImpulse = Vec2(Real(0), Real(0));
+                m_reactionAngularImpulse = Real(0);
+                m_reactionDt = dt;
+            }
+
+        protected:
+            // Record an impulse the joint just applied to body B (A gets the
+            // opposite). Every SolveVelocity path calls these beside its apply.
+            void AddReaction(Real jx, Real jy) noexcept
+            {
+                m_reactionImpulse = Vec2(m_reactionImpulse.x + jx, m_reactionImpulse.y + jy);
+            }
+            void AddReactionTorque(Real j) noexcept { m_reactionAngularImpulse += j; }
+
+        private:
+            Vec2 m_reactionImpulse{ Real(0), Real(0) }; // linear impulse on B, this step
+            Real m_reactionAngularImpulse = Real(0);    // pure angular impulse on B, this step
+            Real m_reactionDt = Real(0);                // the step the sums cover
         };
 
     } // namespace Physics

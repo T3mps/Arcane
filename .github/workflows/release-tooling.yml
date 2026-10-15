@@ -1,0 +1,88 @@
+# Tests the release tooling (distribution spec s10, "Release workflow"): the
+# arcane_release crate on Windows and Linux, the release scripts over a fake
+# R2, the signature checker, and the workflows' SHA pins and lint. It holds no
+# secrets and never touches the release environment.
+name: release-tooling
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ArcaneHub/crates/arcane_release/**'
+      - 'scripts/release/**'
+      - '.github/actions/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/manifest-admin.yml'
+      - '.github/workflows/release-tooling.yml'
+  pull_request:
+    paths:
+      - 'ArcaneHub/crates/arcane_release/**'
+      - 'scripts/release/**'
+      - '.github/actions/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/manifest-admin.yml'
+      - '.github/workflows/release-tooling.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tooling-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  crate:
+    name: arcane_release (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: ArcaneHub/crates/arcane_release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy
+      - run: cargo test --locked
+      - name: The Hub's build (no tools)
+        run: cargo check --locked --no-default-features --lib
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - run: bash scripts/release/tests/run-all.sh
+
+  signature-check:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: ./.github/actions/sign-windows/tests/test-check-signatures.ps1
+
+  workflows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Third-party actions pinned to commit SHAs
+        run: >-
+          bash scripts/release/check-pinned.sh
+          .github/workflows/release.yml .github/workflows/manifest-admin.yml
+          .github/workflows/release-tooling.yml .github/actions/*/action.yml
+      - name: actionlint
+        run: >-
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+          .github/workflows/release.yml .github/workflows/manifest-admin.yml .github/workflows/release-tooling.yml

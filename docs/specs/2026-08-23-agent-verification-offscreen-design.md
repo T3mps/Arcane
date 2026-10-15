@@ -371,7 +371,8 @@ of the five did not land as written and the reasons are the finding:
    **FACTUAL CORRECTION: `scripts/setup.ps1` does not exist in this
    repository.** Arcane's `scripts/` holds `check-faults.ps1`,
    `gen_icons_lucide.py`, `generate.bat`, `golden-gate.ps1`, `launch.bat`,
-   `launch.ps1`, `setup-vcpkg-deps.bat`, `sync-astra.ps1`. The orchestrator
+   `launch.ps1`, `setup-vcpkg-deps.bat`, `sync-vendor.ps1`, and
+   `sync-astra.ps1` (a shim that calls `sync-vendor.ps1 -Library Astra`). The orchestrator
    named above lives in the **Aphelyon/Gacha repo**
    (`Gacha/scripts/setup.ps1` + `scripts/doctor.bat`, with `Setup.exe` as a
    Tauri GUI over it). `PackagesView.svelte`'s comment repeated the same error

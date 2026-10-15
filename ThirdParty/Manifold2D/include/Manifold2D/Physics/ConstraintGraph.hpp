@@ -12,8 +12,9 @@
 //   * IslandManager -- island TOPOLOGY + the sleep pass (decomp step 1); the graph
 //     reaches it only through PhysicsWorld's existing island forwarders + the
 //     public IslandManager API (Attach/DetachContactAdjacency), never directly.
-//   * ContactManager -- the begin/stay/end EVENT machine; a downstream consumer of
-//     the graph's derived touched-pair list, never sees fixtures/manifolds/colors.
+//   * The event arrays -- contact begin/end/hit and the sensor pass live on
+//     PhysicsWorld (spec s6). The graph pushes begin/end through the world
+//     when a solver contact's touching bit flips; it never owns the arrays.
 //   * The solver -- consumes the EMITTED ContactConstraint array only (bucketed by
 //     the constraint's own `color` field); it never touches the pool or the
 //     coloring state and never learns the graph exists (ISolver seam preserved).
@@ -22,8 +23,6 @@
 //   * m_contactConstraints -- the emitted solver feed; SolverContext captures its
 //     raw .data() pointer ONCE per Step (the contact-side twin of the
 //     AwakeIndexData() handoff). The graph fills a caller-provided vector.
-//   * m_touchedEventPairs -- the stage-output buffer handed to ContactManager
-//     (CollectTouchedEventPairs fills it).
 //   * The body/fixture SoA, awake/sleep state + awake-set mechanism, broadphase,
 //     and executor -- reached through PhysicsWorld& w under friendship.
 //
@@ -67,7 +66,7 @@ namespace Manifold2D
             // never enter m_colorContacts). The per-body mask grows via Grow.
             ConstraintGraph();
 
-            // ---- the per-Step drivers (PhysicsWorld::Step stages 2/3b/6) -----
+            // ---- the per-Step drivers (PhysicsWorld::Step stages 2/3b) --------
             //
             // UpdateContacts(w, dt): the ONE-PASS persistent-contact update
             // (Step stage 2). The SOLE narrowphase for the solver feed. Three
@@ -99,11 +98,6 @@ namespace Manifold2D
             // manifold (warm-start-on-Contact). Spans (kNoContact) skipped.
             void WritebackImpulses(const std::vector<ContactConstraint>& ccs);
 
-            // CollectTouchedEventPairs(out): Step stage 6 -- derive the deduped,
-            // sorted event-relevant EXACTLY-OVERLAPPING body-pairs from the pool
-            // (events-as-byproduct). The world hands `out` to ContactManager.
-            void CollectTouchedEventPairs(std::vector<BroadphasePair>& out) const;
-
             // ---- lifecycle-seam contact destruction (world drives these) -----
             // Destroy every pooled contact referencing the removed fixture/body
             // the moment it is removed (DropFixture / RemoveBody seams); marks
@@ -111,11 +105,14 @@ namespace Manifold2D
             void DestroyContactsForFixture(PhysicsWorld& w, std::uint32_t fixtureSlot);
             void DestroyContactsForBody(PhysicsWorld& w, std::uint32_t bodySlot);
 
-            // The canonical pooled-contact teardown: detach island adjacency
-            // (via w.m_islandMgr) + release the persistent color (while c still
-            // holds it) + pool.Destroy. Order is FROZEN.
+            // The canonical pooled-contact teardown: a touching contact whose
+            // Begin was delivered emits its End (Box2D contact.c:354-364, R10)
+            // before the island adjacency detach, the color release, and
+            // pool.Destroy. Order is FROZEN (the End and the detach both read c).
+            // Not noexcept: PushContactEnd may allocate. Non-const: the End
+            // clears Contact::beginReported on the live slot.
             void ReleaseAndDestroyContact(PhysicsWorld& w, std::uint32_t id,
-                                          const Contact& c) noexcept;
+                                          Contact& c);
 
             // ---- persistent incremental contact coloring (Phase C, Task 4;
             //      moved here in decomp step 2 Task 2) -------------------------
@@ -171,6 +168,17 @@ namespace Manifold2D
             // non-const pool stays private to the graph.
             [[nodiscard]] const ContactPool& Pool() const noexcept { return m_contactPool; }
 
+            // Live pool contacts in ascending id (ContactPool::ForEach). Read-only.
+            // GetBodyContacts and ForEachContact filter; this accessor does not.
+            void ForEachPoolContact(Mosaic::FunctionRef<void(std::uint32_t, const Contact&)> fn) const
+            {
+                m_contactPool.ForEach(fn);
+            }
+
+            // The live pool contact for `id`. ContactPool::Get asserts the id is alive.
+            // Stage 6b resolves a solver constraint's sourceContactId through this.
+            [[nodiscard]] const Contact& PoolContact(std::uint32_t id) const;
+
             // Live pooled-contact count (test/inspection hook backing).
             [[nodiscard]] std::size_t DebugContactCount() const noexcept
             {
@@ -180,6 +188,10 @@ namespace Manifold2D
             // handle pair (test hook backing; stale/dead handles return false).
             [[nodiscard]] bool DebugHasContact(const PhysicsWorld& w,
                                                BodyHandle a, BodyHandle b) const;
+
+            // The pool contact for the unordered fixture pair, or nullptr.
+            // Same order-independent key ContactPool::EnsurePair / Find uses.
+            [[nodiscard]] const Contact* FindContact(FixtureHandle a, FixtureHandle b) const;
 
             // ---- world-lifecycle seams (PhysicsWorld drives these) -----------
             // Grow the per-body color-mask column to `next` (EnsureCapacity seam).
@@ -278,6 +290,7 @@ namespace Manifold2D
             // the body slot), which is the ForEachAwake visit order.
             struct NewPairRecord { std::uint32_t awakeIndex; std::uint32_t fiA; std::uint32_t fiB; };
             std::vector<NewPairRecord> m_newPairs;
+            std::vector<std::uint32_t> m_fastMoverScratch; // (b2) fast mover<->mover query output
 
             // Create-phase MT per-worker scratch (sized to WorkerCount() each step,
             // grow-only). Each worker uses ONLY its own [w] entry -> contention-free.

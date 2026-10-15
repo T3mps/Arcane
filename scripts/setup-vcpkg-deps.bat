@@ -39,6 +39,22 @@ echo   vcpkg: %VCPKG_PATH%
 :: -------------------------------------------------------------------
 echo [2/2] Installing sdl3[vulkan]:x64-windows-static-md...
 
+:: The triplet builds SDL3 (only) as a DLL -- one SDL3.dll per process, staged
+:: beside every program (ThirdParty/SDL3/SDL3.arcmodule). vcpkg's classic mode
+:: does not rebuild an installed port whose triplet changed, so an earlier
+:: static install (share\sdl3 present, no bin\SDL3.dll) is removed first.
+set "SDL3_MD=%VCPKG_PATH%\installed\x64-windows-static-md"
+if exist "%SDL3_MD%\share\sdl3" if not exist "%SDL3_MD%\bin\SDL3.dll" (
+    echo   removing the static SDL3 install ^(the triplet now builds SDL3.dll^)...
+    "%VCPKG_PATH%\vcpkg.exe" remove "sdl3:x64-windows-static-md" --overlay-triplets="%~dp0..\vcpkg-triplets"
+    if errorlevel 1 (
+        echo ERROR: vcpkg remove failed.
+        echo.
+        if not defined _APH_NOPAUSE pause
+        exit /b 1
+    )
+)
+
 "%VCPKG_PATH%\vcpkg.exe" install "sdl3[vulkan]:x64-windows-static-md" --overlay-triplets="%~dp0..\vcpkg-triplets"
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: vcpkg install failed.
@@ -49,7 +65,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo ============================================
-echo  Success! SDL3 (with Vulkan support) installed.
+echo  Success! SDL3 (with Vulkan support) installed as SDL3.dll.
 echo ============================================
 echo.
 if not defined _APH_NOPAUSE pause

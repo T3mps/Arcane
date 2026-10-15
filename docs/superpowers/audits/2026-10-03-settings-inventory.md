@@ -11,10 +11,10 @@
 
 | Part | SETTING | CONSTANT | DERIVED | OTHER-STORE |
 |---|---|---|---|---|
-| Part 1: ArcaneCore and the vendored library configs | 88 | 101 | 28 | 1 |
+| Part 1: ArcaneCore and the vendored library configs | 89 | 101 | 28 | 1 |
 | Part 2: ArcaneClient, ArcaneRuntime, ArcaneServer, ArcaneCrashReporter | 148 | 104 | 32 | 0 |
 | Part 3: ArcaneEditor and ArcaneHub | 221 | 40 | 100 | 14 |
-| **Total** | **457** | **245** | **160** | **15** |
+| **Total** | **458** | **245** | **160** | **15** |
 
 (SETTING rows were 82 / 126 / 207 = 415 at the freeze; the post-freeze amendments below split rows and add the names the sweeps registered.)
 
@@ -201,6 +201,7 @@ The freeze binds names, audiences, scopes and apply modes. These rows changed af
 | (none) | `net.defaultPort`, `net.tokenLength`, `net.sessionLifetimeSeconds`, `net.idleTimeoutSeconds`, `net.heartbeatIntervalSeconds` | protocol.json's `settings` keys, layered over net.* (S6-12) | S6-45 |
 | (none) | `server.cheats`, `server.cheatsAllowed`, `server.allowClientSetServer` | the spec's engine knobs (s3.2, s9), registered by the registry since S1 | S6-45 |
 | (none) | `editor.settings.saveDebounceMs`, `.openAtBoot`, `.openCategory`, `.keysConflictsOnly` | the settings windows' own cvars (S3, S4-14) | S6-45 |
+| (none) | `physics.events.hitThreshold` | 2D physics hit threshold; PhysicsSystem reads it Live (spec 2026-10-08 s7.5) | task A3, 2026-10-08 |
 
 Frozen names S6-45 registered in code (no inventory change): `editor.camera.floor` (S6-30 spelled it `speedFloor`), `editor.preview.light.colour` (was `.color`), `editor.shader.previewCheckerLight` / `previewCheckerSpriteScale` (were `editor.preview.checkerLight` / `checkerExtent`), `editor.graph.nodePreviewMinPx` / `dragSpeed` / `rangeDragSpeed` (were under `editor.shader.*`), `editor.mesh.primitiveRanges.*` (were `editor.mesh.subdivMax` ...; the minima are now settings too, each floored at ValidateMeshAsset's rule), and the rows no sweep had converted: `astra.snapshot.compression`, `editor.gizmo.color.*`, `editor.graph.const*Width` / `paramNameFieldWidth` / `passNameFieldWidth` / `swizzleFieldWidth`, `editor.shader.chainLayout.*`, `editor.shader.passThumbPx`, `editor.crash.initialSize` (a Vec2) / `textRows`, `editor.ui.toolbar.logoScale` / `brandScale`, `editor.viewport.grid.fadeInPx` / `fadeFullPx`.
 
@@ -326,6 +327,7 @@ Path prefixes: `Core/` = `ArcaneCore/src/Arcane/`, `TP/` = `ThirdParty/`. In CON
 | Core/Base/Runtime.cpp:429 | `ProjectManifest::PhysicsConfig{}.gravity` fallback | (0,-9.81) | DERIVED | — | — | — | — | — | — | N | no-project fallback = physics.gravity default |
 | Core/Scene/Physics2D.cpp:19, :22, :46 | floor-normal threshold | 0.5 (normal.y, about 60 deg slope) | SETTING | physics.ground.minNormalY | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (walkable slope) |
 | Core/Scene/Physics2D.cpp:44 | ground probe reach | 0.05 (m) | SETTING | physics.ground.probeDistance | PhysicsGroundSettings | Game | Project | Live | [0,1] | Y | game feel (coyote reach) |
+| Core/Scene/PhysicsSystem.hpp | hit event threshold | 1.0 (m/s) | SETTING | physics.events.hitThreshold | PhysicsEventSettings | Game | Project | Live | [0,100] | Y | approach speed an impact must exceed to report a hit (spec 2026-10-08 s7.5) |
 | Core/Scene/PhysicsSystem.hpp:207-208 | `kAuthorPosEps`, `kAuthorRotEps` | 1e-5 m / rad | CONSTANT | — | — | — | — | — | — | N | numeric round-trip noise tolerance |
 | Core/Scene/PhysicsSystem.hpp:213-214; SceneResources.hpp:52-53 | `kPi`, `kTau` | pi, 2pi | CONSTANT | — | — | — | — | — | — | N | math identity |
 | Core/Scene/PhysicsSystem.hpp:696; Runtime.cpp:418, :461 | `m_fixedDt` = 1/fixedHz | s | DERIVED | — | — | — | — | — | — | N | from sim.fixedHz, captured at AddSystem |
@@ -503,7 +505,7 @@ Creation sites:
 | PhysicsWorld.hpp:220 | `maxLinearVelocity` | 400 (m/s) | SETTING | physics.maxLinearVelocity | Physics2DWorldSettings | Game | Project | NextWorld | [1,1e5] | Y | left at default |
 | PhysicsWorld.hpp:229 | `sleepThreshold` | 0.05 (m/s) | SETTING | physics.sleepThreshold | Physics2DWorldSettings | Game | Project | NextWorld | [0,10] | Y | left at default |
 | PhysicsWorld.hpp:549 | `SetExecutor` (never called) | null -> serial | SETTING | physics.parallelSolver | Physics2DWorldSettings | Game Dev | Project | NextWorld | bool | N | MT-invariance tested; binding missing (Notes) |
-| PhysicsWorld.hpp:116, :136 (BodyDef; PhysicsSystem.hpp:428-466 never sets them) | `eventsEnabled` true, per-body `sleepThreshold` -1 (inherit) | - | DERIVED | — | — | — | — | — | — | N | per-body inherits the world value |
+| PhysicsWorld.hpp:137 (BodyDef; PhysicsSystem.hpp:514 never sets it) | per-body `sleepThreshold` -1 (inherit). Per-body `eventsEnabled` removed | - | DERIVED | — | — | — | — | — | — | N | sleepThreshold still inherits WorldDef (the BodyDef fill never assigns it). The per-body `eventsEnabled` gate is removed (spec 2026-10-08 s6.2); events are the per-fixture flags `Fixture::contactEvents` / `sensorEvents` / `hitEvents` (PhysicsComponents.hpp, spec s7.4) and the `physics.events.*` cvars (`PhysicsEventSettings`, spec s7.5) |
 | TP/Manifold2D/include/Manifold2D/Physics/PhysicsTypes.hpp:146, :150 | `kLinearSlop`, `kMaxRotation` | 0.005 m, pi/4 | CONSTANT | — | — | — | — | — | — | N | compile-time library constants (changing them forks the vendored library) |
 | TP/enkiTS/src/TaskScheduler.h:275 | `numTaskThreadsToCreate` | hw-1 when threads == 0 | DERIVED | — | — | — | — | — | — | N | from jobs.workerThreads |
 | TaskScheduler.h:282 | `numExternalTaskThreads` | 0 | SETTING | jobs.externalThreads | JobsSettings | Game Dev | Pref-P | Restart | [0,64] | N | needed if non-enki threads submit tasks; left at default |

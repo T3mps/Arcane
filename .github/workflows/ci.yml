@@ -1,117 +1,534 @@
 name: CI
 
-# Manifold2D-style hosted windows lane: generate, build Debug+Release+Dist, run
-# the suite with `~[gpu]`. The Jenkins multibranch pipeline on windows-1 is the
-# full gate (3 configs, an actual GPU, the unfiltered suite, the --frames
-# scripted verify).
+# The ONE hosted CI workflow for Arcane: a matrix over
+# {windows-msvc, linux-gcc-14, linux-clang-19, macos-appleclang} x
+# {Debug, Release, Dist}. The build and test sequences live in scripts, not
+# here -- this file and scripts/ci/local.ps1 (the desk) are two callers:
+#   build  scripts/ci/build.sh (Linux, macOS) / scripts/ci/build.ps1 (Windows)
+#   test   scripts/run-tests.sh / scripts/run-tests.ps1, two seeds per leg
+# docs/ci.md is the standard this file implements (shared with Astra and
+# Manifold2D) and records its deviations.
 #
-# WHY ~[gpu] HERE, when the [gpu] cases now SKIP-with-reason on a machine that
-# cannot run them. An earlier revision of this file dropped the filter on the
-# strength of "hosted runners have no capable GPU, so [gpu] reports SKIPPED".
-# THAT PREMISE IS UNVERIFIED, AND THIS BRANCH HAS NEVER BEEN PUSHED, SO THIS
-# LANE HAS NEVER RUN. Read at source, it is likely FALSE:
-# DeviceCreationD3D12.cpp:284-333 calls EnumAdapterByGpuPreference(0,
-# HIGH_PERFORMANCE) with NO software-adapter filter and then
-# D3D12CreateDevice(..., D3D_FEATURE_LEVEL_12_0). On a hosted Windows runner
-# the Microsoft Basic Render Driver (WARP) enumerates and supports 12_1, so
-# ARC_REQUIRE_BACKEND's probe would return TRUE and the D3D12 [gpu] cases would
-# RUN -- including GoldenImageTest.cpp:164, a ZERO-TOLERANCE pixel compare
-# against a reference blessed on a discrete GPU. A software rasterizer will not
-# match it, and a false red on a lane nobody has watched run is the worst
-# possible first impression of it.
+# Jobs:
+#   image-tag         the CI scripts' own tests, then the Linux image tag
+#                     (scripts/ci/image-tag.sh: a hash of ci/linux/Dockerfile
+#                     and the repo files it copies)
+#   ci-image          ghcr.io/starworksdev/arcane-ci:<tag> -- reused, or built +
+#                     pushed + verified when missing (scripts/ci/ci-image.sh; the
+#                     ONLY job with packages: write); outputs its digest
+#   build-test-linux  the Linux legs, inside that image pinned by digest
+#   build-test        the Windows and macOS legs, on the hosted runners
+#   notify            Discord FAILED / RECOVERED, never for pull requests
 #
-# THE PRINCIPLED FIX, deliberately not taken here: filter software adapters in
-# the probe itself (DXGI_ADAPTER_FLAG_SOFTWARE, and VK_PHYSICAL_DEVICE_TYPE_CPU
-# on the Vulkan side), so [gpu] reports SKIPPED-with-reason instead of being
-# filtered away unseen. It needs real design work -- the probe delegates to
-# NativeDeviceOwner::Create and NriDevice.hpp exposes no adapter query, so it
-# wants either new surface on RenderDeviceDesc or DXGI enumeration inside a test
-# helper. REVISIT CONDITION: once this hosted lane has been OBSERVED GREEN once,
-# do that, then drop `~[gpu]` from the three invocations below.
-#
-# Jenkins keeps its unfiltered run -- it has a real GPU and is the full gate.
+# Tests run "~[gpu]" minus the per-OS exclusion list on every leg. Extra lanes
+# ride ONE leg each, never a separate workflow:
+#   * linux-gcc-14 Debug: [gpu] on Mesa lavapipe with the image's pinned
+#     validation layer, and the X11 + Wayland windowed smoke
+#     (scripts/linux-windowed-smoke.sh);
+#   * macos-appleclang Debug: [gpu] on MoltenVK over the runner's Apple GPU
+#     (see docs/ci.md "GPU lanes" for what that proves and what it cannot);
+#   * Release on windows-msvc, linux-gcc-14 and macos-appleclang: the
+#     monolithic package (`arcbuild package`, engine modularization s3.3) run
+#     IN PLACE from Packages/ with no SDK, no Binaries/ and a bare PATH -- a windowed
+#     boot on Linux (Xvfb + lavapipe), a load check (--print-engine-info) plus
+#     an imports check on Windows and macOS. Every Linux/macOS leg also runs the
+#     LinkProbe fixture (whole-archive + forced references on GNU ld / ld64).
+# The Jenkins full gate on the GPU desk (Jenkinsfile) stays the unfiltered,
+# real-GPU, golden-gate run until it is retired (sub-project B).
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: arcane-ci-${{ github.ref_name }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The Linux legs' image (ci/linux/Dockerfile; docs/ci.md "Image").
+  CI_IMAGE: ghcr.io/starworksdev/arcane-ci
+  # Xcode is pinned, never "whatever the image defaults to" (docs/ci.md).
+  XCODE_APP: /Applications/Xcode_16.4.app
+
 jobs:
-  windows-msvc:
-    runs-on: windows-latest
+  image-tag:
+    name: CI scripts + image tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+      - name: CI script tests
+        run: |
+          scripts/ci/tests/test-image-tag.sh
+          scripts/ci/tests/test-build-sh.sh
+          scripts/ci/tests/test-ci-image.sh
+          pwsh -NoProfile -File scripts/ci/tests/test-arcane-ci.ps1
 
-      # SDL3 builds from source under the repo's v143 static-md overlay triplet
-      # (~10 min) -- cache the installed tree keyed on the triplet.
-      - name: Cache vcpkg installed tree
-        uses: actions/cache@v4
+      - name: Image tag
+        id: tag
+        run: |
+          tag=$(scripts/ci/image-tag.sh)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Linux CI image tag: $tag"
+
+  ci-image:
+    name: CI image
+    needs: image-tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    # Two runs that miss the same tag build it once: the second waits, then
+    # finds it published.
+    concurrency:
+      group: arcane-ci-image-${{ needs.image-tag.outputs.tag }}
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ needs.image-tag.outputs.tag }}
+      digest: ${{ steps.image.outputs.digest }}
+    env:
+      TAG: ${{ needs.image-tag.outputs.tag }}
+      # A fork pull request never publishes (scripts/ci/ci-image.sh), and
+      # neither does Dependabot: its same-repo PRs get a read-only token, so a
+      # build would run ~30 min and then fail at the push.
+      SAME_REPO: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Resolve or build the image
+        id: image
+        shell: bash
+        run: scripts/ci/ci-image.sh "$CI_IMAGE" "$TAG"
+
+  build-test-linux:
+    name: ${{ matrix.leg }} ${{ matrix.config }}
+    needs: ci-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: read
+    # The image by its immutable digest, never the tag. credentials: the
+    # workflow's own token (read-only on fork PRs), so the legs pull even
+    # before the package is made public (docs/ci.md, Image).
+    container:
+      image: ghcr.io/starworksdev/arcane-ci@${{ needs.ci-image.outputs.digest }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+      options: --init --shm-size=2g
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [linux-gcc-14, linux-clang-19]
+        config: [Debug, Release, Dist]
+        include:
+          - leg: linux-gcc-14
+            cc: gcc-14
+            cxx: g++-14
+          - leg: linux-clang-19
+            cc: clang-19
+            cxx: clang++-19
+    env:
+      ARCANE_CI_LEG: ${{ matrix.leg }}
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      # Two seeds per leg (ArcaneTests runs in RANDOM order). Both are printed
+      # in the suite banner and in each JUnit file name.
+      SEED_A: ${{ github.run_number }}
+      SEED_B: ${{ github.run_number }}50021
+      LINUX_GPU_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Debug' }}
+      # The package lane: Release on linux-gcc-14 (engine modularization s6).
+      PACKAGE_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Release' }}
+      # Hosted Linux runners are 4 vCPU / 16 GB and the Debug ArcaneTests link
+      # alone is ~500 MB: -j3 bounds peak memory.
+      MAKE_JOBS: 3
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain (CI image)
+        run: |
+          echo "image ${{ needs.ci-image.outputs.tag }} @ ${{ needs.ci-image.outputs.digest }}"
+          "$CXX" --version
+          echo "SDL3 $(pkg-config --modversion sdl3)"
+
+      - name: Build
+        run: scripts/ci/build.sh ${{ matrix.config }} -j "$MAKE_JOBS"
+
+      # Under Xvfb with SDL's x11 driver, so windows are real native windows.
+      - name: Test (two seeds)
+        env:
+          SDL_VIDEODRIVER: x11
+        run: |
+          mkdir -p logs
+          failed=0
+          for seed in "$SEED_A" "$SEED_B"; do
+            if ! xvfb-run -a -s "-screen 0 1920x1080x24" scripts/run-tests.sh ${{ matrix.config }} --rng-seed "$seed" \
+                > "logs/tests-seed$seed.log" 2>&1; then
+              echo "::error::seed $seed failed"
+              failed=1
+              # Every failing case's block, so the job log alone diagnoses
+              # it (the artifacts are not always reachable).
+              echo "::group::failures, seed $seed"
+              grep -B10 -A20 -E "FAILED:|due to unexpected exception|due to a fatal error" "logs/tests-seed$seed.log" | head -n 4000 || true
+              echo "::endgroup::"
+            fi
+            tail -n 60 "logs/tests-seed$seed.log"
+          done
+          exit $failed
+
+      - name: Test [gpu] (Linux, lavapipe)
+        if: env.LINUX_GPU_LANE == 'true'
+        env:
+          SDL_VIDEODRIVER: x11
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          # The bare runner got /run/user/1001 from systemd-logind; in the
+          # container nothing sets it. The image creates root's (0700). Not
+          # in the Dockerfile ENV: local runs are uid 1000.
+          XDG_RUNTIME_DIR: /run/user/0
+        run: |
+          set -o pipefail
+          xvfb-run -a -s "-screen 0 1920x1080x24" scripts/run-tests.sh --gpu ${{ matrix.config }} \
+            --rng-seed "$SEED_A" 2>&1 | tee logs/tests-gpu.log
+
+      - name: Windowed smoke (Linux, X11 + Wayland)
+        if: env.LINUX_GPU_LANE == 'true'
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          # x11 hosts use it; the Wayland half makes its own (the smoke's
+          # weston gets a private mktemp runtime dir).
+          XDG_RUNTIME_DIR: /run/user/0
+        run: |
+          set -o pipefail
+          xvfb-run -a -s "-screen 0 1920x1080x24" scripts/linux-windowed-smoke.sh \
+            ${{ matrix.config }} logs/windowed x11 wayland 2>&1 | tee logs/windowed-smoke.log
+
+      # ------------------------------------------------------------------
+      # Package (engine modularization s3.3 / s6)
+      # ------------------------------------------------------------------
+      - name: LinkProbe (GNU ld)
+        run: sh Tests/Fixtures/LinkProbe/run.sh "$RUNNER_TEMP/linkprobe"
+
+      # The one-executable ReferenceProject, staged and run where it lands: its
+      # own libSDL3 and no Arcane module (ldd), then a windowed boot (Xvfb +
+      # lavapipe) with no SDK, no Binaries/ and a bare PATH.
+      - name: Package (Linux)
+        if: env.PACKAGE_LANE == 'true'
+        run: scripts/ci/package.sh ${{ matrix.config }}
+
+      # Every distinct compiler/linker error of the build in one place (the
+      # build runs `make -k`), so a red leg reads at a glance.
+      - name: Summarize build errors
+        if: failure()
+        run: |
+          grep -hE "(error|undefined reference|Undefined symbols|ld: )" logs/build-*.log 2>/dev/null | sort -u | head -150 || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ matrix.leg }}-${{ matrix.config }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Crashes/hangs drop symbolized stacks under <exe dir>/diagnostics/.
+      - name: Upload logs
+        if: failure() || env.LINUX_GPU_LANE == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-${{ matrix.leg }}-${{ matrix.config }}
+          path: |
+            logs/
+            Binaries/*/ArcaneTests/diagnostics/
+            Binaries/*/ArcaneTests/*.log
+            Binaries/*/ArcaneTests/ReferenceProject/Saved/Verify/
+            /tmp/arcane-witness/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  build-test:
+    name: ${{ matrix.leg }} ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    # macOS gets a longer budget: its runner builds with fewer jobs (MAKE_JOBS).
+    timeout-minutes: ${{ matrix.timeout || 150 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [windows-msvc, macos-appleclang]
+        config: [Debug, Release, Dist]
+        include:
+          - leg: windows-msvc
+            os: windows-2025
+            compiler: msvc
+          - leg: macos-appleclang
+            os: macos-15
+            compiler: appleclang
+            cc: clang
+            cxx: clang++
+            make_jobs: 2
+            timeout: 300
+    env:
+      ARCANE_CI_LEG: ${{ matrix.leg }}
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      SEED_A: ${{ github.run_number }}
+      SEED_B: ${{ github.run_number }}50021
+      MACOS_GPU_LANE: ${{ matrix.leg == 'macos-appleclang' && matrix.config == 'Debug' }}
+      PACKAGE_LANE: ${{ matrix.config == 'Release' }}
+      # macos-15 arm64 runners are 3 vCPU / 7 GB, and since the settings arc
+      # the heaviest editor/test TUs peak at 1.4-1.9 GB each: three at once
+      # swap the VM (a pre-merge macOS build took 51 minutes; CI 38076751748
+      # hit the 150-minute cap mid-build), so macOS builds with -j2 under a
+      # longer timeout.
+      MAKE_JOBS: ${{ matrix.make_jobs || 3 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ------------------------------------------------------------------
+      # Toolchains
+      # ------------------------------------------------------------------
+      - name: Toolchain (Windows MSVC)
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+
+      - name: Toolchain (macOS Apple Clang, pinned Xcode)
+        if: runner.os == 'macOS'
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          "$CXX" --version
+          sw_vers
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+
+      # ------------------------------------------------------------------
+      # Third-party dependencies (every download version-pinned + SHA-256)
+      # ------------------------------------------------------------------
+      # SDL3 builds from source under the repo's v143 static-md overlay
+      # triplet (~10 min) -- cache the installed tree.
+      - name: Cache SDL3 (Windows, vcpkg)
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-sdl3-static-md-${{ hashFiles('vcpkg-triplets/x64-windows-static-md.cmake') }}
+          # One key per image, not per config: the installed tree serves every
+          # configuration (audit C9 -- per-config keys stored identical copies).
+          key: ${{ matrix.os }}-vcpkg-${{ hashFiles('vcpkg-triplets/**', 'scripts/setup-vcpkg-deps.bat') }}
+          restore-keys: ${{ matrix.os }}-vcpkg-
 
-      - name: Install SDL3 (vcpkg, overlay triplet)
+      - name: SDL3 (Windows, vcpkg overlay triplet)
+        if: runner.os == 'Windows'
         shell: cmd
         run: |
           set _APH_NOPAUSE=1
           call scripts\setup-vcpkg-deps.bat
 
-      - name: Generate
-        shell: cmd
+      # macOS does not package SDL3: scripts/build-sdl3.sh builds the pinned
+      # release once into a cached prefix, copied into /usr/local
+      # (premake5.lua gives libArcaneClient.dylib an rpath to it).
+      - name: Cache SDL3 (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/sdl3-prefix
+          # SDL3 always builds Release: one copy per image (audit C9).
+          key: ${{ matrix.os }}-sdl3-${{ hashFiles('scripts/build-sdl3.sh') }}
+
+      - name: SDL3 (macOS, from source)
+        if: runner.os == 'macOS'
         run: |
-          set _APH_NOPAUSE=1
-          call GenerateProjects.bat
+          if [ ! -f "$HOME/sdl3-prefix/include/SDL3/SDL.h" ]; then
+            scripts/build-sdl3.sh "$HOME/sdl3-prefix"
+          fi
+          sudo mkdir -p /usr/local
+          sudo cp -R "$HOME/sdl3-prefix/." /usr/local/
+          echo "SDL3_ROOT=/usr/local" >> "$GITHUB_ENV"
+          ls -d /usr/local/lib/*SDL3*
 
-      - name: Build Debug
-        run: msbuild Arcane.slnx /p:Configuration=Debug /m /nologo /v:minimal
+      # premake lands where Arcane::Toolchain looks for a bundled copy on
+      # POSIX (ThirdParty/premake5/premake5, beside the vendored .exe).
+      - name: Cache premake + Vulkan SDK (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ThirdParty/premake5/premake5
+            ThirdParty/tools/vulkan-sdk-macos/download
+          # Identical downloads for every config: one copy per image (audit C9;
+          # the per-config keys held fifteen 326 MB copies on 2026-10-12).
+          key: ${{ matrix.os }}-tools-${{ hashFiles('scripts/fetch-premake.sh', 'scripts/fetch-vulkan-sdk-macos.sh') }}
 
-      - name: Build Release
-        run: msbuild Arcane.slnx /p:Configuration=Release /m /nologo /v:minimal
+      # MoltenVK + the Vulkan loader + validation layer + DXC, one pinned SDK
+      # (the script header says why this is the macOS DXC source).
+      - name: premake + Vulkan SDK (MoltenVK, DXC) (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          scripts/fetch-premake.sh
+          scripts/fetch-vulkan-sdk-macos.sh --system
+          # MoltenVK is the ONLY ICD the leg may see.
+          echo "VK_DRIVER_FILES=/usr/local/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
 
-      - name: Build Dist
-        run: msbuild Arcane.slnx /p:Configuration=Dist /m /nologo /v:minimal
+      # ------------------------------------------------------------------
+      # Build: the shared scripts (docs/ci.md, "Build driver")
+      # ------------------------------------------------------------------
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/build.ps1 ${{ matrix.config }}
 
-      # test-results/ must exist before the first reporter writes into it,
-      # matching the Jenkinsfile's own `if not exist test-results mkdir`.
-      - name: Prepare test-results
-        run: mkdir test-results
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/ci/build.sh ${{ matrix.config }} -j "$MAKE_JOBS"
 
-      # Each suite runs FROM ITS OWN EXE DIRECTORY (working-directory): fixtures,
-      # data/ and the staged automation-exclusions.json are all resolved relative
-      # to it, and the exclusion-expiry case hard-fails if that file is missing.
-      #
-      # -Invocation MUST MATCH the test-spec above, verbatim. The baseline entry
-      # is keyed on it, so a mismatch reports "NO BASELINE -- not checked"
-      # instead of comparing against counts taken a different way. The six
-      # committed baselines are "~[gpu]", which is exactly what this lane runs,
-      # so this lane genuinely checks them.
-      - name: Test Debug
-        working-directory: bin/Debug-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-debug.json
+      # ------------------------------------------------------------------
+      # Test: "~[gpu]" minus the per-OS exclusions, two seeds
+      # ------------------------------------------------------------------
+      - name: Test (Windows, two seeds)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = 0
+          foreach ($seed in @($env:SEED_A, $env:SEED_B)) {
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-tests.ps1 ${{ matrix.config }} --rng-seed $seed
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::seed $seed failed ($LASTEXITCODE)"; $failed = 1 }
+          }
+          exit $failed
 
-      - name: Check Debug baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-debug.json" -Configuration Debug -Invocation "~[gpu]"
+      # Jenkins parity, no GPU needed (audit C10): arccook --check (Debug,
+      # Release) and ReferenceProject built standalone (Debug).
+      - name: Reference checks (Windows)
+        if: runner.os == 'Windows' && !cancelled() && matrix.config != 'Dist'
+        shell: pwsh
+        run: ./scripts/ci/reference-checks.ps1 ${{ matrix.config }}
 
-      - name: Test Release
-        working-directory: bin/Release-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-release.json
+      # SDL's cocoa driver in the runner's Aqua session, so windows are real
+      # NSWindows with a CAMetalLayer (offscreen has none).
+      - name: Test (macOS, two seeds)
+        if: runner.os == 'macOS'
+        env:
+          SDL_VIDEODRIVER: cocoa
+        run: |
+          mkdir -p logs
+          failed=0
+          for seed in "$SEED_A" "$SEED_B"; do
+            if ! scripts/run-tests.sh ${{ matrix.config }} --rng-seed "$seed" > "logs/tests-seed$seed.log" 2>&1; then
+              echo "::error::seed $seed failed"
+              failed=1
+              echo "::group::failures, seed $seed"
+              grep -B10 -A20 -E "FAILED:|due to unexpected exception|due to a fatal error" "logs/tests-seed$seed.log" | head -n 4000 || true
+              echo "::endgroup::"
+            fi
+            tail -n 60 "logs/tests-seed$seed.log"
+          done
+          exit $failed
 
-      - name: Check Release baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-release.json" -Configuration Release -Invocation "~[gpu]"
+      - name: Test [gpu] (macOS, MoltenVK)
+        if: env.MACOS_GPU_LANE == 'true'
+        env:
+          SDL_VIDEODRIVER: cocoa
+        run: |
+          set -o pipefail
+          scripts/run-tests.sh --gpu ${{ matrix.config }} --rng-seed "$SEED_A" 2>&1 | tee logs/tests-gpu.log
 
-      - name: Test Dist
-        working-directory: bin/Dist-windows-x86_64-md/ArcaneTests
-        run: .\ArcaneTests.exe "~[gpu]" -r console -r json::out=${{ github.workspace }}\test-results\arcane-dist.json
+      # ------------------------------------------------------------------
+      # Package (engine modularization s3.3 / s6)
+      # ------------------------------------------------------------------
+      - name: LinkProbe (ld64)
+        if: runner.os == 'macOS'
+        run: sh Tests/Fixtures/LinkProbe/run.sh "$RUNNER_TEMP/linkprobe"
 
-      - name: Check Dist baselines
-        run: powershell -ExecutionPolicy Bypass -File scripts\check-baselines.ps1 -ReportPath "${{ github.workspace }}\test-results\arcane-dist.json" -Configuration Dist -Invocation "~[gpu]"
+      # The one-executable ReferenceProject, staged and run where it lands:
+      # a load check (--print-engine-info) plus an imports check.
+      - name: Package (Windows)
+        if: env.PACKAGE_LANE == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/package.ps1 ${{ matrix.config }}
+
+      - name: Package (macOS)
+        if: env.PACKAGE_LANE == 'true' && runner.os == 'macOS'
+        run: scripts/ci/package.sh ${{ matrix.config }}
+
+      # ------------------------------------------------------------------
+      # Reports
+      # ------------------------------------------------------------------
+      # Both build scripts write logs/build-*.log.
+      - name: Summarize build errors
+        if: failure()
+        run: |
+          grep -hE "(error|undefined reference|Undefined symbols|ld: )" logs/build-*.log 2>/dev/null | sort -u | head -150 || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ matrix.leg }}-${{ matrix.config }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-${{ matrix.leg }}-${{ matrix.config }}
+          path: |
+            logs/
+            Binaries/*/ArcaneTests/diagnostics/
+            Binaries/*/ArcaneTests/*.log
+            Binaries/*/ArcaneTests/ReferenceProject/Saved/Verify/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Discord: post this repo's CI result into its thread in the ⚙️・ci-builds forum (shared action:
+  # StarworksDev/.github/actions/discord-ci-notify; FAILED on every red run, RECOVERED on the first green
+  # after one, failing jobs named). Never for pull requests (fork PRs get no secrets; roadmap D26).
+  notify:
+    name: Discord notify
+    needs: [image-tag, ci-image, build-test-linux, build-test]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: StarworksDev/.github/actions/discord-ci-notify@af9284cd93ba45b7d5bd5818c9ee90812271535c # discord-ci-notify-v1.0.0
+        with:
+          needs: ${{ toJSON(needs) }}
+          webhook: ${{ secrets.DISCORD_CI_WEBHOOK }}
+          threads: ${{ vars.DISCORD_CI_THREADS }}
+          github-token: ${{ github.token }}

@@ -498,6 +498,7 @@ physics.broadphase
 physics.contactDampingRatio
 physics.contactHertz
 physics.contactPushMaxVelocity
+physics.events.hitThreshold
 physics.gravity
 physics.ground.minNormalY
 physics.ground.probeDistance

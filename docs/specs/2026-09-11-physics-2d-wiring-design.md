@@ -19,7 +19,9 @@ This spec closes all four. Physics becomes engine-owned (the industry shape: UE'
 
 **In scope:** engine-owned world + scheduling; project + scene settings; Edit-mode bodies; Play/Stop; the editor overlay (selected-body outline always, whole-world toggle); Astra `FieldInfo` element access; the JSON container branch; the Inspector vector editor; a demonstration scene with a witness; the ABI bump and both restamps.
 
-**Non-goals (recorded, not built):** viewport handles for shapes (F4 owns gizmo work — the selected-body outline is the feedback); joints; physics materials; a layer/mask UI beyond the raw `categoryBits` / `maskBits` fields; sensor / contact events to gameplay; an overlay or cvars in ArcaneRuntime (cvars are last in the roadmap); per-scene `fixedHz`; polygon fixture authoring (`ShapeKind::Polygon` has no verts field in the data model yet).
+**Non-goals (recorded, not built):** viewport handles for shapes (F4 owns gizmo work — the selected-body outline is the feedback); joints; physics materials; a layer/mask UI beyond the raw `categoryBits` / `maskBits` fields; an overlay or cvars in ArcaneRuntime (cvars are last in the roadmap); per-scene `fixedHz`; polygon fixture authoring (`ShapeKind::Polygon` has no verts field in the data model yet).
+
+Contact, sensor and hit events are game-readable as of `docs/specs/2026-10-08-physics-2d-events-design.md` (`Physics2D::StepEvents`, `FrameEvents`, `ContactsOf`).
 
 ## 3. Rulings ledger (user-decided 2026-09-11)
 
@@ -123,7 +125,7 @@ std::function<void(void* inst, size_t i)>          vectorErase;
 std::function<void(void* inst, size_t i)>          vectorInsert;   // default element at i (i == size appends)
 ```
 
-Generic — nothing Fixture-specific; Astra's own `JsonSchema` may use `elementTypeHash` to stop emitting `"type": "object"` for every array, but that is not required here. Astra-side tests pin each accessor on `std::vector<int>` and `std::vector<Struct>`. Then `sync-astra.ps1`, `VENDORED.txt`, and the ABI bump (§9): reflect blocks are compiled into plugins and `FieldInfo` grew.
+Generic — nothing Fixture-specific; Astra's own `JsonSchema` may use `elementTypeHash` to stop emitting `"type": "object"` for every array, but that is not required here. Astra-side tests pin each accessor on `std::vector<int>` and `std::vector<Struct>`. Then `sync-vendor.ps1 -Library Astra`, `VENDORED.txt`, and the ABI bump (§9): reflect blocks are compiled into plugins and `FieldInfo` grew.
 
 ### 7.2 `ReflectionJson.hpp` — the container branch
 
@@ -169,7 +171,7 @@ Every mutation — a scalar edit inside an element, add, remove, reorder — com
 ## 9. ABI, build ritual, plans
 
 - **ABI 27 → 28** in Plan 1's vendor task: `FieldInfo` grew (compiled into every plugin's reflect blocks), `PhysicsSettings` joined the roster, `PhysicsSystem` gained `RequiresExclusive` + an ordering edge + the paused-pass gates, and `Collider2D` / `RigidBody2D` became tracked types (a static member changes no bytes, and `PhysicsComponents.hpp` is **not** on the game-module include surface — only the editor and the tests compile it — but Transform's precedent in the v26 entry records tracked types in the ledger regardless). v28 ledger in the v26/v27 form with the grep evidence over both game modules; `ReferenceProject.arcproj` → 28; Gacha's restamp is Plan 1's own last task (as v26 was), not a follow-up.
-- **Build order** (spec 2026-09-11-astra-adoption §9, unchanged): `sync-astra.ps1` → `GenerateProjects.bat` → `ReferenceProject.slnx` first per configuration (`/t:Rebuild` on every config flip of the single-slot `Binaries\`) → `Arcane.slnx` → unfiltered suite + `~[gpu]` + `check-baselines.ps1`. Absolute `--project` for every host launch. A Debug host launch happens while the Debug DLL is staged.
+- **Build order** (spec 2026-09-11-astra-adoption §9, unchanged): `sync-vendor.ps1 -Library Astra` → `GenerateProjects.bat` → `ReferenceProject.slnx` first per configuration (`/t:Rebuild` on every config flip of the single-slot `Binaries\`) → `Arcane.slnx` → unfiltered suite + `~[gpu]` + `check-baselines.ps1`. Absolute `--project` for every host launch. A Debug host launch happens while the Debug DLL is staged.
 - **Baseline:** 56216 / 1632 (`~[gpu]`, Debug and Release, Astra adoption Plan 2 close). Rises attributed per task; the golden lanes are untouched by construction.
 - **Plans:** `docs/plans/2026-09-11-physics-2d-wiring-plan1-runtime.md` — Astra `FieldInfo` → vendor + ABI 28 → JSON container branch → `PhysicsSettings` + `.arcproj` block → `PhysicsSystem` schedulable → `InstallEngineSystems` / `EnsurePhysics` / `PhysicsEditPass` + host calls → editor Edit / Play integration → overlay → `physics.arcscene` + witness → Gacha restamp → close. `…-plan2-inspector.md` — `FieldKind::Vector` editor + tests → close.
 

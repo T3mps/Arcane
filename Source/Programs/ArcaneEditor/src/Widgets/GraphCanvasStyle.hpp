@@ -1,0 +1,234 @@
+#pragma once
+
+// Graph-canvas CHROME -- the metrics and the neutral palette every node canvas
+// in the editor draws itself in, with one definition each.
+//
+// WHAT BELONGS HERE AND WHAT DOES NOT. These are the canvas's own LANGUAGE:
+// how round a node's corner is, how thick its border grows when hovered or
+// selected, how thick a wire is, how many segments a pin dot is drawn with,
+// what a grid line looks like, and which accent means "selected" or "hovered".
+// They are editor-wide facts, not per-canvas taste, and they were previously
+// spelled as identical literals in two files (ShaderEditorDocument.cpp and
+// AssetGraphPanel.cpp's asset graph) with nothing holding them together.
+//
+// PER-CANVAS TASTE STAYS AT THE CANVAS. The node body/title/border tones and
+// the canvas surface itself are NOT here and must not move here: the Graph
+// lens answers to the OptionD board (a recorded controller ruling, 2026-09-08,
+// written out at AssetGraphPanel.cpp's canvas-palette block) and the shader
+// editor's canvas answers to its own board and its own review history. Those
+// two value sets are deliberately different; the shared piece is the STRUCTURE
+// that consumes them (GraphCanvasStyleDesc below), never the values.
+//
+// Its own header, sibling to CanvasPopupScope.hpp / GraphZoomLevels.hpp /
+// GraphGridPhase.hpp rather than folded into EditorWidgets.hpp: that
+// vocabulary is imgui.h plus Astra::Range only, and the canvas family is kept
+// out of it so no editor widget acquires a node-editor dependency
+// (CanvasPopupScope.hpp:16-19 states the rule). This header IS node-editor
+// coupled -- it includes imgui_node_editor.h below, because ApplyGraphCanvasStyle
+// writes ed::GetStyle() -- which is exactly why it lives in that family and not
+// in EditorWidgets.
+
+#include "Settings/GraphCanvasSettings.hpp"  // editor.graph.*: the node, wire and pin metrics
+#include "Settings/GraphThemeSettings.hpp"   // editor.theme.graph.*: the grid pair and the hover border
+#include "Widgets/EditorTheme.hpp"
+
+#include <Arcane/Config/Settings.hpp>
+
+#include <imgui.h>
+#include <imgui_node_editor.h>
+
+namespace Arcane::Editor
+{
+    // ---- Node chrome metrics (canvas units at zoom 1) --------------------
+    // Both canvases wrote these as the same seven literals; they are now the
+    // editor.graph.* settings (S6-34, GraphCanvasSettings), read from the
+    // published snapshot. A canvas that ever wants to differ overrides through
+    // its own style application, not by re-spelling the number.
+    [[nodiscard]] inline float GraphNodeRounding()       { return Settings<GraphCanvasSettings>().nodeRounding; }
+    [[nodiscard]] inline float GraphNodeBorderWidth()    { return Settings<GraphCanvasSettings>().nodeBorderWidth; }
+    [[nodiscard]] inline float GraphNodeHovBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderHoverWidth; }
+    [[nodiscard]] inline float GraphNodeSelBorderWidth() { return Settings<GraphCanvasSettings>().nodeBorderSelectedWidth; }
+
+    // ---- Wire + pin metrics ----------------------------------------------
+    // The thickness handed to ed::Link is the REAL one even when the link is
+    // submitted fully transparent, or the wire would be hard to grab -- see
+    // GraphWire.hpp's channel note for why the visible curve is hand-drawn.
+    [[nodiscard]] inline float GraphWireThickness() { return Settings<GraphCanvasSettings>().wireThickness; }
+    // A pin dot's tessellation (editor.graph.pinSegments) and ring weight.
+    // The RADIUS is deliberately NOT here: it is the one pin value the two
+    // canvases genuinely disagree about (editor.graph.pinDotRadius on the
+    // shader canvas, 4.5 for spec §11.2's 9px on the Graph lens), so it stays
+    // a parameter at the call.
+    [[nodiscard]] inline int GraphPinSegments() { return Settings<GraphCanvasSettings>().pinSegments; }
+    [[nodiscard]] inline float GraphPinRingWidth() { return Settings<GraphPinRingSettings>().width; }
+    // The OPTIONAL outer ring DrawGraphPinDot adds around a dot (the shader
+    // canvas's "adapts to its input" mark on a resolved dynamic pin): its
+    // centreline sits this far outside the dot's radius, at this weight --
+    // thin, so it reads as a halo and not as a second, hollow pin
+    // (editor.graph.pinRing.outerGap / .outerWidth, S6-44).
+    [[nodiscard]] inline float GraphPinOuterRingGap()   { return Settings<GraphPinRingSettings>().outerGap; }
+    [[nodiscard]] inline float GraphPinOuterRingWidth() { return Settings<GraphPinRingSettings>().outerWidth; }
+
+    // ---- Grid palette -----------------------------------------------------
+    // The theme cvars editor.theme.graph.gridMinor / gridMajor (settings
+    // S6-27, Settings/GraphThemeSettings.hpp), read per frame by both canvases:
+    // GraphThemeColor(&GraphThemeSettings::gridMinor / ::gridMajor). The
+    // alphas are each octave's peak strength, not image opacity -- the backdrop
+    // itself is always written opaque (GraphGridPhase.hpp, GraphGridColors).
+    // The pair was byte-identical in both files BY ACCIDENT (the Graph lens
+    // inherited it); one definition is the whole fix.
+
+    // ---- Selection / hover accents ---------------------------------------
+    // The editor-wide outline language, so one accent means "selected"
+    // everywhere: the viewport outline composite's kSelectColor/kHoverColor
+    // (Source/Client/ArcaneRender/src/Arcane/Render/Nri/nodes/PickOutlineNodes.cpp:101).
+    //
+    // Selection IS Theme::kAmber -- exactly, to the last digit -- and
+    // EditorTheme.hpp:106-110 already names "the shader graph's selected-node
+    // border" among that token's own citations. Both files re-spelled the token
+    // as a literal; this spends it where it was authored to be spent. Hover
+    // cyan is the graph theme's own token, editor.theme.graph.hoverBorder
+    // (settings S6-27), written with the rest of the style at ed::CreateEditor
+    // and re-written by RefreshGraphCanvasStyle when the theme changes.
+    inline constexpr const ImVec4& kGraphNodeSelBorderColor = Theme::kAmber;
+
+    namespace ed = ax::NodeEditor;
+
+    // ---- The style application, and what a canvas may differ on -----------
+    //
+    // THE POINT OF THIS STRUCT is that the two canvases' style blocks wrote the
+    // same ed::Style fields in the same order and differed almost entirely in
+    // VALUES, with nothing tying the structure together. This applier writes 15
+    // of them: 10 colours (Grid, Bg, NodeBg, NodeBorder, HovNodeBorder,
+    // SelNodeBorder, GroupBg, GroupBorder, PinRect, PinRectBorder) and 5 scalars
+    // (NodeRounding, NodeBorderWidth, HoveredNodeBorderWidth,
+    // SelectedNodeBorderWidth, NodePadding).
+    //
+    // "Almost" is exact, not hedging: the shader canvas's old block wrote all 15,
+    // the Graph lens's wrote 13 -- it omitted the GroupBg/GroupBorder pair. The
+    // shared applier writes them for both, which for the Graph lens means
+    // Theme::kNone into two entries it never reads (it creates no group nodes),
+    // and is therefore a state change with no drawing consequence. That one
+    // asymmetry is the whole of the structural difference; everything else was
+    // field-for-field the same.
+    //
+    // A desc preserves the value divergence BY CONSTRUCTION, which is strictly
+    // better than the old arrangement where a structural change (a new style
+    // field, a reordering) could land on one canvas and silently not the other.
+    //
+    // The two divergences are RULINGS, not accidents, and are named fields
+    // rather than defaults so a caller has to state its side:
+    //
+    //   nodeBody / nodeBorder -- the surface tones. Controller ruling
+    //     2026-09-08 (written out at AssetGraphPanel.cpp's canvas-palette block):
+    //     the OptionD board is the redline for the Assets panel's Graph lens,
+    //     and the ruling explicitly DECLINES to drag the shader canvas onto it
+    //     -- that canvas has its own board, its own review history and no such
+    //     ruling. Unifying these re-opens a settled decision.
+    //   nodePadding -- the shader canvas measures its nodes from their content
+    //     and pads them; the Graph lens lays every row out by hand so its 24px
+    //     header band and total height are EXACT, which needs zero padding
+    //     (with none, a node's content origin IS ed::GetNodePosition, which is
+    //     what lets the pin geometry be computed with no frame of readback
+    //     lag). This is the one style field whose divergence is STRUCTURAL
+    //     rather than cosmetic.
+    //
+    // Everything else defaults to the editor-wide language above, so a canvas
+    // that says nothing gets the shared answer.
+    struct GraphCanvasStyleDesc
+    {
+        // No sane default: a canvas that leaves these unset draws invisible
+        // nodes, which is the intended tell.
+        ImVec4 nodeBody   = Theme::kNone;
+        ImVec4 nodeBorder = Theme::kNone;
+
+        // Group (comment box) nodes. Transparent by default because a canvas
+        // that never creates one -- the Graph lens does not -- has nothing to
+        // paint here.
+        ImVec4 groupBg     = Theme::kNone;
+        ImVec4 groupBorder = Theme::kNone;
+
+        // left, top, right, bottom, in canvas units.
+        ImVec4 nodePadding = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        ImVec4 hovBorder = GraphThemeColor(&GraphThemeSettings::hoverBorder);   // the published snapshot; RefreshGraphCanvasStyle keeps an open canvas current
+        ImVec4 selBorder = kGraphNodeSelBorderColor;
+        // editor.graph.* from the published snapshot, like hovBorder.
+        float  rounding       = GraphNodeRounding();
+        float  borderWidth    = GraphNodeBorderWidth();
+        float  hovBorderWidth = GraphNodeHovBorderWidth();
+        float  selBorderWidth = GraphNodeSelBorderWidth();
+    };
+
+    // One-time style for a node-editor context. Written to the PERSISTENT
+    // style (ed::GetStyle returns a mutable reference,
+    // imgui_node_editor.h:295) instead of pushed per frame, because every
+    // value here is latched into the object at BeginNode/BeginPin time
+    // (imgui_node_editor.cpp:5270-5278, 5367-5377) -- one assignment covers
+    // every node for the context's life. Call it with the context CURRENT,
+    // right after ed::CreateEditor.
+    inline void ApplyGraphCanvasStyle(const GraphCanvasStyleDesc& desc)
+    {
+        ed::Style& s = ed::GetStyle();
+        // The vendored grid AND background fill are switched off; our own
+        // lattice is drawn underneath instead -- DrawGraphGridFallback
+        // (Widgets/GraphGridPhase.hpp), through DrawGraphCanvasBackdrop.
+        // Wholesale replacement is the only option available: the built-in
+        // grid's 32 px spacing is a hardcoded local with no StyleVar and no LOD
+        // fade (imgui_node_editor.cpp:1506-1517).
+        s.Colors[ed::StyleColor_Grid] = Theme::kNone;
+        s.Colors[ed::StyleColor_Bg]   = Theme::kNone;
+        s.Colors[ed::StyleColor_NodeBg]        = desc.nodeBody;
+        s.Colors[ed::StyleColor_NodeBorder]    = desc.nodeBorder;
+        s.Colors[ed::StyleColor_HovNodeBorder] = desc.hovBorder;
+        s.Colors[ed::StyleColor_SelNodeBorder] = desc.selBorder;
+        s.Colors[ed::StyleColor_GroupBg]       = desc.groupBg;
+        s.Colors[ed::StyleColor_GroupBorder]   = desc.groupBorder;
+        // A pin draws nothing of its own except a hover rect
+        // (imgui_node_editor.cpp:575-594) -- that rectangle would fight the
+        // dot, so its alpha goes to zero and the dot IS the pin visual.
+        s.Colors[ed::StyleColor_PinRect]       = Theme::kNone;
+        s.Colors[ed::StyleColor_PinRectBorder] = Theme::kNone;
+        s.NodeRounding            = desc.rounding;
+        s.NodeBorderWidth         = desc.borderWidth;
+        s.HoveredNodeBorderWidth  = desc.hovBorderWidth;
+        s.SelectedNodeBorderWidth = desc.selBorderWidth;
+        s.NodePadding             = desc.nodePadding;
+        // EditorActions owns canvas shortcuts, including F, Delete and clipboard.
+        ed::EnableShortcuts(false);
+    }
+
+    // True when the CURRENT context's style already carries every value
+    // ApplyGraphCanvasStyle would write for `desc`.
+    [[nodiscard]] inline bool GraphCanvasStyleMatches(const GraphCanvasStyleDesc& desc)
+    {
+        const ed::Style& s = ed::GetStyle();
+        const auto same = [](const ImVec4& a, const ImVec4& b)
+        { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+        return same(s.Colors[ed::StyleColor_NodeBg], desc.nodeBody)
+            && same(s.Colors[ed::StyleColor_NodeBorder], desc.nodeBorder)
+            && same(s.Colors[ed::StyleColor_HovNodeBorder], desc.hovBorder)
+            && same(s.Colors[ed::StyleColor_SelNodeBorder], desc.selBorder)
+            && same(s.Colors[ed::StyleColor_GroupBg], desc.groupBg)
+            && same(s.Colors[ed::StyleColor_GroupBorder], desc.groupBorder)
+            && same(s.NodePadding, desc.nodePadding)
+            && s.NodeRounding == desc.rounding
+            && s.NodeBorderWidth == desc.borderWidth
+            && s.HoveredNodeBorderWidth == desc.hovBorderWidth
+            && s.SelectedNodeBorderWidth == desc.selBorderWidth;
+    }
+
+    // Per frame, with the canvas's context CURRENT and before ed::Begin: a
+    // theme change (editor.theme.graph.* publishes Live -- a preset switch,
+    // an import, a swatch edit) reaches an ALREADY-OPEN canvas without a
+    // reopen (settings S6-27 carried gap). The style is latched per node at
+    // BeginNode, so a write here lands on this frame's nodes. Unchanged
+    // values cost one compare and write nothing. True when it re-applied.
+    inline bool RefreshGraphCanvasStyle(const GraphCanvasStyleDesc& desc)
+    {
+        if (GraphCanvasStyleMatches(desc))
+            return false;
+        ApplyGraphCanvasStyle(desc);
+        return true;
+    }
+}

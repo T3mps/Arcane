@@ -13,9 +13,11 @@
 *.bat   text eol=crlf
 *.cmd   text eol=crlf
 *.ps1   text eol=crlf
+*.psm1  text eol=crlf
 
 # -- Cross-platform scripts and source -----------------------------------------
 *.sh    text eol=lf
+Dockerfile text eol=lf
 *.lua   text eol=lf
 *.cpp   text eol=lf
 *.hpp   text eol=lf
@@ -31,6 +33,7 @@
 *.html  text eol=lf
 *.svelte text eol=lf
 *.json  text eol=lf
+*.arcscene text eol=lf
 *.gltf  text eol=lf
 *.md    text eol=lf
 *.yml   text eol=lf
@@ -85,3 +88,10 @@ ReferenceProject/Saved/verify-layout.ini text eol=lf
 *.gz    binary
 *.tar   binary
 *.7z    binary
+
+# arcane_release: test keys and signed golden manifests are byte-exact (a CRLF breaks them)
+ArcaneHub/crates/arcane_release/tests/keys/** -text
+ArcaneHub/crates/arcane_release/tests/golden/** -text
+ArcaneHub/crates/arcane_release/keys/** -text
+# release scripts: the fake aws (no extension) and its recorded responses are replayed byte for byte
+scripts/release/tests/fake-aws/** text eol=lf

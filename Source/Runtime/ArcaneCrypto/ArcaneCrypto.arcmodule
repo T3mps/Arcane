@@ -1,0 +1,17 @@
+{
+  "name": "ArcaneCrypto",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "picosha2"
+    ],
+    "private": []
+  },
+  "platforms": {}
+}

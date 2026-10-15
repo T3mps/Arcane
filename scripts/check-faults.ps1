@@ -1,7 +1,7 @@
 # check-faults.ps1 -- Windows Event Log fault detector for Arcane executables.
 #
 # The engine's own crash capture (Diagnostics::Install, see
-# ArcaneClient/src/Arcane/Base/Diagnostics.cpp) cannot see a fault that
+# Source/Runtime/ArcaneCore/src/Arcane/Base/Diagnostics.cpp) cannot see a fault that
 # happens INSIDE a driver: nvwgf2umx.dll +0x1203ce sat unread in the
 # Windows Event Log for six weeks (2026-07-09/10) before anyone noticed --
 # every GPU-work session since had been run at the desk, away from this

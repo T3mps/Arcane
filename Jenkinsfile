@@ -26,10 +26,12 @@ pipeline {
                 }
                 stage('Provision (vcpkg SDL3)') {
                     // Self-heal: build SDL3 with the repo's static-md overlay
-                    // triplet if it is absent from the agent's vcpkg. Guarded on
-                    // presence -- the from-source build is expensive.
+                    // triplet (SDL3 itself as a DLL) if it is absent from the
+                    // agent's vcpkg -- or still the old static flavor, which the
+                    // script replaces. Guarded on presence -- the from-source
+                    // build is expensive.
                     steps {
-                        bat 'if not exist "%VCPKG_ROOT%\\installed\\x64-windows-static-md\\lib\\SDL3-static.lib" ( call scripts\\setup-vcpkg-deps.bat ) else ( echo [provision] SDL3 present -- skipping vcpkg build )'
+                        bat 'if not exist "%VCPKG_ROOT%\\installed\\x64-windows-static-md\\bin\\SDL3.dll" ( call scripts\\setup-vcpkg-deps.bat ) else ( echo [provision] SDL3 present -- skipping vcpkg build )'
                     }
                 }
                 stage('Generate') {
@@ -60,8 +62,8 @@ pipeline {
                     // in this pipeline but is never gated further once it does (same gap
                     // the ~[gpu] baseline note already documents).
                     steps {
-                        bat 'bin\\Debug-windows-x86_64-md\\arccook\\arccook.exe   --project ReferenceProject --check'
-                        bat 'bin\\Release-windows-x86_64-md\\arccook\\arccook.exe --project ReferenceProject --check'
+                        bat 'Binaries\\Debug-windows-x86_64-md\\arccook\\arccook.exe   --project ReferenceProject --check'
+                        bat 'Binaries\\Release-windows-x86_64-md\\arccook\\arccook.exe --project ReferenceProject --check'
                     }
                 }
                 stage('Tests (incl [gpu])') {
@@ -74,8 +76,8 @@ pipeline {
                         // Two -r flags in one invocation: JUnit for Jenkins own test view,
                         // JSON for the baseline check below. Confirmed working on the
                         // vendored Catch2 3.15.0 by RUNNING it, not by reading docs.
-                        bat 'cd bin\\Debug-windows-x86_64-md\\ArcaneTests   && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-debug.xml -r json::out=%WORKSPACE%\\test-results\\arcane-debug.json'
-                        bat 'cd bin\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml -r json::out=%WORKSPACE%\\test-results\\arcane-release.json'
+                        bat 'cd Binaries\\Debug-windows-x86_64-md\\ArcaneTests   && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-debug.xml -r json::out=%WORKSPACE%\\test-results\\arcane-debug.json'
+                        bat 'cd Binaries\\Release-windows-x86_64-md\\ArcaneTests && ArcaneTests.exe -r junit::out=%WORKSPACE%\\test-results\\arcane-release.xml -r json::out=%WORKSPACE%\\test-results\\arcane-release.json'
                         // -Invocation "unfiltered" NAMES WHAT THE TWO LINES
                         // ABOVE ACTUALLY RUN. The committed baselines are all
                         // "~[gpu]" figures; this lane has a real GPU and runs
@@ -99,14 +101,14 @@ pipeline {
                         // Same rationale as the Golden gate stage's post block below:
                         // the [gpu][thumbs][golden] case in THIS stage writes its own
                         // -actual/-diff PNGs under
-                        // bin/<Config>/ArcaneTests/ReferenceProject/Saved/Verify/thumbs/,
+                        // Binaries/<Config>/ArcaneTests/ReferenceProject/Saved/Verify/thumbs/,
                         // and a red here fails the BUILD before the Golden gate stage
                         // (and its post block) ever runs -- so without this block the
                         // pictures are written and then wiped with the workspace, and a
                         // CI failure of the thumbnail set arrives as a diffCount in the
                         // JUnit XML with no image to look at.
                         always {
-                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/**/*.png',
+                            archiveArtifacts artifacts: 'Binaries/**/ReferenceProject/Saved/Verify/**/*.png',
                                               allowEmptyArchive: true
                         }
                     }
@@ -151,7 +153,7 @@ pipeline {
                     }
                     post {
                         // Diff artifacts land under EACH exe's own directory
-                        // (bin/<Config>-windows-x86_64-md/<ArcaneRuntime|
+                        // (Binaries/<Config>-windows-x86_64-md/<ArcaneRuntime|
                         // ArcaneEditor>/ReferenceProject/Saved/Verify/*.png --
                         // Saved/ is project-gitignored, so this is the only
                         // way a failing lane's diff image survives the
@@ -162,7 +164,7 @@ pipeline {
                         // golden-gate.ps1 left on disk, at negligible cost
                         // on a clean run.
                         always {
-                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/**/*.png',
+                            archiveArtifacts artifacts: 'Binaries/**/ReferenceProject/Saved/Verify/**/*.png',
                                               allowEmptyArchive: true
                         }
                     }
@@ -191,7 +193,7 @@ pipeline {
                 }
                 stage('Scripted GPU-verify (--frames)') {
                     steps {
-                        bat 'bin\\Debug-windows-x86_64-md\\ArcaneRuntime\\ArcaneRuntime.exe --project ReferenceProject --frames 180'
+                        bat 'Binaries\\Debug-windows-x86_64-md\\ArcaneRuntime\\ArcaneRuntime.exe --project ReferenceProject --frames 180'
                     }
                 }
             }

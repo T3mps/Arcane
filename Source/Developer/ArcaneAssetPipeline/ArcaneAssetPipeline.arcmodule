@@ -1,0 +1,23 @@
+{
+  "name": "ArcaneAssetPipeline",
+  "type": "Developer",
+  "dependencies": {
+    "public": [
+      "ArcaneCore"
+    ],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "cgltf",
+      "nlohmann"
+    ],
+    "private": [
+      "bc7enc_rdo",
+      "glm",
+      "meshoptimizer",
+      "stb"
+    ]
+  },
+  "platforms": {}
+}

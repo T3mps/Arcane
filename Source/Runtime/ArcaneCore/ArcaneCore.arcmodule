@@ -1,0 +1,33 @@
+{
+  "name": "ArcaneCore",
+  "type": "Runtime",
+  "dependencies": {
+    "public": [],
+    "private": []
+  },
+  "thirdParty": {
+    "public": [
+      "Astra",
+      "Mosaic",
+      "glm",
+      "nlohmann",
+      "spdlog"
+    ],
+    "private": [
+      "enkiTS",
+      "picosha2"
+    ]
+  },
+  "platforms": {
+    "windows": {
+      "links": [
+        "dbghelp",
+        "user32",
+        "gdi32",
+        "bcrypt"
+      ]
+    }
+  },
+  "apiMacro": "ARC_CORE_API",
+  "apiHeader": "src/Arcane/Core/Api.hpp"
+}

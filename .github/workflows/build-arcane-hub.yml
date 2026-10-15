@@ -33,24 +33,29 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: ArcaneHub/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the commit of the action's `stable` branch (2026-10-09); the
+      # Rust toolchain itself still tracks stable.
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: clippy
-      # `-> ../../bin-int/hub-cargo`, not `-> target`: src-tauri/.cargo/config.toml
+      # `-> ../../Intermediate/Build/hub-cargo`, not `-> target`: src-tauri/.cargo/config.toml
       # redirects target-dir so cargo output lands beside every other Arcane
       # build artifact. Pointing the cache at the cargo default would simply
       # never hit -- slower, but not a failure, unlike the artifact path below.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ArcaneHub/src-tauri -> ../../bin-int/hub-cargo
+          workspaces: ArcaneHub/src-tauri -> ../../Intermediate/Build/hub-cargo
 
       # The pure modules (paths/state/engine/project) are the whole reason the
       # Hub splits logic out of the Tauri command layer. Gate on them.
@@ -81,12 +86,13 @@ jobs:
         working-directory: ArcaneHub
         run: npm run tauri build
 
-      # bin-int/hub-cargo/, NOT src-tauri/target/: the target-dir redirect in
+      # Intermediate/Build/hub-cargo/, NOT src-tauri/target/: the target-dir redirect in
       # src-tauri/.cargo/config.toml puts cargo output at the repo root. That
       # directory is gitignored, so on a clean runner a wrong path here fails
       # via `if-no-files-found: error`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: arcane-hub-installer
-          path: bin-int/hub-cargo/release/bundle/nsis/*-setup.exe
+          path: Intermediate/Build/hub-cargo/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+          retention-days: 14

@@ -213,14 +213,25 @@ namespace Manifold2D
             const Real maxHertz = (h > Real(0)) ? (Real(0.125) / h) : w.ContactHertz();
             const Real contactHertz = std::min(w.ContactHertz(), maxHertz);
             const SoftCoeffs contactSoft = MakeSoft(contactHertz, w.ContactDampingRatio(), h);
+            // Stiffer for static contacts to avoid bodies getting pushed through the
+            // ground (Box2D v3 solver.c: staticSoftness = b2MakeSoft(2 * contactHertz,
+            // ...)). Box2D picks it when a side has no solver body -- a static body;
+            // here that is a static body or a tile span. Kinematic bodies have solver
+            // bodies in Box2D (coloured like dynamic ones), so their contacts keep the
+            // regular softness.
+            const SoftCoeffs staticSoft = MakeSoft(Real(2) * contactHertz, w.ContactDampingRatio(), h);
 
             for (std::uint32_t c = 0; c < ctx.contactCount; ++c)
             {
                 ContactConstraint& cc = ctx.contacts[c];
 
-                cc.biasRate     = contactSoft.biasRate;
-                cc.massScale    = contactSoft.massScale;
-                cc.impulseScale = contactSoft.impulseScale;
+                const bool staticSide =
+                    !cc.bodyBIsBody || w.TypeSlot(cc.bodyB) == BodyType::Static ||
+                    w.TypeSlot(cc.bodyA) == BodyType::Static;
+                const SoftCoeffs& soft = staticSide ? staticSoft : contactSoft;
+                cc.biasRate     = soft.biasRate;
+                cc.massScale    = soft.massScale;
+                cc.impulseScale = soft.impulseScale;
 
                 const Vec2 n = cc.normal;
                 const Vec2 tangent(-n.y, n.x);
@@ -292,6 +303,18 @@ namespace Manifold2D
             }
         }
 
+        void SoftStep::BeginJointSubstep(SolverContext& ctx)
+        {
+            // Index-ordered, like every joint pass (determinism).
+            for (std::uint32_t k = 0; k < ctx.jointCount; ++k)
+            {
+                if (ctx.joints[k].joint != nullptr)
+                {
+                    ctx.joints[k].joint->BeginSubstep();
+                }
+            }
+        }
+
         void SoftStep::SolveJoints(SolverContext& ctx)
         {
             // One velocity-constraint pass over the joints (per sub-step). Joints
@@ -331,6 +354,7 @@ namespace Manifold2D
             // so any partition is scatter-safe and byte-identical at any worker count.
             PhysicsWorld& w = *ctx.world;
             const Vec2 g = ctx.gravity;
+            const bool well = w.GetGravityWell().enabled;
             const std::vector<std::uint32_t>& aw = w.AwakeBodies();
             for (std::size_t j = begin; j < end; ++j)
             {
@@ -343,6 +367,26 @@ namespace Manifold2D
                 float vx = m_bodyState[i].vx;
                 float vy = m_bodyState[i].vy;
                 float wv = m_bodyState[i].w;
+                // This body's gravity: the world vector plus the gravity well,
+                // evaluated at the body's CURRENT in-step position (start-of-step
+                // pose + the TGS delta accumulated by the earlier sub-steps), all
+                // times the per-body gravity scale. With no well and scale 1 the
+                // arithmetic below is exactly the old `vx += g.x * h`.
+                Real ax = g.x;
+                Real ay = g.y;
+                if (well)
+                {
+                    const Vec2 p0 = w.PosSlot(s);
+                    const Vec2 gw = w.GravityWellAccel(Vec2(p0.x + m_bodyState[i].dpx, p0.y + m_bodyState[i].dpy));
+                    ax += gw.x;
+                    ay += gw.y;
+                }
+                const Real gs = w.GravityScaleSlot(s);
+                if (gs != Real(1))
+                {
+                    ax *= gs;
+                    ay *= gs;
+                }
                 // Box2D v3 order (solver.c:102-106): damp the OLD velocity FIRST,
                 // then add the UNDAMPED gravity delta -- v = h*g + linearDamping*v_old.
                 // (Arcane has no external force/torque accumulators, so the delta is
@@ -357,8 +401,8 @@ namespace Manifold2D
                     const float f = static_cast<float>(Real(1) / (Real(1) + d * h));
                     vx *= f; vy *= f; wv *= f;
                 }
-                vx += static_cast<float>(g.x * h);
-                vy += static_cast<float>(g.y * h);
+                vx += static_cast<float>(ax * h);
+                vy += static_cast<float>(ay * h);
                 // Clamp to max linear speed (Box2D v3 b2IntegrateVelocitiesTask,
                 // solver.c:108-114). Manifold2D units == Box2D units.
                 const float maxLin   = static_cast<float>(w.MaxLinearVelocity());
@@ -1014,6 +1058,7 @@ namespace Manifold2D
             sc.h                 = static_cast<float>(h);
             sc.maxBiasVel        = maxBiasVel;
             sc.threshold         = threshold;
+            sc.traceHook         = ctx.traceHook;   // empty on the Step(dt) path
 
             // Bind the body-integrate range + the main-serial overflow/joint passes as
             // non-escaping lambdas (FunctionRef views -- they MUST outlive SolverWorker,
@@ -1024,9 +1069,19 @@ namespace Manifold2D
             auto overflowWarmStartFn   = [&]() { OverflowWarmStart(ctx); };
             auto overflowSolveFn       = [&](bool useBias) { OverflowSolve(ctx, h, useBias); };
             auto overflowRestitutionFn = [&]() { OverflowRestitution(ctx); };
+            // The bridge runs twice per sub-step (after WarmStart, after
+            // IntegratePositions). The FIRST pass of each sub-step opens a fresh
+            // per-sub-step budget for impulse-clamped drives (Joint::BeginSubstep:
+            // motors), so a motor delivers maxMotorTorque in every sub-step as in
+            // Box2D, not maxMotorTorque/substepCount over the whole step.
+            std::uint32_t jointPass = 0;
             auto jointBridgeFn = [&]()
             {
-                if (hasJoints) { SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx); }
+                if (hasJoints)
+                {
+                    if ((jointPass++ & 1u) == 0u) { BeginJointSubstep(ctx); }
+                    SyncVelToWorld(ctx); SolveJoints(ctx); SyncVelFromWorld(ctx);
+                }
             };
             sc.integrateVel        = integrateVelFn;
             sc.integratePos        = integratePosFn;

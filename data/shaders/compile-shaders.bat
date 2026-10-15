@@ -10,7 +10,7 @@
 :: (t=0, s=128, b=256, u=384). ShaderMake (vendored) replaces this script
 :: when the shader count outgrows explicit lines.
 ::
-:: SHARED TRUTH: ArcaneClient/src/Arcane/Render/ShaderConventions.hpp holds the
+:: SHARED TRUTH: Source/Client/ArcaneRender/src/Arcane/Render/ShaderConventions.hpp holds the
 :: canonical shift flags + entry/profile conventions for the runtime compile
 :: service (ShaderCompiler). SPIRV_FLAGS below must mirror kSpirvArgs there.
 ::
@@ -70,7 +70,7 @@ call :compile grid ps_main ps_6_5 grid_ps || exit /b 1
 :: graph_grid_vs/_ps were emitted here until the NRI Phase 5a final-review fix
 :: wave. Their only loader was GraphGridPass, deleted at Task 9.5a; the shader
 :: graph's backdrop is now drawn with ImGui primitives
-:: (ArcaneEditor/src/Widgets/GraphGridPhase.hpp, DrawGraphGridFallback), so
+:: (Source/Programs/ArcaneEditor/src/Widgets/GraphGridPhase.hpp, DrawGraphGridFallback), so
 :: graph_grid.hlsl was deleted with these two lines.
 :: The deliberate GPU-fault dispatch (GpuFaultInjector.hpp) -- the ONLY compute
 :: entry point in the tree, and not part of any render path. Built in every

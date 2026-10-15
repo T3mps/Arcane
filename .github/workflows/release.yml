@@ -1,0 +1,288 @@
+# Publishes an Arcane engine release (docs/superpowers/specs/2026-10-12-arcane-distribution-design.md s4).
+#   push of a v* tag  -> publish: build, sign, package, upload to R2, sign releases.json,
+#                        GitHub Release, rebuild the website.
+#   dispatch dry-run  -> a fixture build, packed and turned into a manifest locally;
+#                        nothing uploaded, no secrets, any branch.
+#   dispatch rehearsal (main only) -> a fixture build, really signed, published to
+#                        staging/ with the TEST manifest key, which no Hub trusts.
+#   dispatch rehearsal-unsigned (main only) -> the same without Windows signing:
+#                        tests the pipeline before Artifact Signing exists. staging/
+#                        only; a tag never publishes unsigned binaries.
+# Re-run only the failed jobs ("Re-run failed jobs"), never "Re-run all jobs": a
+# fresh signing gives the Windows archives new bytes under names already taken.
+# Rules (spec s4, roadmap D26): every third-party `uses:` pinned to a commit SHA
+# (release-tooling checks); a read-only token unless a job needs more; secrets only
+# in the `release` environment, whose jobs wait for the owner's approval; no
+# pull_request trigger. The engine stage is phase 1; until it lands a tag fails
+# closed at that step. Runbook: docs/releasing.md.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: dry-run (nothing uploaded, no secrets), rehearsal (main only; publishes a signed fixture to staging/) or rehearsal-unsigned (the same without Windows signing)
+        type: choice
+        options: [dry-run, rehearsal, rehearsal-unsigned]
+        default: dry-run
+
+permissions:
+  contents: read
+
+# No concurrency group: a newly queued run in a group cancels the one already
+# pending, so a dry run could silently cancel a release waiting behind an
+# approval. Writers are kept apart by R2's conditional writes instead: of two
+# runs, the later one fails before touching releases.json and says to re-run.
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.run.outputs.version }}
+      channel: ${{ steps.run.outputs.channel }}
+      mode: ${{ steps.run.outputs.mode }}
+      prefix: ${{ steps.run.outputs.prefix }}
+      released_at: ${{ steps.run.outputs.released_at }}
+      notes: ${{ steps.run.outputs.notes }}
+      ci_image: ${{ steps.run.outputs.ci_image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to GHCR (plan A's CI image is read, never built)
+        if: github.event_name == 'push'
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Decide the run
+        id: run
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+        run: bash scripts/release/prepare.sh
+
+  stage:
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows, runner: windows-2025 }
+          - { os: linux, runner: ubuntu-24.04 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      MODE: ${{ needs.prepare.outputs.mode }}
+      OS: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - name: Engine stage (phase 1)
+        if: env.MODE == 'publish'
+        shell: bash
+        run: |
+          echo "::error::Staging the real engine is phase 1 of the distribution spec (scripts/release/stage-engine.*), which has not landed; this tag cannot publish."
+          exit 1
+      - name: Fixture stage
+        if: env.MODE != 'publish'
+        shell: bash
+        run: bash scripts/release/stage-fixture.sh "$VERSION" "$OS" stage
+      # Artifacts drop file modes (every file arrives 644), which would ship
+      # Linux binaries without their exec bit; a tar keeps them.
+      - name: Keep the Linux stage's file modes
+        if: matrix.os == 'linux'
+        run: tar -cf stage.tar -C stage .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage-${{ matrix.os }}
+          path: ${{ matrix.os == 'linux' && 'stage.tar' || 'stage/' }}
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-windows:
+    needs: [prepare, stage]
+    if: needs.prepare.outputs.mode != 'dry-run' && needs.prepare.outputs.mode != 'rehearsal-unsigned'
+    runs-on: windows-2025
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: stage-windows
+          path: stage
+      - uses: ./.github/actions/sign-windows
+        with:
+          folder: ${{ github.workspace }}\stage\engine
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          account: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          profile: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage-windows-signed
+          path: stage/
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    needs: [prepare, stage, sign-windows]
+    # Unsigned Windows binaries may be packed only in a dry run or an unsigned
+    # rehearsal, which publishes to staging/ only (fail closed for a tag).
+    if: >-
+      ${{ !cancelled() && needs.stage.result == 'success' &&
+      (needs.sign-windows.result == 'success' ||
+      (needs.sign-windows.result == 'skipped' &&
+      (needs.prepare.outputs.mode == 'dry-run' || needs.prepare.outputs.mode == 'rehearsal-unsigned'))) }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows, runner: windows-2025 }
+          - { os: linux, runner: ubuntu-24.04 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      OS: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ${{ (matrix.os == 'windows' && needs.sign-windows.result == 'success') && 'stage-windows-signed' || format('stage-{0}', matrix.os) }}
+          path: stage
+      - name: Unpack the Linux stage with its file modes
+        if: matrix.os == 'linux'
+        run: tar -xf stage/stage.tar -C stage && rm stage/stage.tar
+      - name: Check the stage (the staged binary still runs after signing)
+        shell: bash
+        run: bash scripts/release/check-stage.sh stage "$VERSION" "$OS"
+      - name: Pack
+        shell: bash
+        run: bash scripts/release/pack.sh stage "dist/$OS" "$VERSION" "$OS"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  dry-run-manifest:
+    needs: [prepare, package]
+    # Explicit: in a dry run sign-windows is skipped, and a job whose ancestors
+    # include a skipped job is skipped too unless its `if` says otherwise.
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.prepare.outputs.mode == 'dry-run' }}
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
+      NOTES: ${{ needs.prepare.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - run: bash scripts/release/dry-run-manifest.sh dist "$VERSION" "$RELEASED_AT" "$NOTES"
+
+  publish:
+    needs: [prepare, package]
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.prepare.outputs.mode != 'dry-run' }}
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      MODE: ${{ needs.prepare.outputs.mode }}
+      PREFIX: ${{ needs.prepare.outputs.prefix }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      CHANNEL: ${{ needs.prepare.outputs.channel }}
+      RELEASED_AT: ${{ needs.prepare.outputs.released_at }}
+      NOTES: ${{ needs.prepare.outputs.notes }}
+    # The R2 credentials go only to the steps that use R2, never to the job,
+    # where `cargo install` runs every dependency's build script.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/arcrelease
+      - name: Install the pinned aws-cli
+        run: bash scripts/release/install-aws-cli.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Sign releases.json, upload the archives, publish
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: bash scripts/release/publish.sh "$MODE" "$PREFIX" "$VERSION" "$RELEASED_AT" "$NOTES" dist "$RUNNER_TEMP/publish"
+      - name: List archives left unreferenced
+        if: failure()
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: bash scripts/release/list-unreferenced.sh "$PREFIX" "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: GitHub Release (a permanent date record, no files)
+        if: env.MODE == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [ "$CHANNEL" = preview ]; then flags=(--prerelease); fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "The GitHub Release $GITHUB_REF_NAME exists already (a re-run)."
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Arcane $VERSION" --notes-file "$NOTES" "${flags[@]}"
+          fi
+      # The website rebuilds itself (its workflow, Task 16); this only tells it to.
+      # A StarworksDev GitHub App token scoped to the website repo, never a personal token.
+      - name: Website token
+        id: site-token
+        if: env.MODE == 'publish'
+        # The release is published by now; a missing app or key only skips the rebuild.
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.STARWORKS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.STARWORKS_APP_PRIVATE_KEY }}
+          owner: StarworksDev
+          repositories: StarworksWebsite
+          # repository_dispatch needs contents:write on the website; nothing more.
+          permission-contents: write
+      - name: Rebuild starworks.dev
+        if: env.MODE == 'publish' && steps.site-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.site-token.outputs.token }}
+        run: |
+          gh api repos/StarworksDev/StarworksWebsite/dispatches -f event_type=arcane-release \
+            -F "client_payload[version]=$VERSION" -F "client_payload[channel]=$CHANNEL" \
+            || echo "::warning::The website dispatch failed. The release is published; run the website's arcane-release workflow by hand."
+      - name: Website rebuild skipped
+        if: env.MODE == 'publish' && steps.site-token.outcome != 'success'
+        run: echo "::warning::No website token (is the Starworks Release Dispatch app installed on StarworksWebsite?). The release is published; run the website's arcane-release workflow by hand."
