@@ -14,6 +14,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -43,6 +45,9 @@ struct LiveTarget {
     std::chrono::steady_clock::time_point started{}; // set by the call's first exchange
     std::string clientId;                            // X-Remote-Client (spec s4.5); empty sends none
     const GlobalOptions* opt = nullptr;              // PostToHost's options: --retry-on-death rediscovers with them
+    // --retry-on-death (round 2, I-1): every live {pid, processStart} of the
+    // project when the call began. Rediscovery never retargets to one of them.
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> preexisting;
 };
 
 // Connects to 127.0.0.1:desc.port (ConnectSocketWithTimeout), sends BuildPost("/remote/v1/call", ...)

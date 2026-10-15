@@ -759,5 +759,89 @@ TEST_CASE("Run refuses --world and --read-only on a verb that posts no call", "[
         CHECK(usage.find(expected) != std::string::npos);
     }
 }
+// ---- Final fix round 2 (I-1): --retry-on-death's rediscovery ---------------
+//
+// A resend may go only to the dead target's REPLACEMENT: a host of the same
+// kind and project whose process did not exist when the call began (not in
+// the call's opening scan; identity is {pid, start}, never the pid alone).
+// With none, rediscovery answers at once, so the call reports host.died
+// promptly instead of waiting out --timeout.
+TEST_CASE("--retry-on-death retargets only to a new host of the dead target's kind and project, at once",
+          "[servitor][client]") {
+    namespace fs = std::filesystem;
+    const fs::path proj = fs::temp_directory_path() / ("servitor-rediscover-" + std::to_string(Arcane::EditorLock::Self().pid));
+    fs::remove_all(proj);
+    fs::create_directories(proj);
+    { std::ofstream(proj / "Game.arcproj") << "{}"; }
+    const auto self = Arcane::EditorLock::Self();
+    const std::string project = Servitor::PathUtf8(proj);
+    const auto write = [&](Arcane::Remote::HostKind kind, std::uint64_t start, const std::string& projectText) {
+        Arcane::Remote::Descriptor d;
+        d.hostKind = kind;
+        d.pid = self.pid;
+        d.processStart = start;
+        d.port = 1;
+        d.token = std::string(64, 'a');
+        d.project = projectText;
+        d.state = "ready";
+        d.heartbeatUnixMs = Servitor::NowUnixMs();
+        REQUIRE(Arcane::Remote::WriteDescriptorAtomic(Arcane::Remote::DescriptorPath(proj, kind, d.pid), d));
+        return d;
+    };
+    // The target that died: a runtime whose {pid, start} is no longer live.
+    Arcane::Remote::Descriptor dead;
+    dead.hostKind = Arcane::Remote::HostKind::Runtime;
+    dead.pid = self.pid;
+    dead.processStart = self.start + 1;
+    dead.project = project;
+    Servitor::GlobalOptions opt;
+    opt.project = project;
+    opt.retryOnDeath = true;
+    const auto targetFor = [&] {
+        Servitor::LiveTarget t;
+        t.descriptor = dead;
+        t.watch.command = "cvar.set";
+        t.timeoutMs = 30000;
+        t.started = std::chrono::steady_clock::now();
+        t.opt = &opt;
+        return t;
+    };
+    const auto death = Arcane::Remote::MakeError("cvar.set", "host.died", "gone", "relaunch");
+
+    {
+        // Only another KIND is live (an editor): never a replacement, and the
+        // answer comes at once, not after the 30 s --timeout.
+        write(Arcane::Remote::HostKind::Editor, self.start, project);
+        auto t = targetFor();
+        const auto began = std::chrono::steady_clock::now();
+        CHECK_FALSE(Servitor::RediscoverTarget(&t, death));
+        CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(2));
+        CHECK(Servitor::SameHostProcess(t.descriptor, dead));   // still the dead target
+    }
+    {
+        // A runtime of the same project whose pid equals the dead one's but
+        // whose start differs: a different process (pid reuse), and new.
+        const auto fresh = write(Arcane::Remote::HostKind::Runtime, self.start, project);
+        CHECK(fresh.pid == dead.pid);
+        CHECK_FALSE(Servitor::SameHostProcess(fresh, dead));
+        auto t = targetFor();
+        REQUIRE(Servitor::RediscoverTarget(&t, death));
+        CHECK(t.descriptor.hostKind == Arcane::Remote::HostKind::Runtime);
+        CHECK(t.descriptor.processStart == self.start);
+        CHECK(Servitor::SameHostProcess(t.descriptor, fresh));
+        // The same runtime, but live when the call began: never the target's
+        // replacement (a resend would run the command on a host it already reached).
+        auto pre = targetFor();
+        pre.preexisting.emplace_back(fresh.pid, fresh.processStart);
+        CHECK_FALSE(Servitor::RediscoverTarget(&pre, death));
+    }
+    {
+        // Same kind, another project: not a replacement.
+        write(Arcane::Remote::HostKind::Runtime, self.start, project + "-other");
+        auto t = targetFor();
+        CHECK_FALSE(Servitor::RediscoverTarget(&t, death));
+    }
+    fs::remove_all(proj);
+}
 
 #endif

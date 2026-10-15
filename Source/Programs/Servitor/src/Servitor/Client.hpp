@@ -74,6 +74,7 @@ struct GlobalOptions {
     // sends, the audit line's `client`. ParseGlobals sets DefaultClientId()
     // when the flag is absent; empty only in a hand-built GlobalOptions.
     std::string client;
+    bool clientSet = false;     // --client was given (Rule 3: a verb that posts nothing refuses it)
 };
 
 // "servitor/<kVersion> pid <this process id>": the caller name a call sends

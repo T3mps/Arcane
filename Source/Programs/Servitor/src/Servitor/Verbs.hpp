@@ -105,10 +105,12 @@ std::string FollowEventText(std::string_view topic, std::string_view data, const
 // when the descriptor names a project, else HostDiagnosticsDir). PostToHost and
 // the --follow streams (Task 22) share it.
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt);
-// --retry-on-death's RediscoverFn for a LiveTarget (user): rescans the
-// project's descriptors with target.opt's --host / --pid, drops the process
-// that died or hung (and any hung host), and retargets to the one host left,
-// polling within the call's budget. False when none appeared.
+// --retry-on-death's RediscoverFn for a LiveTarget (user): one rescan of the
+// project's descriptors, no polling. Retargets only to the dead target's
+// replacement: the same kind and project, not hung, a different {pid, start},
+// absent from target.preexisting (the hosts live when the call began), and
+// --pid's pid when given; exactly one such host. False otherwise, at once, so
+// the call reports host.died / host.hung promptly (round 2, I-1).
 bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death);
 // The call half of PostVerb against ONE chosen host: Call through LiveExchange
 // with the busy retry and the target watch. Prints nothing; safe to run for

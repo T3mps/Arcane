@@ -40,6 +40,10 @@ struct Scan {
     std::int64_t nowUnixMs = 0;                     // the one clock IsHung and heartbeatAgeMs use
 };
 
+// The same process: {pid, processStart}, never the pid alone (a recycled pid
+// is another process).
+bool SameHostProcess(const Arcane::Remote::Descriptor& a, const Arcane::Remote::Descriptor& b);
+
 // Reads <projectRoot>/Saved/Remote/*.json (ScanDirectory over DescriptorDir).
 Scan ScanProject(const std::filesystem::path& projectRoot);
 // Reads every *.json directly under `remoteDir`. A stale descriptor (IsStale)

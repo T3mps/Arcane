@@ -631,5 +631,45 @@ TEST_CASE("launch and commands refuse --host and --pid, status filters by them, 
     REQUIRE(only22.size() == 1);
     CHECK(only22[0]["pid"] == 22);
 }
+// ---- Final fix round 2 ----------------------------------------------------
+
+// M-1: an explicit --client on a verb that posts nothing (status, launch,
+// commands, list) would be dropped: refused. The default name is not a flag.
+TEST_CASE("an explicit --client is refused by verbs that post no call", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    std::string error;
+    REQUIRE(ParseFlags({"servitor", "status"}, opt, error));
+    CHECK_FALSE(opt.clientSet);
+    for (const Servitor::VerbRow& row : Servitor::VerbTable())
+        CHECK_FALSE(Servitor::UnusedGlobal(row, opt).has_value());   // the default is never a refusal
+    REQUIRE(ParseFlags({"servitor", "--client", "ci", "status"}, opt, error));
+    CHECK(opt.clientSet);
+    for (const char* words : {"status", "launch", "commands", "list"}) {
+        INFO(words);
+        const auto problem = Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt);
+        REQUIRE(problem.has_value());
+        CHECK(*problem == "--client does not apply to " + std::string(words));
+    }
+    for (const char* words : {"cvar set", "call", "wait", "quit"})
+        CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt).has_value());
+}
+
+// I-1: under --all a rediscovered "replacement" could be a sibling the fan-out
+// already reached, so the two flags never combine.
+TEST_CASE("--retry-on-death with --all is refused before anything is sent", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.all = true;
+    opt.yes = true;
+    opt.retryOnDeath = true;
+    for (const char* words : {"cvar set", "cvar get", "quit"}) {
+        INFO(words);
+        const auto problem = Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt);
+        REQUIRE(problem.has_value());
+        CHECK(problem->find("--retry-on-death") != std::string::npos);
+        CHECK(problem->find("--all") != std::string::npos);
+    }
+    opt.retryOnDeath = false;
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("cvar set"), opt).has_value());
+}
 
 #endif

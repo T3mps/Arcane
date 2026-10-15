@@ -1174,6 +1174,11 @@ std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions&
     // without --all it confirms nothing (final fix pass, C-I4).
     if (opt.yes && !opt.all)
         return std::string("--yes applies only with --all (it confirms a Drive command sent to several hosts)");
+    // Round 2 (I-1): under --all a rediscovered "replacement" could be a
+    // sibling the fan-out already reached, so a resend could run twice there.
+    if (opt.all && opt.retryOnDeath)
+        return std::string("--retry-on-death does not apply with --all (a resend could reach a host the fan-out "
+                           "already reached); retry one host at a time with --pid");
     const std::string_view words = row.words;
     // launch spawns a new host and commands prints the static manifest: neither
     // selects a host, so --host and --pid would be dropped (status filters by
@@ -1186,6 +1191,9 @@ std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions&
     }
     if (PostsCall(row))
         return std::nullopt;
+    // Round 2 (M-1): X-Remote-Client rides a /call only.
+    if (opt.clientSet)
+        return "--client does not apply to " + std::string(row.words);
     if (!opt.world.empty())
         return "--world does not apply to " + std::string(row.words);
     if (opt.readOnly)

@@ -211,6 +211,11 @@ std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::E
     return Arcane::Remote::DescriptorDir(*root, false);
 }
 
+bool SameHostProcess(const Arcane::Remote::Descriptor& a, const Arcane::Remote::Descriptor& b)
+{
+    return a.pid == b.pid && a.processStart == b.processStart;
+}
+
 std::optional<LiveHost> Select(const Scan& scan, const GlobalOptions& opt, Arcane::Remote::Envelope* error)
 {
     std::vector<const LiveHost*> matches;

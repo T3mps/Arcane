@@ -206,6 +206,7 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
                 return Fail(error, "--client needs 1 to " + std::to_string(Arcane::Remote::kMaxClientIdBytes) +
                                        " printable ASCII characters, got '" + std::string(v) + "'");
             out.client = v;
+            out.clientSet = true;
         } else if (flag == "--all") {
             // --all [editor|runtime|server]: the token after it is a kind filter
             // only when it spells one (a verb word is never a kind).
@@ -682,10 +683,18 @@ PostedCall PostToHost(const LiveHost& host, const CallRequest& req, GlobalOption
     target.watch = WatchFor(host, req.command, opt);
     target.clientId = opt.client.empty() ? DefaultClientId() : opt.client;   // X-Remote-Client (C-I1)
     target.opt = &opt;
+    if (opt.retryOnDeath) {
+        // Every host live as the call begins: rediscovery never retargets to
+        // one of them (round 2, I-1).
+        Arcane::Remote::Envelope ignored;
+        if (const auto dir = RemoteDirFor(opt, &ignored))
+            for (const LiveHost& live : ScanDirectory(*dir).live)
+                target.preexisting.emplace_back(live.descriptor.pid, live.descriptor.processStart);
+    }
     posted.client.token = host.descriptor.token;   // print-time redaction only; never printed
     posted.client.descriptor = PathUtf8(host.path);
     (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope, &RediscoverTarget);
-    if (target.descriptor.pid != host.descriptor.pid) {
+    if (!SameHostProcess(target.descriptor, host.descriptor)) {
         // --retry-on-death moved the call to a new host: report that one.
         posted.host->descriptor = target.descriptor;
         posted.host->path = target.watch.descriptorPath;
@@ -831,35 +840,42 @@ bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death)
     if (target == nullptr || target->opt == nullptr)
         return false;
     const GlobalOptions& opt = *target->opt;
-    const std::uint32_t oldPid = target->descriptor.pid;
-    const std::uint64_t oldStart = target->descriptor.processStart;
-    // Rediscover within what is left of the call's budget: the same project,
-    // the same --host / --pid filter, and a host that is NOT the one that died
-    // or hung (spec AM6: rediscover first, then retry against the new pid). A
-    // --pid that named the dead process never matches a new one.
-    const auto budgetEnd = (target->started == std::chrono::steady_clock::time_point{}
-                                ? std::chrono::steady_clock::now()
-                                : target->started) +
-                           std::chrono::milliseconds(target->timeoutMs);
-    for (;;) {
-        Arcane::Remote::Envelope refusal;
-        if (const auto dir = RemoteDirFor(opt, &refusal)) {
-            Scan scan = ScanDirectory(*dir);
-            std::erase_if(scan.live, [&](const LiveHost& h) {
-                return h.hung || (h.descriptor.pid == oldPid && h.descriptor.processStart == oldStart);
-            });
-            if (const auto found = Select(scan, opt, &refusal)) {
-                target->descriptor = found->descriptor;
-                const std::int64_t requestUnixMs = target->watch.requestUnixMs;
-                target->watch = WatchFor(*found, target->watch.command, opt);
-                target->watch.requestUnixMs = requestUnixMs;
-                return true;
-            }
-        }
-        if (std::chrono::steady_clock::now() + std::chrono::milliseconds(kDiscoveryPollMs) >= budgetEnd)
-            return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(kDiscoveryPollMs));
+    // One rescan, no polling (round 2, I-1): with no eligible replacement the
+    // call reports host.died (or host.hung) at once, never after --timeout.
+    // Eligible (spec AM6, "retry against the new pid") means the dead
+    // target's REPLACEMENT only: the same kind and project, not hung, not the
+    // process that died ({pid, start}), not any host that was already live
+    // when the call began (target->preexisting: a resend there could run the
+    // command on a host the call already reached), and --pid's pid when one
+    // was given. Exactly one such host is retargeted; none or several is no.
+    const Arcane::Remote::Descriptor dead = target->descriptor;
+    Arcane::Remote::Envelope refusal;
+    const auto dir = RemoteDirFor(opt, &refusal);
+    if (!dir)
+        return false;
+    const Scan scan = ScanDirectory(*dir);
+    const LiveHost* found = nullptr;
+    for (const LiveHost& h : scan.live) {
+        const Arcane::Remote::Descriptor& d = h.descriptor;
+        if (h.hung || d.hostKind != dead.hostKind || d.project != dead.project || SameHostProcess(d, dead))
+            continue;
+        if (opt.pid != 0 && d.pid != opt.pid)
+            continue;
+        const bool wasLive = std::find(target->preexisting.begin(), target->preexisting.end(),
+                                       std::make_pair(d.pid, d.processStart)) != target->preexisting.end();
+        if (wasLive)
+            continue;
+        if (found != nullptr)
+            return false;   // two candidates: never guess
+        found = &h;
     }
+    if (found == nullptr)
+        return false;
+    target->descriptor = found->descriptor;
+    const std::int64_t requestUnixMs = target->watch.requestUnixMs;
+    target->watch = WatchFor(*found, target->watch.command, opt);
+    target->watch.requestUnixMs = requestUnixMs;
+    return true;
 }
 
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt)
