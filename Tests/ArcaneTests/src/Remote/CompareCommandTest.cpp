@@ -44,7 +44,25 @@ static int g_copies = 0;
 static int g_reads = 0;
 static std::uint64_t g_ticket = 0;
 static bool g_retired = false;
-static const std::uint8_t kWhite[4] = {255, 255, 255, 255};
+// The probe images are solid kProbeSide x kProbeSide squares. CompareImages is
+// Playwright's ssim-cie94 cascade: it pads both images with a 15 px
+// magenta/green border, and a pixel whose 3x3 neighbourhood varies is judged
+// by a 31x31 SSIM window. A 1x1 probe's one pixel sits inside that identical
+// padding, so even black against white scores as antialiasing and passes.
+// A solid square has flat interiors, so a solid colour change is a real
+// difference at every pixel.
+static constexpr std::uint32_t kProbeSide = 32;
+static std::vector<unsigned char> SolidProbe(unsigned char value) {
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(kProbeSide) * kProbeSide * 4, value);
+    for (std::size_t i = 3; i < rgba.size(); i += 4)
+        rgba[i] = 255;
+    return rgba;
+}
+static const std::vector<unsigned char> kWhite = SolidProbe(255);
+static bool WriteBlackProbe(const std::filesystem::path& file) {
+    const std::vector<unsigned char> black = SolidProbe(0);
+    return Arcane::WritePngRgba(file, kProbeSide, kProbeSide, black.data());
+}
 
 static bool ArmWhite(std::uint64_t ticket, void*) {
     ++g_copies;
@@ -56,12 +74,12 @@ static bool DrainWhite(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw,
     if (!g_retired || ticket != g_ticket)
         return false;
     ++g_reads;
-    raw->width = 1;
-    raw->height = 1;
-    raw->rowPitch = 4;
+    raw->width = kProbeSide;
+    raw->height = kProbeSide;
+    raw->rowPitch = kProbeSide * 4;
     raw->bgra = true;
-    raw->mapped = kWhite;
-    raw->mappedBytes = 4;
+    raw->mapped = kWhite.data();
+    raw->mappedBytes = static_cast<std::uint32_t>(kWhite.size());
     return true;
 }
 static Arcane::Remote::ResolvedReference ResolveProbe(const std::filesystem::path&, const std::string& slot, void*) {
@@ -84,8 +102,7 @@ static bool BlessProbe(const std::filesystem::path&, const std::string&,
 TEST_CASE("compare Failed is ok true exit 8, and bless then matches", "[remote][compare]") {
     g_blesses = 0;
     g_ref = std::filesystem::temp_directory_path() / "servitor-bless-probe-black.png";
-    unsigned char black[4] = {0, 0, 0, 255};
-    REQUIRE(Arcane::WritePngRgba(g_ref, 1, 1, black));
+    REQUIRE(WriteBlackProbe(g_ref));
     Arcane::Remote::JobTable jobs;
     Arcane::Remote::CaptureHooks cap;
     cap.framesInFlight = 2;
@@ -193,8 +210,7 @@ TEST_CASE("compare while a screenshot is in flight is host.busy capture-pending"
     hooks.projectRoot = std::filesystem::temp_directory_path();
     RemoteCompareScope scope(cap, hooks, jobs);
     g_ref = std::filesystem::temp_directory_path() / "servitor-bless-probe-busy.png";
-    unsigned char black[4] = {0, 0, 0, 255};
-    REQUIRE(Arcane::WritePngRgba(g_ref, 1, 1, black));
+    REQUIRE(WriteBlackProbe(g_ref));
 
     Arcane::Remote::Call shot;
     shot.command = "capture.window";
@@ -233,8 +249,7 @@ TEST_CASE("a read-only bless is refused and a read-only compare still runs", "[r
     g_ticket = 0;
     g_blesses = 0;
     g_ref = std::filesystem::temp_directory_path() / "servitor-bless-probe-ro.png";
-    unsigned char black[4] = {0, 0, 0, 255};
-    REQUIRE(Arcane::WritePngRgba(g_ref, 1, 1, black));
+    REQUIRE(WriteBlackProbe(g_ref));
     Arcane::Remote::JobTable jobs;
     Arcane::Remote::CaptureHooks cap;
     cap.framesInFlight = 2;
@@ -342,8 +357,7 @@ const Arcane::Remote::Job* RunToEnd(Arcane::Remote::JobTable& jobs, const Arcane
 }
 
 void WriteBlack(const std::filesystem::path& file) {
-    const unsigned char black[4] = {0, 0, 0, 255};
-    REQUIRE(Arcane::WritePngRgba(file, 1, 1, black));
+    REQUIRE(WriteBlackProbe(file));
 }
 
 } // namespace
@@ -471,7 +485,7 @@ TEST_CASE("a Failed compare writes the capture and the diff as artifacts", "[rem
     CHECK(env.ok);
     CHECK(env.data["verdict"] == "Failed");
     CHECK(env.data["reference"] == "servitor-bless-probe");
-    CHECK(env.data["diffPixels"] == 1);
+    CHECK(env.data["diffPixels"] == kProbeSide * kProbeSide);   // every pixel, white against black
     CHECK(env.data["diffRatio"] == 1.0);
     CHECK(env.data["thresholds"]["maxDiffPixels"] == 0);
     CHECK(env.data["thresholds"]["maxDiffPixelRatio"].is_null());
@@ -490,9 +504,9 @@ TEST_CASE("a Failed compare writes the capture and the diff as artifacts", "[rem
     std::vector<unsigned char> rgba;
     const auto& capturePath = env.artifacts[0].path;
     REQUIRE(Arcane::LoadPngRgba(std::filesystem::path(std::u8string(capturePath.begin(), capturePath.end())), w, h, rgba));
-    CHECK(w == 1);
-    CHECK(h == 1);
-    CHECK(rgba == std::vector<unsigned char>{255, 255, 255, 255});
+    CHECK(w == kProbeSide);
+    CHECK(h == kProbeSide);
+    CHECK(rgba == kWhite);
 }
 
 TEST_CASE("compare failures: an unreadable reference, a refused bless, a lost copy", "[remote][compare]") {
