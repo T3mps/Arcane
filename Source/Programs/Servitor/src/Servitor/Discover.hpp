@@ -67,8 +67,10 @@ std::optional<std::filesystem::path> RemoteDirFor(const GlobalOptions& opt, Arca
 std::optional<LiveHost> Select(const Scan& scan, const GlobalOptions& opt, Arcane::Remote::Envelope* error);
 // {hosts:[{hostKind, pid, port, state, frame, abi, project, heartbeatAgeMs, hung}],
 //  stale:[{descriptor, reason, removed}], unreadable:[{descriptor, reason, remediation}]}.
-// Never a token.
-nlohmann::json StatusData(const Scan& scan);
+// Never a token. hosts lists only the live hosts `opt` selects by --host and
+// --pid (servitor status honours both as a filter, spec s4.6 Rule 3); stale
+// and unreadable are the whole scan's.
+nlohmann::json StatusData(const Scan& scan, const GlobalOptions& opt = {});
 
 // The directory that holds ArcaneEditor/, ArcaneRuntime/ and ArcaneServer/. First match wins:
 // opt.engine, then SERVITOR_ENGINE, then the source sibling of servitor's own folder,

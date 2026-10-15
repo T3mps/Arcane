@@ -70,7 +70,15 @@ struct GlobalOptions {
     std::string world;          // --world <name>; Call posts it as options.world when non-empty (ruling F14)
     bool all = false;           // --all: fan the command out to every matching live host (spec AM2)
     std::string allKind;        // --all editor|runtime|server: the token after --all when it is a kind
+    // --client <name> (spec s4.5/s4.6): the X-Remote-Client value every call
+    // sends, the audit line's `client`. ParseGlobals sets DefaultClientId()
+    // when the flag is absent; empty only in a hand-built GlobalOptions.
+    std::string client;
 };
+
+// "servitor/<kVersion> pid <this process id>": the caller name a call sends
+// when --client names none (spec s4.5).
+std::string DefaultClientId();
 
 // The log file a host of `kind` writes (Task 22, ruling E-3 as amended in rev 8),
 // derived exactly as Diagnostics' AttachLogSink derives it: the report directory's
@@ -118,7 +126,9 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 // through SplitVerbTokens (Verbs.hpp), which applies the same rule to a row's
 // undeclared flags. A single '-' stays a value (negative numbers). nullopt: none.
 std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
-// Prints "servitor: <problem>" and the usage text to stderr; returns 2.
+// "servitor: <problem>", the verbs and the global flags: the usage text.
+std::string UsageText(const std::string& problem);
+// Prints UsageText(problem) to stderr; returns 2.
 int PrintUsage(const std::string& problem);
 // Writes printed.stdoutText to stdout and printed.stderrText to stderr (main
 // thread only); returns exitCode.
@@ -138,13 +148,23 @@ struct ExchangeResult {
 };
 
 using ExchangeFn = ExchangeResult (*)(const std::string& requestBody, void* user);
+// --retry-on-death's rediscovery (spec AM6: rediscover first, then retry
+// against the new pid). Called with the exchange's user and the host.died /
+// host.hung envelope; true when `user` now targets a DIFFERENT live process
+// (a new pid or creation stamp), so a resend cannot reach the one that died.
+using RediscoverFn = bool (*)(void* user, const Arcane::Remote::Envelope& death);
 
 // Posts {id, command, args, options:{timeoutMs[, readOnly][, world]}} through `exchange`,
 // retries a provably-not-run busy answer with backoff until opt.timeoutMs, checks
 // the reply's protocol major, and renders it. Opens no socket itself.
 // *finalEnvelope (when non-null) receives the envelope it rendered.
+// With opt.retryOnDeath, an exit 7 is resent only when it is host.died or
+// host.hung AND `rediscover` (non-null) retargets `user` to a new process;
+// host.unreachable (a live host that closed the connection) and call.timeout
+// (a live host still running the command, exit 8) are never resent.
 Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchange, void* user,
-             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope = nullptr);
+             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope = nullptr,
+             RediscoverFn rediscover = nullptr);
 // servitor.exe's main calls this.
 int Run(int argc, char** argv);
 

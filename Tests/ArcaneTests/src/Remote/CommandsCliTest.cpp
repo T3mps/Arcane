@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Servitor/Commands.hpp>
 #include <Servitor/Client.hpp>
+#include <Servitor/Discover.hpp>
+#include <Arcane/Project/Project.hpp> // EditorLock::Self (the default --client names this pid)
+#include <algorithm>
 #include <Servitor/Verbs.hpp>
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
@@ -440,6 +443,193 @@ TEST_CASE("servitor list reads a live host's catalogue over the wire", "[servito
     CHECK(env.host.catalog == Arcane::Remote::CommandRegistry::Get().Generation());
     CHECK(printed.stdoutText.find(desc->token) == std::string::npos);
     session.Stop("test");
+}
+// ---- Final fix pass ----------------------------------------------------------
+
+namespace {
+
+// Parses `argv` (argv[0] is "servitor") with ParseGlobals.
+bool ParseFlags(std::vector<std::string> argv, Servitor::GlobalOptions& opt, std::string& error)
+{
+    std::vector<char*> raw;
+    for (std::string& a : argv)
+        raw.push_back(a.data());
+    return Servitor::ParseGlobals(static_cast<int>(raw.size()), raw.data(), opt, &error);
+}
+
+} // namespace
+
+// C-I1: every call names its caller (spec s4.5/s4.6): --client <name>, else
+// "servitor/<version> pid <pid>". A name the host would refuse is refused here.
+TEST_CASE("--client names the caller, the default names servitor and its pid, and a bad name is refused",
+          "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    std::string error;
+    REQUIRE(ParseFlags({"servitor", "--client", "agent-7 (ci)", "status"}, opt, error));
+    CHECK(opt.client == "agent-7 (ci)");
+    REQUIRE(ParseFlags({"servitor", "status"}, opt, error));
+    const std::string expected =
+        "servitor/" + std::string(Servitor::kVersion) + " pid " + std::to_string(Arcane::EditorLock::Self().pid);
+    CHECK(Servitor::DefaultClientId() == expected);
+    CHECK(opt.client == expected);
+    CHECK(Arcane::Remote::IsValidClientId(opt.client));
+    CHECK_FALSE(ParseFlags({"servitor", "--client", "caf\xc3\xa9", "status"}, opt, error));
+    CHECK(error.find("--client") != std::string::npos);
+    CHECK_FALSE(ParseFlags({"servitor", "--client", std::string(Arcane::Remote::kMaxClientIdBytes + 1, 'a'), "status"},
+                           opt, error));
+    CHECK_FALSE(ParseFlags({"servitor", "status", "--client"}, opt, error));
+    CHECK(Servitor::UsageText("x").find("--client <name>") != std::string::npos);
+}
+
+// C-M9: --verbose logs the whole request, and the help says so.
+TEST_CASE("the usage text says --verbose prints the request payload, values included", "[servitor][client]") {
+    const std::string text = Servitor::UsageText("x");
+    CHECK(text.find("--verbose prints each request's payload, including the values you pass") != std::string::npos);
+}
+
+namespace {
+
+// A scripted exchange: answers `codes` in order (the last repeats); "" is ok.
+struct Scripted {
+    std::vector<std::string> codes;
+    int calls = 0;
+    int rediscovered = 0;
+    bool rediscoverFinds = false;
+};
+
+Servitor::ExchangeResult ScriptedExchange(const std::string&, void* user)
+{
+    auto* s = static_cast<Scripted*>(user);
+    const std::size_t at = std::min<std::size_t>(static_cast<std::size_t>(s->calls), s->codes.size() - 1);
+    const std::string& code = s->codes[at];
+    ++s->calls;
+    Servitor::ExchangeResult r;
+    r.envelope = code.empty() ? Arcane::Remote::MakeOk("play.step", nlohmann::json{{"done", true}}, {})
+                              : Arcane::Remote::MakeError("play.step", code, "m", "r");
+    return r;
+}
+
+bool ScriptedRediscover(void* user, const Arcane::Remote::Envelope&)
+{
+    auto* s = static_cast<Scripted*>(user);
+    ++s->rediscovered;
+    return s->rediscoverFinds;
+}
+
+} // namespace
+
+// C-I2 (d) / C-M6: AM6's "rediscover first, then retry against the new pid".
+// A live host (host.unreachable: it closed the connection; call.timeout: it is
+// still running the command) is never re-posted, and a dead or hung one only
+// when rediscovery found a different process.
+TEST_CASE("--retry-on-death re-posts only after a death or hang that rediscovery replaced", "[servitor][client]") {
+    Servitor::CallRequest req;
+    req.command = "play.step";
+    req.args = {{"n", 100000}};
+    Servitor::GlobalOptions opt;
+    opt.retryOnDeath = true;
+    opt.timeoutMs = 400;
+    Arcane::Remote::ClientBlock client;
+    {
+        Scripted live{{"host.unreachable"}};
+        (void)Servitor::Call(req, opt, &ScriptedExchange, &live, &client, nullptr, &ScriptedRediscover);
+        CHECK(live.calls == 1);
+        CHECK(live.rediscovered == 0);
+        CHECK(client.exitCode == 7);
+    }
+    {
+        Scripted running{{"call.timeout"}};
+        (void)Servitor::Call(req, opt, &ScriptedExchange, &running, &client, nullptr, &ScriptedRediscover);
+        CHECK(running.calls == 1);
+        CHECK(client.exitCode == 8);
+    }
+    {
+        Scripted gone{{"host.died"}};   // nothing new came up
+        (void)Servitor::Call(req, opt, &ScriptedExchange, &gone, &client, nullptr, &ScriptedRediscover);
+        CHECK(gone.calls == 1);
+        CHECK(gone.rediscovered >= 1);
+        CHECK(client.exitCode == 7);
+    }
+    {
+        Scripted replaced{{"host.died", ""}};
+        replaced.rediscoverFinds = true;
+        (void)Servitor::Call(req, opt, &ScriptedExchange, &replaced, &client, nullptr, &ScriptedRediscover);
+        CHECK(replaced.calls == 2);
+        CHECK(client.exitCode == 0);
+        CHECK(client.retried);
+    }
+    {
+        Scripted hung{{"host.hung"}};
+        (void)Servitor::Call(req, opt, &ScriptedExchange, &hung, &client, nullptr, nullptr);   // no rediscovery
+        CHECK(hung.calls == 1);
+    }
+    {
+        Scripted off{{"host.died", ""}};
+        off.rediscoverFinds = true;
+        Servitor::GlobalOptions noFlag = opt;
+        noFlag.retryOnDeath = false;
+        (void)Servitor::Call(req, noFlag, &ScriptedExchange, &off, &client, nullptr, &ScriptedRediscover);
+        CHECK(off.calls == 1);
+        CHECK(off.rediscovered == 0);
+    }
+}
+
+// C-I4: Rule 3 in the client. launch and commands select no host, so --host
+// and --pid would be dropped: refused. status lists hosts, so it honours them
+// as a filter. --yes confirms a Drive command fanned out by --all; alone it
+// confirms nothing and is refused.
+TEST_CASE("launch and commands refuse --host and --pid, status filters by them, and --yes needs --all",
+          "[servitor][client]") {
+    Servitor::GlobalOptions host;
+    host.hostKind = "editor";
+    Servitor::GlobalOptions pid;
+    pid.pid = 4242;
+    for (const char* words : {"launch", "commands"}) {
+        INFO(words);
+        const Servitor::VerbRow* row = Servitor::FindVerb(words);
+        REQUIRE(row != nullptr);
+        const auto h = Servitor::UnusedGlobal(*row, host);
+        REQUIRE(h.has_value());
+        CHECK(*h == "--host does not apply to " + std::string(words));
+        const auto p = Servitor::UnusedGlobal(*row, pid);
+        REQUIRE(p.has_value());
+        CHECK(*p == "--pid does not apply to " + std::string(words));
+    }
+    for (const char* words : {"status", "list", "cvar get", "call", "wait"}) {
+        INFO(words);
+        CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb(words), host).has_value());
+        CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb(words), pid).has_value());
+    }
+    Servitor::GlobalOptions yes;
+    yes.yes = true;
+    for (const Servitor::VerbRow& row : Servitor::VerbTable()) {
+        INFO(row.words);
+        const auto problem = Servitor::UnusedGlobal(row, yes);
+        REQUIRE(problem.has_value());
+        CHECK(problem->find("--yes") != std::string::npos);
+        CHECK(problem->find("--all") != std::string::npos);
+    }
+    yes.all = true;
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("cvar set"), yes).has_value());
+
+    // status: --host / --pid filter the hosts it lists.
+    Servitor::Scan scan;
+    Servitor::LiveHost editor;
+    editor.descriptor.hostKind = Arcane::Remote::HostKind::Editor;
+    editor.descriptor.pid = 11;
+    Servitor::LiveHost runtime;
+    runtime.descriptor.hostKind = Arcane::Remote::HostKind::Runtime;
+    runtime.descriptor.pid = 22;
+    scan.live = {editor, runtime};
+    CHECK(Servitor::StatusData(scan)["hosts"].size() == 2);
+    const auto onlyEditor = Servitor::StatusData(scan, host)["hosts"];
+    REQUIRE(onlyEditor.size() == 1);
+    CHECK(onlyEditor[0]["hostKind"] == "editor");
+    Servitor::GlobalOptions pid22;
+    pid22.pid = 22;
+    const auto only22 = Servitor::StatusData(scan, pid22)["hosts"];
+    REQUIRE(only22.size() == 1);
+    CHECK(only22[0]["pid"] == 22);
 }
 
 #endif

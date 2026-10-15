@@ -226,10 +226,15 @@ TEST_CASE("verb rows declare their flags; unknown ones are refused and launch pa
     CHECK(Servitor::SplitVerbTokens(*status, std::vector<std::string>{"--bogus"}, nullptr)->find("unknown flag --bogus") !=
           std::string::npos);
 
+    // Final fix pass (C-M7): --force is the client's own (it ends the process
+    // after --timeout); the host has no force path and refuses `force`, so the
+    // posted args never carry it.
     REQUIRE(quit->args(std::vector<std::string>{"--force"}, args, &error));
-    CHECK(args == nlohmann::json{{"force", true}, {"discardChanges", false}});
+    CHECK(args == nlohmann::json{{"discardChanges", false}});
+    CHECK(Servitor::QuitForced(std::vector<std::string>{"--force"}));
+    CHECK_FALSE(Servitor::QuitForced(std::vector<std::string>{"--discard-changes"}));
     REQUIRE(quit->args(std::vector<std::string>{"--discard-changes"}, args, &error));
-    CHECK(args == nlohmann::json{{"force", false}, {"discardChanges", true}});
+    CHECK(args == nlohmann::json{{"discardChanges", true}});
     // quit --report stays refused (controller ruling); the problem says where --report goes.
     const auto report = Servitor::SplitVerbTokens(*quit, std::vector<std::string>{"--report", "r.json"}, nullptr);
     REQUIRE(report.has_value());
@@ -340,6 +345,29 @@ TEST_CASE("quit --force terminates a host that does not answer, once --timeout i
     int status = 0;
     ::waitpid(child, &status, 0);
 #endif
+}
+
+// Final fix pass (C-I6): a spawned host that is not ready by --timeout is still
+// running, so the answer is never host.busy (exit 5: provably not run, retry
+// is safe), which would invite a second launch beside it.
+TEST_CASE("a launched host not ready by --timeout is launch.timeout exit 8 naming the running pid", "[servitor][client]") {
+    auto env = Servitor::LaunchTimedOut(Arcane::Remote::HostKind::Runtime, 4242, 30000, "C:/p/logs/a.log",
+                                              "C:/p/runtime-4242.json", "");
+    REQUIRE_FALSE(env.errors.empty());
+    CHECK(env.command == "launch");
+    CHECK(env.errors[0].code == "launch.timeout");
+    CHECK(Arcane::Remote::ExitFromHost(env) == 8);
+    CHECK(env.errors[0].detail["pid"] == 4242);
+    CHECK(env.errors[0].detail["state"] == "starting");
+    CHECK(env.errors[0].detail["log"] == "C:/p/logs/a.log");
+    CHECK(env.errors[0].detail["descriptor"] == "C:/p/runtime-4242.json");
+    CHECK(env.errors[0].message.find("still running") != std::string::npos);
+    CHECK(env.errors[0].remediation.find("servitor wait ready --pid 4242") != std::string::npos);
+    CHECK(env.errors[0].remediation.find("servitor quit --pid 4242") != std::string::npos);
+    CHECK(env.host.pid == 4242);
+    CHECK(env.host.kind == "runtime");
+    auto booting = Servitor::LaunchTimedOut(Arcane::Remote::HostKind::Editor, 7, 100, "l", "d", "booting");
+    CHECK(booting.errors[0].detail["state"] == "booting");
 }
 
 #endif

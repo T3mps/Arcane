@@ -41,6 +41,8 @@ struct LiveTarget {
     std::size_t maxReplyBytes = kMaxReplyBytes;
     ObserveFn observe = &ObserveTarget;              // the Task 14 target watch; tests substitute it
     std::chrono::steady_clock::time_point started{}; // set by the call's first exchange
+    std::string clientId;                            // X-Remote-Client (spec s4.5); empty sends none
+    const GlobalOptions* opt = nullptr;              // PostToHost's options: --retry-on-death rediscovers with them
 };
 
 // Connects to 127.0.0.1:desc.port (ConnectSocketWithTimeout), sends BuildPost("/remote/v1/call", ...)

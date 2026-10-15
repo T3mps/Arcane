@@ -431,6 +431,31 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
     return plan;
 }
 
+Arcane::Remote::Envelope LaunchTimedOut(Arcane::Remote::HostKind kind, std::uint32_t pid, std::uint32_t timeoutMs,
+                                        const fs::path& log, const fs::path& descriptor, const std::string& lastState)
+{
+    // Not host.busy (exit 5: provably not run, retry is safe): a process IS
+    // running, and a second launch would fight it for the project (final fix
+    // pass, C-I6). launch.timeout is exit 8, a check that did not pass in time.
+    const std::string host = std::string(HostName(kind)) + " (pid " + std::to_string(pid) + ")";
+    const std::string pidText = std::to_string(pid);
+    auto env = Arcane::Remote::MakeError("launch", "launch.timeout",
+                                         host + " did not report ready within " + std::to_string(timeoutMs) +
+                                             " ms; it is still running",
+                                         "do not relaunch: wait for it with servitor wait ready --pid " + pidText +
+                                             ", or stop it with servitor quit --pid " + pidText +
+                                             " (add --force if it does not answer); its output is in " +
+                                             PathUtf8(log));
+    auto& detail = env.errors.front().detail;
+    detail["pid"] = pid;
+    detail["log"] = PathUtf8(log);
+    detail["descriptor"] = PathUtf8(descriptor);
+    detail["state"] = lastState.empty() ? std::string("starting") : lastState;
+    env.host.pid = pid;
+    env.host.kind = Arcane::Remote::ToString(kind);
+    return env;
+}
+
 int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<const std::string> hostArgs,
            Arcane::Remote::Envelope* out)
 {
@@ -532,15 +557,7 @@ int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<co
             return Arcane::Remote::ExitFromHost(*out);
         }
         if (std::chrono::steady_clock::now() >= deadline) {
-            *out = Arcane::Remote::MakeError("launch", "host.busy",
-                                             host + " did not report ready within " +
-                                                 std::to_string(opt.timeoutMs) + " ms; it is still running",
-                                             "do not relaunch; servitor wait ready --pid " + std::to_string(child->pid) +
-                                                 " (its output is in " + PathUtf8(log) + ")");
-            fillDetail(*out);
-            out->errors.front().detail["state"] = lastState.empty() ? std::string("starting") : lastState;
-            out->host.pid = child->pid;
-            out->host.kind = Arcane::Remote::ToString(kind);
+            *out = LaunchTimedOut(kind, child->pid, opt.timeoutMs, log, descriptor, lastState);
             return Arcane::Remote::ExitFromHost(*out);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(kLaunchPollMs));

@@ -54,6 +54,15 @@ namespace {
 ARC_CONSTANT("timing: how often an awaitsHost verb (wait) rescans for a host that has not written its descriptor yet")
 constexpr int kDiscoveryPollMs = 100;
 
+std::uint32_t ThisProcessId()
+{
+#if defined(_WIN32)
+    return static_cast<std::uint32_t>(::GetCurrentProcessId());
+#else
+    return static_cast<std::uint32_t>(::getpid());
+#endif
+}
+
 bool StdoutIsTty()
 {
 #if defined(_WIN32)
@@ -187,6 +196,16 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
             if (!value(v))
                 return false;
             out.world = v;
+        } else if (flag == "--client") {
+            // spec s4.5/s4.6: the caller's name, sent as X-Remote-Client and
+            // recorded in the host's audit log. Refused here exactly as the
+            // host would refuse it (final fix pass, C-I1).
+            if (!value(v))
+                return false;
+            if (!Arcane::Remote::IsValidClientId(v))
+                return Fail(error, "--client needs 1 to " + std::to_string(Arcane::Remote::kMaxClientIdBytes) +
+                                       " printable ASCII characters, got '" + std::string(v) + "'");
+            out.client = v;
         } else if (flag == "--all") {
             // --all [editor|runtime|server]: the token after it is a kind filter
             // only when it spells one (a verb word is never a kind).
@@ -202,6 +221,8 @@ bool ParseArgs(int argc, char** argv, GlobalOptions& out, std::string* error, st
             rest->emplace_back(flag);
         }
     }
+    if (out.client.empty())
+        out.client = DefaultClientId();
     // --json equals --format json and wins over TTY detection (AM4); a
     // non-TTY stdout with no format flag is JSON.
     if (out.json)
@@ -426,7 +447,18 @@ int PrintEnvelope(const Arcane::Remote::Envelope& env, const Arcane::Remote::Cli
     return Emit(Render(env, client, ro), client.exitCode);
 }
 
+std::string DefaultClientId()
+{
+    return "servitor/" + std::string(kVersion) + " pid " + std::to_string(ThisProcessId());
+}
+
 int PrintUsage(const std::string& problem)
+{
+    Write(stderr, UsageText(problem));
+    return 2;
+}
+
+std::string UsageText(const std::string& problem)
 {
     std::string text = "servitor: " + problem + "\nusage: servitor [global flags] <verb> [args]\nverbs:";
     for (const VerbRow& row : VerbTable()) {
@@ -439,9 +471,13 @@ int PrintUsage(const std::string& problem)
     }
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
             "--host editor|runtime|server, --pid <n>, --engine <root>, --world <name>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
-            "--retry-on-death, --verbose, --version\n";
-    Write(stderr, text);
-    return 2;
+            "--retry-on-death, --client <name>, --verbose, --version\n"
+            "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>)\n"
+            "  --verbose prints each request's payload, including the values you pass (a cvar set's value too); "
+            "the bearer token is redacted\n"
+            "  --retry-on-death resends only after the host died or hung and a new host was found (servitor status)\n"
+            "  --yes confirms a Drive command sent to several hosts with --all\n";
+    return text;
 }
 
 std::string VersionText()
@@ -481,7 +517,7 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 }
 
 Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchange, void* user,
-             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope)
+             Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope, RediscoverFn rediscover)
 {
     // Built per attempt: a busy retry resends options.timeoutMs as the budget
     // REMAINING, not the original one, so a job a retried call arms on the
@@ -518,9 +554,19 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
             CheckProtocol(req.command, last.envelope);
         const int code = last.connectionRefusedBeforeBody ? 5 : Arcane::Remote::ExitFromHost(last.envelope);
         const bool busy = code == 5 && !opt.noRetry && TransientBusy(req.command, last);
-        const bool death = code == 7 && opt.retryOnDeath;
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count();
+        // --retry-on-death (spec AM6): only a host that died or hung, and only
+        // once rediscovery found a DIFFERENT process to send it to. A live
+        // host that closed the connection (host.unreachable) or is still
+        // running the command (call.timeout, exit 8) is never re-posted: the
+        // first copy may have run (final fix pass, C-I2 d / C-M6).
+        const bool deathCandidate = code == 7 && opt.retryOnDeath && rediscover != nullptr && !busy &&
+                                    !last.envelope.errors.empty() &&
+                                    (last.envelope.errors.front().code == "host.died" ||
+                                     last.envelope.errors.front().code == "host.hung") &&
+                                    elapsed < static_cast<long long>(opt.timeoutMs);
+        const bool death = deathCandidate && rediscover(user, last.envelope);
         if ((busy || death) && elapsed + pauseMs < static_cast<long long>(opt.timeoutMs)) {
             client->retried = true;
             std::this_thread::sleep_for(std::chrono::milliseconds(pauseMs));
@@ -634,9 +680,17 @@ PostedCall PostToHost(const LiveHost& host, const CallRequest& req, GlobalOption
     if (noReplyGrace)
         target.replyGraceMs = 0;
     target.watch = WatchFor(host, req.command, opt);
+    target.clientId = opt.client.empty() ? DefaultClientId() : opt.client;   // X-Remote-Client (C-I1)
+    target.opt = &opt;
     posted.client.token = host.descriptor.token;   // print-time redaction only; never printed
     posted.client.descriptor = PathUtf8(host.path);
-    (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope);
+    (void)Call(req, opt, &LiveExchange, &target, &posted.client, &posted.envelope, &RediscoverTarget);
+    if (target.descriptor.pid != host.descriptor.pid) {
+        // --retry-on-death moved the call to a new host: report that one.
+        posted.host->descriptor = target.descriptor;
+        posted.host->path = target.watch.descriptorPath;
+        posted.client.descriptor = PathUtf8(target.watch.descriptorPath);
+    }
     return posted;
 }
 
@@ -768,6 +822,44 @@ InterruptScope::~InterruptScope()
 const std::atomic<int>& InterruptScope::Pending()
 {
     return g_interrupt;
+}
+
+bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death)
+{
+    (void)death;
+    auto* target = static_cast<LiveTarget*>(user);
+    if (target == nullptr || target->opt == nullptr)
+        return false;
+    const GlobalOptions& opt = *target->opt;
+    const std::uint32_t oldPid = target->descriptor.pid;
+    const std::uint64_t oldStart = target->descriptor.processStart;
+    // Rediscover within what is left of the call's budget: the same project,
+    // the same --host / --pid filter, and a host that is NOT the one that died
+    // or hung (spec AM6: rediscover first, then retry against the new pid). A
+    // --pid that named the dead process never matches a new one.
+    const auto budgetEnd = (target->started == std::chrono::steady_clock::time_point{}
+                                ? std::chrono::steady_clock::now()
+                                : target->started) +
+                           std::chrono::milliseconds(target->timeoutMs);
+    for (;;) {
+        Arcane::Remote::Envelope refusal;
+        if (const auto dir = RemoteDirFor(opt, &refusal)) {
+            Scan scan = ScanDirectory(*dir);
+            std::erase_if(scan.live, [&](const LiveHost& h) {
+                return h.hung || (h.descriptor.pid == oldPid && h.descriptor.processStart == oldStart);
+            });
+            if (const auto found = Select(scan, opt, &refusal)) {
+                target->descriptor = found->descriptor;
+                const std::int64_t requestUnixMs = target->watch.requestUnixMs;
+                target->watch = WatchFor(*found, target->watch.command, opt);
+                target->watch.requestUnixMs = requestUnixMs;
+                return true;
+            }
+        }
+        if (std::chrono::steady_clock::now() + std::chrono::milliseconds(kDiscoveryPollMs) >= budgetEnd)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kDiscoveryPollMs));
+    }
 }
 
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt)

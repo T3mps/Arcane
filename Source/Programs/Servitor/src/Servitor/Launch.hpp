@@ -9,6 +9,7 @@
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Json.hpp>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -51,14 +52,23 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
 
 // Spawns detached (ruling E-2) with --remote (+ --remote-descriptor when given), then polls the
 // descriptor until it is not IsStale and its state is ready (Arcane::Remote::IsReadyState: ready,
-// playing or paused), or opt.timeoutMs (host.busy, exit 5). Returns the exit code and fills *out.
+// playing or paused), or opt.timeoutMs (LaunchTimedOut: launch.timeout, exit 8). Returns the exit code and fills *out.
 //  - ok: MakeOk("launch", {pid, port, descriptor, hostKind, log, exe}) with the host block (exit 0);
 //  - the child exits before it is ready: host.died (exit 7), detail {pid, log, descriptor,
 //    lastState[, exitCode][, arcdiag]} (spec s4.7: the newest .arcdiag written after the spawn);
 //  - the spawn itself fails: internal (exit 1) with the OS error.
-// The child keeps running on a timeout: detail.pid names it, and the remediation says not to relaunch.
+// The child keeps running on a timeout: detail.pid names it, and the remediation says how to stop it.
 int Launch(Arcane::Remote::HostKind kind, const GlobalOptions& opt, std::span<const std::string> hostArgs,
            Arcane::Remote::Envelope* out);
+
+// The answer when the spawned host (pid) did not read ready within
+// timeoutMs: launch.timeout, exit 8 (a check ran and did not pass; never the
+// "provably not run, retry is safe" exit 5, because a process IS running).
+// detail {pid, log, descriptor, state}; the remediation names how to wait for
+// it (servitor wait ready --pid N) and how to stop it (servitor quit --pid N).
+Arcane::Remote::Envelope LaunchTimedOut(Arcane::Remote::HostKind kind, std::uint32_t pid, std::uint32_t timeoutMs,
+                                        const std::filesystem::path& log, const std::filesystem::path& descriptor,
+                                        const std::string& lastState);
 
 // The launch row's flags (Verbs.cpp): --headless, --backend <b>, --remote-descriptor <path>.
 std::span<const VerbFlag> LaunchFlags();

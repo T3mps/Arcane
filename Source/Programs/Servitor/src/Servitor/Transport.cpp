@@ -286,9 +286,28 @@ std::string Endpoint(const Arcane::Remote::Descriptor& desc)
     return "127.0.0.1:" + std::to_string(desc.port);
 }
 
-// The envelope one read ended in.
+// The body was sent, no reply came by the deadline, and the watch's every
+// sample (the last one included) said the process is alive with a fresh
+// heartbeat: nothing died, and the command may still be running. call.timeout
+// (exit 8, a check that did not pass in time; spec s6.6), never
+// host.unreachable (exit 7, "rediscover first") -- final fix pass, C-I2 (c).
+Arcane::Remote::Envelope CallTimeout(const std::string& command, const Arcane::Remote::Descriptor& desc,
+                                     long long waitedMs)
+{
+    auto env = Arcane::Remote::MakeError(
+        command, "call.timeout",
+        "no reply from the host at " + Endpoint(desc) + " within " + std::to_string(waitedMs) +
+            " ms; the host is alive, and the command may still be running",
+        "servitor status shows the host; wait for the command to finish, or call again with a longer --timeout");
+    env.errors.front().detail = {{"inFlight", true}, {"waitedMs", waitedMs}};
+    StampHost(env, desc);
+    return env;
+}
+
+// The envelope one read ended in. `watched`: a target watch sampled the host
+// live on every wake, so a deadline is call.timeout, not host.unreachable.
 Arcane::Remote::Envelope FromReadEnd(ReadOutcome& read, const std::string& command,
-                                     const Arcane::Remote::Descriptor& desc, long long waitedMs)
+                                     const Arcane::Remote::Descriptor& desc, long long waitedMs, bool watched)
 {
     switch (read.end) {
         case ReadEnd::Reply:
@@ -306,6 +325,8 @@ Arcane::Remote::Envelope FromReadEnd(ReadOutcome& read, const std::string& comma
         case ReadEnd::PollFailed:
             return Unreachable(command, desc, "waiting on the connection to " + Endpoint(desc) + " kept failing");
         case ReadEnd::Deadline:
+            if (watched)
+                return CallTimeout(command, desc, waitedMs);
             break;
     }
     return Unreachable(command, desc,
@@ -371,7 +392,8 @@ ExchangeResult LiveExchange(const std::string& requestBody, void* user)
     if (guard.sock == INVALID_SOCK)
         return notSent("connection-refused", "could not connect to the host at " + Endpoint(desc));
     NoSigPipe(guard.sock);
-    const std::string request = Arcane::Remote::BuildPost("/remote/v1/call", desc.port, desc.token, requestBody);
+    const std::string request =
+        Arcane::Remote::BuildPost("/remote/v1/call", desc.port, desc.token, requestBody, target->clientId);
     if (!Arcane::SetNonBlocking(guard.sock, true) || !SendUntil(guard.sock, request, deadline))
         return notSent("connection-reset",
                        "the host at " + Endpoint(desc) + " did not take the whole request; it was not run");
@@ -385,7 +407,8 @@ ExchangeResult LiveExchange(const std::string& requestBody, void* user)
         }
     }
     result.envelope = FromReadEnd(read, command, desc,
-                                  std::chrono::duration_cast<std::chrono::milliseconds>(deadline - target->started).count());
+                                  std::chrono::duration_cast<std::chrono::milliseconds>(deadline - target->started).count(),
+                                  target->observe != nullptr);
     return result;
 }
 
@@ -425,7 +448,7 @@ std::optional<nlohmann::json> GetJson(const Arcane::Remote::Descriptor& desc, st
         return fail(Internal(command, desc, read.reply.status,
                              json.is_discarded() ? (tooDeep ? "too-deep" : "not-json") : "not-an-envelope"));
     }
-    return fail(FromReadEnd(read, command, desc, timeoutMs));
+    return fail(FromReadEnd(read, command, desc, timeoutMs, false));
 }
 
 namespace {

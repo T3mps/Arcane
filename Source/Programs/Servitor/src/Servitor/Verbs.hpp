@@ -67,6 +67,10 @@ bool PostsCall(const VerbRow& row);
 // <verb>" (or --read-only) for the first one given to such a verb; nullopt otherwise.
 std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt);
 
+// quit's tokens carry --force: the client ends the process after --timeout.
+// The host has no force path (C-M7), so it is never posted in host.quit's args.
+bool QuitForced(std::span<const std::string> rest);
+
 // The tokens after a verb, split by the row's declared flags.
 struct VerbTokens {
     std::vector<std::string> positional;
@@ -101,6 +105,11 @@ std::string FollowEventText(std::string_view topic, std::string_view data, const
 // when the descriptor names a project, else HostDiagnosticsDir). PostToHost and
 // the --follow streams (Task 22) share it.
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt);
+// --retry-on-death's RediscoverFn for a LiveTarget (user): rescans the
+// project's descriptors with target.opt's --host / --pid, drops the process
+// that died or hung (and any hung host), and retargets to the one host left,
+// polling within the call's budget. False when none appeared.
+bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death);
 // The call half of PostVerb against ONE chosen host: Call through LiveExchange
 // with the busy retry and the target watch. Prints nothing; safe to run for
 // distinct hosts on distinct threads (--all).

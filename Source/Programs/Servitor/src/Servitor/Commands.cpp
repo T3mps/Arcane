@@ -96,7 +96,9 @@ constexpr ManifestExit kManifestExits[] = {
     {5, "host.busy: provably not run, retryable (minimized, queue-full, capture-pending)", false},
     {6, "the host answered and the operation failed (entity.not-found, compare.missing-reference, ...)", false},
     {7, "unreachable, died or restarting: host.unreachable, host.died, host.hung, host.restarting", false},
-    {8, "a check ran and did not pass: compare.failed, a wait timeout (ok true, no errors)", false},
+    {8, "a check ran and did not pass: compare.failed, a wait or step timeout (ok true, no errors), call.timeout, "
+        "launch.timeout",
+     false},
     {9, "launcher: engine.not-found, package.not-installed, package.incompatible", true},
     {130, "interrupted (SIGINT)", false},
     {143, "terminated (SIGTERM)", false},

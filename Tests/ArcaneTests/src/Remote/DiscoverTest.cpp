@@ -253,7 +253,10 @@ TEST_CASE("HostDiagnosticsDir resolves through HostsDir and is empty when the en
 
 namespace {
 
+std::string g_discoverCaller;   // the last discover.noop call's Call::callerId (final fix pass, C-I1)
+
 Arcane::Remote::CommandResult DiscoverNoop(const Arcane::Remote::Call& call, void*) {
+    g_discoverCaller = call.callerId;
     Arcane::Remote::CommandResult r;
     r.envelope = Arcane::Remote::MakeOk(call.command, nlohmann::json{{"noop", true}}, Arcane::Remote::HostBlock{});
     return r;
@@ -336,8 +339,11 @@ TEST_CASE("LiveExchange returns the command's envelope; a wrong token is auth.de
         R"({"id":"d1","command":"discover.noop","args":{"position":[0,0,0]},"options":{"timeoutMs":5000}})";
 
     auto good = DiscoverTarget(dir, port, token);
+    good.clientId = "agent-7 (ci)";   // the X-Remote-Client value (C-I1): the host's Call::callerId
+    g_discoverCaller.clear();
     const auto ok = DiscoverExchange(good, body, &dispatcher);
     CHECK_FALSE(ok.connectionRefusedBeforeBody);
+    CHECK(g_discoverCaller == "agent-7 (ci)");
     CHECK(ok.envelope.ok);
     CHECK(ok.envelope.command == "discover.noop");
     CHECK(ok.envelope.data["noop"] == true);
@@ -533,7 +539,11 @@ TEST_CASE("a reply past the byte cap is refused as internal exit 1", "[servitor]
     CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
 }
 
-TEST_CASE("a host that never replies is host.unreachable exit 7 at the call's deadline", "[servitor][client]") {
+// Final fix pass (C-I2): the body was sent and the watch still says the host
+// is alive and its heartbeat fresh, so nothing died: the command may still be
+// running. That is call.timeout (exit 8, a check that did not pass in time),
+// never host.unreachable (exit 7, "rediscover first") and never a relaunch.
+TEST_CASE("a live host that never replies is call.timeout exit 8 at the call's deadline", "[servitor][client]") {
     RemoteTest::CannedServer host("", /*holdOpen=*/true);
     auto target = CannedTarget(host.Port());
     target.timeoutMs = 200;
@@ -544,8 +554,11 @@ TEST_CASE("a host that never replies is host.unreachable exit 7 at the call's de
         std::chrono::steady_clock::now() - started).count();
     CHECK_FALSE(r.connectionRefusedBeforeBody);
     REQUIRE_FALSE(r.envelope.errors.empty());
-    CHECK(r.envelope.errors[0].code == "host.unreachable");
-    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 7);
+    CHECK(r.envelope.errors[0].code == "call.timeout");
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 8);
+    CHECK(r.envelope.errors[0].detail.value("inFlight", false));
+    CHECK(r.envelope.errors[0].remediation.find("relaunch") == std::string::npos);
+    CHECK(r.envelope.errors[0].remediation.find("servitor status") != std::string::npos);
     CHECK(tookMs >= 150);
     CHECK(tookMs < 3000);
     // A second exchange of the same call shares the spent budget: it does not

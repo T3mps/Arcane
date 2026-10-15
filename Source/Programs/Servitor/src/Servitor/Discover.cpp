@@ -264,11 +264,16 @@ std::optional<LiveHost> Select(const Scan& scan, const GlobalOptions& opt, Arcan
     return chosen;
 }
 
-nlohmann::json StatusData(const Scan& scan)
+nlohmann::json StatusData(const Scan& scan, const GlobalOptions& opt)
 {
     nlohmann::json hosts = nlohmann::json::array();
     for (const LiveHost& host : scan.live) {
         const Arcane::Remote::Descriptor& d = host.descriptor;
+        // --host / --pid select hosts here as Select does (Rule 3: honoured, never dropped).
+        if (!opt.hostKind.empty() && opt.hostKind != Arcane::Remote::ToString(d.hostKind))
+            continue;
+        if (opt.pid != 0 && opt.pid != d.pid)
+            continue;
         // max(0, now - heartbeat) on the scan's clock, the one IsHung used;
         // unsigned so a garbled heartbeat cannot overflow.
         std::int64_t age = 0;
@@ -367,7 +372,7 @@ int StatusVerb(std::span<const std::string> /*rest: Run refuses any; the row tak
     Arcane::Remote::ClientBlock client;
     Arcane::Remote::Envelope env;
     if (const auto dir = RemoteDirFor(opt, &env)) {
-        env = Arcane::Remote::MakeOk("status", StatusData(ScanDirectory(*dir)), {});
+        env = Arcane::Remote::MakeOk("status", StatusData(ScanDirectory(*dir), opt), {});
     } else {
         env.command = "status";
     }

@@ -232,16 +232,25 @@ bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
         return Fail(error, *problem);
     if (!tokens.positional.empty())
         return Fail(error, "quit takes no arguments, got " + tokens.positional.front());
-    bool force = false;
     bool discard = false;
     for (const auto& [flag, value] : tokens.flags) {
         (void)value;
-        force = force || flag == "--force";
         discard = discard || flag == "--discard-changes";
     }
-    out = {{"force", force}, {"discardChanges", discard}};
+    // --force is servitor's own (QuitForced): the host has no force path and
+    // refuses a `force` arg (final fix pass, C-M7), so it is never posted.
+    out = {{"discardChanges", discard}};
     return true;
 }
+
+} // namespace
+
+bool QuitForced(std::span<const std::string> rest)
+{
+    return std::find(rest.begin(), rest.end(), std::string("--force")) != rest.end();
+}
+
+namespace {
 
 bool WaitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
 {
@@ -591,7 +600,7 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     std::string error;
     if (!QuitArgs(rest, req.args, &error))
         return PrintUsage(error);
-    const bool force = req.args.value("force", false);
+    const bool force = QuitForced(rest);
     const auto started = std::chrono::steady_clock::now();
     PostedCall posted = PostVerb(*FindVerb("quit"), req, opt, force);
     if (!force || !posted.host)
@@ -1161,6 +1170,20 @@ bool PostsCall(const VerbRow& row)
 
 std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt)
 {
+    // --yes confirms a Drive command fanned out to several hosts (spec AM2);
+    // without --all it confirms nothing (final fix pass, C-I4).
+    if (opt.yes && !opt.all)
+        return std::string("--yes applies only with --all (it confirms a Drive command sent to several hosts)");
+    const std::string_view words = row.words;
+    // launch spawns a new host and commands prints the static manifest: neither
+    // selects a host, so --host and --pid would be dropped (status filters by
+    // them, list and every posting verb select by them).
+    if (words == "launch" || words == "commands") {
+        if (!opt.hostKind.empty())
+            return "--host does not apply to " + std::string(words);
+        if (opt.pid != 0)
+            return "--pid does not apply to " + std::string(words);
+    }
     if (PostsCall(row))
         return std::nullopt;
     if (!opt.world.empty())
