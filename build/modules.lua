@@ -31,6 +31,10 @@ function arc_discover_sdl3()
     if SDL3_INCLUDE_DIR then return end
     VCPKG_ROOT = os.getenv("VCPKG_ROOT")
     if os.target() == "windows" then
+        -- scripts\generate.bat's rule: an unset VCPKG_ROOT falls back to C:\vcpkg
+        -- when vcpkg is installed there (the hosted runners), so arcbuild's own
+        -- premake run (`arcbuild package`) resolves SDL3 the way the engine build does.
+        if not VCPKG_ROOT and os.isfile("C:/vcpkg/vcpkg.exe") then VCPKG_ROOT = "C:/vcpkg" end
         if not VCPKG_ROOT then
             error("VCPKG_ROOT environment variable is not set.\nSet it to your vcpkg installation directory, e.g.:\n  setx VCPKG_ROOT C:\\vcpkg\nThen restart your terminal and generate again.")
         end
