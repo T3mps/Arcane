@@ -11,6 +11,7 @@
 
 #include "PickOutlineNodes.hpp"
 
+#include <Arcane/Render/DepthConventionMap.hpp>
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
@@ -579,7 +580,7 @@ namespace Arcane
             // Depth-tested AND written, forward-Z [0,1] -- LESS is "nearer wins"
             // against the 1.0 the pass cleared to. This is what makes two
             // overlapping meshes resolve by depth, not by emission order.
-            desc.outputMerger.depth.compareOp = nri::CompareOp::LESS;
+            desc.outputMerger.depth.compareOp = NearerWinsOp(kSelectedDepthConvention);
         });
         if (!pipeline)
             return;   // already logged + latched by the cache

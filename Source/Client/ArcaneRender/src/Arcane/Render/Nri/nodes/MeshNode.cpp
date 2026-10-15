@@ -11,6 +11,7 @@
 
 #include "MeshNode.hpp"
 
+#include <Arcane/Render/DepthConventionMap.hpp>
 #include <Arcane/Render/Nri/GpuScene.hpp>                  // the instance / args / visible-index buffers Record draws from (F3 plan 1 T7)
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
@@ -829,7 +830,7 @@ namespace Arcane
             // (PipelineStateFor: opaque and masked write, transparent tests
             // only), carried in `key.depthWrite` above and stamped by the
             // cache -- so this callback sets only the shared compare op.
-            desc.outputMerger.depth.compareOp = nri::CompareOp::LESS;
+            desc.outputMerger.depth.compareOp = NearerWinsOp(kSelectedDepthConvention);
         });
     }
 

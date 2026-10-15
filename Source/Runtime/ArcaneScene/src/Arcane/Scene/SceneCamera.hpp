@@ -14,6 +14,7 @@
 
 #include <Arcane/Base/Log.hpp>              // ARC_WARN (degenerate-basis fallback, Task 7/F2a)
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/DepthConvention.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView: render.ortho2D.depthRange (S6-9)
 #include <Arcane/Scene/ViewTransform.hpp>
 
