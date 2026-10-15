@@ -178,9 +178,12 @@ std::optional<Envelope> ParseArgs(const Call& call, std::filesystem::path& outFi
     if (!out.is_string() || out.get<std::string>().empty())
         return MakeError(call.command, "arg.invalid", "out must be a non-empty path", std::string(kUsage));
     const std::string text = out.get<std::string>();
-    // The wire is UTF-8; a byte sequence that is not makes the path
-    // conversion throw (std::system_error on Windows), which must never
-    // escape onto the host main thread.
+    // The wire is UTF-8. Check it explicitly: on POSIX the path conversion
+    // takes any bytes, so only Windows would refuse by throwing.
+    if (!Detail::IsValidUtf8(text))
+        return MakeError(call.command, "arg.invalid", "out is not a valid UTF-8 path", std::string(kUsage));
+    // The conversion can still throw (std::system_error on Windows), which
+    // must never escape onto the host main thread.
     std::filesystem::path path;
     try {
         path = std::filesystem::path(std::u8string(text.begin(), text.end()));

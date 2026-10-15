@@ -56,6 +56,12 @@ Astra::Registry* PickRegistry(const Call& call, Envelope& refusal);
 
 Error MakeIssue(std::string code, std::string message, std::string remediation);
 
+// Strict UTF-8 (no overlongs, no surrogates, nothing past U+10FFFF). A wire
+// string that becomes a filesystem path is checked with this BEFORE the path
+// conversion: on POSIX that conversion takes any bytes, so the throw that
+// refuses bad UTF-8 on Windows is not a check there.
+bool IsValidUtf8(std::string_view text) noexcept;
+
 // An error envelope whose one error is `issue` (detail and candidates kept).
 Envelope ErrorEnvelope(const Call& call, Error issue);
 

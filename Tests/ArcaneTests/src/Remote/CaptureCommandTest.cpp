@@ -562,8 +562,11 @@ TEST_CASE("capture args: relative, non-png and unknown keys are refused before a
         {{{"out", ""}}, "arg.invalid"},
         {{{"out", 3}}, "arg.invalid"},
         {{{"bogus", true}}, "arg.unknown"},
-        // Not UTF-8: the path conversion throws on Windows; it is a refusal, never an escaped exception.
+        // Not UTF-8: refused by an explicit check on every platform (POSIX paths take any
+        // bytes, so the Windows conversion throw is not the check), never an escaped exception.
         {{{"out", std::string(abs.begin(), abs.end() - 4) + "\xff.png"}}, "arg.invalid"},
+        {{{"out", std::string(abs.begin(), abs.end() - 4) + "\xed\xa0\x80.png"}}, "arg.invalid"},   // a UTF-16 surrogate
+        {{{"out", std::string(abs.begin(), abs.end() - 4) + "\xe2\x82.png"}}, "arg.invalid"},       // a truncated sequence
     };
     for (const auto& [args, code] : refused) {
         const auto result = InvokeCapture(args);

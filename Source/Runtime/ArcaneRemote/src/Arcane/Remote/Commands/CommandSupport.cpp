@@ -162,6 +162,40 @@ Error MakeIssue(std::string code, std::string message, std::string remediation)
     return e;
 }
 
+bool IsValidUtf8(std::string_view text) noexcept
+{
+    std::size_t i = 0;
+    while (i < text.size())
+    {
+        const auto lead = static_cast<unsigned char>(text[i]);
+        if (lead < 0x80)
+        {
+            ++i;
+            continue;
+        }
+        std::size_t extra = 0;
+        std::uint32_t code = 0;
+        std::uint32_t minimum = 0;
+        if ((lead & 0xE0) == 0xC0) { extra = 1; code = lead & 0x1F; minimum = 0x80; }
+        else if ((lead & 0xF0) == 0xE0) { extra = 2; code = lead & 0x0F; minimum = 0x800; }
+        else if ((lead & 0xF8) == 0xF0) { extra = 3; code = lead & 0x07; minimum = 0x10000; }
+        else return false;   // a continuation byte, or 0xF8..0xFF, cannot lead
+        if (text.size() - i <= extra)
+            return false;    // truncated sequence
+        for (std::size_t k = 1; k <= extra; ++k)
+        {
+            const auto next = static_cast<unsigned char>(text[i + k]);
+            if ((next & 0xC0) != 0x80)
+                return false;
+            code = (code << 6) | (next & 0x3F);
+        }
+        if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+            return false;    // overlong, out of range, or a UTF-16 surrogate
+        i += extra + 1;
+    }
+    return true;
+}
+
 Envelope ErrorEnvelope(const Call& call, Error issue)
 {
     Envelope env = MakeError(call.command, issue.code, issue.message, issue.remediation);
