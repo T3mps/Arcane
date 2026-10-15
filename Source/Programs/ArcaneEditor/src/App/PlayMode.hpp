@@ -146,6 +146,15 @@ namespace Arcane::Editor
         std::vector<std::byte>         m_serverSeed;
     };
 
+    // --play-as's scripted Play (EditorApp::Init, last in boot; Servitor final
+    // fix round 3, N-3): `armFirst` (the editor's remote arm; null = none)
+    // runs BEFORE Play, so the remote session arms in the edit-mode topology
+    // as it does when the same session is entered interactively, then Play
+    // enters `playAs` (listen-server | embedded-server | client | standalone).
+    // Returns Play's result.
+    bool EnterScriptedPlay(PlaySession& play, Arcane::Runtime& runtime, Arcane::PluginHost* host,
+                           std::string_view playAs, void (*armFirst)(void*), void* user);
+
     // `servitor play --topology` (Servitor P0 Task 29, spec s7.3): standalone ->
     // Standalone, listen -> ListenServer, client+server -> EmbeddedServer.
     // ClientOnly has no remote spelling in P0. nullopt for anything else.

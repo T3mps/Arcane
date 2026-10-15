@@ -1395,15 +1395,19 @@ namespace Arcane::Editor
         // and then watch the editor's own world diverge from it.
         if (!m_config.playAs.empty())
         {
-            using Topo = Arcane::Editor::PlayTopology;
-            const Topo topo = m_config.playAs == "listen-server"   ? Topo::ListenServer
-                             : m_config.playAs == "embedded-server" ? Topo::EmbeddedServer
-                             : m_config.playAs == "client"          ? Topo::ClientOnly
-                                                                    : Topo::Standalone;
-            // HostConfig::Parse already refused every other spelling, so the
-            // fall-through above is "standalone" and nothing else.
+            // HostConfig::Parse already refused every other spelling, so
+            // EnterScriptedPlay's fall-through is "standalone" and nothing else.
             m_documents.FlushGestures();
-            if (!m_play.Play(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr, topo))
+            // Servitor final fix round 3 (N-3): the remote session arms first,
+            // in the edit-mode topology, exactly as when the same session is
+            // entered interactively (arm, then Play), so --remote --play-as
+            // embedded-server|client keeps its remote surface.
+            void (*armRemote)(void*) = nullptr;
+#if !defined(ARC_BUILD_DIST)
+            armRemote = [](void* user) { static_cast<EditorApp*>(user)->UpdateRemoteSession(); };
+#endif
+            if (!Arcane::Editor::EnterScriptedPlay(m_play, m_runtime->Core(), m_plugin ? &*m_plugin : nullptr,
+                                                   m_config.playAs, armRemote, this))
                 ARC_ERROR("--play-as {}: Play refused", m_config.playAs);
         }
         return true;

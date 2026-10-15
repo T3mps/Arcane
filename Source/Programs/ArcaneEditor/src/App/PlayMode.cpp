@@ -192,6 +192,19 @@ namespace Arcane::Editor
         m_server->Loop().Advance(realDt);
     }
 
+    bool EnterScriptedPlay(PlaySession& play, Arcane::Runtime& runtime, Arcane::PluginHost* host,
+                           std::string_view playAs, void (*armFirst)(void*), void* user)
+    {
+        const PlayTopology topo = playAs == "listen-server"   ? PlayTopology::ListenServer
+                                : playAs == "embedded-server" ? PlayTopology::EmbeddedServer
+                                : playAs == "client"          ? PlayTopology::ClientOnly
+                                                              : PlayTopology::Standalone;
+        // The arm first, in the edit-mode topology (N-3), then Play.
+        if (armFirst)
+            armFirst(user);
+        return play.Play(runtime, host, topo);
+    }
+
     std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling)
     {
         if (spelling == "standalone")    return PlayTopology::Standalone;

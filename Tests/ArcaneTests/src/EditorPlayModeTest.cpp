@@ -646,6 +646,57 @@ TEST_CASE("Play as embedded server: the server world mirrors the primary's pause
     REQUIRE(play.Stop(runtime));
 }
 
+// Servitor final fix round 3 (N-3): --play-as enters Play after the remote
+// session's arm, as entering that session interactively does (arm in Edit,
+// then Play), so --remote --play-as embedded-server|client keeps its remote
+// surface. EnterScriptedPlay is what EditorApp::Init calls.
+namespace
+{
+struct ArmProbe {
+    Arcane::Editor::PlaySession* play = nullptr;
+    Arcane::Runtime* runtime = nullptr;
+    int calls = 0;
+    bool playingWhenArmed = true;
+    Arcane::NetMode modeWhenArmed = Arcane::NetMode::Client;
+};
+void RecordArm(void* user)
+{
+    auto* probe = static_cast<ArmProbe*>(user);
+    ++probe->calls;
+    probe->playingWhenArmed = probe->play->IsPlaying();
+    probe->modeWhenArmed = probe->runtime->Mode();
+}
+}
+
+TEST_CASE("--play-as arms the remote session before it enters Play", "[editor][netmode]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    for (const char* playAs : {"embedded-server", "client", "listen-server", "standalone"})
+    {
+        INFO(playAs);
+        Arcane::Editor::PlaySession play;
+        ArmProbe probe;
+        probe.play = &play;
+        probe.runtime = &runtime;
+        REQUIRE(Arcane::Editor::EnterScriptedPlay(play, runtime, nullptr, playAs, &RecordArm, &probe));
+        CHECK(probe.calls == 1);
+        CHECK_FALSE(probe.playingWhenArmed);                                // armed in Edit...
+        CHECK(probe.modeWhenArmed == Arcane::NetMode::Standalone);          // ...in the edit-mode topology
+        CHECK(play.IsPlaying());
+        REQUIRE(play.Stop(runtime));
+    }
+    {
+        Arcane::Editor::PlaySession play;
+        REQUIRE(Arcane::Editor::EnterScriptedPlay(play, runtime, nullptr, "embedded-server", nullptr, nullptr));
+        CHECK(play.Topology() == Arcane::Editor::PlayTopology::EmbeddedServer);
+        REQUIRE(play.Stop(runtime));
+    }
+}
+
 TEST_CASE("Play as listen server flips the ONE world to ListenServer; Stop restores Standalone", "[editor][netmode]")
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
