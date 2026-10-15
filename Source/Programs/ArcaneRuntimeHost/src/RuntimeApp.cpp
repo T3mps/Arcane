@@ -912,11 +912,20 @@ void RuntimeApp::MainLoop()
         // Hold pass keeps only the preamble and the host clock; it still
         // renders below). io.quit covers the Pressed("quit") input-action exit,
         // the one quit path PumpAndResize's own return does not cover.
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        const auto advanceStart = std::chrono::steady_clock::now();
+#endif
         Arcane::RuntimeFrame::AdvanceSim(io, pace);
         if (io.quit) break;
 #if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
         if (m_remote && pace != Arcane::RuntimeFrame::SimPace::Hold)
+        {
             m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim advances only (AM1)
+            // stats.frame (Task 26): only a real sim advance; a held pass keeps the last snapshot.
+            m_remote->NoteSimAdvance(m_remote->Gate().frame.load(), io.lastFrameDt,
+                                     std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - advanceStart).count());
+        }
 #endif
 
         // ImGui BeginFrame + the host HUD + DrawUIAll...
@@ -931,7 +940,15 @@ void RuntimeApp::MainLoop()
         // THE RENDER HALF. RenderGraph's body lives in RuntimeFrame.cpp; the
         // call stays here because only MainLoop's own loop can break/continue.
         // =============================================================
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        const auto renderStart = std::chrono::steady_clock::now();
+#endif
         const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        if (m_remote)
+            m_remote->NoteRenderMs(std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - renderStart).count());
+#endif
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped) continue;
 

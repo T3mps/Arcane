@@ -248,12 +248,22 @@ namespace Arcane::Server
 #endif
             if (advance)
             {
+#if !defined(ARC_BUILD_DIST)
+                const auto advanceStart = std::chrono::steady_clock::now();
+#endif
                 m_runtime->EnsurePhysics();
                 m_runtime->Loop().Advance(m_cfg.fixedDtSeconds,
                                           [&](double dt) { m_plugin->FixedUpdateAll(dt); },
                                           [&](double dt, double a) { m_plugin->UpdateAll(dt, a); });
 #if !defined(ARC_BUILD_DIST)
-                if (m_remote) m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim ticks only (AM1)
+                if (m_remote)
+                {
+                    m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim ticks only (AM1)
+                    // stats.frame (Task 26): renderMs stays 0, a server has no render pass.
+                    m_remote->NoteSimAdvance(m_remote->Gate().frame.load(), m_cfg.fixedDtSeconds,
+                                             std::chrono::duration<double, std::milli>(
+                                                 std::chrono::steady_clock::now() - advanceStart).count());
+                }
 #endif
                 ++rep.framesTicked;
             }

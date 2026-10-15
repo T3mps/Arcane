@@ -14,6 +14,7 @@
 #include <Arcane/Remote/Commands/ResourceCommands.hpp>
 #include <Arcane/Remote/Commands/SceneCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
+#include <Arcane/Remote/Commands/StatsCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Follow.hpp>
@@ -134,6 +135,8 @@ bool HostSession::Start()
     // answers command.host-kind itself (ruling F8). The editor's
     // editor.selection.get registers from the editor program (R8-2).
     RegisterSceneCommands();
+    // stats.frame (Task 26): reads this session's FrameStats; Teardown releases it.
+    RegisterStatsCommand(&m_stats);
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -316,6 +319,7 @@ void HostSession::Teardown()
     ReleaseCvarCommandUser(&m_cvarUser); // likewise cvar.*; another session's user is left alone
     ReleaseConsoleCommandUser(&m_cvarUser); // and console.exec, by the same rule
     ReleaseLogJobs(&m_jobs);                // log.read (Task 22), by the same rule
+    ReleaseStatsCommand(&m_stats);          // stats.frame (Task 26), by the same rule
     // ecs.query's artifact directory (Task 23): the one Start set, recomputed
     // from the same config; a directory another session set since is left alone.
     {
@@ -375,6 +379,23 @@ const HostSession::Config& HostSession::GetConfig() const
 TickGate& HostSession::Tick()
 {
     return m_tick;
+}
+
+FrameStats& HostSession::Stats()
+{
+    return m_stats;
+}
+
+void HostSession::NoteSimAdvance(std::uint64_t frame, double dtSeconds, double tickMs)
+{
+    if (!m_started)
+        return;
+    NoteAdvance(m_stats, frame, dtSeconds, tickMs, m_lastRenderMs);
+}
+
+void HostSession::NoteRenderMs(double renderMs)
+{
+    m_lastRenderMs = renderMs;
 }
 
 void HostSession::NoteReload(std::uint32_t generation, bool ok, std::string reason, std::uint64_t frame)

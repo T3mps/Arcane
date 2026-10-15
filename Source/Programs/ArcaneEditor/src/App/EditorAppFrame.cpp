@@ -503,7 +503,15 @@ namespace Arcane::Editor
             AdvanceSim(ls);
             ApplyPendingViewportResize();
             RefreshSceneResolution();
+#if !defined(ARC_BUILD_DIST)
+            const auto renderStart = std::chrono::steady_clock::now();
+#endif
             RenderSceneToViewport();
+#if !defined(ARC_BUILD_DIST)
+            if (m_remote)   // stats.frame (Task 26): the scene render pass's wall time
+                m_remote->NoteRenderMs(std::chrono::duration<double, std::milli>(
+                                           std::chrono::steady_clock::now() - renderStart).count());
+#endif
             // PHASES 11, 12 AND THE CAPTURE ARE DISCHARGED BY PHASE 10.
             // RenderSceneToViewport declares ONE graph frame whose nodes cover
             // all three: ArmGraphViewportFrame fills FrameDesc::pickOutline/
@@ -1467,9 +1475,21 @@ namespace Arcane::Editor
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
+#if !defined(ARC_BUILD_DIST)
+        const auto advanceStart = std::chrono::steady_clock::now();
+#endif
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
+#if !defined(ARC_BUILD_DIST)
+        // stats.frame (Task 26): a play advance only; Edit-mode frames run this
+        // same function and leave the snapshot alone. The editor's frame clock
+        // is its own m_frameCount.
+        if (m_remote && m_play.IsPlaying())
+            m_remote->NoteSimAdvance(m_frameCount, simDt,
+                                     std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - advanceStart).count());
+#endif
         // The embedded server world (EmbeddedServer topology) advances on the same
         // real dt, right after -- its OWN loop and its OWN Server-masked systems.
         // The module's FixedUpdate hook above is bound to the PRIMARY world and is

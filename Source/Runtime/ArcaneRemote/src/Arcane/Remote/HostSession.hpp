@@ -14,6 +14,7 @@
 #include <Arcane/Core/NetMode.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
+#include <Arcane/Remote/FrameStats.hpp>
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Arcane/Remote/TickGate.hpp>
@@ -152,6 +153,17 @@ public:
     bool TakeQuit() const;              // host.quit sets it; Task 16
     void RequestQuit();
 
+    // Task 26 (stats.frame): the session's one snapshot. The sim-advance
+    // branch of each host calls NoteSimAdvance, and only that branch (idle,
+    // minimized, held and render-only iterations do not). `frame` is the
+    // host's own host.frame value after the advance, `dtSeconds` its frame dt,
+    // `tickMs` the wall time of the advance; renderMs is the last value given
+    // to NoteRenderMs (0 until a render pass completes; a server never gives
+    // one). No-ops before Start.
+    FrameStats& Stats();
+    void NoteSimAdvance(std::uint64_t frame, double dtSeconds, double tickMs);
+    void NoteRenderMs(double renderMs);
+
 private:
     void PublishStatus(std::int64_t nowUnixMs);
     void PublishCatalogue();
@@ -164,6 +176,8 @@ private:
     // Task 22: the store a runtime or server session owns (Config::problemStore
     // null); Start installs it as the engine sink, Teardown uninstalls it.
     std::unique_ptr<DiagnosticStore> m_ownedStore;
+    FrameStats m_stats;       // Task 26: Start registers stats.frame on it, Teardown releases it
+    double m_lastRenderMs = 0;
     HostGate m_gate;
     TickGate m_tick;
     JobTable m_jobs;
