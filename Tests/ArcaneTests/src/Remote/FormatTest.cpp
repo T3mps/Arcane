@@ -282,7 +282,10 @@ TEST_CASE("busy retries stop at --timeout", "[servitor][client]") {
     Servitor::GlobalOptions opt;
     opt.format = Servitor::Format::Json;
     opt.noRetry = false;
-    opt.timeoutMs = 200;
+    // The backoff pauses 10, 50, 100, 200, 400 ms, so 1000 ms fits posts at about
+    // 0/10/60/160/360/760 ms. A 200 ms budget fit exactly 4 and failed on hosted
+    // macOS, whose sleeps overshoot (timer coalescing); this leaves slack for that.
+    opt.timeoutMs = 1000;
     Servitor::CallRequest shot;
     shot.command = "capture.window";
     const auto started = std::chrono::steady_clock::now();
@@ -296,8 +299,8 @@ TEST_CASE("busy retries stop at --timeout", "[servitor][client]") {
     CHECK(client.retried == true);
     CHECK(transport.posts >= 4);
     CHECK(transport.posts < 8);
-    CHECK(elapsedMs >= 60);
-    CHECK(elapsedMs < 1000);
+    CHECK(elapsedMs >= 160);    // 4 posts slept 10 + 50 + 100 ms at least
+    CHECK(elapsedMs < 1500);    // stops at the 1000 ms budget plus one fast exchange
     CHECK(json["errors"][0]["detail"]["state"] == "capture-pending");
 }
 
