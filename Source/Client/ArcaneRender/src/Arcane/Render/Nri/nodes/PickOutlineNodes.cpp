@@ -380,10 +380,12 @@ namespace Arcane
         const nri::CoreInterface& core = context.core;
         (void)frameSlot;   // no per-frame-slot state here: the streams are ring allocations
 
-        // THE CLEAR, both planes. Graph attachments are LOAD/STORE and the
-        // declaration API carries no clear op, so a node that needs a cleared
-        // target clears it from its own exec fn (the seam DeclareGraphFrame
-        // documents). 0 IS the background id, so the colour clear is not
+        // THE CLEAR, both planes. This node still clears from its own exec fn
+        // rather than through a declared load op (RenderGraph::
+        // SetColorAttachmentOps / SetDepthAttachmentOp, F5 plan 1 T2): moving
+        // it was out of that task's scope, and it is the one remaining
+        // in-pass clear (a source scan in RenderGraphTest.cpp pins it, so its
+        // removal is a deliberate act). 0 IS the background id, so the colour clear is not
         // cosmetic: every pixel no silhouette covers must read back as
         // "nothing here". The depth plane is the pass's OWN transient (F4 spec
         // s7.1), a fresh pool slot with undefined contents, cleared to the far
@@ -1450,8 +1452,9 @@ namespace Arcane
                 });
         }
 
-        // NO CLEAR anywhere above, deliberately (the clear seam, stated in
-        // DeclareGraphFrame): every pass here is an OPAQUE fullscreen triangle
+        // NO CLEAR anywhere above -- no clear load op is declared and no exec fn
+        // clears -- deliberately (see DeclareGraphFrame's THE CLEAR IS
+        // DECLARATIVE): every pass here is an OPAQUE fullscreen triangle
         // that writes every pixel of its target, so a LOADed undefined pool slot
         // is fully overwritten before anything can read it. The ID target is the
         // exception and clears itself -- 0 is a meaningful value there.

@@ -1259,8 +1259,12 @@ namespace Arcane
         // WORLD vs CHROME. A world frame (shape.world, the default) declares
         // the empty D1 slots "gbuffer" and "lighting" ahead of batch2d and
         // "taa" just before the tonemap: compute nodes with no access and no
-        // attachment, so Compile gives them no barrier and no pool slot. A
-        // chrome frame (world == false) declares none of the world nodes --
+        // attachment, so Compile gives them no barrier and no pool slot. They
+        // are not literally free on the command buffer: the executor wraps
+        // every node in its NodeScope, so each records one empty
+        // begin/end annotation pair (and a breadcrumb scope while a crash
+        // backend is armed) -- three empty scopes in a PIX/RenderDoc capture,
+        // no draw, dispatch or barrier. A chrome frame (world == false) declares none of the world nodes --
         // only "letterbox", which clears the canvas the tonemap samples.
         //
         // RING FOOTGUN, for whoever adds the next node here: the vehicle calls
@@ -1285,27 +1289,16 @@ namespace Arcane
         }
         else
         {
-            // THE CHROME LETTERBOX: AddBatch2DNode's setup minus the batch. The
-            // canvas is still minted (the tonemap samples it) and cleared by its
-            // load op; the exec records nothing. SetColorAttachments is
-            // required -- Compile refuses a Raster node with no attachment.
+            // THE CHROME LETTERBOX: AddBatch2DNode's setup minus the batch --
+            // the SAME DeclareClearedCanvas call, so chrome and world can never
+            // disagree on the canvas. The canvas is still minted (the tonemap
+            // samples it) and cleared by its load op; the exec records nothing.
+            // The attachment is required anyway: Compile refuses a Raster node
+            // with no attachment.
             graph.AddNode("letterbox", RenderGraph::NodeKind::Raster,
                 [&](RenderGraphBuilder& builder)
                 {
-                    const CVarColor clearColor = Settings<RenderSettings>().clearColor;
-                    RgTextureDesc desc;
-                    desc.format = GraphCanvasFormat();
-                    desc.width  = shape.canvasWidth;
-                    desc.height = shape.canvasHeight;
-                    desc.optimizedClearValue.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
-                    desc.hasOptimizedClearValue = true;
-                    handles.canvas = builder.CreateTexture("canvas", desc);
-                    builder.Write(handles.canvas, RgUsage::ColorWrite);
-                    graph.SetColorAttachments(std::span<const RgTexture>(&handles.canvas, 1));
-                    RgAttachmentOp op;
-                    op.load = RgLoadOp::Clear;
-                    op.clear.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
-                    graph.SetColorAttachmentOps(std::span<const RgAttachmentOp>(&op, 1));
+                    handles.canvas = DeclareClearedCanvas(graph, builder, shape.canvasWidth, shape.canvasHeight);
                 },
                 [](RenderGraphNodeContext&) {});
         }
@@ -1471,16 +1464,16 @@ namespace Arcane
             }
         }
 
-        // The frame's FINAL TARGET: the acquired backbuffer, or -- when the
-        // shape carries one -- the vehicle's persistent offscreen output
-        // (Task 7). Everything below writes `handles.backbuffer` and neither
-        // knows nor cares which it got, which is what keeps the two modes one
-        // frame shape rather than two.
         // The empty TAA slot (D1), last of the world nodes, just ahead of the
         // tonemap. A chrome frame has no world and no TAA.
         if (shape.world)
             addEmpty("taa");
 
+        // The frame's FINAL TARGET: the acquired backbuffer, or -- when the
+        // shape carries one -- the vehicle's persistent offscreen output
+        // (Task 7). Everything below writes `handles.backbuffer` and neither
+        // knows nor cares which it got, which is what keeps the two modes one
+        // frame shape rather than two.
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
 
         // ---------------------------------------------------------------
@@ -1676,6 +1669,21 @@ namespace Arcane
         // World or host-chrome frame (F5 plan 1, Task 2). Default true, so every
         // caller stays a world frame until it opts out.
         shape.world         = frame.world;
+        // A chrome frame declares no world node, so world inputs on it are
+        // dropped -- and a `batch` is never drained. Nothing sets them today
+        // (PresentChromeFrame passes only `imgui`); say so loudly, once, if a
+        // future caller does.
+        if (!frame.world && (frame.batch != nullptr || frame.mesh != nullptr
+                             || frame.grid != nullptr || frame.post != nullptr))
+        {
+            static bool warned = false;
+            if (!warned)
+            {
+                warned = true;
+                ARC_WARN("[nri-graph] a world=false (chrome) frame carries world inputs "
+                         "(batch/mesh/grid/post); they are ignored and the batch is not drained");
+            }
+        }
         shape.canvasWidth   = SurfaceWidth();
         shape.canvasHeight  = SurfaceHeight();
         shape.captureBuffer = m_capture;

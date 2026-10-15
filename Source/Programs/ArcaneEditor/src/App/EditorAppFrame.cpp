@@ -3943,12 +3943,13 @@ namespace Arcane::Editor
     // Phase 19: what puts the editor's main window on screen.
     //
     // ---- THE FRAME'S DECLARED SHAPE, and why it is what it is -------------
-    // Exactly three nodes: batch2d -> tonemap -> imgui -> present.
+    // Exactly three nodes: letterbox -> tonemap -> imgui -> present.
     //
-    //   batch2d   with NO batcher. AddBatch2DNode drains nothing, and
-    //             Batch2DNode::Record's first statement is the canvas CLEAR --
-    //             so a null batcher IS the clear, not a degenerate draw ("an
-    //             empty frame is a cleared canvas, not an error").
+    //   letterbox `frame.world = false` (F5 plan 1 T2) declares no world node
+    //             at all -- no batch2d, mesh, grid, post or empty D1 slot.
+    //             DeclareGraphFrame mints the canvas through the same
+    //             DeclareClearedCanvas call batch2d uses, whose CLEAR colour
+    //             load op is the clear; the node records nothing.
     //   tonemap   is the ONLY thing in the tree that produces a backbuffer
     //             handle at all (AddTonemapNode -> ImportSwapChainTexture), so
     //             it is not decoration on top of the clear -- it is how the

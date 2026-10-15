@@ -4190,7 +4190,7 @@ TEST_CASE("nri graph frame: batch -> tonemap derives canvas colour -> shader-rea
     const Arcane::RgCompiled compiled = CompileOk(graph);
     REQUIRE(compiled.nodes.size() == 5);
 
-    // Node 0 (batch2d): the canvas transient's pool slot starts undefined and
+    // Node 2 (batch2d): the canvas transient's pool slot starts undefined and
     // becomes a colour attachment. On the FIRST frame that `before` is
     // Compile()'s discarding {NONE, UNDEFINED, ALL}.
     REQUIRE(compiled.nodes[2].preBarriers.size() == 1);
@@ -4198,7 +4198,7 @@ TEST_CASE("nri graph frame: batch -> tonemap derives canvas colour -> shader-rea
     CheckState(compiled.nodes[2].preBarriers[0].before, kUnknownState);
     CheckState(compiled.nodes[2].preBarriers[0].after, kColorState);
 
-    // Node 1 (tonemap): TWO transitions, and neither is hand-written anywhere
+    // Node 4 (tonemap): TWO transitions, and neither is hand-written anywhere
     // -- the canvas COLOR_ATTACHMENT -> SHADER_RESOURCE (so the fullscreen
     // triangle can sample it) and the freshly acquired backbuffer's discarding
     // entry -> COLOR_ATTACHMENT.
@@ -4259,7 +4259,7 @@ TEST_CASE("nri graph frame: a capture frame copies the backbuffer BEFORE it pres
     const Arcane::RgCompiled compiled = CompileOk(graph);
     REQUIRE(compiled.nodes.size() == 6);
 
-    // Node 2: the backbuffer becomes a copy SOURCE while it is still the
+    // Node 5 (capture): the backbuffer becomes a copy SOURCE while it is still the
     // graph's -- the copy is recorded before the present, not after it. The
     // imported staging buffer transitions to COPY_DESTINATION, and a buffer
     // barrier's layout is meaningless by contract (hence UNDEFINED).
@@ -4366,7 +4366,7 @@ TEST_CASE("nri graph frame: an OFFSCREEN frame tonemaps into the imported output
     const Arcane::RgCompiled compiled = CompileOk(graph);
     REQUIRE(compiled.nodes.size() == 5);
 
-    // Node 1 (tonemap): the SAME two transitions the presenting frame derives
+    // Node 4 (tonemap): the SAME two transitions the presenting frame derives
     // -- the canvas COLOR_ATTACHMENT -> SHADER_RESOURCE, and the output's
     // contents-discarding entry -> COLOR_ATTACHMENT. The discarding entry is
     // what makes frame 1 (a freshly created texture, genuinely undefined) and
@@ -4709,7 +4709,7 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     const Arcane::RgCompiled compiled = CompileOk(graph);
     REQUIRE(compiled.nodes.size() == 7);
 
-    // Node 1 (post0): reads the CANVAS the batch node just wrote, writes its
+    // Node 3 (post0): reads the CANVAS the batch node just wrote, writes its
     // own target. NEITHER transition is hand-written anywhere -- the node
     // declares Read(scene)/Write(target) and the executor derives both.
     REQUIRE(compiled.nodes[3].preBarriers.size() == 2);
@@ -4731,7 +4731,7 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
     CheckState(ColorWriteBarrier(compiled.nodes[3]).before, kUnknownState);
     CheckState(ColorWriteBarrier(compiled.nodes[3]).after, kColorState);
 
-    // Node 2 (post1): reads pass 0's target -- and writes a target whose pool
+    // Node 4 (post1): reads pass 0's target -- and writes a target whose pool
     // slot the CANVAS just vacated, which is the ping-pong showing up as a
     // handover rather than as an allocation. `before` therefore carries the
     // canvas's OUTGOING state in full -- SHADER_RESOURCE access, layout AND
@@ -4745,7 +4745,7 @@ TEST_CASE("nri graph frame: the post chain inserts one node per pass between the
                nri::AccessBits::SHADER_RESOURCE, nri::Layout::SHADER_RESOURCE, kShaderReadStages);
     CheckState(ColorWriteBarrier(compiled.nodes[4]).after, kColorState);
 
-    // Node 3 (tonemap): samples pass 1's target (NOT the canvas) and writes
+    // Node 6 (tonemap): samples pass 1's target (NOT the canvas) and writes
     // the freshly acquired backbuffer.
     REQUIRE(compiled.nodes[6].preBarriers.size() == 2);
     CheckState(ColorWriteBarrier(compiled.nodes[6]).before, kUnknownState);   // the backbuffer
@@ -5864,6 +5864,7 @@ TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap a
     // the empty D1 slots, F5 plan 1 T2) -- plus one outlinejfa per step.
     REQUIRE(graph.NodeCount() == 9u + steps);
     CHECK(std::string(graph.NodeName(0)) == "gbuffer");
+    CHECK(std::string(graph.NodeName(1)) == "lighting");
     CHECK(std::string(graph.NodeName(2)) == "batch2d");
     CHECK(std::string(graph.NodeName(3)) == "taa");
     CHECK(std::string(graph.NodeName(4)) == "tonemap");
@@ -5922,7 +5923,7 @@ TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the
     constexpr nri::AccessLayoutStage kCopySrcState{
         nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY };
 
-    // Node 2 (pick): TWO pre-barriers -- the id transient's pool slot -> colour
+    // Node 5 (pick): TWO pre-barriers -- the id transient's pool slot -> colour
     // attachment, and the pass-local depth transient's -> depth write (F4 plan
     // 2: the mesh half of the id pass is depth-tested against it).
     REQUIRE(compiled.nodes[5].preBarriers.size() == 2);
@@ -5946,7 +5947,7 @@ TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the
     CHECK(sawIdWrite);
     CHECK(sawDepthWrite);
 
-    // Node 3 (pickreadback): the id target becomes a copy SOURCE and the
+    // Node 6 (pickreadback): the id target becomes a copy SOURCE and the
     // IMPORTED staging buffer a copy DESTINATION. A buffer barrier's layout is
     // meaningless by contract, hence UNDEFINED -- and RgUsage::ReadbackHost
     // deriving the same state as CopyDst is by design, not an accident.
@@ -5964,7 +5965,7 @@ TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the
     CheckState(stagingBarrier.after,
                nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
 
-    // Node 4 (outlineseed): the id target goes COPY_SOURCE -> SHADER_RESOURCE
+    // Node 7 (outlineseed): the id target goes COPY_SOURCE -> SHADER_RESOURCE
     // (the readback ran first), and the seed target becomes an attachment.
     REQUIRE(compiled.nodes[7].preBarriers.size() == 2);
     bool sawIdRead = false, sawSeedWrite = false;

@@ -44,11 +44,12 @@ namespace Arcane
         }
 
         // The engine's canvas clear is render.clearColor (RenderSettings, Live):
-        // AddBatch2DNode reads it ONCE per frame and the same value is both the
-        // canvas's optimized clear value and Record()'s clear, so the two can
-        // never disagree (D3D12 warns on a clear that differs from the
-        // resource's). This is the only node that clears the canvas at all, so
-        // there is exactly one background colour in the process.
+        // DeclareClearedCanvas reads it ONCE per frame and the same value is both
+        // the canvas's optimized clear value and its CLEAR colour load op, so the
+        // two can never disagree (D3D12 warns on a clear that differs from the
+        // resource's). DeclareClearedCanvas is the only place the canvas clear is
+        // declared -- batch2d on a world frame, letterbox on a chrome frame both
+        // call it -- so there is exactly one background colour in the process.
         //
         // The canvas format is GraphCanvasFormat() (NriGraphContext.hpp,
         // render.canvasFormat latched once per process), because the
@@ -1392,9 +1393,10 @@ namespace Arcane
     {
         const nri::CoreInterface& core = context.core;
 
-        // The canvas is already cleared to render.clearColor: AddBatch2DNode
-        // declares a CLEAR colour load op, which the executor applies when it
-        // begins rendering (F5 plan 1, Task 2).
+        // The canvas is already cleared to render.clearColor: AddBatch2DNode's
+        // setup (DeclareClearedCanvas) declares a CLEAR colour load op, which the
+        // executor applies when it begins rendering (F5 plan 1, Task 2).
+        // `clearColor` is therefore unused here; see the header.
         if (batch.spans.empty() || batch.vertices.empty() || batch.indices.empty())
             return;   // an empty frame is a cleared canvas, not an error
 
@@ -1606,6 +1608,30 @@ namespace Arcane
         }
     }
 
+    RgTexture DeclareClearedCanvas(RenderGraph& graph, RenderGraphBuilder& builder,
+                                   std::uint32_t width, std::uint32_t height)
+    {
+        const CVarColor clearColor = Settings<RenderSettings>().clearColor;
+        nri::ClearValue clear{};
+        clear.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
+
+        RgTextureDesc desc;
+        desc.format                 = GraphCanvasFormat();
+        desc.width                  = width;
+        desc.height                 = height;
+        desc.optimizedClearValue    = clear;
+        desc.hasOptimizedClearValue = true;
+        const RgTexture canvas = builder.CreateTexture("canvas", desc);
+        builder.Write(canvas, RgUsage::ColorWrite);
+        graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));
+
+        RgAttachmentOp op;
+        op.load  = RgLoadOp::Clear;
+        op.clear = clear;
+        graph.SetColorAttachmentOps(std::span<const RgAttachmentOp>(&op, 1));
+        return canvas;
+    }
+
     RgTexture AddBatch2DNode(RenderGraph& graph, NriGraphContext* context,
                              std::uint32_t width, std::uint32_t height)
     {
@@ -1645,19 +1671,7 @@ namespace Arcane
         graph.AddNode("batch2d", RenderGraph::NodeKind::Raster,
             [&](RenderGraphBuilder& builder)
             {
-                RgTextureDesc desc;
-                desc.format = canvasFormat;
-                desc.width  = width;
-                desc.height = height;
-                desc.optimizedClearValue.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
-                desc.hasOptimizedClearValue = true;
-                canvas = builder.CreateTexture("canvas", desc);
-                builder.Write(canvas, RgUsage::ColorWrite);
-                graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));
-                Arcane::RgAttachmentOp op;
-                op.load = Arcane::RgLoadOp::Clear;
-                op.clear.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
-                graph.SetColorAttachmentOps(std::span<const Arcane::RgAttachmentOp>(&op, 1));
+                canvas = DeclareClearedCanvas(graph, builder, width, height);
             },
             [context, drained, canvasFormat, clearColor](RenderGraphNodeContext& nodeContext)
             {
