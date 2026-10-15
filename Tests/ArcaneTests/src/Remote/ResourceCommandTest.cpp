@@ -9,6 +9,7 @@
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -103,6 +104,25 @@ struct RemoteSecretHolder {
 ARC_REFLECT_TYPE(RemoteSecretHolder)
     ARC_REFLECT_FIELD(RemoteSecretHolder, inner)
     ARC_REFLECT_FIELD(RemoteSecretHolder, visible)
+ARC_REFLECT_TYPE_END()
+
+// Fix round 1: Astra records no element type for std::array, so a Protected
+// field inside its element must still never be written. (A C-array member does
+// not reflect at all: ARC_REFLECT_FIELD's accessors assign the member, and an
+// array is not assignable -- so there is no C-array case to test.)
+struct RemoteSecretArrays {
+    std::array<RemoteSecretResource, 2> keys;
+    int visible = 0;
+    template <typename Archive>
+    void Serialize(Archive& ar) {
+        for (RemoteSecretResource& k : keys)
+            k.Serialize(ar);
+        ar(visible);
+    }
+};
+ARC_REFLECT_TYPE(RemoteSecretArrays)
+    ARC_REFLECT_FIELD(RemoteSecretArrays, keys)
+    ARC_REFLECT_FIELD(RemoteSecretArrays, visible)
 ARC_REFLECT_TYPE_END()
 
 struct RemoteSealedResource { int code = 0; };
@@ -216,6 +236,19 @@ TEST_CASE("resource.get masks Protected fields and Protected types", "[remote][r
     CHECK(nested.data["visible"] == 1);
     CHECK(nested.data["inner"] == "<protected>");   // a nested struct holding a secret is masked whole
     CHECK(nested.data.dump().find("hunter3") == std::string::npos);
+
+    RemoteSecretArrays arrays;
+    arrays.keys[0].token = "array-secret-0";
+    arrays.keys[1].token = "array-secret-1";
+    arrays.visible = 5;
+    REQUIRE(reg.SetResource(std::move(arrays)) != nullptr);
+    const auto inArrays = InvokeResource("resource.get", {{"name", "RemoteSecretArrays"}});
+    REQUIRE(inArrays.ok);
+    CHECK(inArrays.data["visible"] == 5);
+    CHECK(inArrays.data["keys"] == "<protected>");   // std::array: element type unresolvable, masked whole
+    const std::string arraysDump = inArrays.data.dump();
+    for (const char* leaked : {"array-secret-0", "array-secret-1", "hunter"})
+        CHECK(arraysDump.find(leaked) == std::string::npos);
 
     const auto sealed = InvokeResource("resource.get", {{"name", "RemoteSealedResource"}});
     REQUIRE(sealed.ok);

@@ -20,8 +20,10 @@ namespace Arcane::Remote
 //                            two short-name hits are resource.ambiguous (exit 2,
 //                            candidates), none is resource.not-found (exit 6), an
 //                            unreflected resource is reflect.unreadable (exit 6).
-// A field reflected with Attr::Flags Protected (on the field or its type), or a
-// nested struct holding one, reads "<protected>", never its value. JSON over the
+// A field reflected with Attr::Flags Protected (on the field or its type), a
+// nested struct or vector element holding one, and any field the walk cannot see
+// into (std::array, C array, other containers, unresolved types) read
+// "<protected>", never their value. JSON over the
 // 256 KiB inline cap goes to one `kind:"resource"` artifact in the session's
 // artifact directory (SetEcsArtifactDir) with data null and warning
 // resource.in-artifact; resource.artifact-failed (exit 6) when it cannot be
