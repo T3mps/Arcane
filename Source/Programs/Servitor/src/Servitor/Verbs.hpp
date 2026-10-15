@@ -68,7 +68,8 @@ bool PostsCall(const VerbRow& row);
 std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt);
 
 // `logs --follow` / `problems --follow` (FollowVerb): a GET stream posts no
-// call, so --world, --read-only and an explicit --client would be dropped.
+// call and is never retried, so --world, --read-only, an explicit --client,
+// --retry-on-death and --no-retry would be dropped.
 // The usage problem for the first one given; nullopt otherwise (round 3, M-1).
 std::optional<std::string> FollowUnusedGlobal(std::string_view words, const GlobalOptions& opt);
 
@@ -115,8 +116,9 @@ TargetWatch WatchFor(const LiveHost& host, const std::string& command, const Glo
 // --timeout (round 3, N-1). Retargets only to the dead target's replacement:
 // the same kind and project root (normalized), not hung, a different
 // {pid, start}, absent from target.preexisting (the hosts live when the call
-// began), and --pid's pid when given. Two such hosts: false at once. None by
-// the deadline: false, and the call reports host.died / host.hung (I-1).
+// began). --pid never reaches here (refused with --retry-on-death, N3-1). Two
+// such hosts: false at once. None by the deadline: false, and the call reports
+// host.died / host.hung (I-1).
 bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death);
 // The call half of PostVerb against ONE chosen host: Call through LiveExchange
 // with the busy retry and the target watch. Prints nothing; safe to run for

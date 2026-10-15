@@ -667,6 +667,9 @@ TEST_CASE("--retry-on-death with --all is refused before anything is sent", "[se
         REQUIRE(problem.has_value());
         CHECK(problem->find("--retry-on-death") != std::string::npos);
         CHECK(problem->find("--all") != std::string::npos);
+        // Round 4 (N3-1): the advice is a kind, never a pid (a restart has a new pid).
+        CHECK(problem->find("--host <kind>") != std::string::npos);
+        CHECK(problem->find("--pid") == std::string::npos);
     }
     opt.retryOnDeath = false;
     CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("cvar set"), opt).has_value());
@@ -694,6 +697,67 @@ TEST_CASE("the --follow streams refuse an explicit --client, --world and --read-
     Servitor::GlobalOptions readOnly;
     readOnly.readOnly = true;
     CHECK(Servitor::FollowUnusedGlobal("logs", readOnly)->starts_with("--read-only does not apply to logs --follow"));
+}
+
+// ---- Final fix round 4 ----------------------------------------------------
+
+// N3-1: a restarted host always has a new pid, so --pid can never be
+// retargeted by --retry-on-death: the pair is refused before anything is sent.
+TEST_CASE("--retry-on-death with --pid is refused before anything is sent", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.retryOnDeath = true;
+    opt.pid = 4242;
+    for (const char* words : {"cvar set", "wait", "call", "quit"}) {
+        INFO(words);
+        const auto problem = Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt);
+        REQUIRE(problem.has_value());
+        CHECK(problem->find("--retry-on-death") != std::string::npos);
+        CHECK(problem->find("--pid") != std::string::npos);
+        CHECK(problem->find("--host <kind>") != std::string::npos);
+    }
+    opt.pid = 0;
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("wait"), opt).has_value());
+    opt.retryOnDeath = false;
+    opt.pid = 4242;
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("wait"), opt).has_value());
+}
+
+// N3-4: a --follow stream neither retries a busy answer nor rediscovers a
+// death (it ends Failed), so an explicit --retry-on-death or --no-retry would
+// be dropped: refused, beside --client, --world and --read-only.
+TEST_CASE("the --follow streams refuse --retry-on-death and --no-retry", "[servitor][client]") {
+    Servitor::GlobalOptions death;
+    death.retryOnDeath = true;
+    const auto d = Servitor::FollowUnusedGlobal("logs", death);
+    REQUIRE(d.has_value());
+    CHECK(d->starts_with("--retry-on-death does not apply to logs --follow"));
+    Servitor::GlobalOptions noRetry;
+    noRetry.noRetry = true;
+    const auto n = Servitor::FollowUnusedGlobal("problems", noRetry);
+    REQUIRE(n.has_value());
+    CHECK(n->starts_with("--no-retry does not apply to problems --follow"));
+}
+
+// Round 4 add-on: `servitor --help` and `servitor -h` with no verb print the
+// usage on stdout and exit 0 (they were "unknown flag --help", exit 2). With
+// a verb, the token stays the verb's unknown flag; `servitor help` is
+// untouched (the spec is silent on it).
+TEST_CASE("servitor --help and -h with no verb print the usage and exit 0", "[servitor][client]") {
+    CHECK(Servitor::IsHelpRequest(std::vector<std::string>{"--help"}));
+    CHECK(Servitor::IsHelpRequest(std::vector<std::string>{"-h"}));
+    CHECK_FALSE(Servitor::IsHelpRequest(std::vector<std::string>{}));
+    CHECK_FALSE(Servitor::IsHelpRequest(std::vector<std::string>{"cvar", "get", "--help"}));
+    CHECK_FALSE(Servitor::IsHelpRequest(std::vector<std::string>{"help"}));
+    const std::string help = Servitor::HelpText();
+    CHECK(help.starts_with("usage: servitor [global flags] <verb> [args]"));
+    CHECK(help.find("unknown flag") == std::string::npos);
+    CHECK(help.find("global flags:") != std::string::npos);
+    CHECK(help.find("  status") != std::string::npos);
+    // Run answers it before verb matching; it prints the text above to stdout once.
+    const char* longForm[] = {"servitor", "--help"};
+    CHECK(Servitor::Run(2, const_cast<char**>(longForm)) == 0);
+    const char* shortForm[] = {"servitor", "--json", "-h"};
+    CHECK(Servitor::Run(3, const_cast<char**>(shortForm)) == 0);
 }
 
 #endif

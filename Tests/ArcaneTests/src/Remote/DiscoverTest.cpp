@@ -766,7 +766,7 @@ TEST_CASE("Run refuses --world and --read-only on a verb that posts no call", "[
 // the call's opening scan; identity is {pid, start}, never the pid alone).
 // With none, rediscovery answers at once, so the call reports host.died
 // promptly instead of waiting out --timeout.
-TEST_CASE("--retry-on-death retargets only to a new host of the dead target's kind and project, at once",
+TEST_CASE("--retry-on-death retargets only to a new host of the dead target's kind and project",
           "[servitor][client]") {
     namespace fs = std::filesystem;
     const fs::path proj = fs::temp_directory_path() / ("servitor-rediscover-" + std::to_string(Arcane::EditorLock::Self().pid));
@@ -834,6 +834,7 @@ TEST_CASE("--retry-on-death retargets only to a new host of the dead target's ki
         // The same runtime, but live when the call began: never the target's
         // replacement (a resend would run the command on a host it already reached).
         auto pre = targetFor();
+        pre.timeoutMs = 300;   // no eligible host: the poll ends at this budget (round 4, N3-2)
         pre.preexisting.emplace_back(fresh.pid, fresh.processStart);
         CHECK_FALSE(Servitor::RediscoverTarget(&pre, death));
     }

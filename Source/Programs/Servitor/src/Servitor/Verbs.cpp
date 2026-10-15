@@ -255,6 +255,12 @@ std::optional<std::string> FollowUnusedGlobal(std::string_view words, const Glob
     if (opt.clientSet)
         return "--client does not apply to " + std::string(words) +
                " --follow: a stream sends no X-Remote-Client (only a call is audited)";
+    // Round 4 (N3-4): a stream neither retries nor rediscovers; a death ends it.
+    if (opt.retryOnDeath)
+        return "--retry-on-death does not apply to " + std::string(words) +
+               " --follow: a stream that loses its host ends, it is never resent";
+    if (opt.noRetry)
+        return "--no-retry does not apply to " + std::string(words) + " --follow: a stream is never retried";
     return std::nullopt;
 }
 
@@ -1188,7 +1194,12 @@ std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions&
     // sibling the fan-out already reached, so a resend could run twice there.
     if (opt.all && opt.retryOnDeath)
         return std::string("--retry-on-death does not apply with --all (a resend could reach a host the fan-out "
-                           "already reached); retry one host at a time with --pid");
+                           "already reached); retry one host kind at a time with --host <kind>");
+    // Round 4 (N3-1): a restarted host always has a new pid, so a pinned pid
+    // can never be retargeted; a kind selects the replacement.
+    if (opt.pid != 0 && opt.retryOnDeath)
+        return std::string("--retry-on-death does not apply with --pid (a restarted host has a new pid, so a pid "
+                           "is never retargeted); select the host with --host <kind>");
     const std::string_view words = row.words;
     // launch spawns a new host and commands prints the static manifest: neither
     // selects a host, so --host and --pid would be dropped (status filters by

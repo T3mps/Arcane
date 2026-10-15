@@ -129,6 +129,12 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 std::optional<std::string> LeftoverFlag(std::span<const std::string> rest);
 // "servitor: <problem>", the verbs and the global flags: the usage text.
 std::string UsageText(const std::string& problem);
+// The usage text with no problem line: what `servitor --help` / `-h` print
+// on stdout (round 4 add-on).
+std::string HelpText();
+// True when the verb tokens (globals removed) are exactly one "--help" or
+// "-h": a help request with no verb. Run prints HelpText and exits 0.
+bool IsHelpRequest(std::span<const std::string> tokens);
 // Prints UsageText(problem) to stderr; returns 2.
 int PrintUsage(const std::string& problem);
 // Writes printed.stdoutText to stdout and printed.stderrText to stderr (main

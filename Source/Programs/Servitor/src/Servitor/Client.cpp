@@ -453,6 +453,19 @@ std::string DefaultClientId()
     return "servitor/" + std::string(kVersion) + " pid " + std::to_string(ThisProcessId());
 }
 
+std::string HelpText()
+{
+    // UsageText's own text after its "servitor: <problem>" line.
+    const std::string text = UsageText({});
+    const std::size_t nl = text.find('\n');
+    return nl == std::string::npos ? text : text.substr(nl + 1);
+}
+
+bool IsHelpRequest(std::span<const std::string> tokens)
+{
+    return tokens.size() == 1 && (tokens.front() == "--help" || tokens.front() == "-h");
+}
+
 int PrintUsage(const std::string& problem)
 {
     Write(stderr, UsageText(problem));
@@ -472,7 +485,7 @@ std::string UsageText(const std::string& problem)
     }
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
             "--host editor|runtime|server, --pid <n>, --engine <root>, --world <name>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
-            "--retry-on-death, --client <name>, --verbose, --version\n"
+            "--retry-on-death, --client <name>, --verbose, --version, --help (-h)\n"
             "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>)\n"
             "  --verbose prints each request's payload, including the values you pass (a cvar set's value too); "
             "the bearer token is redacted\n"
@@ -604,6 +617,11 @@ int Run(int argc, char** argv)
     std::vector<std::string> tokens;
     if (!ParseArgs(argc, argv, opt, &error, &tokens))
         return PrintUsage(error);
+    // `servitor --help` / `-h` with no verb: the usage on stdout, exit 0 (round 4).
+    if (IsHelpRequest(tokens)) {
+        Write(stdout, HelpText());
+        return 0;
+    }
     if (tokens.empty())
         return PrintUsage("no verb given");
     std::size_t consumed = 0;
@@ -844,8 +862,8 @@ bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death)
     // REPLACEMENT only -- the same kind and project root (SameProjectRoot,
     // normalized: N-2), not hung, not the process that died ({pid, start}),
     // not any host already live when the call began (target->preexisting: a
-    // resend there could run the command on a host the call already reached),
-    // and --pid's pid when one was given. A restarting host writes its
+    // resend there could run the command on a host the call already reached).
+    // --pid is refused with --retry-on-death (round 4, N3-1). A restarting host writes its
     // descriptor only once it serves, so the scan is repeated every
     // kWatchPollMs within what is left of --timeout (round 3, N-1). Two
     // eligible hosts are refused at once (never a guess); none by the
@@ -866,8 +884,6 @@ bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death)
             const Arcane::Remote::Descriptor& d = h.descriptor;
             if (h.hung || d.hostKind != dead.hostKind || SameHostProcess(d, dead) ||
                 !SameProjectRoot(d.project, dead.project))
-                continue;
-            if (opt.pid != 0 && d.pid != opt.pid)
                 continue;
             const bool wasLive = std::find(target->preexisting.begin(), target->preexisting.end(),
                                            std::make_pair(d.pid, d.processStart)) != target->preexisting.end();
