@@ -2,6 +2,7 @@
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/HostSession.hpp>
+#include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include "RemoteTestHttp.hpp"
@@ -821,6 +822,44 @@ TEST_CASE("a settle wait whose arm is always refused times out naming the last r
     CHECK(ring.refusedArms >= 2);           // retried within the timeout
     CHECK_FALSE(session.SettleClockFrozen());
     session.Stop("test");
+}
+
+// ---- Verification N2: the freeze follows the wait JOB, not only its row ------
+
+// The freeze is read from the session's wait rows. A row ends with its job
+// today (StepWait), but a later cancel path (cancel on client disconnect)
+// could end the job without the wait's own step running. A test-owned table
+// stands in for that path: it ends the job directly, and the clock must run.
+TEST_CASE("the settle freeze ends when its wait job stops running, even if its row outlives it", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-cancelled");
+    SettleRing ring;
+    ring.retire = false;                 // the capture stays in flight, so the freeze holds
+    ring.pixels = {{1, 1, 1, 255}};
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::RegisterSessionCommands(&session, &jobs);
+    Arcane::Remote::Call call;
+    call.command = "host.wait";
+    call.args = {{"what", "settled"}};
+    call.timeoutMs = 5000;
+    const auto armed = Arcane::Remote::CommandRegistry::Get().Invoke(call);
+    REQUIRE(armed.envelope.ok);
+    REQUIRE(armed.completesJob != 0);
+    const Arcane::Remote::JobId id{armed.completesJob};
+    for (int i = 0; i < 50 && !session.SettleClockFrozen(); ++i) {
+        jobs.StepAll(session.Gate());
+        ++ring.frame;
+    }
+    REQUIRE(session.SettleClockFrozen());
+    CHECK(ring.arms == 1);
+    jobs.Finish(id, Arcane::Remote::MakeError("host.wait", "job.cancelled", "cancelled by the test", "arm the wait again"),
+                Arcane::Remote::JobState::Cancelled);
+    REQUIRE(jobs.Find(id) != nullptr);
+    CHECK(jobs.Find(id)->state == Arcane::Remote::JobState::Cancelled);
+    CHECK_FALSE(session.SettleClockFrozen());
+    session.Stop("test");               // releases the row and its ring hold
 }
 
 #endif

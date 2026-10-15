@@ -504,7 +504,13 @@ bool SettleHoldsClock(const HostSession* session)
         return false;
     for (const auto& entry : s.waits) {
         const WaitRow& row = entry.second;
-        if (row.args.what == "settled" && (row.settle.armed || row.settle.havePrevious))
+        if (row.args.what != "settled" || !(row.settle.armed || row.settle.havePrevious))
+            continue;
+        // A row ends with its job today (StepWait's ForgetWait), but only a
+        // job that is still live may hold the clock: a later path that ends a
+        // host.wait job without its step (a cancel) must not leave it frozen.
+        const Job* job = s.jobs != nullptr ? s.jobs->Find(JobId{entry.first}) : nullptr;
+        if (job != nullptr && (job->state == JobState::Running || job->state == JobState::Queued))
             return true;
     }
     return false;

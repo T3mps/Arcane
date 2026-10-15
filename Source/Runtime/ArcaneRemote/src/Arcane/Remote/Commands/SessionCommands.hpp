@@ -57,7 +57,9 @@ ARC_REMOTE_API Envelope WaitPoll(const HostSession& session, const WaitArgs& arg
 // True while a `wait settled` armed on `session` is in its capture phase: from
 // the first capture armed with the producers idle until the wait ends (done,
 // timed out, failed, or released with the session), except while a busy
-// producer has broken the pair and no capture is in flight. The host reads it
+// producer has broken the pair and no capture is in flight. Only a wait whose
+// job is still Running (or Queued) holds it, so a job ended any other way
+// cannot leave the clock frozen. The host reads it
 // (HostSession::SettleClockFrozen) into the same freeze its --settle hold uses
 // (frame and sim dt 0), so the two captures see one frozen clock. The freeze
 // lifts while a producer is busy because it also stops the compile service's
