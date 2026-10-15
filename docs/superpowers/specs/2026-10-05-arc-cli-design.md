@@ -559,7 +559,7 @@ POST /arc/v1/call
 | 4 | no host: nothing to attach to, a stale descriptor, or a protocol-major mismatch (with remediation) |
 | 5 | host busy or not ready within `--timeout`; provably not run; retryable |
 | 6 | the host answered and the operation failed (`errors[]` set; verdict `Errored`) |
-| 7 | host unreachable or died mid-command (with a `.arcdiag` path when one exists); retryable only with `--retry-on-death`, which resends only after `host.died` or `host.hung` and only to the dead host's replacement: one rescan finds exactly one host of the same kind and project, a different `{pid, start}`, that was not live when the call began (AM6); otherwise the death is reported at once. `--retry-on-death` with `--all` is refused (exit 2) |
+| 7 | host unreachable or died mid-command (with a `.arcdiag` path when one exists); retryable only with `--retry-on-death`, which resends only after `host.died` or `host.hung` and only to the dead host's replacement: a host of the same kind and project root (compared normalized), a different `{pid, start}`, that was not live when the call began (AM6). Servitor rescans about every 250 ms within the remaining `--timeout`; two such hosts are refused at once, and none by the deadline reports the death. `--retry-on-death` with `--all` is refused (exit 2) |
 | 8 | a check ran and did not pass: test failures, `compare.failed`, a wait condition false at timeout, a scenario expectation, or verdict `Failed`/`Indeterminate`; also `call.timeout` and `launch.timeout` |
 | 9 | reserved for the Hub's PATH launcher (AM8): `engine.not-found`, `package.not-installed`, `package.incompatible`; `servitor` itself never returns it |
 | 130 / 143 | SIGINT / SIGTERM |
