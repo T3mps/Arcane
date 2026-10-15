@@ -809,13 +809,15 @@ TEST_CASE("--retry-on-death retargets only to a new host of the dead target's ki
     const auto death = Arcane::Remote::MakeError("cvar.set", "host.died", "gone", "relaunch");
 
     {
-        // Only another KIND is live (an editor): never a replacement, and the
-        // answer comes at once, not after the 30 s --timeout.
+        // Only another KIND is live (an editor): never a replacement. With no
+        // candidate, rediscovery gives up at the call's remaining budget
+        // (round 3, N-1), not later.
         write(Arcane::Remote::HostKind::Editor, self.start, project);
         auto t = targetFor();
+        t.timeoutMs = 600;
         const auto began = std::chrono::steady_clock::now();
         CHECK_FALSE(Servitor::RediscoverTarget(&t, death));
-        CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(2));
+        CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(3));
         CHECK(Servitor::SameHostProcess(t.descriptor, dead));   // still the dead target
     }
     {
@@ -839,9 +841,107 @@ TEST_CASE("--retry-on-death retargets only to a new host of the dead target's ki
         // Same kind, another project: not a replacement.
         write(Arcane::Remote::HostKind::Runtime, self.start, project + "-other");
         auto t = targetFor();
+        t.timeoutMs = 400;
         CHECK_FALSE(Servitor::RediscoverTarget(&t, death));
     }
     fs::remove_all(proj);
+}
+
+// ---- Final fix round 3 (N-1, N-2) -----------------------------------------
+
+// N-1: a restarting host writes its descriptor only once it serves, seconds
+// after the old one died. Rediscovery polls (about every 250 ms) within the
+// call's remaining --timeout, with round 2's strict filter, so the
+// replacement that appears mid-poll gets the resend. Two eligible candidates
+// are refused at once (never a guess).
+TEST_CASE("--retry-on-death waits within --timeout for the replacement, and refuses two at once", "[servitor][client]") {
+    namespace fs = std::filesystem;
+    const fs::path proj = fs::temp_directory_path() / ("servitor-repoll-" + std::to_string(Arcane::EditorLock::Self().pid));
+    fs::remove_all(proj);
+    fs::create_directories(proj);
+    { std::ofstream(proj / "Game.arcproj") << "{}"; }
+    const auto self = Arcane::EditorLock::Self();
+    const std::string project = Servitor::PathUtf8(proj);
+    const auto descriptorFor = [&](Arcane::Remote::HostKind kind, std::uint32_t pid, std::uint64_t start) {
+        Arcane::Remote::Descriptor d;
+        d.hostKind = kind;
+        d.pid = pid;
+        d.processStart = start;
+        d.port = 1;
+        d.token = std::string(64, 'a');
+        d.project = project;
+        d.state = "ready";
+        d.heartbeatUnixMs = Servitor::NowUnixMs();
+        return d;
+    };
+    Arcane::Remote::Descriptor dead = descriptorFor(Arcane::Remote::HostKind::Runtime, self.pid, self.start + 1);
+    Servitor::GlobalOptions opt;
+    opt.project = project;
+    opt.retryOnDeath = true;
+    const auto death = Arcane::Remote::MakeError("wait.frames", "host.died", "gone", "relaunch");
+    {
+        Servitor::LiveTarget t;
+        t.descriptor = dead;
+        t.watch.command = "host.wait";
+        t.timeoutMs = 10000;
+        t.started = std::chrono::steady_clock::now();
+        t.opt = &opt;
+        // The replacement comes up 600 ms after rediscovery starts polling.
+        std::thread relaunch([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));
+            const auto fresh = descriptorFor(Arcane::Remote::HostKind::Runtime, self.pid, self.start);
+            (void)Arcane::Remote::WriteDescriptorAtomic(
+                Arcane::Remote::DescriptorPath(proj, Arcane::Remote::HostKind::Runtime, self.pid), fresh);
+        });
+        const auto began = std::chrono::steady_clock::now();
+        const bool found = Servitor::RediscoverTarget(&t, death);
+        const auto took = std::chrono::steady_clock::now() - began;
+        relaunch.join();
+        CHECK(found);
+        CHECK(t.descriptor.processStart == self.start);
+        CHECK(took >= std::chrono::milliseconds(500));
+        CHECK(took < std::chrono::seconds(5));
+    }
+    {
+        // Two eligible runtime candidates (the one above and a second file
+        // naming a live process): refused at once, never a guess.
+        const auto second = descriptorFor(Arcane::Remote::HostKind::Runtime, self.pid, self.start);
+        REQUIRE(Arcane::Remote::WriteDescriptorAtomic(proj / "Saved" / "Remote" / "runtime-twin.json", second));
+        Servitor::LiveTarget t;
+        t.descriptor = dead;
+        t.watch.command = "host.wait";
+        t.timeoutMs = 30000;
+        t.started = std::chrono::steady_clock::now();
+        t.opt = &opt;
+        const auto began = std::chrono::steady_clock::now();
+        CHECK_FALSE(Servitor::RediscoverTarget(&t, death));
+        CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(2));
+    }
+    fs::remove_all(proj);
+}
+
+// N-2: the descriptor's `project` is the host's own spelling of its root. Two
+// spellings of one root (separators, a trailing separator, Windows case, a
+// "." segment) are the same project; another root is not.
+TEST_CASE("project roots compare normalized, not as text", "[servitor][client]") {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("servitor-roots-" + std::to_string(Arcane::EditorLock::Self().pid));
+    fs::create_directories(root / "Game");
+    const std::string plain = Servitor::PathUtf8(root / "Game");
+    CHECK(Servitor::SameProjectRoot(plain, plain));
+    CHECK(Servitor::SameProjectRoot(plain, plain + "/"));
+    CHECK(Servitor::SameProjectRoot(plain, Servitor::PathUtf8(root / "." / "Game")));
+    CHECK(Servitor::SameProjectRoot(plain, (root / "Game").make_preferred().string()));
+#if defined(_WIN32)
+    std::string upper = plain;
+    for (char& c : upper)
+        c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c);
+    CHECK(Servitor::SameProjectRoot(plain, upper));
+#endif
+    CHECK_FALSE(Servitor::SameProjectRoot(plain, Servitor::PathUtf8(root / "Other")));
+    CHECK(Servitor::SameProjectRoot("", ""));           // the projectless editor's descriptors
+    CHECK_FALSE(Servitor::SameProjectRoot("", plain));
+    fs::remove_all(root);
 }
 
 #endif

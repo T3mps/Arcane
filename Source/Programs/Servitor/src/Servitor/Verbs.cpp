@@ -245,6 +245,19 @@ bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::strin
 
 } // namespace
 
+std::optional<std::string> FollowUnusedGlobal(std::string_view words, const GlobalOptions& opt)
+{
+    if (!opt.world.empty())
+        return "--world does not apply to " + std::string(words) +
+               " --follow: the stream is the host's, not one world's";
+    if (opt.readOnly)
+        return "--read-only does not apply to " + std::string(words) + " --follow: a stream only reads";
+    if (opt.clientSet)
+        return "--client does not apply to " + std::string(words) +
+               " --follow: a stream sends no X-Remote-Client (only a call is audited)";
+    return std::nullopt;
+}
+
 bool QuitForced(std::span<const std::string> rest)
 {
     return std::find(rest.begin(), rest.end(), std::string("--force")) != rest.end();
@@ -925,11 +938,8 @@ int FollowVerb(std::string_view words, const char* topic, const char* command, c
                const GlobalOptions& opt)
 {
     // Rule 3: a stream posts no call, so these globals would be dropped silently.
-    if (!opt.world.empty())
-        return PrintUsage("--world does not apply to " + std::string(words) +
-                          " --follow: the stream is the host's, not one world's");
-    if (opt.readOnly)
-        return PrintUsage("--read-only does not apply to " + std::string(words) + " --follow: a stream only reads");
+    if (const auto problem = FollowUnusedGlobal(words, opt))
+        return PrintUsage(*problem);
 
     Arcane::Remote::Envelope env;
     Arcane::Remote::ClientBlock client;

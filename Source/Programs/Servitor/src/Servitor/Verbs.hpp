@@ -67,6 +67,11 @@ bool PostsCall(const VerbRow& row);
 // <verb>" (or --read-only) for the first one given to such a verb; nullopt otherwise.
 std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt);
 
+// `logs --follow` / `problems --follow` (FollowVerb): a GET stream posts no
+// call, so --world, --read-only and an explicit --client would be dropped.
+// The usage problem for the first one given; nullopt otherwise (round 3, M-1).
+std::optional<std::string> FollowUnusedGlobal(std::string_view words, const GlobalOptions& opt);
+
 // quit's tokens carry --force: the client ends the process after --timeout.
 // The host has no force path (C-M7), so it is never posted in host.quit's args.
 bool QuitForced(std::span<const std::string> rest);
@@ -105,12 +110,13 @@ std::string FollowEventText(std::string_view topic, std::string_view data, const
 // when the descriptor names a project, else HostDiagnosticsDir). PostToHost and
 // the --follow streams (Task 22) share it.
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt);
-// --retry-on-death's RediscoverFn for a LiveTarget (user): one rescan of the
-// project's descriptors, no polling. Retargets only to the dead target's
-// replacement: the same kind and project, not hung, a different {pid, start},
-// absent from target.preexisting (the hosts live when the call began), and
-// --pid's pid when given; exactly one such host. False otherwise, at once, so
-// the call reports host.died / host.hung promptly (round 2, I-1).
+// --retry-on-death's RediscoverFn for a LiveTarget (user): rescans the
+// project's descriptors every kWatchPollMs within the call's remaining
+// --timeout (round 3, N-1). Retargets only to the dead target's replacement:
+// the same kind and project root (normalized), not hung, a different
+// {pid, start}, absent from target.preexisting (the hosts live when the call
+// began), and --pid's pid when given. Two such hosts: false at once. None by
+// the deadline: false, and the call reports host.died / host.hung (I-1).
 bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death);
 // The call half of PostVerb against ONE chosen host: Call through LiveExchange
 // with the busy retry and the target watch. Prints nothing; safe to run for

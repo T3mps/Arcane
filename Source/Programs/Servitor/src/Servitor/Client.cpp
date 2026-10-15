@@ -840,42 +840,56 @@ bool RediscoverTarget(void* user, const Arcane::Remote::Envelope& death)
     if (target == nullptr || target->opt == nullptr)
         return false;
     const GlobalOptions& opt = *target->opt;
-    // One rescan, no polling (round 2, I-1): with no eligible replacement the
-    // call reports host.died (or host.hung) at once, never after --timeout.
-    // Eligible (spec AM6, "retry against the new pid") means the dead
-    // target's REPLACEMENT only: the same kind and project, not hung, not the
-    // process that died ({pid, start}), not any host that was already live
-    // when the call began (target->preexisting: a resend there could run the
-    // command on a host the call already reached), and --pid's pid when one
-    // was given. Exactly one such host is retargeted; none or several is no.
+    // Eligible (spec AM6, "retry against the new pid"): the dead target's
+    // REPLACEMENT only -- the same kind and project root (SameProjectRoot,
+    // normalized: N-2), not hung, not the process that died ({pid, start}),
+    // not any host already live when the call began (target->preexisting: a
+    // resend there could run the command on a host the call already reached),
+    // and --pid's pid when one was given. A restarting host writes its
+    // descriptor only once it serves, so the scan is repeated every
+    // kWatchPollMs within what is left of --timeout (round 3, N-1). Two
+    // eligible hosts are refused at once (never a guess); none by the
+    // deadline is false, and the call reports host.died / host.hung.
     const Arcane::Remote::Descriptor dead = target->descriptor;
-    Arcane::Remote::Envelope refusal;
-    const auto dir = RemoteDirFor(opt, &refusal);
-    if (!dir)
-        return false;
-    const Scan scan = ScanDirectory(*dir);
-    const LiveHost* found = nullptr;
-    for (const LiveHost& h : scan.live) {
-        const Arcane::Remote::Descriptor& d = h.descriptor;
-        if (h.hung || d.hostKind != dead.hostKind || d.project != dead.project || SameHostProcess(d, dead))
-            continue;
-        if (opt.pid != 0 && d.pid != opt.pid)
-            continue;
-        const bool wasLive = std::find(target->preexisting.begin(), target->preexisting.end(),
-                                       std::make_pair(d.pid, d.processStart)) != target->preexisting.end();
-        if (wasLive)
-            continue;
-        if (found != nullptr)
-            return false;   // two candidates: never guess
-        found = &h;
+    const auto budgetEnd = (target->started == std::chrono::steady_clock::time_point{}
+                                ? std::chrono::steady_clock::now()
+                                : target->started) +
+                           std::chrono::milliseconds(target->timeoutMs);
+    for (;;) {
+        Arcane::Remote::Envelope refusal;
+        const auto dir = RemoteDirFor(opt, &refusal);
+        if (!dir)
+            return false;
+        const Scan scan = ScanDirectory(*dir);
+        const LiveHost* found = nullptr;
+        for (const LiveHost& h : scan.live) {
+            const Arcane::Remote::Descriptor& d = h.descriptor;
+            if (h.hung || d.hostKind != dead.hostKind || SameHostProcess(d, dead) ||
+                !SameProjectRoot(d.project, dead.project))
+                continue;
+            if (opt.pid != 0 && d.pid != opt.pid)
+                continue;
+            const bool wasLive = std::find(target->preexisting.begin(), target->preexisting.end(),
+                                           std::make_pair(d.pid, d.processStart)) != target->preexisting.end();
+            if (wasLive)
+                continue;
+            if (found != nullptr)
+                return false;   // two candidates: never guess
+            found = &h;
+        }
+        if (found != nullptr) {
+            target->descriptor = found->descriptor;
+            const std::int64_t requestUnixMs = target->watch.requestUnixMs;
+            target->watch = WatchFor(*found, target->watch.command, opt);
+            target->watch.requestUnixMs = requestUnixMs;
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= budgetEnd)
+            return false;
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(budgetEnd - now);
+        std::this_thread::sleep_for(std::min(left, std::chrono::milliseconds(kWatchPollMs)));
     }
-    if (found == nullptr)
-        return false;
-    target->descriptor = found->descriptor;
-    const std::int64_t requestUnixMs = target->watch.requestUnixMs;
-    target->watch = WatchFor(*found, target->watch.command, opt);
-    target->watch.requestUnixMs = requestUnixMs;
-    return true;
 }
 
 TargetWatch WatchFor(const LiveHost& host, const std::string& command, const GlobalOptions& opt)

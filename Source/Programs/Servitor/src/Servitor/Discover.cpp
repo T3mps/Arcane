@@ -211,6 +211,44 @@ std::optional<fs::path> RemoteDirFor(const GlobalOptions& opt, Arcane::Remote::E
     return Arcane::Remote::DescriptorDir(*root, false);
 }
 
+namespace {
+
+// One root, normalized for comparison: weakly_canonical (resolves "." and
+// "..", and on Windows the existing parts' case), lexically normal, generic
+// separators, no trailing separator; lowercased on Windows.
+std::string NormalizedRoot(const std::string& text)
+{
+    if (text.empty())
+        return {};
+    fs::path p;
+    try {
+        p = PathFromUtf8(text);
+    } catch (const std::exception&) {
+        return text;   // not a path this system can represent: compare as written
+    }
+    std::error_code ec;
+    fs::path canonical = fs::weakly_canonical(p, ec);
+    if (ec)
+        canonical = p;
+    std::string out = PathUtf8(canonical.lexically_normal());
+    while (out.size() > 1 && out.back() == '/' && !(out.size() == 3 && out[1] == ':'))
+        out.pop_back();
+#if defined(_WIN32)
+    for (char& c : out)
+        c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+#endif
+    return out;
+}
+
+} // namespace
+
+bool SameProjectRoot(const std::string& a, const std::string& b)
+{
+    if (a.empty() || b.empty())
+        return a.empty() && b.empty();
+    return a == b || NormalizedRoot(a) == NormalizedRoot(b);
+}
+
 bool SameHostProcess(const Arcane::Remote::Descriptor& a, const Arcane::Remote::Descriptor& b)
 {
     return a.pid == b.pid && a.processStart == b.processStart;

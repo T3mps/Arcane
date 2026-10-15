@@ -672,4 +672,28 @@ TEST_CASE("--retry-on-death with --all is refused before anything is sent", "[se
     CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("cvar set"), opt).has_value());
 }
 
+// ---- Final fix round 3 ----------------------------------------------------
+
+// M-1: logs --follow and problems --follow open a GET stream that carries no
+// X-Remote-Client, so an explicit --client is refused there, beside --world
+// and --read-only (FollowVerb runs this check first).
+TEST_CASE("the --follow streams refuse an explicit --client, --world and --read-only", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    CHECK_FALSE(Servitor::FollowUnusedGlobal("logs", opt).has_value());
+    opt.client = Servitor::DefaultClientId();   // the default is not a flag
+    CHECK_FALSE(Servitor::FollowUnusedGlobal("logs", opt).has_value());
+    Servitor::GlobalOptions client;
+    client.client = "ci";
+    client.clientSet = true;
+    const auto problem = Servitor::FollowUnusedGlobal("problems", client);
+    REQUIRE(problem.has_value());
+    CHECK(problem->starts_with("--client does not apply to problems --follow"));
+    Servitor::GlobalOptions world;
+    world.world = "main";
+    CHECK(Servitor::FollowUnusedGlobal("logs", world)->starts_with("--world does not apply to logs --follow"));
+    Servitor::GlobalOptions readOnly;
+    readOnly.readOnly = true;
+    CHECK(Servitor::FollowUnusedGlobal("logs", readOnly)->starts_with("--read-only does not apply to logs --follow"));
+}
+
 #endif

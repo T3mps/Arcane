@@ -44,6 +44,12 @@ struct Scan {
 // is another process).
 bool SameHostProcess(const Arcane::Remote::Descriptor& a, const Arcane::Remote::Descriptor& b);
 
+// Whether two descriptor `project` spellings name one project root (round 3,
+// N-2): normalized (weakly_canonical, lexically normal, no trailing separator;
+// case-insensitive on Windows), never raw text. Two empty roots (the
+// projectless editor) are the same; empty and non-empty are not.
+bool SameProjectRoot(const std::string& a, const std::string& b);
+
 // Reads <projectRoot>/Saved/Remote/*.json (ScanDirectory over DescriptorDir).
 Scan ScanProject(const std::filesystem::path& projectRoot);
 // Reads every *.json directly under `remoteDir`. A stale descriptor (IsStale)
