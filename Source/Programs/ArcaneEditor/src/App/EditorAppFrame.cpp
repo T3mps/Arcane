@@ -611,17 +611,11 @@ namespace Arcane::Editor
 #if !defined(ARC_BUILD_DIST)
         // The frame loop is over: parked remote calls answer host.died and the
         // descriptor goes now, not at ~EditorApp after the whole teardown.
-        if (m_remote)
-        {
-            // The --report chain (ShutdownGraphPath, after this) reads the
-            // remote reason the loop broke on (Task 16): latched here, before
-            // the session goes.
-            if (m_remote->ExitReason() != nullptr)
-                m_remoteExitReason = m_remote->ExitReason();
-            m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "shutting-down" first
-            m_remote.reset();
-            Arcane::Editor::SetSelectionView({});   // the view names this app's m_selection
-        }
+        // The --report chain (ShutdownGraphPath, after this) reads the remote
+        // reason the loop broke on (Task 16): latched here, before the session
+        // goes. StopEditorRemote is the one teardown Shutdown() shares (N3-3).
+        if (const char* reason = Arcane::Editor::StopEditorRemote(m_remote, "exit"))
+            m_remoteExitReason = reason;
 #endif
     }
 

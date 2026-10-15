@@ -6,6 +6,8 @@
 #include <Arcane/Scene/Components.hpp>
 #include "Scene/SelectionContext.hpp"
 #include "Remote/SelectionCommand.hpp"
+#include <Arcane/Remote/HostSession.hpp>   // StopEditorRemote's session (round 4, N3-3)
+#include <memory>
 #include <Astra/Registry/Registry.hpp>
 #include <Servitor/Verbs.hpp>
 #include "RemoteTestSupport.hpp"
@@ -409,6 +411,54 @@ TEST_CASE("scene.tree --depth N cuts a node at depth N that has children", "[rem
     // INT32_MAX itself is accepted (the whole tree in practice).
     const auto maxDepth = InvokeTree({{"depth", std::numeric_limits<std::int32_t>::max()}});
     CHECK(maxDepth.ok);
+}
+
+// ---- Final fix round 4 (N3-3) ---------------------------------------------
+
+// The editor's remote teardown, shared by MainLoop's end and Shutdown(): a
+// boot that exits before MainLoop (a splash close after finalize, a vehicle
+// failure) after --play-as armed the session still stops it -- the descriptor
+// goes, the session is reset, and the selection view naming the app's
+// selection is cleared -- instead of waiting for ~HostSession.
+TEST_CASE("StopEditorRemote stops the session, clears the selection view, and keeps the exit reason", "[remote][scene]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    Arcane::Test::TempDir tmp("remote-editor-stop");
+    Arcane::Remote::HostSession::Config cfg;
+    cfg.kind = Arcane::Remote::HostKind::Editor;
+    cfg.cvarContext = Arcane::CVarContext::Editor;
+    cfg.projectRoot = tmp.path;
+    auto session = std::make_unique<Arcane::Remote::HostSession>(cfg);
+    REQUIRE(session->Start());
+    const std::filesystem::path descriptor = session->DescriptorFile();
+    REQUIRE(std::filesystem::exists(descriptor));
+    Arcane::Editor::SelectionContext sel;
+    g_sel = &sel;
+    Arcane::Editor::SelectionView view;
+    view.count = &SelCount;
+    view.at = &SelAt;
+    view.primary = &SelPrimary;
+    RemoteTest::ScopedRemotePointer<const Arcane::Editor::SelectionView> viewGuard(
+        [](const Arcane::Editor::SelectionView* v) {
+            Arcane::Editor::SetSelectionView(v ? *v : Arcane::Editor::SelectionView{});
+        },
+        &view);
+    Arcane::Editor::RegisterSelectionCommand();
+
+    session->RequestQuit();
+    CHECK(session->DrainFrame(0));   // the loop would break on remote-quit
+    const char* reason = Arcane::Editor::StopEditorRemote(session, "exit");
+    REQUIRE(reason != nullptr);
+    CHECK(std::string(reason) == "remote-quit");
+    CHECK(session == nullptr);
+    CHECK_FALSE(std::filesystem::exists(descriptor));
+    Arcane::Remote::Call call;
+    call.command = "editor.selection.get";
+    const auto denied = Arcane::Remote::CommandRegistry::Get().Invoke(call).envelope;
+    REQUIRE_FALSE(denied.errors.empty());
+    CHECK(denied.errors[0].code == "permission.denied");   // the view was cleared
+    g_sel = nullptr;
+    // No session: a no-op that reports no reason.
+    CHECK(Arcane::Editor::StopEditorRemote(session, "exit") == nullptr);
 }
 
 #endif

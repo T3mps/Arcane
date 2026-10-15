@@ -5,6 +5,7 @@
 #include <Arcane/Remote/Commands/SceneCommands.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Remote/Worlds.hpp>
+#include <Arcane/Remote/HostSession.hpp>   // StopEditorRemote (round 4, N3-3)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Reflection.hpp>
 
@@ -94,6 +95,17 @@ Remote::CommandResult SelectionGet(const Remote::Call& call, void* /*user*/)
 }
 
 } // namespace
+
+const char* StopEditorRemote(std::unique_ptr<Arcane::Remote::HostSession>& session, const char* fallbackReason)
+{
+    if (!session)
+        return nullptr;
+    const char* reason = session->ExitReason();
+    session->Stop(reason != nullptr ? reason : fallbackReason);   // publishes "shutting-down" first
+    session.reset();
+    SetSelectionView({});   // the view names the app's m_selection
+    return reason;
+}
 
 void SetSelectionView(SelectionView view)
 {

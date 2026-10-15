@@ -9,6 +9,7 @@
 #include <Astra/Entity/Entity.hpp>
 
 #include <cstddef>
+#include <memory>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -34,6 +35,26 @@ void SetSelectionView(SelectionView view);
 //   the selection is empty or the primary has no Identity. A dead entity is
 //   skipped; one without an Identity adds warning entity.no-identity.
 void RegisterSelectionCommand();
+
+} // namespace Arcane::Editor
+
+namespace Arcane::Remote
+{
+class HostSession;   // Arcane/Remote/HostSession.hpp
+}
+
+namespace Arcane::Editor
+{
+
+// The editor's one remote teardown (Servitor final fix round 4, N3-3), used by
+// MainLoop's end and by Shutdown(), so a boot that exits before MainLoop with
+// a session already armed (--play-as arms in StageFinalize) stops it too.
+// When `session` is set: latches its ExitReason, Stop(that reason, else
+// `fallbackReason`) -- parked calls answer host.died and the descriptor goes
+// -- resets it, and clears the selection view (it names the app's
+// m_selection). Returns the latched reason (a static literal), or null when
+// there was no session or no remote reason.
+const char* StopEditorRemote(std::unique_ptr<Arcane::Remote::HostSession>& session, const char* fallbackReason);
 
 } // namespace Arcane::Editor
 

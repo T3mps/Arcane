@@ -97,6 +97,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include "Remote/SelectionCommand.hpp"   // StopEditorRemote (Servitor final fix round 4, N3-3)
 #include <string>
 #include <utility>
 #include <vector>
@@ -3642,6 +3643,15 @@ namespace Arcane::Editor
 
     void EditorApp::Shutdown()
     {
+#if !defined(ARC_BUILD_DIST)
+        // Servitor final fix round 4 (N3-3): --play-as arms the remote session
+        // inside StageFinalize, so a boot that exits before MainLoop (a splash
+        // close after finalize, a CreateGraphVehicles failure) reaches here with
+        // it live. Stop it first, as MainLoop's end does: parked calls answer
+        // host.died, the descriptor goes, the selection view is cleared. A
+        // no-op when MainLoop already stopped it.
+        (void)Arcane::Editor::StopEditorRemote(m_remote, "exit");
+#endif
         // Deregister both sinks FIRST, before anything below can dispatch into
         // a half-torn-down editor -- see ConsoleDiagnostics::Uninstall()'s doc
         // comment for the ordering rationale (diagnostics store, then console).
