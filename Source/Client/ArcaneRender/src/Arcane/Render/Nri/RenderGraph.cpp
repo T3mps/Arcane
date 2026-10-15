@@ -224,6 +224,24 @@ namespace Arcane
         m_nodes[m_currentNodeIndex].depthAttachment = attachment;
     }
 
+    void RenderGraph::SetColorAttachmentOps(std::span<const RgAttachmentOp> ops)
+    {
+        ARC_ASSERT(m_currentNodeIndex < m_nodes.size(),
+                   "RenderGraph::SetColorAttachmentOps: no node's Setup is currently running -- "
+                   "call this only from within the Setup passed to AddNode()");
+        m_nodes[m_currentNodeIndex].colorOps.assign(ops.begin(), ops.end());
+    }
+
+    void RenderGraph::SetDepthAttachmentOp(RgAttachmentOp op)
+    {
+        ARC_ASSERT(m_currentNodeIndex < m_nodes.size(),
+                   "RenderGraph::SetDepthAttachmentOp: no node's Setup is currently running -- "
+                   "call this only from within the Setup passed to AddNode()");
+        NodeDesc& node = m_nodes[m_currentNodeIndex];
+        node.depthOp    = op;
+        node.hasDepthOp = true;
+    }
+
     // ------------------------------------------------------------------
     // Compile -- the whole barrier derivation. PURE: reads m_nodes/
     // m_textures/m_buffers/m_accesses, writes nothing, calls no nri device
@@ -859,6 +877,24 @@ namespace Arcane
     {
         ARC_ASSERT(nodeIndex < m_nodes.size(), "RenderGraph::NodeHasRequiredAttachments: index out of range");
         return m_nodes[nodeIndex].hasRequiredAttachments;
+    }
+
+    const RgAttachmentOp* RenderGraph::ColorLoadOp(std::size_t nodeIndex, std::size_t attachment) const
+    {
+        if (nodeIndex >= m_nodes.size())
+            return nullptr;
+        const NodeDesc& node = m_nodes[nodeIndex];
+        if (attachment >= node.colorAttachments.size() || attachment >= node.colorOps.size())
+            return nullptr;
+        return &node.colorOps[attachment];
+    }
+
+    const RgAttachmentOp* RenderGraph::DepthLoadOp(std::size_t nodeIndex) const
+    {
+        if (nodeIndex >= m_nodes.size())
+            return nullptr;
+        const NodeDesc& node = m_nodes[nodeIndex];
+        return node.hasDepthOp ? &node.depthOp : nullptr;
     }
 
     const char* RenderGraph::NameOf(RgTexture texture) const

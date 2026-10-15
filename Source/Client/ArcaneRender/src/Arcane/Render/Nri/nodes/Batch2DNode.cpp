@@ -1392,18 +1392,9 @@ namespace Arcane
     {
         const nri::CoreInterface& core = context.core;
 
-        // THE CLEAR. Graph attachments are LOAD/STORE and the declaration API
-        // carries no clear op, so a node that needs a cleared target clears it
-        // from its own exec fn -- the seam Task 7 chose and documented in
-        // NriGraphContext::BuildFrame. The executor has already opened
-        // rendering with the canvas attached and set the full-target viewport
-        // and scissor; this must not do either itself.
-        nri::ClearAttachmentDesc clear = {};
-        clear.planes               = nri::PlaneBits::COLOR;
-        clear.colorAttachmentIndex = 0;
-        clear.value.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
-        core.CmdClearAttachments(context.cmd, &clear, 1, nullptr, 0);
-
+        // The canvas is already cleared to render.clearColor: AddBatch2DNode
+        // declares a CLEAR colour load op, which the executor applies when it
+        // begins rendering (F5 plan 1, Task 2).
         if (batch.spans.empty() || batch.vertices.empty() || batch.indices.empty())
             return;   // an empty frame is a cleared canvas, not an error
 
@@ -1663,6 +1654,10 @@ namespace Arcane
                 canvas = builder.CreateTexture("canvas", desc);
                 builder.Write(canvas, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));
+                Arcane::RgAttachmentOp op;
+                op.load = Arcane::RgLoadOp::Clear;
+                op.clear.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
+                graph.SetColorAttachmentOps(std::span<const Arcane::RgAttachmentOp>(&op, 1));
             },
             [context, drained, canvasFormat, clearColor](RenderGraphNodeContext& nodeContext)
             {

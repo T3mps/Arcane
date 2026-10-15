@@ -4042,6 +4042,7 @@ namespace Arcane::Editor
             return true;
 
         Arcane::NriGraphContext::FrameDesc frame;
+        frame.world = false;
         frame.imgui = chrome;
 
         // ===== THE --headless FORK, AND THE FULL-FRAME CAPTURE ===============

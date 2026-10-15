@@ -1238,39 +1238,30 @@ namespace Arcane
                                       NriGraphContext* context)
     {
         // ---------------------------------------------------------------
-        // THE CLEAR SEAM (Task 7's decision; Task 8 is its first real user).
+        // THE CLEAR IS DECLARATIVE (F5 plan 1, Task 2; it replaced Task 7's
+        // clear-in-the-exec-fn seam). A node that wants a cleared attachment
+        // declares a load op beside the attachment
+        // (RenderGraph::SetColorAttachmentOps / SetDepthAttachmentOp) and the
+        // executor lowers it to nri::LoadOp::CLEAR at CmdBeginRendering. An
+        // attachment with no declared op LOADs; the store op is always STORE.
+        //   - batch2d (and, on a chrome frame, letterbox) CLEARs the canvas to
+        //     render.clearColor. The canvas is a TRANSIENT whose pool slot the
+        //     graph hands over with a contents-discarding barrier, so its
+        //     LOADed contents would be undefined.
+        //   - mesh LOADs the canvas (it carries batch2d's content) and CLEARs
+        //     its fresh depth transient to DepthClearValue(
+        //     kSelectedDepthConvention).
+        //   - The BACKBUFFER needs no clear: the tonemap covers it with a
+        //     fullscreen triangle, and neither does a POST-CHAIN target, for
+        //     the same reason.
+        //   - Pick keeps its own exec-fn clear (PickOutlineNodes.cpp).
         //
-        // Task 6's executor begins every raster pass with `nri::AttachmentDesc
-        // = {}`, i.e. LoadOp::LOAD + StoreOp::STORE, and the graph's
-        // declaration API carries no clear ops at all. So a node that wants a
-        // cleared attachment has exactly two options: CmdClearAttachments
-        // inside its own exec fn, or a new declarative clear-op on the
-        // attachment declaration.
-        //
-        // THIS TAKES THE FIRST, on purpose:
-        //   - It changes NO frozen API mid-phase. RgExecuteDesc,
-        //     RenderGraphNodeContext and the attachment setters are contracts
-        //     Tasks 8-12 are already written against; a declarative clear op
-        //     is a real design (per-attachment load op + clear value, its
-        //     interaction with the swapchain's fixed discarding entry state,
-        //     depth/stencil planes, and the compile-time validation that a
-        //     CLEAR attachment is also declared as a Write) and deserves its
-        //     own task rather than a rushed corner of this one.
-        //   - It is correct here. The canvas is a TRANSIENT whose pool slot
-        //     the graph hands over with a contents-discarding barrier, so its
-        //     LOADed contents are undefined -- and Batch2DNode::Record clears
-        //     it in full before drawing. The BACKBUFFER needs no clear at all:
-        //     the tonemap covers it with a fullscreen triangle, and neither
-        //     does a POST-CHAIN target, for the same reason (an opaque
-        //     fullscreen pass writes every pixel of it).
-        //   - It costs nothing measurable at Phase 2's scale: one full-target
-        //     clear per frame on an immediate-mode desktop GPU is what
-        //     LoadOp::CLEAR lowers to anyway.
-        // WHEN TO REVISIT: tile-based hardware (where LoadOp::CLEAR genuinely
-        // avoids a tile read) or a node that needs a partial/multi-attachment
-        // clear pattern CmdClearAttachments makes awkward. Both are a Phase
-        // 4+ concern, and both want the declarative version -- so this is a
-        // deferral, not a rejection.
+        // WORLD vs CHROME. A world frame (shape.world, the default) declares
+        // the empty D1 slots "gbuffer" and "lighting" ahead of batch2d and
+        // "taa" just before the tonemap: compute nodes with no access and no
+        // attachment, so Compile gives them no barrier and no pool slot. A
+        // chrome frame (world == false) declares none of the world nodes --
+        // only "letterbox", which clears the canvas the tonemap samples.
         //
         // RING FOOTGUN, for whoever adds the next node here: the vehicle calls
         // ring.BeginFrame(slot) AFTER this function returns, so an allocation
@@ -1280,7 +1271,44 @@ namespace Arcane
         // ---------------------------------------------------------------
         RgFrameHandles handles;
 
-        handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
+        const auto addEmpty = [&](const char* name) {
+            graph.AddNode(name, RenderGraph::NodeKind::Compute,
+                [](RenderGraphBuilder&) {},
+                [](RenderGraphNodeContext&) {});
+        };
+
+        if (shape.world)
+        {
+            addEmpty("gbuffer");
+            addEmpty("lighting");
+            handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
+        }
+        else
+        {
+            // THE CHROME LETTERBOX: AddBatch2DNode's setup minus the batch. The
+            // canvas is still minted (the tonemap samples it) and cleared by its
+            // load op; the exec records nothing. SetColorAttachments is
+            // required -- Compile refuses a Raster node with no attachment.
+            graph.AddNode("letterbox", RenderGraph::NodeKind::Raster,
+                [&](RenderGraphBuilder& builder)
+                {
+                    const CVarColor clearColor = Settings<RenderSettings>().clearColor;
+                    RgTextureDesc desc;
+                    desc.format = GraphCanvasFormat();
+                    desc.width  = shape.canvasWidth;
+                    desc.height = shape.canvasHeight;
+                    desc.optimizedClearValue.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
+                    desc.hasOptimizedClearValue = true;
+                    handles.canvas = builder.CreateTexture("canvas", desc);
+                    builder.Write(handles.canvas, RgUsage::ColorWrite);
+                    graph.SetColorAttachments(std::span<const RgTexture>(&handles.canvas, 1));
+                    RgAttachmentOp op;
+                    op.load = RgLoadOp::Clear;
+                    op.clear.color.f = { clearColor.r, clearColor.g, clearColor.b, clearColor.a };
+                    graph.SetColorAttachmentOps(std::span<const RgAttachmentOp>(&op, 1));
+                },
+                [](RenderGraphNodeContext&) {});
+        }
 
         // ---------------------------------------------------------------
         // THE MESH PASS (Task 4 declared its depth target; Task 7 is the pass
@@ -1292,8 +1320,8 @@ namespace Arcane
         //
         // POSITIONED AFTER batch2d, BEFORE the post chain and the tonemap.
         // After batch2d because the canvas is MINTED AND CLEARED there and this
-        // pass draws on top of it (MeshNode::Record clears the DEPTH plane and
-        // deliberately not the colour one); before the tonemap because the
+        // pass draws on top of it (its colour load op LOADs; only its depth
+        // load op CLEARs); before the tonemap because the
         // canvas is linear and the mesh pass writes linear colour.
         //
         // GATED ON A NON-EMPTY SCENE, and an empty span reads exactly like a
@@ -1304,9 +1332,9 @@ namespace Arcane
         // Since F3 plan 1 T6 "non-empty" is MeshSceneDesc::Empty(): ad-hoc
         // instances OR a registry-backed scene with draws OR (T7, ruling R-D)
         // a registry-backed scene with STAGED rows and nothing emitted --
-        // the upload still has to happen; the mesh node records only its
-        // depth clear then.
-        const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
+        // the upload still has to happen; the mesh node's pass then only
+        // clears depth through its load op.
+        const bool wantsMesh = shape.world && shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {
             // GraphCanvasFormat() is passed EXPLICITLY because it is the format
@@ -1355,7 +1383,7 @@ namespace Arcane
         // transient no node touches has no lifetime and no pool slot",
         // RenderGraph.hpp), so RealizePool never allocates it.
         // ---------------------------------------------------------------
-        else if (shape.depth)
+        else if (shape.world && shape.depth)
         {
             graph.AddNode("depth", RenderGraph::NodeKind::Compute,
                 [&handles, &shape](RenderGraphBuilder& builder)
@@ -1395,7 +1423,7 @@ namespace Arcane
         // GATED ON THE DESC ALONE, like `mesh`: null declares nothing, and a
         // frame that never sets it is byte for byte the pre-T10 frame.
         // ---------------------------------------------------------------
-        if (shape.grid)
+        if (shape.world && shape.grid)
         {
             AddGridNode(graph, context, handles.canvas, GraphCanvasFormat(),
                         wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
@@ -1416,7 +1444,7 @@ namespace Arcane
         // works the same way, off FrameDesc::imgui.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
-        if (shape.post && !shape.post->passes.empty())
+        if (shape.world && shape.post && !shape.post->passes.empty())
         {
             // With a context the NODE decides: PrepareChain builds the
             // pipelines, the descriptor sets and the packed constants, and
@@ -1448,6 +1476,11 @@ namespace Arcane
         // (Task 7). Everything below writes `handles.backbuffer` and neither
         // knows nor cares which it got, which is what keeps the two modes one
         // frame shape rather than two.
+        // The empty TAA slot (D1), last of the world nodes, just ahead of the
+        // tonemap. A chrome frame has no world and no TAA.
+        if (shape.world)
+            addEmpty("taa");
+
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
 
         // ---------------------------------------------------------------
@@ -1640,6 +1673,9 @@ namespace Arcane
         // that would go stale on the next Reset().
         RgFrameShape shape;
         shape.capture       = frame.capture;
+        // World or host-chrome frame (F5 plan 1, Task 2). Default true, so every
+        // caller stays a world frame until it opts out.
+        shape.world         = frame.world;
         shape.canvasWidth   = SurfaceWidth();
         shape.canvasHeight  = SurfaceHeight();
         shape.captureBuffer = m_capture;

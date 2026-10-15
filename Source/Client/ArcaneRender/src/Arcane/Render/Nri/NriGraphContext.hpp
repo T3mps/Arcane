@@ -415,6 +415,14 @@ namespace Arcane
             // Set on the last frame of a --screenshot run.
             bool capture = false;
 
+            // A WORLD frame (the default) declares the world nodes: the empty
+            // gbuffer/lighting slots, batch2d, the mesh/grid/post blocks and
+            // the empty taa slot. A host-chrome frame (the editor's
+            // PresentChromeFrame) sets this false and gets only a "letterbox"
+            // node that clears the canvas to render.clearColor, then tonemap
+            // and the HUD tail (F5 plan 1, Task 2).
+            bool world = true;
+
             // This frame's 2D content, ALREADY SUBMITTED into the batcher by
             // the frame driver (ClientRuntime::SetRenderContext + SubmitRender) and
             // not yet drained -- this path drains it. Borrowed for
@@ -1628,6 +1636,9 @@ namespace Arcane
     struct RgFrameShape
     {
         bool          capture      = false;
+        // FrameDesc::world. False declares "letterbox" in place of every world
+        // node (see DeclareGraphFrame).
+        bool          world        = true;
         // The canvas transient's extent -- the swapchain's, so the tonemap
         // samples 1:1.
         std::uint32_t canvasWidth  = 0;
