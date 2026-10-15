@@ -32,8 +32,10 @@ namespace Arcane::Remote
 //     (Guid::operator<: hi, then lo); entities without an Identity sort last
 //     (by handle), carry guid null, and the tree adds one warning
 //     entity.no-identity (detail.count). depth (optional; absent or -1 = the
-//     whole tree, below -1 is arg.invalid) stops the walk: depth 0 is roots only. A node the walk cut keeps
-//     children [] and childrenOmitted = how many children it has. A tree whose
+//     whole tree, below -1 or above INT32_MAX is arg.invalid) stops the walk:
+//     depth 0 is roots only. A node the walk cut keeps children [] and
+//     childrenOmitted = how many children it has. The walk never goes below
+//     64 levels whatever depth says (warning scene.depth-limit). A tree whose
 //     JSON exceeds the 256 KiB inline cap goes to one `kind:"scene"` artifact
 //     in the session's artifact directory (SetEcsArtifactDir) with data null and
 //     warning scene.in-artifact; scene.artifact-failed (exit 6) when it cannot

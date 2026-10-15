@@ -44,6 +44,7 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("entity.not-found")) == 6);
     CHECK(ExitFromHost(Err("compare.missing-reference")) == 6);
     CHECK(ExitFromHost(Err("capture.no-frame")) == 6);
+    CHECK(ExitFromHost(Err("scene.artifact-failed")) == 6);   // listed explicitly (Task 25 fix round 1)
     CHECK(ExitFromHost(Err("job.failed")) == 6);
     CHECK(ExitFromHost(Err("play.edit-only")) == 6);
     CHECK(ExitFromHost(Err("some.future-code")) == 6); // any other non-empty code (ruling F6)

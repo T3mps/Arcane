@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <Arcane/Remote/Commands/EcsCommands.hpp> // SetEcsArtifactDir: the session artifact directory
 #include <Arcane/Remote/Commands/SceneCommands.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Remote/Worlds.hpp>
@@ -8,6 +9,11 @@
 #include <Astra/Registry/Registry.hpp>
 #include <Servitor/Verbs.hpp>
 #include "RemoteTestSupport.hpp"
+#include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -237,6 +243,172 @@ TEST_CASE("scene and selection verbs build their wire args", "[remote][scene][se
         CHECK_FALSE(tree->args(bad, out, &error));
         CHECK_FALSE(error.empty());
     }
+}
+
+// --- Task 25 fix round 1: the bounded-output paths ---
+
+static Arcane::Remote::Envelope InvokeTree(nlohmann::json args) {
+    Arcane::Remote::Call call;
+    call.command = "scene.tree";
+    call.args = std::move(args);
+    return Arcane::Remote::CommandRegistry::Get().Invoke(call).envelope;
+}
+
+TEST_CASE("scene.tree over the inline cap writes one scene artifact", "[remote][scene]") {
+    Astra::Registry reg;
+    // 2000 named roots with 150-character names: ~0.5 MB of tree JSON.
+    for (std::uint64_t i = 0; i < 2000; ++i) {
+        const auto e = reg.CreateEntity();
+        Arcane::Identity id;
+        id.id = Arcane::Guid{7, i + 1};
+        id.name = std::string(150, 'n') + std::to_string(i);
+        reg.AddComponent<Arcane::Identity>(e, id);
+    }
+    Arcane::Remote::WorldTable worlds{&RemoteTestWorld, &reg};
+    RemoteTest::ScopedRemotePointer<const Arcane::Remote::WorldTable> worldGuard(
+        [](const Arcane::Remote::WorldTable* t) { Arcane::Remote::SetCommandWorlds(t ? *t : Arcane::Remote::WorldTable{}); },
+        &worlds);
+    Arcane::Remote::RegisterSceneCommands();
+    RemoteTest::ScopedHostKind runtimeKind(Arcane::Remote::HostKind::Runtime);
+
+    Arcane::Test::TempDir out("scene_artifact");
+    Arcane::Remote::SetEcsArtifactDir(out.path);   // the session's <remote dir>/out, shared with ecs.query
+    const auto big = InvokeTree(nlohmann::json::object());
+    Arcane::Remote::ReleaseEcsArtifactDir(out.path);
+    REQUIRE(big.ok);
+    CHECK(big.data.is_null());
+    REQUIRE(big.artifacts.size() == 1);
+    CHECK(big.artifacts[0].kind == "scene");
+    CHECK(big.artifacts[0].sha256.size() == 64);
+    REQUIRE(big.warnings.size() == 1);
+    CHECK(big.warnings[0].code == "scene.in-artifact");
+    const std::filesystem::path file = big.artifacts[0].path;
+    REQUIRE(std::filesystem::exists(file));
+    CHECK(std::filesystem::file_size(file) == big.artifacts[0].bytes);
+    CHECK(big.artifacts[0].bytes > 262144);
+    std::ifstream in(file, std::ios::binary);
+    const nlohmann::json written = nlohmann::json::parse(in);
+    REQUIRE(written["roots"].size() == 2000);
+    CHECK(written["roots"][0]["guid"]["lo"] == 1);   // sorted by guid
+
+    // An artifact directory that cannot be written is an error, never ok with no tree.
+    const std::filesystem::path notADir = out.path / "plain-file";
+    { std::ofstream(notADir) << "x"; }
+    Arcane::Remote::SetEcsArtifactDir(notADir);
+    const auto failed = InvokeTree(nlohmann::json::object());
+    Arcane::Remote::ReleaseEcsArtifactDir(notADir);
+    REQUIRE_FALSE(failed.ok);
+    CHECK(failed.errors[0].code == "scene.artifact-failed");
+    CHECK(Arcane::Remote::ExitFromHost(failed) == 6);
+    CHECK(failed.artifacts.empty());
+
+    // With no artifact directory the tree is dropped, not inlined, and a warning says so.
+    const auto noDir = InvokeTree(nlohmann::json::object());
+    REQUIRE(noDir.ok);
+    CHECK(noDir.data.is_null());
+    CHECK(noDir.artifacts.empty());
+    REQUIRE(noDir.warnings.size() == 1);
+    CHECK(noDir.warnings[0].code == "scene.no-artifact-dir");
+}
+
+TEST_CASE("scene.tree cuts a chain deeper than the hard bound with scene.depth-limit", "[remote][scene]") {
+    Astra::Registry reg;
+    // A 100-level parent chain: the walk stops at level 64 whatever --depth says.
+    std::vector<Astra::Entity> chain;
+    for (int i = 0; i < 100; ++i) {
+        const auto e = reg.CreateEntity();
+        if (!chain.empty())
+            REQUIRE(reg.SetParent(e, chain.back()));
+        Arcane::Identity id;
+        id.id = Arcane::Guid{9, static_cast<std::uint64_t>(i + 1)};
+        id.name = "link" + std::to_string(i);
+        reg.AddComponent<Arcane::Identity>(e, id);
+        chain.push_back(e);
+    }
+    Arcane::Remote::WorldTable worlds{&RemoteTestWorld, &reg};
+    RemoteTest::ScopedRemotePointer<const Arcane::Remote::WorldTable> worldGuard(
+        [](const Arcane::Remote::WorldTable* t) { Arcane::Remote::SetCommandWorlds(t ? *t : Arcane::Remote::WorldTable{}); },
+        &worlds);
+    Arcane::Remote::RegisterSceneCommands();
+    RemoteTest::ScopedHostKind runtimeKind(Arcane::Remote::HostKind::Runtime);
+
+    const auto env = InvokeTree(nlohmann::json::object());
+    REQUIRE(env.ok);
+    REQUIRE(env.warnings.size() == 1);
+    CHECK(env.warnings[0].code == "scene.depth-limit");
+    CHECK(env.warnings[0].detail["limit"] == 64);
+    // Walk down to the cut node: level 64 is link64, which keeps its child as childrenOmitted.
+    const nlohmann::json* node = &env.data["roots"][0];
+    for (int level = 0; level < 64; ++level) {
+        REQUIRE(node->at("children").size() == 1);
+        node = &node->at("children").at(0);
+    }
+    CHECK(node->at("name") == "link64");
+    CHECK(node->at("children").empty());
+    CHECK(node->at("childrenOmitted") == 1);
+    // The listener's path (envelope JSON, then text) handles the 64-level tree
+    // on the main-thread stack too.
+    const std::string wire = Arcane::Remote::ToJson(env).dump();
+    CHECK(wire.find("link64") != std::string::npos);
+    CHECK(wire.find("link65") == std::string::npos);
+
+    // A user --depth under the bound cuts there without the hard-bound warning.
+    const auto shallow = InvokeTree({{"depth", 3}});
+    REQUIRE(shallow.ok);
+    CHECK(shallow.warnings.empty());
+}
+
+TEST_CASE("scene.tree --depth N cuts a node at depth N that has children", "[remote][scene]") {
+    Astra::Registry reg;
+    const auto root = reg.CreateEntity();
+    const auto mid = reg.CreateEntity();
+    const auto leafA = reg.CreateEntity();
+    const auto leafB = reg.CreateEntity();
+    REQUIRE(reg.SetParent(mid, root));
+    REQUIRE(reg.SetParent(leafA, mid));
+    REQUIRE(reg.SetParent(leafB, mid));
+    std::uint64_t lo = 1;
+    for (const auto e : {root, mid, leafA, leafB}) {
+        Arcane::Identity id;
+        id.id = Arcane::Guid{4, lo};
+        id.name = "e" + std::to_string(lo++);
+        reg.AddComponent<Arcane::Identity>(e, id);
+    }
+    Arcane::Remote::WorldTable worlds{&RemoteTestWorld, &reg};
+    RemoteTest::ScopedRemotePointer<const Arcane::Remote::WorldTable> worldGuard(
+        [](const Arcane::Remote::WorldTable* t) { Arcane::Remote::SetCommandWorlds(t ? *t : Arcane::Remote::WorldTable{}); },
+        &worlds);
+    Arcane::Remote::RegisterSceneCommands();
+    RemoteTest::ScopedHostKind editorKind(Arcane::Remote::HostKind::Editor);
+
+    const auto env = InvokeTree({{"depth", 1}});
+    REQUIRE(env.ok);
+    REQUIRE(env.data["roots"].size() == 1);
+    CHECK_FALSE(env.data["roots"][0].contains("childrenOmitted"));
+    REQUIRE(env.data["roots"][0]["children"].size() == 1);
+    const nlohmann::json& cut = env.data["roots"][0]["children"][0];
+    CHECK(cut["name"] == "e2");
+    CHECK(cut["children"].empty());
+    CHECK(cut["childrenOmitted"] == 2);
+    CHECK(env.warnings.empty());
+
+    // depth 2 reaches the leaves; nothing is cut.
+    const auto deeper = InvokeTree({{"depth", 2}});
+    REQUIRE(deeper.ok);
+    CHECK(deeper.data["roots"][0]["children"][0]["children"].size() == 2);
+    CHECK_FALSE(deeper.data["roots"][0]["children"][0].contains("childrenOmitted"));
+
+    // Above INT32_MAX is refused on both the signed and the unsigned branch, never truncated.
+    const std::int64_t tooBig = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1;
+    for (const nlohmann::json& bad : {nlohmann::json(tooBig), nlohmann::json(static_cast<std::uint64_t>(tooBig))}) {
+        const auto refused = InvokeTree({{"depth", bad}});
+        REQUIRE_FALSE(refused.ok);
+        CHECK(refused.errors[0].code == "arg.invalid");
+        CHECK(Arcane::Remote::ExitFromHost(refused) == 2);
+    }
+    // INT32_MAX itself is accepted (the whole tree in practice).
+    const auto maxDepth = InvokeTree({{"depth", std::numeric_limits<std::int32_t>::max()}});
+    CHECK(maxDepth.ok);
 }
 
 #endif

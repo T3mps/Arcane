@@ -42,8 +42,8 @@ using Detail::MakeIssue;
 
 constexpr std::string_view kTreeUsage = "pass depth: -1 (the whole tree, the default), 0 (roots only) or N levels";
 
-ARC_CONSTANT("stack bound: scene.tree recurses once per level; a deeper hierarchy is cut here with scene.depth-limit")
-constexpr std::int32_t kMaxWalkDepth = 512;
+ARC_CONSTANT("stack bound: the walk is iterative, but the envelope's JSON copy and dump recurse per level (measured in Debug: ~4 KiB of main-thread stack per level, a bare 256-level chain overflows 1 MiB, a 128-level tree overflowed inside a test); 64 keeps headroom; deeper is cut with scene.depth-limit")
+constexpr std::int32_t kMaxWalkDepth = 64;
 
 // Identity.id order (Guid::operator<: hi, then lo); no Identity last, by handle.
 struct Sibling {
@@ -79,9 +79,12 @@ struct Walk {
     std::set<std::uint64_t> visited; // a malformed hierarchy (a cycle) never loops
 };
 
-nlohmann::json Node(Walk& walk, const Sibling& node, std::int32_t level)
+// Writes one node's own fields into `out` and decides whether the walk goes
+// below it: the sorted children to visit, or none when --depth or the hard
+// bound cuts it there (childrenOmitted then says how many it has).
+std::vector<Sibling> OpenNode(Walk& walk, nlohmann::json& out, const Sibling& node, std::int32_t level)
 {
-    nlohmann::json out = EntityRef(walk.reg, node.entity);
+    out = EntityRef(walk.reg, node.entity);
     if (node.identity == nullptr)
         ++walk.noIdentity;
     const Astra::Registry& reg = walk.reg;
@@ -94,12 +97,41 @@ nlohmann::json Node(Walk& walk, const Sibling& node, std::int32_t level)
             out["childrenOmitted"] = children.size();
             walk.hitStackBound = walk.hitStackBound || (cutByBound && !cutByArg);
         }
-        return out;
+        return {};
     }
-    for (const Sibling& child : Sorted(reg, children))
-        if (walk.visited.insert(child.entity.GetValue()).second)
-            out["children"].push_back(Node(walk, child, level + 1));
-    return out;
+    return Sorted(reg, children);
+}
+
+// The subtree under `root`, depth-first with an explicit stack, so a deep
+// hierarchy costs heap, not main-thread stack. A frame's `node` lives in its
+// parent's children array, which grows only after that frame is popped, so the
+// pointer stays valid while the frame is on the stack.
+void WalkSubtree(Walk& walk, nlohmann::json& out, const Sibling& root)
+{
+    struct Frame {
+        nlohmann::json* node = nullptr;
+        std::vector<Sibling> children;
+        std::size_t next = 0;
+        std::int32_t level = 0;
+    };
+    std::vector<Frame> stack;
+    stack.push_back({&out, OpenNode(walk, out, root, 0), 0, 0});
+    while (!stack.empty()) {
+        Frame& top = stack.back();
+        if (top.next == top.children.size()) {
+            stack.pop_back();
+            continue;
+        }
+        const Sibling child = top.children[top.next++];
+        if (!walk.visited.insert(child.entity.GetValue()).second)
+            continue;
+        nlohmann::json& siblings = (*top.node)["children"];
+        siblings.push_back(nlohmann::json());
+        nlohmann::json* slot = &siblings.back();
+        const std::int32_t level = top.level + 1;
+        std::vector<Sibling> grandchildren = OpenNode(walk, *slot, child, level);
+        stack.push_back({slot, std::move(grandchildren), 0, level});   // `top` is not used past here
+    }
 }
 
 CommandResult SceneTree(const Call& call, void* /*user*/)
@@ -115,10 +147,12 @@ CommandResult SceneTree(const Call& call, void* /*user*/)
     std::int32_t depth = SceneTreeArgs{}.depth;
     if (!refusal && call.args.is_object() && call.args.contains("depth")) {
         const nlohmann::json& v = call.args.at("depth");
+        constexpr auto kMaxDepthArg = std::numeric_limits<std::int32_t>::max();
+        // Both branches are bounded: a value above INT32_MAX never truncates.
         const bool inRange = v.is_number_integer() &&
                              (v.is_number_unsigned()
-                                  ? v.get<std::uint64_t>() <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())
-                                  : v.get<std::int64_t>() >= -1);
+                                  ? v.get<std::uint64_t>() <= static_cast<std::uint64_t>(kMaxDepthArg)
+                                  : (v.get<std::int64_t>() >= -1 && v.get<std::int64_t>() <= kMaxDepthArg));
         if (inRange)
             depth = static_cast<std::int32_t>(v.get<std::int64_t>());
         else
@@ -149,9 +183,12 @@ CommandResult SceneTree(const Call& call, void* /*user*/)
         if (!reg.HasParent(e))
             rootEntities.push_back(e);
     nlohmann::json roots = nlohmann::json::array();
-    for (const Sibling& root : Sorted(reg, rootEntities))
-        if (walk.visited.insert(root.entity.GetValue()).second)
-            roots.push_back(Node(walk, root, 0));
+    for (const Sibling& root : Sorted(reg, rootEntities)) {
+        if (!walk.visited.insert(root.entity.GetValue()).second)
+            continue;
+        roots.push_back(nlohmann::json());
+        WalkSubtree(walk, roots.back(), root);
+    }
 
     std::vector<Error> warnings;
     if (walk.noIdentity > 0) {
