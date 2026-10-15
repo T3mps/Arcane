@@ -6,6 +6,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Arcane/Remote/Commands/CommandSupport.hpp>
+#include <Arcane/Remote/Commands/SessionCommands.hpp>   // BoundedJobTimeoutMs (C-M12)
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
@@ -239,6 +240,7 @@ CommandResult Capture(const Call& call, void* /*user*/)
     state->copy.drain = drain;
     state->copy.hookUser = s.hooks.user;
     state->copy.deadline = Detail::CaptureDeadline(call);
+    state->copy.cancel = window ? s.hooks.cancelWindow : s.hooks.cancelViewport;
     state->outDir = s.hooks.outDir;
     state->outFile = std::move(outFile);
     state->occludedRisk = window && s.hooks.occludedRisk;
@@ -349,8 +351,20 @@ void ReleaseCaptureRing(std::uint64_t jobId)
 
 std::chrono::steady_clock::time_point CaptureDeadline(const Call& call)
 {
+    // Clamped like a wait (C-M12): an abandoned capture on a host that cannot
+    // retire its ticket must not hold the one capture slot for ~49 days.
     return std::chrono::steady_clock::now() +
-           std::chrono::milliseconds(call.timeoutMs != 0 ? call.timeoutMs : kDefaultCaptureTimeoutMs);
+           std::chrono::milliseconds(BoundedJobTimeoutMs(call.timeoutMs, kDefaultCaptureTimeoutMs));
+}
+
+void CancelTicket(Job& job, TicketCopy& copy)
+{
+    if (job.progress.label != "copied" || copy.ticket == 0)
+        return;   // never armed: nothing is in the ring
+    if (copy.cancel != nullptr)
+        copy.cancel(copy.ticket, copy.hookUser);
+    job.progress.label.clear();
+    copy.ticket = 0;
 }
 
 TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureMapped& raw)
@@ -375,6 +389,7 @@ TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureM
             job.envelope = Failure(job.command, "capture.minimized",
                                    "the host was minimized before the capture's frame rendered",
                                    "restore the window and retry");
+            CancelTicket(job, copy);
             return TicketStep::Failed;
         }
         if (std::chrono::steady_clock::now() < copy.deadline)
@@ -383,6 +398,7 @@ TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureM
                                "no rendered frame retired the capture before the timeout",
                                "check that the host is rendering (stats frame, problems) and retry");
         job.envelope.errors.front().detail["reason"] = "timeout";
+        CancelTicket(job, copy);
         return TicketStep::Failed;
     }
     if (raw.mapped == nullptr) {

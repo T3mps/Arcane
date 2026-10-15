@@ -24,8 +24,14 @@ class ARC_REMOTE_API TickGate {
 public:
     void SetRunning(bool running);
     void SetPaused(bool paused);
-    // Adds n single steps to the pending count (saturating).
+    // Raises the pending single-step count to at least n; it never adds. One
+    // budget per host (final fix pass, G-1): overlapping play.step calls
+    // share the ticks, so two step 10s from one frame run 10, not 20, and no
+    // tick runs after every caller was answered. Each job tracks its own target.
     void RequestSteps(std::uint32_t n);
+    // Lowers the pending count to at most `keep` (a play.step that ended
+    // before its ticks ran gives back the share no other step still needs).
+    void TrimSteps(std::uint32_t keep);
     // Drops every pending single step (play.stop, Task 29).
     void ClearSteps();
     // running && !paused: Run, and a leftover step count is cleared.

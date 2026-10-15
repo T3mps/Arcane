@@ -3,6 +3,7 @@
 #include <Arcane/Core/Constant.hpp>
 #include <Json.hpp>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -54,6 +55,17 @@ ARC_CONSTANT("stack bound: what a HOST accepts (request bodies, args, any host-s
 inline constexpr std::uint32_t kMaxRequestDepth = 64;
 ARC_CONSTANT("stack bound: what SERVITOR accepts from a host (replies, stream events); scene.tree's deepest legal reply nests ~134 containers (64 levels below the roots, two per level), so 160 admits every reply a host builds and stays under the ~256-level Debug overflow floor in servitor's copy and print")
 inline constexpr std::uint32_t kMaxReplyDepth = 160;
+ARC_CONSTANT("wire protocol: spec s4.5's caller name is a short label for the audit log, never a payload")
+inline constexpr std::size_t kMaxClientIdBytes = 128;
+
+// spec s4.5 (AM7 spelling): the request header naming the caller, recorded as
+// the audit line's `client` (s10.4). Servitor sends "servitor/<version> pid
+// <pid>" unless --client <name> names it.
+inline constexpr std::string_view kClientHeader = "X-Remote-Client";
+// A caller name both sides accept: 1 to kMaxClientIdBytes bytes of printable
+// ASCII (0x20-0x7E). A host refuses any other X-Remote-Client value with
+// arg.invalid (exit 2); servitor refuses such a --client before it sends.
+ARC_REMOTE_PROTOCOL_API bool IsValidClientId(std::string_view id);
 
 enum class HostKind : std::uint8_t { Editor, Runtime, Server };
 

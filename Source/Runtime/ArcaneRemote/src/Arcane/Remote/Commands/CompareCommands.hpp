@@ -51,6 +51,13 @@ struct CompareHooks {
 // RegisterCompareCommand(nullptr) also finishes every compare job still
 // running in the previous table (Cancelled, host.unavailable) and frees its
 // state, so no job outlives the hooks it would call.
+//
+// capture.compare's wire check on `reference` (final fix pass, G-3): the same
+// rule as ArcaneVerify's ReferenceNameIsSafe, kept as an identical copy here
+// because ArcaneRemote never depends on ArcaneVerify (R8-2); a test pins the
+// two to the same answers. Non-empty, no slash or backslash, no ':', no "..",
+// no leading '.'.
+ARC_REMOTE_API bool CompareReferenceNameIsSafe(const std::string& name);
 ARC_REMOTE_API void SetCompareHooks(CompareHooks hooks);
 ARC_REMOTE_API void RegisterCompareCommand(JobTable* jobs);
 

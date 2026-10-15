@@ -16,6 +16,7 @@
 #include <Arcane/Remote/Commands/CompareCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Commands/PlayCommands.hpp>
+#include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/FrameStats.hpp>
 #include <Arcane/Remote/Jobs.hpp>
@@ -54,6 +55,12 @@ struct ListenerAtoms;   // Listener.hpp
 // call Allow only under --remote and pass true.
 struct ARC_REMOTE_API Arming {
     static bool Allow(NetMode mode, bool distBuild, bool editorEnableCvar);
+    // Final fix pass (C-M16, Rule 3): why an explicit --remote cannot apply to
+    // a process in `mode` -- a Client primary world never serves the remote
+    // surface (spec s10.2) -- or null when it can. A host given --remote
+    // refuses it at startup with this reason and exits 2 (its usage refusal),
+    // never runs on with the flag ignored.
+    static const char* RefusalReason(NetMode mode);
 };
 
 class ARC_REMOTE_API HostSession {
@@ -123,6 +130,13 @@ public:
         // SetPlayHooks + SetPlayGate(&Gate()) + RegisterPlayCommands(&m_jobs);
         // Teardown clears all three.
         PlayHooks play;
+        // Final fix pass (C-I3): the editor's host-state facts, main thread,
+        // called with hookUser inside Drain. modal: a ModalErrorQueue dialog
+        // or another modal popup is open; building: the editor's module
+        // rebuild (arcbuild) is running. Null: never. A runtime and a server
+        // have neither; their play axis is their tick gate (Tick()).
+        bool (*modal)(void*) = nullptr;
+        bool (*building)(void*) = nullptr;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started
@@ -140,9 +154,19 @@ public:
     // Stop, or after a failed Start) is refused with false and a log line;
     // a host that wants a new session makes a new object.
     bool Start();
-    // One main-loop iteration's work: dispatcher.Drain within the frame budget,
-    // then HostStatus and the catalogue republished into the listener atoms,
-    // and the descriptor heartbeat touched once a second. Never sleeps.
+    // One main-loop iteration's work: the host state refreshed (below),
+    // dispatcher.Drain within the frame budget, the state refreshed again (a
+    // play command may have moved it), then HostStatus and the catalogue
+    // republished into the listener atoms, and the descriptor rewritten with a
+    // fresh heartbeat once a second. Never sleeps.
+    //
+    // The host state (spec s4.3; final fix pass, C-I3), highest first:
+    // shutting-down (MarkStopping/Stop latch it), reloading (NoteReloading),
+    // building and modal (Config hooks), paused, playing, minimized
+    // (NoteMinimized), ready. The play axis is the editor's PlaySession and
+    // RunLoop (Config::play.editorPlaying / editorPaused) or, on a runtime or
+    // server, the tick gate: held is ready, running is playing, a paused run is
+    // paused. Gate().inPlay carries the play axis whatever the state shows.
     void Drain();
     // The host's whole per-iteration remote step, one spelling for every host:
     // notes a module reload when `pluginGeneration` (the host's own
@@ -180,6 +204,11 @@ public:
     // the gate's `minimized`, so Drain refuses needsFrame commands with
     // host.busy{state:"minimized"} while the rest still run. A no-op before Start.
     void NoteMinimized(bool minimized);
+    // Final fix pass (C-I3): a module reload is synchronous on the main
+    // thread, so no Drain sees it. The host calls this when its PluginHost
+    // begins (true) and ends (false) a reload (PluginHost::SetReloadObserver):
+    // the state "reloading" is published to /status and the descriptor at once.
+    void NoteReloading(bool reloading);
     HostGate& Gate();
     const HostGate& Gate() const;       // ruling F9: WaitPoll reads it through a const session
     const Config& GetConfig() const;    // ruling F9: the const hooks accessor (dirty, producersIdle, hookUser, ...)
@@ -221,6 +250,8 @@ public:
 
 private:
     void PublishStatus(std::int64_t nowUnixMs);
+    void RefreshState();                         // the state rule above; a no-op once shutting-down is latched
+    void WriteHeartbeat(std::int64_t nowUnixMs); // the whole descriptor, owner-only, a missing file included
     void PublishCatalogue();
     void Teardown(); // the shared tail of Stop and of a failed Start
 
@@ -251,6 +282,10 @@ private:
     const char* m_exitReason = nullptr;          // latched by DrainFrame
     bool m_generationKnown = false;              // DrainFrame's first generation is the boot module
     bool m_descriptorWritten = false;            // Teardown deletes only a descriptor this session wrote
+    Descriptor m_descriptor;                     // what Start wrote; each heartbeat rewrites it whole (C-M3)
+    bool m_reloading = false;                    // NoteReloading (C-I3)
+    bool m_stopping = false;                     // shutting-down is latched (MarkStopping / Stop)
+    std::uint64_t m_requestsSeen = 0;            // ListenerAtoms::requests at the last Drain (C-M4)
 
     bool m_reloadOk = true;
     std::string m_reloadReason;

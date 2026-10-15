@@ -49,10 +49,6 @@ using Detail::kInlineCapBytes;
 using Detail::MakeIssue;
 using Detail::PickRegistry;
 
-ARC_CONSTANT("bound on the nested-type walk that looks for a Protected field; deeper is masked, reflected types nest far less")
-constexpr int kMaxSecretDepth = 16;
-
-constexpr std::string_view kMasked = "<protected>";   // RemoteCVarService's mask, never a value
 constexpr std::string_view kListUsage = "takes no arguments; --world <name> picks one of the host's worlds";
 constexpr std::string_view kGetUsage = "pass name: a resource name from servitor resource list";
 constexpr std::string_view kResourceHint = "servitor resource list names this world's resources";
@@ -67,63 +63,10 @@ std::string ResourceName(const Astra::Registry::ResourceInfo& info)
     return {};
 }
 
-bool FlagsProtected(const Attr::Flags* flags)
-{
-    return flags != nullptr && HasFlag(flags->flags, CVarFlags::Protected);
-}
-
-bool TypeHoldsSecret(const Astra::TypeMeta& meta, std::vector<const Astra::TypeMeta*>& stack);
-
-// Whether writing this field could reveal a Protected value. A type the walk
-// cannot see into -- a std::array or C array (Astra records no element type for
-// them), any other container (map, optional, ...) or an unresolved type -- is
-// treated as holding one, so it is masked whole rather than written unchecked.
-bool FieldHoldsSecret(const Astra::FieldInfo& field, std::vector<const Astra::TypeMeta*>& stack)
-{
-    if (FlagsProtected(field.GetAttribute<Attr::Flags>()))
-        return true;
-    if (field.isArray || field.isStdArray)
-        return true;
-    if (field.isEnum && !field.isVector)
-        return false;   // an enum value is a name, never a container (a Protected one returned above)
-    const std::uint64_t hash = field.isVector ? field.elementTypeHash : field.typeHash;
-    if (::Arcane::Detail::IsScalarHash(hash) || ::Arcane::Detail::IsGlmVecHash(hash) ||
-        ::Arcane::Detail::IsGlmMatHash(hash) || hash == ::Arcane::Detail::QuatHash())
-        return false;
-    const Astra::TypeMeta* nested = Astra::GetMeta(hash);
-    if (nested == nullptr)
-        return true;   // unresolved: never written unchecked
-    if (nested->GetEnumInfo() != nullptr)
-        return false;   // a vector of enum values
-    return TypeHoldsSecret(*nested, stack);
-}
-
-// The type is Protected, or one of its serialized fields may hold a Protected
-// value (FieldHoldsSecret, recursively). A type already on the walk adds nothing
-// new; a walk deeper than kMaxSecretDepth is treated as holding one.
-bool TypeHoldsSecret(const Astra::TypeMeta& meta, std::vector<const Astra::TypeMeta*>& stack)
-{
-    if (FlagsProtected(meta.GetAttribute<Attr::Flags>()))
-        return true;
-    if (std::find(stack.begin(), stack.end(), &meta) != stack.end())
-        return false;
-    if (stack.size() >= static_cast<std::size_t>(kMaxSecretDepth))
-        return true;
-    stack.push_back(&meta);
-    bool secret = false;
-    for (const Astra::FieldInfo& field : meta.fields)
-        if (field.IsSerializable() && FieldHoldsSecret(field, stack)) {
-            secret = true;
-            break;
-        }
-    stack.pop_back();
-    return secret;
-}
-
-// The resource as scene-format JSON: ReflectionJsonWriter over the reflected
-// fields when the type is reflected, else the descriptor's visitFields. A
-// field that may hold a Protected value (FieldHoldsSecret) is masked whole. False with *why
-// when the resource cannot be read.
+// The resource as scene-format JSON: Detail::WriteMaskedFields over the
+// reflected fields when the type is reflected (a field that may hold a
+// Protected value is masked whole), else the descriptor's visitFields. False
+// with *why when the resource cannot be read.
 bool WriteResource(const Astra::Registry::ResourceInfo& info, nlohmann::json& out, std::string& why)
 {
     out = nlohmann::json::object();
@@ -132,20 +75,10 @@ bool WriteResource(const Astra::Registry::ResourceInfo& info, nlohmann::json& ou
         why = "the resource has no readable instance";
         return false;
     }
+    if (info.meta != nullptr)
+        return Detail::WriteMaskedFields(*info.meta, data, out, why);
     ReflectionJsonWriter writer(out);
-    if (info.meta != nullptr) {
-        const bool typeProtected = FlagsProtected(info.meta->GetAttribute<Attr::Flags>());
-        std::vector<const Astra::TypeMeta*> stack{info.meta};
-        for (const Astra::FieldInfo& field : info.meta->fields) {
-            if (!field.IsSerializable())
-                continue;
-            if (typeProtected || FieldHoldsSecret(field, stack)) {
-                out[std::string(field.name)] = std::string(kMasked);
-                continue;
-            }
-            writer.Visit(field, data);
-        }
-    } else if (info.descriptor != nullptr && info.descriptor->visitFields != nullptr) {
+    if (info.descriptor != nullptr && info.descriptor->visitFields != nullptr) {
         info.descriptor->visitFields(data, writer);
     } else {
         why = "the resource type is not reflected";

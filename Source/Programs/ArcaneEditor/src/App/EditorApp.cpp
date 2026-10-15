@@ -2142,6 +2142,18 @@ namespace Arcane::Editor
     {
         return DrainRing(static_cast<EditorApp*>(user)->ChromeGraph(), ticket, raw);
     }
+
+    void EditorApp::RemoteCancelViewport(std::uint64_t ticket, void* user)
+    {
+        if (Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->m_viewportTargets.graph.get())
+            graph->CancelTicketCapture(ticket);
+    }
+
+    void EditorApp::RemoteCancelWindow(std::uint64_t ticket, void* user)
+    {
+        if (Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->ChromeGraph())
+            graph->CancelTicketCapture(ticket);
+    }
 #endif
 
     namespace

@@ -22,8 +22,11 @@ struct HttpReply {
 
 // "POST <target> HTTP/1.1\r\nHost: 127.0.0.1:<port>\r\nAuthorization: Bearer <token>\r\n
 //  Content-Type: application/json\r\nContent-Length: <n>\r\nConnection: close\r\n\r\n<body>"
+// A non-empty `client` adds "X-Remote-Client: <client>\r\n" after the token
+// (spec s4.5, the audit log's caller); the caller passes an IsValidClientId value.
 ARC_REMOTE_PROTOCOL_API std::string BuildPost(std::string_view target, std::uint16_t port,
-                                              std::string_view token, std::string_view jsonBody);
+                                              std::string_view token, std::string_view jsonBody,
+                                              std::string_view client = {});
 // The same shape for GET (no body, Content-Length: 0), used for /remote/v1/status and /catalog.
 ARC_REMOTE_PROTOCOL_API std::string BuildGet(std::string_view target, std::uint16_t port, std::string_view token);
 // Parses one complete response: status line, headers, a Content-Length body. nullopt sets *error

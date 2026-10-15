@@ -875,4 +875,105 @@ TEST_CASE("a Drive call nested to exactly kMaxRequestDepth is audited whole; one
     session.Stop("test");
 }
 
+// Final fix pass (C-I1): the caller names itself with X-Remote-Client (spec
+// s4.5); the listener stamps it onto Call::callerId and the audit line's
+// `client` records it (s10.4). A value that is not 1-128 printable ASCII bytes
+// is arg.invalid (exit 2) at the listener: nothing is queued or run.
+TEST_CASE("X-Remote-Client reaches the audit line, and a bad value is refused unrun", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.drive", Arcane::Remote::Access::Drive,
+                                  Arcane::Remote::Mutates::Preferences, Arcane::Remote::PlayPolicy::Any), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto dir = std::filesystem::temp_directory_path() / "remote-dispatch-client";
+    std::filesystem::remove_all(dir);
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, dir / "audit.ndjson");
+    Arcane::Remote::ListenerAtoms atoms;
+    Arcane::Remote::RemoteListener listener(queue, atoms, Arcane::Remote::MakeToken());
+    listener.Start();
+    REQUIRE(listener.Port() != 0);
+    const std::string body = R"({"command":"demo.drive","args":{}})";
+
+    std::string answered;
+    std::thread worker([&] {
+        answered = RemoteTest::HttpExchange(listener.Port(), listener.Token(), "X-Remote-Client: agent-7 (ci)\r\n",
+                                            "POST /remote/v1/call HTTP/1.1", body);
+    });
+    for (int spin = 0; spin < 400 && queue.Depth() == 0; ++spin)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    dispatcher.Drain(1000.0, 8);
+    worker.join();
+    CHECK(answered.find("\"ok\":true") != std::string::npos);
+    CHECK(g_ran == 1);
+    {
+        std::ifstream in(dir / "audit.ndjson");
+        std::string line;
+        REQUIRE(std::getline(in, line));
+        CHECK(nlohmann::json::parse(line)["client"] == "agent-7 (ci)");
+    }
+
+    for (const std::string& bad : {std::string("X-Remote-Client: \x01" "agent\r\n"),
+                                   "X-Remote-Client: " + std::string(Arcane::Remote::kMaxClientIdBytes + 1, 'a') + "\r\n"}) {
+        const std::string refused =
+            RemoteTest::HttpExchange(listener.Port(), listener.Token(), bad, "POST /remote/v1/call HTTP/1.1", body);
+        CHECK(refused.find("\"code\":\"arg.invalid\"") != std::string::npos);
+        CHECK(refused.find("X-Remote-Client") != std::string::npos);   // the message names the header
+    }
+    CHECK(queue.Depth() == 0);
+    dispatcher.Drain(1000.0, 8);
+    CHECK(g_ran == 1);   // neither bad call reached the command
+    listener.Stop();
+}
+
+// Final fix pass (C-I3): the PlayPolicy gate reads Play from HostGate::inPlay,
+// which the session sets from the host's play facts. The state string shows
+// the highest-ranked state, so a modal or a build in Play must not let an
+// EditOnly command through, and a paused Play is still Play.
+TEST_CASE("the PlayPolicy gate reads inPlay: EditOnly is refused in Play under a modal, PlayingOnly runs", "[remote][dispatch]") {
+    g_ran = 0;
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    RemoteUnregisterOnExit unreg{"dispatch-test"};
+    std::string err;
+    REQUIRE(reg.Register(MakeDesc("demo.edit", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::EditOnly), &err));
+    REQUIRE(reg.Register(MakeDesc("demo.play", Arcane::Remote::Access::Observe,
+                                  Arcane::Remote::Mutates::None, Arcane::Remote::PlayPolicy::PlayingOnly), &err));
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::JobTable jobs;
+    const auto dir = std::filesystem::temp_directory_path() / "remote-dispatch-inplay";
+    std::filesystem::remove_all(dir);
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, dir / "audit.ndjson");
+    const auto run = [&](const char* command, std::uint64_t key) {
+        Arcane::Remote::Call call;
+        call.command = command;
+        REQUIRE(queue.TryPush(key, call));
+        dispatcher.Drain(1000.0, 8);
+        Arcane::Remote::CommandResult out;
+        REQUIRE(queue.TryTake(key, out));
+        return out.envelope;
+    };
+    gate.SetState("modal");
+    gate.inPlay = true;
+    const auto editInPlay = run("demo.edit", 1);
+    REQUIRE_FALSE(editInPlay.errors.empty());
+    CHECK(editInPlay.errors[0].code == "host.busy");
+    CHECK(editInPlay.errors[0].detail.value("state", std::string{}) == "modal");
+    CHECK(run("demo.play", 2).ok);
+    gate.SetState("paused");
+    CHECK_FALSE(run("demo.edit", 3).ok);   // a paused Play is still Play
+    CHECK(g_ran == 1);
+    gate.inPlay = false;
+    gate.SetState("modal");
+    CHECK(run("demo.edit", 4).ok);
+    const auto playInEdit = run("demo.play", 5);
+    REQUIRE_FALSE(playInEdit.errors.empty());
+    CHECK(playInEdit.errors[0].code == "host.busy");
+    CHECK(g_ran == 2);
+}
+
 #endif

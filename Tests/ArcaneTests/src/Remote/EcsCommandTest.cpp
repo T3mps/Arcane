@@ -363,5 +363,68 @@ TEST_CASE("entity get and ecs verbs build their wire args", "[remote][ecs][servi
                                                                 {"--strict"}})
         CHECK_FALSE(query->args(bad, out, &error));
 }
+// ---- Final fix pass (C-I5, C-M8) ---------------------------------------------
+
+// A game component holding a secret: the same Attr::Flags{Protected} the
+// resource walk honours. Non-trivially-copyable, so it serializes through a
+// member, as Identity does.
+struct RemoteSecretComponent {
+    int port = 7;
+    std::string token = "default-secret";
+    template <typename Archive>
+    void Serialize(Archive& ar) {
+        ar(port);
+        ar(token);
+    }
+};
+ARC_REFLECT_TYPE(RemoteSecretComponent)
+    ARC_REFLECT_FIELD(RemoteSecretComponent, port)
+    ARC_REFLECT_FIELD(RemoteSecretComponent, token) ARC_REFLECT_ATTR(Flags, Arcane::CVarFlags::Protected)
+ARC_REFLECT_TYPE_END()
+
+// entity.get and ecs.query apply resource.get's Protected walk (one shared
+// helper), and schema.type masks a Protected field's default the same way.
+TEST_CASE("entity.get, ecs.query and schema.type never write a Protected component field", "[remote][ecs]") {
+    Astra::Registry reg;
+    const auto e = reg.CreateEntity();
+    Arcane::Identity id;
+    id.id = Arcane::Guid{9, 9};
+    id.name = "Vault";
+    reg.AddComponent<Arcane::Identity>(e, id);
+    RemoteSecretComponent secret;
+    secret.port = 4242;
+    secret.token = "hunter2";
+    reg.AddComponent<RemoteSecretComponent>(e, secret);
+    Arcane::Remote::WorldTable worlds{&RemoteTestWorld, &reg};
+    RemoteTest::ScopedRemotePointer<const Arcane::Remote::WorldTable> worldGuard(
+        [](const Arcane::Remote::WorldTable* t) { Arcane::Remote::SetCommandWorlds(t ? *t : Arcane::Remote::WorldTable{}); },
+        &worlds);
+    Arcane::Remote::RegisterEcsCommands();
+    Arcane::Remote::RegisterCatalogCommands();
+
+    auto got = InvokeEcs("entity.get", {{"entity", "name:Vault"},
+                                              {"components", nlohmann::json::array({"RemoteSecretComponent"})}});
+    REQUIRE(got.ok);
+    const auto& comp = got.data["components"]["RemoteSecretComponent"];
+    CHECK(comp["port"] == 4242);
+    CHECK(comp["token"] == "<protected>");
+    CHECK(Arcane::Remote::ToJson(got).dump().find("hunter2") == std::string::npos);
+
+    auto rows = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"RemoteSecretComponent"})}});
+    REQUIRE(rows.ok);
+    REQUIRE(rows.data["rows"].size() == 1);
+    CHECK(rows.data["rows"][0]["components"]["RemoteSecretComponent"]["token"] == "<protected>");
+    auto field = InvokeEcs("ecs.query", {{"with", nlohmann::json::array({"RemoteSecretComponent"})},
+                                               {"fields", nlohmann::json::array({"RemoteSecretComponent.token"})}});
+    REQUIRE(field.ok);
+    CHECK(field.data["rows"][0]["components"]["RemoteSecretComponent"]["token"] == "<protected>");
+    CHECK(Arcane::Remote::ToJson(field).dump().find("hunter2") == std::string::npos);
+
+    auto schema = InvokeEcs("schema.type", {{"kind", "component"}, {"name", "RemoteSecretComponent"}});
+    REQUIRE(schema.ok);
+    CHECK(schema.data["properties"]["port"]["default"] == 7);
+    CHECK(schema.data["properties"]["token"]["default"] == "<protected>");
+    CHECK(Arcane::Remote::ToJson(schema).dump().find("default-secret") == std::string::npos);
+}
 
 #endif

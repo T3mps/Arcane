@@ -14,10 +14,14 @@
 // and returns. N counts host.frame, the host's sim advances (AM1): one per
 // fixed tick on a server, a headless runtime or a step, and one per loop pass
 // on a windowed runtime that is running. It never calls Advance, AdvanceSim or RequestSingleStep itself.
-// Runtime and server: the command requests N gate steps and the host loop's
-// Consume performs one Advance per iteration. Editor: each job step (one per
-// Drain) requests one single step until the frame delta reaches N. The job
-// completes when HostGate::frame minus the frame at arm time reaches N.
+// Runtime and server: the command raises the gate's one step budget to at
+// least N (overlapping steps share it, G-1) and the host loop's Consume
+// performs one Advance per iteration. Editor: while the primary loop is paused,
+// each job step (one per Drain) requests one single step until the frame delta
+// reaches N; a running loop advances by itself (G-2). The job completes when
+// HostGate::frame minus the frame at arm time reaches N, or answers ok with
+// data.timedOut (exit 8) at its host-side bound (BoundedJobTimeoutMs, C-I2),
+// giving back the gate ticks no other running step still needs.
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
 #include <Arcane/Remote/FrameStats.hpp>
 #include <Arcane/Remote/TickGate.hpp>
@@ -56,6 +60,12 @@ struct PlayHooks {
     // ACTUAL topology, and an explicit different one is play.refused with
     // detail.running. Null: play.start always calls editorPlay.
     std::string_view (*editorTopology)(void*) = nullptr;
+    // Final fix pass (G-2): whether the editor's PRIMARY RunLoop is paused.
+    // play.step asks for a single step only while it is (a running loop
+    // already advances host.frame each pass, as a running runtime does; a
+    // single step there would replace the frame's accumulated dt). Null: read
+    // as paused (one single step per Drain, the Task 29 behaviour).
+    bool (*editorPaused)(void*) = nullptr;
 };
 
 // The CLI spellings of play.start's topology (spec s7.3): standalone (the

@@ -187,6 +187,18 @@ namespace Arcane::Editor
         m_server->Loop().Advance(realDt);
     }
 
+    void PlaySession::SetServerPaused(bool paused)
+    {
+        if (m_server)
+            m_server->Loop().SetPaused(paused);
+    }
+
+    void PlaySession::RequestServerSingleStep()
+    {
+        if (m_server)
+            m_server->Loop().RequestSingleStep();
+    }
+
     std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling)
     {
         if (spelling == "standalone")    return PlayTopology::Standalone;

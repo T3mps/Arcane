@@ -2212,6 +2212,11 @@ namespace Arcane
         return true;
     }
 
+    void NriGraphContext::CancelTicketCapture(std::uint64_t ticket)
+    {
+        CancelCaptureRingTicket(m_captureRing, ticket);
+    }
+
     bool NriGraphContext::DrainTicketCapture(std::uint64_t ticket, TicketCaptureBytes& out) const
     {
         out = {};
@@ -2352,6 +2357,13 @@ namespace Arcane
         {
             if (!ring.pending[slot])
                 continue;
+            if (ring.abandoned[slot])
+            {
+                // Its job gave up (CancelCaptureRingTicket): drop it, never retire it.
+                ring.pending[slot]   = false;
+                ring.abandoned[slot] = false;
+                continue;
+            }
             if (canRetire && ring.submitted[slot])
             {
                 const std::size_t bytes = static_cast<std::size_t>(m_ringRowPitch) * m_ringHeight;

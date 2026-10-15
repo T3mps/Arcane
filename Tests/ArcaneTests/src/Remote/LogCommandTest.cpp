@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Remote/Commands/LogCommands.hpp>
+#include <Arcane/Remote/Commands/EcsCommands.hpp>   // SetEcsArtifactDir: the session artifact dir log.read spills to
 #include <Servitor/Client.hpp>
 #include <Servitor/Discover.hpp>   // HostDiagnosticsDir (Task 15)
 #include <Servitor/Verbs.hpp>      // FollowEventText (Task 22 fix round 1)
@@ -240,6 +241,65 @@ TEST_CASE("problems --follow applies --severity and --search to each stream even
     CHECK_FALSE(shown(row("error", "a.b", "no match here", "")));       // search misses
     CHECK(Servitor::FollowEventText("problems", row("error", "a.b", "needle", ""), args, Servitor::Format::Human) ==
           "error a.b: needle\n");
+}
+// Mutes the engine logger's stderr sink (its first) for a scope, so a case
+// that fills the ring with long lines does not flood the suite's output.
+struct QuietStderrSink {
+    spdlog::level::level_enum before;
+    QuietStderrSink() : before(Arcane::Log::Engine()->sinks().front()->level()) {
+        Arcane::Log::Engine()->sinks().front()->set_level(spdlog::level::off);
+    }
+    ~QuietStderrSink() { Arcane::Log::Engine()->sinks().front()->set_level(before); }
+};
+
+// Final fix pass (C-M10): log.read applies the inline cap every other dump
+// applies (spec s4.8: never megabytes in an envelope). Over it, the records go
+// to one artifact under the session's out/ directory and data.records is empty
+// with data.truncated true; under it nothing changes.
+TEST_CASE("log.read over the inline cap writes the records to one log artifact", "[remote]") {
+    Arcane::Test::TempDir tmp("remote-log-cap");
+    const std::filesystem::path out = tmp.path / "out";
+    RemoteTest::ScopedRemotePointer<const std::filesystem::path> dirGuard(
+        [out](const std::filesystem::path* p) {
+            if (p != nullptr)
+                Arcane::Remote::SetEcsArtifactDir(*p);
+            else
+                Arcane::Remote::ReleaseEcsArtifactDir(out);
+        },
+        &out);
+    Arcane::Remote::RegisterLogCommand();
+    const std::uint64_t since = Arcane::Log::LatestSeq();
+    {
+        QuietStderrSink quiet;
+        const std::string filler(1000, 'x');
+        for (int i = 0; i < 400; ++i)
+            Arcane::Log::Engine()->info("remote-log-cap {} {}", i, filler);
+    }
+    Arcane::Remote::Call call;
+    call.command = "log.read";
+    call.args = nlohmann::json{{"since", since}};
+    auto big = Arcane::Remote::CommandRegistry::Get().Invoke(call).envelope;
+    REQUIRE(big.ok);
+    CHECK(big.data["records"].empty());
+    CHECK(big.data["truncated"] == true);
+    REQUIRE(big.artifacts.size() == 1);
+    CHECK(big.artifacts[0].kind == "logs");
+    const auto file = Servitor::PathFromUtf8(big.artifacts[0].path);
+    REQUIRE(std::filesystem::exists(file));
+    std::ifstream in(file, std::ios::binary);
+    const auto dumped = nlohmann::json::parse(in);
+    REQUIRE(dumped["records"].size() >= 400);
+    CHECK(dumped["records"][0]["text"].get<std::string>().find("remote-log-cap 0 ") != std::string::npos);
+    CHECK(Arcane::Remote::ToJson(big).dump().size() < 65536);
+
+    const std::uint64_t small = Arcane::Log::LatestSeq();
+    Arcane::Log::Engine()->info("remote-log-cap-small");
+    call.args = nlohmann::json{{"since", small}};
+    auto inlineRead = Arcane::Remote::CommandRegistry::Get().Invoke(call).envelope;
+    REQUIRE(inlineRead.ok);
+    CHECK(inlineRead.artifacts.empty());
+    CHECK(inlineRead.data["truncated"] == false);
+    CHECK_FALSE(inlineRead.data["records"].empty());
 }
 
 #endif

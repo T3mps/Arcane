@@ -861,8 +861,15 @@ void RuntimeApp::MainLoop()
     // exits 2 instead of running forever (Task 11 review ruling).
     const bool remoteOpenEnded = m_config.headless && m_config.maxFrames == 0;
     if (m_config.remote && !Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, true))
-        ARC_WARN("ArcaneRuntime: --remote ignored: the primary world is a {} world, which never serves "
-                 "the remote surface", Arcane::ToString(m_runtime->Core().Mode()));
+    {
+        // Rule 3 (final fix pass, C-M16): an explicit --remote that cannot
+        // apply is a startup refusal, exit 2, never run on as if ignored.
+        const char* why = Arcane::Remote::Arming::RefusalReason(m_runtime->Core().Mode());
+        ARC_ERROR("ArcaneRuntime: --remote refused: {}; exiting 2", why ? why : "the remote surface cannot arm here");
+        m_remoteArmExit = 2;
+        ShutdownGraphPath();
+        return;
+    }
     else if (m_config.remote)
     {
         Arcane::Remote::HostSession::Config rc;
@@ -927,6 +934,14 @@ void RuntimeApp::MainLoop()
         rc.capture.drainWindow    = drainRing;
         rc.capture.armHost        = armRing;
         rc.capture.drainHost      = drainRing;
+        // Final fix pass (C-M12): a capture job that gives up clears its ticket.
+        const Arcane::Remote::CancelCopyFn cancelRing = [](std::uint64_t ticket, void* user) {
+            if (Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph())
+                graph->CancelTicketCapture(ticket);
+        };
+        rc.capture.cancelViewport = cancelRing;
+        rc.capture.cancelWindow   = cancelRing;
+        rc.capture.cancelHost     = cancelRing;
         rc.capture.occludedRisk   = !m_config.headless;
         rc.capture.user           = this;
 #if defined(ARC_RUNTIME_HOST_VERIFY)
@@ -988,6 +1003,20 @@ void RuntimeApp::MainLoop()
         // reload the last frame performed (CaptureTail's Poll, the
         // reload_plugin actions) from this host's own PluginHost (ruling F10),
         // and a failed one from its attempt count (Task 30).
+        // Final fix pass: the minimized window PumpAndResize skips (C-M5), so a
+        // capture answers host.busy minimized at once; and the module host's
+        // reload begin/end, published as the "reloading" state (C-I3).
+        if (m_remote)
+        {
+            m_remote->NoteMinimized(io.skipFrame);
+            m_plugin->SetReloadObserver(
+                [](bool reloading, void* user) {
+                    auto* app = static_cast<RuntimeApp*>(user);
+                    if (app->m_remote)
+                        app->m_remote->NoteReloading(reloading);
+                },
+                this);
+        }
         if (m_remote && m_remote->DrainFrame(m_plugin->Generation(), m_plugin->ReloadAttempts(),
                                              m_plugin->LastReloadOk()))
         {

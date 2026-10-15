@@ -141,6 +141,9 @@ struct ListenerAtoms
     SharedSnapshot<nlohmann::json> catalog; // GET /catalog snapshot
     std::mutex sseMu;
     std::vector<SseEvent> sseEvents; // listener pushes; TakeSseEvents swaps
+    // Authenticated requests answered or queued, any route (GET /status and
+    // /catalog included). HostSession counts a change as idle-exit activity.
+    std::atomic<std::uint64_t> requests{0};
 };
 
 ARC_REMOTE_API std::vector<SseEvent> TakeSseEvents(ListenerAtoms& atoms);

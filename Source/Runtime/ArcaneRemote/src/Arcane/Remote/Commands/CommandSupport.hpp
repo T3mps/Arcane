@@ -23,6 +23,7 @@
 namespace Astra
 {
 class Registry;
+class TypeMeta;
 }
 
 namespace Arcane::Remote
@@ -86,10 +87,16 @@ struct TicketCopy {
     void* hookUser = nullptr;
     std::uint64_t ticket = 0;
     std::chrono::steady_clock::time_point deadline{};
+    CancelCopyFn cancel = nullptr;   // the pair's cancel (final fix pass, C-M12); null: the ring keeps it
 };
 
+// The job gave up on the ticket it armed (C-M12, G-M5): the host's ring
+// forgets it (copy.cancel), so it cannot hold a slot or land in the next
+// capture's bytes. A no-op before the arm, or with no cancel hook.
+void CancelTicket(Job& job, TicketCopy& copy);
+
 // The deadline a capture job armed for `call` gets: its timeoutMs, or the
-// default when the call carries none.
+// default when the call carries none, never past kMaxWaitTimeoutMs (C-M12).
 std::chrono::steady_clock::time_point CaptureDeadline(const Call& call);
 
 enum class TicketStep : std::uint8_t { Pending, Retired, Failed };
@@ -113,6 +120,22 @@ bool NormalizeRetired(const CaptureMapped& raw, std::vector<unsigned char>& rgba
 // RegisterCaptureCommands that changes the table drops every hold.
 void HoldCaptureRing(std::uint64_t jobId);
 void ReleaseCaptureRing(std::uint64_t jobId);
+
+// ---- The Protected-field walk (spec 0.7). resource.get's since Task 24;
+// entity.get, ecs.query and schema.type's defaults share it (final fix pass,
+// C-I5 / C-M8), so no read path writes a Protected value in clear.
+
+// RemoteCVarService's mask, written in place of a field that may hold a secret.
+inline constexpr std::string_view kMasked = "<protected>";
+
+// Writes `data` (an instance of `meta`) into `out` as scene-format JSON with
+// ReflectionJsonWriter, one key per serializable field (skipHidden: hidden
+// fields too are skipped, as a schema's defaults are). A field that is
+// Protected, or whose type may hold a Protected value (any field of a
+// Protected type, a container the walk cannot see into, an unresolved type),
+// is written as kMasked instead. False with *why when the writer refused a value.
+bool WriteMaskedFields(const Astra::TypeMeta& meta, void* data, nlohmann::json& out, std::string& why,
+                       bool skipHidden = false);
 
 } // namespace Arcane::Remote::Detail
 

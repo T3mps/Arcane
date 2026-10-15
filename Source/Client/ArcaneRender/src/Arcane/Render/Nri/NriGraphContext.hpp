@@ -349,6 +349,11 @@ namespace Arcane
         // re-wanted instead of drained as stale bytes.
         std::uint64_t recordedFrame[3]{};
         bool submitted[3]{};
+        // Servitor final fix pass (C-M12, G-M5): a submitted copy whose job
+        // gave up (CancelCaptureRingTicket). It is still in flight, so its
+        // slot stays pending until FramesInFlight() frames pass; then it is
+        // dropped instead of drained, so it never lands in retiredBytes.
+        bool abandoned[3]{};
     };
 
     // The ring's decisions, pure so a device-less test drives them
@@ -375,7 +380,17 @@ namespace Arcane
             }
             else if (frameIndex >= ring.recordedFrame[slot] + ring.framesInFlight)
             {
-                step.drain = true;
+                if (ring.abandoned[slot])
+                {
+                    // Its job gave up (CancelCaptureRingTicket): retired, but
+                    // its bytes go nowhere, and the slot is free again.
+                    ring.pending[slot]   = false;
+                    ring.abandoned[slot] = false;
+                }
+                else
+                {
+                    step.drain = true;
+                }
             }
         }
         step.record = ring.wanted != 0 && extentMatches && (!ring.pending[slot] || step.drain);
@@ -394,6 +409,7 @@ namespace Arcane
         ring.ticket[slot]        = ring.wanted;
         ring.pending[slot]       = true;    // written with the ticket, never without it
         ring.submitted[slot]     = false;
+        ring.abandoned[slot]     = false;
         ring.recordedFrame[slot] = frameIndex;
         ring.wanted              = 0;
     }
@@ -405,6 +421,27 @@ namespace Arcane
         for (std::uint32_t slot = 0; slot < 3; ++slot)
             if (ring.pending[slot] && !ring.submitted[slot] && ring.recordedFrame[slot] == frameIndex)
                 ring.submitted[slot] = true;
+    }
+
+    // Servitor final fix pass (C-M12, G-M5): forget `ticket` (its job failed
+    // or its settle wait ended). Still wanted: never recorded. Recorded but
+    // not submitted: the slot is freed now. Submitted: the slot is marked
+    // abandoned (see CaptureRing::abandoned). Any other ticket: no change.
+    inline void CancelCaptureRingTicket(CaptureRing& ring, std::uint64_t ticket)
+    {
+        if (ticket == 0)
+            return;
+        if (ring.wanted == ticket)
+            ring.wanted = 0;
+        for (std::uint32_t slot = 0; slot < 3; ++slot)
+        {
+            if (!ring.pending[slot] || ring.ticket[slot] != ticket)
+                continue;
+            if (ring.submitted[slot])
+                ring.abandoned[slot] = true;   // in flight: dropped once its frames pass
+            else
+                ring.pending[slot] = false;    // never submitted: nothing to wait for
+        }
     }
 
     // What DrainTicketCapture hands back: ArcaneRemote's CaptureMapped fields,
@@ -1269,6 +1306,10 @@ namespace Arcane
         // context's format. True with out.mapped null: that copy is lost (its
         // staging buffer could not be created). Never waits, never idles.
         bool DrainTicketCapture(std::uint64_t ticket, TicketCaptureBytes& out) const;
+        // Main thread (Servitor final fix pass, C-M12): the remote job gave up
+        // on `ticket`; CancelCaptureRingTicket forgets it, so it neither holds a
+        // slot nor lands in the next capture's retired bytes.
+        void CancelTicketCapture(std::uint64_t ticket);
         // The `ticket-capture` node's exec fn, once per RECORDED frame the
         // node is declared in, after this frame's pacing wait: drain this
         // slot if a copy is pending there, then record the wanted copy (if

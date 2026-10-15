@@ -26,6 +26,11 @@ class JobTable;    // Jobs.hpp
 ARC_CONSTANT("safety bound: a wait settled freezes the host clock while it captures, and nothing cancels a wait whose client went away, so a host-side wait must end; ten minutes outlasts any real settle, frame or reload wait")
 inline constexpr std::uint32_t kMaxWaitTimeoutMs = 600000;
 
+// The host-side bound of a frame-spanning job (final fix pass, C-I2 / C-M12):
+// requestedMs (fallbackMs when 0), never more than kMaxWaitTimeoutMs. play.step
+// and the capture and compare jobs use it, as host.wait's poll does.
+ARC_REMOTE_API std::uint32_t BoundedJobTimeoutMs(std::uint32_t requestedMs, std::uint32_t fallbackMs);
+
 struct WaitArgs {
     std::string what;          // ready | settled | frames | reload | state
     std::uint32_t frames = 0;  // Optional

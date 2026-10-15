@@ -2,6 +2,7 @@
 #include <Arcane/Crypto/Crypto.hpp>  // first after Catch2: its Logger.hpp defines SPDLOG_ACTIVE_LEVEL
 #include <Arcane/Remote/Commands/CompareCommands.hpp>
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
+#include <Arcane/Host/ReferenceImages.hpp>   // ReferenceNameIsSafe: the copy the wire check is pinned to (G-3)
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Listener.hpp>
 #include <Arcane/Assets/ImageCompare.hpp>
@@ -668,6 +669,23 @@ TEST_CASE("servitor compare builds capture.compare args and refuses the rest", "
         CHECK_FALSE(shot->args(foreign, out, &error));
         CHECK_FALSE(error.empty());
     }
+}
+// Final fix pass (G-3): ArcaneRemote keeps its own copy of ArcaneVerify's
+// ReferenceNameIsSafe (it must not depend on ArcaneVerify, R8-2). This pins
+// the two copies to the same answer for every name, ':' included, so the wire
+// refusal (arg.invalid, exit 2) and the resolver can never disagree.
+TEST_CASE("capture.compare's reference-name check and ReferenceImages' agree, and both refuse ':'", "[remote][compare]") {
+    const std::vector<std::string> names = {
+        "runtime-scene", "servitor-accept-scratch", "a", "a.b", "dx12",
+        "", ".hidden", "..", "a..b", "a/b", "a\\b", "C:shot", "foo:bar", ":", "shot:", "/abs", "\\\\server\\share",
+    };
+    for (const std::string& name : names) {
+        INFO(name);
+        CHECK(Arcane::Remote::CompareReferenceNameIsSafe(name) == Arcane::ReferenceNameIsSafe(name));
+    }
+    CHECK_FALSE(Arcane::Remote::CompareReferenceNameIsSafe("C:shot"));
+    CHECK_FALSE(Arcane::Remote::CompareReferenceNameIsSafe("foo:bar"));
+    CHECK(Arcane::Remote::CompareReferenceNameIsSafe("runtime-scene"));
 }
 
 #endif

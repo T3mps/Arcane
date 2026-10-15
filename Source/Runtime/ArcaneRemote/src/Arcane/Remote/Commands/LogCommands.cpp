@@ -2,11 +2,14 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/CommandSupport.hpp>   // kInlineCapBytes, ArtifactDir, WriteArtifact (C-M10)
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Reflection.hpp>
 
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -107,7 +110,47 @@ CommandResult LogRead(const Call& call, void* /*user*/)
             rows.push_back(LogRecordJson(record));
     }
     CommandResult result;
-    result.envelope = MakeOk(call.command, {{"records", std::move(rows)}, {"dropped", dropped}}, {});
+    // The inline cap every dump applies (spec s4.8; final fix pass, C-M10):
+    // records past it go to one artifact (kind "logs") under the session's
+    // out/ directory, data.records is empty and data.truncated true.
+    bool truncated = false;
+    std::vector<Artifact> artifacts;
+    std::vector<Error> warnings;
+    const std::string inlineJson = rows.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    if (inlineJson.size() > Detail::kInlineCapBytes) {
+        const std::filesystem::path dir = Detail::ArtifactDir();
+        if (dir.empty()) {
+            Error w = Detail::MakeIssue("log.no-artifact-dir",
+                                        "the " + std::to_string(rows.size()) + " records (" +
+                                            std::to_string(inlineJson.size()) +
+                                            " bytes) exceed the inline cap and this host has no artifact directory, "
+                                            "so none were returned",
+                                        "read a later window with --since, or raise --level");
+            w.detail = {{"bytes", inlineJson.size()}, {"records", rows.size()}};
+            warnings.push_back(std::move(w));
+        } else {
+            const nlohmann::json file = {{"records", rows}, {"dropped", dropped}};
+            std::string why;
+            std::optional<Artifact> artifact = Detail::WriteArtifact(
+                dir, "log.read", "logs", file.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), why);
+            if (!artifact) {
+                result.envelope = MakeError(call.command, "log.artifact-failed",
+                                            "the records exceed the inline cap and their artifact could not be "
+                                            "written: " + why,
+                                            "free disk space or check Saved/Remote/out, or read a later window "
+                                            "with --since");
+                result.envelope.errors.front().detail["bytes"] = inlineJson.size();
+                return result;
+            }
+            artifacts.push_back(std::move(*artifact));
+        }
+        rows = nlohmann::json::array();
+        truncated = true;
+    }
+    result.envelope =
+        MakeOk(call.command, {{"records", std::move(rows)}, {"dropped", dropped}, {"truncated", truncated}}, {});
+    result.envelope.warnings = std::move(warnings);
+    result.envelope.artifacts = std::move(artifacts);
     return result;
 }
 

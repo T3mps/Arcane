@@ -25,13 +25,14 @@ namespace Arcane::Remote
 
 // The wire args of the two commands, reflected for their schema (spec s5.3).
 // Each command reads its args JSON itself and refuses unknown keys.
+// `force` is not a host argument: servitor quit --force ends the process
+// itself after --timeout, and the host has no force path, so a `force` arg on
+// the wire is refused (arg.inapplicable), never accepted and ignored (final
+// fix pass, C-M7; Rule 3).
 struct HostQuitArgs {
-    bool force = false;            // the client ends the process after --timeout (spec s4.7); the host quits as usual
     bool discardChanges = false;   // quit even with unsaved changes
 };
 ARC_REFLECT_TYPE(HostQuitArgs)
-    ARC_REFLECT_FIELD(HostQuitArgs, force)
-        ARC_REFLECT_ATTR(Optional)
     ARC_REFLECT_FIELD(HostQuitArgs, discardChanges)
         ARC_REFLECT_ATTR(Optional)
 ARC_REFLECT_TYPE_END()
@@ -139,7 +140,7 @@ std::string StateUsage()
     return text;
 }
 
-constexpr std::string_view kQuitUsage = "pass force or discardChanges (both optional booleans)";
+constexpr std::string_view kQuitUsage = "pass discardChanges (an optional boolean)";
 constexpr std::string_view kWaitUsage = "pass what: ready, settled, frames (with frames: N), reload or state (with state: <s>)";
 
 std::optional<Envelope> ParseWait(const Call& call, WaitArgs& out)
@@ -193,11 +194,14 @@ CommandResult HostQuit(const Call& call, void* /*user*/)
         result.envelope = Unavailable(call.command);
         return result;
     }
-    bool force = false;
+    if (call.args.is_object() && call.args.contains("force")) {
+        result.envelope = MakeError(call.command, "arg.inapplicable",
+                                    "force is servitor quit's own flag: the host has no force path",
+                                    "use servitor quit --force, which ends the process itself after --timeout");
+        return result;
+    }
     bool discardChanges = false;
-    std::optional<Envelope> refusal = CheckKeys(call, {"force", "discardChanges"}, kQuitUsage);
-    if (!refusal)
-        refusal = ReadBool(call, "force", force);
+    std::optional<Envelope> refusal = CheckKeys(call, {"discardChanges"}, kQuitUsage);
     if (!refusal)
         refusal = ReadBool(call, "discardChanges", discardChanges);
     if (refusal) {
@@ -207,9 +211,6 @@ CommandResult HostQuit(const Call& call, void* /*user*/)
 
     // The editor's unsaved-changes guard (spec s4.7): a dirty host does not
     // quit unless the caller says to drop the changes. Nothing has run.
-    // `force` is the client's (it ends the process after --timeout); it does
-    // not answer the guard -- the spec lists --discard-changes separately.
-    (void)force;
     const HostSession::Config& config = s.session->GetConfig();
     const bool dirty = config.dirty != nullptr && config.dirty(config.hookUser);
     if (dirty && !discardChanges) {
@@ -226,11 +227,17 @@ CommandResult HostQuit(const Call& call, void* /*user*/)
     return result;
 }
 
-// Ends a wait row: its ring hold (a settle capture in flight) and its row.
-void ForgetWait(SessionCommandState& s, std::uint64_t jobId)
+// Ends a wait row: a settle capture still armed is cancelled in the ring
+// (C-M12, G-M5: a later screenshot never waits behind it), then its ring hold
+// and its row go.
+void ForgetWait(SessionCommandState& s, Job& job)
 {
-    Detail::ReleaseCaptureRing(jobId);
-    s.waits.erase(jobId);
+    if (const auto it = s.waits.find(job.id.value); it != s.waits.end() && it->second.settle.armed) {
+        Detail::CancelTicket(job, it->second.settle.copy);
+        it->second.settle.armed = false;
+    }
+    Detail::ReleaseCaptureRing(job.id.value);
+    s.waits.erase(job.id.value);
 }
 
 // One step of `wait settled` (spec s4.7; Task 30): the --settle predicate, two
@@ -258,6 +265,7 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
         st.copy.arm = config.capture.armHost;
         st.copy.drain = config.capture.drainHost;
         st.copy.hookUser = config.capture.user;
+        st.copy.cancel = config.capture.cancelHost;
         st.copy.deadline = std::chrono::steady_clock::time_point::max();   // the wait's own timeout governs
         job.progress.label.clear();   // StepTicket arms while the label is not "copied"
     }
@@ -286,7 +294,7 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
     if (step == Detail::TicketStep::Failed) {
         // capture.minimized (exit 5: a minimized host renders nothing) or a
         // lost copy (capture.no-frame); StepTicket wrote the envelope.
-        ForgetWait(s, job.id.value);
+        ForgetWait(s, job);
         return true;
     }
     Detail::ReleaseCaptureRing(job.id.value);
@@ -296,7 +304,7 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
     if (!Detail::NormalizeRetired(raw, rgba, why)) {
         job.envelope = MakeError(job.command, "capture.no-frame", "a settle capture is unusable: " + why,
                                  "retry the wait");
-        ForgetWait(s, job.id.value);
+        ForgetWait(s, job);
         return true;
     }
     ++st.captures;
@@ -307,7 +315,7 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
                               {{"done", true}, {"what", "settled"}, {"captures", st.captures}, {"width", raw.width},
                                {"height", raw.height}},
                               gate.Block());
-        ForgetWait(s, job.id.value);
+        ForgetWait(s, job);
         return true;
     }
     st.previous = std::move(rgba);
@@ -344,7 +352,7 @@ bool StepWaitRow(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
         }
     }
     job.envelope = std::move(env);
-    ForgetWait(s, job.id.value);
+    ForgetWait(s, job);
     return true;
 }
 
@@ -355,7 +363,7 @@ bool StepWait(Job& job, HostGate& gate, void* user)
     if (it == s.waits.end() || s.session == nullptr) {
         // The session that armed this wait is gone (stopped, or replaced).
         job.envelope = Unavailable(job.command);
-        ForgetWait(s, job.id.value);
+        ForgetWait(s, job);
         return true;
     }
     // WaitPoll bounds the wait at kMaxWaitTimeoutMs; the final envelope says
@@ -482,6 +490,11 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
     if (timeoutMs == 0 || std::chrono::steady_clock::now() - started > std::chrono::milliseconds(timeoutMs))
         return MakeOk(command, {{"timedOut", true}, {"what", args.what}}, gate.Block());
     return MakeOk(command, {{"done", false}, {"what", args.what}}, gate.Block());
+}
+
+std::uint32_t BoundedJobTimeoutMs(std::uint32_t requestedMs, std::uint32_t fallbackMs)
+{
+    return std::min(requestedMs != 0 ? requestedMs : fallbackMs, kMaxWaitTimeoutMs);
 }
 
 void RegisterSessionCommands(HostSession* session, JobTable* jobs)

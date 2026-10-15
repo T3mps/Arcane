@@ -1,4 +1,5 @@
 #include <Arcane/Remote/Schema.hpp>
+#include <Arcane/Remote/Commands/CommandSupport.hpp>   // WriteMaskedFields: a Protected default is masked (C-M8)
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -165,13 +166,12 @@ nlohmann::json Arcane::Remote::SchemaFor(const Astra::TypeMeta& meta)
     {
         void* instance = ::operator new(meta.size, std::align_val_t{meta.alignment});
         meta.defaultConstruct(instance);
+        // The defaults go through the Protected walk resource.get and
+        // entity.get use: a secret's default is masked, never stamped
+        // (final fix pass, C-M8).
         nlohmann::json written = nlohmann::json::object();
-        Arcane::ReflectionJsonWriter writer(written);
-        for (const Astra::FieldInfo& field : meta.fields)
-        {
-            if (!field.IsHidden() && field.IsSerializable())
-                writer.Visit(field, instance);
-        }
+        std::string why;
+        (void)Arcane::Remote::Detail::WriteMaskedFields(meta, instance, written, why, /*skipHidden=*/true);
         if (meta.destruct)
             meta.destruct(instance);
         ::operator delete(instance, std::align_val_t{meta.alignment});

@@ -59,6 +59,12 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("")) == 2);                 // empty code on a non-ok envelope
     CHECK(ExitFromHost(Err("host.died")) == 7);
     CHECK(ExitFromHost(Err("host.unreachable")) == 7);
+    // Final fix pass: a client read deadline on a live host (C-I2), a launch
+    // whose spawned host never reached ready (C-I6), a log.read dump whose
+    // artifact failed (C-M10).
+    CHECK(ExitFromHost(Err("call.timeout")) == 8);
+    CHECK(ExitFromHost(Err("launch.timeout")) == 8);
+    CHECK(ExitFromHost(Err("log.artifact-failed")) == 6);
     HostBlock host;
     host.kind = "runtime";
     host.frame = 61;
@@ -175,6 +181,40 @@ TEST_CASE("TryParseEnvelope rejects malformed replies", "[remote][protocol]") {
     CHECK_FALSE(TryParseEnvelope(noCode).has_value());
     auto badHost = good; badHost["host"] = 3;
     CHECK_FALSE(TryParseEnvelope(badHost).has_value());
+    // Final fix pass (C-M11): ok:false says the operation failed, so it must
+    // name a failure. Without one the reply is malformed (EnvelopeOf: internal,
+    // exit 1), never a usage error.
+    auto failedNoErrors = good; failedNoErrors["ok"] = false;
+    CHECK_FALSE(TryParseEnvelope(failedNoErrors).has_value());
+    auto failedNoKey = failedNoErrors; failedNoKey.erase("errors");
+    CHECK_FALSE(TryParseEnvelope(failedNoKey).has_value());
+    auto failedNamed = failedNoErrors; failedNamed["errors"] = nlohmann::json::array({{{"code", "entity.not-found"}}});
+    CHECK(TryParseEnvelope(failedNamed).has_value());
+}
+
+TEST_CASE("X-Remote-Client is printable ASCII up to kMaxClientIdBytes, and BuildPost sends it", "[remote][protocol]") {
+    CHECK(kClientHeader == "X-Remote-Client");
+    CHECK(IsValidClientId("servitor/0.1.0 pid 4242"));
+    CHECK(IsValidClientId("claude"));
+    CHECK(IsValidClientId(std::string(kMaxClientIdBytes, 'a')));
+    CHECK(IsValidClientId("~ !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}"));
+    CHECK_FALSE(IsValidClientId(""));
+    CHECK_FALSE(IsValidClientId(std::string(kMaxClientIdBytes + 1, 'a')));
+    CHECK_FALSE(IsValidClientId("tab\there"));
+    CHECK_FALSE(IsValidClientId("line\r\nX-Evil: 1"));
+    CHECK_FALSE(IsValidClientId("caf\xc3\xa9"));
+    CHECK_FALSE(IsValidClientId(std::string("nul\0byte", 8)));
+    CHECK_FALSE(IsValidClientId("del\x7f"));
+
+    const std::string token(64, 'a');
+    const std::string named = BuildPost("/remote/v1/call", 51234, token, "{}", "agent-7 (ci)");
+    CHECK(named.find("\r\nX-Remote-Client: agent-7 (ci)\r\n") != std::string::npos);
+    std::string err;
+    const auto req = ParseHttpRequest(named, &err);
+    REQUIRE(req.has_value());
+    CHECK(Header(*req, "x-remote-client") == "agent-7 (ci)");
+    CHECK(CheckTransport(*req, "51234", token).refuse == TransportRefuse::None);
+    CHECK(BuildPost("/remote/v1/call", 51234, token, "{}").find("X-Remote-Client") == std::string::npos);
 }
 
 TEST_CASE("HostStatus ToJson carries protocolMinor", "[remote][protocol]") {
@@ -334,7 +374,8 @@ TEST_CASE("every code the s6.4 table names is listed in ExitForCode, not left to
                              "capture.artifact-failed", "compare.reference-unreadable", "compare.bless-failed",
                              "compare.artifact-failed", "play.not-playing", "play.refused", "play.stopped",
                              "module.reload-failed", "quit.force-failed", "resource.not-found", "host.unreachable",
-                             "host.died", "host.restarting", "host.hung", "compare.failed", "wait.timeout"}) {
+                             "host.died", "host.restarting", "host.hung", "compare.failed", "wait.timeout",
+                             "call.timeout", "launch.timeout", "log.artifact-failed"}) {
         INFO(code);
         CHECK(ExitCodeIsListed(code));
     }

@@ -740,5 +740,141 @@ TEST_CASE("servitor play, stop, pause, resume and step build their play.* calls"
     const char* pauseFlag[] = {"servitor", "pause", "--bogus"};
     CHECK(Servitor::Run(3, const_cast<char**>(pauseFlag)) == 2);
 }
+// ---- Final fix pass ----------------------------------------------------------
+
+namespace {
+
+Arcane::Remote::CommandResult InvokeStep(std::uint32_t n, std::uint32_t timeoutMs) {
+    Arcane::Remote::Call call;
+    call.command = "play.step";
+    call.args = nlohmann::json{{"n", n}};
+    call.timeoutMs = timeoutMs;
+    return Arcane::Remote::CommandRegistry::Get().Invoke(call);
+}
+
+bool g_primaryPaused = true;
+bool EditorPrimaryPaused(void*) { return g_primaryPaused; }
+
+} // namespace
+
+// G-1 / C-I2 (b): two overlapping steps from one frame share the gate's ticks.
+// The sim advances to the larger target and no further; every caller is
+// answered when its own target is reached, and nothing runs afterwards.
+TEST_CASE("overlapping steps finish at the larger request, not the sum", "[remote][play]") {
+    Arcane::Remote::TickGate tick;
+    tick.SetRunning(false);
+    tick.SetPaused(true);
+    Arcane::Remote::PlayHooks hooks;
+    hooks.gate = &tick;
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::HostGate gate;
+    RemotePlayScope play(hooks, jobs, &gate);
+    const auto a = InvokeStep(10, 30000);
+    const auto b = InvokeStep(10, 30000);
+    REQUIRE(a.completesJob != 0);
+    REQUIRE(b.completesJob != 0);
+    CHECK(tick.StepsRemaining() == 10);
+    const auto c = InvokeStep(4, 30000);   // a shorter one inside the same window adds nothing
+    REQUIRE(c.completesJob != 0);
+    CHECK(tick.StepsRemaining() == 10);
+    int advanced = 0;
+    while (tick.Consume() == Arcane::Remote::TickDecision::Step && advanced < 100) {
+        gate.frame.fetch_add(1);
+        ++advanced;
+        jobs.StepAll(gate);
+    }
+    CHECK(advanced == 10);
+    CHECK(gate.frame.load() == 10);
+    for (const auto& armed : {a, b, c}) {
+        const auto* row = jobs.Find(Arcane::Remote::JobId{armed.completesJob});
+        REQUIRE(row != nullptr);
+        CHECK(row->state == Arcane::Remote::JobState::Done);
+    }
+    CHECK(jobs.Find(Arcane::Remote::JobId{c.completesJob})->envelope.data.at("advanced") == 4);   // its own target
+    CHECK(tick.Consume() == Arcane::Remote::TickDecision::Idle);   // nothing runs after every caller was answered
+}
+
+// C-I2 (a): play.step is bounded on the host like host.wait. At its deadline
+// it answers ok with data.timedOut (exit 8, the spec's wait timeout) and gives
+// back the ticks no other step still needs.
+TEST_CASE("a step that outlives its timeout stops and answers timedOut", "[remote][play]") {
+    Arcane::Remote::TickGate tick;
+    tick.SetRunning(false);
+    tick.SetPaused(true);
+    Arcane::Remote::PlayHooks hooks;
+    hooks.gate = &tick;
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::HostGate gate;
+    RemotePlayScope play(hooks, jobs, &gate);
+    const auto longStep = InvokeStep(20, 30);     // gives up after 30 ms
+    const auto shortStep = InvokeStep(5, 30000);
+    REQUIRE(longStep.completesJob != 0);
+    REQUIRE(shortStep.completesJob != 0);
+    CHECK(tick.StepsRemaining() == 20);
+    for (int i = 0; i < 2; ++i) {
+        REQUIRE(tick.Consume() == Arcane::Remote::TickDecision::Step);
+        gate.frame.fetch_add(1);
+        jobs.StepAll(gate);
+    }
+    CHECK(jobs.AnyRunning({"play.step"}));
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    jobs.StepAll(gate);
+    const auto* timed = jobs.Find(Arcane::Remote::JobId{longStep.completesJob});
+    REQUIRE(timed != nullptr);
+    CHECK(timed->state == Arcane::Remote::JobState::Done);
+    CHECK(timed->envelope.ok);
+    CHECK(timed->envelope.errors.empty());
+    CHECK(timed->envelope.data.at("timedOut") == true);
+    CHECK(timed->envelope.data.at("advanced") == 2);
+    CHECK(Arcane::Remote::ExitFromHost(timed->envelope) == 8);
+    CHECK(tick.StepsRemaining() == 3);   // the short step still needs 3 of its 5; the rest is dropped
+    while (tick.Consume() == Arcane::Remote::TickDecision::Step) {
+        gate.frame.fetch_add(1);
+        jobs.StepAll(gate);
+    }
+    CHECK(gate.frame.load() == 5);
+    CHECK(jobs.Find(Arcane::Remote::JobId{shortStep.completesJob})->state == Arcane::Remote::JobState::Done);
+    // Alone, a timed-out step clears every pending tick it asked for.
+    const auto alone = InvokeStep(50, 1);
+    REQUIRE(alone.completesJob != 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    jobs.StepAll(gate);
+    CHECK(jobs.Find(Arcane::Remote::JobId{alone.completesJob})->envelope.data.at("timedOut") == true);
+    CHECK(tick.StepsRemaining() == 0);
+}
+
+// G-2: on the editor a single step replaces the frame's accumulated dt, so it
+// is asked for only while the primary loop is paused. A running editor
+// advances host.frame every pass by itself: the step waits on it, as a running
+// runtime's does.
+TEST_CASE("editor step requests single steps only while the primary loop is paused", "[remote][play]") {
+    g_editorSteps = 0;
+    g_primaryPaused = false;
+    Arcane::Remote::PlayHooks hooks;
+    hooks.editor = true;
+    hooks.editorRequestSingleStep = &EditorOneStep;
+    hooks.editorPaused = &EditorPrimaryPaused;
+    hooks.undoReason = "play-mode";
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::HostGate gate;
+    RemotePlayScope play(hooks, jobs, &gate);
+    const auto armed = InvokeStep(3, 30000);
+    REQUIRE(armed.completesJob != 0);
+    jobs.StepAll(gate);
+    gate.frame.fetch_add(1);   // the running loop's own pass
+    jobs.StepAll(gate);
+    CHECK(g_editorSteps == 0);
+    g_primaryPaused = true;    // paused under the step: from now on one single step per Drain
+    jobs.StepAll(gate);
+    CHECK(g_editorSteps == 1);
+    gate.frame.fetch_add(1);
+    jobs.StepAll(gate);
+    CHECK(g_editorSteps == 2);
+    gate.frame.fetch_add(1);
+    jobs.StepAll(gate);
+    CHECK(g_editorSteps == 2);   // the third advance finished it; no extra request
+    CHECK(jobs.Find(Arcane::Remote::JobId{armed.completesJob})->state == Arcane::Remote::JobState::Done);
+    g_primaryPaused = true;
+}
 
 #endif

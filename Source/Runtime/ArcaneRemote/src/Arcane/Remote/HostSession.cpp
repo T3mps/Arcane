@@ -68,6 +68,13 @@ bool Arming::Allow(NetMode mode, bool distBuild, bool editorEnableCvar)
     return mode != NetMode::Client;
 }
 
+const char* Arming::RefusalReason(NetMode mode)
+{
+    if (mode == NetMode::Client)
+        return "the primary world is a Client world, which never serves the remote surface (spec s10.2)";
+    return nullptr;
+}
+
 HostSession::HostSession(Config config)
     : m_config(std::move(config))
 {
@@ -198,7 +205,6 @@ bool HostSession::Start()
     m_gate.kind = ToString(m_config.kind);
     m_gate.pid = self.pid;
     m_gate.catalog = registry.Generation();
-    m_gate.SetState("ready");
     // The s6.3 host block's `world`: the host's default world, the one a call
     // without --world resolves to (ResolveWorld with an empty name). A host
     // with several worlds, or none, has no default and leaves it empty.
@@ -215,6 +221,7 @@ bool HostSession::Start()
     // still finishes.
     m_tick.SetRunning(!m_config.holdSim);
     m_tick.SetPaused(m_config.holdSim);
+    RefreshState();   // the first status already names the play axis (ready when held)
 
     m_atoms = std::make_unique<ListenerAtoms>();
     m_queue = std::make_unique<RequestQueue>(QueueDepthSetting());
@@ -247,6 +254,7 @@ bool HostSession::Start()
     desc.state = m_gate.State();
     desc.frame = m_gate.frame.load(std::memory_order_acquire);
     desc.abi = kGamePluginABIVersion; // ruling F27
+    m_descriptor = desc;
     if (m_descriptorPath.empty() || !WriteDescriptorAtomic(m_descriptorPath, desc)) {
         ARC_ERROR("remote: could not write the descriptor {}; this host runs without remote",
                   Utf8(m_descriptorPath));
@@ -273,15 +281,23 @@ void HostSession::Drain()
         return;
 
     m_gate.catalog = CommandRegistry::Get().Generation();
+    RefreshState();   // the jobs and the gate see this frame's state
     // SSE subscribers opened or closed since the last Drain arm or cancel
     // their follow jobs before the dispatcher steps the jobs (Task 22).
     ApplyFollowEvents(m_jobs, *m_listener);
     // A call already queued counts as activity even if the gate refuses it,
-    // and so does an open follow stream: a client is attached.
+    // and so does an open follow stream: a client is attached. So does any
+    // authenticated request since the last Drain, GET /status and /catalog
+    // included (C-M4).
     const bool hadQueued = m_queue->Depth() > 0;
+    const std::uint64_t requests = m_atoms->requests.load(std::memory_order_relaxed);
+    const bool requested = requests != m_requestsSeen;
+    m_requestsSeen = requests;
     m_dispatcher->Drain(FrameBudgetMsSetting(), kFrameBudgetCommands);
+    RefreshState();   // a play command may have moved it; /status publishes it now
     const auto steadyNow = std::chrono::steady_clock::now();
-    if (hadQueued || m_dispatcher->LastDrainRan() > 0 || m_jobs.AnyRunning({"log.follow", "problem.follow"}))
+    if (hadQueued || requested || m_dispatcher->LastDrainRan() > 0 ||
+        m_jobs.AnyRunning({"log.follow", "problem.follow"}))
         m_lastActivity = steadyNow;
 
     const std::int64_t now = NowUnixMs();
@@ -291,7 +307,7 @@ void HostSession::Drain()
 
     if (steadyNow - m_lastHeartbeat >= kHeartbeatInterval) {
         m_lastHeartbeat = steadyNow;
-        TouchHeartbeat(m_descriptorPath, now, m_gate.State(), m_gate.frame.load(std::memory_order_acquire));
+        WriteHeartbeat(now);
         m_jobs.Prune(now);
     }
 }
@@ -341,10 +357,11 @@ void HostSession::MarkStopping()
 {
     if (!m_started)
         return;
+    m_stopping = true;
     m_gate.SetState("shutting-down");
     const std::int64_t now = NowUnixMs();
     PublishStatus(now);
-    TouchHeartbeat(m_descriptorPath, now, m_gate.State(), m_gate.frame.load(std::memory_order_acquire));
+    WriteHeartbeat(now);
 }
 
 void HostSession::Stop(std::string exitReason)
@@ -352,6 +369,7 @@ void HostSession::Stop(std::string exitReason)
     if (!m_started)
         return;
     m_started = false;
+    m_stopping = true;
     m_gate.SetState("shutting-down");
     PublishStatus(NowUnixMs());
     ARC_INFO("remote: {} stopping ({})", ToString(m_config.kind), exitReason);
@@ -431,6 +449,64 @@ void HostSession::NoteMinimized(bool minimized)
     if (!m_started)
         return;
     m_gate.minimized.store(minimized, std::memory_order_release);
+}
+
+void HostSession::NoteReloading(bool reloading)
+{
+    if (!m_started)
+        return;
+    // Inside the host's synchronous reload: no Drain runs until it ends, so
+    // /status and the descriptor are published here, at once.
+    m_reloading = reloading;
+    RefreshState();
+    const std::int64_t now = NowUnixMs();
+    PublishStatus(now);
+    WriteHeartbeat(now);
+}
+
+void HostSession::RefreshState()
+{
+    if (m_stopping)
+        return;   // shutting-down is latched
+    bool playing = false;
+    bool paused = false;
+    if (m_config.kind == HostKind::Editor) {
+        const PlayHooks& play = m_config.play;
+        playing = play.editorPlaying != nullptr && play.editorPlaying(play.editorUser);
+        paused = playing && play.editorPaused != nullptr && play.editorPaused(play.editorUser);
+    } else {
+        playing = m_tick.Running();   // held at start, or stopped: not running
+        paused = playing && m_tick.Paused();
+    }
+    m_gate.inPlay.store(playing, std::memory_order_release);
+    const char* state = "ready";
+    if (m_reloading)
+        state = "reloading";
+    else if (m_config.building != nullptr && m_config.building(m_config.hookUser))
+        state = "building";
+    else if (m_config.modal != nullptr && m_config.modal(m_config.hookUser))
+        state = "modal";
+    else if (paused)
+        state = "paused";
+    else if (playing)
+        state = "playing";
+    else if (m_gate.minimized.load(std::memory_order_acquire))
+        state = "minimized";
+    m_gate.SetState(state);
+}
+
+void HostSession::WriteHeartbeat(std::int64_t nowUnixMs)
+{
+    if (!m_descriptorWritten || m_descriptorPath.empty())
+        return;
+    // The session's own copy, written whole through WriteDescriptorAtomic's
+    // owner-only path: a descriptor deleted under a live host (Saved/Remote
+    // removed) comes back on the next beat instead of leaving the host
+    // invisible to servitor status (final fix pass, C-M3).
+    m_descriptor.heartbeatUnixMs = nowUnixMs;
+    m_descriptor.state = m_gate.State();
+    m_descriptor.frame = m_gate.frame.load(std::memory_order_acquire);
+    WriteDescriptorAtomic(m_descriptorPath, m_descriptor);
 }
 
 HostGate& HostSession::Gate()

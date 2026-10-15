@@ -37,11 +37,11 @@ std::optional<int> ListedExit(std::string_view code)
                       "reflect.unreadable", "ecs.artifact-failed", "resource.artifact-failed",
                       "scene.artifact-failed", "capture.artifact-failed", "compare.reference-unreadable",
                       "compare.bless-failed", "compare.artifact-failed", "play.not-playing", "play.refused",
-                      "play.stopped", "module.reload-failed", "quit.force-failed" }))
+                      "play.stopped", "module.reload-failed", "quit.force-failed", "log.artifact-failed" }))
         return 6;
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;
-    if (OneOf(code, { "compare.failed", "wait.timeout" })) return 8;
+    if (OneOf(code, { "compare.failed", "wait.timeout", "call.timeout", "launch.timeout" })) return 8;
     return std::nullopt;
 }
 
@@ -276,7 +276,8 @@ bool WellFormed(const nlohmann::json& j)
     if (const auto minor = j.find("protocolMinor"); minor != j.end()) {
         if (!minor->is_number_integer() || minor->get<long long>() < 0) return false;
     }
-    if (const auto errors = j.find("errors"); errors != j.end()) {
+    const auto errors = j.find("errors");
+    if (errors != j.end()) {
         if (!errors->is_array()) return false;
         for (const auto& e : *errors) {
             if (!e.is_object()) return false;
@@ -284,6 +285,9 @@ bool WellFormed(const nlohmann::json& j)
             if (code == e.end() || !code->is_string()) return false;
         }
     }
+    // ok:false says the operation failed, so it names the failure (s6.3); an
+    // ok:false with no error is malformed (internal, exit 1), never usage.
+    if (!ok->get<bool>() && (errors == j.end() || errors->empty())) return false;
     if (const auto host = j.find("host"); host != j.end() && !host->is_object()) return false;
     return true;
 }
@@ -382,6 +386,18 @@ nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth, b
     if (deep)
         return nlohmann::json(nlohmann::json::value_t::discarded);
     return parsed;
+}
+
+bool IsValidClientId(std::string_view id)
+{
+    if (id.empty() || id.size() > kMaxClientIdBytes)
+        return false;
+    for (const char c : id) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte < 0x20 || byte > 0x7E)
+            return false;
+    }
+    return true;
 }
 
 } // namespace Arcane::Remote

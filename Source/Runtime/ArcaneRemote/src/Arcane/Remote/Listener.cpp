@@ -792,6 +792,10 @@ void LoopbackHttpTransport::Impl::HandleRequest(Conn& c, const HttpRequest& req)
                    "auth throttled");
         return;
     }
+    // An authenticated request of any route is a client at work (spec s4.7:
+    // the idle exit counts from the last request). HostSession::Drain reads
+    // the count on the main thread (final fix pass, C-M4).
+    atoms.requests.fetch_add(1, std::memory_order_relaxed);
 
     const std::string_view target = req.target;
     const std::size_t q = target.find('?');
@@ -921,6 +925,22 @@ void LoopbackHttpTransport::Impl::HandleCall(Conn& c, const HttpRequest& req)
     Call call;
     call.id = id;
     call.command = command;
+    // spec s4.5: X-Remote-Client names the caller; the audit line records it
+    // (s10.4). Absent is legal (an empty client); a value outside 1-128
+    // printable ASCII bytes is refused before it is queued (final fix pass, C-I1).
+    for (const auto& [name, value] : req.headers) {
+        if (name != "x-remote-client")
+            continue;
+        if (!IsValidClientId(value)) {
+            refuse(400, "Bad Request", "arg.invalid",
+                   std::string(kClientHeader) + " must be 1 to " + std::to_string(kMaxClientIdBytes) +
+                       " printable ASCII characters",
+                   "name the caller with printable ASCII, e.g. servitor --client ci-nightly");
+            return;
+        }
+        call.callerId = value;
+        break;
+    }
     if (body.contains("args")) {
         if (!body["args"].is_object()) {
             refuse(400, "Bad Request", "arg.invalid", "args must be an object", "send args as a JSON object");

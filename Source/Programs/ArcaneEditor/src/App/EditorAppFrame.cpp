@@ -417,6 +417,10 @@ namespace Arcane::Editor
             // before the frame's phases, on every iteration including a
             // minimized one (which the SkipFrame continue below would skip).
             UpdateRemoteSession();
+            // An explicit --remote this editor cannot serve (a Client primary
+            // world) was refused at startup: exit 2 (final fix pass, C-M16).
+            if (m_remoteArmExit != 0)
+                break;
             // An open-ended headless run (only --remote lifts --headless's
             // --frames requirement) whose remote surface is not up -- refused,
             // failed to start, or switched off -- has no stop path left, so it
@@ -433,6 +437,17 @@ namespace Arcane::Editor
             // PluginHost (ruling F10).
             // Task 30: the attempt count and outcome let it note a failed
             // reload (the generation stays put), so `wait reload` answers it.
+            // Final fix pass (C-I3): a reload is synchronous, so the module
+            // host tells the session when one begins and ends ("reloading").
+            // Set every pass: a project switch replaces m_plugin.
+            if (m_plugin)
+                m_plugin->SetReloadObserver(
+                    [](bool reloading, void* user) {
+                        auto* app = static_cast<EditorApp*>(user);
+                        if (app->m_remote)
+                            app->m_remote->NoteReloading(reloading);
+                    },
+                    this);
             if (m_remote && m_remote->DrainFrame(m_plugin ? m_plugin->Generation() : 0u,
                                                  m_plugin ? m_plugin->ReloadAttempts() : 0u,
                                                  m_plugin ? m_plugin->LastReloadOk() : true))
@@ -1875,9 +1890,18 @@ namespace Arcane::Editor
         // makes the primary world a Client keeps the session (CVarContext::Editor).
         if (!Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, wanted))
         {
+            m_remoteArmBlocked = true;
+            if (m_config.remote)
+            {
+                // Rule 3 (final fix pass, C-M16): an explicit --remote that
+                // cannot apply is refused, never run on as if ignored.
+                const char* why = Arcane::Remote::Arming::RefusalReason(m_runtime->Core().Mode());
+                ARC_ERROR("ArcaneEditor: --remote refused: {}; exiting 2", why ? why : "the remote surface cannot arm here");
+                m_remoteArmExit = 2;
+                return;
+            }
             ARC_WARN("ArcaneEditor: the remote surface is not armed: the primary world is a {} world, "
                      "which never serves it", Arcane::ToString(m_runtime->Core().Mode()));
-            m_remoteArmBlocked = true;
             return;
         }
 
@@ -1898,6 +1922,19 @@ namespace Arcane::Editor
         // loop's SettleProducersIdle; the byte-equal pair is the host.wait
         // job's own two captures through the host pair below (Task 30).
         rc.hookUser           = this;
+        // Final fix pass (C-I3): the editor's host-state facts. modal: an
+        // error dialog is queued or an ImGui modal popup is open (read between
+        // frames, so it is the last frame's popup stack); building: the
+        // module rebuild (arcbuild) is running.
+        rc.modal              = [](void* user) -> bool {
+            const auto* app = static_cast<const EditorApp*>(user);
+            if (app->m_modalErrors.Front() != nullptr)
+                return true;
+            return ImGui::GetCurrentContext() != nullptr && ImGui::GetTopMostPopupModal() != nullptr;
+        };
+        rc.building           = [](void* user) -> bool {
+            return static_cast<const EditorApp*>(user)->m_moduleBuild.Running();
+        };
         rc.dirty              = [](void* user) -> bool {
             const auto* app = static_cast<const EditorApp*>(user);
             return (app->m_undo && app->m_scene.IsDirty(*app->m_undo)) || app->m_documents.AnyDirty();
@@ -1933,6 +1970,10 @@ namespace Arcane::Editor
         rc.capture.drainWindow    = &EditorApp::RemoteDrainWindow;
         rc.capture.armHost        = &EditorApp::RemoteArmViewport;
         rc.capture.drainHost      = &EditorApp::RemoteDrainViewport;
+        // Final fix pass (C-M12): a capture job that gives up clears its ticket.
+        rc.capture.cancelViewport = &EditorApp::RemoteCancelViewport;
+        rc.capture.cancelWindow   = &EditorApp::RemoteCancelWindow;
+        rc.capture.cancelHost     = &EditorApp::RemoteCancelViewport;
         rc.capture.occludedRisk   = !m_config.headless;
         rc.capture.user           = this;
         // Task 28 (ruling F12, G-2): capture.compare resolves and blesses
@@ -1988,15 +2029,24 @@ namespace Arcane::Editor
         rc.play.editorTopology = [](void* user) -> std::string_view {
             return Arcane::Editor::PlayTopologyRemoteName(static_cast<const EditorApp*>(user)->m_play.Topology());
         };
+        // Final fix pass (G-2): the remote pause and the paused step move the
+        // embedded server world's loop with the primary's, so the two worlds
+        // stay in lockstep (TickServer advances it by the same frame).
         rc.play.editorSetPaused = [](bool paused, void* user) {
             auto* app = static_cast<EditorApp*>(user);
             if (app->m_runtime)
                 app->m_runtime->Loop().SetPaused(paused);
+            app->m_play.SetServerPaused(paused);
         };
         rc.play.editorRequestSingleStep = [](void* user) {
             auto* app = static_cast<EditorApp*>(user);
             if (app->m_runtime)
                 app->m_runtime->Loop().RequestSingleStep();
+            app->m_play.RequestServerSingleStep();
+        };
+        rc.play.editorPaused = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);   // Loop() has no const overload
+            return app->m_runtime && app->m_runtime->Loop().IsPaused();
         };
         rc.play.editorPlaying = [](void* user) -> bool {
             return static_cast<const EditorApp*>(user)->InPlayMode();

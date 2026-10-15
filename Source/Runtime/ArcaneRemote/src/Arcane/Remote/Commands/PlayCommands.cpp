@@ -3,6 +3,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Arcane/Remote/Commands/CommandSupport.hpp>
+#include <Arcane/Remote/Commands/SessionCommands.hpp>   // kMaxWaitTimeoutMs, BoundedJobTimeoutMs
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Jobs.hpp>
 #include <Arcane/Remote/Registry.hpp>
@@ -10,6 +11,8 @@
 #include <Arcane/Core/Constant.hpp>
 #include <Arcane/Reflection.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -50,6 +53,8 @@ namespace
 
 ARC_CONSTANT("spec s7.3: play.step's upper bound; a larger N is arg.inapplicable (exit 2)")
 constexpr std::int64_t kMaxSteps = 100000;
+ARC_CONSTANT("a step call that carries no timeout is bounded like a capture: servitor's default --timeout")
+constexpr std::uint32_t kDefaultStepTimeoutMs = 30000;
 
 constexpr std::string_view kStartUsage = "pass topology: standalone (the default), listen or client+server";
 constexpr std::string_view kStepUsage =
@@ -57,15 +62,24 @@ constexpr std::string_view kStepUsage =
 constexpr std::string_view kNoArgsUsage = "takes no arguments";
 constexpr std::string_view kDefaultTopology = "standalone";
 
+// One armed play.step: its origin (HostGate::frame at arm time), its own
+// target n, and its host-side deadline (final fix pass, C-I2: bounded like
+// host.wait, at most kMaxWaitTimeoutMs).
+struct StepRow {
+    std::uint64_t startedFrame = 0;
+    std::uint64_t n = 0;
+    std::chrono::steady_clock::time_point deadline{};
+    std::uint32_t requestedMs = 0;
+};
+
 // The stored hooks, gate and table (ruling F11), and the play.step jobs this
-// module armed in that table (job id -> HostGate::frame at arm time), so a
-// table change finishes them. Main thread only: the commands and their job
-// steps both run inside Drain.
+// module armed in that table (job id -> its row), so a table change finishes
+// them. Main thread only: the commands and their job steps both run inside Drain.
 struct PlayCommandState {
     PlayHooks hooks;
     HostGate* gate = nullptr;
     JobTable* jobs = nullptr;
-    std::map<std::uint64_t, std::uint64_t> live;
+    std::map<std::uint64_t, StepRow> live;
 };
 
 PlayCommandState& State()
@@ -137,8 +151,8 @@ void FinishSteps(const Envelope& env, JobState state)
 {
     PlayCommandState& s = State();
     if (s.jobs != nullptr) {
-        for (const auto& [id, startedFrame] : s.live) {
-            (void)startedFrame;
+        for (const auto& [id, row] : s.live) {
+            (void)row;
             s.jobs->Finish(JobId{id}, env, state);
         }
     }
@@ -275,11 +289,30 @@ CommandResult PlayResume(const Call& call, void* /*user*/)
 
 // ---- play.step ----------------------------------------------------------
 
+// Runtime and server: a step that ended before its ticks ran gives back the
+// gate ticks no other live step still needs (the budget is shared, G-1), so
+// the sim never runs on for a caller who was already answered.
+void GiveBackSteps(std::uint64_t frame)
+{
+    PlayCommandState& s = State();
+    if (s.hooks.editor || s.hooks.gate == nullptr)
+        return;
+    std::uint64_t need = 0;
+    for (const auto& [id, row] : s.live) {
+        (void)id;
+        const std::uint64_t target = row.startedFrame + row.n;
+        if (target > frame)
+            need = std::max(need, target - frame);
+    }
+    s.hooks.gate->TrimSteps(static_cast<std::uint32_t>(std::min<std::uint64_t>(need, UINT32_MAX)));
+}
+
 // One job step per Drain (s7.7). The delta is HostGate::frame minus the frame
 // at arm time (recorded in the live map, mirrored onto job.startedFrame); the
-// job finishes when it reaches n (job.progress.total). Editor: while short, it
-// asks for exactly one single step and returns, so the editor's next sim
-// advance runs one tick. Never calls Advance.
+// job finishes when it reaches n (job.progress.total). Editor: while short and
+// paused, it asks for exactly one single step and returns, so the editor's
+// next sim advance runs one tick; a running editor advances by itself (G-2).
+// Past its deadline it answers timedOut (C-I2). Never calls Advance.
 bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
 {
     PlayCommandState& s = State();
@@ -291,7 +324,7 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
         job.envelope = StepsStopped("the step's host session ended before the requested steps ran");
         return true;
     }
-    job.startedFrame = row->second;   // StepAll writes this copy back to the row
+    job.startedFrame = row->second.startedFrame;   // StepAll writes this copy back to the row
     const std::uint64_t frame = gate.frame.load(std::memory_order_acquire);
     const std::uint64_t delta = frame >= job.startedFrame ? frame - job.startedFrame : 0;
     const std::uint64_t n = job.progress.total;
@@ -302,6 +335,27 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
             data["dtSeconds"] = s.hooks.stats->dtSeconds;   // the last advance's dt (stats.frame)
         job.envelope = MakeOk(job.command, std::move(data), {});
         s.live.erase(job.id.value);
+        return true;
+    }
+    if (std::chrono::steady_clock::now() >= row->second.deadline) {
+        // Bounded like host.wait (spec s4.7): ok with data.timedOut, exit 8,
+        // the wait timeout's answer. The ticks it still owed are dropped.
+        const std::uint32_t requestedMs = row->second.requestedMs;
+        job.envelope = MakeOk(job.command,
+                              {{"done", false}, {"timedOut", true}, {"n", n}, {"advanced", delta},
+                               {"startedFrame", job.startedFrame}},
+                              {});
+        if (requestedMs > kMaxWaitTimeoutMs) {
+            Error clamped = Detail::MakeIssue(
+                "wait.timeout-clamped",
+                "the step asked for " + std::to_string(requestedMs) + " ms; a host bounds a step at " +
+                    std::to_string(kMaxWaitTimeoutMs) + " ms",
+                "step again if it needs longer");
+            clamped.detail = {{"requestedMs", requestedMs}, {"maxMs", kMaxWaitTimeoutMs}};
+            job.envelope.warnings.push_back(std::move(clamped));
+        }
+        s.live.erase(job.id.value);
+        GiveBackSteps(frame);
         return true;
     }
 
@@ -316,7 +370,11 @@ bool StepPlay(Job& job, HostGate& gate, void* /*user*/)
             s.live.erase(job.id.value);
             return true;
         }
-        s.hooks.editorRequestSingleStep(s.hooks.editorUser);   // exactly once per Drain
+        // Only while the primary loop is paused: a running loop already
+        // advances host.frame each pass, and a single step there would replace
+        // that frame's accumulated dt (G-2). Null editorPaused reads as paused.
+        if (s.hooks.editorPaused == nullptr || s.hooks.editorPaused(s.hooks.editorUser))
+            s.hooks.editorRequestSingleStep(s.hooks.editorUser);   // exactly once per Drain
         return false;
     }
 
@@ -366,9 +424,17 @@ CommandResult PlayStep(const Call& call, void* /*user*/)
     // later Drain steps it once. The arm-time frame is the stored gate's.
     const std::uint64_t startedFrame = s.gate->frame.load(std::memory_order_acquire);
     const JobId id = s.jobs->Arm(call.command, static_cast<std::uint64_t>(n), &StepPlay, nullptr);
-    s.live[id.value] = startedFrame;   // the delta's origin; the first step copies it onto job.startedFrame
+    StepRow row;
+    row.startedFrame = startedFrame;   // the delta's origin; the first step copies it onto job.startedFrame
+    row.n = static_cast<std::uint64_t>(n);
+    row.requestedMs = call.timeoutMs;
+    row.deadline = std::chrono::steady_clock::now() +
+                   std::chrono::milliseconds(BoundedJobTimeoutMs(call.timeoutMs, kDefaultStepTimeoutMs));
+    s.live[id.value] = row;
     // Runtime and server: the host loop's Consume turns these into one Advance
-    // per iteration. The editor asks for one single step per job step instead.
+    // per iteration; the gate keeps one budget, raised to this step's n, so
+    // overlapping steps share their ticks (G-1). The editor asks for one
+    // single step per job step instead.
     if (!s.hooks.editor)
         s.hooks.gate->RequestSteps(static_cast<std::uint32_t>(n));
 

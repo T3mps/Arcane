@@ -64,18 +64,28 @@ TEST_CASE("Run clears a leftover step count", "[remote][tick]") {
     CHECK(gate.Consume() == Arcane::Remote::TickDecision::Idle);
 }
 
-TEST_CASE("RequestSteps adds and saturates", "[remote][tick]") {
+// Final fix pass (G-1, C-I2 b): one step budget per host. A request raises
+// the pending count to at least n and never adds, so two overlapping
+// play.step 10 calls run 10 ticks, not 20; each job tracks its own target.
+TEST_CASE("RequestSteps raises the budget to the larger request, never the sum", "[remote][tick]") {
     Arcane::Remote::TickGate gate;
     gate.SetRunning(false);
     gate.RequestSteps(2);
     gate.RequestSteps(3);
-    CHECK(gate.StepsRemaining() == 5);
+    CHECK(gate.StepsRemaining() == 3);
+    gate.RequestSteps(1);
+    CHECK(gate.StepsRemaining() == 3);
     gate.RequestSteps(std::numeric_limits<std::uint32_t>::max());
     CHECK(gate.StepsRemaining() == std::numeric_limits<std::uint32_t>::max());
     gate.RequestSteps(7);
     CHECK(gate.StepsRemaining() == std::numeric_limits<std::uint32_t>::max());
     CHECK(gate.Consume() == Arcane::Remote::TickDecision::Step);
     CHECK(gate.StepsRemaining() == std::numeric_limits<std::uint32_t>::max() - 1);
+    // TrimSteps (a timed-out step giving back its share) only ever lowers it.
+    gate.TrimSteps(4);
+    CHECK(gate.StepsRemaining() == 4);
+    gate.TrimSteps(9);
+    CHECK(gate.StepsRemaining() == 4);
 }
 
 TEST_CASE("running and paused with steps pending is Step, then Idle", "[remote][tick]") {

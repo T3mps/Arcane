@@ -23,6 +23,11 @@ struct ARC_REMOTE_API HostGate {
     std::atomic<bool> readOnly{false};
     std::atomic<std::uint64_t> frame{0};
     std::atomic<std::int64_t> heartbeatUnixMs{0};
+    // Final fix pass (C-I3): the host is in Play (playing or paused), whatever
+    // `state` shows (a modal or a build outranks the play axis there). The
+    // PlayPolicy gate reads it, so an EditOnly command is refused in Play even
+    // while a dialog is up.
+    std::atomic<bool> inPlay{false};
     std::string state = "ready";
     mutable std::mutex stateMutex; // State() and Block() are const and lock it
     std::string world;

@@ -125,10 +125,14 @@ std::optional<Envelope> Gate(const Desc& desc, Access access, const Call& call, 
                          hostReadOnly ? "relaunch the host without ARC_REMOTE_READ_ONLY"
                                       : "drop --read-only to run a Drive command");
     const std::string state = gate.State();
-    if (desc.play == PlayPolicy::EditOnly && state == "playing")
-        return Busy(call.command, "playing", call.command + " runs in edit mode only; the host is playing",
+    // Play is HostGate::inPlay (final fix pass, C-I3): the state shows only the
+    // highest-ranked state, and a modal or a build in Play is still Play. A
+    // gate set to "playing" or "paused" by hand (no session) reads as Play too.
+    const bool inPlay = gate.inPlay.load(std::memory_order_acquire) || state == "playing" || state == "paused";
+    if (desc.play == PlayPolicy::EditOnly && inPlay)
+        return Busy(call.command, state, call.command + " runs in edit mode only; the host is in play mode (" + state + ")",
                     "stop play mode, then retry");
-    if (desc.play == PlayPolicy::PlayingOnly && state != "playing" && state != "paused")
+    if (desc.play == PlayPolicy::PlayingOnly && !inPlay)
         return Busy(call.command, state, call.command + " runs only while playing or paused; the host is " + state,
                     "enter play mode, then retry");
     if (desc.needsFrame && gate.minimized.load(std::memory_order_acquire))

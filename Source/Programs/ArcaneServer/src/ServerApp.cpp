@@ -177,8 +177,14 @@ namespace Arcane::Server
         // open-ended server is open-ended by design. The idle exit applies only
         // to an open-ended run (spec s4.7): a --frames N run ends by itself.
         if (m_cfg.remote && !Arcane::Remote::Arming::Allow(m_runtime->Mode(), false, true))
-            ARC_WARN("ArcaneServer: --remote ignored: the primary world is a {} world, which never serves "
-                     "the remote surface", Arcane::ToString(m_runtime->Mode()));
+        {
+            // Rule 3 (final fix pass, C-M16): an explicit --remote that cannot
+            // apply is a startup refusal, exit 2 (the server's usage exit),
+            // never run on as if ignored.
+            const char* why = Arcane::Remote::Arming::RefusalReason(m_runtime->Mode());
+            ARC_ERROR("ArcaneServer: --remote refused: {}; exiting 2", why ? why : "the remote surface cannot arm here");
+            return Finish(rep, "remote-refused", 2);
+        }
         else if (m_cfg.remote)
         {
             Arcane::Remote::HostSession::Config rc;
@@ -240,6 +246,16 @@ namespace Arcane::Server
             // admin stdin block below. DrainFrame notes a module reload the
             // previous tick's Poll performed, so this drain's status carries it;
             // a failed one is noted from the attempt count (Task 30).
+            // Final fix pass (C-I3): the module host's reload begin/end is the
+            // "reloading" state.
+            if (m_remote)
+                m_plugin->SetReloadObserver(
+                    [](bool reloading, void* user) {
+                        auto* app = static_cast<ServerApp*>(user);
+                        if (app->m_remote)
+                            app->m_remote->NoteReloading(reloading);
+                    },
+                    this);
             if (m_remote && m_remote->DrainFrame(m_plugin->Generation(), m_plugin->ReloadAttempts(),
                                                  m_plugin->LastReloadOk()))
             {

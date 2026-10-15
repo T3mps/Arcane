@@ -2247,6 +2247,9 @@ namespace Arcane::Editor
         static bool RemoteDrainViewport(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
         static bool RemoteArmWindow(std::uint64_t ticket, void* user);
         static bool RemoteDrainWindow(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
+        // Servitor final fix pass (C-M12): the job gave up on `ticket`.
+        static void RemoteCancelViewport(std::uint64_t ticket, void* user);
+        static void RemoteCancelWindow(std::uint64_t ticket, void* user);
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

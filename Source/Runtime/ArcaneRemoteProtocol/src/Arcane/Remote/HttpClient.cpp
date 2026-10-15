@@ -51,9 +51,12 @@ std::string RequestHead(std::string_view method, std::string_view target, std::u
 
 } // namespace
 
-std::string BuildPost(std::string_view target, std::uint16_t port, std::string_view token, std::string_view jsonBody)
+std::string BuildPost(std::string_view target, std::uint16_t port, std::string_view token, std::string_view jsonBody,
+                      std::string_view client)
 {
     std::string out = RequestHead("POST", target, port, token);
+    if (!client.empty())
+        out.append(kClientHeader).append(": ").append(client).append("\r\n");
     out.append("Content-Type: application/json\r\n");
     out.append("Content-Length: ").append(std::to_string(jsonBody.size())).append("\r\n");
     out.append("Connection: close\r\n\r\n");

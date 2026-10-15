@@ -34,6 +34,10 @@ struct CaptureMapped {
 // copy has retired; then true with *raw filled (mapped null = lost).
 using ArmCopyFn = bool (*)(std::uint64_t ticket, void* user);
 using DrainSlotFn = bool (*)(std::uint64_t ticket, CaptureMapped* raw, void* user);
+// Main thread (final fix pass, C-M12): the job gave up on `ticket` (it failed,
+// or the settle wait that armed it ended). The host forgets it in its ring:
+// NriGraphContext::CancelTicketCapture.
+using CancelCopyFn = void (*)(std::uint64_t ticket, void* user);
 struct CaptureHooks {
     std::uint32_t framesInFlight = 2; // host ring only; the job does not wait on host.frame
     ArmCopyFn armViewport = nullptr, armWindow = nullptr, armHost = nullptr;
@@ -45,6 +49,8 @@ struct CaptureHooks {
     // Where a capture without --out is written. Empty: HostSession::Start
     // fills it with the session's artifact directory (<remote dir>/out).
     std::filesystem::path outDir;
+    // Final fix pass (C-M12): each pair's cancel; null = the ring keeps it.
+    CancelCopyFn cancelViewport = nullptr, cancelWindow = nullptr, cancelHost = nullptr;
 };
 // Both are safe to call twice; a later call replaces the stored hooks / pointer
 // (ruling F11). A null JobTable* makes capture.* answer host.unavailable (exit 5).

@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Crypto/Crypto.hpp>  // first after Catch2: its Logger.hpp defines SPDLOG_ACTIVE_LEVEL
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
+#include <Arcane/Remote/Commands/SessionCommands.hpp>   // kMaxWaitTimeoutMs, BoundedJobTimeoutMs (final fix pass)
+#include <limits>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Listener.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
@@ -44,7 +46,15 @@ struct CapUser {
     std::uint64_t wanted = 0;
     bool retired = false;
     bool failMap = false;
+    std::uint64_t cancelled = 0;   // the last ticket the cancel hook was given (final fix pass, C-M12)
+    int cancels = 0;
 };
+
+static void CancelSlot(std::uint64_t ticket, void* user) {
+    auto* u = static_cast<CapUser*>(user);
+    ++u->cancels;
+    u->cancelled = ticket;
+}
 
 static bool ArmSlot(std::uint64_t ticket, void* user) {
     auto* u = static_cast<CapUser*>(user);
@@ -426,6 +436,7 @@ Arcane::Remote::CaptureHooks WindowHooks(CapUser& user, const std::filesystem::p
     hooks.framesInFlight = 2;
     hooks.armWindow = &ArmSlot;
     hooks.drainWindow = &DrainSlot;
+    hooks.cancelWindow = &CancelSlot;
     hooks.user = &user;
     hooks.outDir = outDir;
     return hooks;
@@ -460,6 +471,10 @@ TEST_CASE("a pending capture past its deadline is capture.no-frame timeout; mini
     CHECK(job->envelope.errors[0].code == "capture.no-frame");
     CHECK(job->envelope.errors[0].detail["reason"] == "timeout");
     CHECK(Arcane::Remote::ExitFromHost(job->envelope) == 6);
+    // Final fix pass (C-M12, G-M5): a failed ticket is cleared from the ring,
+    // so it cannot hold a slot or land in the next capture's bytes.
+    CHECK(user.cancels == 1);
+    CHECK(user.cancelled == user.armedTicket);
 
     // Minimized: answered on the first pending step, long before a 30 s deadline.
     const auto minimized = InvokeCapture(nlohmann::json::object());
@@ -472,6 +487,8 @@ TEST_CASE("a pending capture past its deadline is capture.no-frame timeout; mini
     CHECK(job2->state == Arcane::Remote::JobState::Failed);
     CHECK(job2->envelope.errors[0].code == "capture.minimized");
     CHECK(Arcane::Remote::ExitFromHost(job2->envelope) == 5);
+    CHECK(user.cancels == 2);
+    CHECK(user.cancelled == user.armedTicket);   // the minimized capture's own ticket
     CHECK(user.reads == 0);
     CHECK(gate.frame == 7);
 }
@@ -708,6 +725,54 @@ TEST_CASE("a busy retry resends options.timeoutMs as the remaining budget", "[se
     CHECK(host.timeouts[2] < host.timeouts[1]);
     CHECK(host.timeouts[2] >= 1);
     CHECK(host.timeouts[0] - host.timeouts[2] >= 60);   // two 30 ms busy answers plus the backoff
+}
+// Final fix pass (C-M12, G-M5): cancelling a ticket the job gave up on. A
+// still-wanted copy is never recorded; an unsubmitted one frees its slot; a
+// submitted one is in flight, so its slot is abandoned: it drains nothing into
+// retiredBytes once its frames have passed, and the next copy records there.
+TEST_CASE("the capture ring cancels a wanted, an unsubmitted and a submitted ticket", "[remote][capture]") {
+    Arcane::CaptureRing ring;
+    ring.framesInFlight = 2;
+    ring.wanted = 5;
+    Arcane::CancelCaptureRingTicket(ring, 4);   // not this ring's: nothing changes
+    CHECK(ring.wanted == 5);
+    Arcane::CancelCaptureRingTicket(ring, 5);
+    CHECK(ring.wanted == 0);
+
+    ring.wanted = 6;
+    REQUIRE(Arcane::PlanCaptureRingSlot(ring, 0, 10, true).record);
+    Arcane::RecordCaptureRingSlot(ring, 0, 10);   // recorded, its frame not yet submitted
+    Arcane::CancelCaptureRingTicket(ring, 6);
+    CHECK_FALSE(ring.pending[0]);
+    CHECK(ring.wanted == 0);                      // never re-wanted
+
+    ring.wanted = 7;
+    REQUIRE(Arcane::PlanCaptureRingSlot(ring, 0, 20, true).record);
+    Arcane::RecordCaptureRingSlot(ring, 0, 20);
+    Arcane::ConfirmCaptureRingSubmission(ring, 20);   // in flight on the GPU
+    Arcane::CancelCaptureRingTicket(ring, 7);
+    CHECK(ring.pending[0]);                       // the copy cannot be recalled
+    ring.wanted = 8;                              // the retried capture's ticket
+    const auto early = Arcane::PlanCaptureRingSlot(ring, 0, 21, true);
+    CHECK_FALSE(early.drain);
+    CHECK_FALSE(early.record);                    // still in flight: the slot is busy
+    const auto later = Arcane::PlanCaptureRingSlot(ring, 0, 22, true);
+    CHECK_FALSE(later.drain);                     // abandoned: its bytes never reach retiredBytes
+    CHECK(later.record);                          // and the new copy records in its slot
+    CHECK_FALSE(ring.haveRetired);
+    Arcane::RecordCaptureRingSlot(ring, 0, 22);
+    CHECK(ring.ticket[0] == 8);
+}
+
+// C-M12: a capture's host-side bound is the wait bound (kMaxWaitTimeoutMs), so
+// an abandoned capture cannot hold the one capture slot for up to ~49 days.
+TEST_CASE("a job's host-side timeout is clamped to kMaxWaitTimeoutMs", "[remote][capture]") {
+    CHECK(Arcane::Remote::BoundedJobTimeoutMs(0, 30000) == 30000);
+    CHECK(Arcane::Remote::BoundedJobTimeoutMs(500, 30000) == 500);
+    CHECK(Arcane::Remote::BoundedJobTimeoutMs(Arcane::Remote::kMaxWaitTimeoutMs, 30000) ==
+          Arcane::Remote::kMaxWaitTimeoutMs);
+    CHECK(Arcane::Remote::BoundedJobTimeoutMs(std::numeric_limits<std::uint32_t>::max(), 30000) ==
+          Arcane::Remote::kMaxWaitTimeoutMs);
 }
 
 #endif

@@ -608,6 +608,49 @@ TEST_CASE("Play as embedded server: the server world takes the live sim.maxSteps
     REQUIRE(play.Stop(runtime));
 }
 
+// Servitor final fix pass (G-2): the remote pause and step keep the embedded
+// server world in lockstep with the primary. SetServerPaused holds the server
+// loop beside the primary's (TickServer's wall dt no longer runs it), and
+// RequestServerSingleStep is the paused step's twin: exactly one server tick
+// in the same frame as the primary's one.
+TEST_CASE("Play as embedded server: a paused step single-steps the server world with the primary", "[editor][netmode][sim]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    Arcane::Editor::PlaySession play;
+    play.SetServerPaused(true);          // no server world yet: a no-op
+    play.RequestServerSingleStep();
+    REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::EmbeddedServer));
+    Arcane::Runtime* server = play.ServerWorld();
+    REQUIRE(server != nullptr);
+    CHECK_FALSE(server->Loop().IsPaused());
+    const auto ticks = [&] {
+        const Arcane::Time* t = server->Registry().GetResource<Arcane::Time>();
+        REQUIRE(t != nullptr);
+        return t->fixedStep;
+    };
+    play.TickServer(0.05);
+    const std::uint64_t before = ticks();
+    CHECK(before > 0);                   // running: wall dt ticks it
+
+    play.SetServerPaused(true);          // the remote pause holds both loops
+    CHECK(server->Loop().IsPaused());
+    play.TickServer(0.2);
+    CHECK(ticks() == before);            // paused: wall dt runs nothing
+    play.RequestServerSingleStep();      // the primary's paused single step, mirrored
+    play.TickServer(0.2);
+    CHECK(ticks() == before + 1);        // exactly one tick, whatever the frame's dt
+    play.TickServer(0.2);
+    CHECK(ticks() == before + 1);
+
+    play.SetServerPaused(false);
+    CHECK_FALSE(server->Loop().IsPaused());
+    REQUIRE(play.Stop(runtime));
+}
+
 TEST_CASE("Play as listen server flips the ONE world to ListenServer; Stop restores Standalone", "[editor][netmode]")
 {
     Arcane::Runtime runtime(Arcane::Test::Process());

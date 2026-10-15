@@ -109,12 +109,17 @@ bool Finished(Job& job, CompareJobState* state)
 
 // ReferenceImages' ReferenceNameIsSafe rule, applied at the wire boundary so a
 // bad name is a usage error (exit 2) before anything is resolved or armed:
-// non-empty, no separator, no "..", no leading dot.
+// non-empty, no separator, no ':' (a drive or an NTFS stream, G-3), no "..",
+// no leading dot. An identical copy (ArcaneRemote never depends on
+// ArcaneVerify, R8-2); CompareReferenceNameIsSafe exports it so a test pins
+// the two copies to the same answers.
 bool ReferenceNameIsSafe(const std::string& name)
 {
     if (name.empty())
         return false;
     if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
+        return false;
+    if (name.find(':') != std::string::npos)
         return false;
     if (name.find("..") != std::string::npos)
         return false;
@@ -131,7 +136,7 @@ std::optional<Envelope> ParseArgs(const Call& call, ParsedCompare& out)
     const nlohmann::json& reference = call.args.at("reference");
     if (!reference.is_string() || !ReferenceNameIsSafe(reference.get<std::string>()))
         return MakeError(call.command, "arg.invalid",
-                         "reference must be a bare name (no directory, no '..', no leading '.')", std::string(kUsage));
+                         "reference must be a bare name (no directory, no ':', no '..', no leading '.')", std::string(kUsage));
     out.reference = reference.get<std::string>();
 
     if (const auto it = call.args.find("source"); it != call.args.end()) {
@@ -433,6 +438,9 @@ CommandResult Compare(const Call& call, void* /*user*/)
     state->copy.drain = drain;
     state->copy.hookUser = capture.user;
     state->copy.deadline = Detail::CaptureDeadline(call);
+    state->copy.cancel = args.source == "viewport" ? capture.cancelViewport
+                       : args.source == "window"   ? capture.cancelWindow
+                                                   : capture.cancelHost;
     state->args = std::move(args);
     state->resolved = std::move(*resolved);
     state->hooks = s.hooks;
@@ -482,6 +490,11 @@ void RegisterOnce()
 }
 
 } // namespace
+
+bool CompareReferenceNameIsSafe(const std::string& name)
+{
+    return ReferenceNameIsSafe(name);
+}
 
 void SetCompareHooks(CompareHooks hooks)
 {

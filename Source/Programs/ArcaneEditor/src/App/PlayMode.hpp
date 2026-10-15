@@ -127,6 +127,13 @@ namespace Arcane::Editor
         // world runs is its own instantiated (Server-masked) system set.
         void TickServer(double realDt);
 
+        // Servitor final fix pass (G-2): the embedded server world's loop
+        // follows the primary's remote pause and single step, so the two
+        // worlds stay in lockstep while servitor holds and steps the sim.
+        // Both are no-ops when there is no server world.
+        void SetServerPaused(bool paused);
+        void RequestServerSingleStep();
+
     private:
         EditorMode              m_mode = EditorMode::Edit;
         std::vector<std::byte>  m_snapshot;

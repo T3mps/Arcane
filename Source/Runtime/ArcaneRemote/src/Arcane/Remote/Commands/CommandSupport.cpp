@@ -7,6 +7,10 @@
 
 #include <Arcane/Remote/Worlds.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Config/CVarTypes.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Reflection.hpp>
+#include <Arcane/Serialization/ReflectionJson.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -30,6 +34,62 @@ struct ArtifactDirState {
     std::mutex mutex;
     std::filesystem::path dir;
 };
+
+ARC_CONSTANT("bound on the nested-type walk that looks for a Protected field; deeper is masked, reflected types nest far less")
+constexpr int kMaxSecretDepth = 16;
+
+bool FlagsProtected(const Attr::Flags* flags)
+{
+    return flags != nullptr && HasFlag(flags->flags, CVarFlags::Protected);
+}
+
+bool TypeHoldsSecret(const Astra::TypeMeta& meta, std::vector<const Astra::TypeMeta*>& stack);
+
+// Whether writing this field could reveal a Protected value. A type the walk
+// cannot see into -- a std::array or C array (Astra records no element type for
+// them), any other container (map, optional, ...) or an unresolved type -- is
+// treated as holding one, so it is masked whole rather than written unchecked.
+bool FieldHoldsSecret(const Astra::FieldInfo& field, std::vector<const Astra::TypeMeta*>& stack)
+{
+    if (FlagsProtected(field.GetAttribute<Attr::Flags>()))
+        return true;
+    if (field.isArray || field.isStdArray)
+        return true;
+    if (field.isEnum && !field.isVector)
+        return false;   // an enum value is a name, never a container (a Protected one returned above)
+    const std::uint64_t hash = field.isVector ? field.elementTypeHash : field.typeHash;
+    if (::Arcane::Detail::IsScalarHash(hash) || ::Arcane::Detail::IsGlmVecHash(hash) ||
+        ::Arcane::Detail::IsGlmMatHash(hash) || hash == ::Arcane::Detail::QuatHash())
+        return false;
+    const Astra::TypeMeta* nested = Astra::GetMeta(hash);
+    if (nested == nullptr)
+        return true;   // unresolved: never written unchecked
+    if (nested->GetEnumInfo() != nullptr)
+        return false;   // a vector of enum values
+    return TypeHoldsSecret(*nested, stack);
+}
+
+// The type is Protected, or one of its serialized fields may hold a Protected
+// value (FieldHoldsSecret, recursively). A type already on the walk adds nothing
+// new; a walk deeper than kMaxSecretDepth is treated as holding one.
+bool TypeHoldsSecret(const Astra::TypeMeta& meta, std::vector<const Astra::TypeMeta*>& stack)
+{
+    if (FlagsProtected(meta.GetAttribute<Attr::Flags>()))
+        return true;
+    if (std::find(stack.begin(), stack.end(), &meta) != stack.end())
+        return false;
+    if (stack.size() >= static_cast<std::size_t>(kMaxSecretDepth))
+        return true;
+    stack.push_back(&meta);
+    bool secret = false;
+    for (const Astra::FieldInfo& field : meta.fields)
+        if (field.IsSerializable() && FieldHoldsSecret(field, stack)) {
+            secret = true;
+            break;
+        }
+    stack.pop_back();
+    return secret;
+}
 
 ArtifactDirState& DirState()
 {
@@ -196,6 +256,28 @@ std::optional<Artifact> WritePngArtifact(const std::filesystem::path& file, std:
     artifact.height = height;
     artifact.format = "RGBA8_UNORM";   // the PNG is tight RGBA, whatever the target's channel order
     return artifact;
+}
+
+bool WriteMaskedFields(const Astra::TypeMeta& meta, void* data, nlohmann::json& out, std::string& why, bool skipHidden)
+{
+    out = nlohmann::json::object();
+    ReflectionJsonWriter writer(out);   // reads through `data`, never writes
+    const bool typeProtected = FlagsProtected(meta.GetAttribute<Attr::Flags>());
+    std::vector<const Astra::TypeMeta*> stack{&meta};
+    for (const Astra::FieldInfo& field : meta.fields) {
+        if (!field.IsSerializable() || (skipHidden && field.IsHidden()))
+            continue;
+        if (typeProtected || FieldHoldsSecret(field, stack)) {
+            out[std::string(field.name)] = std::string(kMasked);
+            continue;
+        }
+        writer.Visit(field, data);
+    }
+    if (writer.HasError()) {
+        why = writer.Error();
+        return false;
+    }
+    return true;
 }
 
 } // namespace Arcane::Remote::Detail

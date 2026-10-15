@@ -315,7 +315,7 @@ TEST_CASE("host.quit requests the quit; a dirty host answers host.busy modal unl
         CHECK(modal.errors[0].detail["state"] == "modal");
         CHECK(Arcane::Remote::ExitFromHost(modal) == 5);
         CHECK_FALSE(session.TakeQuit());
-        CHECK(Invoke("host.quit", {{"force", "yes"}}).errors[0].code == "arg.invalid");
+        CHECK(Invoke("host.quit", {{"discardChanges", "yes"}}).errors[0].code == "arg.invalid");
         CHECK(Invoke("host.quit", {{"report", "x.json"}}).errors[0].code == "arg.unknown");
         CHECK_FALSE(session.TakeQuit());
         const auto discarded = Invoke("host.quit", {{"discardChanges", true}});
@@ -331,13 +331,19 @@ TEST_CASE("host.quit requests the quit; a dirty host answers host.busy modal unl
         cfg.dirty = &RemoteDirtyAlways;
         Arcane::Remote::HostSession session(cfg);
         REQUIRE(session.Start());
-        // force is the client's (it ends the process after --timeout); it does
-        // not answer the unsaved-changes guard (spec s4.7 lists them apart).
-        const auto forced = Invoke("host.quit", {{"force", true}});
-        REQUIRE_FALSE(forced.errors.empty());
-        CHECK(forced.errors[0].detail["state"] == "modal");
+        // force is the client's (servitor quit --force ends the process after
+        // --timeout). The host has no force path, so `force` on the wire is
+        // refused, never accepted and ignored (final fix pass, C-M7; Rule 3).
+        for (const bool value : {true, false}) {
+            const auto forced = Invoke("host.quit", {{"force", value}});
+            REQUIRE_FALSE(forced.errors.empty());
+            CHECK(forced.errors[0].code == "arg.inapplicable");
+            CHECK(Arcane::Remote::ExitFromHost(forced) == 2);
+        }
         CHECK_FALSE(session.TakeQuit());
-        CHECK(Invoke("host.quit", {{"force", true}, {"discardChanges", true}}).ok);
+        CHECK_FALSE(Invoke("host.quit", {{"force", true}, {"discardChanges", true}}).ok);
+        CHECK_FALSE(session.TakeQuit());
+        CHECK(Invoke("host.quit", {{"discardChanges", true}}).ok);
         CHECK(session.TakeQuit());
         session.Stop("test");
     }
@@ -433,7 +439,16 @@ struct SettleRing {
     // did not move between them.
     const double* clock = nullptr;
     std::array<std::uint8_t, 4> clockPixel{};
+    std::uint64_t cancelled = 0;   // the last ticket the cancel hook got (final fix pass, C-M12)
+    int cancels = 0;
 };
+
+void SettleCancel(std::uint64_t ticket, void* user)
+{
+    auto* ring = static_cast<SettleRing*>(user);
+    ++ring->cancels;
+    ring->cancelled = ticket;
+}
 
 bool SettleArm(std::uint64_t ticket, void* user)
 {
@@ -485,6 +500,7 @@ Arcane::Remote::HostSession::Config SettleConfig(const std::filesystem::path& ro
     cfg.capture.user = &ring;
     cfg.capture.armHost = cfg.capture.armWindow = cfg.capture.armViewport = &SettleArm;
     cfg.capture.drainHost = cfg.capture.drainWindow = cfg.capture.drainViewport = &SettleDrain;
+    cfg.capture.cancelHost = cfg.capture.cancelWindow = cfg.capture.cancelViewport = &SettleCancel;
     cfg.capture.outDir = root / "out";
     return cfg;
 }
@@ -923,6 +939,25 @@ TEST_CASE("a host-side wait is bounded at kMaxWaitTimeoutMs, and a clamped wait 
         CHECK(env.ok);
         CHECK(env.warnings.empty());
     }
+    session.Stop("test");
+}
+
+// Final fix pass (C-M12, G-M5): a settle wait that ends while its capture is
+// armed (here: the ring never retires it, and the wait times out) clears that
+// ticket from the ring, so a later screenshot never waits behind it.
+TEST_CASE("a settle wait that ends with a capture armed cancels that ticket", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-cancel");
+    SettleRing ring;
+    ring.retire = false;
+    ring.pixels = {{1, 1, 1, 255}};
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    const auto env = WaitSettledOverTheWire(session, ring, 200, [] {});
+    CHECK(env.data["timedOut"] == true);
+    REQUIRE(ring.arms == 1);
+    CHECK(ring.cancels == 1);
+    CHECK(ring.cancelled == ring.ticket);
     session.Stop("test");
 }
 

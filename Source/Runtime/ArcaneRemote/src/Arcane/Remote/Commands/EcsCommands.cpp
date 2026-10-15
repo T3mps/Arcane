@@ -149,7 +149,9 @@ nlohmann::json GuidJson(const Guid& guid)
 }
 
 // The component as scene-format JSON (ReflectionJsonWriter); a tag component is
-// null. False when the type is not reflected or a field is unreadable.
+// null. A field that may hold a Protected value is masked, as resource.get
+// masks it (Detail::WriteMaskedFields; final fix pass, C-I5). False when the
+// type is not reflected or a field is unreadable.
 bool WriteComponent(const Astra::Registry& reg, Astra::Entity entity, const Astra::ComponentDescriptor& desc,
                     nlohmann::json& out, std::string& why)
 {
@@ -166,14 +168,7 @@ bool WriteComponent(const Astra::Registry& reg, Astra::Entity entity, const Astr
         why = "the component has no readable instance";
         return false;
     }
-    out = nlohmann::json::object();
-    ReflectionJsonWriter writer(out);
-    desc.visitFields(const_cast<void*>(instance), writer);   // the writer only reads
-    if (writer.HasError()) {
-        why = writer.Error();
-        return false;
-    }
-    return true;
+    return Detail::WriteMaskedFields(*desc.meta, const_cast<void*>(instance), out, why);   // the writer only reads
 }
 
 // The JSON key for each component written: its short name, or the qualified

@@ -2,7 +2,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
-#include <limits>
+#include <algorithm>
 
 namespace Arcane::Remote
 {
@@ -22,8 +22,13 @@ void TickGate::SetPaused(bool paused)
 void TickGate::RequestSteps(std::uint32_t n)
 {
     std::lock_guard lock(m_mutex);
-    const std::uint32_t room = std::numeric_limits<std::uint32_t>::max() - m_steps;
-    m_steps += n < room ? n : room;
+    m_steps = std::max(m_steps, n);   // one budget: overlapping requests share the ticks (G-1)
+}
+
+void TickGate::TrimSteps(std::uint32_t keep)
+{
+    std::lock_guard lock(m_mutex);
+    m_steps = std::min(m_steps, keep);
 }
 
 void TickGate::ClearSteps()
