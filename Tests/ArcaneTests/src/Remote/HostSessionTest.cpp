@@ -13,6 +13,7 @@
 #include "RemoteTestSupport.hpp"
 #include "RemoteTestHttp.hpp"   // HttpExchange: the /status a client reads (final fix pass)
 #include <Json.hpp>
+#include <App/ModalErrorQueue.hpp>   // ReportsModal: the editor modal hook (round 2, I-2; source-compiled editor header)
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir, EnvOverride
 
 #if !defined(ARC_BUILD_DIST)
@@ -370,6 +371,72 @@ TEST_CASE("HostSession: a GET /status counts as activity for the idle exit", "[r
     CHECK_FALSE(session.DrainFrame(1));   // 1.2 s since Start, 0.5 s since the status request
     CHECK(session.ExitReason() == nullptr);
     session.Stop("test");
+}
+// ---- Final fix round 2 ----------------------------------------------------
+
+namespace
+{
+struct HeadlessEditor {
+    Arcane::Editor::ModalErrorQueue dialogs;
+    EditorFacts facts;
+};
+bool HeadlessModal(void* user)
+{
+    // The editor's modal hook on a headless host: no interactive window.
+    return Arcane::Editor::ReportsModal(static_cast<HeadlessEditor*>(user)->dialogs, false, false);
+}
+bool HeadlessPlaying(void* user) { return static_cast<HeadlessEditor*>(user)->facts.playing; }
+bool HeadlessPaused(void* user) { return static_cast<HeadlessEditor*>(user)->facts.paused; }
+} // namespace
+
+// I-2: a headless editor's queued error dialog (a module-load failure, a
+// --project that did not open) has no one to answer it. It never makes the
+// host read modal, so launch and wait ready still see a serving host.
+TEST_CASE("a headless editor with a queued error dialog reads its real state, never modal", "[remote][host][editor]") {
+    Arcane::Editor::ModalErrorQueue empty;
+    Arcane::Editor::ModalErrorQueue queued;
+    queued.Push("Game Module Failed", "ABI mismatch");
+    CHECK(Arcane::Editor::ReportsModal(queued, true, false));    // a desk editor: someone can answer it
+    CHECK(Arcane::Editor::ReportsModal(empty, true, true));
+    CHECK_FALSE(Arcane::Editor::ReportsModal(empty, true, false));
+    CHECK_FALSE(Arcane::Editor::ReportsModal(queued, false, false));   // headless: unattended
+    CHECK_FALSE(Arcane::Editor::ReportsModal(queued, false, true));
+
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    Arcane::Test::TempDir tmp("remote-session-headless-modal");
+    HeadlessEditor editor;
+    editor.dialogs.Push("Open Project Failed", "--project 'x' could not be opened");
+    Arcane::Remote::HostSession::Config cfg;
+    cfg.kind = Arcane::Remote::HostKind::Editor;
+    cfg.cvarContext = Arcane::CVarContext::Editor;
+    cfg.projectRoot = tmp.path;
+    cfg.play.editor = true;
+    cfg.play.editorUser = &editor;
+    cfg.play.editorPlaying = &HeadlessPlaying;
+    cfg.play.editorPaused = &HeadlessPaused;
+    cfg.hookUser = &editor;
+    cfg.modal = &HeadlessModal;
+    Arcane::Remote::HostSession session(cfg);
+    REQUIRE(session.Start());
+    CHECK_FALSE(session.DrainFrame(1));
+    CHECK(session.Gate().State() == "ready");
+    editor.facts.playing = true;
+    CHECK_FALSE(session.DrainFrame(1));
+    CHECK(session.Gate().State() == "playing");
+    editor.facts.paused = true;
+    CHECK_FALSE(session.DrainFrame(1));
+    CHECK(session.Gate().State() == "paused");
+    session.Stop("test");
+}
+
+// M-2: the editor's --remote refusal ends the host only on its startup arm;
+// a later re-arm that cannot apply (an editor.remote.enable toggle during
+// ClientOnly Play, a project switch) logs and stays disarmed.
+TEST_CASE("an explicit --remote refusal exits only at startup", "[remote][host]") {
+    CHECK(Arcane::Remote::Arming::RefusalExits(true, true));
+    CHECK_FALSE(Arcane::Remote::Arming::RefusalExits(true, false));   // later: log, stay disarmed
+    CHECK_FALSE(Arcane::Remote::Arming::RefusalExits(false, true));   // the cvar alone never exits
+    CHECK_FALSE(Arcane::Remote::Arming::RefusalExits(false, false));
 }
 
 #endif

@@ -75,6 +75,11 @@ const char* Arming::RefusalReason(NetMode mode)
     return nullptr;
 }
 
+bool Arming::RefusalExits(bool explicitRemote, bool startupArm)
+{
+    return explicitRemote && startupArm;
+}
+
 HostSession::HostSession(Config config)
     : m_config(std::move(config))
 {

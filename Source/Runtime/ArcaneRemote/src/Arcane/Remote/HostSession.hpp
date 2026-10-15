@@ -61,6 +61,11 @@ struct ARC_REMOTE_API Arming {
     // refuses it at startup with this reason and exits 2 (its usage refusal),
     // never runs on with the flag ignored.
     static const char* RefusalReason(NetMode mode);
+    // Final fix round 2 (M-2): whether that refusal ends the host. Only an
+    // explicit --remote, and only on the startup arm: a later re-arm that
+    // cannot apply (an editor.remote.enable toggle during ClientOnly Play, a
+    // project switch) logs and stays disarmed, never exits.
+    static bool RefusalExits(bool explicitRemote, bool startupArm);
 };
 
 class ARC_REMOTE_API HostSession {
