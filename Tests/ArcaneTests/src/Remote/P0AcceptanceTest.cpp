@@ -289,6 +289,16 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     hosts.server = SpawnHost(server, {L"--project", proj, L"--remote"});
 
     std::string out, err;
+    // A spawned host is booting until it writes its descriptor, and only
+    // `wait ready` keeps looking for a host that is not there yet (spec s4.4;
+    // every other verb is target.none, exit 4, at once). Wait for all three
+    // before any other verb.
+    for (const char* kind : {"editor", "runtime", "server"}) {
+        INFO("wait ready on the " << kind);
+        REQUIRE(RunServitor(servitor, args({"--host", kind, "--timeout", "60", "wait", "ready"}), &out, &err,
+                            75000) == 0);
+    }
+    out.clear();
     const int settled = RunServitor(servitor, args({"--host", "editor", "--timeout", "60", "wait", "settled"}),
                                     &out, &err, 75000);
     REQUIRE(settled == 0);
@@ -402,8 +412,28 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     std::vector<unsigned char> pixels;
     REQUIRE(std::filesystem::exists(scratch));
     REQUIRE(Arcane::LoadPngRgba(scratch, pw, ph, pixels));
-    REQUIRE(pixels.size() >= 4);
-    pixels[0] = static_cast<unsigned char>(pixels[0] ^ 0xFFu);
+    // Poison a solid 16x16 block in the middle, in a colour far from the
+    // original there. CompareImages (Playwright's ssim-cie94 cascade) judges a
+    // lone changed pixel inside varied surroundings (or the 15 px padding at a
+    // corner) as antialiasing, so a one-pixel poison can still pass; a flat
+    // block's interior is a real difference at every pixel.
+    constexpr std::uint32_t kPoisonSide = 16;
+    REQUIRE(pw >= kPoisonSide);
+    REQUIRE(ph >= kPoisonSide);
+    REQUIRE(pixels.size() == static_cast<std::size_t>(pw) * ph * 4);
+    const std::size_t centre = (static_cast<std::size_t>(ph / 2) * pw + pw / 2) * 4;
+    const unsigned char poison[3] = {static_cast<unsigned char>(pixels[centre + 0] < 128 ? 255 : 0),
+                                     static_cast<unsigned char>(pixels[centre + 1] < 128 ? 255 : 0),
+                                     static_cast<unsigned char>(pixels[centre + 2] < 128 ? 255 : 0)};
+    for (std::uint32_t y = ph / 2 - kPoisonSide / 2; y < ph / 2 + kPoisonSide / 2; ++y) {
+        for (std::uint32_t x = pw / 2 - kPoisonSide / 2; x < pw / 2 + kPoisonSide / 2; ++x) {
+            const std::size_t at = (static_cast<std::size_t>(y) * pw + x) * 4;
+            pixels[at + 0] = poison[0];
+            pixels[at + 1] = poison[1];
+            pixels[at + 2] = poison[2];
+            pixels[at + 3] = 255;
+        }
+    }
     REQUIRE(Arcane::WritePngRgba(scratch, pw, ph, pixels.data()));
     out.clear();
     const int poisoned = RunServitor(servitor, args({"--host", "editor", "--timeout", "60", "compare",
