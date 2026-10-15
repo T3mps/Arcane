@@ -401,6 +401,8 @@ Every path below was read on `main` at `c0fb42e1` unless marked `s7` (branch `fe
 - **Held start (AM1; Task 29, 2026-10-15):** a runtime or server launched with `--remote` and no `--frames` starts held at frame 0 until `servitor play` or `servitor resume` runs it (a `--frames N` run is not held), and it says so through the startup log line `remote: holding at frame 0 (servitor play/resume to start)`, a windowed runtime's title suffix ` [held]` while the sim is held (at start, or paused or stopped by servitor) and `--remote`'s help text (an editor has no tick gate: it opens in Edit, and `servitor play` enters Play); there is no opt-out flag.
 - **`arc quit [--force] [--report <path>]`** asks the host to shut down cleanly at the next frame boundary through its normal exit path (report written, `exitReason:"arc-quit"`, descriptor deleted). `--force` terminates the process after `--timeout`. The editor honours its usual unsaved-changes guard: an editor with dirty documents answers `host.busy{state:"modal"}` unless `--discard-changes` is given, which is a `drive` command and audited.
 - **Waiting:** `arc wait ready|settled|frames N|reload|state <s>|job <id>` (s7.1). `settled` reuses the `--settle` predicate (two byte-equal frozen-clock captures and `ShaderCompiler::IsIdle()`), bounded by `--timeout`.
+  - **`settled` (P0, Task 30).** The `host.wait` job takes the captures itself through the capture host pair (Task 27's render-ticket readback, one ticket at a time), and it holds the host's one capture slot while a ticket is in flight, so a `screenshot` or `compare` meanwhile answers `host.busy{state:"capture-pending"}` (exit 5). It is met when two consecutive captures are byte-equal and the host's producers (the shader compiler, plus the editor's cook queue and thumbnail harvester, `SettleProducersIdle`) were idle when each was armed and when each retired. The clock is frozen only when the host was launched with `--fixed-time`; without it, time-driven materials keep the captures from matching and the wait times out (exit 8). The verb's help says so. A host with no renderer (a server, or a host that installed no capture pair) answers `capture.no-renderer` (exit 2), because settled captures and AM1 refuses captures there; that is the fallback, not a producers-only wait.
+  - **`reload` on a failed reload (Task 30).** A reload that fails or is refused leaves `PluginHost::Generation()` alone, so the host also hands its session `PluginHost::ReloadAttempts()` and `LastReloadOk()`; a failed attempt after the wait armed answers `module.reload-failed` (exit 6) with `detail {pluginGeneration, atFrame}` instead of timing out.
 - **A host that dies mid-command** is reported with exit 7 and an envelope naming what is known: the exit code if observed, whether a `.arcdiag` appeared in `<exe dir>/diagnostics` after the request was sent (its path), and the last state seen. HostWitness's precedence applies: died, then timed out, then the envelope.
 
 ## 5. Command registration and self-description
@@ -509,12 +511,31 @@ POST /arc/v1/call
 | `component.unknown`, `component.absent`, `component.ambiguous` | component addressing |
 | `reflect.unreadable`, `reflect.unsupported` | the codec refused a value or a field type |
 | `cvar.unknown`, `cvar.type-mismatch`, `cvar.refused-weaker`, `cvar.protected` | from `SetResult` and the service |
+| `cvar.refused` | any other refused set (`SetResult::Stale`, `TypeMismatch` or an unrecognized refusal); exit 6 |
 | `undo.unavailable`, `undo.batch-structural` | s8 |
 | `play.edit-only` | an authoring command in Play (0.16) |
+| `play.not-playing` | pause, resume or step on an editor in Edit; exit 6 |
+| `play.refused` | the editor refused Play or Stop, or `play.start --topology` names a different topology than the running one (`detail.running`); exit 6. `play.start` on an editor already playing (no topology, or the same one) is `ok` with `data.alreadyPlaying: true` and the running `topology` |
+| `play.stopped` | a `play.step` ended before its ticks ran (stop, a held gate, Play left, or the session ended); ticks may have run, so it is exit 6, never the retryable exit 5 |
 | `ui.not-found`, `ui.ambiguous`, `ui.stale-ref`, `ui.not-actionable` | s9 |
 | `capture.no-frame`, `capture.minimized` | s7.4 |
+| `capture.no-renderer` | a capture (or `wait settled`) on a host with no renderer; exit 2 (AM1) |
+| `capture.artifact-failed` | the capture's PNG was not written; exit 6 |
 | `compare.failed`, `compare.missing-reference` | mirrors `exitReason` |
+| `compare.reference-unreadable` | the reference could not be resolved or decoded; exit 6 |
+| `compare.bless-failed` | `--bless` wrote no reference; exit 6 |
+| `compare.artifact-failed` | a Failed verdict's capture or diff PNG was not written; exit 6 |
 | `job.unknown`, `job.cancelled`, `job.failed` | s7.7 |
+| `arg.inapplicable` | a flag or argument that does not apply to this command or host (Rule 3); exit 2 |
+| `resource.ambiguous` | a resource name that matches more than one type; exit 2 |
+| `resource.not-found`, and any other `*.not-found` | addressing; exit 6 |
+| `ecs.artifact-failed`, `resource.artifact-failed`, `scene.artifact-failed` | a dump over the inline cap could not be written as an artifact; exit 6 |
+| `module.reload-failed` | `wait reload` saw a reload fail (or be refused) after it armed; the previous module is still loaded; exit 6 |
+| `quit.force-failed` | `quit --force` could not end the process (client side); exit 6 |
+| `host.unavailable` | the host has no armed session for this command (stopped, or not wired on this host); exit 5 |
+| `protocol.mismatch`, `engine.unresolved` | client side: a host protocol major this client does not speak; no engine root resolves (`--engine`, `SERVITOR_ENGINE`, the source sibling, a package root; AM8); exit 4 |
+| `host.unreachable`, `host.died`, `host.hung`, `host.restarting` | client side: no answer, the process exited, its heartbeat stalled past the hung rule, or it is restarting; exit 7 |
+| `wait.timeout` | reserved for a wait condition false at timeout; today a wait times out as `ok` with `data.timedOut` (exit 8) |
 | `internal` | a bug; carries the `.arcdiag` path when one exists |
 
 ### 6.5 Formats (0.10)
@@ -618,6 +639,7 @@ Example, `arc ecs query --with LocalTransform,MeshRenderer --fields LocalTransfo
 | `arc input key <key> [--down\|--up\|--tap]`, `arc input mouse move\|click\|drag ...`, `arc input action <name> [--value v]` | `input.inject` | E (Play) R | NotUndoable | P1 |
 | `arc batch <file.json>` | `/arc/v1/batch` | E R | s8.3 | P1 |
 
+- **`play.start`** (P0, Task 29) answers `data {playing: true, topology}`. On an editor that is already playing, it does not restart Play: it answers `ok` with the topology that is running and `alreadyPlaying: true`, and an explicit `--topology` that differs is `play.refused` (exit 6, `detail.running`). A runtime or server refuses `--topology` (`arg.inapplicable`, exit 2): its topology is fixed at launch.
 - **`play.step N`** (P0, Task 29) completes when `host.frame` has moved N: one fixed tick per advance on a server, a headless runtime, a stepped host and an editor in Play; on a windowed runtime that is running, one loop pass (whatever its fixed sub-steps), as AM1 counts `host.frame`.
 - **`entity.set`** takes `Component.field.path=<json>` pairs, resolved against the reflected type; the value is parsed by `ReflectionJsonReader` and refused rather than coerced (`reflect.unreadable`). In the editor it is one transaction (s8.1).
 - **`cvar.*`** goes through the generalized `RemoteCVarService` in the session's context (0.24, s10.2). `cvar.set` publishes before answering, so the reply shows the value in effect, as the service already does; `cvar.explain` returns the structured history (`published`, `pending`, `setBy`, `history[]`).

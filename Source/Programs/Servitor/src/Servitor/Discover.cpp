@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -167,7 +168,17 @@ std::optional<fs::path> ProjectRootFor(const GlobalOptions& opt, Arcane::Remote:
     if (!opt.project.empty()) {
         // An .arcproj names its folder; a directory resolves like the working
         // directory does, up to the nearest .arcproj (spec s4.4).
-        const fs::path project = fs::absolute(fs::path(opt.project), ec);
+        // argv is UTF-8 on every platform (main.cpp converts Windows' wide
+        // command line), so the path is built from UTF-8, never the ANSI page.
+        fs::path given;
+        try {
+            given = PathFromUtf8(opt.project);
+        } catch (const std::exception&) {
+            Fill(error, Arcane::Remote::MakeError("", "arg.invalid", "--project is not valid UTF-8",
+                                                  "pass the project's folder or its .arcproj"));
+            return std::nullopt;
+        }
+        const fs::path project = fs::absolute(given, ec);
         std::optional<fs::path> root;
         if (project.extension() == ".arcproj" && fs::is_regular_file(project, ec))
             root = project.parent_path();
@@ -303,7 +314,7 @@ std::optional<fs::path> HostsDirForRoot(const fs::path& root)
     if (!in.is_open())
         return std::nullopt;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    const auto json = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
+    const auto json = Arcane::Remote::ParseJsonBounded(text);
     if (json.is_discarded() || !json.is_object())
         return std::nullopt;
     const auto config = json.find("engineConfig");
@@ -316,8 +327,15 @@ std::optional<fs::path> HostsDirForRoot(const fs::path& root)
 
 std::optional<fs::path> HostsDir(const GlobalOptions& opt, Arcane::Remote::Envelope* error)
 {
-    if (!opt.engine.empty())
-        return ResolveRoot(fs::path(opt.engine), "--engine", error);
+    if (!opt.engine.empty()) {
+        fs::path engine;
+        try {
+            engine = PathFromUtf8(opt.engine);   // argv is UTF-8 (main.cpp), never the ANSI page
+        } catch (const std::exception&) {
+            return Unresolved(error, "--engine is not valid UTF-8");
+        }
+        return ResolveRoot(engine, "--engine", error);
+    }
     if (const fs::path env = EngineFromEnvironment(); !env.empty())
         return ResolveRoot(env, "SERVITOR_ENGINE", error);
     const fs::path exe = Arcane::Platform::ExecutablePath();

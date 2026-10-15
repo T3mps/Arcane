@@ -238,8 +238,10 @@ namespace Arcane::Server
 #if !defined(ARC_BUILD_DIST)
             // AM1: remote commands run BEFORE the tick advances, never beside the
             // admin stdin block below. DrainFrame notes a module reload the
-            // previous tick's Poll performed, so this drain's status carries it.
-            if (m_remote && m_remote->DrainFrame(m_plugin->Generation()))
+            // previous tick's Poll performed, so this drain's status carries it;
+            // a failed one is noted from the attempt count (Task 30).
+            if (m_remote && m_remote->DrainFrame(m_plugin->Generation(), m_plugin->ReloadAttempts(),
+                                                 m_plugin->LastReloadOk()))
             {
                 ARC_INFO("ArcaneServer: stopping on {} after {} tick(s)", m_remote->ExitReason(), rep.framesTicked);
                 break;

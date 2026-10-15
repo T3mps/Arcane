@@ -19,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -62,6 +63,7 @@ struct CaptureCommandState {
     CaptureHooks hooks;
     JobTable* jobs = nullptr;
     std::map<std::uint64_t, CaptureJobState*> live;
+    std::set<std::uint64_t> ringHolds;   // host.wait settled jobs with a ticket armed (Task 30)
 };
 
 CaptureCommandState& State()
@@ -297,6 +299,7 @@ void RegisterCaptureCommands(JobTable* jobs)
             delete state;
         }
         s.live.clear();
+        s.ringHolds.clear();   // the ids named the previous table's jobs
     }
     s.jobs = jobs;
     RegisterOnce(CaptureDesc("capture.viewport", "Capture the viewport (the scene render target) to a PNG artifact"));
@@ -314,7 +317,16 @@ CommandResult CaptureBusy(const Call& call)
 
 bool CaptureInFlight(const JobTable& jobs)
 {
-    return jobs.AnyRunning({"capture.viewport", "capture.window", "capture.compare"});
+    if (jobs.AnyRunning({"capture.viewport", "capture.window", "capture.compare"}))
+        return true;
+    // A settle wait holding the ring (Task 30) counts while its job runs; a
+    // hold whose job already ended (cancelled under it) is ignored.
+    for (const std::uint64_t id : State().ringHolds) {
+        const Job* job = jobs.Find(JobId{id});
+        if (job != nullptr && job->state == JobState::Running)
+            return true;
+    }
+    return false;
 }
 
 namespace Detail
@@ -323,6 +335,16 @@ namespace Detail
 const CaptureHooks& StoredCaptureHooks()
 {
     return State().hooks;
+}
+
+void HoldCaptureRing(std::uint64_t jobId)
+{
+    State().ringHolds.insert(jobId);
+}
+
+void ReleaseCaptureRing(std::uint64_t jobId)
+{
+    State().ringHolds.erase(jobId);
 }
 
 std::chrono::steady_clock::time_point CaptureDeadline(const Call& call)

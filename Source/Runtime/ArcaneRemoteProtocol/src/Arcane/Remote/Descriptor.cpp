@@ -241,7 +241,7 @@ std::optional<Descriptor> ReadDescriptor(const std::filesystem::path& path)
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) return std::nullopt;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    const Json j = Json::parse(text, nullptr, /*allow_exceptions=*/false);
+    const Json j = ParseJsonBounded(text);   // any local file may sit in Saved/Remote (Task 30)
     if (j.is_discarded() || !j.is_object()) return std::nullopt;
 
     Descriptor d;

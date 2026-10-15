@@ -2226,9 +2226,6 @@ namespace Arcane::Editor
         // 2 when an open-ended --headless --remote run lost (or never had) its
         // remote surface: it has no other stop path, so Main() returns this.
         int                                       m_remoteArmExit   = 0;
-        // `wait settled`'s stability count (Task 16): the session's settled
-        // hook feeds it the producer conjunction once per poll.
-        Arcane::RemoteSettleTracker               m_remoteSettle;
         // The remote reason the frame loop broke on ("remote-quit" or
         // "remote-idle"), latched by MainLoop before the session stops, so
         // ShutdownGraphPath's --report exitReason names it (Task 16).

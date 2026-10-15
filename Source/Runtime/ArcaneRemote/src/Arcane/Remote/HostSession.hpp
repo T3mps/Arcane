@@ -80,7 +80,11 @@ public:
         // Client-module predicate reaches ArcaneRemote without a dependency
         // on it (R8-2). Null = the host has none.
         bool (*dirty)(void*) = nullptr;    // unsaved changes: host.quit answers host.busy{state:"modal"}
-        bool (*settled)(void*) = nullptr;  // wait settled: SettleConverged and ShaderCompiler::IsIdle (editor, runtime)
+        // wait settled (spec s4.7, Task 30): the --settle producer conjunct
+        // (ShaderCompiler::IsIdle, and on the editor the cook queue and the
+        // thumbnail harvester; SettleProducersIdle). The byte-equal pair is
+        // the host.wait job's own: two captures through `capture`'s host pair.
+        bool (*producersIdle)(void*) = nullptr;
         void* hookUser = nullptr;
         // Task 19 (ruling F16): the host's worlds, read by world.list and every
         // world-taking command through CommandWorlds(). Start installs it with
@@ -146,7 +150,16 @@ public:
     // Drains, then checks for a remote quit and the idle timeout. The first
     // generation it sees is adopted silently (the module the host booted with). True means
     // the host should leave its loop now; the reason is latched (ExitReason).
+    // This form notes no failed reload: it is the three-argument form with
+    // the attempt count last seen and lastReloadOk true.
     bool DrainFrame(std::uint32_t pluginGeneration);
+    // Every host's form (Task 30): also the host's PluginHost::ReloadAttempts()
+    // and LastReloadOk(). A reload that failed or was refused leaves the
+    // generation alone, so an attempt count that moved with lastReloadOk false
+    // is noted as a failed reload (NoteReload ok=false), which answers a
+    // pending `wait reload` with module.reload-failed. The first call adopts
+    // the count silently, as it adopts the generation.
+    bool DrainFrame(std::uint32_t pluginGeneration, std::uint64_t reloadAttempts, bool lastReloadOk);
     // The reason DrainFrame latched when it told the host to stop:
     // "remote-quit" or "remote-idle". Null when the loop did not end on the
     // remote surface. Latched at the break site, so a later Ctrl-C or a long
@@ -169,13 +182,20 @@ public:
     void NoteMinimized(bool minimized);
     HostGate& Gate();
     const HostGate& Gate() const;       // ruling F9: WaitPoll reads it through a const session
-    const Config& GetConfig() const;    // ruling F9: the const hooks accessor (dirty, settled, hookUser, ...)
+    const Config& GetConfig() const;    // ruling F9: the const hooks accessor (dirty, producersIdle, hookUser, ...)
     // AM1: the fixed-tick hosts' run/pause/step gate. Start sets it from
     // Config::holdSim: held = not running and paused (Consume is Idle until a
     // play command), otherwise running (Consume is Run, the pre-remote loop).
     TickGate& Tick();
     // ruling F10: the host passes its own m_plugin->Generation(); HostSession holds no PluginHost
     void NoteReload(std::uint32_t generation, bool ok, std::string reason, std::uint64_t frame);
+    // Task 30: how many reloads NoteReload has recorded (ok or not), and the
+    // last one's outcome. host.wait reload records the count when it arms, so
+    // a failure noted after that answers module.reload-failed (exit 6).
+    std::uint64_t ReloadSerial() const;
+    bool LastReloadOk() const;
+    const std::string& LastReloadReason() const;
+    std::uint64_t LastReloadFrame() const;
     std::uint16_t Port() const;          // 0 unless started
     const std::filesystem::path& DescriptorFile() const; // where Start wrote (or would write) the descriptor
     bool TakeQuit() const;              // host.quit sets it; Task 16
@@ -228,6 +248,9 @@ private:
     bool m_reloadOk = true;
     std::string m_reloadReason;
     std::uint64_t m_reloadAtFrame = 0;
+    std::uint64_t m_reloadSerial = 0;           // NoteReload calls, ok or not (Task 30)
+    std::uint64_t m_reloadAttemptsSeen = 0;     // the host's PluginHost::ReloadAttempts() at the last DrainFrame
+    bool m_reloadAttemptsKnown = false;         // the first DrainFrame adopts the count silently
     std::uint32_t m_publishedCatalogue = 0;
     bool m_cataloguePublished = false;
 

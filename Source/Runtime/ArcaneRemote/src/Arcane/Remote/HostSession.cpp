@@ -298,14 +298,29 @@ void HostSession::Drain()
 
 bool HostSession::DrainFrame(std::uint32_t pluginGeneration)
 {
+    return DrainFrame(pluginGeneration, m_reloadAttemptsSeen, true);
+}
+
+bool HostSession::DrainFrame(std::uint32_t pluginGeneration, std::uint64_t reloadAttempts, bool lastReloadOk)
+{
     if (!m_started)
         return false;
-    // The first generation seen is the module the host booted with, not a reload.
+    // The first generation and attempt count seen are the module the host
+    // booted with, not a reload.
+    const bool attemptsMoved = m_reloadAttemptsKnown && reloadAttempts != m_reloadAttemptsSeen;
+    m_reloadAttemptsSeen = reloadAttempts;
+    m_reloadAttemptsKnown = true;
     if (!m_generationKnown) {
         m_gate.pluginGeneration = pluginGeneration;
         m_generationKnown = true;
     } else if (pluginGeneration != m_gate.pluginGeneration) {
         NoteReload(pluginGeneration, true, "reloaded", m_gate.frame.load(std::memory_order_acquire));
+    } else if (attemptsMoved && !lastReloadOk) {
+        // PluginHost rolled back (or refused) and kept the generation: the
+        // only record of the failure is the attempt it counted (Task 30).
+        NoteReload(pluginGeneration, false,
+                   "the module reload failed and the previous module is still loaded; the host log names the cause",
+                   m_gate.frame.load(std::memory_order_acquire));
     }
     Drain();
     if (m_exitReason == nullptr) { // the first reason wins: it is what ended the loop
@@ -462,8 +477,29 @@ void HostSession::NoteReload(std::uint32_t generation, bool ok, std::string reas
     m_reloadOk = ok;
     m_reloadReason = std::move(reason);
     m_reloadAtFrame = frame;
+    ++m_reloadSerial;   // PluginHost already logged a failure's cause
     if (m_started)
         PublishStatus(NowUnixMs());
+}
+
+std::uint64_t HostSession::ReloadSerial() const
+{
+    return m_reloadSerial;
+}
+
+bool HostSession::LastReloadOk() const
+{
+    return m_reloadOk;
+}
+
+const std::string& HostSession::LastReloadReason() const
+{
+    return m_reloadReason;
+}
+
+std::uint64_t HostSession::LastReloadFrame() const
+{
+    return m_reloadAtFrame;
 }
 
 std::uint16_t HostSession::Port() const

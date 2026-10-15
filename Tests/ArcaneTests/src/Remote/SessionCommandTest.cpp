@@ -7,11 +7,15 @@
 #include "RemoteTestHttp.hpp"
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <string>
 #include <thread>
+#include <vector>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -60,6 +64,8 @@ TEST_CASE("wait settled on a server is capture.no-renderer exit 2", "[remote][ho
 }
 
 static bool RemoteSettledNever(void*) { return false; }
+static bool RemoteArmNever(std::uint64_t, void*) { return true; }
+static bool RemoteDrainNever(std::uint64_t, Arcane::Remote::CaptureMapped*, void*) { return false; }
 
 TEST_CASE("wait state times out with ok true and exit 8", "[remote][host]") {
     RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
@@ -67,7 +73,9 @@ TEST_CASE("wait state times out with ok true and exit 8", "[remote][host]") {
     cfg.kind = Arcane::Remote::HostKind::Runtime;
     cfg.cvarContext = Arcane::CVarContext::LocalHost;
     cfg.projectRoot = std::filesystem::temp_directory_path() / "remote-wait-timeout";
-    cfg.settled = &RemoteSettledNever;
+    cfg.producersIdle = &RemoteSettledNever;
+    cfg.capture.armHost = &RemoteArmNever;      // settled captures through the host pair (Task 30)
+    cfg.capture.drainHost = &RemoteDrainNever;
     Arcane::Remote::HostSession session(cfg);
     session.Start();
     session.Gate().SetState("ready");
@@ -89,7 +97,7 @@ TEST_CASE("wait state times out with ok true and exit 8", "[remote][host]") {
     CHECK(late.ok);
     CHECK(late.data["timedOut"] == true);
     auto early = Arcane::Remote::WaitPoll(session, settled, 0, 0, true, std::chrono::steady_clock::now());
-    CHECK_FALSE(early.data.value("done", false));             // settled() is false and 50 ms have not passed
+    CHECK_FALSE(early.data.value("done", false));             // pending, and 50 ms have not passed
     CHECK_FALSE(early.data.value("timedOut", false));
     session.Stop("test");
 }
@@ -117,15 +125,19 @@ Arcane::Remote::Envelope Invoke(const std::string& command, nlohmann::json args)
 bool RemoteDirtyAlways(void*) { return true; }
 
 bool RemoteSettledFlag(void* user) { return *static_cast<bool*>(user); }
+bool RemoteArmAlways(std::uint64_t, void*) { return true; }
+bool RemoteDrainLater(std::uint64_t, Arcane::Remote::CaptureMapped*, void*) { return false; }
 } // namespace
 
-TEST_CASE("wait ready, frames, state and settled complete on their conditions", "[remote][host]") {
+TEST_CASE("wait ready, frames and state complete on their conditions; settled is never a poll's to decide", "[remote][host]") {
     RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
     Arcane::Test::TempDir tmp("remote-wait-conditions");
     bool settledNow = false;
     auto cfg = SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path);
-    cfg.settled = &RemoteSettledFlag;
+    cfg.producersIdle = &RemoteSettledFlag;
     cfg.hookUser = &settledNow;
+    cfg.capture.armHost = &RemoteArmAlways;
+    cfg.capture.drainHost = &RemoteDrainLater;
     Arcane::Remote::HostSession session(cfg);
     REQUIRE(session.Start());
     const auto now = std::chrono::steady_clock::now();
@@ -153,38 +165,111 @@ TEST_CASE("wait ready, frames, state and settled complete on their conditions", 
     state.state = "paused";
     CHECK(Arcane::Remote::WaitPoll(session, state, 0, 0, true, now).data.value("done", false));
 
+    // Task 30 (spec s4.7): settled is two byte-equal captures, which only the
+    // host.wait job takes. Idle producers alone no longer settle a poll.
     Arcane::Remote::WaitArgs settled;
     settled.what = "settled";
-    CHECK_FALSE(Arcane::Remote::WaitPoll(session, settled, 0, 0, true, now).data.value("done", false));
+    settled.timeoutMs = 5000;
     settledNow = true;
-    CHECK(Arcane::Remote::WaitPoll(session, settled, 0, 0, true, now).data.value("done", false));
+    const auto idleOnly = Arcane::Remote::WaitPoll(session, settled, 0, 0, true, now);
+    CHECK(idleOnly.ok);
+    CHECK_FALSE(idleOnly.data.value("done", true));
+    CHECK_FALSE(idleOnly.data.contains("timedOut"));
 
-    // A reload that never moves the generation (PluginHost does not bump it on
-    // a failed or refused reload) keeps the wait pending; it then times out.
+    // Task 30 (C4): a reload that failed after the wait armed keeps the
+    // generation (PluginHost rolled back), and the wait answers the failure
+    // with module.reload-failed (exit 6) instead of timing out (exit 8).
     Arcane::Remote::WaitArgs reload;
     reload.what = "reload";
+    reload.timeoutMs = 5000;
+    const std::uint32_t generation = session.Gate().pluginGeneration;
+    const std::uint64_t armedAt = session.ReloadSerial();
+    CHECK_FALSE(Arcane::Remote::WaitPoll(session, reload, 0, generation, true, now, armedAt).data.value("done", false));
+    session.NoteReload(generation, false, "reload failed: the new module's ABI does not match", 9);
+    auto failed = Arcane::Remote::WaitPoll(session, reload, 0, generation, true, now, armedAt);
+    CHECK_FALSE(failed.ok);
+    REQUIRE_FALSE(failed.errors.empty());
+    CHECK(failed.errors[0].code == "module.reload-failed");
+    CHECK(failed.errors[0].message == "reload failed: the new module's ABI does not match");
+    CHECK(failed.errors[0].detail["pluginGeneration"] == generation);
+    CHECK(failed.errors[0].detail["atFrame"] == 9);
+    CHECK(Arcane::Remote::ExitFromHost(failed) == 6);
+    // A wait armed after that failure is not answered by it: it times out.
     reload.timeoutMs = 50;
-    session.NoteReload(session.Gate().pluginGeneration, false, "reload failed", 9);
-    const auto unchanged = Arcane::Remote::WaitPoll(session, reload, 0, session.Gate().pluginGeneration, true,
-                                                    now - std::chrono::milliseconds(100));
-    CHECK(unchanged.ok);
-    CHECK(unchanged.data["timedOut"] == true);
-    CHECK(Arcane::Remote::ExitFromHost(unchanged) == 8);
+    auto later = Arcane::Remote::WaitPoll(session, reload, 0, generation, true,
+                                                now - std::chrono::milliseconds(100), session.ReloadSerial());
+    CHECK(later.ok);
+    CHECK(later.data["timedOut"] == true);
+    CHECK(Arcane::Remote::ExitFromHost(later) == 8);
     session.Stop("test");
 }
 
-TEST_CASE("wait settled on a renderer host with no settle hook is host.unavailable", "[remote][host]") {
+TEST_CASE("DrainFrame notes a failed reload from the attempt count, and the wait answers it", "[remote][host]") {
     RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
-    Arcane::Test::TempDir tmp("remote-wait-nohook");
+    Arcane::Test::TempDir tmp("remote-wait-reload-failed");
     Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path));
     REQUIRE(session.Start());
+    // The first drain adopts the boot module's generation and attempt count.
+    CHECK_FALSE(session.DrainFrame(4, 7, true));
+    CHECK(session.ReloadSerial() == 0);
+    Arcane::Remote::WaitArgs reload;
+    reload.what = "reload";
+    reload.timeoutMs = 5000;
+    const auto now = std::chrono::steady_clock::now();
+    const std::uint64_t armedAt = session.ReloadSerial();
+    CHECK_FALSE(session.DrainFrame(4, 7, true));   // nothing tried: still pending
+    CHECK_FALSE(Arcane::Remote::WaitPoll(session, reload, 0, 4, true, now, armedAt).data.value("done", false));
+    // PluginHost tried, failed and rolled back: the generation stays 4.
+    CHECK_FALSE(session.DrainFrame(4, 8, false));
+    CHECK(session.ReloadSerial() == 1);
+    CHECK_FALSE(session.LastReloadOk());
+    const auto failed = Arcane::Remote::WaitPoll(session, reload, 0, 4, true, now, armedAt);
+    REQUIRE_FALSE(failed.errors.empty());
+    CHECK(failed.errors[0].code == "module.reload-failed");
+    CHECK(Arcane::Remote::ExitFromHost(failed) == 6);
+    // The one-argument form never notes a failure; a successful reload moves
+    // the generation and completes a wait armed after the failure.
+    const std::uint64_t armedAgain = session.ReloadSerial();
+    CHECK_FALSE(session.DrainFrame(4));
+    CHECK(session.ReloadSerial() == armedAgain);
+    CHECK_FALSE(session.DrainFrame(5, 9, true));
+    CHECK(session.LastReloadOk());
+    const auto done = Arcane::Remote::WaitPoll(session, reload, 0, 4, true, now, armedAgain);
+    CHECK(done.ok);
+    CHECK(done.data.value("done", false));
+    CHECK(Arcane::Remote::ExitFromHost(done) == 0);
+    session.Stop("test");
+}
+
+TEST_CASE("wait settled needs the capture pair (capture.no-renderer) and the producers hook (host.unavailable)", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-nohook");
     Arcane::Remote::WaitArgs settled;
     settled.what = "settled";
-    const auto env = Arcane::Remote::WaitPoll(session, settled, 0, 0, true, std::chrono::steady_clock::now());
-    CHECK_FALSE(env.ok);
-    CHECK(env.errors[0].code == "host.unavailable");
-    CHECK(Arcane::Remote::ExitFromHost(env) == 5);
-    session.Stop("test");
+    settled.timeoutMs = 5000;
+    {
+        // No capture pair: settled captures (spec s4.7), and captures are
+        // refused on a host that cannot take them (spec AM1).
+        Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path / "nopair"));
+        REQUIRE(session.Start());
+        const auto env = Arcane::Remote::WaitPoll(session, settled, 0, 0, true, std::chrono::steady_clock::now());
+        CHECK_FALSE(env.ok);
+        CHECK(env.errors[0].code == "capture.no-renderer");
+        CHECK(Arcane::Remote::ExitFromHost(env) == 2);
+        session.Stop("test");
+    }
+    {
+        auto cfg = SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path / "nohook");
+        cfg.capture.armHost = &RemoteArmAlways;
+        cfg.capture.drainHost = &RemoteDrainLater;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        const auto env = Arcane::Remote::WaitPoll(session, settled, 0, 0, true, std::chrono::steady_clock::now());
+        CHECK_FALSE(env.ok);
+        CHECK(env.errors[0].code == "host.unavailable");
+        CHECK(Arcane::Remote::ExitFromHost(env) == 5);
+        session.Stop("test");
+    }
 }
 
 TEST_CASE("host.wait refuses a missing, unknown or ill-typed argument", "[remote][host]") {
@@ -319,6 +404,236 @@ TEST_CASE("host.wait over the listener: the job completes after N frames and ans
     CHECK(env.host.frame >= 3);
     CHECK(Arcane::Remote::ExitFromHost(env) == 0);
     CHECK(iterations >= 3);
+    session.Stop("test");
+}
+
+// ---- Task 30 (C1): wait settled is spec s4.7's --settle predicate -----------
+
+namespace
+{
+// A fake render ring on the capture host pair: one "rendered frame" per host
+// loop iteration (the test bumps `frame`), a ticket retires one frame after it
+// was armed, and the n-th retired capture carries pixels[n] (the last one
+// repeats). 1x1 RGBA, so the bytes compared are exactly these four.
+struct SettleRing {
+    std::uint64_t frame = 0;
+    std::uint64_t ticket = 0;
+    std::uint64_t armedAt = 0;
+    int arms = 0;
+    std::size_t drained = 0;
+    bool retire = true;
+    bool idle = true;
+    std::vector<std::array<std::uint8_t, 4>> pixels;
+};
+
+bool SettleArm(std::uint64_t ticket, void* user)
+{
+    auto* ring = static_cast<SettleRing*>(user);
+    ring->ticket = ticket;
+    ring->armedAt = ring->frame;
+    ++ring->arms;
+    return true;
+}
+
+bool SettleDrain(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user)
+{
+    auto* ring = static_cast<SettleRing*>(user);
+    if (!ring->retire || ticket != ring->ticket || ring->frame < ring->armedAt + 1)
+        return false;
+    const std::size_t index = std::min(ring->drained, ring->pixels.size() - 1);
+    ++ring->drained;
+    raw->width = 1;
+    raw->height = 1;
+    raw->rowPitch = 4;
+    raw->bgra = false;
+    raw->mapped = ring->pixels[index].data();
+    raw->mappedBytes = 4;
+    return true;
+}
+
+bool SettleIdle(void* user)
+{
+    return static_cast<SettleRing*>(user)->idle;
+}
+
+Arcane::Remote::HostSession::Config SettleConfig(const std::filesystem::path& root, SettleRing& ring)
+{
+    auto cfg = SessionConfig(Arcane::Remote::HostKind::Runtime, root);
+    cfg.hookUser = &ring;
+    cfg.producersIdle = &SettleIdle;
+    cfg.capture.user = &ring;
+    cfg.capture.armHost = cfg.capture.armWindow = cfg.capture.armViewport = &SettleArm;
+    cfg.capture.drainHost = cfg.capture.drainWindow = cfg.capture.drainViewport = &SettleDrain;
+    cfg.capture.outDir = root / "out";
+    return cfg;
+}
+
+// POSTs host.wait settled with `timeoutMs` and runs the host loop (one Drain
+// and one rendered frame per iteration) until the reply arrives. `during`
+// runs once per iteration, after the Drain.
+template <class During>
+Arcane::Remote::Envelope WaitSettledOverTheWire(Arcane::Remote::HostSession& session, SettleRing& ring,
+                                                std::uint32_t timeoutMs, During during)
+{
+    const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+    REQUIRE(desc);
+    const std::uint16_t port = session.Port();
+    const std::string token = desc->token;
+    const std::string body = R"({"id":"s1","command":"host.wait","args":{"what":"settled"},"options":{"timeoutMs":)" +
+                             std::to_string(timeoutMs) + "}}";
+    auto reply = std::async(std::launch::async, [port, token, body] {
+        return RemoteTest::HttpExchange(port, token, "", "POST /remote/v1/call HTTP/1.1", body);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs + 4000);
+    while (reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        session.DrainFrame(0);
+        during();
+        ++ring.frame;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE(reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    const std::string raw = reply.get();
+    const auto split = raw.find("\r\n\r\n");
+    REQUIRE(split != std::string::npos);
+    return Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+}
+} // namespace
+
+TEST_CASE("wait settled completes on two byte-equal captures through the host pair with the producers idle", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settled");
+    SettleRing ring;
+    ring.pixels = {{10, 20, 30, 255}, {40, 50, 60, 255}, {40, 50, 60, 255}};   // A, B, B
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    const std::uint64_t frameBefore = session.Gate().frame.load();
+    auto env = WaitSettledOverTheWire(session, ring, 5000, [] {});
+    CHECK(env.ok);
+    CHECK(env.command == "host.wait");
+    CHECK(env.data["done"] == true);
+    CHECK(env.data["what"] == "settled");
+    CHECK(env.data["captures"] == 3);   // A differs from B; the second B equals the first
+    CHECK(env.data["width"] == 1);
+    CHECK(env.data["height"] == 1);
+    CHECK(Arcane::Remote::ExitFromHost(env) == 0);
+    CHECK(ring.arms == 3);              // one ticket per capture, armed one at a time
+    CHECK(session.Gate().frame.load() == frameBefore);   // render tickets, never host.frame
+    session.Stop("test");
+}
+
+TEST_CASE("wait settled never completes on captures that differ, or while a producer is busy", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-unsettled");
+    {
+        SettleRing ring;
+        for (int i = 0; i < 400; ++i)   // A, B, A, B, ...: an animated frame under an unfrozen clock
+            ring.pixels.push_back(i % 2 == 0 ? std::array<std::uint8_t, 4>{1, 2, 3, 255}
+                                             : std::array<std::uint8_t, 4>{4, 5, 6, 255});
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "differ", ring));
+        REQUIRE(session.Start());
+        auto env = WaitSettledOverTheWire(session, ring, 300, [] {});
+        CHECK(env.ok);
+        CHECK(env.errors.empty());
+        CHECK(env.data["timedOut"] == true);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 8);
+        CHECK(ring.arms >= 2);
+        session.Stop("test");
+    }
+    {
+        // Identical frames, but the shader compiler (the producers hook) is
+        // never idle: nothing is armed, so nothing can settle.
+        SettleRing ring;
+        ring.idle = false;
+        ring.pixels = {{7, 7, 7, 255}};
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "busy", ring));
+        REQUIRE(session.Start());
+        auto env = WaitSettledOverTheWire(session, ring, 200, [] {});
+        CHECK(env.data["timedOut"] == true);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 8);
+        CHECK(ring.arms == 0);
+        session.Stop("test");
+    }
+    {
+        // Identical frames, but a producer turns busy while the second capture
+        // is in flight: that capture retires with it busy, so it pairs with
+        // neither neighbour, and the wait needs two more (4, not 2).
+        SettleRing ring;
+        ring.pixels = {{9, 9, 9, 255}};
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "flicker", ring));
+        REQUIRE(session.Start());
+        auto env = WaitSettledOverTheWire(session, ring, 5000, [&] {
+            ring.idle = !(ring.arms == 2 && ring.drained == 1);
+        });
+        CHECK(env.ok);
+        CHECK(env.data["done"] == true);
+        CHECK(env.data["captures"] == 4);
+        session.Stop("test");
+    }
+}
+
+TEST_CASE("a settle capture holds the one capture slot: a screenshot meanwhile is host.busy capture-pending", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-slot");
+    SettleRing ring;
+    ring.retire = false;                 // the settle ticket stays in flight
+    ring.pixels = {{1, 1, 1, 255}};
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    Arcane::Remote::CommandResult busy;
+    Arcane::Remote::CommandResult freed;
+    bool askedWhileHeld = false;
+    auto env = WaitSettledOverTheWire(session, ring, 300, [&] {
+        if (ring.arms == 1 && !askedWhileHeld) {
+            Arcane::Remote::Call shot;
+            shot.command = "capture.window";
+            shot.args = nlohmann::json::object();
+            busy = Arcane::Remote::CommandRegistry::Get().Invoke(shot);
+            askedWhileHeld = true;
+        }
+    });
+    REQUIRE(askedWhileHeld);
+    REQUIRE_FALSE(busy.envelope.errors.empty());
+    CHECK(busy.envelope.errors[0].code == "host.busy");
+    CHECK(busy.envelope.errors[0].detail["state"] == "capture-pending");
+    CHECK(Arcane::Remote::ExitFromHost(busy.envelope) == 5);
+    CHECK(busy.completesJob == 0);
+    CHECK(env.data["timedOut"] == true);   // the ticket never retired
+    // The wait ended, and its hold went with it: the screenshot now arms.
+    Arcane::Remote::Call shot;
+    shot.command = "capture.window";
+    shot.args = nlohmann::json::object();
+    freed = Arcane::Remote::CommandRegistry::Get().Invoke(shot);
+    CHECK(freed.envelope.ok);
+    CHECK(freed.completesJob != 0);
+    session.Stop("test");
+}
+
+// ---- Task 30 (C2): the listener bounds a request body's depth, not just its size
+
+TEST_CASE("the listener refuses a call body nested past kMaxJsonDepth as malformed, before it is queued", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-deep-body");
+    Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path));
+    REQUIRE(session.Start());
+    const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+    REQUIRE(desc);
+    // A JSON object (well under kMaxBodyBytes) whose args nest past the bound:
+    // without the bound it would be queued as a call (and answered after a
+    // Drain); with it the listener answers 400 at once, with no Drain at all.
+    const std::uint32_t levels = Arcane::Remote::kMaxJsonDepth;
+    const std::string body = R"({"id":"deep","command":"host.wait","args":{"what":"ready","x":)" +
+                             std::string(levels, '[') + std::string(levels, ']') + "}}";
+    const std::string raw =
+        RemoteTest::HttpExchange(session.Port(), desc->token, "", "POST /remote/v1/call HTTP/1.1", body);
+    const auto split = raw.find("\r\n\r\n");
+    REQUIRE(split != std::string::npos);
+    CHECK(raw.rfind("HTTP/1.1 400", 0) == 0);
+    const auto env = Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+    REQUIRE_FALSE(env.errors.empty());
+    CHECK(env.errors[0].code == "arg.invalid");
+    CHECK(env.errors[0].message == "the call body is not a JSON object");
+    CHECK(Arcane::Remote::ExitFromHost(env) == 2);
     session.Stop("test");
 }
 

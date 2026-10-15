@@ -431,7 +431,11 @@ namespace Arcane::Editor
             // DrainFrame notes a module reload since the last drain (EndFrame's
             // Poll, a module rebuild's re-engage) from this host's own
             // PluginHost (ruling F10).
-            if (m_remote && m_remote->DrainFrame(m_plugin ? m_plugin->Generation() : 0u))
+            // Task 30: the attempt count and outcome let it note a failed
+            // reload (the generation stays put), so `wait reload` answers it.
+            if (m_remote && m_remote->DrainFrame(m_plugin ? m_plugin->Generation() : 0u,
+                                                 m_plugin ? m_plugin->ReloadAttempts() : 0u,
+                                                 m_plugin ? m_plugin->LastReloadOk() : true))
             {
                 ARC_INFO("ArcaneEditor: exiting on {}", m_remote->ExitReason());
                 break;
@@ -1879,22 +1883,21 @@ namespace Arcane::Editor
                                   "problems", "scene", "selection", "stats" };
         // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the
         // unsaved-changes guard host.quit honours: the scene (the same test the
-        // Exit intent's confirm modal parks on) or any open document. settled
-        // is `wait settled`: the --settle loop's producer conjunction, held
-        // across kRemoteSettleFrames rendered frames (RemoteSettleTracker).
+        // Exit intent's confirm modal parks on) or any open document.
+        // producersIdle is `wait settled`'s producer conjunct, the --settle
+        // loop's SettleProducersIdle; the byte-equal pair is the host.wait
+        // job's own two captures through the host pair below (Task 30).
         rc.hookUser           = this;
         rc.dirty              = [](void* user) -> bool {
             const auto* app = static_cast<const EditorApp*>(user);
             return (app->m_undo && app->m_scene.IsDirty(*app->m_undo)) || app->m_documents.AnyDirty();
         };
-        rc.settled            = [](void* user) -> bool {
+        rc.producersIdle      = [](void* user) -> bool {
             auto* app = static_cast<EditorApp*>(user);
             const bool shaderIdle       = app->m_shaderCompiler ? app->m_shaderCompiler->IsIdle() : true;
             const bool cookPending      = app->m_cookQueue && app->m_cookQueue->CookPending();
             const bool harvesterPending = app->m_materialThumbs && app->m_materialThumbs->PendingCount() != 0;
-            const bool idle = Arcane::SettleProducersIdle(shaderIdle, app->m_cookQueueSettling, cookPending,
-                                                          harvesterPending);
-            return app->m_remoteSettle.Observe(app->m_frameCount, idle);
+            return Arcane::SettleProducersIdle(shaderIdle, app->m_cookQueueSettling, cookPending, harvesterPending);
         };
         // Task 19 (ruling F16): the editor's one world, read per call so a
         // play session's registry swap is what world-taking commands see.

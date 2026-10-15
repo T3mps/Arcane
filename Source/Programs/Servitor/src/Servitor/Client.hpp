@@ -43,6 +43,15 @@ Arcane::Remote::Envelope ProtocolMismatch(const std::string& command, std::int64
 std::int64_t NowUnixMs();
 // A path as UTF-8 with forward slashes, for envelopes.
 std::string PathUtf8(const std::filesystem::path& p);
+// A path from UTF-8 text: argv (UTF-8 on every platform, see WideToUtf8) and
+// the wire. Never the narrow path(std::string) constructor, which reads the
+// ANSI code page on Windows. On Windows, text that is not UTF-8 throws.
+std::filesystem::path PathFromUtf8(std::string_view utf8);
+// UTF-16 (wchar_t on Windows) or UTF-32 (POSIX) to UTF-8; a lone surrogate or
+// a value past U+10FFFF becomes U+FFFD, so the result is always valid UTF-8.
+// servitor's Windows main converts CommandLineToArgvW's wide argv with it, so
+// a character outside the ANSI code page reaches Run intact instead of as '?'.
+std::string WideToUtf8(std::wstring_view wide);
 
 struct GlobalOptions {
     Format format = Format::Human; // TTY default; non-TTY default is Json

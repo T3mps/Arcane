@@ -29,6 +29,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -350,6 +351,58 @@ std::string PathUtf8(const std::filesystem::path& p)
 {
     const auto u8 = p.generic_u8string();
     return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+std::filesystem::path PathFromUtf8(std::string_view utf8)
+{
+    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
+}
+
+std::string WideToUtf8(std::wstring_view wide)
+{
+    ARC_CONSTANT("Unicode: U+FFFD REPLACEMENT CHARACTER, for a lone surrogate or a value past U+10FFFF")
+    constexpr char32_t kReplacement = 0xFFFD;
+    std::string out;
+    out.reserve(wide.size());
+    const auto append = [&out](char32_t cp) {
+        if (cp < 0x80) {
+            out += static_cast<char>(cp);
+        } else if (cp < 0x800) {
+            out += static_cast<char>(0xC0 | (cp >> 6));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            out += static_cast<char>(0xE0 | (cp >> 12));
+            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (cp >> 18));
+            out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    };
+    for (std::size_t i = 0; i < wide.size(); ++i) {
+        const auto unit = static_cast<char32_t>(static_cast<std::make_unsigned_t<wchar_t>>(wide[i]));
+        const bool high = unit >= 0xD800 && unit <= 0xDBFF;
+        const bool low = unit >= 0xDC00 && unit <= 0xDFFF;
+        if constexpr (sizeof(wchar_t) == 2) {
+            // UTF-16 (Windows): a high surrogate followed by a low one is one
+            // code point; either half alone is not a character.
+            if (high && i + 1 < wide.size()) {
+                const auto next = static_cast<char32_t>(static_cast<std::make_unsigned_t<wchar_t>>(wide[i + 1]));
+                if (next >= 0xDC00 && next <= 0xDFFF) {
+                    append(0x10000 + ((unit - 0xD800) << 10) + (next - 0xDC00));
+                    ++i;
+                    continue;
+                }
+            }
+            append(high || low ? kReplacement : unit);
+        } else {
+            // UTF-32 (POSIX wchar_t): every unit is a code point.
+            append(high || low || unit > 0x10FFFF ? kReplacement : unit);
+        }
+    }
+    return out;
 }
 
 Arcane::Remote::Envelope ProtocolMismatch(const std::string& command, std::int64_t hostMajor)

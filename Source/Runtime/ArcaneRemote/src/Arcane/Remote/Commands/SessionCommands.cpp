@@ -2,6 +2,8 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/CaptureCommands.hpp>
+#include <Arcane/Remote/Commands/CommandSupport.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/HostSession.hpp>
 #include <Arcane/Remote/Jobs.hpp>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Arcane::Remote
 {
@@ -49,13 +52,27 @@ ARC_REFLECT_TYPE_END()
 namespace
 {
 
+// A settle wait's captures (spec s4.7, Task 30): the ticket in flight on the
+// capture host pair, and the last retired capture to compare the next one to.
+struct SettleCaptures {
+    Detail::TicketCopy copy;
+    bool armed = false;               // a ticket is in flight (the ring is held)
+    bool idleAtArm = false;           // producersIdle when that ticket was armed
+    bool havePrevious = false;        // `previous` was captured with the producers idle at both ends
+    std::vector<unsigned char> previous;
+    std::uint32_t width = 0, height = 0;
+    std::uint64_t captures = 0;       // retired captures so far
+};
+
 // One armed host.wait job's inputs, recorded when the command armed it.
 struct WaitRow {
     WaitArgs args;
     std::uint64_t startedFrame = 0;
     std::uint32_t generationAtArm = 0;
+    std::uint64_t reloadSerialAtArm = 0;   // session.ReloadSerial() at the arm (Task 30)
     bool hasRenderer = true;
     std::chrono::steady_clock::time_point started{};
+    SettleCaptures settle;                 // what = settled only
 };
 
 // The stored pointers (ruling F11) and the armed waits, keyed by job id.
@@ -208,6 +225,93 @@ CommandResult HostQuit(const Call& call, void* /*user*/)
     return result;
 }
 
+// Ends a wait row: its ring hold (a settle capture in flight) and its row.
+void ForgetWait(SessionCommandState& s, std::uint64_t jobId)
+{
+    Detail::ReleaseCaptureRing(jobId);
+    s.waits.erase(jobId);
+}
+
+// One step of `wait settled` (spec s4.7; Task 30): the --settle predicate, two
+// byte-equal captures with the producers idle, through the capture host pair
+// and Task 27's ticket step. Each capture is one render ticket: armed on one
+// step (only while no screenshot or compare holds the ring, and only while
+// producersIdle answers true), drained on later ones; it never waits on
+// host.frame and never idles the device. A capture whose producers were busy
+// at either end breaks the pair, so the next two start over. WaitPoll has
+// already answered the refusals and the timeout. True when the job finished.
+bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
+{
+    const HostSession::Config& config = s.session->GetConfig();
+    SettleCaptures& st = row.settle;
+    if (!st.armed) {
+        // One capture in flight per host (ruling P4 (a)): a screenshot or a
+        // compare holds the ring; a wait waits for it rather than refusing.
+        if (CaptureInFlight(*s.jobs))
+            return false;
+        st.idleAtArm = config.producersIdle(config.hookUser);
+        if (!st.idleAtArm) {
+            st.havePrevious = false;   // a busy producer breaks the pair
+            return false;
+        }
+        st.copy.arm = config.capture.armHost;
+        st.copy.drain = config.capture.drainHost;
+        st.copy.hookUser = config.capture.user;
+        st.copy.deadline = std::chrono::steady_clock::time_point::max();   // the wait's own timeout governs
+        job.progress.label.clear();   // StepTicket arms while the label is not "copied"
+    }
+
+    CaptureMapped raw;
+    const Detail::TicketStep step = Detail::StepTicket(job, gate, st.copy, raw);
+    if (!st.armed) {
+        if (step == Detail::TicketStep::Failed) {
+            // Nothing will record a copy yet (a host still booting): not the
+            // wait's failure. StepTicket wrote its MakeError; restore the arm
+            // seed and try again on a later Drain, bounded by the timeout.
+            job.envelope = MakeOk(job.command, nlohmann::json::object(), {});
+            return false;
+        }
+        st.armed = true;   // StepTicket's arming step is always Pending
+        Detail::HoldCaptureRing(job.id.value);
+        return false;
+    }
+    if (step == Detail::TicketStep::Pending)
+        return false;
+    st.armed = false;
+    if (step == Detail::TicketStep::Failed) {
+        // capture.minimized (exit 5: a minimized host renders nothing) or a
+        // lost copy (capture.no-frame); StepTicket wrote the envelope.
+        ForgetWait(s, job.id.value);
+        return true;
+    }
+    Detail::ReleaseCaptureRing(job.id.value);
+
+    std::vector<unsigned char> rgba;
+    std::string why;
+    if (!Detail::NormalizeRetired(raw, rgba, why)) {
+        job.envelope = MakeError(job.command, "capture.no-frame", "a settle capture is unusable: " + why,
+                                 "retry the wait");
+        ForgetWait(s, job.id.value);
+        return true;
+    }
+    ++st.captures;
+    const bool idleThroughout = st.idleAtArm && config.producersIdle(config.hookUser);
+    const bool sameBytes = st.havePrevious && raw.width == st.width && raw.height == st.height && rgba == st.previous;
+    if (idleThroughout && sameBytes) {
+        job.envelope = MakeOk(job.command,
+                              {{"done", true}, {"what", "settled"}, {"captures", st.captures}, {"width", raw.width},
+                               {"height", raw.height}},
+                              gate.Block());
+        ForgetWait(s, job.id.value);
+        return true;
+    }
+    st.previous = std::move(rgba);
+    st.width = raw.width;
+    st.height = raw.height;
+    st.havePrevious = idleThroughout;
+    return false;
+}
+
 bool StepWait(Job& job, HostGate& gate, void* user)
 {
     SessionCommandState& s = *static_cast<SessionCommandState*>(user);
@@ -215,14 +319,15 @@ bool StepWait(Job& job, HostGate& gate, void* user)
     if (it == s.waits.end() || s.session == nullptr) {
         // The session that armed this wait is gone (stopped, or replaced).
         job.envelope = Unavailable(job.command);
-        if (it != s.waits.end())
-            s.waits.erase(it);
+        ForgetWait(s, job.id.value);
         return true;
     }
-    const WaitRow& row = it->second;
+    WaitRow& row = it->second;
     Envelope env = WaitPoll(*s.session, row.args, row.startedFrame, row.generationAtArm, row.hasRenderer,
-                            row.started);
+                            row.started, row.reloadSerialAtArm);
     if (IsPending(env)) {
+        if (row.args.what == "settled")
+            return StepSettle(job, gate, s, row);
         if (row.args.what == "frames") {
             const std::uint64_t now = gate.frame.load(std::memory_order_acquire);
             job.progress.done = std::min<std::uint64_t>(now >= row.startedFrame ? now - row.startedFrame : 0,
@@ -230,8 +335,11 @@ bool StepWait(Job& job, HostGate& gate, void* user)
         }
         return false;
     }
-    job.envelope = std::move(env); // done, timed out, or a failure (MakeError): the row's ok envelope is replaced
-    s.waits.erase(it);
+    // Done, timed out, or a failure (MakeError): the row's ok envelope is
+    // replaced. A settle capture still in flight is abandoned (the ring drops
+    // an unclaimed ticket); its hold goes with the row.
+    job.envelope = std::move(env);
+    ForgetWait(s, job.id.value);
     return true;
 }
 
@@ -257,6 +365,7 @@ CommandResult HostWait(const Call& call, void* /*user*/)
     row.args = args;
     row.startedFrame = session.Gate().frame.load(std::memory_order_acquire);
     row.generationAtArm = session.Gate().pluginGeneration;
+    row.reloadSerialAtArm = session.ReloadSerial();   // a failure noted after this answers the wait (Task 30)
     row.hasRenderer = session.GetConfig().kind != HostKind::Server;
     row.started = std::chrono::steady_clock::now();
     const JobId id = s.jobs->Arm(call.command, args.what == "frames" ? args.frames : 0u, &StepWait, &s);
@@ -279,7 +388,8 @@ void RegisterOnce(Desc desc)
 } // namespace
 
 Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_t startedFrame,
-                  std::uint32_t generationAtArm, bool hasRenderer, std::chrono::steady_clock::time_point started)
+                  std::uint32_t generationAtArm, bool hasRenderer, std::chrono::steady_clock::time_point started,
+                  std::uint64_t reloadSerialAtArm)
 {
     const HostGate& gate = session.Gate();
     const std::string command = "host.wait";
@@ -291,14 +401,20 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
         done = IsReadyState(state);
         data["state"] = state;
     } else if (args.what == "settled") {
+        // Settled is two captures (spec s4.7), and captures are refused on a
+        // host with no renderer (spec AM1): the same answer screenshot gives.
         if (!hasRenderer)
             return MakeError(command, "capture.no-renderer", "this host has no renderer",
                              "wait on an editor or a runtime");
         const HostSession::Config& config = session.GetConfig();
-        if (config.settled == nullptr)
+        if (config.capture.armHost == nullptr || config.capture.drainHost == nullptr)
+            return MakeError(command, "capture.no-renderer",
+                             "this host installed no capture pair, and settled compares two captures",
+                             "wait on an editor or a runtime");
+        if (config.producersIdle == nullptr)
             return MakeError(command, "host.unavailable", "this host installed no settle hook",
                              "wait on an editor or a runtime host");
-        done = config.settled(config.hookUser);
+        done = false;   // the host.wait job decides it from its captures (StepSettle)
     } else if (args.what == "frames") {
         const std::uint64_t frame = gate.frame.load(std::memory_order_acquire);
         done = frame >= startedFrame + args.frames;
@@ -306,6 +422,16 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
         data["startedFrame"] = startedFrame;
     } else if (args.what == "reload") {
         done = gate.pluginGeneration != generationAtArm;
+        // A reload that failed after the arm keeps the generation, so without
+        // this the wait would run out its timeout (exit 8) on a known failure.
+        if (!done && session.ReloadSerial() != reloadSerialAtArm && !session.LastReloadOk()) {
+            Envelope failed = MakeError(command, "module.reload-failed", session.LastReloadReason(),
+                                        "fix the cause the host log names (servitor logs), rebuild, then wait "
+                                        "reload again");
+            failed.errors.front().detail = {{"pluginGeneration", gate.pluginGeneration},
+                                            {"atFrame", session.LastReloadFrame()}};
+            return failed;
+        }
         data["pluginGeneration"] = gate.pluginGeneration;
     } else if (args.what == "state") {
         if (!IsHostStateName(args.state))
@@ -332,6 +458,8 @@ void RegisterSessionCommands(HostSession* session, JobTable* jobs)
     SessionCommandState& s = State();
     s.session = session;
     s.jobs = jobs;
+    for (const auto& entry : s.waits)
+        Detail::ReleaseCaptureRing(entry.first);   // a settle capture's hold (Task 30)
     s.waits.clear(); // a wait armed under the previous pointers answers host.unavailable
 
     Desc quit;
@@ -364,6 +492,8 @@ void ReleaseSessionCommands(const HostSession* session)
         return;
     s.session = nullptr;
     s.jobs = nullptr;
+    for (const auto& entry : s.waits)
+        Detail::ReleaseCaptureRing(entry.first);
     s.waits.clear();
 }
 

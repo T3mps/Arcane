@@ -84,7 +84,7 @@ nlohmann::json ParseField(const std::string& text)
 {
     if (text.empty())
         return nullptr;
-    nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
+    nlohmann::json parsed = ParseJsonBounded(text);   // a String cvar's text is caller-supplied (Task 30)
     return parsed.is_discarded() ? nlohmann::json(nullptr) : parsed;
 }
 

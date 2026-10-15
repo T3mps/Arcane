@@ -105,6 +105,15 @@ TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureM
 // BGRA swapped); false with *why when its geometry does not fit its bytes.
 bool NormalizeRetired(const CaptureMapped& raw, std::vector<unsigned char>& rgba, std::string& why);
 
+// The capture ring's third user (host.wait settled, Task 30): a job that has
+// armed a ticket on the host pair holds the ring until that ticket retires or
+// the job ends, and CaptureInFlight counts a hold whose job is still Running,
+// so a screenshot or compare meanwhile answers host.busy capture-pending
+// (ruling P4 (a): one capture in flight per host). Main thread only. A
+// RegisterCaptureCommands that changes the table drops every hold.
+void HoldCaptureRing(std::uint64_t jobId);
+void ReleaseCaptureRing(std::uint64_t jobId);
+
 } // namespace Arcane::Remote::Detail
 
 #endif

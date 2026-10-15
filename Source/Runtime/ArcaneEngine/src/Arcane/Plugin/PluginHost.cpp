@@ -230,6 +230,10 @@ namespace Arcane
         EngineContext          ctx{};
         std::optional<PluginImage> current;
         std::uint32_t gen = 0;
+        // Reload's own record (ReloadAttempts / LastReloadOk): every reload
+        // that tried, and how the last one ended. Poll drops Reload's bool.
+        std::uint64_t reloadAttempts = 0;
+        bool          lastReloadOk   = true;
 
         std::filesystem::file_time_type lastWrite{};
         bool                            pending = false;
@@ -1210,6 +1214,8 @@ namespace Arcane
         if (m_impl->source.empty())
             return true;
 
+        ++m_impl->reloadAttempts;   // from here on the reload tries; its outcome is recorded below
+
         // Multi-module: quiesce plugins (kept mapped) so the primary's reset doesn't touch
         // a running secondary, run the UNCHANGED primary reload, then re-establish the
         // plugins on the post-reload registry. With no plugins both calls are no-ops, so
@@ -1220,7 +1226,10 @@ namespace Arcane
         // here too, BEFORE the secondaries are quiesced, so a refused reload bounces
         // nothing at all -- not the primary, not a secondary, not a generation.
         if (m_impl->RefuseReloadForActiveNetDriver())
+        {
+            m_impl->lastReloadOk = false;
             return false;
+        }
         m_impl->ShutdownPluginsLive();
         const bool ok = m_impl->ReloadPrimary(restoreState);
         m_impl->InitPluginsLive();
@@ -1228,6 +1237,7 @@ namespace Arcane
         // (after ReloadPrimary's own InstantiateAll); idempotent, so this only adds what
         // they brought back.
         m_impl->InstantiateAll();
+        m_impl->lastReloadOk = ok;
         return ok;
 #endif
     }
@@ -1325,6 +1335,16 @@ namespace Arcane
     std::uint32_t PluginHost::Generation() const noexcept
     {
         return m_impl->gen;
+    }
+
+    std::uint64_t PluginHost::ReloadAttempts() const noexcept
+    {
+        return m_impl->reloadAttempts;
+    }
+
+    bool PluginHost::LastReloadOk() const noexcept
+    {
+        return m_impl->lastReloadOk;
     }
 
     bool PluginHost::SaveStatePrimary(BinaryWriter& w)

@@ -44,6 +44,8 @@ ARC_CONSTANT("capacity hint: s4.3 default commands drained per tick")
 inline constexpr std::uint32_t kFrameBudgetCommands = 8;
 ARC_CONSTANT("wire protocol: s10.1 idle connection close")
 inline constexpr std::uint32_t kIdleConnectionSeconds = 30;
+ARC_CONSTANT("stack bound: nlohmann parses iteratively, but a copy or dump recurses ~4 KiB per level in Debug (a bare 256-level chain overflows a 1 MiB stack, SceneCommands.cpp); scene.tree's deepest legal reply nests ~134 containers (64 levels below the roots, two per level), so 160 admits every reply a host builds and refuses a hostile body long before the stack")
+inline constexpr std::uint32_t kMaxJsonDepth = 160;
 
 enum class HostKind : std::uint8_t { Editor, Runtime, Server };
 
@@ -167,6 +169,16 @@ ARC_REMOTE_PROTOCOL_API Envelope MakeOk(std::string command, nlohmann::json data
 ARC_REMOTE_PROTOCOL_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
 ARC_REMOTE_PROTOCOL_API int ExitFromHost(const Envelope& env);
 ARC_REMOTE_PROTOCOL_API int WorstExit(std::span<const int> codes);
+// The one parse of untrusted or unbounded JSON on both sides of the wire
+// (request bodies on the host; host replies, stream events, descriptors and
+// --args-json in servitor): nlohmann's iterative parser with a callback that
+// refuses any container nested deeper than maxDepth (the outermost container
+// is level 1). Returns a discarded value (is_discarded()) when the text is not
+// JSON or nests too deep, and never throws. *tooDeep (when non-null) is true
+// only for the depth refusal. A container past the limit is never built, so a
+// body of a million '[' costs no stack here or in a later copy or dump.
+ARC_REMOTE_PROTOCOL_API nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth = kMaxJsonDepth,
+                                                        bool* tooDeep = nullptr);
 
 } // namespace Arcane::Remote
 

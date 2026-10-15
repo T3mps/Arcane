@@ -865,7 +865,10 @@ void LoopbackHttpTransport::Impl::HandleStream(Conn& c, std::string_view query)
 
 void LoopbackHttpTransport::Impl::HandleCall(Conn& c, const HttpRequest& req)
 {
-    nlohmann::json body = nlohmann::json::parse(req.body, nullptr, false);
+    // kMaxBodyBytes bounds the size, not the depth: a body nested past
+    // kMaxJsonDepth is refused here, on the listener thread, before any copy
+    // or dump could recurse through it (Task 30).
+    nlohmann::json body = ParseJsonBounded(req.body);
     if (body.is_discarded() || !body.is_object()) {
         Refuse(c, 400, "Bad Request",
                MakeError("", "arg.invalid", "the call body is not a JSON object", "send {id, command, args, options}"), "call body");

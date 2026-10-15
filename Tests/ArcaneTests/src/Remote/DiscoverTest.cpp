@@ -2,6 +2,7 @@
 #include <Servitor/Client.hpp>
 #include <Servitor/Discover.hpp>
 #include <Servitor/Transport.hpp>
+#include <Servitor/Verbs.hpp>   // FindVerb (Task 30: --out as UTF-8)
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Http.hpp>       // MakeToken (Task 5)
@@ -449,6 +450,23 @@ TEST_CASE("a reply body that is not an envelope is internal exit 1", "[servitor]
     }
 }
 
+// Task 30 (C2): a well-formed ok envelope whose data nests one container past
+// kMaxJsonDepth (the envelope object is level 1) is the malformed-reply path,
+// never parsed into a document a later copy or print would recurse through.
+TEST_CASE("a reply nested past kMaxJsonDepth is internal exit 1, reason too-deep", "[servitor][client]") {
+    const std::uint32_t levels = Arcane::Remote::kMaxJsonDepth;
+    const std::string body = R"({"ok":true,"protocol":1,"id":"d","command":"discover.noop","errors":[],"data":)" +
+                             std::string(levels, '[') + std::string(levels, ']') + "}";
+    RemoteTest::CannedServer host("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
+                                  "\r\nConnection: close\r\n\r\n" + body);
+    auto target = CannedTarget(host.Port());
+    const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+    REQUIRE_FALSE(r.envelope.errors.empty());
+    CHECK(r.envelope.errors[0].code == "internal");
+    CHECK(r.envelope.errors[0].detail["reason"] == "too-deep");
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
+}
+
 TEST_CASE("a reply past the byte cap is refused as internal exit 1", "[servitor][client]") {
     const std::string body(4096, 'x');
     RemoteTest::CannedServer host("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n" + body);
@@ -505,6 +523,45 @@ TEST_CASE("--project resolves a directory up to its .arcproj, like the working d
     CHECK_FALSE(Servitor::RemoteDirFor(opt, &err).has_value());
     CHECK(err.errors[0].code == "arg.invalid");
     CHECK(Arcane::Remote::ExitFromHost(err) == 2);
+    fs::remove_all(proj);
+}
+
+// Task 30 (C3): servitor's argv is UTF-8 on every platform. The Windows main
+// converts CommandLineToArgvW's wide argv with WideToUtf8, so a character
+// outside the ANSI code page is not '?', and the argv consumers build paths
+// from UTF-8 (PathFromUtf8), never through the ANSI page.
+TEST_CASE("argv is UTF-8: WideToUtf8 keeps non-ANSI text, and --project and --out read it as UTF-8", "[servitor][client]") {
+    namespace fs = std::filesystem;
+    CHECK(Servitor::WideToUtf8(L"plain --flag") == "plain --flag");
+    CHECK(Servitor::WideToUtf8(L"café-中") == "caf\xC3\xA9-\xE4\xB8\xAD");
+    CHECK(Servitor::WideToUtf8(L"\U0001F600") == "\xF0\x9F\x98\x80");   // a surrogate pair in UTF-16
+    const std::wstring lone(1, static_cast<wchar_t>(0xD800));
+    CHECK(Servitor::WideToUtf8(lone) == "\xEF\xBF\xBD");                // never invalid UTF-8
+    CHECK(Servitor::WideToUtf8(L"").empty());
+
+    fs::path proj = fs::temp_directory_path() / std::u8string(u8"servitor-utf8-é中-");
+    proj += std::to_string(Arcane::EditorLock::Self().pid);
+    fs::remove_all(proj);
+    fs::create_directories(proj);
+    { std::ofstream(proj / "Demo.arcproj") << "{}"; }
+
+    Servitor::GlobalOptions opt;
+    Arcane::Remote::Envelope err;
+    opt.project = Servitor::PathUtf8(proj);   // what main hands Run for this argument
+    const auto root = Servitor::ProjectRootFor(opt, &err);
+    REQUIRE(root.has_value());
+    CHECK(fs::equivalent(*root, proj));
+
+    const Servitor::VerbRow* row = Servitor::FindVerb("screenshot window");
+    REQUIRE(row != nullptr);
+    REQUIRE(row->args != nullptr);
+    const fs::path shot = proj / std::u8string(u8"shot-é.png");
+    const std::vector<std::string> rest = {"--out", Servitor::PathUtf8(shot)};
+    nlohmann::json args;
+    std::string why;
+    REQUIRE(row->args(rest, args, &why));
+    REQUIRE(args.contains("out"));
+    CHECK(Servitor::PathFromUtf8(args["out"].get<std::string>()).lexically_normal() == shot.lexically_normal());
     fs::remove_all(proj);
 }
 

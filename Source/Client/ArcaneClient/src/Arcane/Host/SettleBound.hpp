@@ -162,40 +162,4 @@ namespace Arcane
     {
         return byteEqual && producersIdle && matches;
     }
-
-    // Servitor `wait settled` (the remote host.wait job, Servitor P0 Task 16):
-    // the live hosts' settle hook. A remote wait has no per-poll capture to
-    // byte-compare (remote capture is its own later job, and the --settle
-    // capture path idles the device), so the byte-equal conjunct is stood in
-    // for by STABILITY: every producer idle across kRemoteSettleFrames
-    // rendered frames in a row. Polled once per host-loop iteration while a
-    // wait runs; a poll that skipped a rendered frame (the previous wait ended
-    // long ago) restarts the count, so an old idle streak never settles a new
-    // wait early. No match conjunct: a remote wait compares against nothing.
-    ARC_CONSTANT("remote settle: rendered frames of idle producers that stand in for --settle's byte-equal pair")
-    inline constexpr std::uint64_t kRemoteSettleFrames = 2;
-
-    struct RemoteSettleTracker
-    {
-        // `renderedFrames` is the host's rendered-frame counter; true once it
-        // has advanced kRemoteSettleFrames past the first poll of an unbroken
-        // idle streak.
-        [[nodiscard]] bool Observe(std::uint64_t renderedFrames, bool producersIdle) noexcept
-        {
-            const bool contiguous = m_streak && renderedFrames >= m_lastFrame && renderedFrames - m_lastFrame <= 1;
-            if (!producersIdle || !contiguous)
-            {
-                m_streak    = producersIdle;
-                m_idleSince = renderedFrames;
-            }
-            m_lastFrame = renderedFrames;
-            const bool stable = m_streak && renderedFrames - m_idleSince >= kRemoteSettleFrames;
-            return SettleConverged(stable, producersIdle, /*matches=*/true);
-        }
-
-    private:
-        bool          m_streak    = false;
-        std::uint64_t m_idleSince = 0;
-        std::uint64_t m_lastFrame = 0;
-    };
 }

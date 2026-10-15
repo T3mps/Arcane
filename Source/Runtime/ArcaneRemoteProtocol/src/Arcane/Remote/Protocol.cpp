@@ -35,7 +35,7 @@ int ExitForCode(const std::string& code)
                       "reflect.unreadable", "ecs.artifact-failed", "resource.artifact-failed",
                       "scene.artifact-failed", "capture.artifact-failed", "compare.reference-unreadable",
                       "compare.bless-failed", "compare.artifact-failed", "play.not-playing", "play.refused",
-                      "play.stopped" }))
+                      "play.stopped", "module.reload-failed", "quit.force-failed" }))
         return 6;
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;
@@ -343,6 +343,33 @@ int WorstExit(std::span<const int> codes)
         }
     }
     return worst;
+}
+
+nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth, bool* tooDeep)
+{
+    // The callback's depth is the number of containers already open around
+    // the event (0 for the outermost value), and it keeps counting inside a
+    // container it discarded, so returning false at a start event past the
+    // limit stops every deeper level from being built. The flag then turns
+    // the whole parse into a refusal: a partially kept document is never
+    // handed on.
+    bool deep = false;
+    const nlohmann::json::parser_callback_t limit =
+        [&deep, maxDepth](int depth, nlohmann::json::parse_event_t event, nlohmann::json& /*parsed*/) {
+            const bool opens = event == nlohmann::json::parse_event_t::object_start ||
+                               event == nlohmann::json::parse_event_t::array_start;
+            if (opens && depth >= 0 && static_cast<std::uint32_t>(depth) >= maxDepth) {
+                deep = true;
+                return false;
+            }
+            return true;
+        };
+    nlohmann::json parsed = nlohmann::json::parse(text.begin(), text.end(), limit, /*allow_exceptions=*/false);
+    if (tooDeep != nullptr)
+        *tooDeep = deep;
+    if (deep)
+        return nlohmann::json(nlohmann::json::value_t::discarded);
+    return parsed;
 }
 
 } // namespace Arcane::Remote

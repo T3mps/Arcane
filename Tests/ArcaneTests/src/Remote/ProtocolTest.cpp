@@ -53,6 +53,8 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("play.not-playing")) == 6);   // listed explicitly (Task 29)
     CHECK(ExitFromHost(Err("play.refused")) == 6);
     CHECK(ExitFromHost(Err("play.stopped")) == 6);
+    CHECK(ExitFromHost(Err("module.reload-failed")) == 6);   // listed explicitly (Task 30: wait reload on a failed reload)
+    CHECK(ExitFromHost(Err("quit.force-failed")) == 6);      // listed explicitly (Task 30 s6.4 table pass)
     CHECK(ExitFromHost(Err("some.future-code")) == 6); // any other non-empty code (ruling F6)
     CHECK(ExitFromHost(Err("")) == 2);                 // empty code on a non-ok envelope
     CHECK(ExitFromHost(Err("host.died")) == 7);
@@ -313,5 +315,39 @@ TEST_CASE("ParseHttpReply refuses chunked and malformed replies", "[remote][prot
     REQUIRE(empty.has_value());
     CHECK(empty->status == 204);
     CHECK(empty->body.empty());
+}
+
+// Task 30 (C2): the one bounded parse both sides use. kMaxJsonDepth nested
+// containers parse; one more is refused as too deep, and a megabyte of '['
+// (inside kMaxBodyBytes, which bounds size, not depth) is refused without
+// building a level past the limit.
+TEST_CASE("ParseJsonBounded refuses nesting past kMaxJsonDepth and nothing shallower", "[remote][protocol]") {
+    const auto nest = [](std::uint32_t levels) {
+        return std::string(levels, '[') + std::string(levels, ']');
+    };
+    bool deep = true;
+    const auto atLimit = ParseJsonBounded(nest(kMaxJsonDepth), kMaxJsonDepth, &deep);
+    CHECK_FALSE(atLimit.is_discarded());
+    CHECK_FALSE(deep);
+    const auto past = ParseJsonBounded(nest(kMaxJsonDepth + 1), kMaxJsonDepth, &deep);
+    CHECK(past.is_discarded());
+    CHECK(deep);
+    // Objects count the same as arrays; the outermost container is level 1.
+    CHECK_FALSE(ParseJsonBounded(R"({"a":{"b":[1]}})", 3).is_discarded());
+    CHECK(ParseJsonBounded(R"({"a":{"b":[1]}})", 2).is_discarded());
+    // A request-sized hostile body: refused, and flagged as depth, not syntax.
+    deep = false;
+    CHECK(ParseJsonBounded(std::string(1024u * 1024u, '['), kMaxJsonDepth, &deep).is_discarded());
+    CHECK(deep);
+    // Malformed text is discarded without the depth flag; scalars are depth 0.
+    deep = true;
+    CHECK(ParseJsonBounded("{not json", kMaxJsonDepth, &deep).is_discarded());
+    CHECK_FALSE(deep);
+    CHECK(ParseJsonBounded("42").get<int>() == 42);
+    // The envelope a host builds parses back whole under the default bound.
+    const auto env = ToJson(MakeOk("x.y", nlohmann::json{{"a", nlohmann::json::array({1, 2})}}, HostBlock{}));
+    const auto round = ParseJsonBounded(env.dump());
+    REQUIRE_FALSE(round.is_discarded());
+    CHECK(round == env);
 }
 #endif

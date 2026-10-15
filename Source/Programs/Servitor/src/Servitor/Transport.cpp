@@ -269,9 +269,12 @@ Arcane::Remote::Envelope NotSent(const std::string& command, const Arcane::Remot
 Arcane::Remote::Envelope EnvelopeOf(const std::string& command, const Arcane::Remote::Descriptor& desc,
                                     const Arcane::Remote::HttpReply& reply)
 {
-    const auto json = nlohmann::json::parse(reply.body, nullptr, /*allow_exceptions=*/false);
+    // Bounded (Task 30): a reply nested past kMaxJsonDepth is malformed, never
+    // copied or printed (both recurse per level).
+    bool tooDeep = false;
+    const auto json = Arcane::Remote::ParseJsonBounded(reply.body, Arcane::Remote::kMaxJsonDepth, &tooDeep);
     if (json.is_discarded())
-        return Internal(command, desc, reply.status, "not-json");
+        return Internal(command, desc, reply.status, tooDeep ? "too-deep" : "not-json");
     auto env = Arcane::Remote::TryParseEnvelope(json);
     if (!env)
         return Internal(command, desc, reply.status, "not-an-envelope");
@@ -411,14 +414,16 @@ std::optional<nlohmann::json> GetJson(const Arcane::Remote::Descriptor& desc, st
 
     ReadOutcome read = ReadReply(guard.sock, deadline, kMaxReplyBytes, nullptr);
     if (read.end == ReadEnd::Reply) {
-        const auto json = nlohmann::json::parse(read.reply.body, nullptr, /*allow_exceptions=*/false);
+        bool tooDeep = false;   // bounded like EnvelopeOf (Task 30)
+        const auto json = Arcane::Remote::ParseJsonBounded(read.reply.body, Arcane::Remote::kMaxJsonDepth, &tooDeep);
         if (read.reply.status == 200 && !json.is_discarded())
             return json;
         if (!json.is_discarded()) {
             if (auto env = Arcane::Remote::TryParseEnvelope(json); env && !env->errors.empty())
                 return fail(std::move(*env));
         }
-        return fail(Internal(command, desc, read.reply.status, json.is_discarded() ? "not-json" : "not-an-envelope"));
+        return fail(Internal(command, desc, read.reply.status,
+                             json.is_discarded() ? (tooDeep ? "too-deep" : "not-json") : "not-an-envelope"));
     }
     return fail(FromReadEnd(read, command, desc, timeoutMs));
 }

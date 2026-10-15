@@ -876,13 +876,13 @@ void RuntimeApp::MainLoop()
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
         rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()
         // Task 16 (ruling F12): `wait settled` -- the runtime's --settle
-        // producer conjunct is its shader compiler alone (SettleBound.hpp),
-        // held across kRemoteSettleFrames rendered frames. No dirty hook: a
-        // runtime has no unsaved documents.
+        // producer conjunct is its shader compiler alone (SettleBound.hpp);
+        // the byte-equal pair is the host.wait job's own two captures through
+        // the capture pair below (Task 30). No dirty hook: a runtime has no
+        // unsaved documents.
         rc.hookUser           = this;
-        rc.settled            = [](void* user) -> bool {
-            auto* app = static_cast<RuntimeApp*>(user);
-            return app->m_remoteSettle.Observe(app->m_frameCount, app->m_shaderCompiler.IsIdle());
+        rc.producersIdle      = [](void* user) -> bool {
+            return static_cast<RuntimeApp*>(user)->m_shaderCompiler.IsIdle();
         };
         // Task 19 (ruling F16): the runtime's one world.
         rc.worlds.user        = this;
@@ -986,8 +986,10 @@ void RuntimeApp::MainLoop()
         // Remote commands run after the pump and before the sim advance, on
         // every iteration including a minimized one. DrainFrame notes a module
         // reload the last frame performed (CaptureTail's Poll, the
-        // reload_plugin actions) from this host's own PluginHost (ruling F10).
-        if (m_remote && m_remote->DrainFrame(m_plugin->Generation()))
+        // reload_plugin actions) from this host's own PluginHost (ruling F10),
+        // and a failed one from its attempt count (Task 30).
+        if (m_remote && m_remote->DrainFrame(m_plugin->Generation(), m_plugin->ReloadAttempts(),
+                                             m_plugin->LastReloadOk()))
         {
             ARC_INFO("ArcaneRuntime: exiting on {}", m_remote->ExitReason());
             break;

@@ -10,7 +10,6 @@ using Arcane::SettleBail;
 using Arcane::SettleBailDecision;
 using Arcane::SettleConverged;
 using Arcane::SettleProducersIdle;
-using Arcane::RemoteSettleTracker;
 
 TEST_CASE("settle bail: keeps going until BOTH bounds are spent", "[settle]")
 {
@@ -131,19 +130,4 @@ TEST_CASE("settle converged: byte-equal frames + shader idle + cook pending "
     // substitute for either of the other two conjuncts.
     CHECK_FALSE(SettleConverged(/*byteEqual=*/false, producersFullyIdle, matches));
     CHECK_FALSE(SettleConverged(byteEqual, producersFullyIdle, /*matches=*/false));
-}
-
-TEST_CASE("RemoteSettleTracker needs two rendered frames of idle producers in a row", "[settle]") {
-    RemoteSettleTracker tracker;
-    CHECK_FALSE(tracker.Observe(10, true));    // idle seen at frame 10
-    CHECK_FALSE(tracker.Observe(10, true));    // no new frame rendered yet
-    CHECK_FALSE(tracker.Observe(11, true));
-    CHECK(tracker.Observe(12, true));          // two rendered frames with every producer idle
-    CHECK_FALSE(tracker.Observe(13, false));   // a busy producer restarts the count
-    CHECK_FALSE(tracker.Observe(14, true));
-    CHECK_FALSE(tracker.Observe(15, true));
-    CHECK(tracker.Observe(16, true));
-    CHECK_FALSE(tracker.Observe(40, true));    // a poll that skipped frames (a new wait) restarts it
-    CHECK_FALSE(tracker.Observe(41, true));
-    CHECK(tracker.Observe(42, true));
 }

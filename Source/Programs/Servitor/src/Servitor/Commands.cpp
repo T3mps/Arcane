@@ -45,7 +45,9 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"status", "List the project's live hosts from their descriptors (no connection)", "observe"},
     {"launch", "Start an editor, runtime or server with --remote and wait until it is ready", "drive"},
     {"quit", "Ask the host to exit cleanly; --force ends the process after --timeout", "drive"},
-    {"wait", "Wait until the host is ready or settled, N frames pass, a module reloads, or it reaches a state",
+    {"wait", "Wait until the host is ready or settled (two byte-equal captures, shaders idle; launch it with "
+             "--fixed-time), N frames pass, a module reloads (a failed reload is module.reload-failed), or it "
+             "reaches a state",
      "observe"},
     {"world", "List the host's worlds", "observe"},
     {"commands", "Print this manifest (verbs and exit codes) with no host running", "none"},
@@ -66,7 +68,9 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"screenshot", "Capture the viewport or the window to a PNG", "observe"},
     {"compare", "Compare a capture against a reference image (--bless writes the reference, a drive)",
      "per-command"},
-    {"play", "Enter play mode (editor), or run a held simulation (runtime, server)", "drive"},
+    {"play", "Enter play mode (editor), or run a held simulation (runtime, server); an editor already playing "
+             "answers ok with alreadyPlaying: true and the running topology",
+     "drive"},
     {"stop", "Leave play mode (editor), or hold the simulation (runtime, server)", "drive"},
     {"pause", "Pause the simulation", "drive"},
     {"resume", "Resume the simulation (also starts a host held at frame 0)", "drive"},
@@ -225,7 +229,10 @@ bool ParseCallTokens(std::span<const std::string> rest, CallRequest& out, std::s
                 return Fail(error, "--args-file cannot read " + value);
             text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
-        nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
+        bool tooDeep = false;   // the host refuses a body this deep; say so before sending (Task 30)
+        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+        if (tooDeep)
+            return Fail(error, flag + " nests deeper than " + std::to_string(Arcane::Remote::kMaxJsonDepth) + " levels");
         if (parsed.is_discarded())
             return Fail(error, flag + " is not valid JSON");
         if (!parsed.is_object())
@@ -241,7 +248,11 @@ bool ParseCallTokens(std::span<const std::string> rest, CallRequest& out, std::s
         if (args.contains(key))
             return Fail(error, "argument '" + key + "' is given twice");
         const std::string text = token.substr(eq + 1);
-        nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
+        bool tooDeep = false;   // too deep is refused, never quietly sent as a string
+        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+        if (tooDeep)
+            return Fail(error, "argument '" + key + "' nests deeper than " +
+                                   std::to_string(Arcane::Remote::kMaxJsonDepth) + " levels");
         args[key] = parsed.is_discarded() ? nlohmann::json(text) : std::move(parsed);
     }
     out.command = tokens.positional.front();

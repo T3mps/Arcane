@@ -139,9 +139,13 @@ const std::array<VerbRow, 34> kVerbs = {{
     {"quit", "host.quit", &QuitArgs, &QuitVerb, kQuitFlags, false, nullptr, "[--force] [--discard-changes]"},
     // `frames N` counts host.frame, the host's sim advances (AM1): one per fixed
     // tick on a server, a headless runtime or a step; a windowed runtime in Run
-    // mode advances it once per loop pass, whatever its sub-steps.
+    // mode advances it once per loop pass, whatever its sub-steps. `settled` is
+    // spec s4.7's --settle predicate (Task 30): two byte-equal captures with the
+    // shader compiler idle, deterministic only under a frozen clock.
     {"wait", "host.wait", &WaitArgs, nullptr, {}, false, &WaitAwaitsHost,
-     "ready|settled|frames N|reload|state <s>   (frames counts host.frame: sim advances, not rendered frames)"},
+     "ready|settled|frames N|reload|state <s>   (frames counts host.frame: sim advances, not rendered frames; "
+     "settled is two byte-equal captures with the shaders idle, deterministic only for a host launched with "
+     "--fixed-time)"},
     // Task 17. commands prints the static manifest with no host; list reads
     // GET /remote/v1/catalog; describe and schema post catalog.describe and
     // schema.type; call posts any command by name (client-side: the command
@@ -207,7 +211,8 @@ const std::array<VerbRow, 34> kVerbs = {{
     // is a job: it returns once host.frame has moved N (sim ticks; loop passes
     // on a running windowed runtime, AM1), so a large N needs a --timeout to match.
     {"play", "play.start", &PlayArgs, nullptr, kPlayFlags, false, nullptr,
-     "[--topology standalone|listen|client+server]   (--topology: editor only)"},
+     "[--topology standalone|listen|client+server]   (--topology: editor only; an editor already playing "
+     "answers ok with alreadyPlaying: true and its running topology)"},
     {"stop", "play.stop", nullptr, nullptr},
     {"pause", "play.pause", nullptr, nullptr},
     {"resume", "play.resume", nullptr, nullptr},
@@ -388,12 +393,12 @@ bool ScreenshotArgs(const char* words, std::span<const std::string> rest, nlohma
         // --out is the only flag the row declares.
         if (value.empty())
             return Fail(error, "--out needs a file path");
-        // argv is the platform's narrow encoding (the ANSI code page on
-        // Windows, UTF-8 on POSIX), so the path is built from it natively and
-        // sent as UTF-8. A conversion that fails is a usage error, never an
-        // escaped exception.
+        // argv is UTF-8 on every platform (main.cpp converts Windows' wide
+        // command line, Task 30), so the path is built from UTF-8 and sent as
+        // UTF-8. A conversion that fails is a usage error, never an escaped
+        // exception.
         try {
-            const std::filesystem::path given(value);
+            const std::filesystem::path given = PathFromUtf8(value);
             std::string ext;
             for (const char8_t c : given.extension().u8string())
                 ext += static_cast<char>(c >= u8'A' && c <= u8'Z' ? c - u8'A' + u8'a' : c);
@@ -1103,7 +1108,7 @@ std::size_t WordsMatched(std::string_view words, std::span<const std::string> to
 
 std::string FollowEventText(std::string_view topic, std::string_view data, const nlohmann::json& args, Format format)
 {
-    nlohmann::json parsed = nlohmann::json::parse(data, nullptr, false);
+    nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(data);   // a host stream event (Task 30)
     if (parsed.is_discarded())
         parsed = std::string(data);
     const bool logs = topic == "logs";

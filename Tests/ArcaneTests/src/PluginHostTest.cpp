@@ -129,6 +129,8 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
     std::filesystem::copy_file(Arcane::Test::ModuleFile("HotReloadPluginV2"), Arcane::Test::ModuleFile("HotReloadPluginV1"),
                                std::filesystem::copy_options::overwrite_existing);
     REQUIRE(host.ForceReload());                   // SaveState -> unload -> load V2 -> Init -> LoadState
+    CHECK(host.ReloadAttempts() == 1);             // a successful reload is an attempt too (Task 30)
+    CHECK(host.LastReloadOk());
 
     CHECK(ReadPulse(rt) == 5);                     // STATE SURVIVED the swap
     StepAllK(rt, host, 1);
@@ -156,10 +158,18 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     REQUIRE(host.Load());
     StepAllK(rt, host, 3);
     REQUIRE(ReadPulse(rt) == 3);
+    CHECK(host.ReloadAttempts() == 0);             // Load is not a reload (Task 30)
+    CHECK(host.LastReloadOk());
+    const std::uint32_t generation = host.Generation();
 
     std::filesystem::copy_file(Arcane::Test::ModuleFile("HotReloadPluginBad"), Arcane::Test::ModuleFile("HotReloadPluginV1"),
                                std::filesystem::copy_options::overwrite_existing);
     CHECK_FALSE(host.ForceReload());               // ABI mismatch -> reload fails
+    // The failure's only record (Task 30): the generation stays, the attempt
+    // is counted and its outcome kept, for a host's remote `wait reload`.
+    CHECK(host.Generation() == generation);
+    CHECK(host.ReloadAttempts() == 1);
+    CHECK_FALSE(host.LastReloadOk());
     CHECK(host.IsLoaded());                        // still on last-good
     StepAllK(rt, host, 1);
     CHECK(ReadPulse(rt) == 4);                      // last-good V1 still running, state intact

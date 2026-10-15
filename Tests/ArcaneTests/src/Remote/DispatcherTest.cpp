@@ -6,12 +6,18 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
+#include <vector>
 #include <Arcane/Remote/Http.hpp> // MakeToken
 #include "../Helpers/SettingsSweep.hpp" // Arcane::Test::ScopedCodeRung
 #include "RemoteDemoArgs.hpp"
 #include "RemoteTestHttp.hpp"
+#include "RemoteTestSupport.hpp"
+#include <Arcane/Remote/Commands/ConsoleCommands.hpp>   // Task 30 (C5): the cvar drive calls' audit
+#include <Arcane/Remote/Commands/CvarCommands.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -705,6 +711,96 @@ TEST_CASE("--world on a command that is not world-scoped is arg.inapplicable and
     CHECK(ran.envelope.ok);
     CHECK(scopedRan.envelope.ok);
     CHECK(g_ran == 2);                      // the refused call never reached its fn
+}
+
+// Task 30 (C5, spec s10.4): the cvar drive calls (cvar.set) and console.exec
+// reach the Task 8 audit like every Drive call, as argsDigest only: neither a
+// set value nor a console line is ever written, so a Protected value never
+// lands on disk. (The registry-wide S7 sink, SetAuditSink, is a host's
+// choice; no P0 host installs one, and RemoteCVarService gets none, so a
+// Server set is never recorded twice.)
+TEST_CASE("cvar.set and console.exec are audited as argsDigest only, never a value", "[remote][dispatch]") {
+    Arcane::CVarRegistry cvars;
+    Arcane::CVarDesc secret;
+    secret.name = "test.auditSecret";
+    secret.type = Arcane::CVarType::String;
+    secret.defaultValue = Arcane::CVarValue::String("hunter2");
+    secret.audience = Arcane::Audience::Server;
+    secret.flags = Arcane::CVarFlags::Protected;
+    secret.help = "audit secret";
+    REQUIRE_FALSE(cvars.Register(secret).IsStale());
+    cvars.Publish();
+    Arcane::Remote::CvarCommandUser user{&cvars, Arcane::CVarContext::ServerAdmin};
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> cvarGuard(&Arcane::Remote::SetCvarCommandUser, &user);
+    RemoteTest::ScopedRemotePointer<Arcane::Remote::CvarCommandUser> consoleGuard(&Arcane::Remote::SetConsoleCommandUser, &user);
+    Arcane::Remote::RegisterCvarCommands();
+    Arcane::Remote::RegisterConsoleCommand();
+    auto& reg = Arcane::Remote::CommandRegistry::Get();
+    REQUIRE(reg.Find("cvar.set") != nullptr);
+    REQUIRE(reg.Find("console.exec") != nullptr);
+    CHECK(reg.Find("cvar.set")->access == Arcane::Remote::Access::Drive);
+    CHECK(reg.Find("console.exec")->access == Arcane::Remote::Access::Drive);
+
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::HostGate gate;
+    gate.pid = 31;
+    Arcane::Remote::JobTable jobs;
+    const auto dir = std::filesystem::temp_directory_path() / "remote-dispatch-cvar-audit";
+    std::filesystem::remove_all(dir);
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, reg, gate, jobs, dir / "audit.ndjson");
+    Arcane::Remote::Call set;
+    set.command = "cvar.set";
+    set.callerId = "audit-test";
+    set.args = nlohmann::json{{"name", "test.auditSecret"}, {"value", "s3cretCvarValue"}};
+    Arcane::Remote::Call exec;
+    exec.command = "console.exec";
+    exec.callerId = "audit-test";
+    exec.args = nlohmann::json{{"line", "test.auditSecret s3cretConsoleValue"}};
+    Arcane::Remote::Call get;   // an Observe call: never audited
+    get.command = "cvar.get";
+    get.args = nlohmann::json{{"name", "test.auditSecret"}};
+    REQUIRE(queue.TryPush(1, set));
+    REQUIRE(queue.TryPush(2, exec));
+    REQUIRE(queue.TryPush(3, get));
+    dispatcher.Drain(1000.0, 8);
+    Arcane::Remote::CommandResult setDone;
+    Arcane::Remote::CommandResult execDone;
+    Arcane::Remote::CommandResult getDone;
+    REQUIRE(queue.TryTake(1, setDone));
+    REQUIRE(queue.TryTake(2, execDone));
+    REQUIRE(queue.TryTake(3, getDone));
+    CHECK(setDone.envelope.ok);
+    CHECK(execDone.envelope.ok);
+    CHECK(cvars.Get(cvars.Find("test.auditSecret"))->AsString() == "s3cretConsoleValue");   // both sets ran
+
+    std::ifstream in(dir / "audit.ndjson");
+    const std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(body.find("s3cretCvarValue") == std::string::npos);
+    CHECK(body.find("s3cretConsoleValue") == std::string::npos);
+    CHECK(body.find("hunter2") == std::string::npos);
+    CHECK(body.find("cvar.get") == std::string::npos);
+    std::vector<nlohmann::json> lines;
+    std::size_t at = 0;
+    while (at < body.size()) {
+        const std::size_t end = body.find('\n', at);
+        REQUIRE(end != std::string::npos);
+        lines.push_back(nlohmann::json::parse(body.substr(at, end - at)));
+        at = end + 1;
+    }
+    REQUIRE(lines.size() == 2);
+    const Arcane::Remote::Call* calls[] = {&set, &exec};
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        nlohmann::json& line = lines[i];   // non-const: a missing key reads null, never asserts
+        CHECK(line["command"] == calls[i]->command);
+        CHECK(line["client"] == "audit-test");
+        CHECK(line["pid"] == 31);
+        CHECK(line["outcome"] == "ok");
+        CHECK(line["argsDigest"] == Arcane::Crypto::Sha256Hex(
+                                        calls[i]->args.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)));
+        CHECK_FALSE(line.contains("args"));
+        CHECK_FALSE(line.contains("value"));
+        CHECK_FALSE(line.contains("line"));
+    }
 }
 
 #endif
