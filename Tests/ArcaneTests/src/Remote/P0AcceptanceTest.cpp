@@ -15,6 +15,8 @@
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Json.hpp>
 #include <Servitor/Client.hpp>   // PathUtf8 (argv is UTF-8, Task 30), FileTimeToSys (never clock_cast, R8-7)
+#include <Arcane/Remote/Descriptor.hpp>   // ReadDescriptor, IsStale, DescriptorPath: RemoteDirSweep (final fix pass)
+#include <Arcane/Project/Project.hpp>     // EditorLock::Self: the sweep test's live descriptor
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -69,14 +71,64 @@ struct HostGuard {
 // Every RunServitor call appends its stdout and stderr here (ruling F23).
 static std::string g_servitorTranscript;
 
-// Removes ReferenceProject/Saved/Remote on scope exit, so a REQUIRE abort still
-// removes the descriptors (ruling F34). Shared by every case in this file.
-struct DescriptorSweep {
+// The project's remote directory (Saved/Remote) belongs to the user: it holds
+// the audit log, launch logs and capture evidence of any session, not only
+// this file's (final fix pass, C-I7 / G-4; it replaces ruling F34's
+// remove_all). On construction it prunes only STALE descriptors (a pid that
+// is gone or recycled, exactly what `servitor status` would delete) and
+// snapshots out/ and the audit log's size. On scope exit, so a REQUIRE abort
+// still cleans up, it removes only what the case's children wrote: the
+// descriptors <kind>-<pid>.json and launch logs *.servitor-launch-<pid>.log
+// of `childPids`, and the out/ files that were not there at the start. The
+// audit log, and anything else, is never touched.
+struct RemoteDirSweep {
     std::filesystem::path dir;
-    ~DescriptorSweep() {
+    std::vector<std::uint32_t> childPids;
+    std::vector<std::filesystem::path> outBefore;
+    std::uintmax_t auditBefore = 0;
+    explicit RemoteDirSweep(std::filesystem::path remoteDir) : dir(std::move(remoteDir)) {
         std::error_code ec;
-        std::filesystem::remove_all(dir, ec);
+        // Stale descriptors only: a pid that is gone or recycled. A live one
+        // (another session's host) and an unreadable one stay.
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (entry.path().extension() != ".json")
+                continue;
+            const auto desc = Arcane::Remote::ReadDescriptor(entry.path());
+            if (desc && Arcane::Remote::IsStale(*desc)) {
+                std::error_code removeEc;
+                std::filesystem::remove(entry.path(), removeEc);
+            }
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(dir / "out", ec))
+            outBefore.push_back(entry.path());
+        auditBefore = AuditBytes();
     }
+    ~RemoteDirSweep() {
+        std::error_code ec;
+        for (const std::uint32_t pid : childPids) {
+            if (pid == 0)
+                continue;
+            const std::string tag = std::to_string(pid);
+            for (const char* kind : {"editor", "runtime", "server"})
+                std::filesystem::remove(dir / (std::string(kind) + "-" + tag + ".json"), ec);
+            for (const char* host : {"ArcaneEditor", "ArcaneRuntime", "ArcaneServer"})
+                std::filesystem::remove(dir / "logs" / (std::string(host) + ".servitor-launch-" + tag + ".log"), ec);
+        }
+        std::vector<std::filesystem::path> created;
+        for (const auto& entry : std::filesystem::directory_iterator(dir / "out", ec))
+            if (std::find(outBefore.begin(), outBefore.end(), entry.path()) == outBefore.end())
+                created.push_back(entry.path());
+        for (const auto& file : created)
+            std::filesystem::remove(file, ec);
+    }
+    // The audit log's size now (0 when it does not exist).
+    std::uintmax_t AuditBytes() const {
+        std::error_code ec;
+        const auto bytes = std::filesystem::file_size(dir / "audit.ndjson", ec);
+        return ec ? 0 : bytes;
+    }
+    RemoteDirSweep(const RemoteDirSweep&) = delete;
+    RemoteDirSweep& operator=(const RemoteDirSweep&) = delete;
 };
 
 // Removes, on scope exit, the crash/hang report files a child host wrote:
@@ -84,7 +136,7 @@ struct DescriptorSweep {
 // only files whose name carries `-pid<pid>.` and that were NOT there when the
 // sweep was armed are removed. Anything that was already present, or names
 // another process, is never touched (it may be the user's). Declared after
-// DescriptorSweep and before HostGuard, so the child is dead before it runs.
+// RemoteDirSweep and before HostGuard, so the child is dead before it runs.
 struct ChildReportSweep {
     std::vector<std::filesystem::path> dirs;
     std::vector<std::filesystem::path> before;
@@ -267,11 +319,10 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     REQUIRE(std::filesystem::exists(runtime));
     REQUIRE(std::filesystem::exists(server));
     DeleteScratch(project);
-    DescriptorSweep saved{project / "Saved" / "Remote"};   // ruling F34
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(saved.dir, ec);     // no stale descriptor from an earlier run
-    }
+    // Final fix pass (C-I7): prunes stale descriptors only; the audit log, and
+    // everything else not written by this case's children, stays.
+    RemoteDirSweep saved(project / "Saved" / "Remote");
+    const std::uintmax_t auditAtStart = saved.AuditBytes();
     g_servitorTranscript.clear();
     auto args = [&project](std::initializer_list<std::string> tail) { return ServitorArgs(project, tail); };
 
@@ -284,9 +335,12 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     const std::wstring proj = project.wstring();
     HostGuard hosts;
     hosts.project = project;
-    hosts.editor = SpawnHost(editor, {L"--headless", L"--project", proj, L"--remote", L"--fixed-time", L"0"});
-    hosts.runtime = SpawnHost(runtime, {L"--headless", L"--project", proj, L"--remote"});
-    hosts.server = SpawnHost(server, {L"--project", proj, L"--remote"});
+    DWORD editorPid = 0, runtimePid = 0, serverPid = 0;
+    hosts.editor = SpawnHost(editor, {L"--headless", L"--project", proj, L"--remote", L"--fixed-time", L"0"}, &editorPid);
+    hosts.runtime = SpawnHost(runtime, {L"--headless", L"--project", proj, L"--remote"}, &runtimePid);
+    hosts.server = SpawnHost(server, {L"--project", proj, L"--remote"}, &serverPid);
+    saved.childPids = {static_cast<std::uint32_t>(editorPid), static_cast<std::uint32_t>(runtimePid),
+                       static_cast<std::uint32_t>(serverPid)};
 
     std::string out, err;
     // A spawned host is booting until it writes its descriptor, and only
@@ -550,9 +604,19 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
         CHECK(played["command"] == "play.start");
         CHECK(played["data"]["playing"] == true);
         CHECK_FALSE(played["data"].contains("alreadyPlaying"));
+        // Final fix pass (C-I3): the editor publishes Play as its host state,
+        // so `wait state` completes on it (it timed out on every host before).
+        std::string stateOut;
+        REQUIRE(RunServitor(servitor, args({"--host", "editor", "--timeout", "15", "wait", "state", "playing"}),
+                            &stateOut, &sink, 20000) == 0);
+        CHECK(Json(stateOut)["host"]["state"] == "playing");
         std::string pauseOut;
         REQUIRE(RunServitor(servitor, args({"--host", "editor", "pause"}), &pauseOut, &sink, 20000) == 0);
         CHECK(Json(pauseOut)["data"]["paused"] == true);
+        stateOut.clear();
+        REQUIRE(RunServitor(servitor, args({"--host", "editor", "--timeout", "15", "wait", "state", "paused"}),
+                            &stateOut, &sink, 20000) == 0);
+        CHECK(Json(stateOut)["data"]["state"] == "paused");
         std::string before, stepOut, after;
         REQUIRE(RunServitor(servitor, args({"--host", "editor", "stats", "frame"}), &before, &sink, 20000) == 0);
         const auto frame0 = Json(before)["data"]["frame"].get<std::uint64_t>();
@@ -581,6 +645,9 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     REQUIRE_FALSE(g_servitorTranscript.empty());
     for (const auto& token : tokens)
         CHECK(g_servitorTranscript.find(token) == std::string::npos);
+    // C-I7: the case's Drive calls were audited into the project's existing
+    // log, which the sweep never removes (it grew; it was not recreated).
+    CHECK(saved.AuditBytes() > auditAtStart);
 
     CHECK(Arcane::RenderErrorCount() == 0);
 }
@@ -694,11 +761,7 @@ TEST_CASE("a hung runtime is exit 7", "[remote][gpu]") {
     const auto servitor = bin / "Servitor" / "servitor.exe";
     REQUIRE(std::filesystem::exists(runtime));
     REQUIRE(std::filesystem::exists(servitor));
-    DescriptorSweep saved{project / "Saved" / "Remote"};
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(saved.dir, ec);
-    }
+    RemoteDirSweep saved(project / "Saved" / "Remote");   // C-I7: stale descriptors only
     // M8: the hang report this child writes is removed on scope exit, after
     // HostGuard has killed it; nothing that was already there is touched.
     ChildReportSweep reports({project / "Saved" / "Diagnostics", runtime.parent_path() / "diagnostics"});
@@ -708,6 +771,7 @@ TEST_CASE("a hung runtime is exit 7", "[remote][gpu]") {
                                         L"--hang-main", L"60"},
                               &pid);
     reports.pid = static_cast<std::uint32_t>(pid);
+    saved.childPids = {static_cast<std::uint32_t>(pid)};
     bool sawHung = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -766,11 +830,8 @@ TEST_CASE("server --frames 1200 ticks exactly 1200 across a remote pause, step a
     REQUIRE(std::filesystem::exists(server));
     REQUIRE(std::filesystem::exists(servitor));
     constexpr std::uint64_t kFrames = 1200;
-    DescriptorSweep saved{project / "Saved" / "Remote"};
-    {
-        std::error_code ec;
-        std::filesystem::remove_all(saved.dir, ec);
-    }
+    RemoteDirSweep saved(project / "Saved" / "Remote");   // C-I7: stale descriptors only
+    const std::uintmax_t auditAtStart = saved.AuditBytes();
     const auto scratch = std::filesystem::temp_directory_path() / "remote-server-frames";
     std::filesystem::remove_all(scratch);
     std::filesystem::create_directories(scratch);
@@ -780,6 +841,7 @@ TEST_CASE("server --frames 1200 ticks exactly 1200 across a remote pause, step a
     hosts.server = SpawnHost(server, {L"--project", project.wstring(), L"--frames", L"1200", L"--report",
                                       report.wstring(), L"--remote"},
                              &serverPid);
+    saved.childPids = {static_cast<std::uint32_t>(serverPid)};
     const std::string pid = std::to_string(serverPid);
 
     bool live = false;
@@ -825,6 +887,7 @@ TEST_CASE("server --frames 1200 ticks exactly 1200 across a remote pause, step a
     REQUIRE(rep.is_object());
     REQUIRE(rep.contains("framesTicked"));
     CHECK(rep["framesTicked"].get<std::uint64_t>() == kFrames);   // the pause spent none of the budget
+    CHECK(saved.AuditBytes() > auditAtStart);   // pause, step and resume are Drive calls (C-I7)
 }
 
 // The desk-only TDR lane, gated like G1 (CrashWitnessTest.cpp:122-124). An
@@ -882,4 +945,57 @@ TEST_CASE("the host guard kills children when a REQUIRE aborts", "[remote][accep
         CloseHandle(h);
     }
 }
+
+// Final fix pass (C-I7 / G-4): the sweep every acceptance case uses keeps what
+// is not the case's own. Runs on a temp directory, so it starts no host and is
+// in the ~[gpu] lane.
+TEST_CASE("the acceptance sweep removes only what the case's children wrote, never the audit log", "[remote][accept]") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("remote-accept-sweep-" + std::to_string(GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "out");
+    fs::create_directories(dir / "logs");
+    const auto touch = [](const fs::path& p, const char* text) { std::ofstream(p, std::ios::binary) << text; };
+    touch(dir / "audit.ndjson", "{\"command\":\"earlier\"}\n");
+    touch(dir / "user-note.txt", "not the test's");
+    touch(dir / "out" / "capture.window-1-old.png", "old");
+    touch(dir / "logs" / "ArcaneServer.servitor-launch-777.log", "another launch");
+    // A live descriptor that is not a child's (this process), and a stale one
+    // (this pid with another creation stamp: recycled, so dead).
+    Arcane::Remote::Descriptor live;
+    live.hostKind = Arcane::Remote::HostKind::Editor;
+    live.pid = static_cast<std::uint32_t>(GetCurrentProcessId());
+    live.processStart = Arcane::EditorLock::Self().start;
+    live.port = 1;
+    live.token = std::string(64, 'a');
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(dir / ("editor-" + std::to_string(live.pid) + ".json"), live));
+    Arcane::Remote::Descriptor stale = live;
+    stale.hostKind = Arcane::Remote::HostKind::Runtime;
+    stale.processStart += 1;
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(dir / ("runtime-" + std::to_string(live.pid) + ".json"), stale));
+    {
+        RemoteDirSweep sweep(dir);
+        CHECK_FALSE(fs::exists(dir / ("runtime-" + std::to_string(live.pid) + ".json")));   // stale: pruned
+        CHECK(fs::exists(dir / ("editor-" + std::to_string(live.pid) + ".json")));         // live: kept
+        const auto auditAtStart = sweep.AuditBytes();
+        CHECK(auditAtStart > 0);
+        sweep.childPids = {4242};
+        touch(dir / "server-4242.json", "{}");
+        touch(dir / "logs" / "ArcaneServer.servitor-launch-4242.log", "the child's launch");
+        touch(dir / "out" / "capture.window-4242-new.png", "new");
+        std::ofstream(dir / "audit.ndjson", std::ios::binary | std::ios::app) << "{\"command\":\"play.step\"}\n";
+        CHECK(sweep.AuditBytes() > auditAtStart);
+    }
+    CHECK(fs::exists(dir / "audit.ndjson"));
+    CHECK(fs::exists(dir / "user-note.txt"));
+    CHECK(fs::exists(dir / "out" / "capture.window-1-old.png"));
+    CHECK(fs::exists(dir / "logs" / "ArcaneServer.servitor-launch-777.log"));
+    CHECK(fs::exists(dir / ("editor-" + std::to_string(live.pid) + ".json")));
+    CHECK_FALSE(fs::exists(dir / "server-4242.json"));
+    CHECK_FALSE(fs::exists(dir / "logs" / "ArcaneServer.servitor-launch-4242.log"));
+    CHECK_FALSE(fs::exists(dir / "out" / "capture.window-4242-new.png"));
+    fs::remove_all(dir, ec);
+}
+
 #endif // defined(_WIN32) && !defined(ARC_BUILD_DIST)
