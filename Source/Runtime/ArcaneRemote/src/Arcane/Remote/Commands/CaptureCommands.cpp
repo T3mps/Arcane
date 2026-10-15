@@ -1,0 +1,379 @@
+// Crypto.hpp before any spdlog include: it includes Util/Logger.hpp, which
+// defines SPDLOG_ACTIVE_LEVEL first.
+#include <Arcane/Crypto/Crypto.hpp>
+#include <Arcane/Remote/Commands/CaptureCommands.hpp>
+
+#if !defined(ARC_BUILD_DIST)
+
+#include <Arcane/Remote/Commands/CommandSupport.hpp>
+#include <Arcane/Remote/Dispatcher.hpp>
+#include <Arcane/Remote/Jobs.hpp>
+#include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Core/Constant.hpp>
+#include <Arcane/Reflection.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+namespace Arcane::Remote
+{
+
+// The wire args of both commands, reflected for their schema (spec s5.3).
+struct CaptureArgs {
+    std::string out;   // absolute .png path the client resolved from --out; empty = the artifact directory
+};
+ARC_REFLECT_TYPE(CaptureArgs)
+    ARC_REFLECT_FIELD(CaptureArgs, out)
+        ARC_REFLECT_ATTR(Optional)
+ARC_REFLECT_TYPE_END()
+
+namespace
+{
+
+ARC_CONSTANT("a capture job's bound when the call carries no timeout: a render frame retires a ticket in a few frames, so 30 s means the host is not rendering")
+constexpr std::uint32_t kDefaultCaptureTimeoutMs = 30000;
+
+constexpr std::string_view kUsage = "pass out: an absolute .png path, or nothing for the artifact directory";
+
+// One armed capture job (ruling P4 (a)): the source's hook pair, the ticket
+// the first step armed, and where the PNG goes. `new`ed by the command, passed
+// as job.user, deleted by the step that finishes the job.
+struct CaptureJobState {
+    ArmCopyFn arm = nullptr;
+    DrainSlotFn drain = nullptr;
+    void* hookUser = nullptr;
+    std::uint64_t ticket = 0;
+    std::filesystem::path outDir;
+    std::filesystem::path outFile;   // --out; empty = outDir/<command>-<unix ms>-<n>.png
+    bool occludedRisk = false;
+    std::chrono::steady_clock::time_point deadline{};
+};
+
+// The stored hooks and table (ruling F11), and every live job state keyed by
+// job id, so a release frees what no step will reach. Main thread only.
+struct CaptureCommandState {
+    CaptureHooks hooks;
+    JobTable* jobs = nullptr;
+    std::map<std::uint64_t, CaptureJobState*> live;
+};
+
+CaptureCommandState& State()
+{
+    static CaptureCommandState state;
+    return state;
+}
+
+std::uint64_t NextCaptureTicket()
+{
+    static std::atomic<std::uint64_t> next{1};   // 0 is never issued: "not armed"
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string Utf8(const std::filesystem::path& p)
+{
+    const std::u8string s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
+Envelope Failure(const std::string& command, std::string code, std::string message, std::string remediation)
+{
+    return MakeError(command, std::move(code), std::move(message), std::move(remediation));
+}
+
+// Ends the job: forgets and frees its state. The caller sets job.envelope.
+bool Finished(Job& job, CaptureJobState* state)
+{
+    State().live.erase(job.id.value);
+    delete state;
+    return true;
+}
+
+// Normalizes, writes the PNG through <file>.tmp, hashes the written bytes and
+// renames it into place; the artifact, or nullopt with *why.
+std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& state, const CaptureMapped& raw,
+                                        std::string& why)
+{
+    const std::size_t needed = raw.height == 0 ? 0
+                             : static_cast<std::size_t>(raw.rowPitch) * (raw.height - 1) +
+                                   static_cast<std::size_t>(raw.width) * 4;
+    if (raw.width == 0 || raw.height == 0 || raw.rowPitch < raw.width * 4u || raw.mappedBytes < needed) {
+        why = "the retired copy is " + std::to_string(raw.mappedBytes) + " bytes for " + std::to_string(raw.width) +
+              "x" + std::to_string(raw.height) + " at pitch " + std::to_string(raw.rowPitch);
+        return std::nullopt;
+    }
+    std::vector<unsigned char> rgba;
+    NormalizeCaptureRows(raw.mapped, raw.width, raw.height, raw.rowPitch, raw.bgra, rgba);
+
+    static std::atomic<std::uint64_t> serial{0};
+    std::filesystem::path file = state.outFile;
+    if (file.empty()) {
+        const auto unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+        file = state.outDir /
+               (job.command + "-" + std::to_string(unixMs) + "-" + std::to_string(++serial) + ".png");
+    }
+    std::error_code ec;
+    if (file.has_parent_path())
+        std::filesystem::create_directories(file.parent_path(), ec);
+    const std::filesystem::path temp = std::filesystem::path(file).concat(".tmp");
+    if (!WritePngRgba(temp, raw.width, raw.height, rgba.data())) {
+        std::filesystem::remove(temp, ec);
+        why = "cannot write " + Utf8(temp);
+        return std::nullopt;
+    }
+    std::string bytes;
+    {
+        std::ifstream in(temp, std::ios::binary);
+        if (in.is_open())
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        const bool readOk = in.is_open() && !in.bad();
+        in.close();
+        if (!readOk || bytes.empty()) {
+            std::filesystem::remove(temp, ec);
+            why = "cannot read back " + Utf8(temp);
+            return std::nullopt;
+        }
+    }
+    std::filesystem::rename(temp, file, ec);
+    if (ec) {
+        std::filesystem::remove(temp, ec);
+        why = "cannot rename into " + Utf8(file);
+        return std::nullopt;
+    }
+    Artifact artifact;
+    artifact.kind = "capture";
+    artifact.path = Utf8(file);
+    artifact.bytes = bytes.size();
+    artifact.sha256 = Crypto::Sha256Hex(bytes);
+    artifact.width = raw.width;
+    artifact.height = raw.height;
+    artifact.format = "RGBA8_UNORM";   // the PNG is tight RGBA, whatever the target's channel order
+    return artifact;
+}
+
+// The job step (ruling P3 (a)): the PickNode ticket, split across render
+// submissions. It reads no gate.frame, writes no startedFrame, never idles.
+bool StepCapture(Job& job, HostGate& gate, void* user)
+{
+    CaptureCommandState& s = State();
+    auto* state = static_cast<CaptureJobState*>(user);
+    const auto it = s.live.find(job.id.value);
+    if (it == s.live.end() || it->second != state) {
+        // Released (RegisterCaptureCommands moved on): the state is already gone.
+        job.envelope = Failure(job.command, "host.unavailable", "the capture's host session ended",
+                               "retry once the host is armed again");
+        return true;
+    }
+
+    if (job.progress.label != "copied") {
+        state->ticket = NextCaptureTicket();
+        if (!state->arm(state->ticket, state->hookUser)) {
+            job.envelope = Failure(job.command, "capture.no-frame", "the host could not arm a capture copy",
+                                   "retry once the host is rendering");
+            return Finished(job, state);
+        }
+        job.progress.label = "copied";
+        return false;
+    }
+
+    CaptureMapped raw;
+    if (!state->drain(state->ticket, &raw, state->hookUser)) {
+        // Not retired yet. Bounded: a host that stops rendering (minimized,
+        // device lost, a failing frame) ends the job instead of parking it.
+        if (std::chrono::steady_clock::now() < state->deadline)
+            return false;
+        if (gate.minimized.load(std::memory_order_acquire)) {
+            job.envelope = Failure(job.command, "capture.minimized",
+                                   "the host was minimized before the capture's frame rendered",
+                                   "restore the window and retry");
+        } else {
+            job.envelope = Failure(job.command, "capture.no-frame",
+                                   "no rendered frame retired the capture before the timeout",
+                                   "check that the host is rendering (stats frame, problems) and retry");
+            job.envelope.errors.front().detail["reason"] = "timeout";
+        }
+        return Finished(job, state);
+    }
+    if (raw.mapped == nullptr) {
+        job.envelope = Failure(job.command, "capture.no-frame", "the capture copy was lost (its map failed)",
+                               "retry the capture");
+        return Finished(job, state);
+    }
+
+    std::string why;
+    std::optional<Artifact> artifact = WriteCapturePng(job, *state, raw, why);
+    if (!artifact) {
+        job.envelope = Failure(job.command, "capture.artifact-failed", "the capture PNG was not written: " + why,
+                               "check the output path and free disk space, then retry");
+        return Finished(job, state);
+    }
+    nlohmann::json data = {{"path", artifact->path}, {"width", raw.width}, {"height", raw.height}};
+    job.progress.done = 1;
+    job.envelope = MakeOk(job.command, std::move(data), gate.Block());
+    job.envelope.artifacts.push_back(std::move(*artifact));
+    if (state->occludedRisk) {
+        job.envelope.warnings.push_back(Detail::MakeIssue(
+            "capture.occluded-risk", "the window capture comes from a windowed host; some drivers return black "
+                                     "for an occluded window",
+            "keep the host window in the foreground, or capture a --headless host"));
+    }
+    return Finished(job, state);
+}
+
+// Parses {out}. An --out path must be absolute (the client resolved it) and end in .png.
+std::optional<Envelope> ParseArgs(const Call& call, std::filesystem::path& outFile)
+{
+    if (auto refusal = Detail::CheckKeys(call, {"out"}, kUsage))
+        return refusal;
+    if (!call.args.is_object() || !call.args.contains("out"))
+        return std::nullopt;
+    const nlohmann::json& out = call.args.at("out");
+    if (!out.is_string() || out.get<std::string>().empty())
+        return MakeError(call.command, "arg.invalid", "out must be a non-empty path", std::string(kUsage));
+    const std::string text = out.get<std::string>();
+    std::filesystem::path path(std::u8string(text.begin(), text.end()));
+    if (!path.is_absolute())
+        return MakeError(call.command, "arg.invalid", "out must be an absolute path, got " + text,
+                         std::string(kUsage));
+    std::string ext = Utf8(path.extension());
+    for (char& c : ext)
+        c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    if (ext != ".png")
+        return MakeError(call.command, "arg.invalid", "out must name a .png file, got " + text,
+                         std::string(kUsage));
+    outFile = std::move(path);
+    return std::nullopt;
+}
+
+CommandResult Capture(const Call& call, void* /*user*/)
+{
+    CommandResult result;
+    CaptureCommandState& s = State();
+    const bool window = call.command == "capture.window";
+    const ArmCopyFn arm = window ? s.hooks.armWindow : s.hooks.armViewport;
+    const DrainSlotFn drain = window ? s.hooks.drainWindow : s.hooks.drainViewport;
+    // A server (all six hooks null) has no renderer (spec AM1): exit 2, nothing armed.
+    if (arm == nullptr || drain == nullptr) {
+        result.envelope = MakeError(call.command, "capture.no-renderer", "this host has no renderer to capture",
+                                    "capture an editor or a runtime");
+        return result;
+    }
+    if (s.jobs == nullptr) {
+        result.envelope = MakeError(call.command, "host.unavailable", "no armed host session serves " + call.command,
+                                    "relaunch the host with --remote");
+        return result;
+    }
+    std::filesystem::path outFile;
+    if (auto refusal = ParseArgs(call, outFile)) {
+        result.envelope = std::move(*refusal);
+        return result;
+    }
+    if (outFile.empty() && s.hooks.outDir.empty()) {
+        result.envelope = MakeError(call.command, "host.unavailable", "this host has no artifact directory",
+                                    "pass --out <file.png>");
+        return result;
+    }
+    // ONE capture in flight per host (ruling P4 (a)): the ring has one
+    // `wanted`, so a second capture is refused before Arm and before arm.
+    if (CaptureInFlight(*s.jobs))
+        return CaptureBusy(call);
+
+    auto* state = new CaptureJobState;
+    state->arm = arm;
+    state->drain = drain;
+    state->hookUser = s.hooks.user;
+    state->outDir = s.hooks.outDir;
+    state->outFile = std::move(outFile);
+    state->occludedRisk = window && s.hooks.occludedRisk;
+    state->deadline = std::chrono::steady_clock::now() +
+                      std::chrono::milliseconds(call.timeoutMs != 0 ? call.timeoutMs : kDefaultCaptureTimeoutMs);
+    const JobId id = s.jobs->Arm(call.command, 1, &StepCapture, state);
+    s.live[id.value] = state;
+    result.envelope = MakeOk(call.command, {{"done", false}}, {});
+    result.completesJob = id.value;
+    return result;
+}
+
+void RegisterOnce(Desc desc)
+{
+    CommandRegistry& registry = CommandRegistry::Get();
+    if (registry.Find(desc.name) != nullptr)
+        return;
+    std::string error;
+    if (!registry.Register(std::move(desc), &error))
+        ARC_ERROR("remote: capture command refused: {}", error);
+}
+
+Desc CaptureDesc(const char* name, const char* summary)
+{
+    Desc desc;
+    desc.name = name;
+    desc.summary = summary;
+    desc.access = Access::Observe;
+    desc.mutates = Mutates::None;
+    desc.play = PlayPolicy::Any;
+    desc.thread = ExecThread::Job;
+    desc.needsFrame = true;   // a minimized editor answers host.busy{minimized} before this runs (Task 13)
+    desc.argsMeta = Astra::GetMeta<CaptureArgs>();
+    desc.fn = &Capture;
+    return desc;
+}
+
+} // namespace
+
+void SetCaptureHooks(CaptureHooks hooks)
+{
+    State().hooks = std::move(hooks);
+}
+
+void RegisterCaptureCommands(JobTable* jobs)
+{
+    CaptureCommandState& s = State();
+    if (s.jobs != jobs) {
+        // The previous table's captures will never be stepped against these
+        // hooks again: finish them (no waiter hangs) and free their state.
+        for (auto& [id, state] : s.live) {
+            if (s.jobs != nullptr) {
+                const Job* row = s.jobs->Find(JobId{id});
+                const std::string command = row != nullptr ? row->command : std::string("capture.window");
+                s.jobs->Finish(JobId{id},
+                               MakeError(command, "host.unavailable", "the capture's host session ended",
+                                         "retry once the host is armed again"),
+                               JobState::Cancelled);
+            }
+            delete state;
+        }
+        s.live.clear();
+    }
+    s.jobs = jobs;
+    RegisterOnce(CaptureDesc("capture.viewport", "Capture the viewport (the scene render target) to a PNG artifact"));
+    RegisterOnce(CaptureDesc("capture.window", "Capture the window backbuffer (after tonemap and ImGui) to a PNG artifact"));
+}
+
+CommandResult CaptureBusy(const Call& call)
+{
+    CommandResult result;
+    result.envelope = MakeError(call.command, "host.busy", "a capture or compare is already in flight on this host",
+                                "retry when it completes (servitor retries host.busy until --timeout)");
+    result.envelope.errors.front().detail["state"] = "capture-pending";
+    return result;
+}
+
+bool CaptureInFlight(const JobTable& jobs)
+{
+    return jobs.AnyRunning({"capture.viewport", "capture.window", "capture.compare"});
+}
+
+} // namespace Arcane::Remote
+
+#endif

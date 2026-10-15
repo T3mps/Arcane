@@ -26,6 +26,7 @@
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths::Resolve(DiagnosticsDir) -- the "finalize" dump-dir retarget (settings spec s11.0)
 #include <Arcane/Assets/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/FramePacing.hpp>       // FramesInFlight() -- the remote capture hooks' ring depth (Task 27)
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
@@ -847,6 +848,43 @@ void RuntimeApp::MainLoop()
                 return {};
             return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
         };
+        // Task 27 (ruling F12): capture.viewport / capture.window / the host
+        // pair all read the runtime's one graph context, Graph() (the window's
+        // backbuffer, or the --headless offscreen target), through its capture
+        // ring: Arm stores the ticket, Drain hands back the retired copy. The
+        // ring retires on RuntimeFrame::RenderGraph's submits, which run while
+        // the sim is held, so an idle runtime still completes a capture. Never
+        // ReadCapture or DeviceWaitIdle (the --screenshot path stays its own).
+        // outDir is left empty: Start fills it with the session's artifact dir.
+        const Arcane::Remote::ArmCopyFn armRing = [](std::uint64_t ticket, void* user) -> bool {
+            Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph();
+            return graph && graph->ArmTicketCapture(ticket);
+        };
+        const Arcane::Remote::DrainSlotFn drainRing = [](std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw,
+                                                         void* user) -> bool {
+            Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph();
+            if (!graph)
+                return true;   // raw stays empty: mapped null, capture.no-frame
+            Arcane::TicketCaptureBytes bytes;
+            if (!graph->DrainTicketCapture(ticket, bytes))
+                return false;
+            raw->width       = bytes.width;
+            raw->height      = bytes.height;
+            raw->rowPitch    = bytes.rowPitch;
+            raw->bgra        = bytes.bgra;
+            raw->mapped      = bytes.mapped;
+            raw->mappedBytes = bytes.mappedBytes;
+            return true;
+        };
+        rc.capture.framesInFlight = Arcane::FramesInFlight();
+        rc.capture.armViewport    = armRing;
+        rc.capture.drainViewport  = drainRing;
+        rc.capture.armWindow      = armRing;
+        rc.capture.drainWindow    = drainRing;
+        rc.capture.armHost        = armRing;
+        rc.capture.drainHost      = drainRing;
+        rc.capture.occludedRisk   = !m_config.headless;
+        rc.capture.user           = this;
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
             m_remote.reset();   // Start logged why

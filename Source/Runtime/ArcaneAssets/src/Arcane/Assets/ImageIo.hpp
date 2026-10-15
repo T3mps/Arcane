@@ -9,6 +9,7 @@
 #include <Arcane/Core/Api.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <vector>
 
@@ -44,4 +45,34 @@ namespace Arcane
     ARC_ASSETS_API bool WritePngRgba(const std::filesystem::path& path,
                                  std::uint32_t width, std::uint32_t height,
                                  const unsigned char* rgba);
+
+    // A GPU readback's mapped rows into tight RGBA8: the row padding
+    // (rowPitch past width * 4) is dropped and BGRA is swizzled to RGBA, so a
+    // capture's bytes mean the same thing on every backend. The one copy of
+    // that normalization: NriGraphContext::ReadCapture (the --screenshot and
+    // cover path) and the Servitor capture job (ArcaneRemote) both call it.
+    // `mapped` holds at least rowPitch * (height - 1) + width * 4 bytes.
+    inline void NormalizeCaptureRows(const std::uint8_t* mapped,
+        std::uint32_t width, std::uint32_t height,
+        std::uint32_t rowPitch, bool bgra,
+        std::vector<unsigned char>& rgba)
+    {
+        rgba.resize(static_cast<std::size_t>(width) * height * 4);
+        for (std::uint32_t y = 0; y < height; ++y)
+        {
+            const std::uint8_t* src = mapped + static_cast<std::size_t>(y) * rowPitch;
+            unsigned char* dst = rgba.data() + static_cast<std::size_t>(y) * width * 4;
+            std::memcpy(dst, src, static_cast<std::size_t>(width) * 4);
+            if (bgra)
+            {
+                for (std::uint32_t x = 0; x < width; ++x)
+                {
+                    unsigned char* p = dst + static_cast<std::size_t>(x) * 4;
+                    const unsigned char b = p[0];
+                    p[0] = p[2];
+                    p[2] = b;
+                }
+            }
+        }
+    }
 }

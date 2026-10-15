@@ -2220,6 +2220,14 @@ namespace Arcane::Editor
         // "remote-idle"), latched by MainLoop before the session stops, so
         // ShutdownGraphPath's --report exitReason names it (Task 16).
         std::string                               m_remoteExitReason;
+        // Task 27: the capture hooks (CaptureHooks), defined beside
+        // CaptureGraphViewportPng in EditorApp.cpp. user = this. Viewport =
+        // m_viewportTargets.graph (also the host pair, ruling F20); window =
+        // ChromeGraph(). Main thread.
+        static bool RemoteArmViewport(std::uint64_t ticket, void* user);
+        static bool RemoteDrainViewport(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
+        static bool RemoteArmWindow(std::uint64_t ticket, void* user);
+        static bool RemoteDrainWindow(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

@@ -5,6 +5,7 @@
 
 #if !defined(ARC_BUILD_DIST)
 
+#include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Commands/ConsoleCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
@@ -137,6 +138,19 @@ bool HostSession::Start()
     RegisterSceneCommands();
     // stats.frame (Task 26): reads this session's FrameStats; Teardown releases it.
     RegisterStatsCommand(&m_stats);
+    // capture.viewport, capture.window (Task 27, ruling F12): the host's
+    // render-ring hooks and this session's job table. A capture without
+    // --out lands in the session's artifact directory. Teardown clears both.
+    {
+        CaptureHooks hooks = m_config.capture;
+        if (hooks.outDir.empty()) {
+            const std::filesystem::path dir = DescriptorDir(m_config.projectRoot, m_config.projectRoot.empty());
+            if (!dir.empty())
+                hooks.outDir = dir / "out";
+        }
+        SetCaptureHooks(std::move(hooks));
+        RegisterCaptureCommands(&m_jobs);
+    }
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -312,6 +326,12 @@ void HostSession::Teardown()
     m_listener.reset();
     m_dispatcher.reset();
     m_jobs.SetQueue(nullptr); // the queue goes next; no finish path may Complete into it
+    // capture.* (Task 27): after SetQueue(nullptr), so the in-flight capture
+    // RegisterCaptureCommands(nullptr) finishes (Cancelled) Completes into no
+    // queue -- its parked call was already answered host.died by the listener's
+    // Stop above. The hooks name this host's render contexts; drop them.
+    SetCaptureHooks({});
+    RegisterCaptureCommands(nullptr);
     m_queue.reset();
     m_atoms.reset();
     m_cataloguePublished = false;

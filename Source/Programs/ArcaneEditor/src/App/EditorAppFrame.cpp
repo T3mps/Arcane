@@ -66,6 +66,7 @@
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
+#include <Arcane/Render/FramePacing.hpp>   // FramesInFlight() -- the capture hooks' ring depth (Task 27)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsWorld2D (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
@@ -1825,6 +1826,20 @@ namespace Arcane::Editor
         // Task 22 (ruling F12): problems.list reads the Problems panel's store,
         // the one ConsoleDiagnostics::Install made the engine's diagnostics sink.
         rc.problemStore       = &m_consoleDiag.store;
+        // Task 27 (ruling F12): capture.viewport / capture.window forward to the
+        // viewport and chrome contexts' capture rings; the host pair is the
+        // viewport pair (ruling F20), the pixels --compare captures. outDir is
+        // left empty: Start fills it with the session's artifact directory. A
+        // windowed editor may be occluded (capture.occluded-risk on window).
+        rc.capture.framesInFlight = Arcane::FramesInFlight();
+        rc.capture.armViewport    = &EditorApp::RemoteArmViewport;
+        rc.capture.drainViewport  = &EditorApp::RemoteDrainViewport;
+        rc.capture.armWindow      = &EditorApp::RemoteArmWindow;
+        rc.capture.drainWindow    = &EditorApp::RemoteDrainWindow;
+        rc.capture.armHost        = &EditorApp::RemoteArmViewport;
+        rc.capture.drainHost      = &EditorApp::RemoteDrainViewport;
+        rc.capture.occludedRisk   = !m_config.headless;
+        rc.capture.user           = this;
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
         {

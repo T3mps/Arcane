@@ -2091,6 +2091,59 @@ namespace Arcane::Editor
         return Arcane::WriteThumbnailPngRgba(file, w, h, std::move(rgba), 512);
     }
 
+#if !defined(ARC_BUILD_DIST)
+    // ---- Servitor capture hooks (P0 Task 27, R8-2) ---------------------------
+    // capture.viewport / capture.window reach the editor's graph contexts only
+    // through these (CaptureHooks, installed in UpdateRemoteSession). They
+    // forward to each context's capture ring: Arm stores the ticket, Drain
+    // hands back the retired copy. Never ReadCapture, never DeviceWaitIdle --
+    // CaptureGraphViewportPng above stays the cover path and Remote does not
+    // call it. Viewport = m_viewportTargets.graph, the same target
+    // CaptureGraphViewportPng and --compare read (so the host pair is this
+    // pair, ruling F20); window = ChromeGraph(), the backbuffer after ImGui.
+    // A context that is gone answers a drain with a null map (capture.no-frame).
+    namespace
+    {
+        bool DrainRing(Arcane::NriGraphContext* graph, std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw)
+        {
+            if (!graph)
+                return true;   // raw stays empty: mapped null, the capture is lost
+            Arcane::TicketCaptureBytes bytes;
+            if (!graph->DrainTicketCapture(ticket, bytes))
+                return false;
+            raw->width       = bytes.width;
+            raw->height      = bytes.height;
+            raw->rowPitch    = bytes.rowPitch;
+            raw->bgra        = bytes.bgra;
+            raw->mapped      = bytes.mapped;
+            raw->mappedBytes = bytes.mappedBytes;
+            return true;
+        }
+    }
+
+    bool EditorApp::RemoteArmViewport(std::uint64_t ticket, void* user)
+    {
+        Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->m_viewportTargets.graph.get();
+        return graph && graph->ArmTicketCapture(ticket);
+    }
+
+    bool EditorApp::RemoteDrainViewport(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user)
+    {
+        return DrainRing(static_cast<EditorApp*>(user)->m_viewportTargets.graph.get(), ticket, raw);
+    }
+
+    bool EditorApp::RemoteArmWindow(std::uint64_t ticket, void* user)
+    {
+        Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->ChromeGraph();
+        return graph && graph->ArmTicketCapture(ticket);
+    }
+
+    bool EditorApp::RemoteDrainWindow(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user)
+    {
+        return DrainRing(static_cast<EditorApp*>(user)->ChromeGraph(), ticket, raw);
+    }
+#endif
+
     namespace
     {
         using StageFn = bool (Arcane::Editor::EditorApp::*)(Arcane::HostBoot::BootContext&);

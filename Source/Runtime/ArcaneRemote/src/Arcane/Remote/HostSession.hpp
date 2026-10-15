@@ -12,6 +12,7 @@
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
 #include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Core/NetMode.hpp>
+#include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/FrameStats.hpp>
@@ -91,6 +92,15 @@ public:
         // session-owned store and installs it as the engine sink; Stop
         // uninstalls it. Main thread only.
         DiagnosticStore* problemStore = nullptr;
+        // Task 27 (ruling F12): capture.viewport / capture.window's hooks,
+        // forwarding to the host's NriGraphContext capture ring (R8-2: this
+        // module includes no render header). The editor installs six pointers
+        // (host pair = viewport pair, ruling F20), the runtime its one target
+        // three times; a server leaves all six null (capture.no-renderer).
+        // An empty outDir is filled by Start with the session's artifact
+        // directory (<remote dir>/out). Start installs them with
+        // SetCaptureHooks + RegisterCaptureCommands(&m_jobs); Teardown clears both.
+        CaptureHooks capture;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

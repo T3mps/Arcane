@@ -64,6 +64,14 @@ bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::
 bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool ScreenshotViewportArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool ScreenshotWindowArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+
+// Task 27. --out is resolved against servitor's working directory here; the
+// host writes exactly that absolute path (a .png).
+constexpr VerbFlag kScreenshotFlags[] = {
+    {"--out", true},  // the PNG to write; omitted = the host's artifact directory (<remote dir>/out)
+};
 
 // Task 25.
 constexpr VerbFlag kSceneTreeFlags[] = {
@@ -101,7 +109,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 26> kVerbs = {{
+const std::array<VerbRow, 28> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -158,6 +166,14 @@ const std::array<VerbRow, 26> kVerbs = {{
     {"scene tree", "scene.tree", &SceneTreeArgs, nullptr, kSceneTreeFlags, false, nullptr,
      "[--depth N]   (0 = roots only)"},
     {"selection", "editor.selection.get", nullptr, nullptr},
+    // Task 27. Observe jobs completed by a render-ticket readback; a server
+    // answers capture.no-renderer (exit 2), a minimized editor host.busy (5).
+    // A held runtime still renders, but its time-driven materials follow wall
+    // time: launch the host with --fixed-time for byte-stable captures.
+    {"screenshot viewport", "capture.viewport", &ScreenshotViewportArgs, nullptr, kScreenshotFlags, false, nullptr,
+     "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
+    {"screenshot window", "capture.window", &ScreenshotWindowArgs, nullptr, kScreenshotFlags, false, nullptr,
+     "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -320,6 +336,44 @@ bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std
 }
 
 // scene tree [--depth N] -> {} or {depth}.
+bool ScreenshotArgs(const char* words, std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb(words), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, std::string(words) + " takes flags only (--out FILE.png), got " + tokens.positional.front());
+    out = nlohmann::json::object();
+    for (const auto& [flag, value] : tokens.flags) {
+        // --out is the only flag the row declares.
+        if (value.empty())
+            return Fail(error, "--out needs a file path");
+        const std::filesystem::path given(std::u8string(value.begin(), value.end()));
+        std::string ext;
+        for (const char8_t c : given.extension().u8string())
+            ext += static_cast<char>(c >= u8'A' && c <= u8'Z' ? c - u8'A' + u8'a' : c);
+        if (ext != ".png")
+            return Fail(error, "--out must name a .png file, got " + value);
+        std::error_code ec;
+        const std::filesystem::path absolute = std::filesystem::absolute(given, ec);
+        if (ec)
+            return Fail(error, "--out cannot be resolved: " + value);
+        const std::u8string utf8 = absolute.lexically_normal().u8string();
+        out["out"] = std::string(utf8.begin(), utf8.end());
+    }
+    return true;
+}
+
+bool ScreenshotViewportArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    return ScreenshotArgs("screenshot viewport", rest, out, error);
+}
+
+bool ScreenshotWindowArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    return ScreenshotArgs("screenshot window", rest, out, error);
+}
+
 bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
 {
     VerbTokens tokens;
