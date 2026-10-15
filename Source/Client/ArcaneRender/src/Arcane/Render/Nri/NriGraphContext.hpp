@@ -341,7 +341,71 @@ namespace Arcane
         bool retiredBgra = false;
         std::uint32_t submission = 0;
         std::uint32_t framesInFlight = 2;
+        // Task 27 fix round 1: the frame index each slot's copy was recorded
+        // in, and whether that frame's Execute succeeded (its submit carried
+        // the copy). A slot drains only once it is submitted AND
+        // FramesInFlight() frames have passed; an unsubmitted copy (Execute
+        // failed after the node recorded, so m_frameIndex did not advance) is
+        // re-wanted instead of drained as stale bytes.
+        std::uint64_t recordedFrame[3]{};
+        bool submitted[3]{};
     };
+
+    // The ring's decisions, pure so a device-less test drives them
+    // (CaptureCommandTest.cpp). NoteRenderSubmission calls them at record
+    // time; ConfirmCaptureRingSubmission runs after a successful Execute.
+    struct CaptureRingStep
+    {
+        bool drain  = false;   // memcpy this slot's slice into retiredBytes, then RetireCaptureRingSlot
+        bool record = false;   // record the wanted copy into this slot, then RecordCaptureRingSlot
+    };
+
+    inline CaptureRingStep PlanCaptureRingSlot(CaptureRing& ring, std::uint32_t slot, std::uint64_t frameIndex,
+                                               bool extentMatches)
+    {
+        CaptureRingStep step;
+        if (ring.pending[slot])
+        {
+            if (!ring.submitted[slot])
+            {
+                // The frame that recorded this copy never submitted it: copy again.
+                if (ring.wanted == 0)
+                    ring.wanted = ring.ticket[slot];
+                ring.pending[slot] = false;
+            }
+            else if (frameIndex >= ring.recordedFrame[slot] + ring.framesInFlight)
+            {
+                step.drain = true;
+            }
+        }
+        step.record = ring.wanted != 0 && extentMatches && (!ring.pending[slot] || step.drain);
+        return step;
+    }
+
+    inline void RetireCaptureRingSlot(CaptureRing& ring, std::uint32_t slot)
+    {
+        ring.retiredTicket = ring.ticket[slot];
+        ring.haveRetired   = true;
+        ring.pending[slot] = false;
+    }
+
+    inline void RecordCaptureRingSlot(CaptureRing& ring, std::uint32_t slot, std::uint64_t frameIndex)
+    {
+        ring.ticket[slot]        = ring.wanted;
+        ring.pending[slot]       = true;    // written with the ticket, never without it
+        ring.submitted[slot]     = false;
+        ring.recordedFrame[slot] = frameIndex;
+        ring.wanted              = 0;
+    }
+
+    // After a SUCCESSFUL Execute of frame `frameIndex` (before m_frameIndex
+    // advances): the copies that frame recorded were submitted.
+    inline void ConfirmCaptureRingSubmission(CaptureRing& ring, std::uint64_t frameIndex)
+    {
+        for (std::uint32_t slot = 0; slot < 3; ++slot)
+            if (ring.pending[slot] && !ring.submitted[slot] && ring.recordedFrame[slot] == frameIndex)
+                ring.submitted[slot] = true;
+    }
 
     // What DrainTicketCapture hands back: ArcaneRemote's CaptureMapped fields,
     // render-side (ArcaneRender includes no Arcane/Remote header, R8-2). The

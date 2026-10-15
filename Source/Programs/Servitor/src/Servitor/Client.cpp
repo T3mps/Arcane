@@ -430,17 +430,23 @@ bool ParseGlobals(int argc, char** argv, GlobalOptions& out, std::string* error)
 Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchange, void* user,
              Arcane::Remote::ClientBlock* client, Arcane::Remote::Envelope* finalEnvelope)
 {
-    nlohmann::json body = {
-        {"id", "c1"},
-        {"command", req.command},
-        {"args", req.args},
-        {"options", {{"timeoutMs", opt.timeoutMs}}},
+    // Built per attempt: a busy retry resends options.timeoutMs as the budget
+    // REMAINING, not the original one, so a job a retried call arms on the
+    // host is bounded by what the client still waits (Task 27 fix round 1).
+    const auto makePayload = [&](std::uint32_t timeoutMs) {
+        nlohmann::json body = {
+            {"id", "c1"},
+            {"command", req.command},
+            {"args", req.args},
+            {"options", {{"timeoutMs", timeoutMs}}},
+        };
+        if (opt.readOnly)
+            body["options"]["readOnly"] = true;   // ruling F15
+        if (!opt.world.empty())
+            body["options"]["world"] = opt.world; // ruling F14; the listener copies it onto Call::world
+        return body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     };
-    if (opt.readOnly)
-        body["options"]["readOnly"] = true;   // ruling F15
-    if (!opt.world.empty())
-        body["options"]["world"] = opt.world; // ruling F14; the listener copies it onto Call::world
-    const std::string payload = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    std::string payload = makePayload(opt.timeoutMs);
     Arcane::Remote::ClientBlock local;
     if (client == nullptr)
         client = &local;
@@ -466,6 +472,10 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
             client->retried = true;
             std::this_thread::sleep_for(std::chrono::milliseconds(pauseMs));
             pauseMs = pauseMs < 50 ? 50 : std::min(1000, pauseMs * 2);
+            const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count();
+            payload = makePayload(static_cast<std::uint32_t>(
+                std::max<long long>(1, static_cast<long long>(opt.timeoutMs) - spent)));
             continue;
         }
         client->exitCode = code;

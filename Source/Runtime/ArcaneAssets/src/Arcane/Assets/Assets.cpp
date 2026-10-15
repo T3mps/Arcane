@@ -1673,4 +1673,29 @@ namespace Arcane
         }
         return true;
     }
+
+    bool EncodePngRgba(std::uint32_t width, std::uint32_t height,
+                       const unsigned char* rgba, std::vector<unsigned char>& png)
+    {
+        png.clear();
+        if (!rgba || width == 0 || height == 0)
+            return false;
+        // stbi_write_png_to_func is the public in-memory entry point: it
+        // encodes into its own buffer, hands it to this sink once, and frees
+        // it itself (STBIW_FREE), so nothing stb allocated escapes.
+        const auto sink = [](void* context, void* data, int size)
+        {
+            auto* out = static_cast<std::vector<unsigned char>*>(context);
+            const auto* bytes = static_cast<const unsigned char*>(data);
+            if (size > 0)
+                out->insert(out->end(), bytes, bytes + size);
+        };
+        if (!stbi_write_png_to_func(sink, &png, static_cast<int>(width), static_cast<int>(height), 4,
+                                    rgba, static_cast<int>(width) * 4))
+        {
+            png.clear();
+            return false;
+        }
+        return !png.empty();
+    }
 }

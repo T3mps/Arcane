@@ -222,4 +222,28 @@ TEST_CASE("--all call is a drive: refused without --yes, fans out with it, --pid
     CHECK(seen.pids.size() == 3);
 }
 
+TEST_CASE("--all screenshot --out is refused; --all screenshot fans out as an observe", "[servitor][client]") {
+    Servitor::Scan scan;
+    scan.live = {MakeHost(1, Arcane::Remote::HostKind::Runtime), MakeHost(2, Arcane::Remote::HostKind::Editor)};
+    struct Seen { std::mutex m; std::vector<std::uint32_t> pids; } seen;
+    auto post = [](const Arcane::Remote::Descriptor& d, const nlohmann::json&, Arcane::Remote::Envelope* out,
+                   void* user) {
+        auto& s = *static_cast<Seen*>(user);
+        std::lock_guard lock(s.m);
+        s.pids.push_back(d.pid);
+        *out = Arcane::Remote::MakeOk("capture.window", nlohmann::json::object(), {});
+        return 0;
+    };
+    const Servitor::VerbRow* shot = Servitor::FindVerb("screenshot window");
+    REQUIRE(shot != nullptr);
+    Servitor::GlobalOptions opt;
+    opt.all = true;
+    Servitor::FanOutResult result;
+    const std::vector<std::string> withOut = {"--out", "shot.png"};
+    CHECK(Servitor::FanOutVerb(*shot, withOut, opt, scan, post, &seen, &result) == 2);
+    CHECK(seen.pids.empty());
+    CHECK(Servitor::FanOutVerb(*shot, {}, opt, scan, post, &seen, &result) == 0);   // observe: no --yes
+    CHECK(seen.pids.size() == 2);
+}
+
 #endif

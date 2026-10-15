@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -348,18 +349,26 @@ bool ScreenshotArgs(const char* words, std::span<const std::string> rest, nlohma
         // --out is the only flag the row declares.
         if (value.empty())
             return Fail(error, "--out needs a file path");
-        const std::filesystem::path given(std::u8string(value.begin(), value.end()));
-        std::string ext;
-        for (const char8_t c : given.extension().u8string())
-            ext += static_cast<char>(c >= u8'A' && c <= u8'Z' ? c - u8'A' + u8'a' : c);
-        if (ext != ".png")
-            return Fail(error, "--out must name a .png file, got " + value);
-        std::error_code ec;
-        const std::filesystem::path absolute = std::filesystem::absolute(given, ec);
-        if (ec)
-            return Fail(error, "--out cannot be resolved: " + value);
-        const std::u8string utf8 = absolute.lexically_normal().u8string();
-        out["out"] = std::string(utf8.begin(), utf8.end());
+        // argv is the platform's narrow encoding (the ANSI code page on
+        // Windows, UTF-8 on POSIX), so the path is built from it natively and
+        // sent as UTF-8. A conversion that fails is a usage error, never an
+        // escaped exception.
+        try {
+            const std::filesystem::path given(value);
+            std::string ext;
+            for (const char8_t c : given.extension().u8string())
+                ext += static_cast<char>(c >= u8'A' && c <= u8'Z' ? c - u8'A' + u8'a' : c);
+            if (ext != ".png")
+                return Fail(error, "--out must name a .png file, got " + value);
+            std::error_code ec;
+            const std::filesystem::path absolute = std::filesystem::absolute(given, ec);
+            if (ec)
+                return Fail(error, "--out cannot be resolved: " + value);
+            const std::u8string utf8 = absolute.lexically_normal().u8string();
+            out["out"] = std::string(utf8.begin(), utf8.end());
+        } catch (const std::exception&) {
+            return Fail(error, "--out is not a path this system can represent: " + value);
+        }
     }
     return true;
 }

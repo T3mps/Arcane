@@ -1899,6 +1899,9 @@ namespace Arcane
         // until here.
         if (m_scene)
             m_scene->FlushGraves(m_graves);
+#if !defined(ARC_BUILD_DIST)
+        ConfirmCaptureRingSubmission(m_captureRing, m_frameIndex);   // this frame's ring copy was submitted
+#endif
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, after the frame's present and
@@ -2050,6 +2053,9 @@ namespace Arcane
                                          m_graph ? m_graph->DebugSubmitCount() : 0);
         if (m_scene)
             m_scene->FlushGraves(m_graves);   // same contract as RenderFrame() above
+#if !defined(ARC_BUILD_DIST)
+        ConfirmCaptureRingSubmission(m_captureRing, m_frameIndex);   // this frame's ring copy was submitted
+#endif
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, published ONLY when the caller has said
@@ -2290,8 +2296,9 @@ namespace Arcane
         // FramesInFlight()): `submission` follows the context's own clock, so
         // the pacing wait this frame already paid for its slot covers the ring's.
         ring.submission = static_cast<std::uint32_t>(m_frameIndex);
-        const std::uint32_t framesInFlight = ring.framesInFlight == 0 ? 1u : ring.framesInFlight;
-        const std::uint32_t slot = ring.submission % framesInFlight;
+        if (ring.framesInFlight == 0)
+            ring.framesInFlight = 1;
+        const std::uint32_t slot = ring.submission % ring.framesInFlight;
         if (slot >= kMaxFramesInFlight || &dest != m_ringBuffer || !m_ringCpu)
         {
             GraphError("NriGraphContext: the ticket-capture node ran with a slot outside the ring or "
@@ -2299,10 +2306,13 @@ namespace Arcane
             return;
         }
 
-        // DRAIN FIRST: whatever was copied into this slot FramesInFlight()
-        // frames ago has retired (PickNode::RecordReadback's argument). No
-        // fence query, no idle.
-        if (ring.pending[slot])
+        const CaptureRingStep step = PlanCaptureRingSlot(
+            ring, slot, m_frameIndex, m_ringWidth == SurfaceWidth() && m_ringHeight == SurfaceHeight());
+
+        // DRAIN FIRST: the copy in this slot was SUBMITTED FramesInFlight() or
+        // more frames ago, so the pacing wait this frame paid has retired it
+        // (PickNode::RecordReadback's argument). No fence query, no idle.
+        if (step.drain)
         {
             const std::size_t bytes = static_cast<std::size_t>(m_ringRowPitch) * m_ringHeight;
             const std::uint8_t* src = m_ringCpu + static_cast<std::size_t>(slot) * m_ringSlicePitch;
@@ -2311,14 +2321,12 @@ namespace Arcane
             ring.retiredH      = m_ringHeight;
             ring.retiredPitch  = static_cast<std::uint32_t>(m_ringRowPitch);
             ring.retiredBgra   = IsBgraFormat(m_format);
-            ring.retiredTicket = ring.ticket[slot];
-            ring.haveRetired   = true;
-            ring.pending[slot] = false;
+            RetireCaptureRingSlot(ring, slot);
         }
 
         // RECORD SECOND: the wanted copy into this slot, only at the buffer's
         // extent (PrepareTicketCapture resizes it only while nothing is pending).
-        if (ring.wanted != 0 && m_ringWidth == SurfaceWidth() && m_ringHeight == SurfaceHeight())
+        if (step.record)
         {
             nri::TextureDataLayoutDesc layout = {};
             layout.offset     = static_cast<std::uint64_t>(slot) * m_ringSlicePitch;
@@ -2331,9 +2339,7 @@ namespace Arcane
             region.depth  = 1;
 
             core.CmdReadbackTextureToBuffer(cmd, dest, layout, source, region);
-            ring.ticket[slot]  = ring.wanted;
-            ring.pending[slot] = true;   // written with the ticket, never without it
-            ring.wanted        = 0;
+            RecordCaptureRingSlot(ring, slot, m_frameIndex);
         }
         ++ring.submission;
     }
@@ -2346,7 +2352,7 @@ namespace Arcane
         {
             if (!ring.pending[slot])
                 continue;
-            if (canRetire)
+            if (canRetire && ring.submitted[slot])
             {
                 const std::size_t bytes = static_cast<std::size_t>(m_ringRowPitch) * m_ringHeight;
                 const std::uint8_t* src = m_ringCpu + static_cast<std::size_t>(slot) * m_ringSlicePitch;
@@ -2358,9 +2364,13 @@ namespace Arcane
                 ring.retiredTicket = ring.ticket[slot];
                 ring.haveRetired   = true;
             }
-            else
+            else if (ring.submitted[slot])
             {
                 m_lostTicket = ring.ticket[slot];   // its drain answers with a null map: capture.no-frame
+            }
+            else if (ring.wanted == 0)
+            {
+                ring.wanted = ring.ticket[slot];    // never submitted: copy it again from the next frame
             }
             ring.pending[slot] = false;
         }

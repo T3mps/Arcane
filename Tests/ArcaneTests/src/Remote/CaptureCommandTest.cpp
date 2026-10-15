@@ -1,10 +1,20 @@
 #include <catch2/catch_test_macros.hpp>
+#include <Arcane/Crypto/Crypto.hpp>  // first after Catch2: its Logger.hpp defines SPDLOG_ACTIVE_LEVEL
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/Listener.hpp>
 #include <Arcane/Assets/ImageIo.hpp>
 #include "RemoteDemoArgs.hpp"
 #include "RemoteTestSupport.hpp"
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Servitor/Client.hpp>
+#include <Servitor/Verbs.hpp>
+#include <chrono>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <thread>
+#include <utility>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -405,6 +415,299 @@ TEST_CASE("a published ticket with a null map finishes capture.no-frame", "[remo
     CHECK(user.reads == 0);
     CHECK(user.idles == 0);
     CHECK(gate.frame == 4);
+}
+
+// ---- Task 27 fix round 1 ----------------------------------------------------
+
+namespace {
+
+Arcane::Remote::CaptureHooks WindowHooks(CapUser& user, const std::filesystem::path& outDir) {
+    Arcane::Remote::CaptureHooks hooks;
+    hooks.framesInFlight = 2;
+    hooks.armWindow = &ArmSlot;
+    hooks.drainWindow = &DrainSlot;
+    hooks.user = &user;
+    hooks.outDir = outDir;
+    return hooks;
+}
+
+Arcane::Remote::CommandResult InvokeCapture(const nlohmann::json& args, std::uint32_t timeoutMs = 30000) {
+    Arcane::Remote::Call call;
+    call.command = "capture.window";
+    call.args = args;
+    call.timeoutMs = timeoutMs;
+    return Arcane::Remote::CommandRegistry::Get().Invoke(call);
+}
+
+} // namespace
+
+TEST_CASE("a pending capture past its deadline is capture.no-frame timeout; minimized is capture.minimized", "[remote][capture]") {
+    CapUser user;   // never retired: every drain answers false
+    Arcane::Remote::JobTable jobs;
+    const auto hooks = WindowHooks(user, std::filesystem::temp_directory_path() / "remote-cap-deadline");
+    RemoteCaptureScope scope(hooks, jobs);
+    Arcane::Remote::HostGate gate;
+    gate.frame = 7;
+
+    const auto timedOut = InvokeCapture(nlohmann::json::object(), 1);
+    REQUIRE(timedOut.completesJob != 0);
+    jobs.StepAll(gate);   // arms
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    jobs.StepAll(gate);   // pending, past the 1 ms deadline, not minimized
+    const auto* job = jobs.Find(Arcane::Remote::JobId{timedOut.completesJob});
+    REQUIRE(job != nullptr);
+    CHECK(job->state == Arcane::Remote::JobState::Failed);
+    CHECK(job->envelope.errors[0].code == "capture.no-frame");
+    CHECK(job->envelope.errors[0].detail["reason"] == "timeout");
+    CHECK(Arcane::Remote::ExitFromHost(job->envelope) == 6);
+
+    // Minimized: answered on the first pending step, long before a 30 s deadline.
+    const auto minimized = InvokeCapture(nlohmann::json::object());
+    REQUIRE(minimized.completesJob != 0);
+    jobs.StepAll(gate);   // arms
+    gate.minimized.store(true);
+    jobs.StepAll(gate);
+    const auto* job2 = jobs.Find(Arcane::Remote::JobId{minimized.completesJob});
+    REQUIRE(job2 != nullptr);
+    CHECK(job2->state == Arcane::Remote::JobState::Failed);
+    CHECK(job2->envelope.errors[0].code == "capture.minimized");
+    CHECK(Arcane::Remote::ExitFromHost(job2->envelope) == 5);
+    CHECK(user.reads == 0);
+    CHECK(gate.frame == 7);
+}
+
+TEST_CASE("releasing the capture table cancels an armed capture and completes its waiter", "[remote][capture]") {
+    CapUser user;
+    Arcane::Remote::JobTable jobs;
+    const auto hooks = WindowHooks(user, std::filesystem::temp_directory_path() / "remote-cap-cancel");
+    RemoteCaptureScope scope(hooks, jobs);
+    Arcane::Remote::HostGate gate;
+    Arcane::Remote::RequestQueue queue;
+    Arcane::Remote::RemoteDispatcher dispatcher(queue, Arcane::Remote::CommandRegistry::Get(), gate, jobs,
+                                                hooks.outDir / "audit.ndjson");
+    Arcane::Remote::Call call;
+    call.command = "capture.window";
+    REQUIRE(queue.TryPush(41, call));
+    dispatcher.Drain(1000.0, 8);   // runs the command: the job is armed and the waiter bound
+    dispatcher.Drain(1000.0, 8);   // steps it once: the copy is armed
+    CHECK(user.copies == 1);
+    REQUIRE(jobs.AnyRunning({"capture.window"}));
+
+    Arcane::Remote::RegisterCaptureCommands(nullptr);   // what HostSession::Teardown does
+    CHECK_FALSE(jobs.AnyRunning({"capture.window"}));
+    Arcane::Remote::CommandResult answered;
+    REQUIRE(queue.Wait(41, answered, std::chrono::milliseconds(1000)));
+    CHECK_FALSE(answered.envelope.ok);
+    CHECK(answered.envelope.errors[0].code == "host.unavailable");
+    user.retired = true;
+    jobs.StepAll(gate);   // the cancelled row is not stepped again; nothing dangles
+    CHECK(user.reads == 0);
+    // A torn-down session answers host.unavailable, not capture.no-renderer.
+    const auto after = InvokeCapture(nlohmann::json::object());
+    CHECK(after.completesJob == 0);
+    CHECK(after.envelope.errors[0].code == "host.unavailable");
+    CHECK(Arcane::Remote::ExitFromHost(after.envelope) == 5);
+}
+
+TEST_CASE("an unwritable capture path is capture.artifact-failed and leaves no .tmp", "[remote][capture]") {
+    const auto blocker = std::filesystem::temp_directory_path() / "remote-cap-blocker";
+    std::filesystem::remove_all(blocker);
+    { std::ofstream(blocker) << "a plain file where the out dir should be"; }
+    CapUser user;
+    user.retired = true;
+    Arcane::Remote::JobTable jobs;
+    const auto hooks = WindowHooks(user, blocker);
+    RemoteCaptureScope scope(hooks, jobs);
+    Arcane::Remote::HostGate gate;
+    const auto armed = InvokeCapture(nlohmann::json::object());
+    REQUIRE(armed.completesJob != 0);
+    jobs.StepAll(gate);
+    jobs.StepAll(gate);
+    const auto* job = jobs.Find(Arcane::Remote::JobId{armed.completesJob});
+    REQUIRE(job != nullptr);
+    CHECK(job->state == Arcane::Remote::JobState::Failed);
+    CHECK(job->envelope.errors[0].code == "capture.artifact-failed");
+    CHECK(Arcane::Remote::ExitFromHost(job->envelope) == 6);
+    CHECK(job->envelope.artifacts.empty());
+    CHECK(std::filesystem::is_regular_file(blocker));
+    std::filesystem::remove(blocker);
+}
+
+TEST_CASE("capture args: relative, non-png and unknown keys are refused before anything is armed", "[remote][capture]") {
+    CapUser user;
+    Arcane::Remote::JobTable jobs;
+    const auto hooks = WindowHooks(user, std::filesystem::temp_directory_path() / "remote-cap-args");
+    RemoteCaptureScope scope(hooks, jobs);
+    const auto abs = (std::filesystem::temp_directory_path() / "shot.jpg").generic_u8string();
+    const std::vector<std::pair<nlohmann::json, std::string>> refused = {
+        {{{"out", "relative/shot.png"}}, "arg.invalid"},
+        {{{"out", std::string(abs.begin(), abs.end())}}, "arg.invalid"},
+        {{{"out", ""}}, "arg.invalid"},
+        {{{"out", 3}}, "arg.invalid"},
+        {{{"bogus", true}}, "arg.unknown"},
+        // Not UTF-8: the path conversion throws on Windows; it is a refusal, never an escaped exception.
+        {{{"out", std::string(abs.begin(), abs.end() - 4) + "\xff.png"}}, "arg.invalid"},
+    };
+    for (const auto& [args, code] : refused) {
+        const auto result = InvokeCapture(args);
+        CHECK(result.completesJob == 0);
+        REQUIRE_FALSE(result.envelope.errors.empty());
+        CHECK(result.envelope.errors[0].code == code);
+        CHECK(Arcane::Remote::ExitFromHost(result.envelope) == 2);
+    }
+    CHECK(jobs.FinishedCount() == 0);
+    CHECK_FALSE(jobs.AnyRunning({"capture.window"}));
+    CHECK(user.copies == 0);
+}
+
+TEST_CASE("a non-ASCII --out path is written as given, hashed from the written bytes, named with the pid", "[remote][capture]") {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / std::u8string(u8"remote-cap-\u00e9\u4e2d");
+    std::filesystem::remove_all(dir);
+    CapUser user;
+    user.retired = true;
+    Arcane::Remote::JobTable jobs;
+    const auto hooks = WindowHooks(user, dir);
+    RemoteCaptureScope scope(hooks, jobs);
+    Arcane::Remote::HostGate gate;
+    gate.pid = 4242;
+
+    const std::u8string outUtf8 = (dir / std::u8string(u8"shot-\u00e9.png")).generic_u8string();
+    const auto named = InvokeCapture({{"out", std::string(outUtf8.begin(), outUtf8.end())}});
+    REQUIRE(named.completesJob != 0);
+    jobs.StepAll(gate);
+    jobs.StepAll(gate);
+    const auto* job = jobs.Find(Arcane::Remote::JobId{named.completesJob});
+    REQUIRE(job != nullptr);
+    REQUIRE(job->state == Arcane::Remote::JobState::Done);
+    const auto& art = job->envelope.artifacts[0];
+    CHECK(art.path == std::string(outUtf8.begin(), outUtf8.end()));
+    const std::filesystem::path written(std::u8string(art.path.begin(), art.path.end()));
+    REQUIRE(std::filesystem::exists(written));
+    CHECK(std::filesystem::file_size(written) == art.bytes);
+    std::string bytes;
+    {
+        std::ifstream in(written, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    CHECK(Arcane::Crypto::Sha256Hex(bytes) == art.sha256);
+    CHECK_FALSE(std::filesystem::exists(std::filesystem::path(written).concat(".tmp")));
+
+    // No --out: <command>-<pid>-<unix ms>-<n>.png in the artifact directory.
+    const auto unnamed = InvokeCapture(nlohmann::json::object());
+    REQUIRE(unnamed.completesJob != 0);
+    jobs.StepAll(gate);
+    jobs.StepAll(gate);
+    const auto* job2 = jobs.Find(Arcane::Remote::JobId{unnamed.completesJob});
+    REQUIRE(job2 != nullptr);
+    REQUIRE(job2->state == Arcane::Remote::JobState::Done);
+    const std::filesystem::path auto_(std::u8string(job2->envelope.artifacts[0].path.begin(),
+                                                    job2->envelope.artifacts[0].path.end()));
+    const std::u8string leaf = auto_.filename().u8string();
+    CHECK(std::string(leaf.begin(), leaf.end()).starts_with("capture.window-4242-"));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("the capture ring re-copies a ticket whose frame never submitted, and drains only after framesInFlight", "[remote][capture]") {
+    Arcane::CaptureRing ring;
+    ring.framesInFlight = 2;
+    ring.wanted = 9;
+    // Frame 10, slot 0: the copy is recorded, then Execute fails (no confirm,
+    // m_frameIndex stays 10).
+    auto step = Arcane::PlanCaptureRingSlot(ring, 0, 10, true);
+    CHECK_FALSE(step.drain);
+    REQUIRE(step.record);
+    Arcane::RecordCaptureRingSlot(ring, 0, 10);
+    CHECK(ring.wanted == 0);
+    // Frame 10 again, slot 0: the unsubmitted copy is NOT drained as stale bytes; it is copied again.
+    step = Arcane::PlanCaptureRingSlot(ring, 0, 10, true);
+    CHECK_FALSE(step.drain);
+    REQUIRE(step.record);
+    CHECK(ring.wanted == 9);
+    Arcane::RecordCaptureRingSlot(ring, 0, 10);
+    Arcane::ConfirmCaptureRingSubmission(ring, 10);   // this time Execute succeeded
+    CHECK(ring.submitted[0]);
+    // Frame 11, slot 1: nothing to do.
+    step = Arcane::PlanCaptureRingSlot(ring, 1, 11, true);
+    CHECK_FALSE(step.drain);
+    CHECK_FALSE(step.record);
+    // Frame 12, slot 0: framesInFlight frames after the submitted copy, so it drains.
+    step = Arcane::PlanCaptureRingSlot(ring, 0, 12, true);
+    REQUIRE(step.drain);
+    CHECK_FALSE(step.record);
+    Arcane::RetireCaptureRingSlot(ring, 0);
+    CHECK(ring.haveRetired);
+    CHECK(ring.retiredTicket == 9);
+    CHECK_FALSE(ring.pending[0]);
+}
+
+TEST_CASE("screenshot verbs resolve --out to an absolute .png and refuse the rest", "[servitor][client]") {
+    const Servitor::VerbRow* row = Servitor::FindVerb("screenshot window");
+    REQUIRE(row != nullptr);
+    REQUIRE(row->args != nullptr);
+    REQUIRE(Servitor::FindVerb("screenshot viewport") != nullptr);
+    nlohmann::json out;
+    std::string error;
+    const std::vector<std::string> none;
+    REQUIRE(row->args(none, out, &error));
+    CHECK(out == nlohmann::json::object());
+    const std::vector<std::string> rel = {"--out", "shots/a.PNG"};
+    REQUIRE(row->args(rel, out, &error));
+    const std::string resolved = out.at("out").get<std::string>();
+    const std::filesystem::path resolvedPath(std::u8string(resolved.begin(), resolved.end()));
+    CHECK(resolvedPath.is_absolute());
+    CHECK(resolvedPath.filename() == "a.PNG");
+    for (const std::vector<std::string>& bad : std::vector<std::vector<std::string>>{
+             {"--out", "a.jpg"}, {"--out"}, {"extra"}, {"--bogus"}}) {
+        error.clear();
+        CHECK_FALSE(row->args(bad, out, &error));
+        CHECK_FALSE(error.empty());
+    }
+}
+
+namespace {
+
+struct TimeoutHost {
+    int posts = 0;
+    std::vector<std::uint32_t> timeouts;
+};
+
+Servitor::ExchangeResult BusyTwice(const std::string& body, void* user) {
+    auto* host = static_cast<TimeoutHost*>(user);
+    ++host->posts;
+    const auto json = nlohmann::json::parse(body);
+    host->timeouts.push_back(json.at("options").at("timeoutMs").get<std::uint32_t>());
+    Servitor::ExchangeResult result;
+    const std::string cmd = json.at("command").get<std::string>();
+    if (host->posts <= 2) {
+        result.envelope = Arcane::Remote::MakeError(cmd, "host.busy", "a capture is pending", "retry");
+        result.envelope.errors[0].detail = nlohmann::json{{"state", "capture-pending"}};
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        return result;
+    }
+    result.envelope = Arcane::Remote::MakeOk(cmd, nlohmann::json::object(), {});
+    return result;
+}
+
+} // namespace
+
+TEST_CASE("a busy retry resends options.timeoutMs as the remaining budget", "[servitor][client]") {
+    TimeoutHost host;
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.timeoutMs = 5000;
+    Servitor::CallRequest shot;
+    shot.command = "capture.window";
+    shot.args = nlohmann::json::object();
+    Arcane::Remote::ClientBlock client;
+    (void)Servitor::Call(shot, opt, &BusyTwice, &host, &client);
+    CHECK(client.exitCode == 0);
+    CHECK(client.retried);
+    REQUIRE(host.timeouts.size() == 3);
+    CHECK(host.timeouts[0] == 5000);
+    CHECK(host.timeouts[1] < host.timeouts[0]);
+    CHECK(host.timeouts[2] < host.timeouts[1]);
+    CHECK(host.timeouts[2] >= 1);
+    CHECK(host.timeouts[0] - host.timeouts[2] >= 60);   // two 30 ms busy answers plus the backoff
 }
 
 #endif

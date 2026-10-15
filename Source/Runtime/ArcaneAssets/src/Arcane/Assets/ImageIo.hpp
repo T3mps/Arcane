@@ -46,6 +46,15 @@ namespace Arcane
                                  std::uint32_t width, std::uint32_t height,
                                  const unsigned char* rgba);
 
+    // Encode tight RGBA8 to PNG bytes in memory (stb's to-func writer), so a
+    // caller owns the file write: a wide-path std::ofstream, a checked close
+    // and a rename (the Servitor capture job). WritePngRgba goes through
+    // stbi_write_png, which neither reports a short write nor opens a
+    // non-ANSI path on Windows. False (png empty) for empty input or an
+    // encoder failure. Pure CPU, never logs.
+    ARC_ASSETS_API bool EncodePngRgba(std::uint32_t width, std::uint32_t height,
+                                      const unsigned char* rgba, std::vector<unsigned char>& png);
+
     // A GPU readback's mapped rows into tight RGBA8: the row padding
     // (rowPitch past width * 4) is dropped and BGRA is swizzled to RGBA, so a
     // capture's bytes mean the same thing on every backend. The one copy of

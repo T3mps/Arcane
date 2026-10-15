@@ -15,11 +15,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <fstream>
-#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -97,10 +98,13 @@ bool Finished(Job& job, CaptureJobState* state)
     return true;
 }
 
-// Normalizes, writes the PNG through <file>.tmp, hashes the written bytes and
-// renames it into place; the artifact, or nullopt with *why.
+// Normalizes and encodes the PNG in memory, hashes those bytes, writes them
+// to <file>.tmp through a wide-path std::ofstream whose close is checked, and
+// renames it into place; the artifact, or nullopt with *why (the .tmp removed).
+// No path is narrowed with path::string(): a non-ASCII --out or project
+// directory is written as given, and envelope text is UTF-8 (Utf8).
 std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& state, const CaptureMapped& raw,
-                                        std::string& why)
+                                        std::uint32_t pid, std::string& why)
 {
     const std::size_t needed = raw.height == 0 ? 0
                              : static_cast<std::size_t>(raw.rowPitch) * (raw.height - 1) +
@@ -112,35 +116,38 @@ std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& s
     }
     std::vector<unsigned char> rgba;
     NormalizeCaptureRows(raw.mapped, raw.width, raw.height, raw.rowPitch, raw.bgra, rgba);
+    std::vector<unsigned char> png;
+    if (!EncodePngRgba(raw.width, raw.height, rgba.data(), png)) {
+        why = "the PNG encoder failed";
+        return std::nullopt;
+    }
 
     static std::atomic<std::uint64_t> serial{0};
     std::filesystem::path file = state.outFile;
     if (file.empty()) {
+        // <command>-<pid>-<unix ms>-<n>: an editor and a runtime sharing one
+        // project's out/ directory never pick the same name.
         const auto unixMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count();
-        file = state.outDir /
-               (job.command + "-" + std::to_string(unixMs) + "-" + std::to_string(++serial) + ".png");
+        file = state.outDir / (job.command + "-" + std::to_string(pid) + "-" + std::to_string(unixMs) + "-" +
+                               std::to_string(++serial) + ".png");
     }
     std::error_code ec;
     if (file.has_parent_path())
-        std::filesystem::create_directories(file.parent_path(), ec);
+        std::filesystem::create_directories(file.parent_path(), ec);   // a failure surfaces as the open below
     const std::filesystem::path temp = std::filesystem::path(file).concat(".tmp");
-    if (!WritePngRgba(temp, raw.width, raw.height, rgba.data())) {
-        std::filesystem::remove(temp, ec);
-        why = "cannot write " + Utf8(temp);
-        return std::nullopt;
-    }
-    std::string bytes;
     {
-        std::ifstream in(temp, std::ios::binary);
-        if (in.is_open())
-            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-        const bool readOk = in.is_open() && !in.bad();
-        in.close();
-        if (!readOk || bytes.empty()) {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        if (out.is_open())
+            out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        // close() flushes: a full disk sets failbit here, so a short file is
+        // never renamed and reported with the full size and hash.
+        const bool opened = out.is_open();
+        out.close();
+        if (!opened || out.fail()) {
             std::filesystem::remove(temp, ec);
-            why = "cannot read back " + Utf8(temp);
+            why = "cannot write " + Utf8(temp);
             return std::nullopt;
         }
     }
@@ -153,8 +160,8 @@ std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& s
     Artifact artifact;
     artifact.kind = "capture";
     artifact.path = Utf8(file);
-    artifact.bytes = bytes.size();
-    artifact.sha256 = Crypto::Sha256Hex(bytes);
+    artifact.bytes = png.size();
+    artifact.sha256 = Crypto::Sha256Hex(std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
     artifact.width = raw.width;
     artifact.height = raw.height;
     artifact.format = "RGBA8_UNORM";   // the PNG is tight RGBA, whatever the target's channel order
@@ -188,20 +195,22 @@ bool StepCapture(Job& job, HostGate& gate, void* user)
 
     CaptureMapped raw;
     if (!state->drain(state->ticket, &raw, state->hookUser)) {
-        // Not retired yet. Bounded: a host that stops rendering (minimized,
-        // device lost, a failing frame) ends the job instead of parking it.
-        if (std::chrono::steady_clock::now() < state->deadline)
-            return false;
+        // Not retired yet. A minimized host renders nothing, so the ticket
+        // cannot retire: answer at once (exit 5, retryable), on any pending
+        // step. Otherwise bounded: a host that stops rendering (device lost,
+        // a failing frame) ends the job at its deadline instead of parking it.
         if (gate.minimized.load(std::memory_order_acquire)) {
             job.envelope = Failure(job.command, "capture.minimized",
                                    "the host was minimized before the capture's frame rendered",
                                    "restore the window and retry");
-        } else {
-            job.envelope = Failure(job.command, "capture.no-frame",
-                                   "no rendered frame retired the capture before the timeout",
-                                   "check that the host is rendering (stats frame, problems) and retry");
-            job.envelope.errors.front().detail["reason"] = "timeout";
+            return Finished(job, state);
         }
+        if (std::chrono::steady_clock::now() < state->deadline)
+            return false;
+        job.envelope = Failure(job.command, "capture.no-frame",
+                               "no rendered frame retired the capture before the timeout",
+                               "check that the host is rendering (stats frame, problems) and retry");
+        job.envelope.errors.front().detail["reason"] = "timeout";
         return Finished(job, state);
     }
     if (raw.mapped == nullptr) {
@@ -211,7 +220,7 @@ bool StepCapture(Job& job, HostGate& gate, void* user)
     }
 
     std::string why;
-    std::optional<Artifact> artifact = WriteCapturePng(job, *state, raw, why);
+    std::optional<Artifact> artifact = WriteCapturePng(job, *state, raw, gate.pid, why);
     if (!artifact) {
         job.envelope = Failure(job.command, "capture.artifact-failed", "the capture PNG was not written: " + why,
                                "check the output path and free disk space, then retry");
@@ -241,7 +250,15 @@ std::optional<Envelope> ParseArgs(const Call& call, std::filesystem::path& outFi
     if (!out.is_string() || out.get<std::string>().empty())
         return MakeError(call.command, "arg.invalid", "out must be a non-empty path", std::string(kUsage));
     const std::string text = out.get<std::string>();
-    std::filesystem::path path(std::u8string(text.begin(), text.end()));
+    // The wire is UTF-8; a byte sequence that is not makes the path
+    // conversion throw (std::system_error on Windows), which must never
+    // escape onto the host main thread.
+    std::filesystem::path path;
+    try {
+        path = std::filesystem::path(std::u8string(text.begin(), text.end()));
+    } catch (const std::exception&) {
+        return MakeError(call.command, "arg.invalid", "out is not a valid UTF-8 path", std::string(kUsage));
+    }
     if (!path.is_absolute())
         return MakeError(call.command, "arg.invalid", "out must be an absolute path, got " + text,
                          std::string(kUsage));
@@ -262,15 +279,17 @@ CommandResult Capture(const Call& call, void* /*user*/)
     const bool window = call.command == "capture.window";
     const ArmCopyFn arm = window ? s.hooks.armWindow : s.hooks.armViewport;
     const DrainSlotFn drain = window ? s.hooks.drainWindow : s.hooks.drainViewport;
+    // A torn-down session (no table; Teardown also cleared the hooks) is
+    // host.unavailable (exit 5), not a host without a renderer.
+    if (s.jobs == nullptr) {
+        result.envelope = MakeError(call.command, "host.unavailable", "no armed host session serves " + call.command,
+                                    "relaunch the host with --remote");
+        return result;
+    }
     // A server (all six hooks null) has no renderer (spec AM1): exit 2, nothing armed.
     if (arm == nullptr || drain == nullptr) {
         result.envelope = MakeError(call.command, "capture.no-renderer", "this host has no renderer to capture",
                                     "capture an editor or a runtime");
-        return result;
-    }
-    if (s.jobs == nullptr) {
-        result.envelope = MakeError(call.command, "host.unavailable", "no armed host session serves " + call.command,
-                                    "relaunch the host with --remote");
         return result;
     }
     std::filesystem::path outFile;
