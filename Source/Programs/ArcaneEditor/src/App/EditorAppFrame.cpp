@@ -21,6 +21,7 @@
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -545,6 +546,7 @@ namespace Arcane::Editor
                 m_remoteExitReason = m_remote->ExitReason();
             m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");   // publishes "shutting-down" first
             m_remote.reset();
+            Arcane::Editor::SetSelectionView({});   // the view names this app's m_selection
         }
 #endif
     }
@@ -1729,6 +1731,7 @@ namespace Arcane::Editor
             {
                 m_remote->Stop("remote-disabled");
                 m_remote.reset();
+                Arcane::Editor::SetSelectionView({});
             }
             m_remoteArmBlocked = true;   // until the cvar is true again
             return;
@@ -1745,6 +1748,7 @@ namespace Arcane::Editor
         {
             m_remote->Stop("project-switched");
             m_remote.reset();
+            Arcane::Editor::SetSelectionView({});
         }
         const bool wanted = enabled || m_config.remote;
         if (m_remote || m_remoteArmBlocked || !wanted || !m_runtime)
@@ -1808,6 +1812,23 @@ namespace Arcane::Editor
             m_remoteArmBlocked = true;
             return;
         }
+        // Task 25 (R8-2, ruling F33): editor.selection.get reads m_selection
+        // through this view, main thread; HostSession is ArcaneRemote and cannot
+        // see SelectionContext, so the install is here, not inside Start. Every
+        // m_remote Stop site clears it.
+        Arcane::Editor::SelectionView selectionView;
+        selectionView.user    = this;
+        selectionView.count   = [](void* user) -> std::size_t {
+            return static_cast<const EditorApp*>(user)->m_selection.Count();
+        };
+        selectionView.at      = [](std::size_t index, void* user) -> Astra::Entity {
+            return static_cast<const EditorApp*>(user)->m_selection.Entities()[index];
+        };
+        selectionView.primary = [](void* user) -> Astra::Entity {
+            return static_cast<const EditorApp*>(user)->m_selection.Primary();
+        };
+        Arcane::Editor::SetSelectionView(selectionView);
+        Arcane::Editor::RegisterSelectionCommand();
     }
 #endif
 

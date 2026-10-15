@@ -1327,6 +1327,10 @@ project "ArcaneTests"
         -- source-compiles into the test exe so the [editor] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/EntityList.cpp",
+        -- Servitor P0 Task 25: editor.selection.get (the editor program's
+        -- remote command over SelectionContext) source-compiles into the test
+        -- exe so the [remote][scene] cases drive it directly.
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Remote/SelectionCommand.cpp",
         -- Task 6: InspectorFields (reflected field classification + pure write-backs
         -- for the Inspector panel) source-compiles into the test exe so the
         -- [editor] unit tests drive it directly -- no ImGui dependency, same

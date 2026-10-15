@@ -63,6 +63,12 @@ int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt);
 bool EntityGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+
+// Task 25.
+constexpr VerbFlag kSceneTreeFlags[] = {
+    {"--depth", true},  // levels below the roots (0 = roots only); omitted = the whole tree
+};
 
 // Task 23. Repeated list flags accumulate; each value may also be comma-separated.
 constexpr VerbFlag kEntityGetFlags[] = {
@@ -95,7 +101,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 24> kVerbs = {{
+const std::array<VerbRow, 26> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -146,6 +152,12 @@ const std::array<VerbRow, 24> kVerbs = {{
     // Task 24. Read-only; each resolves --world on the host.
     {"resource list", "resource.list", nullptr, nullptr},
     {"resource get", "resource.get", &ResourceGetArgs, nullptr, {}, false, nullptr, "<Name>   (from resource list)"},
+    // Task 25. scene tree resolves --world on the host (editor and runtime; a
+    // server answers command.host-kind). selection is editor-only: a runtime or
+    // server answers command.host-kind (ruling F-1).
+    {"scene tree", "scene.tree", &SceneTreeArgs, nullptr, kSceneTreeFlags, false, nullptr,
+     "[--depth N]   (0 = roots only)"},
+    {"selection", "editor.selection.get", nullptr, nullptr},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -304,6 +316,26 @@ bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std
     if (tokens.positional.size() != 1)
         return Fail(error, "resource get needs one resource name (servitor resource list names them)");
     out = {{"name", tokens.positional.front()}};
+    return true;
+}
+
+// scene tree [--depth N] -> {} or {depth}.
+bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("scene tree"), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, "scene tree takes flags only (--depth N), got " + tokens.positional.front());
+    out = nlohmann::json::object();
+    for (const auto& [flag, value] : tokens.flags) {
+        // --depth is the only flag the row declares.
+        const bool digits = !value.empty() && value.size() <= 9 &&
+                            std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; });
+        if (!digits)
+            return Fail(error, "--depth needs a non-negative whole number, got " + value);
+        out["depth"] = std::stoul(value);
+    }
     return true;
 }
 

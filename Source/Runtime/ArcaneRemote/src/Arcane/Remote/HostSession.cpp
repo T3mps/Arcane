@@ -12,6 +12,7 @@
 #include <Arcane/Remote/Commands/LogCommands.hpp>
 #include <Arcane/Remote/Commands/ProblemCommands.hpp>
 #include <Arcane/Remote/Commands/ResourceCommands.hpp>
+#include <Arcane/Remote/Commands/SceneCommands.hpp>
 #include <Arcane/Remote/Commands/SessionCommands.hpp>
 #include <Arcane/Remote/Commands/WorldCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
@@ -127,6 +128,12 @@ bool HostSession::Start()
     // artifact directory (set below, released in Teardown), so nothing of
     // theirs is released.
     RegisterResourceCommands();
+    // scene.tree (Task 25, ruling F12): like the ECS commands it reads
+    // CommandWorlds() through SceneWorld and holds no pointer, and it shares
+    // their artifact directory, so nothing of its is released. On a server it
+    // answers command.host-kind itself (ruling F8). The editor's
+    // editor.selection.get registers from the editor program (R8-2).
+    RegisterSceneCommands();
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
