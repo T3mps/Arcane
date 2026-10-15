@@ -2235,8 +2235,9 @@ namespace Arcane::Editor
         // 2 when an open-ended --headless --remote run lost (or never had) its
         // remote surface: it has no other stop path, so Main() returns this.
         int                                       m_remoteArmExit   = 0;
-        // UpdateRemoteSession has attempted an arm before (round 2, M-2): an
-        // explicit --remote refusal exits only on the first, startup attempt.
+        // UpdateRemoteSession has attempted an arm before (Arming::Attempt marks
+        // it, armed or refused): an explicit --remote refusal exits only on
+        // the first, startup attempt (rounds 2-3, M-2).
         bool                                      m_remoteArmTried  = false;
         // The remote reason the frame loop broke on ("remote-quit" or
         // "remote-idle"), latched by MainLoop before the session stops, so

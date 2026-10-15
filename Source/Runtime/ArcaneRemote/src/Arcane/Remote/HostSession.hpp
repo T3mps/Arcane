@@ -66,6 +66,13 @@ struct ARC_REMOTE_API Arming {
     // cannot apply (an editor.remote.enable toggle during ClientOnly Play, a
     // project switch) logs and stays disarmed, never exits.
     static bool RefusalExits(bool explicitRemote, bool startupArm);
+    // Final fix round 3 (M-2): one arm attempt, past the caller's own
+    // early-return guard. The first attempt (attemptedBefore false) is the
+    // startup arm, whether it arms or is refused, and every call marks the
+    // attempt. Arm: `mode` may serve. Otherwise RefuseExit (an explicit
+    // --remote at startup) or RefuseLog (anything later, or the cvar alone).
+    enum class Verdict : std::uint8_t { Arm, RefuseExit, RefuseLog };
+    static Verdict Attempt(bool& attemptedBefore, NetMode mode, bool explicitRemote);
 };
 
 class ARC_REMOTE_API HostSession {

@@ -439,4 +439,29 @@ TEST_CASE("an explicit --remote refusal exits only at startup", "[remote][host]"
     CHECK_FALSE(Arcane::Remote::Arming::RefusalExits(false, false));
 }
 
+// ---- Final fix round 3 ----------------------------------------------------
+
+// M-2: the editor's arm-attempt sequencing (EditorApp::UpdateRemoteSession
+// calls Arming::Attempt past its early-return guard). The first attempt is the
+// startup arm whether it arms or is refused; every later one -- a cvar toggle
+// during ClientOnly or client+server Play, a project switch -- only logs.
+TEST_CASE("the editor's arm attempts: only the first is the startup arm, armed or refused", "[remote][host]") {
+    using Arcane::Remote::Arming;
+    using Verdict = Arcane::Remote::Arming::Verdict;
+    bool tried = false;
+    CHECK(Arming::Attempt(tried, Arcane::NetMode::Standalone, true) == Verdict::Arm);   // `servitor launch editor`
+    CHECK(tried);
+    // The reviewer's scenario: the user enters client+server Play (a Client
+    // primary) and cycles editor.remote.enable: never an exit.
+    CHECK(Arming::Attempt(tried, Arcane::NetMode::Client, true) == Verdict::RefuseLog);
+    CHECK(Arming::Attempt(tried, Arcane::NetMode::Standalone, true) == Verdict::Arm);
+
+    bool refusedAtBoot = false;
+    CHECK(Arming::Attempt(refusedAtBoot, Arcane::NetMode::Client, true) == Verdict::RefuseExit);
+    CHECK(Arming::Attempt(refusedAtBoot, Arcane::NetMode::Client, true) == Verdict::RefuseLog);
+
+    bool cvarOnly = false;   // armed by the cvar alone: no explicit --remote to refuse
+    CHECK(Arming::Attempt(cvarOnly, Arcane::NetMode::Client, false) == Verdict::RefuseLog);
+}
+
 #endif

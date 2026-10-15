@@ -1894,12 +1894,14 @@ namespace Arcane::Editor
 
         // The editor arms in its edit-mode topology; a play session that later
         // makes the primary world a Client keeps the session (CVarContext::Editor).
-        if (!Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, wanted))
+        // Arming::Attempt marks the attempt before it checks Allow, so only the
+        // first pass that gets here is the startup arm (round 3, M-2).
+        const Arcane::Remote::Arming::Verdict verdict =
+            Arcane::Remote::Arming::Attempt(m_remoteArmTried, m_runtime->Core().Mode(), m_config.remote);
+        if (verdict != Arcane::Remote::Arming::Verdict::Arm)
         {
             m_remoteArmBlocked = true;
-            const bool startupArm = !m_remoteArmTried;
-            m_remoteArmTried = true;
-            if (Arcane::Remote::Arming::RefusalExits(m_config.remote, startupArm))
+            if (verdict == Arcane::Remote::Arming::Verdict::RefuseExit)
             {
                 // Rule 3 (final fix pass, C-M16): an explicit --remote that
                 // cannot apply is refused, never run on as if ignored.

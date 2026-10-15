@@ -75,6 +75,17 @@ const char* Arming::RefusalReason(NetMode mode)
     return nullptr;
 }
 
+Arming::Verdict Arming::Attempt(bool& attemptedBefore, NetMode mode, bool explicitRemote)
+{
+    // Marked before the Allow check, so a successful startup arm is the
+    // startup attempt too: a later refusal never exits (round 3, M-2).
+    const bool startup = !attemptedBefore;
+    attemptedBefore = true;
+    if (Allow(mode, false, true))
+        return Verdict::Arm;
+    return RefusalExits(explicitRemote, startup) ? Verdict::RefuseExit : Verdict::RefuseLog;
+}
+
 bool Arming::RefusalExits(bool explicitRemote, bool startupArm)
 {
     return explicitRemote && startupArm;
