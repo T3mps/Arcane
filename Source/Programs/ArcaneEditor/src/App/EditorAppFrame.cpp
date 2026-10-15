@@ -1524,18 +1524,27 @@ namespace Arcane::Editor
         Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
 #if !defined(ARC_BUILD_DIST)
         const auto advanceStart = std::chrono::steady_clock::now();
+        // Asked BEFORE Advance, which consumes a pending single step: whether
+        // this Advance runs the play sim (Task 29, ruling A).
+        const bool simAdvance = Arcane::Editor::CountsAsSimAdvance(m_play.IsPlaying(), m_runtime->Loop());
 #endif
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
 #if !defined(ARC_BUILD_DIST)
-        // stats.frame (Task 26): a play advance only; Edit-mode frames run this
-        // same function and leave the snapshot alone. The editor's frame clock
-        // is its own m_frameCount.
-        if (m_remote && m_play.IsPlaying())
-            m_remote->NoteSimAdvance(m_frameCount, simDt,
+        // host.frame (Task 29, ruling A; AM1) and stats.frame (Task 26): one
+        // per play sim advance, the same bump the runtime and the server make
+        // in their Advance branch. Edit-mode frames and paused Play frames run
+        // this same function and touch neither; a requested single step (the
+        // toolbar's, or servitor step's) is exactly one. Without this bump the
+        // editor's host.frame stayed 0 and `servitor step` never completed.
+        if (m_remote && simAdvance)
+        {
+            m_remote->Gate().frame.fetch_add(1);
+            m_remote->NoteSimAdvance(m_remote->Gate().frame.load(), simDt,
                                      std::chrono::duration<double, std::milli>(
                                          std::chrono::steady_clock::now() - advanceStart).count());
+        }
 #endif
         // The embedded server world (EmbeddedServer topology) advances on the same
         // real dt, right after -- its OWN loop and its OWN Server-masked systems.
@@ -1903,6 +1912,61 @@ namespace Arcane::Editor
             auto* app = static_cast<EditorApp*>(user);
             return Arcane::BlessReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->ChromeGraph()),
                                           width, height, rgba);
+        };
+        // Task 29 (ruling F12): play.start/stop/pause/resume/step drive the
+        // same PlaySession and RunLoop the toolbar transport does
+        // (DrawSimTimeToolbar), main thread inside Drain, user = this. The
+        // loop is re-fetched per call (Stop's RestoreRegistry replaces it).
+        // Drain runs before this frame's play/edit re-derivation
+        // (m_editBinding.editMode), so a remote flip is followed by that same
+        // re-derivation; the flip's other follow-ups (NextWorld settings on
+        // Play, the scene epoch both ways, the separate server process on
+        // Stop) are the toolbar site's, repeated here.
+        rc.play.editor     = true;
+        rc.play.undoReason = "play-mode";
+        rc.play.editorUser = this;
+        rc.play.editorPlay = [](void* user, std::string_view topology) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            const std::optional<Arcane::Editor::PlayTopology> topo = Arcane::Editor::PlayTopologyFromRemote(topology);
+            if (!topo || !app->m_runtime)
+                return false;
+            const bool wasPlaying = app->InPlayMode();
+            if (!wasPlaying)
+                app->m_documents.FlushGestures();   // the toolbar's beforePlay (s3.3b)
+            if (!app->m_play.Play(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr, *topo))
+                return false;
+            if (!wasPlaying)
+            {
+                Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
+                app->NoteSceneReplaced();
+            }
+            return true;
+        };
+        rc.play.editorStop = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            if (!app->m_runtime)
+                return false;
+            const bool wasPlaying = app->InPlayMode();
+            const bool ok = app->m_play.Stop(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr);
+            if (wasPlaying && !app->InPlayMode())
+            {
+                app->m_serverProcess.Stop();   // the session's other half; a no-op otherwise
+                app->NoteSceneReplaced();
+            }
+            return ok;
+        };
+        rc.play.editorSetPaused = [](bool paused, void* user) {
+            auto* app = static_cast<EditorApp*>(user);
+            if (app->m_runtime)
+                app->m_runtime->Loop().SetPaused(paused);
+        };
+        rc.play.editorRequestSingleStep = [](void* user) {
+            auto* app = static_cast<EditorApp*>(user);
+            if (app->m_runtime)
+                app->m_runtime->Loop().RequestSingleStep();
+        };
+        rc.play.editorPlaying = [](void* user) -> bool {
+            return static_cast<const EditorApp*>(user)->InPlayMode();
         };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())

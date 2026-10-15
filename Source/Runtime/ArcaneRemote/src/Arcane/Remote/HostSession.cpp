@@ -12,6 +12,7 @@
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Commands/EcsCommands.hpp>
 #include <Arcane/Remote/Commands/LogCommands.hpp>
+#include <Arcane/Remote/Commands/PlayCommands.hpp>
 #include <Arcane/Remote/Commands/ProblemCommands.hpp>
 #include <Arcane/Remote/Commands/ResourceCommands.hpp>
 #include <Arcane/Remote/Commands/SceneCommands.hpp>
@@ -157,6 +158,23 @@ bool HostSession::Start()
     // in-flight capture slot. Teardown clears both.
     SetCompareHooks(m_config.compare);
     RegisterCompareCommand(&m_jobs);
+    // play.* (Task 29, ruling F12): a runtime or server drives its AM1 tick
+    // gate; the editor's PlaySession / RunLoop hooks come from Config::play.
+    // play.step reads its arm-time frame from this session's gate and arms
+    // on this session's job table. Teardown clears all three.
+    {
+        PlayHooks hooks = m_config.play;
+        if (m_config.kind != HostKind::Editor) {
+            hooks.gate = &m_tick;
+            hooks.editor = false;
+        }
+        hooks.stats = &m_stats;
+        if (hooks.undoReason.empty())
+            hooks.undoReason = m_config.kind == HostKind::Editor ? "play-mode" : "runtime-host";
+        SetPlayHooks(std::move(hooks));
+        SetPlayGate(&m_gate);
+        RegisterPlayCommands(&m_jobs);
+    }
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -242,6 +260,10 @@ bool HostSession::Start()
     m_lastHeartbeat = m_lastActivity;
     ARC_INFO("remote: {} listening on 127.0.0.1:{} (descriptor {}){}", ToString(m_config.kind),
              m_listener->Port(), Utf8(m_descriptorPath), readOnly ? ", read-only" : "");
+    // Task 29 (ruling B): the AM1 hold is visible. Only a runtime or server
+    // sets holdSim (an open-ended --remote run); a --frames N run runs.
+    if (m_config.holdSim)
+        ARC_INFO("remote: holding at frame 0 (servitor play/resume to start)");
     return true;
 }
 
@@ -341,6 +363,12 @@ void HostSession::Teardown()
     // capture.compare (Task 28): by the same rule, after SetQueue(nullptr).
     SetCompareHooks({});
     RegisterCompareCommand(nullptr);
+    // play.* (Task 29): by the same rule, after SetQueue(nullptr) -- a step
+    // still running is finished Cancelled into no queue (its parked call was
+    // answered host.died by the listener's Stop above).
+    SetPlayHooks({});
+    SetPlayGate(nullptr);
+    RegisterPlayCommands(nullptr);
     m_queue.reset();
     m_atoms.reset();
     m_cataloguePublished = false;

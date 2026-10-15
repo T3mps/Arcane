@@ -75,6 +75,10 @@ namespace Arcane
         // one tick whatever the dt, backlog or time scale, and the backlog is
         // left as it was (StepFixed; the runtime's remote `step` relies on it).
         void RequestSingleStep() noexcept { m_singleStep = true; }
+        // A single step is requested and the next Advance will run it (the
+        // editor counts that Advance as a sim advance for host.frame, Servitor
+        // P0 Task 29).
+        [[nodiscard]] bool SingleStepPending() const noexcept { return m_singleStep; }
 
         // The fixed step's rate (Hz) -- a RUNTIME value (Core-DLL split, plan 1
         // Task 6 review round 1): StepFixed's canonical `fixedDt` (`1.0 /

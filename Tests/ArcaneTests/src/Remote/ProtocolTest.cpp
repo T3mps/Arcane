@@ -50,6 +50,9 @@ TEST_CASE("exit table matches s6.6, AM1, and AM6", "[remote][protocol]") {
     CHECK(ExitFromHost(Err("compare.artifact-failed")) == 6);
     CHECK(ExitFromHost(Err("job.failed")) == 6);
     CHECK(ExitFromHost(Err("play.edit-only")) == 6);
+    CHECK(ExitFromHost(Err("play.not-playing")) == 6);   // listed explicitly (Task 29)
+    CHECK(ExitFromHost(Err("play.refused")) == 6);
+    CHECK(ExitFromHost(Err("play.stopped")) == 6);
     CHECK(ExitFromHost(Err("some.future-code")) == 6); // any other non-empty code (ruling F6)
     CHECK(ExitFromHost(Err("")) == 2);                 // empty code on a non-ok envelope
     CHECK(ExitFromHost(Err("host.died")) == 7);

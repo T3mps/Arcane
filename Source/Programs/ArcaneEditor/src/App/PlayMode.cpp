@@ -186,4 +186,17 @@ namespace Arcane::Editor
         Arcane::ApplySimStepCap(m_server->Loop());
         m_server->Loop().Advance(realDt);
     }
+
+    std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling)
+    {
+        if (spelling == "standalone")    return PlayTopology::Standalone;
+        if (spelling == "listen")        return PlayTopology::ListenServer;
+        if (spelling == "client+server") return PlayTopology::EmbeddedServer;
+        return std::nullopt;
+    }
+
+    bool CountsAsSimAdvance(bool playing, const Arcane::RunLoop& loop)
+    {
+        return playing && (!loop.IsPaused() || loop.SingleStepPending());
+    }
 }

@@ -34,7 +34,8 @@ int ExitForCode(const std::string& code)
                       "capture.no-frame", "cvar.unknown", "cvar.type-mismatch", "cvar.refused-weaker", "cvar.refused",
                       "reflect.unreadable", "ecs.artifact-failed", "resource.artifact-failed",
                       "scene.artifact-failed", "capture.artifact-failed", "compare.reference-unreadable",
-                      "compare.bless-failed", "compare.artifact-failed" }))
+                      "compare.bless-failed", "compare.artifact-failed", "play.not-playing", "play.refused",
+                      "play.stopped" }))
         return 6;
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;

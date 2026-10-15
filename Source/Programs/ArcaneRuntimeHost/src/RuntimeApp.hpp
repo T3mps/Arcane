@@ -337,6 +337,10 @@ private:
     // `wait settled`'s stability count (Task 16): the session's settled hook
     // feeds it the shader compiler's idleness once per poll.
     Arcane::RemoteSettleTracker                  m_remoteSettle;
+    // Task 29 (ruling B): the windowed title shows " [held]" while the remote
+    // tick gate holds the sim; this is what the title says now, so SetTitle
+    // runs only on a change.
+    bool                                         m_remoteTitleHeld = false;
 #endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,

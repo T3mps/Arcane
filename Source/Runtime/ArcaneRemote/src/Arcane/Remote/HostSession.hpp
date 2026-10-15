@@ -15,6 +15,7 @@
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Commands/CompareCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
+#include <Arcane/Remote/Commands/PlayCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/FrameStats.hpp>
 #include <Arcane/Remote/Jobs.hpp>
@@ -110,6 +111,14 @@ public:
         // SetCompareHooks + RegisterCompareCommand(&m_jobs), the same table
         // the capture commands use; Teardown clears both.
         CompareHooks compare;
+        // Task 29 (ruling F12): play.start/stop/pause/resume/step. The editor
+        // installs its PlaySession / RunLoop functions (editor = true,
+        // undoReason "play-mode"); a runtime or server leaves them null and
+        // Start points `gate` at Tick() (undoReason "runtime-host"). Start
+        // also sets `stats` to the session's FrameStats and installs them with
+        // SetPlayHooks + SetPlayGate(&Gate()) + RegisterPlayCommands(&m_jobs);
+        // Teardown clears all three.
+        PlayHooks play;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

@@ -231,8 +231,7 @@ namespace Arcane
                                       "read back at canvas pixel x,y -- exit 0 on a hit, 1 on a miss");
         // Servitor P0 (Task 10). Dist refuses all three before Cli::Parse
         // (NamesRemoteFlag above); see HostConfig.hpp's remote block.
-        cli.Flag  ("remote",          "DEV: arm the loopback remote surface a Servitor client attaches "
-                                      "to; lifts --headless's --frames requirement");
+        cli.Flag  ("remote",          std::string(kRemoteFlagHelp));   // states the AM1 hold (Task 29)
         cli.Option("remote-descriptor", "", "DEV: write the remote attach descriptor to this path "
                                             "(empty = under <project>/Saved/Remote/)");
         cli.Option("remote-idle-exit", std::to_string(HostConfig{}.remoteIdleExitSeconds),

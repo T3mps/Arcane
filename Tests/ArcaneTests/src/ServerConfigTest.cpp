@@ -59,6 +59,14 @@ TEST_CASE("ServerConfig: the remote defaults, and the same refusals as HostConfi
         CHECK(bad.exitCode == 2);
     }
 }
+
+// Servitor P0 Task 29 (ruling B): the server's --remote help states the AM1 hold.
+TEST_CASE("ServerConfig: --remote's help states the held start", "[remote][host]") {
+    const std::string_view help = Arcane::Server::kRemoteFlagHelp;
+    CHECK(help.starts_with("DEV: arm the loopback remote surface"));
+    CHECK(help.find("an open-ended run starts held at frame 0; use servitor play/resume, or pass --frames N")
+          != std::string_view::npos);
+}
 #else
 TEST_CASE("ServerConfig: Dist refuses the remote flags at parse", "[server][dist]") {
     for (const auto& args : std::vector<std::vector<const char*>>{

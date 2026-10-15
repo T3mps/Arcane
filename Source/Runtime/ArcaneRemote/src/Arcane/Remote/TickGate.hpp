@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <mutex>
+#include <string>
+#include <string_view>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -24,11 +26,17 @@ public:
     void SetPaused(bool paused);
     // Adds n single steps to the pending count (saturating).
     void RequestSteps(std::uint32_t n);
+    // Drops every pending single step (play.stop, Task 29).
+    void ClearSteps();
     // running && !paused: Run, and a leftover step count is cleared.
     // Otherwise a pending step is Step (and the count drops by one), else Idle.
     TickDecision Consume();
     bool Running() const;
     bool Paused() const;
+    // The gate holds the sim: not running, or paused (held at start, or
+    // stopped / paused by servitor). Pending single steps still run one tick
+    // each while held; Held stays true through them.
+    bool Held() const;
     std::uint32_t StepsRemaining() const;
 
 private:
@@ -37,6 +45,10 @@ private:
     bool m_paused = false;
     std::uint32_t m_steps = 0;
 };
+
+// Task 29 (ruling B): the windowed runtime's title while the remote gate
+// holds its sim -- `base` plus " [held]" when held, `base` unchanged otherwise.
+ARC_REMOTE_API std::string HeldWindowTitle(std::string_view base, bool held);
 
 } // namespace Arcane::Remote
 

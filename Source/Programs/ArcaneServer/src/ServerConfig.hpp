@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Arcane::Server
 {
@@ -59,6 +60,16 @@ namespace Arcane::Server
     };
 
     struct ServerConfig::ParseOutcome { std::optional<ServerConfig> config; int exitCode = 0; };
+
+#if !defined(ARC_BUILD_DIST)
+    // Servitor P0 Task 29 (ruling B): --remote's help line, HostConfig's
+    // kRemoteFlagHelp rule in this host's words (this exe never links Client).
+    // An open-ended --remote server starts held at frame 0 and logs
+    // "remote: holding at frame 0"; a --frames N server runs. No opt-out flag.
+    inline constexpr std::string_view kRemoteFlagHelp =
+        "DEV: arm the loopback remote surface a Servitor client attaches to; an open-ended run "
+        "starts held at frame 0; use servitor play/resume, or pass --frames N";
+#endif
 
     // THE RELAUNCH LINE (Diagnostics::Config::commandLine, spec S5.1), this
     // host's own copy of the rule ArcaneClient's SanitizeRelaunchLine

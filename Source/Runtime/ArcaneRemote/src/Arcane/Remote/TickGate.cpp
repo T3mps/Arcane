@@ -26,6 +26,12 @@ void TickGate::RequestSteps(std::uint32_t n)
     m_steps += n < room ? n : room;
 }
 
+void TickGate::ClearSteps()
+{
+    std::lock_guard lock(m_mutex);
+    m_steps = 0;
+}
+
 TickDecision TickGate::Consume()
 {
     std::lock_guard lock(m_mutex);
@@ -52,10 +58,24 @@ bool TickGate::Paused() const
     return m_paused;
 }
 
+bool TickGate::Held() const
+{
+    std::lock_guard lock(m_mutex);
+    return !m_running || m_paused;
+}
+
 std::uint32_t TickGate::StepsRemaining() const
 {
     std::lock_guard lock(m_mutex);
     return m_steps;
+}
+
+std::string HeldWindowTitle(std::string_view base, bool held)
+{
+    std::string title(base);
+    if (held)
+        title += " [held]";
+    return title;
 }
 
 } // namespace Arcane::Remote

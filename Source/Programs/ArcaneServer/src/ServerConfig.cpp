@@ -68,7 +68,7 @@ namespace Arcane::Server
         cli.Flag  ("no-admin-console", "do not read admin commands (get/set/list/explain) from stdin");
 #if !defined(ARC_BUILD_DIST)
         // Servitor P0 (Task 10): HostConfig's three remote flags, same help.
-        cli.Flag  ("remote", "DEV: arm the loopback remote surface a Servitor client attaches to");
+        cli.Flag  ("remote", std::string(kRemoteFlagHelp));   // states the AM1 hold (Task 29)
         cli.Option("remote-descriptor", "", "DEV: write the remote attach descriptor to this path "
                                             "(empty = under <project>/Saved/Remote/)");
         cli.Option("remote-idle-exit", std::to_string(ServerConfig{}.remoteIdleExitSeconds),

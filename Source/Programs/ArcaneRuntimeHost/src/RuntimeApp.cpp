@@ -1007,6 +1007,19 @@ void RuntimeApp::MainLoop()
             case Arcane::Remote::TickDecision::Step: pace = Arcane::RuntimeFrame::SimPace::SingleTick; break;
             case Arcane::Remote::TickDecision::Run:  pace = Arcane::RuntimeFrame::SimPace::Run;        break;
             }
+            // Task 29 (ruling B): the hold is visible. A windowed runtime's
+            // title reads "<title> [held]" while the gate holds the sim (held
+            // at frame 0, or stopped / paused by servitor) and the plain title
+            // while it runs. --headless has no title.
+            if (!m_config.headless)
+            {
+                const bool held = m_remote->Tick().Held();
+                if (held != m_remoteTitleHeld)
+                {
+                    m_remoteTitleHeld = held;
+                    m_gpu->Win().SetTitle(Arcane::Remote::HeldWindowTitle(Arcane::kHostWindowTitle, held));
+                }
+            }
         }
 #endif
 

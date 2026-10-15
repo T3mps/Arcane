@@ -34,6 +34,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Arcane { class PluginHost; struct PluginVTable; }
@@ -138,4 +139,16 @@ namespace Arcane::Editor
         std::optional<Arcane::Runtime> m_server;
         std::vector<std::byte>         m_serverSeed;
     };
+
+    // `servitor play --topology` (Servitor P0 Task 29, spec s7.3): standalone ->
+    // Standalone, listen -> ListenServer, client+server -> EmbeddedServer.
+    // ClientOnly has no remote spelling in P0. nullopt for anything else.
+    [[nodiscard]] std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling);
+
+    // Whether this frame's RunLoop::Advance is a sim advance the remote
+    // surface counts in host.frame (Task 29, ruling A; AM1): playing, and
+    // either running or holding a requested single step. Ask BEFORE Advance
+    // (it consumes the step). A paused Play frame and every Edit frame (Edit's
+    // loop is paused; EditModeSchedule owns its pass) are not advances.
+    [[nodiscard]] bool CountsAsSimAdvance(bool playing, const Arcane::RunLoop& loop);
 }

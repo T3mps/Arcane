@@ -68,6 +68,15 @@ bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::
 bool ScreenshotViewportArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ScreenshotWindowArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool CompareArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool PlayArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool StepArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+
+// Task 29. The topology is the editor's (an editor's Play topology); a runtime
+// or server was launched with its own and answers arg.inapplicable for any
+// other than standalone.
+constexpr VerbFlag kPlayFlags[] = {
+    {"--topology", true},   // standalone (default) | listen | client+server
+};
 
 // Task 27. --out is resolved against servitor's working directory here; the
 // host writes exactly that absolute path (a .png).
@@ -120,7 +129,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 29> kVerbs = {{
+const std::array<VerbRow, 34> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -192,6 +201,18 @@ const std::array<VerbRow, 29> kVerbs = {{
     {"compare", "capture.compare", &CompareArgs, nullptr, kCompareFlags, false, nullptr,
      "<reference> [--source host|viewport|window] [--bless] [--max-diff-pixels N] [--max-diff-pixel-ratio R]   "
      "(time-driven materials: launch with --fixed-time)"},
+    // Task 29. Drive commands (the host's read-only gate and audit apply; --all
+    // needs --yes). An editor enters / leaves Play; a runtime or server runs or
+    // holds its sim (an open-ended --remote run starts held at frame 0). step N
+    // is a job: it returns once host.frame has moved N sim ticks, so a large N
+    // needs a --timeout to match.
+    {"play", "play.start", &PlayArgs, nullptr, kPlayFlags, false, nullptr,
+     "[--topology standalone|listen|client+server]   (--topology: editor only)"},
+    {"stop", "play.stop", nullptr, nullptr},
+    {"pause", "play.pause", nullptr, nullptr},
+    {"resume", "play.resume", nullptr, nullptr},
+    {"step", "play.step", &StepArgs, nullptr, {}, false, nullptr,
+     "[N]   (1 to 100000 fixed ticks, default 1; returns when host.frame moved N)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -444,6 +465,48 @@ bool CompareArgs(std::span<const std::string> rest, nlohmann::json& out, std::st
             out[key] = r;
         }
     }
+    return true;
+}
+
+// play [--topology T] -> {} or {topology}. The spelling is checked here and
+// again by the host (arg.invalid), which owns the rule.
+bool PlayArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("play"), rest, &tokens))
+        return Fail(error, *problem);
+    if (!tokens.positional.empty())
+        return Fail(error, "play takes flags only (--topology T), got " + tokens.positional.front());
+    out = nlohmann::json::object();
+    for (const auto& [flag, value] : tokens.flags) {
+        // --topology is the only flag the row declares; once (Rule 3: never last-wins).
+        if (out.contains("topology"))
+            return Fail(error, flag + " is given more than once");
+        if (value != "standalone" && value != "listen" && value != "client+server")
+            return Fail(error, "--topology needs standalone, listen or client+server, got '" + value + "'");
+        out["topology"] = value;
+    }
+    return true;
+}
+
+// step [N] -> {} or {n}. N is a whole number; the host owns the 1..100000
+// range (arg.inapplicable, exit 2).
+bool StepArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("step"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() > 1)
+        return Fail(error, "step takes one count N, got " + tokens.positional[1]);
+    out = nlohmann::json::object();
+    if (tokens.positional.empty())
+        return true;
+    const std::string& n = tokens.positional.front();
+    const bool digits = !n.empty() && n.size() <= 9 &&
+                        std::all_of(n.begin(), n.end(), [](char c) { return c >= '0' && c <= '9'; });
+    if (!digits)
+        return Fail(error, "step needs a whole number of ticks N (1 to 100000), got '" + n + "'");
+    out["n"] = std::stoul(n);
     return true;
 }
 

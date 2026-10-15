@@ -66,11 +66,11 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"screenshot", "Capture the viewport or the window to a PNG", "observe"},
     {"compare", "Compare a capture against a reference image (--bless writes the reference, a drive)",
      "per-command"},
-    {"play", "Enter play mode", "drive"},
-    {"stop", "Leave play mode", "drive"},
+    {"play", "Enter play mode (editor), or run a held simulation (runtime, server)", "drive"},
+    {"stop", "Leave play mode (editor), or hold the simulation (runtime, server)", "drive"},
     {"pause", "Pause the simulation", "drive"},
-    {"resume", "Resume the simulation", "drive"},
-    {"step", "Advance the paused simulation by N fixed ticks", "drive"},
+    {"resume", "Resume the simulation (also starts a host held at frame 0)", "drive"},
+    {"step", "Advance the simulation by N fixed ticks; returns when host.frame moved N", "drive"},
 };
 
 // One row of the manifest's exit table (spec s6.6 + AM1/AM6/AM8, rev 8.3 V7/V8).

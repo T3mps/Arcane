@@ -1249,6 +1249,17 @@ TEST_CASE("--headless without --frames or --remote keeps the refusal text byte-i
                  "close button and cannot be focused for the quit action, so an "
                  "open-ended run has no way to stop itself)\n");
 }
+
+// Servitor P0 Task 29 (ruling B): the AM1 hold is documented where the flag
+// is. Parse registers --remote with exactly this text (HostConfig.cpp).
+TEST_CASE("--remote's help states the held start and how to leave it", "[remote][host]")
+{
+    const std::string_view help = Arcane::kRemoteFlagHelp;
+    CHECK(help.starts_with("DEV: arm the loopback remote surface"));
+    CHECK(help.find("lifts --headless's --frames requirement") != std::string_view::npos);
+    CHECK(help.find("an open-ended run starts held at frame 0; use servitor play/resume, or pass --frames N")
+          != std::string_view::npos);
+}
 #else
 // Dist: the remote fields and the Remote module are compiled out, so each of
 // the three spellings (both Cli forms) is refused at parse with exit 2 and the

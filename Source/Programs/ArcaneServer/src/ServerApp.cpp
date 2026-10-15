@@ -212,7 +212,13 @@ namespace Arcane::Server
         // report "frames-complete" for a run that was stopped a tenth of the
         // way through.
         bool stoppedByCleanExit = false;
-        for (std::uint64_t f = 0; m_cfg.frames == 0 || f < m_cfg.frames; ++f)
+        // --frames N counts SIM TICKS, not loop iterations (AM1, Servitor P0
+        // Task 29): rep.framesTicked moves only in the advance branch below, so
+        // an iteration a remote pause or stop holds idle never spends the
+        // budget. A paused `--frames N --remote` server idles until it is
+        // resumed or stepped, and still ticks exactly N. Without remote (and in
+        // Dist) every iteration advances, so the count is the same as before.
+        while (m_cfg.frames == 0 || rep.framesTicked < m_cfg.frames)
         {
             // Ctrl-C, the console close box, logoff or service shutdown,
             // routed through Diagnostics::RequestCleanExit into the hook

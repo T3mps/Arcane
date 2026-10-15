@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <Arcane/Base/DiagnosticsSettingsData.hpp>   // kHangMainSeconds derives from hangSeconds
 #include <Arcane/Core/Constant.hpp>
@@ -429,6 +430,16 @@ namespace Arcane
     // reliably provoked.
     ARC_CONSTANT("the --hang-main margin over diagnostics.hangSeconds' default")
     inline constexpr std::uint32_t kHangMainSeconds = DiagnosticsSettings{}.hangSeconds + 3u;
+
+    // DEV ONLY (Servitor P0 Task 29, ruling B): --remote's help line. It states
+    // the AM1 hold, so the held start is documented where the flag is: an
+    // open-ended --remote run starts held (a --frames N run runs), and the
+    // runtime logs "remote: holding at frame 0" and titles its window
+    // "[held]" while held. There is no opt-out flag.
+    inline constexpr std::string_view kRemoteFlagHelp =
+        "DEV: arm the loopback remote surface a Servitor client attaches to; lifts --headless's "
+        "--frames requirement; an open-ended run starts held at frame 0; use servitor play/resume, "
+        "or pass --frames N";
 #endif
 
     // The RELAUNCH line a host hands to Diagnostics::Config::commandLine (crash
