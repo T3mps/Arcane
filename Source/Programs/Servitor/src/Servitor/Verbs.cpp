@@ -67,11 +67,21 @@ bool ResourceGetArgs(std::span<const std::string> rest, nlohmann::json& out, std
 bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ScreenshotViewportArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 bool ScreenshotWindowArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
+bool CompareArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error);
 
 // Task 27. --out is resolved against servitor's working directory here; the
 // host writes exactly that absolute path (a .png).
 constexpr VerbFlag kScreenshotFlags[] = {
     {"--out", true},  // the PNG to write; omitted = the host's artifact directory (<remote dir>/out)
+};
+
+// Task 28. --bless writes the reference: a Drive call on the host (the
+// read-only gate and the audit apply) and under --all (--yes, FanOut).
+constexpr VerbFlag kCompareFlags[] = {
+    {"--source", true},                // host (default) | viewport | window: Task 27's capture pairs
+    {"--bless", false},                // write the capture as the reference instead of failing on a mismatch
+    {"--max-diff-pixels", true},       // differing pixels allowed (a whole number)
+    {"--max-diff-pixel-ratio", true},  // differing fraction allowed, 0..1
 };
 
 // Task 25.
@@ -110,7 +120,7 @@ bool WaitAwaitsHost(const nlohmann::json& args)
 }
 
 // Tasks 15-29 add their rows here (ruling F17).
-const std::array<VerbRow, 28> kVerbs = {{
+const std::array<VerbRow, 29> kVerbs = {{
     {"status", nullptr, nullptr, &StatusVerb},   // client-side: lists live hosts, no connect (Task 15)
     {"stats frame", "stats.frame", nullptr, nullptr},
     // Task 16. launch is client-side: it spawns the host and waits for its descriptor.
@@ -175,6 +185,13 @@ const std::array<VerbRow, 28> kVerbs = {{
      "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
     {"screenshot window", "capture.window", &ScreenshotWindowArgs, nullptr, kScreenshotFlags, false, nullptr,
      "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
+    // Task 28. One capture.compare job on the screenshot pairs: Passed exits 0,
+    // Failed exits 8 (ok true), a missing reference exits 6 unless --bless
+    // creates it. Against a golden, use a static scene or launch the host with
+    // --fixed-time: a held runtime's time-driven materials follow wall time.
+    {"compare", "capture.compare", &CompareArgs, nullptr, kCompareFlags, false, nullptr,
+     "<reference> [--source host|viewport|window] [--bless] [--max-diff-pixels N] [--max-diff-pixel-ratio R]   "
+     "(time-driven materials: launch with --fixed-time)"},
 }};
 
 bool QuitArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
@@ -381,6 +398,53 @@ bool ScreenshotViewportArgs(std::span<const std::string> rest, nlohmann::json& o
 bool ScreenshotWindowArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
 {
     return ScreenshotArgs("screenshot window", rest, out, error);
+}
+
+// compare <reference> [--source S] [--bless] [--max-diff-pixels N] [--max-diff-pixel-ratio R]
+// -> {reference[, source][, bless][, maxDiffPixels][, maxDiffPixelRatio]}.
+// An omitted budget is left out (unset: both unset is a zero budget). The
+// reference name itself is checked by the host (arg.invalid), which owns the rule.
+bool CompareArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)
+{
+    VerbTokens tokens;
+    if (const auto problem = SplitVerbTokens(*FindVerb("compare"), rest, &tokens))
+        return Fail(error, *problem);
+    if (tokens.positional.size() != 1)
+        return Fail(error, "compare needs one reference name, such as editor-ui");
+    out = {{"reference", tokens.positional.front()}};
+    for (const auto& [flag, value] : tokens.flags) {
+        // Every flag once: a repeated one is ambiguous, never last-wins (Rule 3).
+        const std::string key = flag == "--source"            ? "source"
+                              : flag == "--bless"             ? "bless"
+                              : flag == "--max-diff-pixels"   ? "maxDiffPixels"
+                                                              : "maxDiffPixelRatio";
+        if (out.contains(key))
+            return Fail(error, flag + " is given more than once");
+        if (flag == "--source") {
+            if (value != "host" && value != "viewport" && value != "window")
+                return Fail(error, "--source needs host, viewport or window, got '" + value + "'");
+            out[key] = value;
+        } else if (flag == "--bless") {
+            out[key] = true;
+        } else if (flag == "--max-diff-pixels") {
+            errno = 0;
+            char* end = nullptr;
+            const unsigned long long v = std::strtoull(value.c_str(), &end, 10);
+            if (value.empty() || value[0] < '0' || value[0] > '9' || end != value.c_str() + value.size() ||
+                errno == ERANGE || v > static_cast<unsigned long long>(std::numeric_limits<std::int64_t>::max()))
+                return Fail(error, "--max-diff-pixels needs a non-negative whole number, got '" + value + "'");
+            out[key] = static_cast<std::uint64_t>(v);
+        } else {
+            errno = 0;
+            char* end = nullptr;
+            const double r = std::strtod(value.c_str(), &end);
+            const bool numeric = !value.empty() && ((value[0] >= '0' && value[0] <= '9') || value[0] == '.');
+            if (!numeric || end != value.c_str() + value.size() || errno == ERANGE || !(r >= 0.0 && r <= 1.0))
+                return Fail(error, "--max-diff-pixel-ratio needs a number from 0 to 1, got '" + value + "'");
+            out[key] = r;
+        }
+    }
+    return true;
 }
 
 bool SceneTreeArgs(std::span<const std::string> rest, nlohmann::json& out, std::string* error)

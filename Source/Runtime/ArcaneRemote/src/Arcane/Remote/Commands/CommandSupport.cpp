@@ -6,6 +6,7 @@
 #if !defined(ARC_BUILD_DIST)
 
 #include <Arcane/Remote/Worlds.hpp>
+#include <Arcane/Assets/ImageIo.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace Arcane::Remote::Detail
 {
@@ -146,6 +148,53 @@ std::optional<Artifact> WriteArtifact(const std::filesystem::path& dir, std::str
     artifact.bytes = json.size();
     artifact.sha256 = Crypto::Sha256Hex(json);
     artifact.format = "json";
+    return artifact;
+}
+
+std::optional<Artifact> WritePngArtifact(const std::filesystem::path& file, std::uint32_t width, std::uint32_t height,
+                                         const unsigned char* rgba, std::string_view kind, std::string& why)
+{
+    const auto utf8 = [](const std::filesystem::path& p) {
+        const std::u8string s = p.generic_u8string();
+        return std::string(s.begin(), s.end());
+    };
+    std::vector<unsigned char> png;
+    if (!EncodePngRgba(width, height, rgba, png)) {
+        why = "the PNG encoder failed";
+        return std::nullopt;
+    }
+    std::error_code ec;
+    if (file.has_parent_path())
+        std::filesystem::create_directories(file.parent_path(), ec);   // a failure surfaces as the open below
+    const std::filesystem::path temp = std::filesystem::path(file).concat(".tmp");
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        if (out.is_open())
+            out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        // close() flushes: a full disk sets failbit here, so a short file is
+        // never renamed and reported with the full size and hash.
+        const bool opened = out.is_open();
+        out.close();
+        if (!opened || out.fail()) {
+            std::filesystem::remove(temp, ec);
+            why = "cannot write " + utf8(temp);
+            return std::nullopt;
+        }
+    }
+    std::filesystem::rename(temp, file, ec);
+    if (ec) {
+        std::filesystem::remove(temp, ec);
+        why = "cannot rename into " + utf8(file);
+        return std::nullopt;
+    }
+    Artifact artifact;
+    artifact.kind = std::string(kind);
+    artifact.path = utf8(file);
+    artifact.bytes = png.size();
+    artifact.sha256 = Crypto::Sha256Hex(std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
+    artifact.width = width;
+    artifact.height = height;
+    artifact.format = "RGBA8_UNORM";   // the PNG is tight RGBA, whatever the target's channel order
     return artifact;
 }
 

@@ -55,6 +55,14 @@ namespace Arcane
     ARC_ASSETS_API bool EncodePngRgba(std::uint32_t width, std::uint32_t height,
                                       const unsigned char* rgba, std::vector<unsigned char>& png);
 
+    // Decode PNG (or any stb-supported image) bytes already in memory into
+    // tight RGBA8, so a caller owns the file read: a wide-path std::ifstream
+    // (the Servitor compare job reads its reference this way; LoadPngRgba
+    // narrows the path with path::string(), which throws on a non-ANSI path
+    // on Windows). False (pixels invalid) for empty or undecodable input.
+    // Pure CPU, never logs.
+    ARC_ASSETS_API bool DecodePngRgba(const unsigned char* bytes, std::size_t size, PixelData& pixels);
+
     // A GPU readback's mapped rows into tight RGBA8: the row padding
     // (rowPitch past width * 4) is dropped and BGRA is swizzled to RGBA, so a
     // capture's bytes mean the same thing on every backend. The one copy of

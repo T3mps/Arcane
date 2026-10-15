@@ -7,6 +7,7 @@
 
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
+#include <Arcane/Remote/Commands/CompareCommands.hpp>
 #include <Arcane/Remote/Commands/ConsoleCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Commands/EcsCommands.hpp>
@@ -151,6 +152,11 @@ bool HostSession::Start()
         SetCaptureHooks(std::move(hooks));
         RegisterCaptureCommands(&m_jobs);
     }
+    // capture.compare (Task 28, ruling F12): the host's reference hooks and
+    // the same job table, so a compare and a screenshot share the one
+    // in-flight capture slot. Teardown clears both.
+    SetCompareHooks(m_config.compare);
+    RegisterCompareCommand(&m_jobs);
 
     const EditorLock::Info self = EditorLock::Self();
     m_processStart = self.start;
@@ -332,6 +338,9 @@ void HostSession::Teardown()
     // Stop above. The hooks name this host's render contexts; drop them.
     SetCaptureHooks({});
     RegisterCaptureCommands(nullptr);
+    // capture.compare (Task 28): by the same rule, after SetQueue(nullptr).
+    SetCompareHooks({});
+    RegisterCompareCommand(nullptr);
     m_queue.reset();
     m_atoms.reset();
     m_cataloguePublished = false;

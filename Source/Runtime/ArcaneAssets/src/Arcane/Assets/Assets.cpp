@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -1697,5 +1698,24 @@ namespace Arcane
             return false;
         }
         return !png.empty();
+    }
+
+    bool DecodePngRgba(const unsigned char* bytes, std::size_t size, PixelData& pixels)
+    {
+        pixels = PixelData{};
+        if (!bytes || size == 0 || size > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+            return false;
+        int w = 0, h = 0, comp = 0;
+        unsigned char* data = stbi_load_from_memory(bytes, static_cast<int>(size), &w, &h, &comp, 4);
+        if (!data || w <= 0 || h <= 0)
+        {
+            if (data) stbi_image_free(data);
+            return false;
+        }
+        pixels.width  = static_cast<std::uint32_t>(w);
+        pixels.height = static_cast<std::uint32_t>(h);
+        pixels.rgba.assign(data, data + (static_cast<std::size_t>(w) * h * 4));
+        stbi_image_free(data);
+        return true;
     }
 }

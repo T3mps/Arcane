@@ -1,23 +1,34 @@
 #pragma once
 // ArcaneRemote-internal helpers shared by the world-reading commands (entity.*
-// and ecs.*, Task 23; resource.*, Task 24). Not exported: nothing outside this
-// module includes it. Moved out of EcsCommands.cpp so resource.get reuses the
-// same world pick, argument checks and inline-cap artifact path.
+// and ecs.*, Task 23; resource.*, Task 24) and the capture commands
+// (capture.*, Tasks 27-28). Not exported: nothing outside this module
+// includes it. Moved out of EcsCommands.cpp so resource.get reuses the same
+// world pick, argument checks and inline-cap artifact path.
+#include <Arcane/Remote/Commands/CaptureCommands.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Core/Constant.hpp>
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #if !defined(ARC_BUILD_DIST)
 
 namespace Astra
 {
 class Registry;
+}
+
+namespace Arcane::Remote
+{
+struct Job;       // Jobs.hpp
+struct HostGate;  // Dispatcher.hpp
 }
 
 namespace Arcane::Remote::Detail
@@ -52,6 +63,47 @@ Envelope ErrorEnvelope(const Call& call, Error issue);
 // bytes, sha256), or nullopt with *why when any step fails.
 std::optional<Artifact> WriteArtifact(const std::filesystem::path& dir, std::string_view stem, std::string_view kind,
                                       const std::string& json, std::string& why);
+
+// Encodes tight RGBA8 to PNG bytes in memory, writes them to <file>.tmp
+// through a wide-path std::ofstream whose close is checked, and renames it
+// into place; the artifact (`kind`, RGBA8_UNORM, width, height, bytes, sha256
+// of the written bytes), or nullopt with *why (the .tmp removed). No path is
+// narrowed with path::string(): a non-ASCII path is written as given.
+std::optional<Artifact> WritePngArtifact(const std::filesystem::path& file, std::uint32_t width, std::uint32_t height,
+                                         const unsigned char* rgba, std::string_view kind, std::string& why);
+
+// ---- The capture ticket step (Task 27; shared with capture.compare, Task 28).
+// Defined in CaptureCommands.cpp, beside the stored hooks.
+
+// The hooks SetCaptureHooks stored (main thread only).
+const CaptureHooks& StoredCaptureHooks();
+
+// One armed render-ticket copy (rulings P2 (a), P3 (a)): the source's hook
+// pair, the ticket the first step armed, and the job's deadline.
+struct TicketCopy {
+    ArmCopyFn arm = nullptr;
+    DrainSlotFn drain = nullptr;
+    void* hookUser = nullptr;
+    std::uint64_t ticket = 0;
+    std::chrono::steady_clock::time_point deadline{};
+};
+
+// The deadline a capture job armed for `call` gets: its timeoutMs, or the
+// default when the call carries none.
+std::chrono::steady_clock::time_point CaptureDeadline(const Call& call);
+
+enum class TicketStep : std::uint8_t { Pending, Retired, Failed };
+// One job step of a ticket copy. The first step arms (job.progress.label
+// becomes "copied"); later steps drain that ticket. Pending: not retired yet
+// (the job stays Running). Retired: *raw holds the retired copy, mapped
+// non-null. Failed: job.envelope is the MakeError to finish with
+// (capture.no-frame: arm refused, map lost or deadline passed;
+// capture.minimized: the host is minimized). Reads no gate.frame.
+TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureMapped& raw);
+
+// The retired copy as tight RGBA8 (NormalizeCaptureRows: row padding dropped,
+// BGRA swapped); false with *why when its geometry does not fit its bytes.
+bool NormalizeRetired(const CaptureMapped& raw, std::vector<unsigned char>& rgba, std::string& why);
 
 } // namespace Arcane::Remote::Detail
 

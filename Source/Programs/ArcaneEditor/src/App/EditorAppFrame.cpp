@@ -120,6 +120,52 @@ namespace Arcane::Editor
             return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
         }
 
+#if !defined(ARC_BUILD_DIST)
+        // capture.compare's ResolveFn / BlessFn (Servitor P0 Task 28, ruling
+        // G-2): the adapter-set ResolveReference overload with the adapter set
+        // computed here from the chrome device, exactly as --compare computes
+        // it above MainLoop (m_compareAdapterSet is filled only under
+        // --compare, so it is not read). A software adapter (WARP, lavapipe)
+        // therefore never blesses into the shared or backend level.
+        Arcane::ReferenceResolution ResolveRemoteReference(const std::filesystem::path& projectRoot,
+                                                           const std::string& slot,
+                                                           Arcane::GraphicsBackend backend,
+                                                           Arcane::NriGraphContext* chrome)
+        {
+            const char* const backendName = CompareBackendName(backend);
+            std::string adapterSet;
+            if (chrome)
+            {
+                const Arcane::NriDeviceCaps& caps = chrome->Device().Caps();
+                adapterSet = Arcane::ReferenceAdapterSet(backendName, caps.adapterName, caps.softwareAdapter);
+            }
+            return Arcane::ResolveReference(projectRoot, slot, backendName, adapterSet);
+        }
+
+        // ReferenceResolution -> the wire's ResolvedReference: the level's
+        // report name (VerifyReport's resolvedLevel spelling) and the probed
+        // paths as UTF-8 with forward slashes.
+        Arcane::Remote::ResolvedReference ToRemoteReference(const Arcane::ReferenceResolution& resolution)
+        {
+            Arcane::Remote::ResolvedReference out;
+            out.found = resolution.level != Arcane::ReferenceLevel::None;
+            out.path  = resolution.path;
+            switch (resolution.level)
+            {
+                case Arcane::ReferenceLevel::Shared:  out.level = "shared";  break;
+                case Arcane::ReferenceLevel::Backend: out.level = "backend"; break;
+                case Arcane::ReferenceLevel::Adapter: out.level = "adapter"; break;
+                default:                              out.level = "none";    break;
+            }
+            for (const std::filesystem::path& tried : resolution.triedPaths)
+            {
+                const std::u8string utf8 = tried.generic_u8string();
+                out.triedPaths.emplace_back(utf8.begin(), utf8.end());
+            }
+            return out;
+        }
+#endif
+
         // Modifier scancodes still read here for camera orbit (Alt) and the
         // gizmo snap / fly-boost (Ctrl / Shift). Letter keys go through
         // EditorActions (settings S4, spec s7.2).
@@ -1840,6 +1886,24 @@ namespace Arcane::Editor
         rc.capture.drainHost      = &EditorApp::RemoteDrainViewport;
         rc.capture.occludedRisk   = !m_config.headless;
         rc.capture.user           = this;
+        // Task 28 (ruling F12, G-2): capture.compare resolves and blesses
+        // through ReferenceImages with this project's root and the chrome
+        // device's adapter set, the same resolution --compare uses; the
+        // compare's pixels are the host pair above (the viewport).
+        rc.compare.projectRoot    = projectRoot;
+        rc.compare.user           = this;
+        rc.compare.resolve        = [](const std::filesystem::path& root, const std::string& slot,
+                                       void* user) -> Arcane::Remote::ResolvedReference {
+            auto* app = static_cast<EditorApp*>(user);
+            return ToRemoteReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->ChromeGraph()));
+        };
+        rc.compare.bless          = [](const std::filesystem::path& root, const std::string& slot,
+                                       std::uint32_t width, std::uint32_t height, const unsigned char* rgba,
+                                       void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            return Arcane::BlessReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->ChromeGraph()),
+                                          width, height, rgba);
+        };
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
         {

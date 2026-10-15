@@ -45,18 +45,15 @@ constexpr std::uint32_t kDefaultCaptureTimeoutMs = 30000;
 
 constexpr std::string_view kUsage = "pass out: an absolute .png path, or nothing for the artifact directory";
 
-// One armed capture job (ruling P4 (a)): the source's hook pair, the ticket
-// the first step armed, and where the PNG goes. `new`ed by the command, passed
-// as job.user, deleted by the step that finishes the job.
+// One armed capture job (ruling P4 (a)): the ticket copy (the source's hook
+// pair, the ticket the first step armed, the deadline) and where the PNG goes.
+// `new`ed by the command, passed as job.user, deleted by the step that
+// finishes the job.
 struct CaptureJobState {
-    ArmCopyFn arm = nullptr;
-    DrainSlotFn drain = nullptr;
-    void* hookUser = nullptr;
-    std::uint64_t ticket = 0;
+    Detail::TicketCopy copy;
     std::filesystem::path outDir;
     std::filesystem::path outFile;   // --out; empty = outDir/<command>-<unix ms>-<n>.png
     bool occludedRisk = false;
-    std::chrono::steady_clock::time_point deadline{};
 };
 
 // The stored hooks and table (ruling F11), and every live job state keyed by
@@ -98,29 +95,15 @@ bool Finished(Job& job, CaptureJobState* state)
     return true;
 }
 
-// Normalizes and encodes the PNG in memory, hashes those bytes, writes them
-// to <file>.tmp through a wide-path std::ofstream whose close is checked, and
-// renames it into place; the artifact, or nullopt with *why (the .tmp removed).
-// No path is narrowed with path::string(): a non-ASCII --out or project
-// directory is written as given, and envelope text is UTF-8 (Utf8).
+// Normalizes the retired copy and writes it as a PNG artifact
+// (Detail::WritePngArtifact: encoded in memory, a wide-path std::ofstream
+// whose close is checked, a rename); the artifact, or nullopt with *why.
 std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& state, const CaptureMapped& raw,
                                         std::uint32_t pid, std::string& why)
 {
-    const std::size_t needed = raw.height == 0 ? 0
-                             : static_cast<std::size_t>(raw.rowPitch) * (raw.height - 1) +
-                                   static_cast<std::size_t>(raw.width) * 4;
-    if (raw.width == 0 || raw.height == 0 || raw.rowPitch < raw.width * 4u || raw.mappedBytes < needed) {
-        why = "the retired copy is " + std::to_string(raw.mappedBytes) + " bytes for " + std::to_string(raw.width) +
-              "x" + std::to_string(raw.height) + " at pitch " + std::to_string(raw.rowPitch);
-        return std::nullopt;
-    }
     std::vector<unsigned char> rgba;
-    NormalizeCaptureRows(raw.mapped, raw.width, raw.height, raw.rowPitch, raw.bgra, rgba);
-    std::vector<unsigned char> png;
-    if (!EncodePngRgba(raw.width, raw.height, rgba.data(), png)) {
-        why = "the PNG encoder failed";
+    if (!Detail::NormalizeRetired(raw, rgba, why))
         return std::nullopt;
-    }
 
     static std::atomic<std::uint64_t> serial{0};
     std::filesystem::path file = state.outFile;
@@ -133,43 +116,12 @@ std::optional<Artifact> WriteCapturePng(const Job& job, const CaptureJobState& s
         file = state.outDir / (job.command + "-" + std::to_string(pid) + "-" + std::to_string(unixMs) + "-" +
                                std::to_string(++serial) + ".png");
     }
-    std::error_code ec;
-    if (file.has_parent_path())
-        std::filesystem::create_directories(file.parent_path(), ec);   // a failure surfaces as the open below
-    const std::filesystem::path temp = std::filesystem::path(file).concat(".tmp");
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        if (out.is_open())
-            out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-        // close() flushes: a full disk sets failbit here, so a short file is
-        // never renamed and reported with the full size and hash.
-        const bool opened = out.is_open();
-        out.close();
-        if (!opened || out.fail()) {
-            std::filesystem::remove(temp, ec);
-            why = "cannot write " + Utf8(temp);
-            return std::nullopt;
-        }
-    }
-    std::filesystem::rename(temp, file, ec);
-    if (ec) {
-        std::filesystem::remove(temp, ec);
-        why = "cannot rename into " + Utf8(file);
-        return std::nullopt;
-    }
-    Artifact artifact;
-    artifact.kind = "capture";
-    artifact.path = Utf8(file);
-    artifact.bytes = png.size();
-    artifact.sha256 = Crypto::Sha256Hex(std::string_view(reinterpret_cast<const char*>(png.data()), png.size()));
-    artifact.width = raw.width;
-    artifact.height = raw.height;
-    artifact.format = "RGBA8_UNORM";   // the PNG is tight RGBA, whatever the target's channel order
-    return artifact;
+    return Detail::WritePngArtifact(file, raw.width, raw.height, rgba.data(), "capture", why);
 }
 
 // The job step (ruling P3 (a)): the PickNode ticket, split across render
-// submissions. It reads no gate.frame, writes no startedFrame, never idles.
+// submissions (Detail::StepTicket). It reads no gate.frame, writes no
+// startedFrame, never idles.
 bool StepCapture(Job& job, HostGate& gate, void* user)
 {
     CaptureCommandState& s = State();
@@ -182,41 +134,14 @@ bool StepCapture(Job& job, HostGate& gate, void* user)
         return true;
     }
 
-    if (job.progress.label != "copied") {
-        state->ticket = NextCaptureTicket();
-        if (!state->arm(state->ticket, state->hookUser)) {
-            job.envelope = Failure(job.command, "capture.no-frame", "the host could not arm a capture copy",
-                                   "retry once the host is rendering");
-            return Finished(job, state);
-        }
-        job.progress.label = "copied";
-        return false;
-    }
-
     CaptureMapped raw;
-    if (!state->drain(state->ticket, &raw, state->hookUser)) {
-        // Not retired yet. A minimized host renders nothing, so the ticket
-        // cannot retire: answer at once (exit 5, retryable), on any pending
-        // step. Otherwise bounded: a host that stops rendering (device lost,
-        // a failing frame) ends the job at its deadline instead of parking it.
-        if (gate.minimized.load(std::memory_order_acquire)) {
-            job.envelope = Failure(job.command, "capture.minimized",
-                                   "the host was minimized before the capture's frame rendered",
-                                   "restore the window and retry");
-            return Finished(job, state);
-        }
-        if (std::chrono::steady_clock::now() < state->deadline)
+    switch (Detail::StepTicket(job, gate, state->copy, raw)) {
+        case Detail::TicketStep::Pending:
             return false;
-        job.envelope = Failure(job.command, "capture.no-frame",
-                               "no rendered frame retired the capture before the timeout",
-                               "check that the host is rendering (stats frame, problems) and retry");
-        job.envelope.errors.front().detail["reason"] = "timeout";
-        return Finished(job, state);
-    }
-    if (raw.mapped == nullptr) {
-        job.envelope = Failure(job.command, "capture.no-frame", "the capture copy was lost (its map failed)",
-                               "retry the capture");
-        return Finished(job, state);
+        case Detail::TicketStep::Failed:
+            return Finished(job, state);
+        case Detail::TicketStep::Retired:
+            break;
     }
 
     std::string why;
@@ -308,14 +233,13 @@ CommandResult Capture(const Call& call, void* /*user*/)
         return CaptureBusy(call);
 
     auto* state = new CaptureJobState;
-    state->arm = arm;
-    state->drain = drain;
-    state->hookUser = s.hooks.user;
+    state->copy.arm = arm;
+    state->copy.drain = drain;
+    state->copy.hookUser = s.hooks.user;
+    state->copy.deadline = Detail::CaptureDeadline(call);
     state->outDir = s.hooks.outDir;
     state->outFile = std::move(outFile);
     state->occludedRisk = window && s.hooks.occludedRisk;
-    state->deadline = std::chrono::steady_clock::now() +
-                      std::chrono::milliseconds(call.timeoutMs != 0 ? call.timeoutMs : kDefaultCaptureTimeoutMs);
     const JobId id = s.jobs->Arm(call.command, 1, &StepCapture, state);
     s.live[id.value] = state;
     result.envelope = MakeOk(call.command, {{"done", false}}, {});
@@ -392,6 +316,77 @@ bool CaptureInFlight(const JobTable& jobs)
 {
     return jobs.AnyRunning({"capture.viewport", "capture.window", "capture.compare"});
 }
+
+namespace Detail
+{
+
+const CaptureHooks& StoredCaptureHooks()
+{
+    return State().hooks;
+}
+
+std::chrono::steady_clock::time_point CaptureDeadline(const Call& call)
+{
+    return std::chrono::steady_clock::now() +
+           std::chrono::milliseconds(call.timeoutMs != 0 ? call.timeoutMs : kDefaultCaptureTimeoutMs);
+}
+
+TicketStep StepTicket(Job& job, const HostGate& gate, TicketCopy& copy, CaptureMapped& raw)
+{
+    if (job.progress.label != "copied") {
+        copy.ticket = NextCaptureTicket();
+        if (!copy.arm(copy.ticket, copy.hookUser)) {
+            job.envelope = Failure(job.command, "capture.no-frame", "the host could not arm a capture copy",
+                                   "retry once the host is rendering");
+            return TicketStep::Failed;
+        }
+        job.progress.label = "copied";
+        return TicketStep::Pending;
+    }
+
+    if (!copy.drain(copy.ticket, &raw, copy.hookUser)) {
+        // Not retired yet. A minimized host renders nothing, so the ticket
+        // cannot retire: answer at once (exit 5, retryable), on any pending
+        // step. Otherwise bounded: a host that stops rendering (device lost,
+        // a failing frame) ends the job at its deadline instead of parking it.
+        if (gate.minimized.load(std::memory_order_acquire)) {
+            job.envelope = Failure(job.command, "capture.minimized",
+                                   "the host was minimized before the capture's frame rendered",
+                                   "restore the window and retry");
+            return TicketStep::Failed;
+        }
+        if (std::chrono::steady_clock::now() < copy.deadline)
+            return TicketStep::Pending;
+        job.envelope = Failure(job.command, "capture.no-frame",
+                               "no rendered frame retired the capture before the timeout",
+                               "check that the host is rendering (stats frame, problems) and retry");
+        job.envelope.errors.front().detail["reason"] = "timeout";
+        return TicketStep::Failed;
+    }
+    if (raw.mapped == nullptr) {
+        job.envelope = Failure(job.command, "capture.no-frame", "the capture copy was lost (its map failed)",
+                               "retry the capture");
+        return TicketStep::Failed;
+    }
+    return TicketStep::Retired;
+}
+
+bool NormalizeRetired(const CaptureMapped& raw, std::vector<unsigned char>& rgba, std::string& why)
+{
+    const std::size_t needed = raw.height == 0 ? 0
+                             : static_cast<std::size_t>(raw.rowPitch) * (raw.height - 1) +
+                                   static_cast<std::size_t>(raw.width) * 4;
+    if (raw.mapped == nullptr || raw.width == 0 || raw.height == 0 || raw.rowPitch < raw.width * 4u ||
+        raw.mappedBytes < needed) {
+        why = "the retired copy is " + std::to_string(raw.mappedBytes) + " bytes for " + std::to_string(raw.width) +
+              "x" + std::to_string(raw.height) + " at pitch " + std::to_string(raw.rowPitch);
+        return false;
+    }
+    NormalizeCaptureRows(raw.mapped, raw.width, raw.height, raw.rowPitch, raw.bgra, rgba);
+    return true;
+}
+
+} // namespace Detail
 
 } // namespace Arcane::Remote
 

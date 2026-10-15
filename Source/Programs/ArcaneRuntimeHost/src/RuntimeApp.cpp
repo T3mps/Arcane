@@ -75,6 +75,50 @@ namespace
     {
         return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
     }
+
+#if defined(ARC_RUNTIME_HOST_VERIFY) && !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // capture.compare's ResolveFn / BlessFn (Servitor P0 Task 28): the same
+    // adapter set and adapter-set ResolveReference overload the --compare
+    // path builds in RenderLoop (m_compareAdapterSet is filled only under
+    // --compare, so it is not read), so a software adapter never blesses into
+    // the shared or backend level.
+    Arcane::ReferenceResolution ResolveRemoteReference(const std::filesystem::path& projectRoot,
+                                                       const std::string& slot,
+                                                       Arcane::GraphicsBackend backend,
+                                                       Arcane::NriGraphContext* graph)
+    {
+        const char* const backendName = CompareBackendName(backend);
+        std::string adapterSet;
+        if (graph)
+        {
+            const Arcane::NriDeviceCaps& caps = graph->Device().Caps();
+            adapterSet = Arcane::ReferenceAdapterSet(backendName, caps.adapterName, caps.softwareAdapter);
+        }
+        return Arcane::ResolveReference(projectRoot, slot, backendName, adapterSet);
+    }
+
+    // ReferenceResolution -> the wire's ResolvedReference: the report's level
+    // names and the probed paths as UTF-8 with forward slashes.
+    Arcane::Remote::ResolvedReference ToRemoteReference(const Arcane::ReferenceResolution& resolution)
+    {
+        Arcane::Remote::ResolvedReference out;
+        out.found = resolution.level != Arcane::ReferenceLevel::None;
+        out.path  = resolution.path;
+        switch (resolution.level)
+        {
+            case Arcane::ReferenceLevel::Shared:  out.level = "shared";  break;
+            case Arcane::ReferenceLevel::Backend: out.level = "backend"; break;
+            case Arcane::ReferenceLevel::Adapter: out.level = "adapter"; break;
+            default:                              out.level = "none";    break;
+        }
+        for (const std::filesystem::path& tried : resolution.triedPaths)
+        {
+            const std::u8string utf8 = tried.generic_u8string();
+            out.triedPaths.emplace_back(utf8.begin(), utf8.end());
+        }
+        return out;
+    }
+#endif
 }
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
@@ -885,6 +929,26 @@ void RuntimeApp::MainLoop()
         rc.capture.drainHost      = drainRing;
         rc.capture.occludedRisk   = !m_config.headless;
         rc.capture.user           = this;
+#if defined(ARC_RUNTIME_HOST_VERIFY)
+        // Task 28 (ruling F12): capture.compare resolves and blesses through
+        // ReferenceImages with this project's root and Graph()'s adapter set,
+        // the resolution --compare uses. Without the verification vehicle
+        // the hooks stay null and capture.compare answers host.unavailable.
+        rc.compare.projectRoot    = rc.projectRoot;
+        rc.compare.user           = this;
+        rc.compare.resolve        = [](const std::filesystem::path& root, const std::string& slot,
+                                       void* user) -> Arcane::Remote::ResolvedReference {
+            auto* app = static_cast<RuntimeApp*>(user);
+            return ToRemoteReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->Graph()));
+        };
+        rc.compare.bless          = [](const std::filesystem::path& root, const std::string& slot,
+                                       std::uint32_t width, std::uint32_t height, const unsigned char* rgba,
+                                       void* user) -> bool {
+            auto* app = static_cast<RuntimeApp*>(user);
+            return Arcane::BlessReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->Graph()),
+                                          width, height, rgba);
+        };
+#endif
         m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
         if (!m_remote->Start())
             m_remote.reset();   // Start logged why

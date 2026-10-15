@@ -13,6 +13,7 @@
 #include <Arcane/Config/CVarTypes.hpp>
 #include <Arcane/Core/NetMode.hpp>
 #include <Arcane/Remote/Commands/CaptureCommands.hpp>
+#include <Arcane/Remote/Commands/CompareCommands.hpp>
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Remote/Dispatcher.hpp>
 #include <Arcane/Remote/FrameStats.hpp>
@@ -101,6 +102,14 @@ public:
         // directory (<remote dir>/out). Start installs them with
         // SetCaptureHooks + RegisterCaptureCommands(&m_jobs); Teardown clears both.
         CaptureHooks capture;
+        // Task 28 (ruling F12): capture.compare's reference hooks. The editor
+        // and the runtime install ResolveFn / BlessFn over ReferenceImages
+        // (ResolveReference with the host's adapter set, BlessReference) with
+        // their project root; a server leaves them null (it has no renderer,
+        // so capture.no-renderer answers first). Start installs them with
+        // SetCompareHooks + RegisterCompareCommand(&m_jobs), the same table
+        // the capture commands use; Teardown clears both.
+        CompareHooks compare;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started
