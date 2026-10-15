@@ -141,11 +141,11 @@ const std::array<VerbRow, 34> kVerbs = {{
     // tick on a server, a headless runtime or a step; a windowed runtime in Run
     // mode advances it once per loop pass, whatever its sub-steps. `settled` is
     // spec s4.7's --settle predicate (Task 30): two byte-equal captures with the
-    // shader compiler idle, deterministic only under a frozen clock.
+    // shader compiler idle, taken while the wait freezes the host's clock.
     {"wait", "host.wait", &WaitArgs, nullptr, {}, false, &WaitAwaitsHost,
      "ready|settled|frames N|reload|state <s>   (frames counts host.frame: sim advances, not rendered frames; "
-     "settled is two byte-equal captures with the shaders idle, deterministic only for a host launched with "
-     "--fixed-time)"},
+     "settled is two byte-equal captures with the shaders idle, and the wait freezes the host clock while it "
+     "captures)"},
     // Task 17. commands prints the static manifest with no host; list reads
     // GET /remote/v1/catalog; describe and schema post catalog.describe and
     // schema.type; call posts any command by name (client-side: the command
@@ -193,18 +193,22 @@ const std::array<VerbRow, 34> kVerbs = {{
     // Task 27. Observe jobs completed by a render-ticket readback; a server
     // answers capture.no-renderer (exit 2), a minimized editor host.busy (5).
     // A held runtime still renders, but its time-driven materials follow wall
-    // time: launch the host with --fixed-time for byte-stable captures.
+    // time: a --headless host launched with --fixed-time (headless only) gives
+    // byte-stable captures from one call to the next.
     {"screenshot viewport", "capture.viewport", &ScreenshotViewportArgs, nullptr, kScreenshotFlags, false, nullptr,
-     "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
+     "[--out FILE.png]   (time-driven materials follow the host clock; --fixed-time, on a --headless host only, "
+     "pins it)"},
     {"screenshot window", "capture.window", &ScreenshotWindowArgs, nullptr, kScreenshotFlags, false, nullptr,
-     "[--out FILE.png]   (time-driven materials: launch with --fixed-time for byte-stable captures)"},
+     "[--out FILE.png]   (time-driven materials follow the host clock; --fixed-time, on a --headless host only, "
+     "pins it)"},
     // Task 28. One capture.compare job on the screenshot pairs: Passed exits 0,
     // Failed exits 8 (ok true), a missing reference exits 6 unless --bless
-    // creates it. Against a golden, use a static scene or launch the host with
-    // --fixed-time: a held runtime's time-driven materials follow wall time.
+    // creates it. Against a golden, use a static scene or a --headless host
+    // launched with --fixed-time (headless only): a held runtime's time-driven
+    // materials follow wall time.
     {"compare", "capture.compare", &CompareArgs, nullptr, kCompareFlags, false, nullptr,
      "<reference> [--source host|viewport|window] [--bless] [--max-diff-pixels N] [--max-diff-pixel-ratio R]   "
-     "(time-driven materials: launch with --fixed-time)"},
+     "(time-driven materials follow the host clock; --fixed-time, on a --headless host only, pins it)"},
     // Task 29. Drive commands (the host's read-only gate and audit apply; --all
     // needs --yes). An editor enters / leaves Play; a runtime or server runs or
     // holds its sim (an open-ended --remote run starts held at frame 0). step N
@@ -1108,7 +1112,7 @@ std::size_t WordsMatched(std::string_view words, std::span<const std::string> to
 
 std::string FollowEventText(std::string_view topic, std::string_view data, const nlohmann::json& args, Format format)
 {
-    nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(data);   // a host stream event (Task 30)
+    nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(data, Arcane::Remote::kMaxReplyDepth);   // a host stream event
     if (parsed.is_discarded())
         parsed = std::string(data);
     const bool logs = topic == "logs";

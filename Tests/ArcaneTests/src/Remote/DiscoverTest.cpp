@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Servitor/Client.hpp>
+#include <Servitor/Commands.hpp>   // ParseCallTokens (Task 30 fix round 1: the request cap)
 #include <Servitor/Discover.hpp>
 #include <Servitor/Transport.hpp>
 #include <Servitor/Verbs.hpp>   // FindVerb (Task 30: --out as UTF-8)
@@ -450,21 +451,74 @@ TEST_CASE("a reply body that is not an envelope is internal exit 1", "[servitor]
     }
 }
 
-// Task 30 (C2): a well-formed ok envelope whose data nests one container past
-// kMaxJsonDepth (the envelope object is level 1) is the malformed-reply path,
-// never parsed into a document a later copy or print would recurse through.
-TEST_CASE("a reply nested past kMaxJsonDepth is internal exit 1, reason too-deep", "[servitor][client]") {
-    const std::uint32_t levels = Arcane::Remote::kMaxJsonDepth;
+// Task 30 (C2, fix round 1 I1): a well-formed ok envelope whose data nests
+// to exactly kMaxReplyDepth (the envelope object is level 1) goes through
+// EnvelopeOf -> TryParseEnvelope (which copies data) -> the printer (ToJson
+// plus client, dumped): every step that recurses, at the cap. One container
+// more is the malformed-reply path, never parsed into a document a later copy
+// or print would recurse through.
+namespace {
+std::string DeepReply(std::uint32_t dataLevels) {
     const std::string body = R"({"ok":true,"protocol":1,"id":"d","command":"discover.noop","errors":[],"data":)" +
-                             std::string(levels, '[') + std::string(levels, ']') + "}";
-    RemoteTest::CannedServer host("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
-                                  "\r\nConnection: close\r\n\r\n" + body);
+                             std::string(dataLevels, '[') + std::string(dataLevels, ']') + "}";
+    return "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" +
+           body;
+}
+}  // namespace
+
+TEST_CASE("a reply nested to exactly kMaxReplyDepth is parsed, copied and printed whole", "[servitor][client]") {
+    const std::uint32_t cap = Arcane::Remote::kMaxReplyDepth;
+    RemoteTest::CannedServer host(DeepReply(cap - 1));
+    auto target = CannedTarget(host.Port());
+    const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
+    CHECK(r.envelope.errors.empty());
+    CHECK(r.envelope.ok);
+    CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 0);
+    Arcane::Remote::ClientBlock client;
+    client.exitCode = 0;
+    Servitor::RenderOptions ro;
+    ro.format = Servitor::Format::Json;
+    const Servitor::Printed printed = Servitor::Render(r.envelope, client, ro);
+    bool deep = true;
+    const auto reparsed = Arcane::Remote::ParseJsonBounded(printed.stdoutText, cap, &deep);
+    REQUIRE_FALSE(reparsed.is_discarded());   // the print kept every level, and no more
+    CHECK_FALSE(deep);
+    CHECK(reparsed.contains("client"));
+}
+
+TEST_CASE("a reply nested past kMaxReplyDepth is internal exit 1, reason too-deep", "[servitor][client]") {
+    RemoteTest::CannedServer host(DeepReply(Arcane::Remote::kMaxReplyDepth));
     auto target = CannedTarget(host.Port());
     const auto r = Servitor::LiveExchange(kDiscoverBody, &target);
     REQUIRE_FALSE(r.envelope.errors.empty());
     CHECK(r.envelope.errors[0].code == "internal");
     CHECK(r.envelope.errors[0].detail["reason"] == "too-deep");
     CHECK(Arcane::Remote::ExitFromHost(r.envelope) == 1);
+}
+
+// The client's own request JSON uses the HOST's cap: servitor refuses early
+// what the host would refuse anyway.
+TEST_CASE("call --args-json and name=value refuse nesting past kMaxRequestDepth before sending", "[servitor][client]") {
+    const std::uint32_t cap = Arcane::Remote::kMaxRequestDepth;
+    const auto nest = [](std::uint32_t levels) { return std::string(levels, '[') + std::string(levels, ']'); };
+    Servitor::CallRequest req;
+    std::string why;
+    // The request body is level 1 and args level 2, so an --args-json member
+    // may nest cap - 2 more, and a name=value value cap - 2 in all.
+    CHECK(Servitor::ParseCallTokens(std::vector<std::string>{"x.y", "--args-json", R"({"v":)" + nest(cap - 2) + "}"},
+                                    req, &why));
+    CHECK_FALSE(Servitor::ParseCallTokens(
+        std::vector<std::string>{"x.y", "--args-json", R"({"v":)" + nest(cap - 1) + "}"}, req, &why));
+    CHECK(why.find("nests deeper than") != std::string::npos);
+    why.clear();
+    CHECK(Servitor::ParseCallTokens(std::vector<std::string>{"x.y", "v=" + nest(cap - 2)}, req, &why));
+    CHECK_FALSE(Servitor::ParseCallTokens(std::vector<std::string>{"x.y", "v=" + nest(cap - 1)}, req, &why));
+    CHECK(why.find("nests deeper than") != std::string::npos);
+    // What it accepts, the host accepts: the body built from the deepest args
+    // still parses under the host's cap.
+    const nlohmann::json body = {{"id", "c"}, {"command", "x.y"},
+                                 {"args", nlohmann::json{{"v", nlohmann::json::parse(nest(cap - 2))}}}};
+    CHECK_FALSE(Arcane::Remote::ParseJsonBounded(body.dump(), cap).is_discarded());
 }
 
 TEST_CASE("a reply past the byte cap is refused as internal exit 1", "[servitor][client]") {

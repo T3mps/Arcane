@@ -269,10 +269,10 @@ Arcane::Remote::Envelope NotSent(const std::string& command, const Arcane::Remot
 Arcane::Remote::Envelope EnvelopeOf(const std::string& command, const Arcane::Remote::Descriptor& desc,
                                     const Arcane::Remote::HttpReply& reply)
 {
-    // Bounded (Task 30): a reply nested past kMaxJsonDepth is malformed, never
+    // Bounded (Task 30): a reply nested past kMaxReplyDepth is malformed, never
     // copied or printed (both recurse per level).
     bool tooDeep = false;
-    const auto json = Arcane::Remote::ParseJsonBounded(reply.body, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+    const auto json = Arcane::Remote::ParseJsonBounded(reply.body, Arcane::Remote::kMaxReplyDepth, &tooDeep);
     if (json.is_discarded())
         return Internal(command, desc, reply.status, tooDeep ? "too-deep" : "not-json");
     auto env = Arcane::Remote::TryParseEnvelope(json);
@@ -415,7 +415,7 @@ std::optional<nlohmann::json> GetJson(const Arcane::Remote::Descriptor& desc, st
     ReadOutcome read = ReadReply(guard.sock, deadline, kMaxReplyBytes, nullptr);
     if (read.end == ReadEnd::Reply) {
         bool tooDeep = false;   // bounded like EnvelopeOf (Task 30)
-        const auto json = Arcane::Remote::ParseJsonBounded(read.reply.body, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+        const auto json = Arcane::Remote::ParseJsonBounded(read.reply.body, Arcane::Remote::kMaxReplyDepth, &tooDeep);
         if (read.reply.status == 200 && !json.is_discarded())
             return json;
         if (!json.is_discarded()) {

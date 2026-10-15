@@ -44,8 +44,16 @@ ARC_CONSTANT("capacity hint: s4.3 default commands drained per tick")
 inline constexpr std::uint32_t kFrameBudgetCommands = 8;
 ARC_CONSTANT("wire protocol: s10.1 idle connection close")
 inline constexpr std::uint32_t kIdleConnectionSeconds = 30;
-ARC_CONSTANT("stack bound: nlohmann parses iteratively, but a copy or dump recurses ~4 KiB per level in Debug (a bare 256-level chain overflows a 1 MiB stack, SceneCommands.cpp); scene.tree's deepest legal reply nests ~134 containers (64 levels below the roots, two per level), so 160 admits every reply a host builds and refuses a hostile body long before the stack")
-inline constexpr std::uint32_t kMaxJsonDepth = 160;
+// The two nesting caps (Task 30 fix round 1). nlohmann parses iteratively,
+// but a copy or a dump recurses once per level, and the only Debug figure is a
+// FLOOR, not a measurement: a bare 256-level chain overflowed a 1 MiB stack
+// (SceneCommands.cpp), so a level costs at least ~4 KiB there. The at-limit
+// tests ([remote][host], [remote][dispatch], [servitor][client]) push exactly
+// each cap through the paths that recurse.
+ARC_CONSTANT("stack bound: what a HOST accepts (request bodies, args, any host-side parse); a request needs a few levels, and the listener's protocol dump and the audit's argsDigest dump recurse through all of them on the listener and main threads, so 64 keeps them far under the ~256-level Debug overflow floor")
+inline constexpr std::uint32_t kMaxRequestDepth = 64;
+ARC_CONSTANT("stack bound: what SERVITOR accepts from a host (replies, stream events); scene.tree's deepest legal reply nests ~134 containers (64 levels below the roots, two per level), so 160 admits every reply a host builds and stays under the ~256-level Debug overflow floor in servitor's copy and print")
+inline constexpr std::uint32_t kMaxReplyDepth = 160;
 
 enum class HostKind : std::uint8_t { Editor, Runtime, Server };
 
@@ -169,16 +177,23 @@ ARC_REMOTE_PROTOCOL_API Envelope MakeOk(std::string command, nlohmann::json data
 ARC_REMOTE_PROTOCOL_API Envelope MakeError(std::string command, std::string code, std::string message, std::string remediation);
 ARC_REMOTE_PROTOCOL_API int ExitFromHost(const Envelope& env);
 ARC_REMOTE_PROTOCOL_API int WorstExit(std::span<const int> codes);
-// The one parse of untrusted or unbounded JSON on both sides of the wire
-// (request bodies on the host; host replies, stream events, descriptors and
-// --args-json in servitor): nlohmann's iterative parser with a callback that
-// refuses any container nested deeper than maxDepth (the outermost container
-// is level 1). Returns a discarded value (is_discarded()) when the text is not
-// JSON or nests too deep, and never throws. *tooDeep (when non-null) is true
-// only for the depth refusal. A container past the limit is never built, so a
-// body of a million '[' costs no stack here or in a later copy or dump.
-ARC_REMOTE_PROTOCOL_API nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth = kMaxJsonDepth,
+// The one parse of untrusted or unbounded JSON on both sides of the wire:
+// nlohmann's iterative parser with a callback that refuses any container
+// nested deeper than maxDepth (the outermost container is level 1). The cap is
+// always named at the call: kMaxRequestDepth for what a host accepts and for
+// servitor's own request JSON (--args-json, name=value: refused early, as the
+// host would), kMaxReplyDepth for what servitor accepts from a host. Returns a
+// discarded value (is_discarded()) when the text is not JSON or nests too
+// deep, and never throws. *tooDeep (when non-null) is true only for the depth
+// refusal. A container past the limit is never built, so a body of a million
+// '[' costs no stack here or in a later copy or dump.
+ARC_REMOTE_PROTOCOL_API nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth,
                                                         bool* tooDeep = nullptr);
+// True when ExitForCode lists `code` explicitly (a named entry or the
+// *.not-found rule), false when it falls to ruling F6's default (exit 6). The
+// exit-table test pins every code the spec's s6.4 table names with it, so
+// deleting an entry whose exit equals the default still fails a CHECK.
+ARC_REMOTE_PROTOCOL_API bool ExitCodeIsListed(std::string_view code);
 
 } // namespace Arcane::Remote
 

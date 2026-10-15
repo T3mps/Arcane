@@ -953,6 +953,10 @@ namespace Arcane::Editor
         if (SettleHoldActive())
         {
             frameDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+            // A remote settle hold ends (Task 30): a windowed clock resumes
+            // from here, not with the whole hold as one frame's dt.
+            if (!m_config.headless)
+                ls.lastFrameTime = std::chrono::steady_clock::now();
         }
         else if (m_config.headless)
         {
@@ -1539,6 +1543,8 @@ namespace Arcane::Editor
         if (SettleHoldActive())
         {
             simDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+            if (!m_config.headless)
+                ls.simPrev = std::chrono::steady_clock::now();   // as frameDt's hold branch
         }
         else if (m_config.headless)
         {
@@ -1557,7 +1563,10 @@ namespace Arcane::Editor
         const auto advanceStart = std::chrono::steady_clock::now();
         // Asked BEFORE Advance, which consumes a pending single step: whether
         // this Advance runs the play sim (Task 29, ruling A).
-        const bool simAdvance = Arcane::Editor::CountsAsSimAdvance(m_play.IsPlaying(), m_runtime->Loop());
+        // Under the settle freeze (SettleHoldActive: --settle or a remote
+        // `wait settled`, Task 30) simDt is 0, so only a requested single step ticks.
+        const bool simAdvance = Arcane::Editor::CountsAsSimAdvance(m_play.IsPlaying(), m_runtime->Loop()) &&
+                                (!SettleHoldActive() || m_runtime->Loop().SingleStepPending());
 #endif
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },

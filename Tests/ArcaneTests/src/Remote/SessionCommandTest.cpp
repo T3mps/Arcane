@@ -420,15 +420,26 @@ struct SettleRing {
     std::uint64_t ticket = 0;
     std::uint64_t armedAt = 0;
     int arms = 0;
+    int refusedArms = 0;
     std::size_t drained = 0;
     bool retire = true;
     bool idle = true;
+    bool refuseArm = false;              // the ring cannot record a copy yet (a booting host)
     std::vector<std::array<std::uint8_t, 4>> pixels;
+    // Non-null: the captured pixel is this host clock (a wall-clock-driven
+    // material) instead of `pixels`, so two captures match only if the clock
+    // did not move between them.
+    const double* clock = nullptr;
+    std::array<std::uint8_t, 4> clockPixel{};
 };
 
 bool SettleArm(std::uint64_t ticket, void* user)
 {
     auto* ring = static_cast<SettleRing*>(user);
+    if (ring->refuseArm) {
+        ++ring->refusedArms;
+        return false;
+    }
     ring->ticket = ticket;
     ring->armedAt = ring->frame;
     ++ring->arms;
@@ -440,14 +451,22 @@ bool SettleDrain(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void*
     auto* ring = static_cast<SettleRing*>(user);
     if (!ring->retire || ticket != ring->ticket || ring->frame < ring->armedAt + 1)
         return false;
-    const std::size_t index = std::min(ring->drained, ring->pixels.size() - 1);
-    ++ring->drained;
     raw->width = 1;
     raw->height = 1;
     raw->rowPitch = 4;
     raw->bgra = false;
-    raw->mapped = ring->pixels[index].data();
     raw->mappedBytes = 4;
+    if (ring->clock != nullptr) {
+        const auto ms = static_cast<std::uint32_t>(*ring->clock * 1000.0);
+        ring->clockPixel = {static_cast<std::uint8_t>(ms & 0xFFu), static_cast<std::uint8_t>((ms >> 8) & 0xFFu),
+                            static_cast<std::uint8_t>((ms >> 16) & 0xFFu), 255};
+        ++ring->drained;
+        raw->mapped = ring->clockPixel.data();
+        return true;
+    }
+    const std::size_t index = std::min(ring->drained, ring->pixels.size() - 1);
+    ++ring->drained;
+    raw->mapped = ring->pixels[index].data();
     return true;
 }
 
@@ -609,31 +628,198 @@ TEST_CASE("a settle capture holds the one capture slot: a screenshot meanwhile i
     session.Stop("test");
 }
 
-// ---- Task 30 (C2): the listener bounds a request body's depth, not just its size
+// ---- Task 30 (C2, fix round 1 I1): the listener bounds a request's depth ----
 
-TEST_CASE("the listener refuses a call body nested past kMaxJsonDepth as malformed, before it is queued", "[remote][host]") {
-    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
-    Arcane::Test::TempDir tmp("remote-deep-body");
-    Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path));
-    REQUIRE(session.Start());
+namespace
+{
+// POSTs `body` to a started session's listener with no Drain at all: a body
+// the listener refuses is answered at once, on its own thread.
+Arcane::Remote::Envelope PostWithoutDrain(Arcane::Remote::HostSession& session, const std::string& body,
+                                          std::string* statusLine)
+{
     const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
     REQUIRE(desc);
-    // A JSON object (well under kMaxBodyBytes) whose args nest past the bound:
-    // without the bound it would be queued as a call (and answered after a
-    // Drain); with it the listener answers 400 at once, with no Drain at all.
-    const std::uint32_t levels = Arcane::Remote::kMaxJsonDepth;
-    const std::string body = R"({"id":"deep","command":"host.wait","args":{"what":"ready","x":)" +
-                             std::string(levels, '[') + std::string(levels, ']') + "}}";
     const std::string raw =
         RemoteTest::HttpExchange(session.Port(), desc->token, "", "POST /remote/v1/call HTTP/1.1", body);
     const auto split = raw.find("\r\n\r\n");
     REQUIRE(split != std::string::npos);
-    CHECK(raw.rfind("HTTP/1.1 400", 0) == 0);
-    const auto env = Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
-    REQUIRE_FALSE(env.errors.empty());
-    CHECK(env.errors[0].code == "arg.invalid");
-    CHECK(env.errors[0].message == "the call body is not a JSON object");
-    CHECK(Arcane::Remote::ExitFromHost(env) == 2);
+    *statusLine = raw.substr(0, raw.find("\r\n"));
+    return Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+}
+
+std::string Nest(std::uint32_t levels)
+{
+    return std::string(levels, '[') + std::string(levels, ']');
+}
+} // namespace
+
+TEST_CASE("the listener accepts a body at exactly kMaxRequestDepth through its protocol dump, and refuses one more", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-deep-body");
+    Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path));
+    REQUIRE(session.Start());
+    const std::uint32_t cap = Arcane::Remote::kMaxRequestDepth;
+    std::string status;
+    {
+        // At the cap: the body object (level 1) holds a non-integer protocol
+        // nested cap - 1 deep. It parses, and the listener's refusal Dumps it
+        // into the message on the listener thread: the recursion at the cap.
+        const std::string body = R"({"protocol":)" + Nest(cap - 1) + R"(,"command":"host.wait"})";
+        auto env = PostWithoutDrain(session, body, &status);
+        CHECK(status.rfind("HTTP/1.1 400", 0) == 0);
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "protocol.mismatch");
+        CHECK(env.errors[0].message.find(Nest(cap - 1)) != std::string::npos);   // the whole value was dumped
+        CHECK(Arcane::Remote::ExitFromHost(env) == 4);
+    }
+    {
+        // One level more: refused as too deep before anything copies or dumps it.
+        const std::string body = R"({"protocol":)" + Nest(cap) + R"(,"command":"host.wait"})";
+        auto env = PostWithoutDrain(session, body, &status);
+        CHECK(status.rfind("HTTP/1.1 400", 0) == 0);
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "arg.invalid");
+        CHECK(env.errors[0].message == "the call body nests deeper than " + std::to_string(cap) + " levels");
+        CHECK(env.errors[0].detail["reason"] == "too-deep");
+        CHECK(env.errors[0].detail["maxDepth"] == cap);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 2);
+    }
+    {
+        // Not JSON at all keeps the old malformed-body answer, without the depth detail.
+        auto env = PostWithoutDrain(session, "{not json", &status);
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "arg.invalid");
+        CHECK(env.errors[0].message == "the call body is not a JSON object");
+        CHECK_FALSE(env.errors[0].detail.contains("reason"));
+    }
+    session.Stop("test");
+}
+
+// ---- Task 30 fix round 1 (I2): the settle wait freezes the host clock --------
+
+TEST_CASE("wait settled freezes the host clock for its captures, so a wall-clock value settles", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-freeze");
+    double clock = 0.0;                  // a held or windowed host's wall clock: +16 ms per frame unless frozen
+    SettleRing ring;
+    ring.clock = &clock;
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    CHECK_FALSE(session.SettleClockFrozen());
+    bool sawFrozen = false;
+    // The host loop: what AdvanceSim's settleHold does with the freeze (dt 0).
+    auto env = WaitSettledOverTheWire(session, ring, 5000, [&] {
+        if (session.SettleClockFrozen())
+            sawFrozen = true;
+        else
+            clock += 0.016;
+    });
+    CHECK(env.ok);
+    CHECK(env.data["done"] == true);
+    CHECK(env.data["captures"] == 2);    // both captures under the one frozen clock
+    CHECK(sawFrozen);
+    // Restored: the wait is over, so the clock runs again.
+    CHECK_FALSE(session.SettleClockFrozen());
+    const double before = clock;
+    session.DrainFrame(0);
+    if (!session.SettleClockFrozen())
+        clock += 0.016;
+    CHECK(clock > before);
+    session.Stop("test");
+}
+
+TEST_CASE("the settle freeze lifts when the wait times out, while a producer is busy, and on teardown", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-restore");
+    {
+        // Timeout: captures that never match. Frozen during, restored after.
+        SettleRing ring;
+        for (int i = 0; i < 400; ++i)
+            ring.pixels.push_back(i % 2 == 0 ? std::array<std::uint8_t, 4>{1, 2, 3, 255}
+                                             : std::array<std::uint8_t, 4>{4, 5, 6, 255});
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "timeout", ring));
+        REQUIRE(session.Start());
+        bool sawFrozen = false;
+        auto env = WaitSettledOverTheWire(session, ring, 300, [&] { sawFrozen = sawFrozen || session.SettleClockFrozen(); });
+        CHECK(env.data["timedOut"] == true);
+        CHECK(env.data["captures"].get<std::uint64_t>() >= 2);
+        CHECK_FALSE(env.data.contains("lastRefusal"));
+        CHECK(sawFrozen);
+        CHECK_FALSE(session.SettleClockFrozen());
+        session.Stop("test");
+    }
+    {
+        // A busy producer: no capture is armed, so the clock is never frozen
+        // (the freeze would also stop the compile service's debounce clock).
+        SettleRing ring;
+        ring.idle = false;
+        ring.pixels = {{7, 7, 7, 255}};
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "busy", ring));
+        REQUIRE(session.Start());
+        bool sawFrozen = false;
+        auto env = WaitSettledOverTheWire(session, ring, 200, [&] { sawFrozen = sawFrozen || session.SettleClockFrozen(); });
+        CHECK(env.data["timedOut"] == true);
+        CHECK_FALSE(sawFrozen);
+        CHECK_FALSE(session.SettleClockFrozen());
+        session.Stop("test");
+    }
+    {
+        // Teardown while a capture is in flight: the stop answers the parked
+        // call and the freeze goes with the session.
+        SettleRing ring;
+        ring.retire = false;
+        ring.pixels = {{1, 1, 1, 255}};
+        Arcane::Remote::HostSession session(SettleConfig(tmp.path / "teardown", ring));
+        REQUIRE(session.Start());
+        const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        const std::uint16_t port = session.Port();
+        const std::string token = desc->token;
+        const std::string body =
+            R"({"id":"t1","command":"host.wait","args":{"what":"settled"},"options":{"timeoutMs":5000}})";
+        auto reply = std::async(std::launch::async, [port, token, body] {
+            return RemoteTest::HttpExchange(port, token, "", "POST /remote/v1/call HTTP/1.1", body);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!session.SettleClockFrozen() && std::chrono::steady_clock::now() < deadline) {
+            session.DrainFrame(0);
+            ++ring.frame;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        REQUIRE(session.SettleClockFrozen());
+        CHECK(ring.arms == 1);
+        session.Stop("test");
+        CHECK_FALSE(session.SettleClockFrozen());
+        REQUIRE(reply.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const std::string raw = reply.get();
+        const auto split = raw.find("\r\n\r\n");
+        REQUIRE(split != std::string::npos);
+        const auto env = Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+        REQUIRE_FALSE(env.errors.empty());
+        CHECK(env.errors[0].code == "host.died");
+    }
+}
+
+// Fix round 1 (M3): a host whose ring keeps refusing the arm is not a silent
+// timeout: the timeout envelope names the last refusal.
+TEST_CASE("a settle wait whose arm is always refused times out naming the last refusal", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-settle-refused");
+    SettleRing ring;
+    ring.refuseArm = true;
+    ring.pixels = {{3, 3, 3, 255}};
+    Arcane::Remote::HostSession session(SettleConfig(tmp.path, ring));
+    REQUIRE(session.Start());
+    auto env = WaitSettledOverTheWire(session, ring, 200, [] {});
+    CHECK(env.ok);
+    CHECK(env.errors.empty());
+    CHECK(env.data["timedOut"] == true);
+    CHECK(env.data["captures"] == 0);
+    REQUIRE(env.data.contains("lastRefusal"));
+    CHECK(env.data["lastRefusal"]["code"] == "capture.no-frame");
+    CHECK(Arcane::Remote::ExitFromHost(env) == 8);
+    CHECK(ring.refusedArms >= 2);           // retried within the timeout
+    CHECK_FALSE(session.SettleClockFrozen());
     session.Stop("test");
 }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -18,7 +19,8 @@ bool OneOf(std::string_view code, std::initializer_list<std::string_view> codes)
     return std::find(codes.begin(), codes.end(), code) != codes.end();
 }
 
-int ExitForCode(const std::string& code)
+// The listed exit of `code`; nullopt when it is not listed (ruling F6's default applies).
+std::optional<int> ListedExit(std::string_view code)
 {
     if (code.empty()) return 2;
     if (code == "internal") return 1;
@@ -40,7 +42,12 @@ int ExitForCode(const std::string& code)
     if (code.size() >= 10 && code.ends_with(".not-found")) return 6;
     if (OneOf(code, { "host.unreachable", "host.died", "host.restarting", "host.hung" })) return 7;
     if (OneOf(code, { "compare.failed", "wait.timeout" })) return 8;
-    return 6; // ruling F6: the host answered and the operation failed
+    return std::nullopt;
+}
+
+int ExitForCode(const std::string& code)
+{
+    return ListedExit(code).value_or(6); // ruling F6: the host answered and the operation failed
 }
 
 int Rank(int code)
@@ -343,6 +350,11 @@ int WorstExit(std::span<const int> codes)
         }
     }
     return worst;
+}
+
+bool ExitCodeIsListed(std::string_view code)
+{
+    return ListedExit(code).has_value();
 }
 
 nlohmann::json ParseJsonBounded(std::string_view text, std::uint32_t maxDepth, bool* tooDeep)

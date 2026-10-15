@@ -193,6 +193,13 @@ public:
     // last one's outcome. host.wait reload records the count when it arms, so
     // a failure noted after that answers module.reload-failed (exit 6).
     std::uint64_t ReloadSerial() const;
+    // Task 30 fix round 1 (spec s4.7: frozen-clock captures): true while a
+    // `wait settled` on this session is in its capture phase. Each host ORs it
+    // into the freeze its --settle hold already applies (frame and sim dt 0):
+    // the editor's SettleHoldActive, the runtime's settleHold through
+    // FrameIo::remoteSettleHold. False before Start and after Stop, so a wait
+    // that ends, fails, is cancelled or is torn down restores the clock.
+    bool SettleClockFrozen() const;
     bool LastReloadOk() const;
     const std::string& LastReloadReason() const;
     std::uint64_t LastReloadFrame() const;

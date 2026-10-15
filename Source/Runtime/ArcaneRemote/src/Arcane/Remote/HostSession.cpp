@@ -482,6 +482,11 @@ void HostSession::NoteReload(std::uint32_t generation, bool ok, std::string reas
         PublishStatus(NowUnixMs());
 }
 
+bool HostSession::SettleClockFrozen() const
+{
+    return m_started && SettleHoldsClock(this);
+}
+
 std::uint64_t HostSession::ReloadSerial() const
 {
     return m_reloadSerial;

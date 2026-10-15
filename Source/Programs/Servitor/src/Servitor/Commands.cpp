@@ -45,9 +45,9 @@ constexpr ManifestVerb kManifestVerbs[] = {
     {"status", "List the project's live hosts from their descriptors (no connection)", "observe"},
     {"launch", "Start an editor, runtime or server with --remote and wait until it is ready", "drive"},
     {"quit", "Ask the host to exit cleanly; --force ends the process after --timeout", "drive"},
-    {"wait", "Wait until the host is ready or settled (two byte-equal captures, shaders idle; launch it with "
-             "--fixed-time), N frames pass, a module reloads (a failed reload is module.reload-failed), or it "
-             "reaches a state",
+    {"wait", "Wait until the host is ready or settled (two byte-equal captures with the shaders idle; the wait "
+             "freezes the host clock while it captures), N frames pass, a module reloads (a failed reload is "
+             "module.reload-failed), or it reaches a state",
      "observe"},
     {"world", "List the host's worlds", "observe"},
     {"commands", "Print this manifest (verbs and exit codes) with no host running", "none"},
@@ -215,6 +215,8 @@ bool ParseCallTokens(std::span<const std::string> rest, CallRequest& out, std::s
     if (tokens.positional.empty())
         return Fail(error, "call needs a command name (servitor list shows them)");
 
+    // The deepest args object a host accepts (kMaxRequestDepth counts the body).
+    constexpr std::uint32_t kArgsDepth = Arcane::Remote::kMaxRequestDepth - 1;
     nlohmann::json args = nlohmann::json::object();
     std::string source;
     for (const auto& [flag, value] : tokens.flags) {
@@ -229,10 +231,14 @@ bool ParseCallTokens(std::span<const std::string> rest, CallRequest& out, std::s
                 return Fail(error, "--args-file cannot read " + value);
             text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
-        bool tooDeep = false;   // the host refuses a body this deep; say so before sending (Task 30)
-        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+        // The args become a request: the host's cap, so servitor refuses
+        // early what the host would refuse anyway (Task 30). The args object
+        // sits one level inside the request body.
+        bool tooDeep = false;
+        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, kArgsDepth, &tooDeep);
         if (tooDeep)
-            return Fail(error, flag + " nests deeper than " + std::to_string(Arcane::Remote::kMaxJsonDepth) + " levels");
+            return Fail(error, flag + " nests deeper than " + std::to_string(kArgsDepth) +
+                                   " levels; inside a request body that is the most a host accepts");
         if (parsed.is_discarded())
             return Fail(error, flag + " is not valid JSON");
         if (!parsed.is_object())
@@ -248,11 +254,13 @@ bool ParseCallTokens(std::span<const std::string> rest, CallRequest& out, std::s
         if (args.contains(key))
             return Fail(error, "argument '" + key + "' is given twice");
         const std::string text = token.substr(eq + 1);
-        bool tooDeep = false;   // too deep is refused, never quietly sent as a string
-        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, Arcane::Remote::kMaxJsonDepth, &tooDeep);
+        // Too deep is refused, never quietly sent as a string. A value sits
+        // two levels inside the request body (body, args).
+        bool tooDeep = false;
+        nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(text, kArgsDepth - 1, &tooDeep);
         if (tooDeep)
-            return Fail(error, "argument '" + key + "' nests deeper than " +
-                                   std::to_string(Arcane::Remote::kMaxJsonDepth) + " levels");
+            return Fail(error, "argument '" + key + "' nests deeper than " + std::to_string(kArgsDepth - 1) +
+                                   " levels; inside a request body that is the most a host accepts");
         args[key] = parsed.is_discarded() ? nlohmann::json(text) : std::move(parsed);
     }
     out.command = tokens.positional.front();

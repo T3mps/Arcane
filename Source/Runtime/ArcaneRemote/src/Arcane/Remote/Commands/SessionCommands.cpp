@@ -62,6 +62,7 @@ struct SettleCaptures {
     std::vector<unsigned char> previous;
     std::uint32_t width = 0, height = 0;
     std::uint64_t captures = 0;       // retired captures so far
+    std::optional<Error> lastRefusal; // the last arm the ring refused; a timeout reports it (data.lastRefusal)
 };
 
 // One armed host.wait job's inputs, recorded when the command armed it.
@@ -266,8 +267,12 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
     if (!st.armed) {
         if (step == Detail::TicketStep::Failed) {
             // Nothing will record a copy yet (a host still booting): not the
-            // wait's failure. StepTicket wrote its MakeError; restore the arm
-            // seed and try again on a later Drain, bounded by the timeout.
+            // wait's failure. StepTicket wrote its MakeError; keep its error
+            // for the timeout (a host that never arms is not silently a plain
+            // timeout), restore the arm seed and try again on a later Drain,
+            // bounded by the timeout.
+            if (!job.envelope.errors.empty())
+                st.lastRefusal = job.envelope.errors.front();
             job.envelope = MakeOk(job.command, nlohmann::json::object(), {});
             return false;
         }
@@ -337,7 +342,14 @@ bool StepWait(Job& job, HostGate& gate, void* user)
     }
     // Done, timed out, or a failure (MakeError): the row's ok envelope is
     // replaced. A settle capture still in flight is abandoned (the ring drops
-    // an unclaimed ticket); its hold goes with the row.
+    // an unclaimed ticket); its hold, and its clock freeze, go with the row.
+    if (row.args.what == "settled" && env.ok && env.data.value("timedOut", false)) {
+        env.data["captures"] = row.settle.captures;
+        if (row.settle.lastRefusal) {
+            const Error& refusal = *row.settle.lastRefusal;
+            env.data["lastRefusal"] = {{"code", refusal.code}, {"message", refusal.message}};
+        }
+    }
     job.envelope = std::move(env);
     ForgetWait(s, job.id.value);
     return true;
@@ -483,6 +495,19 @@ void RegisterSessionCommands(HostSession* session, JobTable* jobs)
     wait.argsMeta = Astra::GetMeta<HostWaitArgs>();
     wait.fn = &HostWait;
     RegisterOnce(std::move(wait));
+}
+
+bool SettleHoldsClock(const HostSession* session)
+{
+    const SessionCommandState& s = State();
+    if (session == nullptr || s.session != session)
+        return false;
+    for (const auto& entry : s.waits) {
+        const WaitRow& row = entry.second;
+        if (row.args.what == "settled" && (row.settle.armed || row.settle.havePrevious))
+            return true;
+    }
+    return false;
 }
 
 void ReleaseSessionCommands(const HostSession* session)

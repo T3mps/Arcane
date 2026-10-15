@@ -994,6 +994,9 @@ void RuntimeApp::MainLoop()
             ARC_INFO("ArcaneRuntime: exiting on {}", m_remote->ExitReason());
             break;
         }
+        // Task 30 fix round 1: a `wait settled` in its capture phase freezes
+        // this frame's clock through AdvanceSim's settleHold (spec s4.7).
+        io.remoteSettleHold = m_remote && m_remote->SettleClockFrozen();
 #endif
         if (io.skipFrame) continue;
 
@@ -1035,7 +1038,10 @@ void RuntimeApp::MainLoop()
         Arcane::RuntimeFrame::AdvanceSim(io, pace);
         if (io.quit) break;
 #if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
-        if (m_remote && pace != Arcane::RuntimeFrame::SimPace::Hold)
+        // A settle freeze (Task 30) runs a Run pass at sim dt 0: no tick, so no
+        // host.frame. A requested single step still ticks once under it.
+        if (m_remote && pace != Arcane::RuntimeFrame::SimPace::Hold &&
+            (pace == Arcane::RuntimeFrame::SimPace::SingleTick || !io.remoteSettleHold))
         {
             m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim advances only (AM1)
             // stats.frame (Task 26): only a real sim advance; a held pass keeps the last snapshot.

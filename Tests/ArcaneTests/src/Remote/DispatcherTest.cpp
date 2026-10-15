@@ -18,6 +18,10 @@
 #include <Arcane/Remote/Commands/ConsoleCommands.hpp>   // Task 30 (C5): the cvar drive calls' audit
 #include <Arcane/Remote/Commands/CvarCommands.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Remote/Descriptor.hpp>    // Task 30 fix round 1: the at-limit audit, through a live session
+#include <Arcane/Remote/HostSession.hpp>
+#include "../Helpers/TestEnvironment.hpp"   // Arcane::Test::TempDir
+#include <future>
 
 #if !defined(ARC_BUILD_DIST)
 
@@ -801,6 +805,74 @@ TEST_CASE("cvar.set and console.exec are audited as argsDigest only, never a val
         CHECK_FALSE(line.contains("value"));
         CHECK_FALSE(line.contains("line"));
     }
+}
+
+// Task 30 fix round 1 (I1): a Drive call whose args nest to exactly
+// kMaxRequestDepth goes through the real listener, queue and dispatcher, and
+// the audit's argsDigest dumps the whole of it on the host main thread (the
+// recursion the cap bounds). One level more is refused by the listener and
+// never reaches the dispatcher, so it writes no audit line.
+TEST_CASE("a Drive call nested to exactly kMaxRequestDepth is audited whole; one level more never reaches the audit", "[remote][dispatch]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-dispatch-deep-audit");
+    Arcane::Remote::HostSession::Config cfg;
+    cfg.kind = Arcane::Remote::HostKind::Runtime;
+    cfg.cvarContext = Arcane::CVarContext::LocalHost;
+    cfg.projectRoot = tmp.path;
+    Arcane::Remote::HostSession session(cfg);
+    REQUIRE(session.Start());
+    const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+    REQUIRE(desc);
+    const auto auditPath = Arcane::Remote::DescriptorDir(tmp.path, false) / "audit.ndjson";
+    const std::uint32_t cap = Arcane::Remote::kMaxRequestDepth;
+    const auto nest = [](std::uint32_t levels) { return std::string(levels, '[') + std::string(levels, ']'); };
+    const auto post = [&](const std::string& body) {
+        const std::uint16_t port = session.Port();
+        const std::string token = desc->token;
+        auto reply = std::async(std::launch::async, [port, token, body] {
+            return RemoteTest::HttpExchange(port, token, "", "POST /remote/v1/call HTTP/1.1", body);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (reply.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+               std::chrono::steady_clock::now() < deadline) {
+            session.DrainFrame(0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        REQUIRE(reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+        const std::string raw = reply.get();
+        const auto split = raw.find("\r\n\r\n");
+        REQUIRE(split != std::string::npos);
+        return Arcane::Remote::ParseEnvelope(nlohmann::json::parse(raw.substr(split + 4)));
+    };
+    const auto auditLines = [&] {
+        std::vector<nlohmann::json> lines;
+        std::ifstream in(auditPath);
+        std::string line;
+        while (std::getline(in, line))
+            if (!line.empty())
+                lines.push_back(nlohmann::json::parse(line));
+        return lines;
+    };
+
+    // The body object (1) holds args (2), whose value nests cap - 2 more.
+    const std::string atLimitArgs = R"({"name":"render.vsync","value":)" + nest(cap - 2) + "}";
+    auto ran = post(R"({"id":"deep","command":"cvar.set","args":)" + atLimitArgs + "}");
+    CHECK(ran.command == "cvar.set");   // the command ran (it refuses an array value; that is not the point)
+    auto lines = auditLines();
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0]["command"] == "cvar.set");
+    CHECK(lines[0]["argsDigest"] ==
+          Arcane::Crypto::Sha256Hex(
+              nlohmann::json::parse(atLimitArgs).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)));
+
+    const std::string pastLimitArgs = R"({"name":"render.vsync","value":)" + nest(cap - 1) + "}";
+    auto refused = post(R"({"id":"deeper","command":"cvar.set","args":)" + pastLimitArgs + "}");
+    REQUIRE_FALSE(refused.errors.empty());
+    CHECK(refused.errors[0].code == "arg.invalid");
+    CHECK(refused.errors[0].detail["reason"] == "too-deep");
+    CHECK(refused.errors[0].detail["maxDepth"] == cap);
+    CHECK(auditLines().size() == 1);   // refused before the dispatcher: no second line
+    session.Stop("test");
 }
 
 #endif

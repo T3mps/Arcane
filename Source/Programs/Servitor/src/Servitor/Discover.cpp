@@ -314,7 +314,7 @@ std::optional<fs::path> HostsDirForRoot(const fs::path& root)
     if (!in.is_open())
         return std::nullopt;
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    const auto json = Arcane::Remote::ParseJsonBounded(text);
+    const auto json = Arcane::Remote::ParseJsonBounded(text, Arcane::Remote::kMaxRequestDepth);   // a flat local file
     if (json.is_discarded() || !json.is_object())
         return std::nullopt;
     const auto config = json.find("engineConfig");

@@ -286,6 +286,11 @@ namespace Arcane::RuntimeFrame
         // clears it. MainLoop checks it after both calls and `continue`s in
         // turn.
         bool skipFrame = false;
+        // remoteSettleHold (Task 30 fix round 1): a remote `wait settled` is
+        // in its capture phase (HostSession::SettleClockFrozen), set by
+        // MainLoop after each drain. AdvanceSim ORs it into its --settle
+        // `settleHold`, so the captures see one frozen clock, held or running.
+        bool remoteSettleHold = false;
     };
 
     // Heartbeat + device-lost check + this frame's ONE window-event pump +

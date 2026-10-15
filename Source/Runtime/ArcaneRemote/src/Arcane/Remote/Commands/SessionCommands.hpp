@@ -44,15 +44,26 @@ struct WaitArgs {
 // PluginHost leaves the generation alone on a failed or refused reload, which
 // DrainFrame notes from its attempt count); `state` is gate.State() == state.
 // `settled` is never met here: the host.wait job decides it from its own
-// captures (spec s4.7: two byte-equal captures through the capture host pair,
-// with config.producersIdle true when each was armed and when it retired), so
-// a poll of `settled` answers only its refusals, its timeout, or pending. The
-// pair is byte-stable only under a frozen clock: launch the host with
-// --fixed-time (the verb's help says so).
+// captures (spec s4.7: two byte-equal frozen-clock captures through the
+// capture host pair, with config.producersIdle true when each was armed and
+// when it retired), so a poll of `settled` answers only its refusals, its
+// timeout, or pending. The host freezes its own clock for the captures
+// (SettleHoldsClock below, read through HostSession::SettleClockFrozen).
 ARC_REMOTE_API Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_t startedFrame,
                                  std::uint32_t generationAtArm, bool hasRenderer,
                                  std::chrono::steady_clock::time_point started,
                                  std::uint64_t reloadSerialAtArm = 0);
+
+// True while a `wait settled` armed on `session` is in its capture phase: from
+// the first capture armed with the producers idle until the wait ends (done,
+// timed out, failed, or released with the session), except while a busy
+// producer has broken the pair and no capture is in flight. The host reads it
+// (HostSession::SettleClockFrozen) into the same freeze its --settle hold uses
+// (frame and sim dt 0), so the two captures see one frozen clock. The freeze
+// lifts while a producer is busy because it also stops the compile service's
+// debounce clock: a compile submitted before the freeze could otherwise never
+// dispatch, and the wait could never settle. Main thread only. Module-internal.
+bool SettleHoldsClock(const HostSession* session);
 
 // Registers host.quit and host.wait. Safe to call twice; a later call replaces
 // the stored pointers (ruling F11). Null pointers make both commands answer

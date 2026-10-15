@@ -54,7 +54,7 @@ nlohmann::json HostEnvelopeJson(const HostSlot& slot)
     nlohmann::json j = Arcane::Remote::ToJson(slot.envelope);
     j["client"] = {{"exitCode", slot.exitCode}, {"descriptor", PathUtf8(slot.host->path)}};
     const std::string redacted = Arcane::Remote::RedactSecrets(Dump(j), slot.host->descriptor.token);
-    nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(redacted);   // the reply was bounded; so is its re-parse
+    nlohmann::json parsed = Arcane::Remote::ParseJsonBounded(redacted, Arcane::Remote::kMaxReplyDepth);   // a bounded reply, re-parsed
     return parsed.is_discarded() ? nlohmann::json::object() : parsed;
 }
 

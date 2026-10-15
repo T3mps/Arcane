@@ -709,8 +709,17 @@ namespace Arcane::Editor
         // host's dt sources (FrameInput's frameDt, AdvanceSim's simDt) read
         // 0 while this is true. ONE predicate, read by both, so the two
         // clocks can never disagree about whether the hold is on.
+        //
+        // Task 30 fix round 1: a remote `servitor wait settled` holds the same
+        // freeze while it is in its capture phase (spec s4.7: frozen-clock
+        // captures), on a windowed editor too; the session lifts it when the
+        // wait ends, fails or is torn down (HostSession::SettleClockFrozen).
         [[nodiscard]] bool SettleHoldActive() const noexcept
         {
+#if !defined(ARC_BUILD_DIST)
+            if (m_remote && m_remote->SettleClockFrozen())
+                return true;
+#endif
             return m_config.headless && m_config.settleAttempts != 0 &&
                    m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
         }

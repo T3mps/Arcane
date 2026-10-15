@@ -16,8 +16,10 @@
 #include <Json.hpp>
 #include <Servitor/Client.hpp>   // PathUtf8 (argv is UTF-8, Task 30), FileTimeToSys (never clock_cast, R8-7)
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -77,6 +79,46 @@ struct DescriptorSweep {
     }
 };
 
+// Removes, on scope exit, the crash/hang report files a child host wrote:
+// Diagnostics names them "<app>-<stamp>-pid<n>.<ext>" (Diagnostics.cpp), so
+// only files whose name carries `-pid<pid>.` and that were NOT there when the
+// sweep was armed are removed. Anything that was already present, or names
+// another process, is never touched (it may be the user's). Declared after
+// DescriptorSweep and before HostGuard, so the child is dead before it runs.
+struct ChildReportSweep {
+    std::vector<std::filesystem::path> dirs;
+    std::vector<std::filesystem::path> before;
+    std::uint32_t pid = 0;
+    explicit ChildReportSweep(std::vector<std::filesystem::path> reportDirs) : dirs(std::move(reportDirs)) {
+        std::error_code ec;
+        for (const auto& dir : dirs)
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+                before.push_back(entry.path());
+    }
+    ~ChildReportSweep() {
+        if (pid == 0)
+            return;
+        const std::string tag = "-pid" + std::to_string(pid) + ".";
+        std::error_code ec;
+        for (const auto& dir : dirs) {
+            std::vector<std::filesystem::path> mine;
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                const std::u8string name = entry.path().filename().u8string();
+                const std::string narrow(name.begin(), name.end());
+                if (narrow.find(tag) == std::string::npos)
+                    continue;
+                if (std::find(before.begin(), before.end(), entry.path()) != before.end())
+                    continue;
+                mine.push_back(entry.path());
+            }
+            for (const auto& file : mine)
+                std::filesystem::remove(file, ec);
+        }
+    }
+    ChildReportSweep(const ChildReportSweep&) = delete;
+    ChildReportSweep& operator=(const ChildReportSweep&) = delete;
+};
+
 // Every 64-char token in the live descriptors under `dir`.
 static std::vector<std::string> ReadTokens(const std::filesystem::path& dir) {
     std::vector<std::string> tokens;
@@ -116,6 +158,22 @@ static HANDLE DuplicateProcess(HANDLE process) {
                             0, FALSE, DUPLICATE_SAME_ACCESS));
     return dup;
 }
+
+// Closes a Win32 handle on scope exit (fix round 1, M7): RunServitor's
+// capture files close even when a REQUIRE throws between the two opens.
+struct ScopedHandle {
+    HANDLE h = INVALID_HANDLE_VALUE;
+    ScopedHandle() = default;
+    explicit ScopedHandle(HANDLE handle) : h(handle) {}
+    ~ScopedHandle() { Close(); }
+    void Close() {
+        if (h != nullptr && h != INVALID_HANDLE_VALUE)
+            CloseHandle(h);
+        h = INVALID_HANDLE_VALUE;
+    }
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+};
 
 // UTF-8 to UTF-16 for a command line: servitor reads its argv as UTF-8
 // (CommandLineToArgvW + WideToUtf8, Task 30), so the arguments go in as such.
@@ -217,15 +275,17 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     g_servitorTranscript.clear();
     auto args = [&project](std::initializer_list<std::string> tail) { return ServitorArgs(project, tail); };
 
-    // --fixed-time 0 freezes the scene clock (spec s4.7: settled is two
-    // byte-equal frozen-clock captures; the screenshot, compare and wait verbs'
-    // help say so), so the settle, the scratch bless and its byte-exact
-    // compare see the same pixels on every capture.
+    // The editor runs with --fixed-time 0 (a --headless-only flag) for the
+    // scratch bless and its byte-exact compares: they are separate captures,
+    // taken with the clock running between the calls. `wait settled` needs no
+    // flag: it freezes the host clock itself while it captures (spec s4.7). The
+    // runtime is launched WITHOUT --fixed-time, held, so its clock follows wall
+    // time, and its own `wait settled` below is the live proof of that freeze.
     const std::wstring proj = project.wstring();
     HostGuard hosts;
     hosts.project = project;
     hosts.editor = SpawnHost(editor, {L"--headless", L"--project", proj, L"--remote", L"--fixed-time", L"0"});
-    hosts.runtime = SpawnHost(runtime, {L"--headless", L"--project", proj, L"--remote", L"--fixed-time", L"0"});
+    hosts.runtime = SpawnHost(runtime, {L"--headless", L"--project", proj, L"--remote"});
     hosts.server = SpawnHost(server, {L"--project", proj, L"--remote"});
 
     std::string out, err;
@@ -253,6 +313,15 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
     REQUIRE(tokens.size() == 3);
+
+    // I2: the held runtime's clock follows wall time (no --fixed-time), so it
+    // settles only because the wait freezes that clock for its captures.
+    out.clear();
+    REQUIRE(RunServitor(servitor, args({"--host", "runtime", "--timeout", "60", "wait", "settled"}),
+                        &out, &err, 75000) == 0);
+    auto runtimeSettled = Json(out);
+    CHECK(runtimeSettled["data"]["done"] == true);
+    CHECK(runtimeSettled["data"]["captures"].get<std::uint64_t>() >= 2);
 
     // Ruling F21, decided live: render.vsync is ArcaneRender's (a Client
     // module the server does not link), but a game module the server maps may
@@ -473,7 +542,7 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
     }
 
     out.clear();
-    CHECK(RunServitor(servitor, args({"--host", "editor", "quit"}), &out, &err, 10000) == 0);
+    CHECK(RunServitor(servitor, args({"--host", "editor", "--timeout", "8", "quit"}), &out, &err, 10000) == 0);
     CHECK(Json(out)["command"] == "host.quit");
     // Quit within 10 s; past that the guard kills it, and that is a failure.
     CHECK(WaitForSingleObject(hosts.editor, 10000) == WAIT_OBJECT_0);
@@ -487,7 +556,8 @@ TEST_CASE("P0 hosts answer the spec envelope", "[remote][gpu]") {
 }
 
 // CreateProcessW with stdout and stderr redirected to files, WaitForSingleObject
-// bounded by timeoutMs (TerminateProcess and 124 past it). Appends one line,
+// bounded by timeoutMs (TerminateProcess and 124 past it). servitor's own
+// --timeout is always under timeoutMs (M2). Appends one line,
 // `milliseconds args`, to servitor-latency.txt beside the test exe, and the
 // call's stdout and stderr to g_servitorTranscript (ruling F23).
 // RenderErrorCount() covers this process; the children's GPU validation is the
@@ -501,48 +571,65 @@ static int RunServitor(const std::filesystem::path& servitorExe, const std::vect
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
-    HANDLE outFile = CreateFileW(outPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
-                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    HANDLE errFile = CreateFileW(errPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
-                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    REQUIRE(outFile != INVALID_HANDLE_VALUE);
-    REQUIRE(errFile != INVALID_HANDLE_VALUE);
+    ScopedHandle outFile(CreateFileW(outPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    ScopedHandle errFile(CreateFileW(errPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    REQUIRE(outFile.h != INVALID_HANDLE_VALUE);
+    REQUIRE(errFile.h != INVALID_HANDLE_VALUE);
+
+    // Fix round 1 (M2): servitor must answer before this harness gives up, or a
+    // host.busy it is still retrying reads as 124 with no envelope. A call
+    // that names no --timeout gets one a quarter (at most 5 s) under the
+    // harness wait; one that names its own must already be under it.
+    std::vector<std::string> argv = args;
+    const auto given = std::find(argv.begin(), argv.end(), "--timeout");
+    if (given == argv.end()) {
+        const std::uint32_t slack = std::min<std::uint32_t>(timeoutMs / 4, 5000);
+        char seconds[32];
+        std::snprintf(seconds, sizeof(seconds), "%.3f", static_cast<double>(timeoutMs - slack) / 1000.0);
+        argv.insert(argv.begin(), {"--timeout", seconds});
+    } else {
+        REQUIRE(given + 1 != argv.end());
+        REQUIRE(std::stod(*(given + 1)) * 1000.0 < static_cast<double>(timeoutMs));
+    }
+
     std::wstring cmd = QuoteArg(servitorExe.wstring());
     std::string joined;
-    for (const auto& a : args) {
+    for (const auto& a : argv) {
         cmd += L" " + QuoteArg(Utf8ToWide(a));
         joined += ' ' + a;
     }
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = outFile;
-    si.hStdError = errFile;
+    si.hStdOutput = outFile.h;
+    si.hStdError = errFile.h;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> mutableCmd(cmd.begin(), cmd.end());
     mutableCmd.push_back(L'\0');
     const auto t0 = std::chrono::steady_clock::now();
-    if (!CreateProcessW(servitorExe.c_str(), mutableCmd.data(), nullptr, nullptr, TRUE, 0,
-                        nullptr, servitorExe.parent_path().c_str(), &si, &pi)) {
-        CloseHandle(outFile);
-        CloseHandle(errFile);
+    const BOOL started = CreateProcessW(servitorExe.c_str(), mutableCmd.data(), nullptr, nullptr, TRUE, 0,
+                                        nullptr, servitorExe.parent_path().c_str(), &si, &pi);
+    outFile.Close();   // the child holds its own copies; ours close now so the files can be read back
+    errFile.Close();
+    if (!started)
         return 125;
-    }
-    CloseHandle(outFile);
-    CloseHandle(errFile);
-    const DWORD wait = WaitForSingleObject(pi.hProcess, timeoutMs);
+    ScopedHandle process(pi.hProcess);
+    ScopedHandle thread(pi.hThread);
+    const DWORD wait = WaitForSingleObject(process.h, timeoutMs);
     int code = 124;
     if (wait == WAIT_OBJECT_0) {
         DWORD exitCode = 124;
-        GetExitCodeProcess(pi.hProcess, &exitCode);
+        GetExitCodeProcess(process.h, &exitCode);
         code = static_cast<int>(exitCode);
     } else {
-        TerminateProcess(pi.hProcess, 124);
-        WaitForSingleObject(pi.hProcess, 5000);   // its handles to the capture files close before they are read
+        TerminateProcess(process.h, 124);
+        WaitForSingleObject(process.h, 5000);   // its handles to the capture files close before they are read
     }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+    thread.Close();
+    process.Close();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
     {
@@ -582,11 +669,15 @@ TEST_CASE("a hung runtime is exit 7", "[remote][gpu]") {
         std::error_code ec;
         std::filesystem::remove_all(saved.dir, ec);
     }
+    // M8: the hang report this child writes is removed on scope exit, after
+    // HostGuard has killed it; nothing that was already there is touched.
+    ChildReportSweep reports({project / "Saved" / "Diagnostics", runtime.parent_path() / "diagnostics"});
     HostGuard hosts;
     DWORD pid = 0;
     hosts.runtime = SpawnHost(runtime, {L"--headless", L"--project", project.wstring(), L"--remote",
                                         L"--hang-main", L"60"},
                               &pid);
+    reports.pid = static_cast<std::uint32_t>(pid);
     bool sawHung = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
     while (std::chrono::steady_clock::now() < deadline) {
