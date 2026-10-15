@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -860,6 +861,69 @@ TEST_CASE("the settle freeze ends when its wait job stops running, even if its r
     CHECK(jobs.Find(id)->state == Arcane::Remote::JobState::Cancelled);
     CHECK_FALSE(session.SettleClockFrozen());
     session.Stop("test");               // releases the row and its ring hold
+}
+
+// ---- Verification N3: a host-side wait's timeout is bounded ----------------
+
+TEST_CASE("a host-side wait is bounded at kMaxWaitTimeoutMs, and a clamped wait says so", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Runtime);
+    Arcane::Test::TempDir tmp("remote-wait-timeout-cap");
+    Arcane::Remote::HostSession session(SessionConfig(Arcane::Remote::HostKind::Runtime, tmp.path));
+    REQUIRE(session.Start());
+    session.Gate().SetState("ready");
+    const std::uint32_t cap = Arcane::Remote::kMaxWaitTimeoutMs;
+    CHECK(cap >= 30000u);               // servitor's default --timeout (30 s) is never clamped
+    const auto now = std::chrono::steady_clock::now();
+    {
+        // WaitPoll: a wait asking for the u32 maximum (what the listener and
+        // servitor's --timeout both admit) has timed out once the cap passed.
+        Arcane::Remote::WaitArgs args;
+        args.what = "state";
+        args.state = "playing";         // never reached here
+        args.timeoutMs = std::numeric_limits<std::uint32_t>::max();
+        const auto past = now - std::chrono::milliseconds(cap) - std::chrono::milliseconds(50);
+        auto late = Arcane::Remote::WaitPoll(session, args, 0, 0, true, past);
+        CHECK(late.ok);
+        CHECK(late.data["timedOut"] == true);
+        CHECK(Arcane::Remote::ExitFromHost(late) == 8);
+        // Under the cap it is still pending.
+        const auto recent = now - std::chrono::milliseconds(cap) + std::chrono::milliseconds(60000);
+        auto pending = Arcane::Remote::WaitPoll(session, args, 0, 0, true, recent);
+        CHECK_FALSE(pending.data.value("done", true));
+        CHECK_FALSE(pending.data.contains("timedOut"));
+    }
+    // The job's final envelope warns when it clamped, and only then.
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::RegisterSessionCommands(&session, &jobs);
+    const auto runWait = [&](std::uint32_t timeoutMs) {
+        Arcane::Remote::Call call;
+        call.command = "host.wait";
+        call.args = {{"what", "state"}, {"state", "ready"}};
+        call.timeoutMs = timeoutMs;
+        const auto armed = Arcane::Remote::CommandRegistry::Get().Invoke(call);
+        REQUIRE(armed.completesJob != 0);
+        jobs.StepAll(session.Gate());
+        const Arcane::Remote::Job* job = jobs.Find(Arcane::Remote::JobId{armed.completesJob});
+        REQUIRE(job != nullptr);
+        REQUIRE(job->state == Arcane::Remote::JobState::Done);
+        return job->envelope;
+    };
+    {
+        const auto env = runWait(std::numeric_limits<std::uint32_t>::max());
+        CHECK(env.ok);
+        CHECK(env.data["done"] == true);
+        REQUIRE(env.warnings.size() == 1);
+        CHECK(env.warnings[0].code == "wait.timeout-clamped");
+        CHECK(env.warnings[0].detail["requestedMs"] == std::numeric_limits<std::uint32_t>::max());
+        CHECK(env.warnings[0].detail["maxMs"] == cap);
+        CHECK(Arcane::Remote::ExitFromHost(env) == 0);
+    }
+    {
+        const auto env = runWait(cap);  // exactly the cap: not clamped
+        CHECK(env.ok);
+        CHECK(env.warnings.empty());
+    }
+    session.Stop("test");
 }
 
 #endif

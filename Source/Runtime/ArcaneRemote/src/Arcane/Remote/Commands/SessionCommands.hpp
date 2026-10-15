@@ -3,6 +3,7 @@
 // commands every armed host serves. HostSession::Start registers them with its
 // own session and job table (ruling F12); HostSession::Stop releases them.
 #include <Arcane/Modules/ArcaneRemoteApi.hpp>
+#include <Arcane/Core/Constant.hpp>
 #include <Arcane/Remote/Protocol.hpp>
 
 #include <chrono>
@@ -16,6 +17,14 @@ namespace Arcane::Remote
 
 class HostSession; // HostSession.hpp
 class JobTable;    // Jobs.hpp
+
+// The longest a host-side wait runs, whatever options.timeoutMs asks for. The
+// listener and servitor's --timeout both admit up to the u32 maximum of
+// milliseconds (~49 days); a wait asking for more than this is bounded here,
+// and its final envelope carries a wait.timeout-clamped warning. Servitor's
+// default --timeout (30 s) and every acceptance timeout are far below it.
+ARC_CONSTANT("safety bound: a wait settled freezes the host clock while it captures, and nothing cancels a wait whose client went away, so a host-side wait must end; ten minutes outlasts any real settle, frame or reload wait")
+inline constexpr std::uint32_t kMaxWaitTimeoutMs = 600000;
 
 struct WaitArgs {
     std::string what;          // ready | settled | frames | reload | state
@@ -35,8 +44,9 @@ struct WaitArgs {
 //    past reloadSerialAtArm) failed and the generation did not move:
 //    module.reload-failed (exit 6), detail {pluginGeneration, atFrame};
 //  - the condition met: MakeOk(host.wait, {done: true, what, ...}) (exit 0);
-//  - timeoutMs == 0, or more than timeoutMs since `started`:
-//    MakeOk(host.wait, {timedOut: true, what}) -- ok, no errors, exit 8;
+//  - timeoutMs == 0, or more than min(timeoutMs, kMaxWaitTimeoutMs) since
+//    `started`: MakeOk(host.wait, {timedOut: true, what}) -- ok, no errors,
+//    exit 8;
 //  - otherwise MakeOk(host.wait, {done: false, what}): still pending.
 // `ready` is state ready, playing or paused; `frames` is gate.frame >=
 // startedFrame + frames (host.frame counts sim advances, AM1); `reload` is

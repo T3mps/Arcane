@@ -317,17 +317,10 @@ bool StepSettle(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
     return false;
 }
 
-bool StepWait(Job& job, HostGate& gate, void* user)
+// One step of an armed wait's row; true when the job finished (the row is
+// gone then).
+bool StepWaitRow(Job& job, HostGate& gate, SessionCommandState& s, WaitRow& row)
 {
-    SessionCommandState& s = *static_cast<SessionCommandState*>(user);
-    const auto it = s.waits.find(job.id.value);
-    if (it == s.waits.end() || s.session == nullptr) {
-        // The session that armed this wait is gone (stopped, or replaced).
-        job.envelope = Unavailable(job.command);
-        ForgetWait(s, job.id.value);
-        return true;
-    }
-    WaitRow& row = it->second;
     Envelope env = WaitPoll(*s.session, row.args, row.startedFrame, row.generationAtArm, row.hasRenderer,
                             row.started, row.reloadSerialAtArm);
     if (IsPending(env)) {
@@ -353,6 +346,32 @@ bool StepWait(Job& job, HostGate& gate, void* user)
     job.envelope = std::move(env);
     ForgetWait(s, job.id.value);
     return true;
+}
+
+bool StepWait(Job& job, HostGate& gate, void* user)
+{
+    SessionCommandState& s = *static_cast<SessionCommandState*>(user);
+    const auto it = s.waits.find(job.id.value);
+    if (it == s.waits.end() || s.session == nullptr) {
+        // The session that armed this wait is gone (stopped, or replaced).
+        job.envelope = Unavailable(job.command);
+        ForgetWait(s, job.id.value);
+        return true;
+    }
+    // WaitPoll bounds the wait at kMaxWaitTimeoutMs; the final envelope says
+    // so when the caller asked for more.
+    const std::uint32_t requestedMs = it->second.args.timeoutMs;
+    const bool finished = StepWaitRow(job, gate, s, it->second);   // erases the row when finished
+    if (finished && requestedMs > kMaxWaitTimeoutMs) {
+        Error clamped = Detail::MakeIssue(
+            "wait.timeout-clamped",
+            "the wait asked for " + std::to_string(requestedMs) + " ms; a host bounds a wait at " +
+                std::to_string(kMaxWaitTimeoutMs) + " ms",
+            "wait again if the condition can take longer");
+        clamped.detail = {{"requestedMs", requestedMs}, {"maxMs", kMaxWaitTimeoutMs}};
+        job.envelope.warnings.push_back(std::move(clamped));
+    }
+    return finished;
 }
 
 CommandResult HostWait(const Call& call, void* /*user*/)
@@ -459,8 +478,8 @@ Envelope WaitPoll(const HostSession& session, const WaitArgs& args, std::uint64_
 
     if (done)
         return MakeOk(command, std::move(data), gate.Block());
-    if (args.timeoutMs == 0 ||
-        std::chrono::steady_clock::now() - started > std::chrono::milliseconds(args.timeoutMs))
+    const std::uint32_t timeoutMs = std::min(args.timeoutMs, kMaxWaitTimeoutMs);
+    if (timeoutMs == 0 || std::chrono::steady_clock::now() - started > std::chrono::milliseconds(timeoutMs))
         return MakeOk(command, {{"timedOut", true}, {"what", args.what}}, gate.Block());
     return MakeOk(command, {{"done", false}, {"what", args.what}}, gate.Block());
 }
