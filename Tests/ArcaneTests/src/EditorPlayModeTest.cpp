@@ -608,12 +608,11 @@ TEST_CASE("Play as embedded server: the server world takes the live sim.maxSteps
     REQUIRE(play.Stop(runtime));
 }
 
-// Servitor final fix pass (G-2): the remote pause and step keep the embedded
-// server world in lockstep with the primary. SetServerPaused holds the server
-// loop beside the primary's (TickServer's wall dt no longer runs it), and
-// RequestServerSingleStep is the paused step's twin: exactly one server tick
-// in the same frame as the primary's one.
-TEST_CASE("Play as embedded server: a paused step single-steps the server world with the primary", "[editor][netmode][sim]")
+// Servitor final fix round 2 (I-3): TickServer mirrors the primary loop every
+// frame -- its pause, and its single step of this frame -- so the embedded
+// server world stays in lockstep whoever paused or stepped the primary (the
+// toolbar or servitor), and a resume anywhere resumes both.
+TEST_CASE("Play as embedded server: the server world mirrors the primary's pause and single step", "[editor][netmode][sim]")
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::RegisterSceneComponents(runtime.Registry());
@@ -621,33 +620,29 @@ TEST_CASE("Play as embedded server: a paused step single-steps the server world 
     runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
 
     Arcane::Editor::PlaySession play;
-    play.SetServerPaused(true);          // no server world yet: a no-op
-    play.RequestServerSingleStep();
     REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::EmbeddedServer));
     Arcane::Runtime* server = play.ServerWorld();
     REQUIRE(server != nullptr);
-    CHECK_FALSE(server->Loop().IsPaused());
     const auto ticks = [&] {
         const Arcane::Time* t = server->Registry().GetResource<Arcane::Time>();
         REQUIRE(t != nullptr);
         return t->fixedStep;
     };
-    play.TickServer(0.05);
+    play.TickServer(0.05, false, false);
     const std::uint64_t before = ticks();
-    CHECK(before > 0);                   // running: wall dt ticks it
+    CHECK(before > 0);                          // running: wall dt ticks it
 
-    play.SetServerPaused(true);          // the remote pause holds both loops
+    play.TickServer(0.2, true, false);          // the primary is paused (toolbar or servitor)
     CHECK(server->Loop().IsPaused());
-    play.TickServer(0.2);
-    CHECK(ticks() == before);            // paused: wall dt runs nothing
-    play.RequestServerSingleStep();      // the primary's paused single step, mirrored
-    play.TickServer(0.2);
-    CHECK(ticks() == before + 1);        // exactly one tick, whatever the frame's dt
-    play.TickServer(0.2);
+    CHECK(ticks() == before);                   // paused: wall dt runs nothing
+    play.TickServer(0.2, true, true);           // the primary took one single step this frame
+    CHECK(ticks() == before + 1);               // exactly one, whatever the frame's dt
+    play.TickServer(0.2, true, false);
     CHECK(ticks() == before + 1);
 
-    play.SetServerPaused(false);
+    play.TickServer(0.05, false, false);        // a resume anywhere resumes the server too
     CHECK_FALSE(server->Loop().IsPaused());
+    CHECK(ticks() > before + 1);
     REQUIRE(play.Stop(runtime));
 }
 

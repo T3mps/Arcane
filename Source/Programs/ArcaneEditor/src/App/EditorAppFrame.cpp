@@ -1574,6 +1574,10 @@ namespace Arcane::Editor
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
+        // The embedded server mirrors these (round 2, I-3): read BEFORE Advance,
+        // which consumes a pending single step.
+        const bool primaryPaused     = m_runtime->Loop().IsPaused();
+        const bool primarySingleStep = m_runtime->Loop().SingleStepPending();
 #if !defined(ARC_BUILD_DIST)
         const auto advanceStart = std::chrono::steady_clock::now();
         // Asked BEFORE Advance, which consumes a pending single step: whether
@@ -1605,8 +1609,10 @@ namespace Arcane::Editor
         // real dt, right after -- its OWN loop and its OWN Server-masked systems.
         // The module's FixedUpdate hook above is bound to the PRIMARY world and is
         // deliberately NOT re-run for it (MultiRuntimeReloadTest's StepAll documents
-        // the same rule). A no-op on every other topology.
-        m_play.TickServer(simDt);
+        // the same rule). A no-op on every other topology. Its loop mirrors the
+        // primary's pause and this frame's single step, whoever drove them --
+        // the toolbar or servitor -- so the two worlds stay in lockstep.
+        m_play.TickServer(simDt, primaryPaused, primarySingleStep);
         m_runtime->AudioSystem().Update(simDt);
     }
 
@@ -1891,7 +1897,9 @@ namespace Arcane::Editor
         if (!Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, wanted))
         {
             m_remoteArmBlocked = true;
-            if (m_config.remote)
+            const bool startupArm = !m_remoteArmTried;
+            m_remoteArmTried = true;
+            if (Arcane::Remote::Arming::RefusalExits(m_config.remote, startupArm))
             {
                 // Rule 3 (final fix pass, C-M16): an explicit --remote that
                 // cannot apply is refused, never run on as if ignored.
@@ -1900,6 +1908,8 @@ namespace Arcane::Editor
                 m_remoteArmExit = 2;
                 return;
             }
+            // A later re-arm (a cvar toggle during ClientOnly Play, a project
+            // switch) logs and stays disarmed; it never ends the editor (M-2).
             ARC_WARN("ArcaneEditor: the remote surface is not armed: the primary world is a {} world, "
                      "which never serves it", Arcane::ToString(m_runtime->Core().Mode()));
             return;
@@ -1928,9 +1938,10 @@ namespace Arcane::Editor
         // module rebuild (arcbuild) is running.
         rc.modal              = [](void* user) -> bool {
             const auto* app = static_cast<const EditorApp*>(user);
-            if (app->m_modalErrors.Front() != nullptr)
-                return true;
-            return ImGui::GetCurrentContext() != nullptr && ImGui::GetTopMostPopupModal() != nullptr;
+            // Only an editor someone can answer reads modal (round 2, I-2): a
+            // headless editor's queued dialog stays a log and Problems entry.
+            const bool popupOpen = ImGui::GetCurrentContext() != nullptr && ImGui::GetTopMostPopupModal() != nullptr;
+            return Arcane::Editor::ReportsModal(app->m_modalErrors, !app->m_config.headless, popupOpen);
         };
         rc.building           = [](void* user) -> bool {
             return static_cast<const EditorApp*>(user)->m_moduleBuild.Running();
@@ -2029,20 +2040,17 @@ namespace Arcane::Editor
         rc.play.editorTopology = [](void* user) -> std::string_view {
             return Arcane::Editor::PlayTopologyRemoteName(static_cast<const EditorApp*>(user)->m_play.Topology());
         };
-        // Final fix pass (G-2): the remote pause and the paused step move the
-        // embedded server world's loop with the primary's, so the two worlds
-        // stay in lockstep (TickServer advances it by the same frame).
+        // The embedded server world follows the primary through TickServer's
+        // mirror (round 2, I-3), so these drive the primary alone.
         rc.play.editorSetPaused = [](bool paused, void* user) {
             auto* app = static_cast<EditorApp*>(user);
             if (app->m_runtime)
                 app->m_runtime->Loop().SetPaused(paused);
-            app->m_play.SetServerPaused(paused);
         };
         rc.play.editorRequestSingleStep = [](void* user) {
             auto* app = static_cast<EditorApp*>(user);
             if (app->m_runtime)
                 app->m_runtime->Loop().RequestSingleStep();
-            app->m_play.RequestServerSingleStep();
         };
         rc.play.editorPaused = [](void* user) -> bool {
             auto* app = static_cast<EditorApp*>(user);   // Loop() has no const overload

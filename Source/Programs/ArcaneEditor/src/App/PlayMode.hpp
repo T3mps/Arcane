@@ -125,14 +125,13 @@ namespace Arcane::Editor
         // bound to the PRIMARY (the editor's world) and is deliberately NOT re-run
         // here, the same rule MultiRuntimeReloadTest's StepAll documents -- what this
         // world runs is its own instantiated (Server-masked) system set.
-        void TickServer(double realDt);
-
-        // Servitor final fix pass (G-2): the embedded server world's loop
-        // follows the primary's remote pause and single step, so the two
-        // worlds stay in lockstep while servitor holds and steps the sim.
-        // Both are no-ops when there is no server world.
-        void SetServerPaused(bool paused);
-        void RequestServerSingleStep();
+        //
+        // Final fix round 2 (I-3): the server world's loop mirrors the primary's
+        // every frame -- paused when it is paused, and one single step when the
+        // primary took one this frame (read before the primary's Advance
+        // consumed it). Toolbar and servitor pause, resume and step therefore
+        // keep both worlds in lockstep, whoever drove them.
+        void TickServer(double realDt, bool primaryPaused = false, bool primarySingleStep = false);
 
     private:
         EditorMode              m_mode = EditorMode::Edit;

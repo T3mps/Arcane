@@ -176,27 +176,20 @@ namespace Arcane::Editor
         return ok;
     }
 
-    void PlaySession::TickServer(double realDt)
+    void PlaySession::TickServer(double realDt, bool primaryPaused, bool primarySingleStep)
     {
         if (!m_server) return;
+        // Lockstep (round 2, I-3): the primary's pause and its single step of
+        // this frame, mirrored before the server's Advance.
+        m_server->Loop().SetPaused(primaryPaused);
+        if (primarySingleStep)
+            m_server->Loop().RequestSingleStep();
         m_server->EnsurePhysics();
         // sim.maxStepsPerFrame is Live: the server world takes the cap the editor's
         // primary loop took this frame (EditorAppFrame), so a hitch that clamps one
         // world clamps the other identically and the two do not desync.
         Arcane::ApplySimStepCap(m_server->Loop());
         m_server->Loop().Advance(realDt);
-    }
-
-    void PlaySession::SetServerPaused(bool paused)
-    {
-        if (m_server)
-            m_server->Loop().SetPaused(paused);
-    }
-
-    void PlaySession::RequestServerSingleStep()
-    {
-        if (m_server)
-            m_server->Loop().RequestSingleStep();
     }
 
     std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling)
