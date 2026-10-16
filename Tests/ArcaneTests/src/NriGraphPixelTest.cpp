@@ -1,4 +1,5 @@
 #include <Arcane/ImGui/ImGuiNriNode.hpp>
+#include <Arcane/ImGui/ImDrawSnapshot.hpp>   // CopyImDrawSnapshot / ImDrawSnapshotRebuild (ruling PR-1)
 // NODE-LEVEL PIXEL CORRECTNESS for the NRI frame graph -- [gpu], outside the
 // ~[gpu] baseline set.
 //
@@ -72,6 +73,7 @@
 #include <Arcane/Scene/TransformSystems.hpp>      // TransformPropagationSystem
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
+#include <Arcane/Render/RenderFramePacket.hpp>    // ImDrawSnapshot -- the packet's ImGui copy (F5 plan 1 Task 4)
 #include <Arcane/Mesh/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/GpuScene.hpp>         // GpuScene -- the instance-buffer round trip (F3 plan 1 T6)
@@ -2583,4 +2585,76 @@ TEST_CASE("imgui: 100 concurrent textures grow the HUD's descriptor-pool chain a
           "samples its own texture (vulkan)", "[gpu][pixel][imgui][nri][vulkan]")
 {
     CheckImGuiDrawsPastOnePool(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// F5 plan 1 Task 4 (ruling PR-1): a packet's ImDrawSnapshot, rebuilt into an
+// ImDrawData, reaches ImGuiNri -- the rebuild carries Textures, declaration
+// services the atlas before record, and the red rect composites after tonemap.
+// ---------------------------------------------------------------------------
+namespace
+{
+    void CheckImGuiSnapshotReachesRenderer(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        ImGuiContext* const previous = ImGui::GetCurrentContext();
+        ImGuiContext* const imgui = ImGui::CreateContext();
+        REQUIRE(imgui != nullptr);
+        ImGui::SetCurrentContext(imgui);
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2(static_cast<float>(kW), static_cast<float>(kH));
+        io.DeltaTime = 1.0f / 60.0f;
+
+        Arcane::NriGraphContext::NodeSet nodes;
+        nodes.hostHud = true;
+        PixelVehicle v = MakeVehicle(backend, nodes);
+        Arcane::RenderOverlayNode* const hud = v.ctx->ImGuiHud();
+        REQUIRE(hud != nullptr);
+        hud->AdoptImGuiContext(imgui);
+
+        ImGui::NewFrame();
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            ImVec2(70.0f, 40.0f), ImVec2(90.0f, 56.0f), IM_COL32(255, 0, 0, 255));
+        ImGui::Render();
+
+        Arcane::ImDrawSnapshot snap;
+        REQUIRE(Arcane::CopyImDrawSnapshot(ImGui::GetDrawData(), snap));
+        REQUIRE(snap.hasTextures);
+        Arcane::ImDrawSnapshotRebuild rebuilt(snap);
+        REQUIRE(rebuilt.Data()->Textures != nullptr);
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.imgui = rebuilt.Data();
+        frame.capture = true;
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        REQUIRE(w == kW);
+        REQUIRE(h == kH);
+        const Rgba px = At(rgba, w, 80u, 48u);
+        CHECK(px.r > px.g + 60);
+        CHECK(px.r > px.b + 60);
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        v.ctx.reset();
+        ImGui::DestroyContext(imgui);
+        ImGui::SetCurrentContext(previous);
+    }
+}
+
+TEST_CASE("an ImDrawSnapshot rebuild reaches ImGuiNri (d3d12)",
+          "[gpu][packet][imgui][nri][d3d12]")
+{
+    CheckImGuiSnapshotReachesRenderer(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("an ImDrawSnapshot rebuild reaches ImGuiNri (vulkan)",
+          "[gpu][packet][imgui][nri][vulkan]")
+{
+    CheckImGuiSnapshotReachesRenderer(Arcane::GraphicsBackend::Vulkan);
 }

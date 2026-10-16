@@ -16,6 +16,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/DepthConvention.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView: render.ortho2D.depthRange (S6-9)
+#include <Arcane/Scene/SceneCameraView.hpp>        // SceneCameraView (its own header, F5 plan 1 Task 4)
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -29,19 +30,6 @@
 
 namespace Arcane
 {
-    struct SceneCameraView
-    {
-        // The authored facts, for callers that need to draw the camera rather than
-        // look through it (the editor's camera-rect overlay).
-        glm::vec2 worldCenter{0.0f, 0.0f};   // the camera entity's world position
-        float     halfHeight = 0.0f;         // Camera::orthographicSize, meters
-
-        // Derived for the viewport that was asked about: the orthographic
-        // ViewTransform (+Y up; its AsAffine2D() is the pixel mapping the
-        // overlays still draw through, with a NEGATIVE y scale).
-        ViewTransform view{};
-    };
-
     // The active camera's view for a `viewport` (pixels), or nullopt when the
     // scene has no usable active Camera.
     //
