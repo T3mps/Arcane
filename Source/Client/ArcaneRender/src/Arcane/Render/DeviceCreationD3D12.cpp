@@ -10,6 +10,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/D3D12DebugLayer.hpp>
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceRemovedObservers.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // NoteGpuDeviceLost -- the host's device-lost latch
@@ -51,7 +52,7 @@ namespace Arcane
         // already owns a live device: D3D12CreateDevice fails and the run
         // exits after 0 frames. That is observed behaviour, not a worry.
         //
-        // These two flags make the sequencing structural rather than a rule
+        // These flags make the sequencing structural rather than a rule
         // somebody has to remember at each new call site.
         //
         // MONOTONE ON PURPOSE, and the conservative direction:
@@ -61,10 +62,23 @@ namespace Arcane
         // deliberately not done, because the failure mode of being wrong here
         // is asymmetric. Skipping an enable that would have
         // been legal costs one diagnostic channel; making the call when it is
-        // NOT legal removes a live device. Nothing in the tree creates a
-        // second D3D12 device at all, so today this costs nothing.
+        // NOT legal removes a live device. Tests do create another device
+        // after the first has been destroyed (the capability probe, then each
+        // [gpu] case). The flag staying set is what drops the debug layer for
+        // all of them once that first device was created with the layer off.
+        // ForceD3D12DebugLayerForProcess is the opt-in that calls
+        // EnableDebugLayer before that first device, so the closed window no
+        // longer costs the channel. The flag is still never cleared: the
+        // runtime removes a device if EnableDebugLayer runs after one has
+        // existed, destroyed or not.
         std::atomic<bool> g_d3d12DeviceCreated{ false };
         std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
+        // Set by ForceD3D12DebugLayerForProcess. Independent of "the layer is
+        // on": without this flag, a device whose enableD3D12DebugLayer is
+        // false skips the callback and DXGI_CREATE_FACTORY_DEBUG even after
+        // EnableDebugLayer has already run. With the flag, every later device
+        // is debug-layer-active.
+        std::atomic<bool> g_d3d12DebugLayerForced{ false };
 
         // The DXGI debug layer's info queue. PROCESS-GLOBAL like the layer
         // itself (DXGIGetDebugInterface1 hands out one queue per process, not
@@ -296,6 +310,54 @@ namespace Arcane
     }
 
     // ----------------------------------------------------------------
+    // Process-wide force. See D3D12DebugLayer.hpp for the contract.
+    // ----------------------------------------------------------------
+    bool ForceD3D12DebugLayerForProcess()
+    {
+        // Refuse before touching the layer. EnableDebugLayer after any device
+        // has existed removes that device; a destroyed device does not reopen
+        // the window (g_d3d12DeviceCreated is monotone).
+        if (g_d3d12DeviceCreated.load(std::memory_order_acquire))
+        {
+            ARC_ERROR("ForceD3D12DebugLayerForProcess refused: a D3D12 device already exists in this "
+                      "process. EnableDebugLayer must run before the first device; calling it later "
+                      "removes that device.");
+            return false;
+        }
+
+        if (!g_d3d12DebugLayerEnabled.load(std::memory_order_acquire))
+        {
+            // Same check-then-act as CreateD3D12NativeDevice, tightened to the
+            // line above the call. Both are main-thread-only; a concurrent
+            // creator would need its own serialization.
+            if (g_d3d12DeviceCreated.load(std::memory_order_acquire))
+            {
+                ARC_ERROR("ForceD3D12DebugLayerForProcess refused: a D3D12 device already exists in this "
+                          "process. EnableDebugLayer must run before the first device; calling it later "
+                          "removes that device.");
+                return false;
+            }
+
+            ComPtr<ID3D12Debug> debug;
+            const HRESULT hr = D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
+            if (FAILED(hr) || !debug)
+            {
+                ARC_ERROR("ForceD3D12DebugLayerForProcess: D3D12 debug layer unavailable "
+                          "(D3D12GetDebugInterface hr=0x{:08X})",
+                          static_cast<uint32_t>(hr));
+                return false;
+            }
+            debug->EnableDebugLayer();
+            // Before the force flag, so a caller that observes the force flag
+            // also observes that EnableDebugLayer has already run.
+            g_d3d12DebugLayerEnabled.store(true, std::memory_order_release);
+        }
+
+        g_d3d12DebugLayerForced.store(true, std::memory_order_release);
+        return true;
+    }
+
+    // ----------------------------------------------------------------
     // The CREATION HALF.
     // ----------------------------------------------------------------
     // The member ORDER inside D3D12DeviceCreation is COM release order in
@@ -323,16 +385,22 @@ namespace Arcane
         // enabling unconditionally. `debugLayerActive` is what the rest of this
         // function keys off, because "the caller asked for the layer" and "the
         // layer is servicing this device" stopped being the same thing here.
+        // The process-wide force (ForceD3D12DebugLayerForProcess) is a third
+        // answer to the same question: this device is serviced even when its
+        // own enableD3D12DebugLayer is false.
+        const bool wantDebugLayer = desc.enableD3D12DebugLayer
+            || g_d3d12DebugLayerForced.load(std::memory_order_acquire);
         UINT factoryFlags     = 0;
         bool debugLayerActive = false;
-        if (desc.enableD3D12DebugLayer)
+        if (wantDebugLayer)
         {
             if (g_d3d12DebugLayerEnabled.load(std::memory_order_acquire))
             {
-                // Already on process-wide, from an earlier device's creation.
-                // Re-calling EnableDebugLayer is the illegal post-device call
-                // AND would buy nothing: the layer that is already loaded is
-                // the one that will service this device too.
+                // Already on process-wide: ForceD3D12DebugLayerForProcess, or an
+                // earlier device's creation. Re-calling EnableDebugLayer is the
+                // illegal post-device call AND would buy nothing: the layer
+                // that is already loaded is the one that will service this
+                // device too.
                 debugLayerActive = true;
                 factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
             }
@@ -340,12 +408,21 @@ namespace Arcane
             {
                 // THE SECOND-DEVICE CASE, and the tradeoff stated out loud.
                 //
-                // NOTHING IN THE TREE REACHES THIS TODAY: the one graphics
-                // device this process creates is the FIRST, so it takes the
-                // else-branch below and does get the debug layer. The guard is
-                // general -- ANY second device that requests the layer lands
-                // here -- so the branch stays reachable by anything that adds
-                // one.
+                // THIS BRANCH IS LIVE. ArcaneTests' capability probe
+                // (Tests/ArcaneTests/src/Helpers/GpuCapability.cpp) creates the
+                // process's first D3D12 device with enableD3D12DebugLayer left
+                // false, which closes the EnableDebugLayer window
+                // (g_d3d12DeviceCreated is monotone and is not cleared when
+                // that device is destroyed). Every later device that asks for
+                // the layer lands here: the suite logs "D3D12 debug layer NOT
+                // enabled for this device" and D3D12DebugLayerCallback never
+                // runs, so a CPU validation error cannot fail RenderErrorCount.
+                // ArcaneTests closes that hole by calling
+                // ForceD3D12DebugLayerForProcess before any device, which
+                // takes the "already on" branch above instead. A process that
+                // does not force, and whose first device left the layer off,
+                // still lands here: a host with render.debug.d3d12DebugLayer
+                // false, or ArcaneTests under ARCANE_TESTS_NO_D3D12_DEBUG=1.
                 //
                 // Such a device gets NO D3D12 debug layer: enabling it would
                 // remove the live first device (and, observed at the desk,
@@ -354,20 +431,26 @@ namespace Arcane
                 // working device at all".
                 //
                 // WHAT IS LOST: D3D12 CPU validation messages for THIS device
-                // cannot reach D3D12DebugLayerCallback and therefore cannot fail
-                // the RenderErrorCount latch. NRI's own validation layer and (on
-                // Vulkan) the VK validation layers are unaffected -- they are
-                // per-device, not process-global. On the dev box the loss is
-                // currently nil: the in-box Win10 D3D12SDKLayers.dll implements
-                // no ID3D12InfoQueue1, so those messages reach nothing anyway
-                // (see the WARN further down).
+                // never enter an info queue, so neither D3D12DebugLayerCallback
+                // nor the stored-message drain can fail the RenderErrorCount
+                // latch. NRI's own validation layer and (on Vulkan) the VK
+                // validation layers are unaffected -- they are per-device, not
+                // process-global. The loss is real where the Agility SDK layers
+                // are loaded: ArcaneTests exports the handshake and stages
+                // D3D12/D3D12SDKLayers.dll, so once the layer is actually on
+                // those messages reach the latch -- through the InfoQueue1
+                // callback when that interface registers, and through
+                // DrainD3D12DebugMessages at device destruction when it does
+                // not. The in-box Win10 layer's missing InfoQueue1 is a
+                // different degradation, logged further down, and it is not
+                // the layer an Agility-linked process loads.
                 //
-                // HOW TO GET IT BACK, if a second device is ever added: the
-                // FIRST device in the process has to be the one that turns the
-                // layer on, i.e. its creator sets
-                // RenderDeviceDesc::enableD3D12DebugLayer -- and this branch
-                // would then never be reached, the first branch above taking
-                // it instead.
+                // HOW TO GET IT BACK: the layer has to be turned on before the
+                // first device. ForceD3D12DebugLayerForProcess does that for
+                // the whole process and then treats every later device as
+                // debug-layer-active, including one whose own flag is false.
+                // Setting enableD3D12DebugLayer on the first device only covers
+                // later devices that ask for the layer themselves.
                 ARC_WARN("D3D12 debug layer NOT enabled for this device: a D3D12 device already "
                          "exists in this process and EnableDebugLayer is documented to remove it "
                          "when called after device creation. This device's D3D12 validation "

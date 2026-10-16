@@ -7,14 +7,18 @@
 #include "Helpers/UserDataDirs.hpp"
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Platform/Platform.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Host/VerifyHooks.hpp>
 #include <Arcane/ImGui/ImGuiHostHooks.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
+#include <Arcane/Render/D3D12DebugLayer.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 // Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
 // The macro is empty off Windows.
@@ -58,6 +62,26 @@ int main(int argc, char* argv[]) {
     // captures) instead of Mosaic's raw stderr fallback, so a guard failure
     // -- fatal or not -- is diagnosable from the run's normal log output.
     Arcane::Assert::InstallMosaicHandler();
+
+#if ARC_PLATFORM_WINDOWS
+    // Before any test creates a device. The capability probe leaves
+    // enableD3D12DebugLayer false and would otherwise close the
+    // EnableDebugLayer window for the rest of the process. Opt out on a
+    // machine whose OSD injection makes the layer fail-fast.
+    if (const char* optOut = std::getenv("ARCANE_TESTS_NO_D3D12_DEBUG");
+        optOut != nullptr && std::strcmp(optOut, "1") == 0)
+    {
+        ARC_INFO("ArcaneTests: D3D12 debug layer OFF (ARCANE_TESTS_NO_D3D12_DEBUG=1)");
+    }
+    else if (Arcane::ForceD3D12DebugLayerForProcess())
+    {
+        ARC_INFO("ArcaneTests: D3D12 debug layer ON for this process");
+    }
+    else
+    {
+        ARC_INFO("ArcaneTests: D3D12 debug layer OFF (ForceD3D12DebugLayerForProcess refused)");
+    }
+#endif
 
     return Catch::Session().run(argc, argv);
 }
