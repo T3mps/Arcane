@@ -79,17 +79,138 @@ static std::string GrabTag(const std::string& xml, const char* tag)
     return xml.substr(a + open.size(), b - (a + open.size()));
 }
 
+// premake5.lua configurations: Debug / Release / Dist define exactly one of these.
+static const char* BuiltConfiguration()
+{
+#if defined(ARC_BUILD_DEBUG)
+    return "Debug";
+#elif defined(ARC_BUILD_RELEASE)
+    return "Release";
+#elif defined(ARC_BUILD_DIST)
+    return "Dist";
+#else
+#error Arcane premake defines one of ARC_BUILD_DEBUG, ARC_BUILD_RELEASE, ARC_BUILD_DIST
+#endif
+}
+
+// MultiThreadedDebugDLL -> /MDd, MultiThreadedDLL -> /MD. Anything else is empty
+// so the caller fails instead of inventing a flag.
+static std::string RuntimeLibraryFlag(const std::string& runtimeLibrary)
+{
+    if (runtimeLibrary == "MultiThreadedDebugDLL")
+        return "/MDd";
+    if (runtimeLibrary == "MultiThreadedDLL")
+        return "/MD";
+    return {};
+}
+
+// The ItemDefinitionGroup whose Condition is
+// '$(Configuration)|$(Platform)'=='<cfg>|x64'. Empty when that group is
+// absent: the caller fails, and does not use another configuration's group.
+// PropertyGroups carry the same Condition and are not compile settings.
+static std::string ItemDefinitionGroupFor(const std::string& xml, const std::string& cfg)
+{
+    const std::string condition = "'$(Configuration)|$(Platform)'=='" + cfg + "|x64'";
+    const std::string openTag = "<ItemDefinitionGroup";
+    const std::string closeTag = "</ItemDefinitionGroup>";
+    std::size_t search = 0;
+    while (search < xml.size())
+    {
+        const std::size_t open = xml.find(openTag, search);
+        if (open == std::string::npos)
+            return {};
+        const std::size_t openEnd = xml.find('>', open);
+        if (openEnd == std::string::npos)
+            return {};
+        const std::string opening = xml.substr(open, openEnd - open);
+        if (opening.find(condition) != std::string::npos)
+        {
+            const std::size_t close = xml.find(closeTag, openEnd);
+            if (close == std::string::npos)
+                return {};
+            return xml.substr(open, close + closeTag.size() - open);
+        }
+        search = openEnd + 1;
+    }
+    return {};
+}
+
+TEST_CASE("the ItemDefinitionGroup helper picks the named configuration", "[registry-gate]")
+{
+    // Release's PropertyGroup precedes both compile groups, matching the vcxproj
+    // shape: the first condition hit is not the ItemDefinitionGroup.
+    const char* xml =
+        "<PropertyGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\">"
+        "<OutDir>release-out</OutDir></PropertyGroup>"
+        "<ItemDefinitionGroup Condition=\"'$(Configuration)|$(Platform)'=='Debug|x64'\">"
+        "<PreprocessorDefinitions>FROM_DEBUG</PreprocessorDefinitions>"
+        "<AdditionalIncludeDirectories>inc-debug</AdditionalIncludeDirectories>"
+        "<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>"
+        "</ItemDefinitionGroup>"
+        "<ItemDefinitionGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|x64'\">"
+        "<PreprocessorDefinitions>FROM_RELEASE</PreprocessorDefinitions>"
+        "<AdditionalIncludeDirectories>inc-release</AdditionalIncludeDirectories>"
+        "<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>"
+        "</ItemDefinitionGroup>";
+
+    const std::string debug = ItemDefinitionGroupFor(xml, "Debug");
+    REQUIRE_FALSE(debug.empty());
+    CHECK(GrabTag(debug, "PreprocessorDefinitions") == "FROM_DEBUG");
+    CHECK(GrabTag(debug, "AdditionalIncludeDirectories") == "inc-debug");
+    CHECK(RuntimeLibraryFlag(GrabTag(debug, "RuntimeLibrary")) == "/MDd");
+
+    const std::string release = ItemDefinitionGroupFor(xml, "Release");
+    REQUIRE_FALSE(release.empty());
+    CHECK(GrabTag(release, "PreprocessorDefinitions") == "FROM_RELEASE");
+    CHECK(GrabTag(release, "AdditionalIncludeDirectories") == "inc-release");
+    CHECK(RuntimeLibraryFlag(GrabTag(release, "RuntimeLibrary")) == "/MD");
+
+    // A missing configuration is a miss. It must not come back as Debug.
+    CHECK(ItemDefinitionGroupFor(xml, "Dist").empty());
+
+    const std::string built = ItemDefinitionGroupFor(xml, BuiltConfiguration());
+#if defined(ARC_BUILD_DEBUG)
+    REQUIRE_FALSE(built.empty());
+    CHECK(GrabTag(built, "PreprocessorDefinitions") == "FROM_DEBUG");
+    CHECK(RuntimeLibraryFlag(GrabTag(built, "RuntimeLibrary")) == "/MDd");
+#elif defined(ARC_BUILD_RELEASE)
+    REQUIRE_FALSE(built.empty());
+    CHECK(GrabTag(built, "PreprocessorDefinitions") == "FROM_RELEASE");
+    CHECK(RuntimeLibraryFlag(GrabTag(built, "RuntimeLibrary")) == "/MD");
+#else
+    CHECK(built.empty());
+#endif
+}
+
 static int ShowIncludes(const ClTool& tool, const std::filesystem::path& tu, std::string& output,
                         const std::filesystem::path& vcx = ModuleProject("Client", "ArcaneRender"))
 {
     const std::filesystem::path projectDir = vcx.parent_path();
     const std::string xml = ReadAll(vcx);
-    const std::string includes = GrabTag(xml, "AdditionalIncludeDirectories");
-    const std::string defines = GrabTag(xml, "PreprocessorDefinitions");
+    const char* cfg = BuiltConfiguration();
+    const std::string group = ItemDefinitionGroupFor(xml, cfg);
+    if (group.empty())
+    {
+        FAIL("no ItemDefinitionGroup with Condition '$(Configuration)|$(Platform)'=='"
+             << cfg << "|x64' in " << vcx.string()
+             << "; refusing to use another configuration");
+        return 1;
+    }
+    const std::string includes = GrabTag(group, "AdditionalIncludeDirectories");
+    const std::string defines = GrabTag(group, "PreprocessorDefinitions");
+    const std::string runtimeFlag = RuntimeLibraryFlag(GrabTag(group, "RuntimeLibrary"));
+    if (runtimeFlag.empty())
+    {
+        FAIL("RuntimeLibrary in " << vcx.string() << " (" << cfg
+             << ") is not MultiThreadedDebugDLL (/MDd) or MultiThreadedDLL (/MD)");
+        return 1;
+    }
 
     // AdditionalOptions from the module vcxproj. fmt static_asserts without /utf-8.
+    // RuntimeLibrary is the built configuration's flag, read above, not a fixed /MD.
     std::string cmd = "cmd /c \"call \"" + tool.vcvars + "\" >nul && \"" + tool.cl
-        + "\" /nologo /showIncludes /Zs /std:c++latest /EHsc /MD /utf-8 /arch:AVX2 /Zc:__cplusplus ";
+        + "\" /nologo /showIncludes /Zs /std:c++latest /EHsc " + runtimeFlag
+        + " /utf-8 /arch:AVX2 /Zc:__cplusplus ";
     std::stringstream def(defines);
     std::string item;
     while (std::getline(def, item, ';'))
@@ -397,6 +518,7 @@ TEST_CASE("named frame builders do not read the registry", "[registry-gate]")
     const std::string preview = ReadAll(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/Documents/ShaderEditorDocument.cpp");
     const std::string editorApp = ReadAll(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorApp.cpp");
     CHECK(HostGateHits(runtime, "RenderGraph(") == 0);
+    CHECK(HostGateHits(runtime, "BuildHud(") == 0);
     CHECK(HostGateHits(editor, "EditorApp::RefreshSceneResolution(") == 0);
     CHECK(HostGateHits(editor, "EditorApp::RenderSceneToViewport(") == 0);
     CHECK(HostGateHits(editor, "EditorApp::SubmitSceneToBatcher(") == 0);

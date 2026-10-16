@@ -29,9 +29,9 @@
 namespace Arcane
 {
     class Batcher2D;
-    struct SpriteEntry;            // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
-    struct MeshEntry;               // Scene/SceneResources.hpp -- SpriteEntry's F2a (3D) sibling
-    struct ResolvedMeshMaterial;    // Scene/SceneResources.hpp -- mesh-material constants
+    struct SpriteEntry;            // Scene/SceneCacheRecords.hpp -- only named here (pointer-to-map param)
+    struct MeshEntry;               // Scene/SceneCacheRecords.hpp -- SpriteEntry's F2a (3D) sibling
+    struct ResolvedMeshMaterial;    // Scene/SceneCacheRecords.hpp -- mesh-material constants
 
 #if defined(_MSC_VER)
 #pragma warning(push)
