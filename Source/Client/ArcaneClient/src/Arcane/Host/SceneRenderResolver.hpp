@@ -57,6 +57,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 namespace Arcane
 {
@@ -130,10 +131,15 @@ namespace Arcane
         };
 
         // This frame's facts. `now` is the compile service's clock (monotonic
-        // seconds); viewport extent sizes the material globals.
+        // seconds): material and post Requests debounce against it and the
+        // compile service polls on it, so it must keep running. `sceneTime`,
+        // when set (--fixed-time), is the Time the material globals report
+        // instead of `now`; pinning it never pins the compile clock.
+        // Viewport extent sizes the material globals.
         struct FrameInfo
         {
             double now = 0.0;
+            std::optional<double> sceneTime;
             double dt  = 0.0;
             float  viewportWidth  = 0.0f;
             float  viewportHeight = 0.0f;

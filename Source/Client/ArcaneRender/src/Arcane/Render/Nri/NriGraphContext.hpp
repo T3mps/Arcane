@@ -316,6 +316,147 @@ namespace Arcane
     // driver hands us: nothing here is free to pick a channel order.
     inline constexpr nri::Format kGraphOffscreenFormat = nri::Format::BGRA8_UNORM;
 
+#if !defined(ARC_BUILD_DIST)
+    // THE SERVITOR CAPTURE RING (Servitor P0 Task 27, rulings P2 (a) / P3 (a),
+    // R8-2): the remote `screenshot` job's readback, the PickNode ticket
+    // pattern (PickNode::RecordReadback) applied to the whole backbuffer.
+    // ArmTicketCapture stores `wanted`; the context's own frame recording
+    // (NoteRenderSubmission, from the `ticket-capture` copy node's exec fn)
+    // drains a slot whose copy is FramesInFlight() frames old -- the pacing
+    // wait the frame already paid is what makes it safe, so there is no fence
+    // query and no idle -- and then records the wanted copy into this frame's
+    // slot. DrainTicketCapture returns the retired bytes for that ticket.
+    // One ring per graph context (ruling F-2); ONE capture in flight per
+    // host is enforced before anything is armed (ArcaneRemote's
+    // CaptureInFlight), so `wanted` is never overwritten by a second ticket.
+    struct CaptureRing
+    {
+        std::uint64_t ticket[3]{};
+        bool pending[3]{};
+        std::uint64_t wanted = 0;
+        std::uint64_t retiredTicket = 0;
+        bool haveRetired = false;
+        std::vector<std::uint8_t> retiredBytes;
+        std::uint32_t retiredW = 0, retiredH = 0, retiredPitch = 0;
+        bool retiredBgra = false;
+        std::uint32_t submission = 0;
+        std::uint32_t framesInFlight = 2;
+        // Task 27 fix round 1: the frame index each slot's copy was recorded
+        // in, and whether that frame's Execute succeeded (its submit carried
+        // the copy). A slot drains only once it is submitted AND
+        // FramesInFlight() frames have passed; an unsubmitted copy (Execute
+        // failed after the node recorded, so m_frameIndex did not advance) is
+        // re-wanted instead of drained as stale bytes.
+        std::uint64_t recordedFrame[3]{};
+        bool submitted[3]{};
+        // Servitor final fix pass (C-M12, G-M5): a submitted copy whose job
+        // gave up (CancelCaptureRingTicket). It is still in flight, so its
+        // slot stays pending until FramesInFlight() frames pass; then it is
+        // dropped instead of drained, so it never lands in retiredBytes.
+        bool abandoned[3]{};
+    };
+
+    // The ring's decisions, pure so a device-less test drives them
+    // (CaptureCommandTest.cpp). NoteRenderSubmission calls them at record
+    // time; ConfirmCaptureRingSubmission runs after a successful Execute.
+    struct CaptureRingStep
+    {
+        bool drain  = false;   // memcpy this slot's slice into retiredBytes, then RetireCaptureRingSlot
+        bool record = false;   // record the wanted copy into this slot, then RecordCaptureRingSlot
+    };
+
+    inline CaptureRingStep PlanCaptureRingSlot(CaptureRing& ring, std::uint32_t slot, std::uint64_t frameIndex,
+                                               bool extentMatches)
+    {
+        CaptureRingStep step;
+        if (ring.pending[slot])
+        {
+            if (!ring.submitted[slot])
+            {
+                // The frame that recorded this copy never submitted it: copy again.
+                if (ring.wanted == 0)
+                    ring.wanted = ring.ticket[slot];
+                ring.pending[slot] = false;
+            }
+            else if (frameIndex >= ring.recordedFrame[slot] + ring.framesInFlight)
+            {
+                if (ring.abandoned[slot])
+                {
+                    // Its job gave up (CancelCaptureRingTicket): retired, but
+                    // its bytes go nowhere, and the slot is free again.
+                    ring.pending[slot]   = false;
+                    ring.abandoned[slot] = false;
+                }
+                else
+                {
+                    step.drain = true;
+                }
+            }
+        }
+        step.record = ring.wanted != 0 && extentMatches && (!ring.pending[slot] || step.drain);
+        return step;
+    }
+
+    inline void RetireCaptureRingSlot(CaptureRing& ring, std::uint32_t slot)
+    {
+        ring.retiredTicket = ring.ticket[slot];
+        ring.haveRetired   = true;
+        ring.pending[slot] = false;
+    }
+
+    inline void RecordCaptureRingSlot(CaptureRing& ring, std::uint32_t slot, std::uint64_t frameIndex)
+    {
+        ring.ticket[slot]        = ring.wanted;
+        ring.pending[slot]       = true;    // written with the ticket, never without it
+        ring.submitted[slot]     = false;
+        ring.abandoned[slot]     = false;
+        ring.recordedFrame[slot] = frameIndex;
+        ring.wanted              = 0;
+    }
+
+    // After a SUCCESSFUL Execute of frame `frameIndex` (before m_frameIndex
+    // advances): the copies that frame recorded were submitted.
+    inline void ConfirmCaptureRingSubmission(CaptureRing& ring, std::uint64_t frameIndex)
+    {
+        for (std::uint32_t slot = 0; slot < 3; ++slot)
+            if (ring.pending[slot] && !ring.submitted[slot] && ring.recordedFrame[slot] == frameIndex)
+                ring.submitted[slot] = true;
+    }
+
+    // Servitor final fix pass (C-M12, G-M5): forget `ticket` (its job failed
+    // or its settle wait ended). Still wanted: never recorded. Recorded but
+    // not submitted: the slot is freed now. Submitted: the slot is marked
+    // abandoned (see CaptureRing::abandoned). Any other ticket: no change.
+    inline void CancelCaptureRingTicket(CaptureRing& ring, std::uint64_t ticket)
+    {
+        if (ticket == 0)
+            return;
+        if (ring.wanted == ticket)
+            ring.wanted = 0;
+        for (std::uint32_t slot = 0; slot < 3; ++slot)
+        {
+            if (!ring.pending[slot] || ring.ticket[slot] != ticket)
+                continue;
+            if (ring.submitted[slot])
+                ring.abandoned[slot] = true;   // in flight: dropped once its frames pass
+            else
+                ring.pending[slot] = false;    // never submitted: nothing to wait for
+        }
+    }
+
+    // What DrainTicketCapture hands back: ArcaneRemote's CaptureMapped fields,
+    // render-side (ArcaneRender includes no Arcane/Remote header, R8-2). The
+    // host program's hook copies it across. `mapped` points into the ring's
+    // retired copy and stays valid until the next ArmTicketCapture.
+    struct TicketCaptureBytes
+    {
+        std::uint32_t width = 0, height = 0, rowPitch = 0;
+        bool bgra = false;
+        const std::uint8_t* mapped = nullptr;   // null with a true drain: the copy was lost
+        std::uint32_t mappedBytes = 0;
+    };
+#endif
+
     class ARC_RENDER_API NriGraphContext
     {
     public:
@@ -1152,6 +1293,32 @@ namespace Arcane
         // not in a member.
         void NoteCaptureRecorded() noexcept { m_captureRecorded = true; }
 
+#if !defined(ARC_BUILD_DIST)
+        // ---- the Servitor capture ring (see CaptureRing above) ------------
+        // Main thread. Stores `ticket` as the ring's wanted copy; the next
+        // recorded frame copies the backbuffer into its slot. False for ticket
+        // 0 or a context with no device (nothing will ever record). Clears the
+        // previous capture's retired bytes.
+        bool ArmTicketCapture(std::uint64_t ticket);
+        // Main thread. False until the copy stored with `ticket` has retired
+        // (FramesInFlight() recorded frames after it was recorded, or a resize's
+        // idle). True with out.mapped set: the retired bytes, padded rows in the
+        // context's format. True with out.mapped null: that copy is lost (its
+        // staging buffer could not be created). Never waits, never idles.
+        bool DrainTicketCapture(std::uint64_t ticket, TicketCaptureBytes& out) const;
+        // Main thread (Servitor final fix pass, C-M12): the remote job gave up
+        // on `ticket`; CancelCaptureRingTicket forgets it, so it neither holds a
+        // slot nor lands in the next capture's retired bytes.
+        void CancelTicketCapture(std::uint64_t ticket);
+        // The `ticket-capture` node's exec fn, once per RECORDED frame the
+        // node is declared in, after this frame's pacing wait: drain this
+        // slot if a copy is pending there, then record the wanted copy (if
+        // any) from `source` into `dest` at this slot's offset. Public because
+        // the frame's declarations live in a free function (DeclareGraphFrame).
+        void NoteRenderSubmission(const nri::CoreInterface& core, nri::CommandBuffer& cmd,
+                                  nri::Texture& source, nri::Buffer& dest);
+#endif
+
         // The capture staging buffer's layout, read by that node's exec fn for
         // the same reason.
         [[nodiscard]] std::uint64_t CaptureRowPitch() const noexcept { return m_captureRowPitch; }
@@ -1524,6 +1691,30 @@ namespace Arcane
         // writing whatever was already in host-readback memory.
         bool          m_captureRecorded  = false;
 
+#if !defined(ARC_BUILD_DIST)
+        // True when this frame must declare the `ticket-capture` node: a copy
+        // is wanted or one is still pending in a slot. Sizes the ring's
+        // staging buffer to the current surface first when a copy is wanted
+        // and nothing is pending (a pending slot keeps its old buffer; the
+        // wanted copy then waits for it to drain). A failed creation marks
+        // the wanted ticket lost (DrainTicketCapture answers it with a null map).
+        bool PrepareTicketCapture();
+        // Unmaps and buries the ring's staging buffer at `fence`. With
+        // `retire`, the device has just been idled, so every pending slot is
+        // retired from the mapped memory first (a resize mid-capture keeps
+        // its copy instead of losing it).
+        void ReleaseTicketRing(Graveyard& graves, std::uint64_t fence, bool retire);
+
+        CaptureRing   m_captureRing;
+        nri::Buffer*  m_ringBuffer      = nullptr;   // HOST_READBACK, kMaxFramesInFlight slices, persistently mapped
+        const std::uint8_t* m_ringCpu   = nullptr;
+        std::uint64_t m_ringRowPitch    = 0;
+        std::uint64_t m_ringSlicePitch  = 0;
+        std::uint32_t m_ringWidth       = 0;
+        std::uint32_t m_ringHeight      = 0;
+        std::uint64_t m_lostTicket      = 0;         // a wanted copy whose staging buffer could not be created
+#endif
+
         // FrameDesc::batch for the frame currently being declared -- see
         // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
         // batcher can never be drained by a later frame.
@@ -1639,6 +1830,15 @@ namespace Arcane
         // it is true -- ImportBuffer stores the pointer without dereferencing).
         nri::Buffer*  captureBuffer = nullptr;
         std::uint64_t captureBytes  = 0;
+
+        // The Servitor capture ring's copy node (`ticket-capture`, Task 27):
+        // declared while the ring wants a copy or holds a pending one, after
+        // every node that writes the backbuffer. Its staging buffer is
+        // imported like `captureBuffer` (HOST_READBACK, never a transient).
+        // Always false in Dist.
+        bool          ticketCapture       = false;
+        nri::Buffer*  ticketCaptureBuffer = nullptr;
+        std::uint64_t ticketCaptureBytes  = 0;
 
         // OFFSCREEN MODE. The persistent, sampled texture the tonemap renders
         // into INSTEAD of a swapchain backbuffer; null means "present mode",
