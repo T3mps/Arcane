@@ -456,9 +456,9 @@ namespace Arcane
             // default) is "no grid", the same slice-by-nulling rule as `mesh`.
             // Since F5 plan 1 Task 3 it is drawn by the post-tonemap OVERLAY
             // pass (OverlayNode), which samples the mesh pass's depth (never
-            // writing it); with no mesh pass the grid draws unoccluded. Editor chrome: the editor arms it only in Edit mode
-            // with the Perspective view and Show grid on; the runtime never
-            // does. BORROWED for the duration of the RenderFrame call.
+            // writing it); with no mesh pass the grid draws unoccluded.
+            // Editor chrome: the editor arms it only in Edit mode with the
+            // Perspective view and Show grid on; the runtime never does. BORROWED for the duration of the RenderFrame call.
             const GridSceneDesc* grid = nullptr;
 
             // ---- the post-tonemap overlay (F5 plan 1 Task 3) -------------
@@ -468,6 +468,13 @@ namespace Arcane
             // no 3D grid, declares no overlay node (with `grid` also null).
             // BORROWED for the duration of the RenderFrame call.
             const OverlayPrimitiveList* overlay = nullptr;
+
+            // The WORLD camera the overlay's world-space primitives project
+            // through: the sprite/main view (review ruling I2; Task 9 fills it
+            // from the packet's sprite view). Empty falls back to the mesh
+            // camera. A depth-tested world primitive samples the mesh depth
+            // only when this equals the mesh camera (projection * view).
+            std::optional<glm::mat4> overlayWorldViewProjection;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
             // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
@@ -1777,6 +1784,9 @@ namespace Arcane
         // node is declared after "tonemap" and before "gameui" when `grid` is
         // non-null or this list has any line, fill, or hasGrid3d.
         const OverlayPrimitiveList* overlay = nullptr;
+
+        // FrameDesc::overlayWorldViewProjection, or null for none.
+        const glm::mat4* overlayWorldViewProjection = nullptr;
     };
 
     struct RgFrameHandles

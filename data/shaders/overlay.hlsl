@@ -12,7 +12,8 @@
 //   grid_vs_main / grid_ps_main -- the analytic 3D reference grid, folded in from
 //                                  grid.hlsl (whose own entry points stay for
 //                                  GridNode's direct-drive path). Six vertices,
-//                                  no vertex buffer; always depth-tested; its
+//                                  no vertex buffer; depth-tested when its
+//                                  camera is the mesh camera; its
 //                                  LINEAR colour runs the shared operator.
 //
 // THE COLOUR: a Linear primitive runs exactly the scene's operator
@@ -43,12 +44,14 @@ struct VSOut
 
 cbuffer OverlayCB : register(b0)
 {
-    float4x4 g_ViewProjection;
+    float4x4 g_ViewProjection;       // world-space primitives (the world camera)
     float2   g_Viewport;             // pixels
     float    g_DiscardIfGreater;     // 1 = ForwardZ (discard when frag > scene)
     float    g_HasDepth;             // 1 = sample g_Depth; 0 = draw unoccluded
-    // The 3D grid's block: grid.hlsl's GridFrameCB minus its matrix, which is
-    // g_ViewProjection above. Meaningful only on a frame that draws the grid.
+    // The 3D grid's block: grid.hlsl's GridFrameCB plus a flag. Meaningful only
+    // on a frame that draws the grid.
+    float4x4 g_GridViewProjection;   // the grid's own camera
+    float4   g_GridFlags;            // x: 1 = the grid samples depth (its camera IS the mesh camera)
     float4   g_GridEyeAndPlane;      // xyz: the eye in world space; w: plane id (0 = XZ, 1 = XY)
     float4   g_GridParams;           // x: minor spacing (m), y: major every (m), z: fade (m), w: half-extent (m)
     float4   g_GridMinorColor;       // straight alpha, linear
@@ -108,7 +111,7 @@ struct GridVSOut
 {
     float4 clip      : SV_Position;
     float3 world     : TEXCOORD0;   // world-space position on the plane
-    float  depthTest : TEXCOORD1;   // always 1: the grid is depth-tested
+    float  depthTest : TEXCOORD1;   // 1 when the grid's camera is the mesh camera
 };
 
 float3 GridPlaneToWorld(float2 uv, float planeId)
@@ -149,8 +152,8 @@ GridVSOut grid_vs_main(uint vertexId : SV_VertexID)
 
     GridVSOut o;
     o.world     = GridPlaneToWorld(uv, planeId);
-    o.clip      = mul(g_ViewProjection, float4(o.world, 1.0));
-    o.depthTest = 1.0;
+    o.clip      = mul(g_GridViewProjection, float4(o.world, 1.0));
+    o.depthTest = g_GridFlags.x;
     return o;
 }
 

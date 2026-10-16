@@ -1457,8 +1457,9 @@ namespace Arcane
         // ---------------------------------------------------------------
         // THE POST-TONEMAP OVERLAY PASS (F5 plan 1 Task 3, spec s3.3),
         // declared right AFTER the tonemap and BEFORE the game HUD: the 3D
-        // grid, then depth-tested lines and fills, then always-on-top ones
-        // (the 2D grid, physics debug, the camera rect, the gizmo), blended
+        // grid, then depth-tested lines and fills (the 2D grid), then
+        // always-on-top ones (physics debug, the camera rect, the gizmo),
+        // each class in submission order, blended
         // straight-alpha onto the DISPLAY-REFERRED target -- so the post
         // chain never grades them. Linear colours run the tonemap operator in
         // overlay.hlsl; display-referred ones are written as given.
@@ -1473,16 +1474,19 @@ namespace Arcane
         // ---------------------------------------------------------------
         const bool wantOverlay = (shape.grid != nullptr) ||
             (shape.overlay != nullptr &&
-             (!shape.overlay->lines.empty() || !shape.overlay->fills.empty() || shape.overlay->hasGrid3d));
+             (!shape.overlay->prims.empty() || shape.overlay->hasGrid3d));
         if (shape.world && wantOverlay)
         {
-            // World-space primitives project through the mesh pass's camera
-            // when no grid supplies one (OverlayNode.hpp, AddOverlayNode).
+            // THE CAMERAS (review ruling I2; OverlayNode.hpp, AddOverlayNode):
+            // world-space primitives project through the frame's world camera
+            // (the sprite/main view); they and the grid sample the mesh depth
+            // only when their camera IS the mesh camera below.
             const glm::mat4 meshViewProjection =
                 wantsMesh ? shape.mesh->projection * shape.mesh->view : glm::mat4(1.0f);
             AddOverlayNode(graph, context, handles.backbuffer,
                            wantsMesh ? handles.depth : RgTexture{},
                            shape.grid, shape.overlay, shape.canvasWidth, shape.canvasHeight,
+                           shape.overlayWorldViewProjection,
                            wantsMesh ? &meshViewProjection : nullptr);
         }
 
@@ -1711,6 +1715,8 @@ namespace Arcane
         shape.grid          = m_overlay ? frame.grid : nullptr;
         // The post-tonemap overlay (F5 plan 1 T3), against ITS node the same way.
         shape.overlay       = m_overlay ? frame.overlay : nullptr;
+        shape.overlayWorldViewProjection =
+            frame.overlayWorldViewProjection ? &*frame.overlayWorldViewProjection : nullptr;
         // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
         // host-window mode, so the tonemap imports the swapchain exactly as it
         // always has; the vehicle's output texture otherwise. Nothing else in

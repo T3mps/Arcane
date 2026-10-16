@@ -51,7 +51,7 @@ namespace Arcane
             line.depth = m_depth;
             line.space = OverlayColorSpace::Linear;
             line.screenSpace = true;
-            m_out.lines.push_back(line);
+            m_out.AddLine(line);
         }
 
         void Circle(glm::vec2 center, float radius, glm::vec4 color) override
@@ -64,7 +64,7 @@ namespace Arcane
             fill.depth = m_depth;
             fill.space = OverlayColorSpace::Linear;
             fill.screenSpace = true;
-            m_out.fills.push_back(fill);
+            m_out.AddFill(fill);
         }
 
         void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 color, float) override
@@ -77,7 +77,7 @@ namespace Arcane
             fill.depth = m_depth;
             fill.space = OverlayColorSpace::Linear;
             fill.screenSpace = true;
-            m_out.fills.push_back(fill);
+            m_out.AddFill(fill);
         }
 
     private:

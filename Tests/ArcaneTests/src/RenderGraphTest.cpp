@@ -7174,7 +7174,12 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'overlay'
         // THE BARRIERS: exactly one -- the depth moving to the shader-read
         // state. The backbuffer is already in the ColorWrite state the
         // tonemap left, so it contributes none.
-        CHECK(compiled.nodes[8].preBarriers.size() == 1u);
+        REQUIRE(compiled.nodes[8].preBarriers.size() == 1u);
+        const Arcane::RgBarrier& depthBarrier = compiled.nodes[8].preBarriers[0];
+        CHECK(depthBarrier.isTexture);
+        CHECK(depthBarrier.resourceIndex == 1u);   // the depth texture's slot (transients[1] above)
+        CHECK(depthBarrier.after.layout == nri::Layout::SHADER_RESOURCE);
+        CHECK(depthBarrier.after.access == nri::AccessBits::SHADER_RESOURCE);
     }
 
     SECTION("with no mesh scene: 'overlay' is still declared, reading no depth")

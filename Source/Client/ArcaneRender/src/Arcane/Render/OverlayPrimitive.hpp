@@ -57,14 +57,55 @@ namespace Arcane
         bool screenSpace;
     };
 
+    // One overlay primitive: a line OR a fill, tagged. `line` is meaningful
+    // when tag == Line, `fill` when tag == Fill.
+    struct OverlayPrimitive
+    {
+        enum class Tag : std::uint8_t { Line, Fill };
+        Tag         tag = Tag::Line;
+        OverlayLine line{};
+        OverlayFill fill{};
+    };
+
     // One frame's overlay. BORROWED by FrameDesc::overlay for the duration of
     // the RenderFrame call. `hasGrid3d` adds the analytic 3D grid described by
     // `grid3d` as the pass's first draw.
+    //
+    // ONE LIST, IN SUBMISSION ORDER (F5 plan 1 Task 3, review ruling I1):
+    // lines and fills interleave exactly as the producers submitted them, and
+    // the pass keeps that order within each depth class -- so a gizmo's plane
+    // fill stays UNDER its outline bars, and a primitive appended later paints
+    // over one appended earlier, whatever their kinds.
     struct OverlayPrimitiveList
     {
-        std::vector<OverlayLine> lines;
-        std::vector<OverlayFill> fills;
+        std::vector<OverlayPrimitive> prims;
         bool hasGrid3d = false;
         GridSceneDesc grid3d{};
+
+        void AddLine(const OverlayLine& line)
+        {
+            OverlayPrimitive p{};
+            p.tag  = OverlayPrimitive::Tag::Line;
+            p.line = line;
+            prims.push_back(p);
+        }
+        void AddFill(const OverlayFill& fill)
+        {
+            OverlayPrimitive p{};
+            p.tag  = OverlayPrimitive::Tag::Fill;
+            p.fill = fill;
+            prims.push_back(p);
+        }
+        // Appends `other`'s primitives after this list's, keeping both orders.
+        void Append(const OverlayPrimitiveList& other)
+        {
+            prims.insert(prims.end(), other.prims.begin(), other.prims.end());
+        }
+        // Drops every primitive and the 3D grid.
+        void Clear()
+        {
+            prims.clear();
+            hasGrid3d = false;
+        }
     };
 }

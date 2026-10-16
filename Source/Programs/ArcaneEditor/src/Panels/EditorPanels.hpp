@@ -362,9 +362,10 @@ namespace Arcane::Editor
     // only: hover, click capture and game input are unchanged).
     // imageOverlay, when set, is called right after the image is drawn with
     // the Viewport window's draw list (clipped to the image) and the image's
-    // screen origin -- the editor's FOREGROUND: the transform gizmo paints
-    // here, over the finished frame, under the tool overlay's buttons
-    // (Viewport/GizmoOverlay.hpp). Skipped when there is no image.
+    // screen origin -- a generic FOREGROUND hook, under the tool overlay's
+    // buttons. Nothing passes one today: the transform gizmo is a post-tonemap
+    // overlay primitive set inside the frame (F5 plan 1 Task 3). Skipped when
+    // there is no image.
     using ViewportImageOverlayFn = std::function<void(ImDrawList& list, ImVec2 origin)>;
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
                                           ViewportToolState& tools, const ViewportChrome& chrome,

@@ -46,10 +46,12 @@ namespace Arcane
         // overlay.hlsl's OverlayCB, byte for byte.
         struct OverlayFrameConstants
         {
-            glm::mat4 viewProjection{ 1.0f };
+            glm::mat4 viewProjection{ 1.0f };       // world-space primitives
             glm::vec2 viewport{ 0.0f };
             float     discardIfGreater = 0.0f;
             float     hasDepth         = 0.0f;
+            glm::mat4 gridViewProjection{ 1.0f };   // the 3D grid's own camera
+            glm::vec4 gridFlags{ 0.0f };         // x: the grid samples depth (1) or not (0)
             glm::vec4 gridEyeAndPlane{ 0.0f };   // xyz eye, w plane id
             glm::vec4 gridParams{ 0.0f };        // minor, majorEvery, fade, halfExtent
             glm::vec4 gridMinorColor{ 0.0f };
@@ -57,7 +59,7 @@ namespace Arcane
             glm::vec4 gridAxisUColor{ 0.0f };
             glm::vec4 gridAxisVColor{ 0.0f };
         };
-        static_assert(sizeof(OverlayFrameConstants) == 176, "must match overlay.hlsl's OverlayCB");
+        static_assert(sizeof(OverlayFrameConstants) == 256, "must match overlay.hlsl's OverlayCB");
         static_assert(sizeof(OverlayFrameConstants) <= OverlayNode::kFrameCbMaxBytes,
                       "the frame constants must fit one arena region");
         static_assert(sizeof(OverlayNode::Vertex) == 40, "must match overlay.hlsl's VSIn stream");
@@ -72,49 +74,52 @@ namespace Arcane
         }
 
         [[nodiscard]] OverlayNode::Vertex MakeVertex(glm::vec3 pos, glm::vec4 color, bool screenSpace,
-                                                     OverlayColorSpace space, OverlayDepthClass depth) noexcept
+                                                     OverlayColorSpace space, bool depthTest) noexcept
         {
             OverlayNode::Vertex v{};
             v.pos         = pos;
             v.color       = color;
             v.screenSpace = screenSpace ? 1.0f : 0.0f;
             v.linearSpace = space == OverlayColorSpace::Linear ? 1.0f : 0.0f;
-            v.depthTest   = depth == OverlayDepthClass::DepthTested ? 1.0f : 0.0f;
+            v.depthTest   = depthTest ? 1.0f : 0.0f;
             return v;
         }
-    }
 
-    // =====================================================================
-    // CPU expansion
-    // =====================================================================
-    void OverlayNode::AppendTriangles(const OverlayPrimitiveList& list, OverlayDepthClass depth,
-                                      std::vector<Vertex>& out)
-    {
-        for (const OverlayLine& line : list.lines)
+        // A primitive samples the scene depth when it is DepthTested AND either
+        // screen-space (its z is a clip depth already) or world-space through a
+        // camera that IS the mesh camera (review ruling I2): a world primitive
+        // projected through any other camera has a clip.z the mesh depth buffer
+        // knows nothing about, so it draws untested -- plans 1-2's picture.
+        [[nodiscard]] bool SamplesDepth(OverlayDepthClass depth, bool screenSpace, bool worldDepthTest) noexcept
         {
-            if (line.depth != depth || !(line.thickness > 0.0f))
-                continue;
+            return depth == OverlayDepthClass::DepthTested && (screenSpace || worldDepthTest);
+        }
+
+        void AppendLine(const OverlayLine& line, bool worldDepthTest, std::vector<OverlayNode::Vertex>& out)
+        {
+            if (!(line.thickness > 0.0f))
+                return;
             const glm::vec2 d   = glm::vec2(line.b) - glm::vec2(line.a);
             const float     len = std::sqrt(d.x * d.x + d.y * d.y);
             if (!(len > 0.0f))
-                continue;   // a degenerate segment has no direction to widen across
+                return;   // a degenerate segment has no direction to widen across
             const glm::vec2 n = glm::vec2(-d.y, d.x) / len * (line.thickness * 0.5f);
             const float     z = line.a.z;
             const glm::vec3 a0(glm::vec2(line.a) + n, z), a1(glm::vec2(line.a) - n, z);
             const glm::vec3 b0(glm::vec2(line.b) + n, z), b1(glm::vec2(line.b) - n, z);
+            const bool tested = SamplesDepth(line.depth, line.screenSpace, worldDepthTest);
             const auto v = [&](glm::vec3 p) {
-                out.push_back(MakeVertex(p, line.color, line.screenSpace, line.space, line.depth));
+                out.push_back(MakeVertex(p, line.color, line.screenSpace, line.space, tested));
             };
             v(a0); v(a1); v(b1);
             v(a0); v(b1); v(b0);
         }
 
-        for (const OverlayFill& fill : list.fills)
+        void AppendFill(const OverlayFill& fill, bool worldDepthTest, std::vector<OverlayNode::Vertex>& out)
         {
-            if (fill.depth != depth)
-                continue;
+            const bool tested = SamplesDepth(fill.depth, fill.screenSpace, worldDepthTest);
             const auto v = [&](glm::vec3 p) {
-                out.push_back(MakeVertex(p, fill.color, fill.screenSpace, fill.space, fill.depth));
+                out.push_back(MakeVertex(p, fill.color, fill.screenSpace, fill.space, tested));
             };
             const float z = fill.a.z;
             switch (fill.kind)
@@ -139,10 +144,11 @@ namespace Arcane
                 ARC_CONSTANT("math: a full turn in radians")
                 constexpr float kTwoPi = 6.28318530717958647692f;
                 const glm::vec3 centre(fill.a.x, fill.a.y, z);
-                for (std::uint32_t i = 0; i < kCircleSegments; ++i)
+                const std::uint32_t segments = OverlayNode::kCircleSegments;
+                for (std::uint32_t i = 0; i < segments; ++i)
                 {
-                    const float t0 = kTwoPi * (float)i       / (float)kCircleSegments;
-                    const float t1 = kTwoPi * (float)(i + 1) / (float)kCircleSegments;
+                    const float t0 = kTwoPi * (float)i       / (float)segments;
+                    const float t1 = kTwoPi * (float)(i + 1) / (float)segments;
                     v(centre);
                     v(glm::vec3(fill.a.x + std::cos(t0) * fill.radius, fill.a.y + std::sin(t0) * fill.radius, z));
                     v(glm::vec3(fill.a.x + std::cos(t1) * fill.radius, fill.a.y + std::sin(t1) * fill.radius, z));
@@ -150,7 +156,28 @@ namespace Arcane
                 break;
             }
             case OverlayPrimKind::Line:
-                break;   // lines live in `lines`; a Line-kind fill draws nothing
+                break;   // a line is a Tag::Line primitive; a Line-kind fill draws nothing
+            }
+        }
+    }
+
+    // =====================================================================
+    // CPU expansion -- ONE pass over the list per depth class, so lines and
+    // fills keep the order they were submitted in (review ruling I1).
+    // =====================================================================
+    void OverlayNode::AppendTriangles(const OverlayPrimitiveList& list, OverlayDepthClass depth,
+                                      bool worldDepthTest, std::vector<Vertex>& out)
+    {
+        for (const OverlayPrimitive& prim : list.prims)
+        {
+            if (prim.tag == OverlayPrimitive::Tag::Line)
+            {
+                if (prim.line.depth == depth)
+                    AppendLine(prim.line, worldDepthTest, out);
+            }
+            else if (prim.fill.depth == depth)
+            {
+                AppendFill(prim.fill, worldDepthTest, out);
             }
         }
     }
@@ -773,6 +800,8 @@ namespace Arcane
                 const float     minor       = std::max(scene.minorSpacing, 1e-3f);
                 const float     major       = std::max(scene.majorEvery,   minor);
                 const float     fade        = std::max(scene.fadeDistance, 1e-3f);
+                constants.gridViewProjection = scene.view.projection * scene.view.view;
+                constants.gridFlags       = glm::vec4(desc.gridDepthTest ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
                 constants.gridEyeAndPlane = glm::vec4(eye, xy ? 1.0f : 0.0f);
                 constants.gridParams      = glm::vec4(minor, major, fade, halfExtent);
                 constants.gridMinorColor  = scene.minorColor;
@@ -789,8 +818,8 @@ namespace Arcane
         m_scratch.clear();
         if (desc.list)
         {
-            AppendTriangles(*desc.list, OverlayDepthClass::DepthTested, m_scratch);
-            AppendTriangles(*desc.list, OverlayDepthClass::AlwaysOnTop, m_scratch);
+            AppendTriangles(*desc.list, OverlayDepthClass::DepthTested, desc.worldDepthTest, m_scratch);
+            AppendTriangles(*desc.list, OverlayDepthClass::AlwaysOnTop, desc.worldDepthTest, m_scratch);
         }
 
         nri::Pipeline* gridPipeline = drawGrid ? GridPipeline(targetFormat) : nullptr;
@@ -860,6 +889,7 @@ namespace Arcane
                         RgTexture target, RgTexture depth,
                         const GridSceneDesc* grid, const OverlayPrimitiveList* overlay,
                         std::uint32_t width, std::uint32_t height,
+                        const glm::mat4* worldViewProjection,
                         const glm::mat4* meshViewProjection)
     {
         const bool hasDepth = graph.IsHandleValid(depth);
@@ -872,10 +902,24 @@ namespace Arcane
             desc.grid = *grid;
         else if (overlay && overlay->hasGrid3d)
             desc.grid = overlay->grid3d;
-        if (desc.grid)
-            desc.worldViewProjection = desc.grid->view.projection * desc.grid->view.view;
+        // THE CAMERAS (review ruling I2). World-space primitives project
+        // through the caller's world camera (the sprite/main view); with none
+        // given, through the mesh camera, then the grid's, then identity. The
+        // 3D grid always projects through its own camera. Either one samples
+        // the scene depth ONLY when its camera IS the mesh camera that wrote
+        // that depth (exact equality: every caller builds these products the
+        // same way, projection * view, from the same values) -- a different
+        // camera's clip.z means nothing against that buffer, so it draws
+        // untested. No mesh pass, no depth: both draw unoccluded.
+        if (worldViewProjection)
+            desc.worldViewProjection = *worldViewProjection;
         else if (meshViewProjection)
             desc.worldViewProjection = *meshViewProjection;
+        else if (desc.grid)
+            desc.worldViewProjection = desc.grid->view.projection * desc.grid->view.view;
+        desc.worldDepthTest = meshViewProjection && desc.worldViewProjection == *meshViewProjection;
+        desc.gridDepthTest  = meshViewProjection && desc.grid
+                           && desc.grid->view.projection * desc.grid->view.view == *meshViewProjection;
 
         graph.AddNode("overlay", RenderGraph::NodeKind::Raster,
             [&](RenderGraphBuilder& builder)

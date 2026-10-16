@@ -30,6 +30,10 @@
 #include <Arcane/Render/ShaderConventions.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
+#include <Arcane/Edit/Gizmo.hpp>                 // the real gizmo, for the order witness
+#include <Arcane/Scene/RenderViewSettings.hpp>     // Ortho2DView
+#include <Arcane/Render/Nri/nodes/OverlayNode.hpp> // OverlayNode::AppendTriangles
+#include "Settings/EditorViewportSettings.hpp"     // ToGizmoTuning: the editor.gizmo.* defaults
 
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Registry/Registry.hpp>
@@ -308,7 +312,7 @@ TEST_CASE("overlay node sits after tonemap and samples mesh depth", "[nri][overl
     line.color = { 1.0f, 0.0f, 0.0f, 1.0f };
     line.depth = Arcane::OverlayDepthClass::DepthTested;
     line.space = Arcane::OverlayColorSpace::Linear;
-    list.lines.push_back(line);
+    list.AddLine(line);
     shape.overlay = &list;
 
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
@@ -391,7 +395,7 @@ TEST_CASE("overlay with no mesh does not read the placeholder depth", "[nri][ove
     line.space = Arcane::OverlayColorSpace::DisplayReferred;
     line.color = { 0.0f, 0.0f, 1.0f, 1.0f };
     line.screenSpace = true;
-    list.lines.push_back(line);
+    list.AddLine(line);
     shape.overlay = &list;
 
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
@@ -472,7 +476,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     // discards when fragD > sceneD, so this green line is hidden. A shader that
     // writes clip.z = 0 puts the line on the near plane and the centre goes green.
     Arcane::OverlayPrimitiveList hidden;
-    hidden.lines.push_back(ScreenLine(72.0f, 48.0f, 88.0f, 48.0f, 1.0f,
+    hidden.AddLine(ScreenLine(72.0f, 48.0f, 88.0f, 48.0f, 1.0f,
         Arcane::OverlayDepthClass::DepthTested,
         Arcane::OverlayColorSpace::DisplayReferred,
         glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)));
@@ -481,7 +485,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     CHECK(cubePixel.r > cubePixel.g + 60);
 
     Arcane::OverlayPrimitiveList onTop = hidden;
-    onTop.lines[0].depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+    onTop.prims[0].line.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
     const std::vector<unsigned char> top = shoot(onTop, true);
     const Rgba topPixel = At(top, kW, kW / 2u, kH / 2u);
     CHECK(topPixel.r == 0);
@@ -491,7 +495,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     // Display-referred (1,0,0) is not ACES(1,0,0). ACES(1) is about 0.8038,
     // which encodes to a byte near 231, not 255. Pixel (10, 10) is off the cube.
     Arcane::OverlayPrimitiveList red;
-    red.lines.push_back(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 0.0f,
+    red.AddLine(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 0.0f,
         Arcane::OverlayDepthClass::AlwaysOnTop,
         Arcane::OverlayColorSpace::DisplayReferred,
         glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)));
@@ -502,7 +506,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     CHECK(shownPixel.b == 0);
 
     Arcane::OverlayPrimitiveList graded = red;
-    graded.lines[0].space = Arcane::OverlayColorSpace::Linear;
+    graded.prims[0].line.space = Arcane::OverlayColorSpace::Linear;
     const std::vector<unsigned char> gradedPx = shoot(graded, true);
     const Rgba gradedPixel = At(gradedPx, kW, 10u, 10u);
     CHECK(gradedPixel.r > 200);
@@ -511,7 +515,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     // No mesh: g_HasDepth is 0, so z = 1 is still drawn. The declaration test
     // above is what fails if this frame samples the placeholder depth.
     Arcane::OverlayPrimitiveList open;
-    open.lines.push_back(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 1.0f,
+    open.AddLine(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 1.0f,
         Arcane::OverlayDepthClass::DepthTested,
         Arcane::OverlayColorSpace::DisplayReferred,
         glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)));
@@ -585,7 +589,7 @@ void CheckPostDoesNotGradeOverlay(Arcane::GraphicsBackend backend)
 
     PixelVehicle v = MakeVehicle(backend);
     Arcane::OverlayPrimitiveList list;
-    list.lines.push_back(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 0.0f,
+    list.AddLine(ScreenLine(4.0f, 10.0f, 16.0f, 10.0f, 0.0f,
         Arcane::OverlayDepthClass::AlwaysOnTop,
         Arcane::OverlayColorSpace::DisplayReferred,
         glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)));
@@ -739,14 +743,14 @@ void CheckPerspectiveGridDepth(Arcane::GraphicsBackend backend)
         return line;
     };
     Arcane::OverlayPrimitiveList inFront;
-    inFront.lines.push_back(worldLine(2.0f));
+    inFront.AddLine(worldLine(2.0f));
     const Rgba front = At(shoot(inFront), kW, kW / 2u, kH / 2u);
     CHECK(front.r == 0);
     CHECK(front.g == 255);
     CHECK(front.b == 0);
 
     Arcane::OverlayPrimitiveList behind;
-    behind.lines.push_back(worldLine(-2.0f));
+    behind.AddLine(worldLine(-2.0f));
     const Rgba back = At(shoot(behind), kW, kW / 2u, kH / 2u);
     CHECK(back.r > back.g + 60);
     CHECK(Arcane::RenderErrorCount() == before);
@@ -759,4 +763,392 @@ TEST_CASE("a perspective grid axis is hidden on the cube and visible beside it (
 TEST_CASE("a perspective grid axis is hidden on the cube and visible beside it (vulkan)", "[gpu][overlay][vulkan]")
 {
     CheckPerspectiveGridDepth(Arcane::GraphicsBackend::Vulkan);
+}
+
+// =========================================================================
+// Review round 1 (Task 3): I1 submission order, I2 the world camera, M5 the
+// CPU expansion.
+// =========================================================================
+namespace
+{
+    Arcane::OverlayFill ScreenRect(glm::vec2 pos, glm::vec2 size, Arcane::OverlayDepthClass depth, glm::vec4 color)
+    {
+        Arcane::OverlayFill fill{};
+        fill.kind        = Arcane::OverlayPrimKind::Rect;
+        fill.a           = glm::vec3(pos, 0.0f);
+        fill.size        = size;
+        fill.color       = color;
+        fill.depth       = depth;
+        fill.space       = Arcane::OverlayColorSpace::DisplayReferred;
+        fill.screenSpace = true;
+        return fill;
+    }
+
+    // The OverlayGizmoSink in EditorAppFrame.cpp, restated: the gizmo
+    // callbacks as AlwaysOnTop, DisplayReferred, screen-space primitives, in
+    // the order the gizmo calls them.
+    class TestGizmoSink final : public Arcane::GizmoDrawSink
+    {
+    public:
+        explicit TestGizmoSink(Arcane::OverlayPrimitiveList& out) : m_out(out) {}
+        void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) override
+        {
+            Arcane::OverlayLine line{};
+            line.a = glm::vec3(a, 0.0f);
+            line.b = glm::vec3(b, 0.0f);
+            line.color = rgba;
+            line.thickness = thickness;
+            line.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+            line.space = Arcane::OverlayColorSpace::DisplayReferred;
+            line.screenSpace = true;
+            m_out.AddLine(line);
+        }
+        void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) override
+        {
+            Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Triangle, rgba);
+            fill.a = glm::vec3(a, 0.0f);
+            fill.b = glm::vec3(b, 0.0f);
+            fill.c = glm::vec3(c, 0.0f);
+            m_out.AddFill(fill);
+        }
+        void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) override
+        {
+            Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Rect, rgba);
+            fill.a = glm::vec3(pos, 0.0f);
+            fill.size = size;
+            m_out.AddFill(fill);
+        }
+        void Circle(glm::vec2 center, float radius, glm::vec4 rgba) override
+        {
+            Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Circle, rgba);
+            fill.a = glm::vec3(center, 0.0f);
+            fill.radius = radius;
+            m_out.AddFill(fill);
+        }
+    private:
+        static Arcane::OverlayFill Fill(Arcane::OverlayPrimKind kind, glm::vec4 rgba)
+        {
+            Arcane::OverlayFill fill{};
+            fill.kind = kind;
+            fill.color = rgba;
+            fill.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+            fill.space = Arcane::OverlayColorSpace::DisplayReferred;
+            fill.screenSpace = true;
+            return fill;
+        }
+        Arcane::OverlayPrimitiveList& m_out;
+    };
+
+    // The real translate gizmo with its XY plane HOT (so the plane square is
+    // drawn), at the centre of a kW x kH ortho view.
+    Arcane::OverlayPrimitiveList HotPlaneGizmo()
+    {
+        Arcane::OverlayPrimitiveList list;
+        TestGizmoSink sink(list);
+        const Arcane::ViewTransform view = Arcane::Ortho2DView({ 0.0f, 0.0f }, 1.0f, { kW, kH });
+        const Arcane::GizmoTuning tuning = Arcane::Editor::ToGizmoTuning(Arcane::Editor::EditorGizmoSettings{});
+        Arcane::Draw(sink, Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, Arcane::GizmoTransform{},
+                     view, Arcane::GizmoHandleMask::All(), 1.0f, Arcane::GizmoAxis::XY, Arcane::GizmoAxis::None,
+                     tuning);
+        return list;
+    }
+
+    // The translucent prims are the hot plane square (hotFillAlpha < 1);
+    // every bar, axis and head is opaque.
+    bool IsTranslucentFill(const Arcane::OverlayPrimitive& p)
+    {
+        return p.tag == Arcane::OverlayPrimitive::Tag::Fill && p.fill.color.a < 1.0f;
+    }
+}
+
+TEST_CASE("overlay expansion: vertex counts per kind, the class filter and degenerate input", "[nri][overlay]")
+{
+    using Arcane::OverlayDepthClass;
+    const glm::vec4 white(1.0f);
+    Arcane::OverlayPrimitiveList list;
+    list.AddLine(ScreenLine(0, 0, 10, 0, 0, OverlayDepthClass::AlwaysOnTop,
+                            Arcane::OverlayColorSpace::DisplayReferred, white));            // 6
+    Arcane::OverlayLine thin = ScreenLine(0, 0, 10, 0, 0, OverlayDepthClass::AlwaysOnTop,
+                                          Arcane::OverlayColorSpace::DisplayReferred, white);
+    thin.thickness = 0.0f;
+    list.AddLine(thin);                                                                       // 0
+    list.AddLine(ScreenLine(5, 5, 5, 5, 0, OverlayDepthClass::AlwaysOnTop,
+                            Arcane::OverlayColorSpace::DisplayReferred, white));            // 0: zero length
+    list.AddFill(ScreenRect({ 0, 0 }, { 4, 4 }, OverlayDepthClass::AlwaysOnTop, white));   // 6
+    Arcane::OverlayFill tri = ScreenRect({ 0, 0 }, { 0, 0 }, OverlayDepthClass::AlwaysOnTop, white);
+    tri.kind = Arcane::OverlayPrimKind::Triangle;
+    list.AddFill(tri);                                                                        // 3
+    Arcane::OverlayFill circle = ScreenRect({ 8, 8 }, { 0, 0 }, OverlayDepthClass::AlwaysOnTop, white);
+    circle.kind   = Arcane::OverlayPrimKind::Circle;
+    circle.radius = 3.0f;
+    list.AddFill(circle);                                                                     // 48
+    Arcane::OverlayFill dot = circle;
+    dot.radius = 0.0f;
+    list.AddFill(dot);                                                                        // 0
+    list.AddFill(ScreenRect({ 0, 0 }, { 4, 4 }, OverlayDepthClass::DepthTested, white));   // the other class
+
+    std::vector<Arcane::OverlayNode::Vertex> onTop, tested;
+    Arcane::OverlayNode::AppendTriangles(list, OverlayDepthClass::AlwaysOnTop, true, onTop);
+    Arcane::OverlayNode::AppendTriangles(list, OverlayDepthClass::DepthTested, true, tested);
+    CHECK(Arcane::OverlayNode::kCircleSegments == 16u);
+    CHECK(onTop.size() == 6u + 6u + 3u + 3u * Arcane::OverlayNode::kCircleSegments);
+    CHECK(tested.size() == 6u);
+    for (const auto& v : onTop)
+        CHECK(v.depthTest == 0.0f);
+    for (const auto& v : tested)
+        CHECK(v.depthTest == 1.0f);   // screen-space: samples whenever DepthTested
+}
+
+TEST_CASE("overlay expansion keeps submission order: a fill before a line stays under it", "[nri][overlay]")
+{
+    using Arcane::OverlayDepthClass;
+    const glm::vec4 red{ 1, 0, 0, 1 }, green{ 0, 1, 0, 1 }, blue{ 0, 0, 1, 1 };
+    Arcane::OverlayPrimitiveList list;
+    list.AddFill(ScreenRect({ 0, 0 }, { 10, 10 }, OverlayDepthClass::AlwaysOnTop, red));
+    list.AddLine(ScreenLine(0, 5, 10, 5, 0, OverlayDepthClass::AlwaysOnTop,
+                            Arcane::OverlayColorSpace::DisplayReferred, green));
+    list.AddFill(ScreenRect({ 2, 2 }, { 2, 2 }, OverlayDepthClass::AlwaysOnTop, blue));
+
+    std::vector<Arcane::OverlayNode::Vertex> out;
+    Arcane::OverlayNode::AppendTriangles(list, OverlayDepthClass::AlwaysOnTop, false, out);
+    REQUIRE(out.size() == 18u);
+    for (std::size_t i = 0; i < 6; ++i)   CHECK(out[i].color == red);
+    for (std::size_t i = 6; i < 12; ++i)  CHECK(out[i].color == green);
+    for (std::size_t i = 12; i < 18; ++i) CHECK(out[i].color == blue);
+
+    // The real gizmo submits its hot plane square BEFORE the plane bars
+    // (Gizmo.cpp, the DrawDualAxis block), and the list keeps that order.
+    const Arcane::OverlayPrimitiveList gizmo = HotPlaneGizmo();
+    std::size_t firstFill = gizmo.prims.size(), lastFill = 0;
+    for (std::size_t i = 0; i < gizmo.prims.size(); ++i)
+        if (IsTranslucentFill(gizmo.prims[i])) { firstFill = std::min(firstFill, i); lastFill = i; }
+    REQUIRE(firstFill < gizmo.prims.size());
+    REQUIRE(lastFill + 1 < gizmo.prims.size());
+    CHECK(gizmo.prims[lastFill + 1].tag == Arcane::OverlayPrimitive::Tag::Line);   // a bar follows the square
+}
+
+TEST_CASE("overlay expansion: a world primitive samples depth only through the mesh camera", "[nri][overlay]")
+{
+    Arcane::OverlayLine world = ScreenLine(0, 0, 1, 0, 0, Arcane::OverlayDepthClass::DepthTested,
+                                           Arcane::OverlayColorSpace::Linear, glm::vec4(1.0f));
+    world.screenSpace = false;
+    Arcane::OverlayPrimitiveList list;
+    list.AddLine(world);
+    std::vector<Arcane::OverlayNode::Vertex> same, other;
+    Arcane::OverlayNode::AppendTriangles(list, Arcane::OverlayDepthClass::DepthTested, true, same);
+    Arcane::OverlayNode::AppendTriangles(list, Arcane::OverlayDepthClass::DepthTested, false, other);
+    REQUIRE(same.size() == 6u);
+    REQUIRE(other.size() == 6u);
+    CHECK(same[0].depthTest == 1.0f);
+    CHECK(other[0].depthTest == 0.0f);
+}
+
+// I1, GPU half: submission order is paint order. A fill submitted before a
+// line ends up UNDER it; the reverse order puts it over. And the real gizmo
+// bars stay over its hot plane square: wherever moving the square to the END
+// of the list changes a pixel, the submitted order shows the bar-only pixel.
+void CheckOverlaySubmissionOrder(Arcane::GraphicsBackend backend)
+{
+    ARC_REQUIRE_BACKEND(backend);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+    PixelVehicle v = MakeVehicle(backend);
+    auto shoot = [&](const Arcane::OverlayPrimitiveList& list) {
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.overlay = &list;
+        RenderOne(*v.ctx, frame);
+        std::uint32_t width = 0, height = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+        REQUIRE(width == kW);
+        REQUIRE(height == kH);
+        return rgba;
+    };
+
+    const Arcane::OverlayFill rect = ScreenRect({ 4, 4 }, { 32, 32 }, Arcane::OverlayDepthClass::AlwaysOnTop,
+                                                glm::vec4(1, 0, 0, 1));
+    const Arcane::OverlayLine line = ScreenLine(4, 20, 36, 20, 0, Arcane::OverlayDepthClass::AlwaysOnTop,
+                                                Arcane::OverlayColorSpace::DisplayReferred, glm::vec4(0, 1, 0, 1));
+    Arcane::OverlayPrimitiveList fillFirst;
+    fillFirst.AddFill(rect);
+    fillFirst.AddLine(line);
+    Arcane::OverlayPrimitiveList lineFirst;
+    lineFirst.AddLine(line);
+    lineFirst.AddFill(rect);
+    const Rgba under = At(shoot(fillFirst), kW, 20u, 20u);
+    CHECK(under.r == 0);
+    CHECK(under.g == 255);
+    const Rgba over = At(shoot(lineFirst), kW, 20u, 20u);
+    CHECK(over.r == 255);
+    CHECK(over.g == 0);
+
+    // The hot square and the hot bars are the SAME colour (Colors().hot), so
+    // their order is invisible as drawn; the square is recoloured (blue, its
+    // own alpha) so the order shows, and nothing else about the list changes.
+    Arcane::OverlayPrimitiveList submitted = HotPlaneGizmo();
+    for (Arcane::OverlayPrimitive& p : submitted.prims)
+        if (IsTranslucentFill(p))
+            p.fill.color = glm::vec4(0.0f, 0.0f, 1.0f, p.fill.color.a);
+    Arcane::OverlayPrimitiveList fillLast, barsOnly;
+    for (const Arcane::OverlayPrimitive& p : submitted.prims)
+        if (!IsTranslucentFill(p)) { fillLast.prims.push_back(p); barsOnly.prims.push_back(p); }
+    for (const Arcane::OverlayPrimitive& p : submitted.prims)
+        if (IsTranslucentFill(p)) fillLast.prims.push_back(p);
+    const std::vector<unsigned char> a = shoot(submitted);
+    const std::vector<unsigned char> b = shoot(fillLast);
+    const std::vector<unsigned char> c = shoot(barsOnly);
+    std::size_t moved = 0, wrong = 0;
+    for (std::size_t i = 0; i + 3 < a.size(); i += 4)
+    {
+        if (a[i] == b[i] && a[i + 1] == b[i + 1] && a[i + 2] == b[i + 2])
+            continue;
+        ++moved;
+        if (a[i] != c[i] || a[i + 1] != c[i + 1] || a[i + 2] != c[i + 2])
+            ++wrong;
+    }
+    CHECK(moved > 0);    // the square does overlap the bars
+    CHECK(wrong == 0);   // and in submitted order the bars win every one of those pixels
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("overlay keeps submission order on the GPU, gizmo bars over the plane fill (d3d12)", "[gpu][overlay][d3d12]")
+{
+    CheckOverlaySubmissionOrder(Arcane::GraphicsBackend::D3D12);
+}
+TEST_CASE("overlay keeps submission order on the GPU, gizmo bars over the plane fill (vulkan)", "[gpu][overlay][vulkan]")
+{
+    CheckOverlaySubmissionOrder(Arcane::GraphicsBackend::Vulkan);
+}
+
+// I2, GPU half: the world camera.
+//   * no meshes: the 3D grid and a world line still draw (nothing to test
+//     against, and the world camera is given, so nothing projects through
+//     identity);
+//   * a world camera DIFFERENT from the mesh camera: a depth-tested world
+//     line behind the cube, and the grid, draw UNTESTED over the cube;
+//   * the SAME camera: the same line is hidden.
+void CheckOverlayWorldCamera(Arcane::GraphicsBackend backend)
+{
+    ARC_REQUIRE_BACKEND(backend);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    GpuSceneWorld w;
+    w.AddMesh(cubeId, cube);
+    w.Spawn(glm::vec3(0.0f), cubeId);
+    w.Schedulers();
+
+    Arcane::MeshSceneDesc scene;
+    FillCamera(scene);
+    Arcane::ViewTransform meshView;
+    meshView.view       = scene.view;
+    meshView.projection = scene.projection;
+    meshView.viewport   = glm::uvec2{ kW, kH };
+
+    Arcane::VisibleSet vis;
+    Arcane::BuildVisibleSet(w.reg, meshView, vis);
+    Arcane::GpuSceneMirror mirror;
+    Arcane::GpuSceneFrame gpu;
+    Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
+    Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), meshView, gpu);
+    for (Arcane::GpuInstance& row : gpu.stage.values)
+        row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+    PixelVehicle v = MakeVehicle(backend);
+    v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
+    scene.scene = &gpu;
+
+    // A second camera: the same eye, a slightly wider lens. Not the mesh camera.
+    Arcane::ViewTransform otherView = meshView;
+    otherView.projection = Arcane::PerspectiveProjection(kFovYDegrees + 1.0f,
+                                                         static_cast<float>(kW) / static_cast<float>(kH),
+                                                         kNearZ, kFarZ);
+    const glm::mat4 meshVp  = meshView.projection * meshView.view;
+    const glm::mat4 otherVp = otherView.projection * otherView.view;
+
+    auto shoot = [&](const Arcane::OverlayPrimitiveList& list, bool withMesh, const glm::mat4* worldVp) {
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.overlay = &list;
+        if (withMesh)
+            frame.mesh = &scene;
+        if (worldVp)
+            frame.overlayWorldViewProjection = *worldVp;
+        RenderOne(*v.ctx, frame);
+        std::uint32_t width = 0, height = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+        REQUIRE(width == kW);
+        REQUIRE(height == kH);
+        return rgba;
+    };
+    auto axisNearCentreRow = [&](const std::vector<unsigned char>& px, std::uint32_t x) {
+        for (std::uint32_t y = (kH / 2u) - 1u; y <= (kH / 2u) + 1u; ++y)
+        {
+            const Rgba p = At(px, kW, x, y);
+            if (p.g > 200 && p.g < 250 && p.r < 80)
+                return true;
+        }
+        return false;
+    };
+    auto worldLine = [](float z) {
+        Arcane::OverlayLine line{};
+        line.a = { -0.4f, 0.0f, z };
+        line.b = {  0.4f, 0.0f, z };
+        line.thickness = 0.5f;
+        line.depth = Arcane::OverlayDepthClass::DepthTested;
+        line.space = Arcane::OverlayColorSpace::DisplayReferred;
+        line.color = { 0.0f, 1.0f, 0.0f, 1.0f };
+        line.screenSpace = false;
+        return line;
+    };
+    auto gridThrough = [&](const Arcane::ViewTransform& view) {
+        Arcane::OverlayPrimitiveList grid;
+        grid.hasGrid3d = true;
+        grid.grid3d.view = view;
+        grid.grid3d.SetPlane(Arcane::GridSceneDesc::Plane::XY);
+        grid.grid3d.minorSpacing = 1.0f;
+        grid.grid3d.majorEvery = 8.0f;
+        grid.grid3d.fadeDistance = 1000.0f;
+        grid.grid3d.minHalfExtent = 20.0f;
+        grid.grid3d.extentPerAltitude = 1.0f;
+        grid.grid3d.minorColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+        grid.grid3d.majorColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+        grid.grid3d.axisUColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+        grid.grid3d.axisVColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+        return grid;
+    };
+
+    // No meshes: the grid axis crosses the centre (no cube there), and a world
+    // line through the given world camera lands on the centre too.
+    CHECK(axisNearCentreRow(shoot(gridThrough(meshView), false, &meshVp), kW / 2u));
+    Arcane::OverlayPrimitiveList behind;
+    behind.AddLine(worldLine(-2.0f));
+    const Rgba bare = At(shoot(behind, false, &meshVp), kW, kW / 2u, kH / 2u);
+    CHECK(bare.g == 255);
+    CHECK(bare.r == 0);
+
+    // The world camera IS the mesh camera: the line behind the cube is hidden.
+    const Rgba hidden = At(shoot(behind, true, &meshVp), kW, kW / 2u, kH / 2u);
+    CHECK(hidden.r > hidden.g + 60);
+
+    // A different world camera: untested, drawn over the cube.
+    const Rgba shown = At(shoot(behind, true, &otherVp), kW, kW / 2u, kH / 2u);
+    CHECK(shown.g == 255);
+    CHECK(shown.r == 0);
+
+    // The grid through a camera that is not the mesh camera: untested, its
+    // axis crosses the cube at the centre.
+    CHECK(axisNearCentreRow(shoot(gridThrough(otherView), true, &meshVp), kW / 2u));
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("overlay world camera: no mesh still draws, a non-mesh camera is untested (d3d12)", "[gpu][overlay][d3d12]")
+{
+    CheckOverlayWorldCamera(Arcane::GraphicsBackend::D3D12);
+}
+TEST_CASE("overlay world camera: no mesh still draws, a non-mesh camera is untested (vulkan)", "[gpu][overlay][vulkan]")
+{
+    CheckOverlayWorldCamera(Arcane::GraphicsBackend::Vulkan);
 }

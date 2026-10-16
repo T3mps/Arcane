@@ -123,7 +123,7 @@ namespace Arcane::Editor
                 line.depth       = Arcane::OverlayDepthClass::AlwaysOnTop;
                 line.space       = Arcane::OverlayColorSpace::DisplayReferred;
                 line.screenSpace = true;
-                m_out.lines.push_back(line);
+                m_out.AddLine(line);
             }
             void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) override
             {
@@ -131,21 +131,21 @@ namespace Arcane::Editor
                 fill.a = glm::vec3(a, 0.0f);
                 fill.b = glm::vec3(b, 0.0f);
                 fill.c = glm::vec3(c, 0.0f);
-                m_out.fills.push_back(fill);
+                m_out.AddFill(fill);
             }
             void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) override
             {
                 Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Rect, rgba);
                 fill.a    = glm::vec3(pos, 0.0f);
                 fill.size = size;
-                m_out.fills.push_back(fill);
+                m_out.AddFill(fill);
             }
             void Circle(glm::vec2 center, float radius, glm::vec4 rgba) override
             {
                 Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Circle, rgba);
                 fill.a      = glm::vec3(center, 0.0f);
                 fill.radius = radius;
-                m_out.fills.push_back(fill);
+                m_out.AddFill(fill);
             }
 
         private:
@@ -1950,9 +1950,7 @@ namespace Arcane::Editor
         // is collected through an OverlayBatchCollector into m_overlayPrims,
         // which ArmGraphViewportFrame hands to the graph's overlay node.
         // Cleared here, so it lives until the next submission.
-        m_overlayPrims.lines.clear();
-        m_overlayPrims.fills.clear();
-        m_overlayPrims.hasGrid3d = false;
+        m_overlayPrims.Clear();
 
         // The 2D reference grid (F4 plan 1 T9, spec s5.1), FIRST and at the
         // BOTTOM batcher layer (0, 0) so every sprite paints over it: decade
@@ -2080,18 +2078,16 @@ namespace Arcane::Editor
         // pass, so a gizmo in it vanished inside any mesh covering its
         // handles. Since F5 plan 1 Task 3 it is a post-tonemap overlay
         // primitive set, built by BuildGizmoOverlayPrims before this frame's
-        // render and appended LAST, so it sits on top of every other overlay
-        // primitive.
-        m_overlayPrims.lines.insert(m_overlayPrims.lines.end(),
-                                    m_gizmoPrims.lines.begin(), m_gizmoPrims.lines.end());
-        m_overlayPrims.fills.insert(m_overlayPrims.fills.end(),
-                                    m_gizmoPrims.fills.begin(), m_gizmoPrims.fills.end());
+        // render and appended LAST. The overlay keeps submission order within
+        // a depth class, and every gizmo primitive is AlwaysOnTop, so the
+        // gizmo paints over the other always-on-top primitives (physics debug,
+        // the camera rect) and its own fills stay under its own bars.
+        m_overlayPrims.Append(m_gizmoPrims);
     }
 
     void EditorApp::BuildGizmoOverlayPrims()
     {
-        m_gizmoPrims.lines.clear();
-        m_gizmoPrims.fills.clear();
+        m_gizmoPrims.Clear();
         // Edit mode with a live gizmo and a selection only -- the same gate the
         // hit-test uses, and the SAME handle mask, size and view as this
         // frame's hit-test.
@@ -2249,6 +2245,12 @@ namespace Arcane::Editor
         // before this function). UNCONDITIONAL, above the pick chain's early
         // return; an empty list declares no overlay node.
         vp.overlay = &m_overlayPrims;
+        // The overlay's WORLD camera is the sprite/main view -- the same
+        // view-projection SubmitSceneToBatcher hands the scene batcher
+        // (review ruling I2). Task 9 takes it from the packet's sprite view
+        // instead. In Edit mode it equals the mesh camera (m_meshView is
+        // m_runtime->View() there), so depth-tested world primitives test.
+        vp.overlayWorldViewProjection = m_runtime->View().ViewProjection();
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // THE HOVER GOES THROUGH HoverLive(), not m_gameUi.inViewport

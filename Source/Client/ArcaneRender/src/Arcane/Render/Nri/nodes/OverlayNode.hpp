@@ -6,8 +6,9 @@
 // One raster pass, declared right AFTER the tonemap and before the game HUD,
 // that draws editor and debug affordances onto the DISPLAY-REFERRED target:
 // the folded 3D reference grid (overlay.hlsl's grid_vs_main / grid_ps_main),
-// then the depth-tested lines and fills, then the always-on-top ones (the 2D
-// grid, physics debug, the camera rect, the gizmo). Straight alpha,
+// then the depth-tested lines and fills (the 2D grid), then the always-on-top
+// ones (physics debug, the camera rect, the gizmo), each class in submission
+// order. Straight alpha,
 // source-over; the post chain never grades it, because it runs after the
 // chain AND after the tonemap.
 //
@@ -61,12 +62,17 @@ namespace Arcane
     // What one overlay frame records. `list` is BORROWED for the RenderFrame
     // call (FrameDesc's rule); `grid` is a copy of the frame's 3D grid when it
     // draws one; `worldViewProjection` projects world-space primitives.
+    // `worldDepthTest` / `gridDepthTest`: whether depth-tested world-space
+    // primitives / the grid may sample the scene depth -- true only when their
+    // camera is the mesh camera (AddOverlayNode decides).
     struct OverlayRecordDesc
     {
         const OverlayPrimitiveList* list = nullptr;
         std::optional<GridSceneDesc> grid;
         glm::mat4 worldViewProjection{ 1.0f };
         glm::vec2 viewport{ 0.0f };
+        bool worldDepthTest = false;
+        bool gridDepthTest  = false;
     };
 
     class ARC_RENDER_API OverlayNode
@@ -100,7 +106,7 @@ namespace Arcane
                     const OverlayRecordDesc& desc, std::uint32_t frameSlot);
 
         // The b0 block's region size BEFORE alignment; overlay.hlsl's OverlayCB
-        // is 176 bytes, and 256 is D3D12's constant-buffer placement alignment.
+        // is 256 bytes, exactly D3D12's constant-buffer placement alignment.
         ARC_CONSTANT("layout: constant-buffer placement size; the frame struct must fit")
         static constexpr std::uint32_t kFrameCbMaxBytes = 256;
 
@@ -120,10 +126,14 @@ namespace Arcane
 
         // CPU EXPANSION, exposed so it is testable without a device: appends
         // the triangles for every primitive of `list` whose depth class is
-        // `depth`, lines first, then fills. A zero-thickness or zero-length
-        // line, and a non-positive-radius circle, emit nothing.
+        // `depth`, IN SUBMISSION ORDER (lines and fills interleaved as given).
+        // A line is 6 vertices, a Rect 6, a Triangle 3, a Circle
+        // 3 * kCircleSegments. A zero-thickness or zero-length line, and a
+        // non-positive-radius circle, emit nothing. A DepthTested primitive's
+        // vertices sample depth when it is screen-space, or world-space with
+        // `worldDepthTest` true; otherwise they draw untested.
         static void AppendTriangles(const OverlayPrimitiveList& list, OverlayDepthClass depth,
-                                    std::vector<Vertex>& out);
+                                    bool worldDepthTest, std::vector<Vertex>& out);
 
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
@@ -204,14 +214,20 @@ namespace Arcane
     //
     // `grid` (the frame's 3D grid desc) and `overlay` (the primitive list) are
     // BORROWED for the RenderFrame call; either may be null. The 3D grid draws
-    // when `grid` is non-null or `overlay->hasGrid3d`. World-space primitives
-    // and the grid project through the grid's camera when a grid draws, else
-    // through `mesh`'s camera when the frame carried a mesh pass, else
-    // identity. `context` is a POINTER so device-less [nri] cases can drive the
-    // real declaration with none.
+    // when `grid` is non-null or `overlay->hasGrid3d`, through its own camera.
+    //
+    // THE CAMERAS (review ruling I2): world-space primitives project through
+    // `worldViewProjection` -- the sprite/main view, the camera the 2D world is
+    // authored in -- or, when it is null, through `meshViewProjection`, then
+    // the grid's camera, then identity. `meshViewProjection` is the camera of
+    // the mesh pass whose depth `depth` is (null with no mesh pass). A
+    // depth-tested world primitive, and the grid, sample that depth ONLY when
+    // their camera equals it; otherwise they draw untested. `context` is a
+    // POINTER so device-less [nri] cases can drive the real declaration.
     ARC_RENDER_API void AddOverlayNode(RenderGraph& graph, NriGraphContext* context,
                                        RgTexture target, RgTexture depth,
                                        const GridSceneDesc* grid, const OverlayPrimitiveList* overlay,
                                        std::uint32_t width, std::uint32_t height,
+                                       const glm::mat4* worldViewProjection = nullptr,
                                        const glm::mat4* meshViewProjection = nullptr);
 }
