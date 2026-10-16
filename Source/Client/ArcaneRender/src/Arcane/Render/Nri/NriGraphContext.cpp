@@ -470,6 +470,10 @@ namespace Arcane
         m_grid = GridNode::Create(*this);
         if (!m_grid)
             return false;   // already logged
+        // The post-tonemap overlay pass (F5 plan 1 T3), eagerly -- see Overlay().
+        m_overlay = OverlayNode::Create(*this);
+        if (!m_overlay)
+            return false;   // already logged
         m_post = PostChainNode::Create(*this);
         if (!m_post)
             return false;   // already logged
@@ -828,6 +832,8 @@ namespace Arcane
             m_tonemap->Release(graves, fence);
         if (m_post)
             m_post->Release(graves, fence);
+        if (m_overlay)
+            m_overlay->Release(graves, fence);
         if (m_grid)
             m_grid->Release(graves, fence);
         if (m_meshCull)
@@ -1391,37 +1397,9 @@ namespace Arcane
                 [](RenderGraphNodeContext&) {});
         }
 
-        // ---------------------------------------------------------------
-        // THE 3D REFERENCE GRID (F4 plan 1 Task 10, spec s5.2). Declared
-        // AFTER both branches above -- after the mesh pass, before the post
-        // chain and the tonemap -- so it blends over the opaque geometry and
-        // is DEPTH-TESTED against the depth transient AddMeshNode returned
-        // (never writing it: GridNode's PSO has depth.write = false; the
-        // graph-level DepthWrite is just the barrier state of a bound depth
-        // attachment). A frame with no mesh pass hands it an INVALID handle
-        // and the grid draws unoccluded with no depth attachment at all. The
-        // Task 4 placeholder's depth (the `else` above) is deliberately NOT
-        // handed over: that resource is pinned as declared-and-unconsumed,
-        // and a grid attached to it would test against undefined contents.
-        //
-        // THE SPEC S14 LIFETIME RISK, SETTLED AS A DECLARATION FACT: the grid
-        // reads the depth transient MeshNode minted, which must therefore
-        // outlive MeshNode's record. It does, with NO ownership move and NO
-        // MeshNode change: RenderGraph::Compile derives every transient's
-        // pool tenancy as [first toucher, LAST toucher] (RgCompiled::
-        // Lifetime), so AddGridNode's Write(depth, DepthWrite) alone carries
-        // the depth's life through the grid node. RenderGraphTest.cpp's
-        // (T10F4) case pins that lifetime -- mesh first, grid last.
-        //
-        // GATED ON THE DESC ALONE, like `mesh`: null declares nothing, and a
-        // frame that never sets it is byte for byte the pre-T10 frame.
-        // ---------------------------------------------------------------
-        if (shape.world && shape.grid)
-        {
-            AddGridNode(graph, context, handles.canvas, GraphCanvasFormat(),
-                        wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
-                        shape.canvasWidth, shape.canvasHeight);
-        }
+        // THE 3D REFERENCE GRID is no longer a canvas node here (F5 plan 1
+        // Task 3): it is drawn after the tonemap by the overlay pass below,
+        // which SAMPLES the mesh depth instead of attaching it.
 
         // ---------------------------------------------------------------
         // THE POST CHAIN (Task 10). One node per chain pass, between the
@@ -1475,6 +1453,38 @@ namespace Arcane
         // knows nor cares which it got, which is what keeps the two modes one
         // frame shape rather than two.
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
+
+        // ---------------------------------------------------------------
+        // THE POST-TONEMAP OVERLAY PASS (F5 plan 1 Task 3, spec s3.3),
+        // declared right AFTER the tonemap and BEFORE the game HUD: the 3D
+        // grid, then depth-tested lines and fills, then always-on-top ones
+        // (the 2D grid, physics debug, the camera rect, the gizmo), blended
+        // straight-alpha onto the DISPLAY-REFERRED target -- so the post
+        // chain never grades them. Linear colours run the tonemap operator in
+        // overlay.hlsl; display-referred ones are written as given.
+        //
+        // DEPTH IS SAMPLED, NOT ATTACHED: with a mesh pass the node Reads that
+        // pass's depth transient as ShaderRead (its lifetime then runs mesh ->
+        // overlay); with none it Reads no depth at all -- in particular NOT the
+        // placeholder `depth` node above, which stays declared-and-unconsumed.
+        //
+        // GATED ON CONTENT: a frame with no grid and an empty (or null) list
+        // declares nothing, so the runtime's frame is unchanged.
+        // ---------------------------------------------------------------
+        const bool wantOverlay = (shape.grid != nullptr) ||
+            (shape.overlay != nullptr &&
+             (!shape.overlay->lines.empty() || !shape.overlay->fills.empty() || shape.overlay->hasGrid3d));
+        if (shape.world && wantOverlay)
+        {
+            // World-space primitives project through the mesh pass's camera
+            // when no grid supplies one (OverlayNode.hpp, AddOverlayNode).
+            const glm::mat4 meshViewProjection =
+                wantsMesh ? shape.mesh->projection * shape.mesh->view : glm::mat4(1.0f);
+            AddOverlayNode(graph, context, handles.backbuffer,
+                           wantsMesh ? handles.depth : RgTexture{},
+                           shape.grid, shape.overlay, shape.canvasWidth, shape.canvasHeight,
+                           wantsMesh ? &meshViewProjection : nullptr);
+        }
 
         // ---------------------------------------------------------------
         // THE GAME HUD (Task 9), declared BETWEEN the tonemap and the
@@ -1657,6 +1667,7 @@ namespace Arcane
         if (m_post)     m_post->SyncPoolEpoch(*m_graph);
         if (m_tonemap)  m_tonemap->SyncPoolEpoch(*m_graph);
         if (m_outline)  m_outline->SyncPoolEpoch(*m_graph);
+        if (m_overlay)  m_overlay->SyncPoolEpoch(*m_graph);
 
         // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
         // device-less [nri] frame-shape cases drive the real declarations instead
@@ -1674,14 +1685,15 @@ namespace Arcane
         // (PresentChromeFrame passes only `imgui`); say so loudly, once, if a
         // future caller does.
         if (!frame.world && (frame.batch != nullptr || frame.mesh != nullptr
-                             || frame.grid != nullptr || frame.post != nullptr))
+                             || frame.grid != nullptr || frame.post != nullptr
+                             || frame.overlay != nullptr))
         {
             static bool warned = false;
             if (!warned)
             {
                 warned = true;
                 ARC_WARN("[nri-graph] a world=false (chrome) frame carries world inputs "
-                         "(batch/mesh/grid/post); they are ignored and the batch is not drained");
+                         "(batch/mesh/grid/post/overlay); they are ignored and the batch is not drained");
             }
         }
         shape.canvasWidth   = SurfaceWidth();
@@ -1696,7 +1708,9 @@ namespace Arcane
         // declaring a node that does not exist.
         shape.mesh          = m_mesh ? frame.mesh : nullptr;
         // The 3D reference grid (F4 plan 1 T10), belt-and-braces the same way.
-        shape.grid          = m_grid ? frame.grid : nullptr;
+        shape.grid          = m_overlay ? frame.grid : nullptr;
+        // The post-tonemap overlay (F5 plan 1 T3), against ITS node the same way.
+        shape.overlay       = m_overlay ? frame.overlay : nullptr;
         // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
         // host-window mode, so the tonemap imports the swapchain exactly as it
         // always has; the vehicle's output texture otherwise. Nothing else in

@@ -723,6 +723,10 @@ namespace Arcane
         [[nodiscard]] bool        IsTransient(RgBuffer buffer) const;
         [[nodiscard]] bool        WasWritten(RgTexture texture) const;
         [[nodiscard]] bool        WasWritten(RgBuffer buffer) const;
+        // True when some node Reads `texture` (any non-write access). False for
+        // an invalid handle. F5 plan 1 Task 3: pins that the overlay pass
+        // samples the mesh depth and never the unconsumed placeholder depth.
+        [[nodiscard]] bool        WasRead(RgTexture texture) const;
 
         // True iff `texture`/`buffer` decodes to a slot that both exists in
         // the CURRENT generation and is in range -- the non-fatal, queryable

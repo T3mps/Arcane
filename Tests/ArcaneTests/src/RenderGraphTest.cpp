@@ -7108,24 +7108,20 @@ TEST_CASE("nri graph frame (T6F3/T7): a registry-backed scene declares 'gpuscene
 }
 
 // =========================================================================
-// F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID -- GridNode, the
-// analytic depth-tested ground grid, declared AFTER the mesh pass and READING
-// its depth transient as a depth attachment it tests against but never writes
-// (the PSO's depth.write = false; the graph-level declaration is still
-// DepthWrite, the only barrier state a bound depth attachment has).
+// F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID -- since F5 plan 1
+// Task 3 drawn by the post-tonemap OVERLAY node, declared right AFTER the
+// tonemap. There is no node named "grid" on the frame any more. The overlay
+// SAMPLES the mesh pass's depth transient (Read as ShaderRead) instead of
+// attaching it, so it declares no depth load op and carries one barrier: the
+// depth moving from the mesh pass's attachment state to shader-read.
 //
-// THE SPEC S14 LIFETIME RISK, pinned here: GridNode consumes the depth
-// transient MeshNode minted, so that transient must outlive MeshNode's own
-// record. That is a DECLARATION fact, not an ownership one -- Compile()
-// derives every transient's lifetime as [first node that touches it, LAST
-// node that touches it] (RgCompiled::Lifetime), so the grid node's Write
-// alone extends the depth transient's pool tenancy through the grid node.
-// No resource moved and MeshNode is untouched; the cases below assert the
-// lifetime directly.
+// THE SPEC S14 LIFETIME, still a declaration fact: the overlay's Read extends
+// the depth transient's pool tenancy from the mesh node (first toucher)
+// through the overlay node (last toucher).
 // =========================================================================
 
-TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' after 'mesh', "
-          "reading the mesh depth as its depth attachment", "[nri][graph]")
+TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'overlay' after 'tonemap', "
+          "sampling the mesh depth", "[nri][graph]")
 {
     Arcane::MeshInstance one;
     one.mesh = Arcane::Guid{ 1, 1 };
@@ -7136,7 +7132,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
 
     Arcane::GridSceneDesc grid;   // XZ plane; the tunables are zero (MakeGridScene fills them) -- the declaration shape does not read them
 
-    SECTION("with a mesh scene: batch2d, gpuscene-sync, mesh-cull, mesh, grid, tonemap -- one shared depth transient")
+    SECTION("with a mesh scene: ... mesh, taa, tonemap, overlay -- one shared depth transient, read by the overlay")
     {
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
@@ -7147,46 +7143,41 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
 
         const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 
-        // F3 plan 1 T6: the GPU scene's Copy node rides ahead of mesh.
         REQUIRE(graph.NodeCount() == 9);
-        CHECK(NodeNames(graph) == WithReservedSlots({ "batch2d", "gpuscene-sync", "mesh-cull", "mesh", "grid", "tonemap" }));
+        CHECK(NodeNames(graph) == std::vector<std::string>{ "gbuffer", "lighting", "batch2d", "gpuscene-sync",
+                                                            "mesh-cull", "mesh", "taa", "tonemap", "overlay" });
         CHECK(std::string(graph.NodeName(3)) == "gpuscene-sync");
         CHECK(std::string(graph.NodeName(4)) == "mesh-cull");
         CHECK(std::string(graph.NodeName(5)) == "mesh");
-        CHECK(std::string(graph.NodeName(6)) == "grid");
-        CHECK(std::string(graph.NodeName(8)) == "tonemap");
+        CHECK(std::string(graph.NodeName(7)) == "tonemap");
+        CHECK(std::string(graph.NodeName(8)) == "overlay");
 
-        // ONE depth transient, minted by the mesh node; the grid node did not
-        // mint a second one.
+        // ONE depth transient, minted by the mesh node and READ by the overlay.
         REQUIRE(graph.IsHandleValid(handles.depth));
         CHECK(std::string(graph.NameOf(handles.depth)) == "depth");
         CHECK(graph.WasWritten(handles.depth));
+        CHECK(graph.WasRead(handles.depth));
         CHECK(graph.WasWritten(handles.canvas));
+        CHECK(graph.DepthLoadOp(8) == nullptr);   // sampled, not attached
 
         const Arcane::RgCompiled compiled = CompileOk(graph);
         REQUIRE(compiled.nodes.size() == 9);
-        REQUIRE(compiled.transients.size() == 2);   // canvas + the ONE depth (imported buffers are not transients)
+        REQUIRE(compiled.transients.size() == 2);   // canvas + the ONE depth (the backbuffer is imported)
 
-        // THE LIFETIME (spec s14): the depth transient is texture slot 1 and
-        // its tenancy runs from the mesh node (first toucher) THROUGH the
-        // grid node (last toucher) -- which is the whole of "the depth
-        // outlives MeshNode's record".
+        // THE LIFETIME (spec s14): mesh (first toucher) through overlay (last).
         CHECK(compiled.transients[1].resourceIndex == 1u);
         CHECK(compiled.transientLifetimes[1].first == 5u);   // mesh
-        CHECK(compiled.transientLifetimes[1].last  == 6u);   // grid
+        CHECK(compiled.transientLifetimes[1].last  == 8u);   // overlay
         CHECK(compiled.transientPoolSlot[1] != Arcane::kRgNoPoolSlot);
         CHECK(compiled.poolSlotCount == 2);
 
-        // THE BARRIERS: the grid node declares the SAME state the mesh node
-        // left both targets in (canvas COLOR_ATTACHMENT, depth
-        // DEPTH_STENCIL_ATTACHMENT), and consecutive same-state declarations
-        // derive NO barrier -- so the grid node carries none. A grid node that
-        // read the depth as ShaderRead (a texture, not an attachment) would
-        // carry one, and that is exactly the shape spec s5.2 does NOT want.
-        CHECK(compiled.nodes[6].preBarriers.empty());
+        // THE BARRIERS: exactly one -- the depth moving to the shader-read
+        // state. The backbuffer is already in the ColorWrite state the
+        // tonemap left, so it contributes none.
+        CHECK(compiled.nodes[8].preBarriers.size() == 1u);
     }
 
-    SECTION("with no mesh scene: 'grid' is still declared, with no depth attachment")
+    SECTION("with no mesh scene: 'overlay' is still declared, reading no depth")
     {
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
@@ -7197,9 +7188,10 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 
         REQUIRE(graph.NodeCount() == 6);
-        CHECK(NodeNames(graph) == WithReservedSlots({ "batch2d", "grid", "tonemap" }));
-        CHECK(std::string(graph.NodeName(3)) == "grid");
-        CHECK(std::string(graph.NodeName(5)) == "tonemap");
+        CHECK(NodeNames(graph) == std::vector<std::string>{ "gbuffer", "lighting", "batch2d", "taa", "tonemap",
+                                                            "overlay" });
+        CHECK(std::string(graph.NodeName(4)) == "tonemap");
+        CHECK(std::string(graph.NodeName(5)) == "overlay");
         CHECK_FALSE(graph.IsHandleValid(handles.depth));
         CHECK(graph.WasWritten(handles.canvas));
 
@@ -7207,10 +7199,10 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         REQUIRE(compiled.nodes.size() == 6);
         CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
         CHECK(compiled.poolSlotCount == 1);
-        CHECK(compiled.nodes[3].preBarriers.empty());   // canvas already COLOR_ATTACHMENT
+        CHECK(compiled.nodes[5].preBarriers.empty());   // backbuffer already ColorWrite
     }
 
-    SECTION("with no grid scene: the frame is byte-for-byte the pre-T10 mesh frame")
+    SECTION("with no grid scene: the frame is byte-for-byte the pre-T10 mesh frame, no overlay")
     {
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
@@ -7224,6 +7216,8 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         CHECK(std::string(graph.NodeName(4)) == "mesh-cull");
         CHECK(std::string(graph.NodeName(5)) == "mesh");
         CHECK(std::string(graph.NodeName(7)) == "tonemap");
+        for (std::size_t i = 0; i < graph.NodeCount(); ++i)
+            CHECK(std::string(graph.NodeName(i)) != "overlay");
     }
 }
 

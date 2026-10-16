@@ -54,7 +54,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
-#include "Viewport/GizmoOverlay.hpp"   // ImGuiGizmoSink (the gizmo as foreground chrome)
+#include <Arcane/Render/OverlayBatchCollector.hpp>   // Batcher2D producers -> overlay primitives (F5 plan 1 T3)
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame, once per viewport frame
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -102,6 +102,67 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // The transform gizmo's sink (F5 plan 1 Task 3): the same Line /
+        // Triangle / Rect / Circle callbacks ImGuiGizmoSink used to paint into
+        // the Viewport window's draw list, recorded instead as post-tonemap
+        // overlay primitives -- viewport pixels (image origin (0, 0)),
+        // AlwaysOnTop, DisplayReferred (the gizmo colours were ImGui colours,
+        // i.e. already display-referred).
+        class OverlayGizmoSink final : public Arcane::GizmoDrawSink
+        {
+        public:
+            explicit OverlayGizmoSink(Arcane::OverlayPrimitiveList& out) : m_out(out) {}
+
+            void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) override
+            {
+                Arcane::OverlayLine line{};
+                line.a           = glm::vec3(a, 0.0f);
+                line.b           = glm::vec3(b, 0.0f);
+                line.color       = rgba;
+                line.thickness   = thickness;
+                line.depth       = Arcane::OverlayDepthClass::AlwaysOnTop;
+                line.space       = Arcane::OverlayColorSpace::DisplayReferred;
+                line.screenSpace = true;
+                m_out.lines.push_back(line);
+            }
+            void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Triangle, rgba);
+                fill.a = glm::vec3(a, 0.0f);
+                fill.b = glm::vec3(b, 0.0f);
+                fill.c = glm::vec3(c, 0.0f);
+                m_out.fills.push_back(fill);
+            }
+            void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Rect, rgba);
+                fill.a    = glm::vec3(pos, 0.0f);
+                fill.size = size;
+                m_out.fills.push_back(fill);
+            }
+            void Circle(glm::vec2 center, float radius, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Circle, rgba);
+                fill.a      = glm::vec3(center, 0.0f);
+                fill.radius = radius;
+                m_out.fills.push_back(fill);
+            }
+
+        private:
+            [[nodiscard]] static Arcane::OverlayFill Fill(Arcane::OverlayPrimKind kind, glm::vec4 rgba) noexcept
+            {
+                Arcane::OverlayFill fill{};
+                fill.kind        = kind;
+                fill.color       = rgba;
+                fill.depth       = Arcane::OverlayDepthClass::AlwaysOnTop;
+                fill.space       = Arcane::OverlayColorSpace::DisplayReferred;
+                fill.screenSpace = true;
+                return fill;
+            }
+
+            Arcane::OverlayPrimitiveList& m_out;
+        };
+
         // --compare / --bless (Task 9). Own private copy, matching
         // RuntimeApp.cpp's (which explains the reasoning in full): this is a
         // FILE PATH COMPONENT ("dx12"/"vulkan", matching HostConfig.cpp's
@@ -477,6 +538,9 @@ namespace Arcane::Editor
             AdvanceSim(ls);
             ApplyPendingViewportResize();
             RefreshSceneResolution();
+            // The gizmo's overlay primitives, BEFORE the scene render that
+            // carries them (F5 plan 1 Task 3) -- not a frame late.
+            BuildGizmoOverlayPrims();
             RenderSceneToViewport();
             // PHASES 11, 12 AND THE CAPTURE ARE DISCHARGED BY PHASE 10.
             // RenderSceneToViewport declares ONE graph frame whose nodes cover
@@ -1881,6 +1945,15 @@ namespace Arcane::Editor
         // re-Begin) reach this line right after their Begin.
         b.SetViewProjection(m_runtime->View().ViewProjection());
 
+        // THE POST-TONEMAP OVERLAY (F5 plan 1 Task 3): the 2D grid, physics
+        // debug and the camera rect no longer go into the scene batcher. Each
+        // is collected through an OverlayBatchCollector into m_overlayPrims,
+        // which ArmGraphViewportFrame hands to the graph's overlay node.
+        // Cleared here, so it lives until the next submission.
+        m_overlayPrims.lines.clear();
+        m_overlayPrims.fills.clear();
+        m_overlayPrims.hasGrid3d = false;
+
         // The 2D reference grid (F4 plan 1 T9, spec s5.1), FIRST and at the
         // BOTTOM batcher layer (0, 0) so every sprite paints over it: decade
         // levels on the metre, chosen from this frame's pixels-per-metre and
@@ -1892,8 +1965,13 @@ namespace Arcane::Editor
         if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
             && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
         {
+            // Into the overlay, DepthTested: DrawGrid2D projects each world
+            // segment to pixels, so the lines land screenSpace with z = 0 (the
+            // near plane -- no mesh occludes them in this interim; Task 9
+            // replaces them with world-space lines).
             const Arcane::ViewTransform& view = m_runtime->View();
-            Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
+            Arcane::OverlayBatchCollector grid(m_overlayPrims, Arcane::OverlayDepthClass::DepthTested);
+            Arcane::Editor::DrawGrid2D(grid, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
         }
 
         m_runtime->SetRenderContext(&b);
@@ -1933,7 +2011,9 @@ namespace Arcane::Editor
                 opts.contacts   = plan.wholeWorld;
                 if (!plan.wholeWorld && selectedBody)
                     opts.onlyBody = (static_cast<std::uint64_t>(selectedBody->index) << 32) | selectedBody->generation;
-                Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), b, opts);
+                // Into the overlay, AlwaysOnTop (above the grid), already pixels.
+                Arcane::OverlayBatchCollector debug(m_overlayPrims);
+                Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), debug, opts);
             }
         }
 
@@ -1987,17 +2067,51 @@ namespace Arcane::Editor
                     const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
                                                             kVpDefaults.cameraFrame, kCameraFrameColor);
                     const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
+                    // Into the overlay, AlwaysOnTop; the corners are pixels.
+                    Arcane::OverlayBatchCollector rect(m_overlayPrims);
                     for (int i = 0; i < 4; ++i)
-                        b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
+                        rect.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
                 }
             }
         }
 
-        // The gizmo is NOT drawn here any more (F4 plan 2, desk finding
-        // 2026-09-18): the scene batch is painted before the mesh pass, so a
-        // gizmo in it vanished inside any mesh covering its handles. It paints
-        // as viewport FOREGROUND chrome instead -- see the gizmoOverlay lambda
-        // handed to DrawViewportPanel.
+        // The gizmo is NOT drawn into the scene batcher (F4 plan 2, desk
+        // finding 2026-09-18): the scene batch is painted before the mesh
+        // pass, so a gizmo in it vanished inside any mesh covering its
+        // handles. Since F5 plan 1 Task 3 it is a post-tonemap overlay
+        // primitive set, built by BuildGizmoOverlayPrims before this frame's
+        // render and appended LAST, so it sits on top of every other overlay
+        // primitive.
+        m_overlayPrims.lines.insert(m_overlayPrims.lines.end(),
+                                    m_gizmoPrims.lines.begin(), m_gizmoPrims.lines.end());
+        m_overlayPrims.fills.insert(m_overlayPrims.fills.end(),
+                                    m_gizmoPrims.fills.begin(), m_gizmoPrims.fills.end());
+    }
+
+    void EditorApp::BuildGizmoOverlayPrims()
+    {
+        m_gizmoPrims.lines.clear();
+        m_gizmoPrims.fills.clear();
+        // Edit mode with a live gizmo and a selection only -- the same gate the
+        // hit-test uses, and the SAME handle mask, size and view as this
+        // frame's hit-test.
+        if (InPlayMode() || !GizmoLive() || !m_selection.HasSelection() || !m_runtime)
+            return;
+        Astra::Registry& reg = m_runtime->Registry();
+        const Arcane::Transform* lt =
+            std::as_const(reg).GetComponent<Arcane::Transform>(m_selection.Primary());
+        if (!lt)
+            return;
+        // WORLD pose, matching the interaction block's -- the gizmo draws
+        // where it hit-tests, including for a parented primary.
+        const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
+            Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
+        OverlayGizmoSink sink(m_gizmoPrims);
+        Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
+                     Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
+                     m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                     Arcane::Editor::MakeGizmoTuning(),
+                     m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
     }
 
     // Phase 11's CPU HALF -- see the declaration. The GPU composite is a NODE
@@ -2128,6 +2242,13 @@ namespace Arcane::Editor
                                      : Arcane::GridSceneDesc::Plane::XZ);
             vp.grid = &m_gridScene;
         }
+
+        // ---- F5 plan 1 T3: the post-tonemap overlay ----------------------
+        // The 2D grid, physics debug, the camera rect and the gizmo, collected
+        // by SubmitSceneToBatcher (called from RenderSceneToViewport just
+        // before this function). UNCONDITIONAL, above the pick chain's early
+        // return; an empty list declares no overlay node.
+        vp.overlay = &m_overlayPrims;
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // THE HOVER GOES THROUGH HoverLive(), not m_gameUi.inViewport
@@ -3715,39 +3836,16 @@ namespace Arcane::Editor
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
             m_camera.mode,
         };
-        // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
-        // SDPG_Foreground for its widget): drawn by the panel right after the
-        // image, under the tool buttons, through an ImGui sink. Edit mode with
-        // a live gizmo and a selection only -- the same gate the hit-test uses,
-        // and the SAME handle mask, size and view as this frame's hit-test.
-        const Arcane::Editor::ViewportImageOverlayFn gizmoOverlay =
-            [this](ImDrawList& list, ImVec2 origin)
-            {
-                if (InPlayMode() || !GizmoLive() || !m_selection.HasSelection() || !m_runtime)
-                    return;
-                Astra::Registry& reg = m_runtime->Registry();
-                const Arcane::Transform* lt =
-                    std::as_const(reg).GetComponent<Arcane::Transform>(m_selection.Primary());
-                if (!lt)
-                    return;
-                // WORLD pose, matching the interaction block's -- the gizmo draws
-                // where it hit-tests, including for a parented primary.
-                const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
-                    Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
-                Arcane::Editor::ImGuiGizmoSink sink(list, origin);
-                Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
-                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
-                             Arcane::Editor::MakeGizmoTuning(),
-                             m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
-            };
+        // The gizmo is no longer painted here as ImGui foreground chrome (F5
+        // plan 1 Task 3): BuildGizmoOverlayPrims records it as post-tonemap
+        // overlay primitives BEFORE this frame's render, so the panel draws no
+        // image overlay (and a later packet path cannot double-draw it).
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
                                             tools,
                                             Arcane::Editor::ViewportChrome{ /*showToolOverlay=*/!InPlayMode(),
                                                                             /*playing=*/InPlayMode(),
-                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty },
-                                            gizmoOverlay);
+                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty });
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;
         m_viewportTargets.pendingH = fs.vp.desiredH;

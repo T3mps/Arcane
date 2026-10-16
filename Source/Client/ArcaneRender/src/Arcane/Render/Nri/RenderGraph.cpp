@@ -932,6 +932,17 @@ namespace Arcane
         return m_textures[slot].everWritten;
     }
 
+    bool RenderGraph::WasRead(RgTexture texture) const
+    {
+        const std::size_t slot = DecodeAndValidateSlot(texture.index, m_textures.size());
+        if (slot == kNoSlot)
+            return false;
+        for (const Access& access : m_accesses)
+            if (access.isTexture && access.resourceIndex == slot && !access.isWrite)
+                return true;
+        return false;
+    }
+
     bool RenderGraph::WasWritten(RgBuffer buffer) const
     {
         const std::size_t slot = DecodeAndValidateSlot(buffer.index, m_buffers.size());

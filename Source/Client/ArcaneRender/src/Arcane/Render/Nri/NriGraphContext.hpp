@@ -249,6 +249,8 @@
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
+#include <Arcane/Render/Nri/nodes/OverlayNode.hpp>
+#include <Arcane/Render/OverlayPrimitive.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <cstdint>
@@ -452,12 +454,20 @@ namespace Arcane
             // ---- the 3D reference grid (F4 plan 1 T10, spec s5.2) --------
             // THIS FRAME'S GRID -- the editor camera and the plane. Null (the
             // default) is "no grid", the same slice-by-nulling rule as `mesh`.
-            // Declared AFTER the mesh pass and depth-tested against its depth
-            // transient (never writing it); with no mesh pass the grid draws
-            // unoccluded. Editor chrome: the editor arms it only in Edit mode
+            // Since F5 plan 1 Task 3 it is drawn by the post-tonemap OVERLAY
+            // pass (OverlayNode), which samples the mesh pass's depth (never
+            // writing it); with no mesh pass the grid draws unoccluded. Editor chrome: the editor arms it only in Edit mode
             // with the Perspective view and Show grid on; the runtime never
             // does. BORROWED for the duration of the RenderFrame call.
             const GridSceneDesc* grid = nullptr;
+
+            // ---- the post-tonemap overlay (F5 plan 1 Task 3) -------------
+            // Lines and fills drawn AFTER the tonemap by OverlayNode: the 2D
+            // grid, physics debug, the camera rect and the gizmo (the editor),
+            // or a test's primitives. Null, or a list with no line, no fill and
+            // no 3D grid, declares no overlay node (with `grid` also null).
+            // BORROWED for the duration of the RenderFrame call.
+            const OverlayPrimitiveList* overlay = nullptr;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
             // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
@@ -1031,6 +1041,10 @@ namespace Arcane
         // two-region constant arena.
         [[nodiscard]] GridNode*      Grid()      noexcept { return m_grid.get(); }
 
+        // The post-tonemap overlay pass (F5 plan 1 Task 3). Built EAGERLY like
+        // Grid(): a frame with no overlay declares no node.
+        [[nodiscard]] OverlayNode*   Overlay()   noexcept { return m_overlay.get(); }
+
         // The pick + outline pair (Task 11). NULL on every run that neither
         // passed --pick-probe nor asked for them through NodeSet::pickOutline:
         // an ordinary --nri-graph run creates no readback buffer, no descriptor
@@ -1485,6 +1499,7 @@ namespace Arcane
         std::unique_ptr<MeshCullNode>      m_meshCull;
         std::unique_ptr<MeshNode>          m_mesh;
         std::unique_ptr<GridNode>          m_grid;
+        std::unique_ptr<OverlayNode>       m_overlay;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
         // Built only under --pick-probe or NodeSet::pickOutline (see
@@ -1751,13 +1766,17 @@ namespace Arcane
         const MeshSceneDesc* mesh = nullptr;
 
         // F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID's desc, or null
-        // for none. Read for its PRESENCE here and for nothing else: the node
-        // is declared after the mesh block, reading the mesh pass's depth
-        // transient as its depth attachment when `mesh` above declared one
-        // (and with no depth attachment otherwise). The camera, the plane and
-        // the colours are consumed by GridNode at Record time. A device-less
-        // drive can point this at a default GridSceneDesc.
+        // for none. Since F5 plan 1 Task 3 it declares the post-tonemap
+        // "overlay" node (no "grid" node any more), which SAMPLES the mesh
+        // pass's depth transient when `mesh` above declared one. The camera,
+        // the plane and the colours are consumed by OverlayNode at Record
+        // time. A device-less drive can point this at a default GridSceneDesc.
         const GridSceneDesc* grid = nullptr;
+
+        // F5 plan 1 Task 3: the post-tonemap overlay primitives. The "overlay"
+        // node is declared after "tonemap" and before "gameui" when `grid` is
+        // non-null or this list has any line, fill, or hasGrid3d.
+        const OverlayPrimitiveList* overlay = nullptr;
     };
 
     struct RgFrameHandles

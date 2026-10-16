@@ -318,6 +318,13 @@ namespace Arcane::Editor
         // itself. Contains no target, no command list and no device, which is
         // what keeps the ORDER of its statements the whole of its contract.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
+        // The transform gizmo as post-tonemap overlay primitives (F5 plan 1
+        // Task 3): fills m_gizmoPrims from the same gate, handle mask, size and
+        // view as this frame's hit-test, in viewport pixels (image origin),
+        // AlwaysOnTop + DisplayReferred. Called from MainLoop immediately
+        // BEFORE RenderSceneToViewport, so the gizmo is not a frame late;
+        // SubmitSceneToBatcher appends the result to m_overlayPrims.
+        void BuildGizmoOverlayPrims();
         // Phase 11's CPU HALF: the game context's
         // per-frame input, and -- in Play, with a plugin that draws one --
         // its BeginFrame + DrawUIAll. Returns true when a game-UI frame was
@@ -1418,6 +1425,15 @@ namespace Arcane::Editor
         // POINTER read by RenderFrameOffscreen after ArmGraphViewportFrame
         // (which fills it) has returned.
         Arcane::GridSceneDesc m_gridScene;
+
+        // THIS FRAME'S POST-TONEMAP OVERLAY (F5 plan 1 Task 3): the 2D grid,
+        // physics debug and the camera rect that SubmitSceneToBatcher collects,
+        // plus the gizmo's primitives. A member for m_gridScene's reason
+        // (FrameDesc::overlay is a pointer read after ArmGraphViewportFrame
+        // returns); alive until the next SubmitSceneToBatcher clears it.
+        Arcane::OverlayPrimitiveList m_overlayPrims;
+        // The gizmo's primitives, rebuilt by BuildGizmoOverlayPrims each frame.
+        Arcane::OverlayPrimitiveList m_gizmoPrims;
 
         // The click-pick, which cannot answer in the frame it is asked -- see
         // DeferredPick.hpp for the three hazards it closes.
