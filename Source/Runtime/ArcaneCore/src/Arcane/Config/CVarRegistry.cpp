@@ -28,25 +28,25 @@
 
 namespace Arcane
 {
+    const char* ToString(SetBy by) noexcept
+    {
+        switch (by)
+        {
+        case SetBy::Default: return "Default";
+        case SetBy::EngineConfig: return "EngineConfig";
+        case SetBy::Plugin: return "Plugin";
+        case SetBy::Project: return "Project";
+        case SetBy::EditorUser: return "EditorUser";
+        case SetBy::User: return "User";
+        case SetBy::CommandLine: return "CommandLine";
+        case SetBy::Code: return "Code";
+        case SetBy::Console: return "Console";
+        }
+        return "?";
+    }
+
     namespace
     {
-        const char* SetByName(SetBy by)
-        {
-            switch (by)
-            {
-            case SetBy::Default: return "Default";
-            case SetBy::EngineConfig: return "EngineConfig";
-            case SetBy::Plugin: return "Plugin";
-            case SetBy::Project: return "Project";
-            case SetBy::EditorUser: return "EditorUser";
-            case SetBy::User: return "User";
-            case SetBy::CommandLine: return "CommandLine";
-            case SetBy::Code: return "Code";
-            case SetBy::Console: return "Console";
-            }
-            return "?";
-        }
-
         bool TakesRange(CVarType t)
         {
             return (t >= CVarType::Int32 && t <= CVarType::Float64) || (t >= CVarType::Color && t <= CVarType::Vec4);
@@ -614,12 +614,12 @@ namespace Arcane
             out += " = ";
             out += FormatCVarValue(explained->published, enumNames);
             out += " [";
-            out += SetByName(explained->setBy);
+            out += ToString(explained->setBy);
             out += "]\n";
             for (const CVarHistoryRecord& h : explained->history)
             {
                 out += "  ";
-                out += SetByName(h.by);
+                out += ToString(h.by);
                 if (!h.module.empty()) { out += " ("; out += h.module; out += ")"; }
                 out += " = ";
                 out += FormatCVarValue(h.value, enumNames);

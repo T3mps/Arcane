@@ -27,7 +27,7 @@ been hand-verified on Linux or macOS.
 | Real-GPU golden images | Defined in the [Jenkinsfile](Jenkinsfile) for a Windows GPU agent, and run on the Windows desk. |
 | Unified 2D and 3D world rendering | In progress on a separate branch. Sprites still draw through the 2D batcher. |
 | Entity replication, 3D physics, 64-bit worlds, game UI, VFX, skeletal animation | Specified or planned. Not in this tree. |
-| `arc` automation CLI | Designed. The checked-in note is still a draft, and the tool is not in this tree. |
+| Servitor automation CLI (`servitor`) | Designed. The checked-in note is still a draft, and the tool is not in this tree. |
 
 ## Feature overview
 
@@ -938,7 +938,7 @@ python .claude\skills\arcane-graph\neighbors.py ViewTransform
 ```
 
 Tooling is CLI-first. Asking a running host a new question is the job
-of the `arc` CLI, described under the roadmap. The draft is
+of the Servitor CLI, described under the roadmap. The draft is
 [docs/superpowers/specs/2026-10-05-arc-cli-design.md](docs/superpowers/specs/2026-10-05-arc-cli-design.md).
 
 Layout, build rules, and the engine-as-SDK contract are also in
@@ -982,8 +982,9 @@ including a per-camera option with no jitter. This is underway on a
 separate branch and is not in this tree. Sprites in this tree still
 draw with Batcher2D.
 
-**`arc` CLI.** A local command-line client that attaches to a running
-editor, runtime, or headless host (or launches one). The planned first
+**Servitor CLI.** A local command-line client (`servitor`; the engine
+side is the ArcaneRemote module) that attaches to a running editor,
+runtime, or headless host (or launches one). The planned first
 slice is query, act, screenshots, and JSON, local-only, with a session
 token. The checked-in design is still marked draft. The tool is not
 implemented in this tree.

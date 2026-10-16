@@ -26,6 +26,9 @@
 #include <Arcane/Host/ReferenceImages.hpp>    // --compare/--bless (Task 9): ReferenceResolution
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
+#if !defined(ARC_BUILD_DIST)
+#include <Arcane/Remote/HostSession.hpp>      // Servitor P0: the editor's remote surface (m_remote)
+#endif
 #include "Panels/AssetActivityLog.hpp"
 #include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState (m_assetBrowserUi)
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState (m_assetGraphUi) + the canvas teardown seam
@@ -706,8 +709,17 @@ namespace Arcane::Editor
         // host's dt sources (FrameInput's frameDt, AdvanceSim's simDt) read
         // 0 while this is true. ONE predicate, read by both, so the two
         // clocks can never disagree about whether the hold is on.
+        //
+        // Task 30 fix round 1: a remote `servitor wait settled` holds the same
+        // freeze while it is in its capture phase (spec s4.7: frozen-clock
+        // captures), on a windowed editor too; the session lifts it when the
+        // wait ends, fails or is torn down (HostSession::SettleClockFrozen).
         [[nodiscard]] bool SettleHoldActive() const noexcept
         {
+#if !defined(ARC_BUILD_DIST)
+            if (m_remote && m_remote->SettleClockFrozen())
+                return true;
+#endif
             return m_config.headless && m_config.settleAttempts != 0 &&
                    m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
         }
@@ -1438,6 +1450,19 @@ namespace Arcane::Editor
         std::uint64_t m_sceneEpoch = 0;
         // Bumped from the two sites above; named so both read as one decision.
         void NoteSceneReplaced() noexcept { ++m_sceneEpoch; m_deferredPick.Reset(); }
+
+        // THE ONE PLAY/EDIT FLIP RULE (Servitor P0 Task 29 fix round 1). Every
+        // site that calls PlaySession Play or Stop -- the toolbar transport,
+        // servitor play/stop, the save modal's Stop, ClearSceneReferences --
+        // runs BeforePlayStart before an Edit -> Play attempt and
+        // AfterPlayFlip(wasPlaying) after it, so their follow-ups cannot drift:
+        // the separate server process on Stop, NextWorld settings and the
+        // "editor:play" Problems retraction on Play, the scene epoch and the
+        // m_editBinding.editMode re-derivation either way (PlanPlayFlip,
+        // PlayMode.hpp). EditorAppFrame.cpp. The shutdown Stop and the boot
+        // --play-as Play stay outside it (see their own comments).
+        void BeforePlayStart();
+        void AfterPlayFlip(bool wasPlaying);
 
         // Shader-editor services + open documents (Slice 5). The compiler is the
         // app-shared compile service: documents Submit through it, and the
@@ -2185,6 +2210,50 @@ namespace Arcane::Editor
         // trigger, honoured by both hosts. Same fired-once shape as
         // m_gpuFaultFired directly above.
         bool                                      m_hangMainFired = false;
+
+        // ---- Servitor remote surface (P0 Task 11) ----------------------------
+        // Armed when editor.remote.enable is published true OR --remote was
+        // given (spec 0.4(b): the editor is armed by its cvar, default on;
+        // servitor launch passes --remote), and the primary world is not a
+        // Client (Arming::Allow). Drained once per frame between the event
+        // pump's Exit break and its SkipFrame continue (EditorAppFrame.cpp).
+        // The cvar going true -> false stops it ("remote-disabled") until it
+        // is true again. A project switch re-arms it so the descriptor follows
+        // the open project. Main thread only. The condition lives in
+        // UpdateRemoteSession, beside the cvar in EditorAppFrame.cpp.
+        void UpdateRemoteSession();
+        std::unique_ptr<Arcane::Remote::HostSession> m_remote;
+        // A start that failed (or was not allowed), or a cvar switched off, is
+        // not retried every frame: only the cvar being published true again
+        // (after a false) clears this.
+        bool                                      m_remoteArmBlocked = false;
+        // The last published editor.remote.enable UpdateRemoteSession saw, so
+        // only a true -> false TRANSITION stops the session (a false at boot
+        // with --remote still arms).
+        bool                                      m_remoteCvarKnown = false;
+        bool                                      m_remoteCvarLast  = false;
+        // 2 when an open-ended --headless --remote run lost (or never had) its
+        // remote surface: it has no other stop path, so Main() returns this.
+        int                                       m_remoteArmExit   = 0;
+        // UpdateRemoteSession has attempted an arm before (Arming::Attempt marks
+        // it, armed or refused): an explicit --remote refusal exits only on
+        // the first, startup attempt (rounds 2-3, M-2).
+        bool                                      m_remoteArmTried  = false;
+        // The remote reason the frame loop broke on ("remote-quit" or
+        // "remote-idle"), latched by MainLoop before the session stops, so
+        // ShutdownGraphPath's --report exitReason names it (Task 16).
+        std::string                               m_remoteExitReason;
+        // Task 27: the capture hooks (CaptureHooks), defined beside
+        // CaptureGraphViewportPng in EditorApp.cpp. user = this. Viewport =
+        // m_viewportTargets.graph (also the host pair, ruling F20); window =
+        // ChromeGraph(). Main thread.
+        static bool RemoteArmViewport(std::uint64_t ticket, void* user);
+        static bool RemoteDrainViewport(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
+        static bool RemoteArmWindow(std::uint64_t ticket, void* user);
+        static bool RemoteDrainWindow(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user);
+        // Servitor final fix pass (C-M12): the job gave up on `ticket`.
+        static void RemoteCancelViewport(std::uint64_t ticket, void* user);
+        static void RemoteCancelWindow(std::uint64_t ticket, void* user);
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

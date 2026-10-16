@@ -26,6 +26,7 @@
 #include <Arcane/Platform/Paths.hpp>   // Arcane::Paths::Resolve(DiagnosticsDir) -- the "finalize" dump-dir retarget (settings spec s11.0)
 #include <Arcane/Assets/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/FramePacing.hpp>       // FramesInFlight() -- the remote capture hooks' ring depth (Task 27)
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (StageGpuCore's boot banner)
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
@@ -47,6 +48,7 @@
 #include <atomic>   // g_cleanExitRequested -- the clean-exit hook's latch
 #include <chrono>
 #include <cstdint>
+#include <cstdio>   // std::fputs: the monolithic --remote refusal (Run)
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -73,6 +75,50 @@ namespace
     {
         return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
     }
+
+#if defined(ARC_RUNTIME_HOST_VERIFY) && !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // capture.compare's ResolveFn / BlessFn (Servitor P0 Task 28): the same
+    // adapter set and adapter-set ResolveReference overload the --compare
+    // path builds in RenderLoop (m_compareAdapterSet is filled only under
+    // --compare, so it is not read), so a software adapter never blesses into
+    // the shared or backend level.
+    Arcane::ReferenceResolution ResolveRemoteReference(const std::filesystem::path& projectRoot,
+                                                       const std::string& slot,
+                                                       Arcane::GraphicsBackend backend,
+                                                       Arcane::NriGraphContext* graph)
+    {
+        const char* const backendName = CompareBackendName(backend);
+        std::string adapterSet;
+        if (graph)
+        {
+            const Arcane::NriDeviceCaps& caps = graph->Device().Caps();
+            adapterSet = Arcane::ReferenceAdapterSet(backendName, caps.adapterName, caps.softwareAdapter);
+        }
+        return Arcane::ResolveReference(projectRoot, slot, backendName, adapterSet);
+    }
+
+    // ReferenceResolution -> the wire's ResolvedReference: the report's level
+    // names and the probed paths as UTF-8 with forward slashes.
+    Arcane::Remote::ResolvedReference ToRemoteReference(const Arcane::ReferenceResolution& resolution)
+    {
+        Arcane::Remote::ResolvedReference out;
+        out.found = resolution.level != Arcane::ReferenceLevel::None;
+        out.path  = resolution.path;
+        switch (resolution.level)
+        {
+            case Arcane::ReferenceLevel::Shared:  out.level = "shared";  break;
+            case Arcane::ReferenceLevel::Backend: out.level = "backend"; break;
+            case Arcane::ReferenceLevel::Adapter: out.level = "adapter"; break;
+            default:                              out.level = "none";    break;
+        }
+        for (const std::filesystem::path& tried : resolution.triedPaths)
+        {
+            const std::u8string utf8 = tried.generic_u8string();
+            out.triedPaths.emplace_back(utf8.begin(), utf8.end());
+        }
+        return out;
+    }
+#endif
 }
 
 RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
@@ -803,6 +849,135 @@ void RuntimeApp::MainLoop()
         .lastShaderPoll  = lastShaderPoll,
     };
 
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // Servitor P0 (Task 11): --remote arms the loopback surface once the render
+    // vehicle exists, so the first status already reads "ready". A client-mode
+    // primary world never arms (Arming::Allow), and says so. The idle exit
+    // applies only to an open-ended headless run (spec s4.7); a windowed or
+    // --frames N run ends by its own means, so a listener that cannot start
+    // leaves it running without remote. An open-ended headless run whose
+    // remote surface did not come up has NO stop path at all (s4.7 lifted
+    // --headless's --frames requirement only because remote is one), so it
+    // exits 2 instead of running forever (Task 11 review ruling).
+    const bool remoteOpenEnded = m_config.headless && m_config.maxFrames == 0;
+    if (m_config.remote && !Arcane::Remote::Arming::Allow(m_runtime->Core().Mode(), false, true))
+    {
+        // Rule 3 (final fix pass, C-M16): an explicit --remote that cannot
+        // apply is a startup refusal, exit 2, never run on as if ignored.
+        const char* why = Arcane::Remote::Arming::RefusalReason(m_runtime->Core().Mode());
+        ARC_ERROR("ArcaneRuntime: --remote refused: {}; exiting 2", why ? why : "the remote surface cannot arm here");
+        m_remoteArmExit = 2;
+        ShutdownGraphPath();
+        return;
+    }
+    else if (m_config.remote)
+    {
+        Arcane::Remote::HostSession::Config rc;
+        rc.kind               = Arcane::Remote::HostKind::Runtime;
+        rc.cvarContext        = Arcane::CVarContext::LocalHost;
+        if (const Arcane::Project* proj = m_runtime->CurrentProject())
+            rc.projectRoot    = proj->Root();
+        rc.descriptorOverride = m_config.remoteDescriptor;
+        rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
+        rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
+        rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
+        rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()
+        // Task 16 (ruling F12): `wait settled` -- the runtime's --settle
+        // producer conjunct is its shader compiler alone (SettleBound.hpp);
+        // the byte-equal pair is the host.wait job's own two captures through
+        // the capture pair below (Task 30). No dirty hook: a runtime has no
+        // unsaved documents.
+        rc.hookUser           = this;
+        rc.producersIdle      = [](void* user) -> bool {
+            return static_cast<RuntimeApp*>(user)->m_shaderCompiler.IsIdle();
+        };
+        // Task 19 (ruling F16): the runtime's one world.
+        rc.worlds.user        = this;
+        rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
+            auto* app = static_cast<RuntimeApp*>(user);
+            if (!app->m_runtime)
+                return {};
+            return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
+        };
+        // Task 27 (ruling F12): capture.viewport / capture.window / the host
+        // pair all read the runtime's one graph context, Graph() (the window's
+        // backbuffer, or the --headless offscreen target), through its capture
+        // ring: Arm stores the ticket, Drain hands back the retired copy. The
+        // ring retires on RuntimeFrame::RenderGraph's submits, which run while
+        // the sim is held, so an idle runtime still completes a capture. Never
+        // ReadCapture or DeviceWaitIdle (the --screenshot path stays its own).
+        // outDir is left empty: Start fills it with the session's artifact dir.
+        const Arcane::Remote::ArmCopyFn armRing = [](std::uint64_t ticket, void* user) -> bool {
+            Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph();
+            return graph && graph->ArmTicketCapture(ticket);
+        };
+        const Arcane::Remote::DrainSlotFn drainRing = [](std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw,
+                                                         void* user) -> bool {
+            Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph();
+            if (!graph)
+                return true;   // raw stays empty: mapped null, capture.no-frame
+            Arcane::TicketCaptureBytes bytes;
+            if (!graph->DrainTicketCapture(ticket, bytes))
+                return false;
+            raw->width       = bytes.width;
+            raw->height      = bytes.height;
+            raw->rowPitch    = bytes.rowPitch;
+            raw->bgra        = bytes.bgra;
+            raw->mapped      = bytes.mapped;
+            raw->mappedBytes = bytes.mappedBytes;
+            return true;
+        };
+        rc.capture.framesInFlight = Arcane::FramesInFlight();
+        rc.capture.armViewport    = armRing;
+        rc.capture.drainViewport  = drainRing;
+        rc.capture.armWindow      = armRing;
+        rc.capture.drainWindow    = drainRing;
+        rc.capture.armHost        = armRing;
+        rc.capture.drainHost      = drainRing;
+        // Final fix pass (C-M12): a capture job that gives up clears its ticket.
+        const Arcane::Remote::CancelCopyFn cancelRing = [](std::uint64_t ticket, void* user) {
+            if (Arcane::NriGraphContext* graph = static_cast<RuntimeApp*>(user)->Graph())
+                graph->CancelTicketCapture(ticket);
+        };
+        rc.capture.cancelViewport = cancelRing;
+        rc.capture.cancelWindow   = cancelRing;
+        rc.capture.cancelHost     = cancelRing;
+        rc.capture.occludedRisk   = !m_config.headless;
+        rc.capture.user           = this;
+#if defined(ARC_RUNTIME_HOST_VERIFY)
+        // Task 28 (ruling F12): capture.compare resolves and blesses through
+        // ReferenceImages with this project's root and Graph()'s adapter set,
+        // the resolution --compare uses. Without the verification vehicle
+        // the hooks stay null and capture.compare answers host.unavailable.
+        rc.compare.projectRoot    = rc.projectRoot;
+        rc.compare.user           = this;
+        rc.compare.resolve        = [](const std::filesystem::path& root, const std::string& slot,
+                                       void* user) -> Arcane::Remote::ResolvedReference {
+            auto* app = static_cast<RuntimeApp*>(user);
+            return ToRemoteReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->Graph()));
+        };
+        rc.compare.bless          = [](const std::filesystem::path& root, const std::string& slot,
+                                       std::uint32_t width, std::uint32_t height, const unsigned char* rgba,
+                                       void* user) -> bool {
+            auto* app = static_cast<RuntimeApp*>(user);
+            return Arcane::BlessReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->Graph()),
+                                          width, height, rgba);
+        };
+#endif
+        m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+        if (!m_remote->Start())
+            m_remote.reset();   // Start logged why
+    }
+    if (m_config.remote && remoteOpenEnded && !m_remote)
+    {
+        ARC_ERROR("ArcaneRuntime: --headless --remote without --frames has no stop path when the remote "
+                  "surface did not start (see above); exiting 2");
+        m_remoteArmExit = 2;
+        ShutdownGraphPath();
+        return;
+    }
+#endif
+
     while (running)
     {
         // The OS asked for this session to end -- Ctrl-C, the console close
@@ -822,13 +997,88 @@ void RuntimeApp::MainLoop()
         // the device was lost; io.skipFrame (minimized window) asks for the
         // ordinary `continue` a bare bool return cannot express by itself.
         if (Arcane::RuntimeFrame::PumpAndResize(io)) break;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // Remote commands run after the pump and before the sim advance, on
+        // every iteration including a minimized one. DrainFrame notes a module
+        // reload the last frame performed (CaptureTail's Poll, the
+        // reload_plugin actions) from this host's own PluginHost (ruling F10),
+        // and a failed one from its attempt count (Task 30).
+        // Final fix pass: the minimized window PumpAndResize skips (C-M5), so a
+        // capture answers host.busy minimized at once; and the module host's
+        // reload begin/end, published as the "reloading" state (C-I3).
+        if (m_remote)
+        {
+            m_remote->NoteMinimized(io.skipFrame);
+            m_plugin->SetReloadObserver(
+                [](bool reloading, void* user) {
+                    auto* app = static_cast<RuntimeApp*>(user);
+                    if (app->m_remote)
+                        app->m_remote->NoteReloading(reloading);
+                },
+                this);
+        }
+        if (m_remote && m_remote->DrainFrame(m_plugin->Generation(), m_plugin->ReloadAttempts(),
+                                             m_plugin->LastReloadOk()))
+        {
+            ARC_INFO("ArcaneRuntime: exiting on {}", m_remote->ExitReason());
+            break;
+        }
+        // Task 30 fix round 1: a `wait settled` in its capture phase freezes
+        // this frame's clock through AdvanceSim's settleHold (spec s4.7).
+        io.remoteSettleHold = m_remote && m_remote->SettleClockFrozen();
+#endif
         if (io.skipFrame) continue;
 
-        // Per-frame timing + input sampling + the fixed-step sim advance.
-        // io.quit covers the Pressed("quit") input-action exit, the one quit
-        // path PumpAndResize's own return does not cover.
-        Arcane::RuntimeFrame::AdvanceSim(io);
+        // AM1 tick gate: a held --remote run (no --frames) holds its sim until a
+        // play command; a step is one fixed tick. No remote: Run, as before.
+        Arcane::RuntimeFrame::SimPace pace = Arcane::RuntimeFrame::SimPace::Run;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        if (m_remote)
+        {
+            switch (m_remote->Tick().Consume())
+            {
+            case Arcane::Remote::TickDecision::Idle: pace = Arcane::RuntimeFrame::SimPace::Hold;       break;
+            case Arcane::Remote::TickDecision::Step: pace = Arcane::RuntimeFrame::SimPace::SingleTick; break;
+            case Arcane::Remote::TickDecision::Run:  pace = Arcane::RuntimeFrame::SimPace::Run;        break;
+            }
+            // Task 29 (ruling B): the hold is visible. A windowed runtime's
+            // title reads "<title> [held]" while the gate holds the sim (held
+            // at frame 0, or stopped / paused by servitor) and the plain title
+            // while it runs. --headless has no title.
+            if (!m_config.headless)
+            {
+                const bool held = m_remote->Tick().Held();
+                if (held != m_remoteTitleHeld)
+                {
+                    m_remoteTitleHeld = held;
+                    m_gpu->Win().SetTitle(Arcane::Remote::HeldWindowTitle(Arcane::kHostWindowTitle, held));
+                }
+            }
+        }
+#endif
+
+        // Per-frame timing + input sampling + the fixed-step sim advance (a
+        // Hold pass keeps only the preamble and the host clock; it still
+        // renders below). io.quit covers the Pressed("quit") input-action exit,
+        // the one quit path PumpAndResize's own return does not cover.
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        const auto advanceStart = std::chrono::steady_clock::now();
+#endif
+        Arcane::RuntimeFrame::AdvanceSim(io, pace);
         if (io.quit) break;
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // A settle freeze (Task 30) runs a Run pass at sim dt 0: no tick, so no
+        // host.frame. A requested single step still ticks once under it.
+        if (m_remote && pace != Arcane::RuntimeFrame::SimPace::Hold &&
+            (pace == Arcane::RuntimeFrame::SimPace::SingleTick || !io.remoteSettleHold))
+        {
+            m_remote->Gate().frame.fetch_add(1);   // host.frame counts sim advances only (AM1)
+            // stats.frame (Task 26): only a real sim advance; a held pass keeps the last snapshot.
+            m_remote->NoteSimAdvance(m_remote->Gate().frame.load(), io.lastFrameDt,
+                                     std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - advanceStart).count());
+        }
+#endif
 
         // ImGui BeginFrame + the host HUD + DrawUIAll...
         Arcane::RuntimeFrame::BuildHud(io);
@@ -842,7 +1092,15 @@ void RuntimeApp::MainLoop()
         // THE RENDER HALF. RenderGraph's body lives in RuntimeFrame.cpp; the
         // call stays here because only MainLoop's own loop can break/continue.
         // =============================================================
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        const auto renderStart = std::chrono::steady_clock::now();
+#endif
         const Arcane::NriGraphContext::FrameOutcome outcome = Arcane::RuntimeFrame::RenderGraph(io);
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        if (m_remote)
+            m_remote->NoteRenderMs(std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - renderStart).count());
+#endif
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)  break;
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Skipped) continue;
 
@@ -856,7 +1114,21 @@ void RuntimeApp::MainLoop()
     // Destroys the vehicle and folds a grown RenderErrorCount into the exit
     // code -- read AFTER the last NRI object is gone, so a teardown-only
     // validation error still fails the run.
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    if (m_remote)
+        m_remote->MarkStopping();   // clients read "shutting-down" through the vehicle teardown
+#endif
     ShutdownGraphPath();
+
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // After ShutdownGraphPath: its --report exitReason reads the latched ExitReason.
+    if (m_remote)
+    {
+        m_remote->Stop(m_remote->ExitReason() != nullptr ? m_remote->ExitReason() : "exit");
+        m_remote.reset();
+    }
+    m_problems.UninstallEngineSink();   // after the session that read it (identity-checked)
+#endif
 }
 
 void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
@@ -1322,6 +1594,14 @@ void RuntimeApp::ShutdownGraphPath()
             exitReason = "compare-blessed";
         else if (compareWriteFailed)
             exitReason = "compare-failed";
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+        // Servitor P0 (Task 11): the loop broke on a remote quit (host.quit) or
+        // on the --remote-idle-exit timeout, latched where it broke
+        // (HostSession::DrainFrame). m_remote is still alive here; MainLoop
+        // stops it after this function.
+        else if (m_remote && m_remote->ExitReason() != nullptr)
+            exitReason = m_remote->ExitReason();
+#endif
         else if (!completedAllFrames)
             exitReason = "stopped-early";
 
@@ -1595,6 +1875,24 @@ void RuntimeApp::Shutdown()
 
 int RuntimeApp::Run()
 {
+#if defined(ARC_MONOLITHIC) && !defined(ARC_BUILD_DIST)
+    // Ruling D-1: a package links no ArcaneRemote, even in a non-Dist
+    // configuration, so --remote is a usage refusal before anything boots.
+    if (m_config.remote)
+    {
+        std::fputs("the remote surface is not linked into packaged games\n", stderr);
+        return 2;
+    }
+#endif
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // Task 22 fix round 1: before every boot stage, so the remote session's
+    // problems.list sees the diagnostics project open, plugin load and the boot
+    // scene publish (Diagnostics does not replay). MainLoop uninstalls it once
+    // m_remote has stopped; ~DiagnosticStore covers an early exit.
+    if (m_config.remote)
+        m_problems.InstallAsEngineSink();
+#endif
+
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime     = nullptr;              // stages populate as they go
     ctx.gpu         = nullptr;
@@ -1674,6 +1972,16 @@ int RuntimeApp::Run()
         return boot.quitRequested ? 0 : 1;
 
     MainLoop();
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // An open-ended headless --remote run whose remote surface did not start
+    // (MainLoop logged why) ends before its first frame with usage exit 2.
+    if (m_remoteArmExit != 0)
+    {
+        Arcane::Diagnostics::RequestCleanExit();
+        Shutdown();
+        return m_remoteArmExit;
+    }
+#endif
     // THE QUIT SITE (crash window plan 1, task 9; spec S5.7): the loop is over
     // and everything below is teardown, which is the one failure the watchdog
     // cannot otherwise see -- the loop beat right up to its last frame and

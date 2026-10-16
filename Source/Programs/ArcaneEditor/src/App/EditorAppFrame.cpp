@@ -21,6 +21,7 @@
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -65,6 +66,7 @@
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
+#include <Arcane/Render/FramePacing.hpp>   // FramesInFlight() -- the capture hooks' ring depth (Task 27)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsWorld2D (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
@@ -117,6 +119,52 @@ namespace Arcane::Editor
         {
             return backend == Arcane::GraphicsBackend::Vulkan ? "vulkan" : "dx12";
         }
+
+#if !defined(ARC_BUILD_DIST)
+        // capture.compare's ResolveFn / BlessFn (Servitor P0 Task 28, ruling
+        // G-2): the adapter-set ResolveReference overload with the adapter set
+        // computed here from the chrome device, exactly as --compare computes
+        // it above MainLoop (m_compareAdapterSet is filled only under
+        // --compare, so it is not read). A software adapter (WARP, lavapipe)
+        // therefore never blesses into the shared or backend level.
+        Arcane::ReferenceResolution ResolveRemoteReference(const std::filesystem::path& projectRoot,
+                                                           const std::string& slot,
+                                                           Arcane::GraphicsBackend backend,
+                                                           Arcane::NriGraphContext* chrome)
+        {
+            const char* const backendName = CompareBackendName(backend);
+            std::string adapterSet;
+            if (chrome)
+            {
+                const Arcane::NriDeviceCaps& caps = chrome->Device().Caps();
+                adapterSet = Arcane::ReferenceAdapterSet(backendName, caps.adapterName, caps.softwareAdapter);
+            }
+            return Arcane::ResolveReference(projectRoot, slot, backendName, adapterSet);
+        }
+
+        // ReferenceResolution -> the wire's ResolvedReference: the level's
+        // report name (VerifyReport's resolvedLevel spelling) and the probed
+        // paths as UTF-8 with forward slashes.
+        Arcane::Remote::ResolvedReference ToRemoteReference(const Arcane::ReferenceResolution& resolution)
+        {
+            Arcane::Remote::ResolvedReference out;
+            out.found = resolution.level != Arcane::ReferenceLevel::None;
+            out.path  = resolution.path;
+            switch (resolution.level)
+            {
+                case Arcane::ReferenceLevel::Shared:  out.level = "shared";  break;
+                case Arcane::ReferenceLevel::Backend: out.level = "backend"; break;
+                case Arcane::ReferenceLevel::Adapter: out.level = "adapter"; break;
+                default:                              out.level = "none";    break;
+            }
+            for (const std::filesystem::path& tried : resolution.triedPaths)
+            {
+                const std::u8string utf8 = tried.generic_u8string();
+                out.triedPaths.emplace_back(utf8.begin(), utf8.end());
+            }
+            return out;
+        }
+#endif
 
         // Modifier scancodes still read here for camera orbit (Alt) and the
         // gizmo snap / fly-boost (Ctrl / Shift). Letter keys go through
@@ -364,6 +412,50 @@ namespace Arcane::Editor
             {
                 break;
             }
+#if !defined(ARC_BUILD_DIST)
+            // Servitor P0 (Task 11): remote commands run after the pump and
+            // before the frame's phases, on every iteration including a
+            // minimized one (which the SkipFrame continue below would skip).
+            UpdateRemoteSession();
+            // An explicit --remote this editor cannot serve (a Client primary
+            // world) was refused at startup: exit 2 (final fix pass, C-M16).
+            if (m_remoteArmExit != 0)
+                break;
+            // An open-ended headless run (only --remote lifts --headless's
+            // --frames requirement) whose remote surface is not up -- refused,
+            // failed to start, or switched off -- has no stop path left, so it
+            // exits 2 instead of running forever (Task 11 review ruling).
+            if (!m_remote && m_config.headless && m_config.maxFrames == 0)
+            {
+                ARC_ERROR("ArcaneEditor: --headless --remote without --frames has no stop path while the "
+                          "remote surface is not up (see above); exiting 2");
+                m_remoteArmExit = 2;
+                break;
+            }
+            // DrainFrame notes a module reload since the last drain (EndFrame's
+            // Poll, a module rebuild's re-engage) from this host's own
+            // PluginHost (ruling F10).
+            // Task 30: the attempt count and outcome let it note a failed
+            // reload (the generation stays put), so `wait reload` answers it.
+            // Final fix pass (C-I3): a reload is synchronous, so the module
+            // host tells the session when one begins and ends ("reloading").
+            // Set every pass: a project switch replaces m_plugin.
+            if (m_plugin)
+                m_plugin->SetReloadObserver(
+                    [](bool reloading, void* user) {
+                        auto* app = static_cast<EditorApp*>(user);
+                        if (app->m_remote)
+                            app->m_remote->NoteReloading(reloading);
+                    },
+                    this);
+            if (m_remote && m_remote->DrainFrame(m_plugin ? m_plugin->Generation() : 0u,
+                                                 m_plugin ? m_plugin->ReloadAttempts() : 0u,
+                                                 m_plugin ? m_plugin->LastReloadOk() : true))
+            {
+                ARC_INFO("ArcaneEditor: exiting on {}", m_remote->ExitReason());
+                break;
+            }
+#endif
             if (pump == FramePump::SkipFrame)
             {
                 continue;
@@ -477,7 +569,15 @@ namespace Arcane::Editor
             AdvanceSim(ls);
             ApplyPendingViewportResize();
             RefreshSceneResolution();
+#if !defined(ARC_BUILD_DIST)
+            const auto renderStart = std::chrono::steady_clock::now();
+#endif
             RenderSceneToViewport();
+#if !defined(ARC_BUILD_DIST)
+            if (m_remote)   // stats.frame (Task 26): the scene render pass's wall time
+                m_remote->NoteRenderMs(std::chrono::duration<double, std::milli>(
+                                           std::chrono::steady_clock::now() - renderStart).count());
+#endif
             // PHASES 11, 12 AND THE CAPTURE ARE DISCHARGED BY PHASE 10.
             // RenderSceneToViewport declares ONE graph frame whose nodes cover
             // all three: ArmGraphViewportFrame fills FrameDesc::pickOutline/
@@ -508,6 +608,15 @@ namespace Arcane::Editor
             EndFrame(ls);
         }
 
+#if !defined(ARC_BUILD_DIST)
+        // The frame loop is over: parked remote calls answer host.died and the
+        // descriptor goes now, not at ~EditorApp after the whole teardown.
+        // The --report chain (ShutdownGraphPath, after this) reads the remote
+        // reason the loop broke on (Task 16): latched here, before the session
+        // goes. StopEditorRemote is the one teardown Shutdown() shares (N3-3).
+        if (const char* reason = Arcane::Editor::StopEditorRemote(m_remote, "exit"))
+            m_remoteExitReason = reason;
+#endif
     }
 
     // Phase 1: pump the window/OS event queue. Must stay first -- everything
@@ -571,7 +680,15 @@ namespace Arcane::Editor
             if (ChromeGraph() && !ChromeGraph()->IsOffscreen())
                 ChromeGraph()->Resize(events.width, events.height);
         }
-        if (m_gpu->Win().IsMinimized())
+        const bool minimized = m_gpu->Win().IsMinimized();
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0 (Task 13): the gate learns the same predicate that skips
+        // the frame, every loop, so MainLoop's Drain (which still runs before
+        // the SkipFrame continue) refuses needsFrame commands while minimized.
+        if (m_remote)
+            m_remote->NoteMinimized(minimized);
+#endif
+        if (minimized)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(Arcane::Settings<Arcane::AppWindowSettings>().minimizedSleepMs));
             return FramePump::SkipFrame;
@@ -845,6 +962,10 @@ namespace Arcane::Editor
         if (SettleHoldActive())
         {
             frameDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+            // A remote settle hold ends (Task 30): a windowed clock resumes
+            // from here, not with the whole hold as one frame's dt.
+            if (!m_config.headless)
+                ls.lastFrameTime = std::chrono::steady_clock::now();
         }
         else if (m_config.headless)
         {
@@ -1385,6 +1506,33 @@ namespace Arcane::Editor
     // Phase 7: sim advance. The plugin's UpdateAll runs HERE, before the
     // pre-submit camera push below -- that ordering is what lets the editor
     // camera override a plugin that pushes its own every frame (Sandbox does).
+    // THE ONE PLAY/EDIT FLIP RULE (EditorApp.hpp). Before an Edit -> Play
+    // attempt: document gestures flush while still in Edit (s3.3b).
+    void EditorApp::BeforePlayStart()
+    {
+        m_documents.FlushGestures();
+    }
+
+    // After any Play or Stop call: the follow-ups PlanPlayFlip names for the
+    // flip that actually happened, then the re-derivation sec 1's rule
+    // requires of every mid-frame flip site. The epoch also bumps when the
+    // edit binding is stale (a flip earlier this frame that did not come
+    // through here), which is the toolbar site's original test.
+    void EditorApp::AfterPlayFlip(bool wasPlaying)
+    {
+        const bool nowPlaying = InPlayMode();
+        const Arcane::Editor::PlayFlipFollowUps f = Arcane::Editor::PlanPlayFlip(wasPlaying, nowPlaying);
+        if (f.stopServerProcess)
+            m_serverProcess.Stop();   // Stop is the end of the whole session, including the child process
+        if (f.settingsWorldCreated)
+            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
+        if (f.clearPlayRefusal)
+            Arcane::Diagnostics::Clear("editor:play");   // the toolbar publishes a refused Play there
+        if (f.sceneReplaced || m_editBinding.editMode == nowPlaying)
+            NoteSceneReplaced();
+        m_editBinding.editMode = !nowPlaying;
+    }
+
     void EditorApp::AdvanceSim(LoopState& ls)
     {
         // Sim advance through the RunLoop with the plugin callbacks interleaved.
@@ -1404,6 +1552,8 @@ namespace Arcane::Editor
         if (SettleHoldActive())
         {
             simDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+            if (!m_config.headless)
+                ls.simPrev = std::chrono::steady_clock::now();   // as frameDt's hold branch
         }
         else if (m_config.headless)
         {
@@ -1418,15 +1568,45 @@ namespace Arcane::Editor
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         Arcane::ApplySimStepCap(m_runtime->Loop());   // sim.maxStepsPerFrame (Live)
+        // The embedded server mirrors these (round 2, I-3): read BEFORE Advance,
+        // which consumes a pending single step.
+        const bool primaryPaused     = m_runtime->Loop().IsPaused();
+        const bool primarySingleStep = m_runtime->Loop().SingleStepPending();
+#if !defined(ARC_BUILD_DIST)
+        const auto advanceStart = std::chrono::steady_clock::now();
+        // Asked BEFORE Advance, which consumes a pending single step: whether
+        // this Advance runs the play sim (Task 29, ruling A).
+        // Under the settle freeze (SettleHoldActive: --settle or a remote
+        // `wait settled`, Task 30) simDt is 0, so only a requested single step ticks.
+        const bool simAdvance = Arcane::Editor::CountsAsSimAdvance(m_play.IsPlaying(), m_runtime->Loop()) &&
+                                (!SettleHoldActive() || m_runtime->Loop().SingleStepPending());
+#endif
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
+#if !defined(ARC_BUILD_DIST)
+        // host.frame (Task 29, ruling A; AM1) and stats.frame (Task 26): one
+        // per play sim advance, the same bump the runtime and the server make
+        // in their Advance branch. Edit-mode frames and paused Play frames run
+        // this same function and touch neither; a requested single step (the
+        // toolbar's, or servitor step's) is exactly one. Without this bump the
+        // editor's host.frame stayed 0 and `servitor step` never completed.
+        if (m_remote && simAdvance)
+        {
+            m_remote->Gate().frame.fetch_add(1);
+            m_remote->NoteSimAdvance(m_remote->Gate().frame.load(), simDt,
+                                     std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - advanceStart).count());
+        }
+#endif
         // The embedded server world (EmbeddedServer topology) advances on the same
         // real dt, right after -- its OWN loop and its OWN Server-masked systems.
         // The module's FixedUpdate hook above is bound to the PRIMARY world and is
         // deliberately NOT re-run for it (MultiRuntimeReloadTest's StepAll documents
-        // the same rule). A no-op on every other topology.
-        m_play.TickServer(simDt);
+        // the same rule). A no-op on every other topology. Its loop mirrors the
+        // primary's pause and this frame's single step, whoever drove them --
+        // the toolbar or servitor -- so the two worlds stay in lockstep.
+        m_play.TickServer(simDt, primaryPaused, primarySingleStep);
         m_runtime->AudioSystem().Update(simDt);
     }
 
@@ -1541,7 +1721,8 @@ namespace Arcane::Editor
             // the compile service's Poll/Submit and the material file-watch
             // debounce (EditorAppProject.cpp), so only the scene's view of time is
             // pinned here.
-            frame.now            = m_config.fixedTimeSeconds.value_or(m_editorClock);
+            frame.now            = m_editorClock;
+            frame.sceneTime      = m_config.fixedTimeSeconds;
             frame.dt             = m_gameUi.frameDt;
             frame.viewportWidth  = (float)ViewportWidth();
             frame.viewportHeight = (float)ViewportHeight();
@@ -1639,6 +1820,17 @@ namespace Arcane::Editor
                  .audience = ::Arcane::Audience::Editor, .scope = ::Arcane::SettingScope::PreferencesProject,
                  .help = "Windowed --screenshot captures the composited editor frame (the presented "
                          "backbuffer: chrome, panels, viewport) instead of the viewport texture");
+
+#if !defined(ARC_BUILD_DIST)
+        // Servitor P0 (Task 11): the editor's remote surface switch. Machine-wide
+        // preference, Dev (never in Dist), read once per frame by
+        // UpdateRemoteSession below.
+        ARC_CVAR(cvar_editorRemoteEnable, "editor.remote.enable", bool, true,
+            .flags = ::Arcane::CVarFlags::Dev,
+            .audience = ::Arcane::Audience::Editor,
+            .scope = ::Arcane::SettingScope::PreferencesMachine,
+            .help = "Serve the remote-control surface on 127.0.0.1.");
+#endif
     }
 
     static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
@@ -1647,6 +1839,248 @@ namespace Arcane::Editor
             return false;   // --headless already captures the composited frame, offscreen
         return cvar_windowedFrameCapture.Get();
     }
+
+#if !defined(ARC_BUILD_DIST)
+    // Arms, disarms or re-arms the remote session once per frame, before the
+    // drain (MainLoop). Cheap when nothing changes: one published-cvar read and
+    // a path compare.
+    //
+    // THE ARMING CONDITION (spec 0.4(b), s4.7; controller ruling on Task 11):
+    // the editor is armed by its cvar, default on, OR by --remote (servitor
+    // launch passes it), and only when Arming::Allow passes. A published
+    // true -> false stops a running session ("remote-disabled") and keeps it
+    // down, --remote or not, until the cvar is published true again.
+    void EditorApp::UpdateRemoteSession()
+    {
+        const bool enabled    = cvar_editorRemoteEnable.Get();
+        const bool turnedOff  = m_remoteCvarKnown && m_remoteCvarLast && !enabled;
+        const bool turnedOn   = m_remoteCvarKnown && !m_remoteCvarLast && enabled;
+        m_remoteCvarKnown = true;
+        m_remoteCvarLast  = enabled;
+        if (turnedOff)
+        {
+            if (m_remote)
+            {
+                m_remote->Stop("remote-disabled");
+                m_remote.reset();
+                Arcane::Editor::SetSelectionView({});
+            }
+            m_remoteArmBlocked = true;   // until the cvar is true again
+            return;
+        }
+        if (turnedOn)
+            m_remoteArmBlocked = false;   // a cvar cycle also retries a failed start
+
+        const std::filesystem::path projectRoot =
+            (m_runtime && m_runtime->CurrentProject()) ? m_runtime->CurrentProject()->Root()
+                                                        : std::filesystem::path{};
+        // A project switch moves the descriptor (and the audit log) to the new
+        // project's Saved/Remote, so the session follows it.
+        if (m_remote && m_remote->GetConfig().projectRoot != projectRoot)
+        {
+            m_remote->Stop("project-switched");
+            m_remote.reset();
+            Arcane::Editor::SetSelectionView({});
+        }
+        const bool wanted = enabled || m_config.remote;
+        if (m_remote || m_remoteArmBlocked || !wanted || !m_runtime)
+            return;
+
+        // The editor arms in its edit-mode topology; a play session that later
+        // makes the primary world a Client keeps the session (CVarContext::Editor).
+        // Arming::Attempt marks the attempt before it checks Allow, so only the
+        // first pass that gets here is the startup arm (round 3, M-2).
+        const Arcane::Remote::Arming::Verdict verdict =
+            Arcane::Remote::Arming::Attempt(m_remoteArmTried, m_runtime->Core().Mode(), m_config.remote);
+        if (verdict != Arcane::Remote::Arming::Verdict::Arm)
+        {
+            m_remoteArmBlocked = true;
+            if (verdict == Arcane::Remote::Arming::Verdict::RefuseExit)
+            {
+                // Rule 3 (final fix pass, C-M16): an explicit --remote that
+                // cannot apply is refused, never run on as if ignored.
+                const char* why = Arcane::Remote::Arming::RefusalReason(m_runtime->Core().Mode());
+                ARC_ERROR("ArcaneEditor: --remote refused: {}; exiting 2", why ? why : "the remote surface cannot arm here");
+                m_remoteArmExit = 2;
+                return;
+            }
+            // A later re-arm (a cvar toggle during ClientOnly Play, a project
+            // switch) logs and stays disarmed; it never ends the editor (M-2).
+            ARC_WARN("ArcaneEditor: the remote surface is not armed: the primary world is a {} world, "
+                     "which never serves it", Arcane::ToString(m_runtime->Core().Mode()));
+            return;
+        }
+
+        Arcane::Remote::HostSession::Config rc;
+        rc.kind               = Arcane::Remote::HostKind::Editor;
+        rc.cvarContext        = Arcane::CVarContext::Editor;
+        rc.projectRoot        = projectRoot;
+        rc.descriptorOverride = m_config.remoteDescriptor;
+        // The idle exit is for an abandoned open-ended headless editor only
+        // (spec s4.7); an interactive editor never ends itself.
+        rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
+        rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
+                                  "problems", "scene", "selection", "stats" };
+        // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the
+        // unsaved-changes guard host.quit honours: the scene (the same test the
+        // Exit intent's confirm modal parks on) or any open document.
+        // producersIdle is `wait settled`'s producer conjunct, the --settle
+        // loop's SettleProducersIdle; the byte-equal pair is the host.wait
+        // job's own two captures through the host pair below (Task 30).
+        rc.hookUser           = this;
+        // Final fix pass (C-I3): the editor's host-state facts. modal: an
+        // error dialog is queued or an ImGui modal popup is open (read between
+        // frames, so it is the last frame's popup stack); building: the
+        // module rebuild (arcbuild) is running.
+        rc.modal              = [](void* user) -> bool {
+            const auto* app = static_cast<const EditorApp*>(user);
+            // Only an editor someone can answer reads modal (round 2, I-2): a
+            // headless editor's queued dialog stays a log and Problems entry.
+            const bool popupOpen = ImGui::GetCurrentContext() != nullptr && ImGui::GetTopMostPopupModal() != nullptr;
+            return Arcane::Editor::ReportsModal(app->m_modalErrors, !app->m_config.headless, popupOpen);
+        };
+        rc.building           = [](void* user) -> bool {
+            return static_cast<const EditorApp*>(user)->m_moduleBuild.Running();
+        };
+        rc.dirty              = [](void* user) -> bool {
+            const auto* app = static_cast<const EditorApp*>(user);
+            return (app->m_undo && app->m_scene.IsDirty(*app->m_undo)) || app->m_documents.AnyDirty();
+        };
+        rc.producersIdle      = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            const bool shaderIdle       = app->m_shaderCompiler ? app->m_shaderCompiler->IsIdle() : true;
+            const bool cookPending      = app->m_cookQueue && app->m_cookQueue->CookPending();
+            const bool harvesterPending = app->m_materialThumbs && app->m_materialThumbs->PendingCount() != 0;
+            return Arcane::SettleProducersIdle(shaderIdle, app->m_cookQueueSettling, cookPending, harvesterPending);
+        };
+        // Task 19 (ruling F16): the editor's one world, read per call so a
+        // play session's registry swap is what world-taking commands see.
+        rc.worlds.user        = this;
+        rc.worlds.fn          = [](void* user) -> std::vector<Arcane::Remote::WorldInfo> {
+            auto* app = static_cast<EditorApp*>(user);
+            if (!app->m_runtime)
+                return {};
+            return { { "main", Arcane::ToString(app->m_runtime->Core().Mode()), &app->m_runtime->Registry() } };
+        };
+        // Task 22 (ruling F12): problems.list reads the Problems panel's store,
+        // the one ConsoleDiagnostics::Install made the engine's diagnostics sink.
+        rc.problemStore       = &m_consoleDiag.store;
+        // Task 27 (ruling F12): capture.viewport / capture.window forward to the
+        // viewport and chrome contexts' capture rings; the host pair is the
+        // viewport pair (ruling F20), the pixels --compare captures. outDir is
+        // left empty: Start fills it with the session's artifact directory. A
+        // windowed editor may be occluded (capture.occluded-risk on window).
+        rc.capture.framesInFlight = Arcane::FramesInFlight();
+        rc.capture.armViewport    = &EditorApp::RemoteArmViewport;
+        rc.capture.drainViewport  = &EditorApp::RemoteDrainViewport;
+        rc.capture.armWindow      = &EditorApp::RemoteArmWindow;
+        rc.capture.drainWindow    = &EditorApp::RemoteDrainWindow;
+        rc.capture.armHost        = &EditorApp::RemoteArmViewport;
+        rc.capture.drainHost      = &EditorApp::RemoteDrainViewport;
+        // Final fix pass (C-M12): a capture job that gives up clears its ticket.
+        rc.capture.cancelViewport = &EditorApp::RemoteCancelViewport;
+        rc.capture.cancelWindow   = &EditorApp::RemoteCancelWindow;
+        rc.capture.cancelHost     = &EditorApp::RemoteCancelViewport;
+        rc.capture.occludedRisk   = !m_config.headless;
+        rc.capture.user           = this;
+        // Task 28 (ruling F12, G-2): capture.compare resolves and blesses
+        // through ReferenceImages with this project's root and the chrome
+        // device's adapter set, the same resolution --compare uses; the
+        // compare's pixels are the host pair above (the viewport).
+        rc.compare.projectRoot    = projectRoot;
+        rc.compare.user           = this;
+        rc.compare.resolve        = [](const std::filesystem::path& root, const std::string& slot,
+                                       void* user) -> Arcane::Remote::ResolvedReference {
+            auto* app = static_cast<EditorApp*>(user);
+            return ToRemoteReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->ChromeGraph()));
+        };
+        rc.compare.bless          = [](const std::filesystem::path& root, const std::string& slot,
+                                       std::uint32_t width, std::uint32_t height, const unsigned char* rgba,
+                                       void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            return Arcane::BlessReference(ResolveRemoteReference(root, slot, app->m_config.backend, app->ChromeGraph()),
+                                          width, height, rgba);
+        };
+        // Task 29 (ruling F12): play.start/stop/pause/resume/step drive the
+        // same PlaySession and RunLoop the toolbar transport does
+        // (DrawSimTimeToolbar), main thread inside Drain, user = this. The
+        // loop is re-fetched per call (Stop's RestoreRegistry replaces it).
+        // Play and Stop run the one flip rule the toolbar runs
+        // (BeforePlayStart / AfterPlayFlip, EditorApp.hpp), so a remote flip
+        // gets the same follow-ups, including the edit binding re-derivation
+        // and the "editor:play" retraction on a successful Play.
+        rc.play.editor     = true;
+        rc.play.undoReason = "play-mode";
+        rc.play.editorUser = this;
+        rc.play.editorPlay = [](void* user, std::string_view topology) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            const std::optional<Arcane::Editor::PlayTopology> topo = Arcane::Editor::PlayTopologyFromRemote(topology);
+            if (!topo || !app->m_runtime)
+                return false;
+            const bool wasPlaying = app->InPlayMode();
+            if (!wasPlaying)
+                app->BeforePlayStart();
+            const bool ok = app->m_play.Play(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr, *topo);
+            app->AfterPlayFlip(wasPlaying);   // the one flip rule, shared with the toolbar
+            return ok;
+        };
+        rc.play.editorStop = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);
+            if (!app->m_runtime)
+                return false;
+            const bool wasPlaying = app->InPlayMode();
+            const bool ok = app->m_play.Stop(app->m_runtime->Core(), app->m_plugin ? &*app->m_plugin : nullptr);
+            app->AfterPlayFlip(wasPlaying);   // the one flip rule, shared with the toolbar
+            return ok;
+        };
+        rc.play.editorTopology = [](void* user) -> std::string_view {
+            return Arcane::Editor::PlayTopologyRemoteName(static_cast<const EditorApp*>(user)->m_play.Topology());
+        };
+        // The embedded server world follows the primary through TickServer's
+        // mirror (round 2, I-3), so these drive the primary alone.
+        rc.play.editorSetPaused = [](bool paused, void* user) {
+            auto* app = static_cast<EditorApp*>(user);
+            if (app->m_runtime)
+                app->m_runtime->Loop().SetPaused(paused);
+        };
+        rc.play.editorRequestSingleStep = [](void* user) {
+            auto* app = static_cast<EditorApp*>(user);
+            if (app->m_runtime)
+                app->m_runtime->Loop().RequestSingleStep();
+        };
+        rc.play.editorPaused = [](void* user) -> bool {
+            auto* app = static_cast<EditorApp*>(user);   // Loop() has no const overload
+            return app->m_runtime && app->m_runtime->Loop().IsPaused();
+        };
+        rc.play.editorPlaying = [](void* user) -> bool {
+            return static_cast<const EditorApp*>(user)->InPlayMode();
+        };
+        m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+        if (!m_remote->Start())
+        {
+            m_remote.reset();   // Start logged why; not retried until the cvar cycles
+            m_remoteArmBlocked = true;
+            return;
+        }
+        // Task 25 (R8-2, ruling F33): editor.selection.get reads m_selection
+        // through this view, main thread; HostSession is ArcaneRemote and cannot
+        // see SelectionContext, so the install is here, not inside Start. Every
+        // m_remote Stop site clears it.
+        Arcane::Editor::SelectionView selectionView;
+        selectionView.user    = this;
+        selectionView.count   = [](void* user) -> std::size_t {
+            return static_cast<const EditorApp*>(user)->m_selection.Count();
+        };
+        selectionView.at      = [](std::size_t index, void* user) -> Astra::Entity {
+            return static_cast<const EditorApp*>(user)->m_selection.Entities()[index];
+        };
+        selectionView.primary = [](void* user) -> Astra::Entity {
+            return static_cast<const EditorApp*>(user)->m_selection.Primary();
+        };
+        Arcane::Editor::SetSelectionView(selectionView);
+        Arcane::Editor::RegisterSelectionCommand();
+    }
+#endif
 
     void EditorApp::RenderSceneToViewport()
     {
@@ -2362,7 +2796,7 @@ namespace Arcane::Editor
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, playMode,
                                                ToolbarLogoTextureId(), stripStatus,
-                                               [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+                                               [this]() { BeforePlayStart(); });   // T1-B14's beforePlay (s3.3b)
         if (playMode != publishedPlayMode)
             Arcane::Editor::SetPlayLaunchMode(playMode);
         if (toolbar.launchStandalone)
@@ -2384,26 +2818,15 @@ namespace Arcane::Editor
             m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
             Arcane::Editor::SelectDockTab("Problems");
         }
-        // Stop is the end of the whole session, including the child process.
-        // A no-op on every topology that never spawned one.
-        if (wasPlaying && !InPlayMode())
-            m_serverProcess.Stop();
-        if (!wasPlaying && InPlayMode())
-            Arcane::Editor::SettingsWorldCreated();   // NextWorld settings applied with this world (spec s6.5)
-        // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
-        // (sec 1's rule): re-derive so this frame's consume blocks and panels see
-        // the true state, not last frame's.
-        //
-        // A FLIP HERE ALSO REPLACES THE SCENE: both PlaySession::Play and
-        // ::Stop go through Runtime::Snapshot/RestoreRegistry, which destroys
-        // and replaces the registry OBJECT -- so a click-pick in flight names
-        // entities of a registry that no longer exists. Noted here rather than
-        // inside PlaySession because
-        // this is the ONE site that can flip the mode, and because the same
-        // line already exists to say exactly that.
-        if (m_editBinding.editMode == InPlayMode())
-            NoteSceneReplaced();
-        m_editBinding.editMode = !InPlayMode();
+        // The toolbar's Play/Stop click flips the mode mid-frame (sec 1's
+        // rule), so the shared flip follow-ups run here: the separate server
+        // process on Stop, NextWorld settings and the "editor:play" Problems
+        // retraction on Play, the scene epoch (both PlaySession::Play and
+        // ::Stop go through Runtime::Snapshot/RestoreRegistry, which replaces
+        // the registry OBJECT a click-pick in flight names) and the edit
+        // binding re-derivation, so this frame's consume blocks and panels see
+        // the true state. One rule with servitor play/stop (AfterPlayFlip).
+        AfterPlayFlip(wasPlaying);
         // ALWAYS consume the flag: on a Reset Layout frame a pending flag
         // would otherwise survive into the next frame and split the freshly
         // built default layout's browser node a second time.
@@ -3638,9 +4061,11 @@ namespace Arcane::Editor
                     // ClearSceneReferences, Exit ends the process, and a parked
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
-                    if (InPlayMode())
+                    const bool wasPlaying = InPlayMode();
+                    if (wasPlaying)
                         m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
-                    m_serverProcess.Stop();   // the session's other half; no-op otherwise
+                    AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
+                    m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
                     if (m_scene.Path().empty())
                     {
                         // Never saved: this needs a filename first. The intent
