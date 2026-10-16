@@ -180,9 +180,10 @@ namespace Arcane
         void  OnSystemsCleared() noexcept override;
         void  FillEngineContext(EngineContext& ctx) noexcept override;
 
-        // RenderSubmissionSystem into the render scheduler, idempotently. Called at
-        // construction and from OnSystemsCleared -- the presentation counterpart of
-        // Runtime::InstallEngineSystems.
+        // The presentation's render-scheduler systems. Called at construction and
+        // from OnSystemsCleared -- the presentation counterpart of
+        // Runtime::InstallEngineSystems. Installs nothing since F5 plan 1 Task 5:
+        // RenderSubmissionSystem runs inside ExtractFrame, once per frame.
         void InstallRenderSystems();
 
         // ORDER MATTERS: the presentation is declared SECOND so it destructs FIRST,

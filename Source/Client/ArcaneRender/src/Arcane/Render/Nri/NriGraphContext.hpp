@@ -269,6 +269,7 @@ namespace Arcane
 {
     class Batcher2D;
     struct PostChainDesc;
+    struct RenderFramePacket;
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
     // node's canvas, and every post-chain pass's target. Colours are LINEAR
@@ -1155,6 +1156,17 @@ namespace Arcane
         // outside one and on a frame the driver submitted nothing for.
         [[nodiscard]] Batcher2D* CurrentBatch() noexcept { return m_currentBatch; }
 
+        // THE FRAME'S PACKET (F5 plan 1 Task 5): what ExtractFrame published
+        // for the frame about to be rendered. The host binds it immediately
+        // before RenderFrame / RenderFrameOffscreen; both reset it to null
+        // before they return, so a later frame can never read a stale one.
+        // With a packet bound, the batch node draws the packet's copied batch
+        // and does not Drain CurrentBatch() again; with none (thumbnail
+        // harvest, shader preview), it keeps the Drain path. The packet is a
+        // PacketRing slot, alive for FramesInFlight() further extracts.
+        void BindPacket(const RenderFramePacket* packet) noexcept { m_packet = packet; }
+        [[nodiscard]] const RenderFramePacket* Packet() const noexcept { return m_packet; }
+
         // FrameDesc::globals for the frame currently being declared, COPIED so
         // it stays readable for the whole RenderFrame call (the post chain's
         // b1 is written at record time). All-zero on a frame the driver
@@ -1558,6 +1570,10 @@ namespace Arcane
         // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
         // batcher can never be drained by a later frame.
         Batcher2D* m_currentBatch = nullptr;
+
+        // BindPacket's packet -- see Packet(). Reset at the end of every
+        // RenderFrame / RenderFrameOffscreen, on every return path.
+        const RenderFramePacket* m_packet = nullptr;
 
         // FrameDesc::globals, by VALUE -- see CurrentGlobals().
         GlobalParams m_currentGlobals{};

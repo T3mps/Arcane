@@ -21,6 +21,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/Batcher2D.hpp>        // Batch2DDrained / Batch2DVertex / Batch2DDrawSpan
+#include <Arcane/Render/RenderFramePacket.hpp>   // the bound packet's copied batch (F5 plan 1 Task 5)
 #include <Arcane/Render/RenderBudgetSettings.hpp>   // RenderBatch2dSettings -- the caps the constructor latches
 #include <Arcane/Render/RenderLookSettings.hpp>     // render.clearColor, render.sprite.filter
 #include <Arcane/Render/RenderErrorLatch.hpp>
@@ -1635,15 +1636,38 @@ namespace Arcane
     RgTexture AddBatch2DNode(RenderGraph& graph, NriGraphContext* context,
                              std::uint32_t width, std::uint32_t height)
     {
-        // Drained at DECLARATION time on purpose: it is pure CPU work (sort +
-        // index/span build) with no ring allocation in it, and doing it here
-        // means the exec fn only touches the GPU. The returned spans view the
-        // batcher's own storage and stay valid until its next Begin(), which is
-        // a whole frame away.
+        // Resolved at DECLARATION time on purpose: it is pure CPU work with no
+        // ring allocation in it, and doing it here means the exec fn only
+        // touches the GPU.
+        //
+        // WITH A BOUND PACKET (F5 plan 1 Task 5) the batch is the packet's
+        // copy, which ExtractFrame drained out of the host's batcher: the
+        // spans view the packet's vectors, which live until FramesInFlight()
+        // later extracts recycle the slot, and nothing is drained again.
+        // Prepare still resolves the REGISTERED materials on CurrentBatch(),
+        // the same batcher extract submitted into (the hosts pass it as
+        // FrameDesc::batch), because that is where the registrations live.
+        //
+        // WITHOUT ONE (thumbnail harvest, shader preview) the batcher is
+        // drained here; those spans view the batcher's own storage and stay
+        // valid until its next Begin(), which is a whole frame away.
         const nri::Format canvasFormat = GraphCanvasFormat();
         const CVarColor clearColor = Settings<RenderSettings>().clearColor;   // once per frame; see the top of this file
         Batch2DDrained drained;
-        if (context)
+        if (context && context->Packet())
+        {
+            const RenderFramePacket* packet = context->Packet();
+            drained.vertices = packet->batchVertices;
+            drained.indices = packet->batchIndices;
+            drained.spans = packet->batchSpans;
+            drained.globals = &packet->globals;
+            drained.viewProjection = packet->viewProjection;
+            drained.viewport = glm::vec2(float(width), float(height));
+            if (Batcher2D* batcher = context->CurrentBatch())
+                if (Batch2DNode* node = context->Batch2D())
+                    node->Prepare(*batcher, drained, canvasFormat);
+        }
+        else if (context)
         {
             if (Batcher2D* batcher = context->CurrentBatch())
             {

@@ -91,6 +91,8 @@
 #include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the viewport's per-frame GPU-scene frame (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the frame's pickables
+#include <Arcane/Render/ExtractFrame.hpp>        // ExtractRequest (BuildExtractRequest) -- F5 plan 1 Task 5
+#include <Arcane/Render/RenderFramePacket.hpp>   // PacketRing (m_packetRing)
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
@@ -311,13 +313,20 @@ namespace Arcane::Editor
         void ApplyPendingViewportResize();
         void RefreshSceneResolution();
         void RenderSceneToViewport();
-        // The scene's 2D submission plus the two Edit-mode overlays drawn on
-        // top of it (the scene-camera rect and the transform gizmo), against
+        // The scene's 2D submission SETUP -- globals, view-projection and the
+        // render context; the sprite sweep itself runs in the caller's
+        // ExtractFrame (F5 plan 1 Task 5) -- plus the Edit-mode overlays
+        // (the scene-camera rect and the transform gizmo), against
         // whichever batcher the caller hands in -- in practice the
         // device-less GpuContext batcher RenderSceneToViewport Begin()s
         // itself. Contains no target, no command list and no device, which is
         // what keeps the ORDER of its statements the whole of its contract.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
+        // THE EXTRACT REQUEST (F5 plan 1 Task 5) for a w x h frame -- the ONE
+        // builder, so the viewport frame and the scene-save cover ask for the
+        // same picture. Fills only editor state and settings, never a registry
+        // read; ExtractFrame does the reading.
+        [[nodiscard]] Arcane::ExtractRequest BuildExtractRequest(std::uint32_t w, std::uint32_t h);
         // The transform gizmo as post-tonemap overlay primitives (F5 plan 1
         // Task 3): fills m_gizmoPrims from the same gate, handle mask, size and
         // view as this frame's hit-test, in viewport pixels (image origin),
@@ -1434,6 +1443,13 @@ namespace Arcane::Editor
         Arcane::OverlayPrimitiveList m_overlayPrims;
         // The gizmo's primitives, rebuilt by BuildGizmoOverlayPrims each frame.
         Arcane::OverlayPrimitiveList m_gizmoPrims;
+
+        // THE EXTRACT STAGE'S PACKETS (F5 plan 1 Task 5): the viewport frame
+        // and the scene-save cover each ExtractFrame into this ring and bind
+        // the returned slot on m_viewportTargets.graph for their one
+        // RenderFrameOffscreen; FramesInFlight() slots keep a bound packet
+        // alive past that call.
+        Arcane::PacketRing m_packetRing;
 
         // The click-pick, which cannot answer in the frame it is asked -- see
         // DeferredPick.hpp for the three hazards it closes.

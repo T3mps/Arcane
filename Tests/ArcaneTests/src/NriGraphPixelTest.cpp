@@ -74,6 +74,12 @@
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
 #include <Arcane/Render/RenderFramePacket.hpp>    // ImDrawSnapshot -- the packet's ImGui copy (F5 plan 1 Task 4)
+#include <Arcane/Render/ExtractFrame.hpp>         // ExtractFrame / ExtractRequest -- the registered-material witness (F5 plan 1 Task 5)
+#include <Arcane/Material/MaterialSource.hpp>     // BuildMaterialShaderSource / MaterialTemplateFile
+#include <Arcane/Material/MaterialInstance.hpp>
+#include <Arcane/Render/ShaderSourceProvider.hpp>
+#include <Arcane/Render/ShaderCompiler.hpp>
+#include <Arcane/Render/ShaderConventions.hpp>    // kVsEntry / kPsEntry / kVsProfile / kPsProfile
 #include <Arcane/Mesh/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/GpuScene.hpp>         // GpuScene -- the instance-buffer round trip (F3 plan 1 T6)
@@ -130,6 +136,7 @@
 #include <system_error> // case 9's own temp-dir cleanup
 #include <unordered_map> // the T7 case's MeshTable backing store
 #include <vector>
+#include <utility>      // std::move -- the extract witness's resource and material desc
 
 #include "Helpers/GpuCapability.hpp"
 
@@ -2657,4 +2664,132 @@ TEST_CASE("an ImDrawSnapshot rebuild reaches ImGuiNri (vulkan)",
           "[gpu][packet][imgui][nri][vulkan]")
 {
     CheckImGuiSnapshotReachesRenderer(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// EXTRACT KEEPS A REGISTERED SPRITE MATERIAL (F5 plan 1 Task 5). ExtractFrame
+// submits into the batcher the material was registered on and copies the
+// drained batch into the packet; the bound packet is what Batch2DNode draws.
+// A constant-green shade proves the registered pipeline drew: had the id been
+// rewritten to kMaterialSprite, the plain sprite pipeline would draw the red
+// tint instead.
+// ---------------------------------------------------------------------------
+namespace
+{
+    void CheckExtractKeepsRegisteredMaterial(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        Arcane::ShaderSourceProvider provider;
+        provider.AddRoot("data/shaders");
+        const auto templateText = provider.Get(
+            Arcane::MaterialTemplateFile(Arcane::MaterialSurface::Sprite));
+        REQUIRE(templateText.has_value());
+        const Arcane::MaterialBuildResult build = Arcane::BuildMaterialShaderSource(
+            *templateText,
+            "float4 shade(Varyings v) { return float4(0.0, 1.0, 0.0, 1.0); }",
+            "extract_green",
+            Arcane::MaterialSurface::Sprite);
+        REQUIRE(build.errors.empty());
+
+        Arcane::ShaderCompiler compiler;
+        REQUIRE(compiler.InitializeWithDebounce(0.0));
+        auto compileStage = [&](const char* entry, const char* profile)
+        {
+            Arcane::ShaderCompileRequest compileReq;
+            compileReq.debugName = "extract_green.hlsl";
+            compileReq.sourceUtf8 = build.hlsl;
+            compileReq.entry = entry;
+            compileReq.profile = profile;
+            return compiler.CompileNow(compileReq);
+        };
+        const Arcane::ShaderCompileResult vs = compileStage(Arcane::kVsEntry, Arcane::kVsProfile);
+        const Arcane::ShaderCompileResult ps = compileStage(Arcane::kPsEntry, Arcane::kPsProfile);
+        const bool vulkan = backend == Arcane::GraphicsBackend::Vulkan;
+        const Arcane::ShaderTargetResult& vsTarget = vulkan ? vs.spirv : vs.dxil;
+        const Arcane::ShaderTargetResult& psTarget = vulkan ? ps.spirv : ps.dxil;
+        REQUIRE(vsTarget.succeeded);
+        REQUIRE(psTarget.succeeded);
+
+        auto batcher = Arcane::Batcher2D::Create();
+        REQUIRE(batcher != nullptr);
+        auto templ = std::make_shared<const Arcane::MaterialTemplate>(build.templ);
+        auto instance = std::make_shared<const Arcane::MaterialInstance>(templ);
+        Arcane::Material2DDesc desc;
+        desc.templ = templ;
+        desc.instance = instance;
+        desc.vsBytes = std::make_shared<const std::vector<std::uint8_t>>(vsTarget.bytecode);
+        desc.psBytes = std::make_shared<const std::vector<std::uint8_t>>(psTarget.bytecode);
+        const std::uint16_t id = batcher->RegisterMaterial(std::move(desc));
+        REQUIRE(id != Arcane::Batcher2D::kInvalidMaterialId);
+        REQUIRE(id != Arcane::Batcher2D::kMaterialSprite);
+        batcher->Begin(kW, kH);
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ components };
+        Arcane::RegisterSceneComponents(reg);
+        Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
+
+        Arcane::RenderContext2D renderCtx;
+        renderCtx.batcher = batcher.get();
+        reg.SetResource<Arcane::RenderContext2D>(std::move(renderCtx));
+        const Arcane::Guid matGuid = Arcane::Guid::Generate();
+        std::unordered_map<Arcane::Guid, std::uint16_t> ids;
+        ids.emplace(matGuid, id);
+        reg.SetResource<Arcane::SpriteMaterialTable>(Arcane::SpriteMaterialTable{ &ids });
+
+        Astra::Entity sprite = reg.CreateEntity();
+        Arcane::Transform xform;
+        xform.position = { 80.0f, 48.0f, 0.0f };
+        xform.scale = { 16.0f, 16.0f, 1.0f };
+        reg.AddComponent<Arcane::Transform>(sprite, xform);
+        reg.SetParent(sprite, root);
+        Arcane::SpriteRenderer rend;
+        rend.tint = { 1.0f, 0.0f, 0.0f, 1.0f };
+        rend.material = matGuid;
+        reg.AddComponent<Arcane::SpriteRenderer>(sprite, rend);
+        Arcane::TransformPropagationSystem{}(reg);
+        Arcane::BoundsSystem{}(reg);
+
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { kW, kH };
+        req.editorView = Arcane::Ortho2DView(
+            glm::vec2(static_cast<float>(kW) * 0.5f, static_cast<float>(kH) * 0.5f),
+            static_cast<float>(kH) * 0.5f,
+            req.viewport);
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(reg, req, ring);
+        REQUIRE(packet.batchSpans.size() == 1u);
+        CHECK(packet.batchSpans[0].material == id);
+        CHECK(packet.batchSpans[0].worldSpace);
+
+        PixelVehicle v = MakeVehicle(backend);
+        v.ctx->BindPacket(&packet);
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.batch = batcher.get();
+        frame.capture = true;
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        const Rgba px = At(rgba, w, 80u, 48u);
+        CHECK(px.g > px.r + 60);
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("extract keeps a registered sprite material on screen (d3d12)",
+          "[gpu][extract][shadercompile][nri][d3d12]")
+{
+    CheckExtractKeepsRegisteredMaterial(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("extract keeps a registered sprite material on screen (vulkan)",
+          "[gpu][extract][shadercompile][nri][vulkan]")
+{
+    CheckExtractKeepsRegisteredMaterial(Arcane::GraphicsBackend::Vulkan);
 }

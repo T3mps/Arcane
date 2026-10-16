@@ -22,7 +22,8 @@
 #endif
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
-#include <Arcane/Render/Batcher2D.hpp>              // Arcane::Batch2DStats (BuildHud's HUD text, CaptureTail's perf tick)
+#include <Arcane/Render/Batcher2D.hpp>
+#include <Arcane/Render/ExtractFrame.hpp>            // ExtractFrame / ExtractRequest -- RenderGraph's one extract (F5 plan 1 Task 5)
 #include <Arcane/Render/GraphicsBackend.hpp>                 // Arcane::GraphicsBackend / ToString (BuildHud's HUD text)
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
@@ -320,8 +321,18 @@ void BuildHud(FrameIo& io)
         // the HUD reads the backend out of the config it was selected with.
         ImGui::Text("Backend: %s", Arcane::ToString(io.config.backend));
         ImGui::Text("Plugin gen: %u", io.plugin->Generation());
-        const Arcane::Batch2DStats s = io.gpu->Batch().Stats();
-        ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
+        // The last extracted packet's sprite batch (F5 plan 1 Task 5): draws
+        // are its spans, quads its vertices / 4. io.frameCount > 0 means a
+        // frame has been extracted and presented; before that there is no
+        // packet and the counts are 0.
+        std::uint32_t quads = 0, draws = 0;
+        if (io.frameCount > 0)
+        {
+            const Arcane::RenderFramePacket& last = io.packetRing.Slot(0);
+            quads = static_cast<std::uint32_t>(last.batchVertices.size() / 4u);
+            draws = static_cast<std::uint32_t>(last.batchSpans.size());
+        }
+        ImGui::Text("Quads: %u  Draws: %u", quads, draws);
 
         // THE 3D PASS'S VISIBILITY, beside the 2D batcher's counts (F3 plan 2
         // T5): the CPU's own figures, then what the GPU CULL PASS itself
@@ -388,7 +399,7 @@ void BuildHud(FrameIo& io)
 void PrepareFrame(FrameIo& io)
 {
     // Scene asset resolution, BEFORE the batcher's Begin and before
-    // SubmitRender: the drain inside registers compiled materials with the
+    // ExtractFrame: the drain inside registers compiled materials with the
     // batcher (a pipeline/binding-set table mutation that does not belong
     // inside a recording), and the SpriteTable/SpriteMaterialTable it
     // publishes are what THIS frame's submission reads. Without this call the
@@ -435,10 +446,11 @@ void PrepareFrame(FrameIo& io)
 // thing this function owes it is calling the right member of the
 // RenderFrame/RenderFrameOffscreen pair. See that call below.
 //
-// The plugin's RENDER submission: the batcher is Begin()'d with the
-// canvas extent alone, SubmitRender fills it, and the graph's
-// Batch2DNode DRAINS it -- one batcher, one batching algorithm, one
-// recorder. End() is deliberately NOT called: that batcher is
+// The RENDER submission: the batcher is Begin()'d with the canvas
+// extent alone, ExtractFrame runs the sprite sweep into it and copies
+// the drained batch into this frame's packet, and the graph's
+// Batch2DNode draws the bound packet -- one batcher, one batching
+// algorithm, one recorder. End() is deliberately NOT called: that batcher is
 // DEVICE-LESS by construction (GpuContext::Create builds no render
 // device), so End() would refuse anyway and records nothing.
 //
@@ -533,8 +545,8 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and the
     // frame's batches -- AFTER the schedulers (AdvanceSim left WorldTransform
     // + WorldBounds current) and PushSceneCamera (View() is this frame's),
-    // and BEFORE the SubmitRender just below, whose sprite sweep reads
-    // views[0] through MainVisibleSet. The mesh pass draws with the
+    // and BEFORE the ExtractFrame below, whose sprite sweep reads views[0]
+    // through MainVisibleSet. The mesh pass draws with the
     // perspective scene camera (the SAME guarded path the mesh block below
     // has always used: a validated ViewTransform or nullopt, never identity),
     // and culls against it as views[1] when it differs from the sprites'
@@ -544,12 +556,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight });
     Arcane::PrepareSceneForRender(io.runtime->Registry(), io.runtime->View(), meshView,
                                   io.graph->Scene(), io.gpuSceneFrame);
-    {
-        const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-        io.runtime->SetRenderContext(&io.gpu->Batch());
-        io.runtime->Loop().SubmitRender();
-        io.perf.Add(io.perf.accRec, t0, io.perf.Now());
-    }
+    // The batcher the sprite sweep submits into, published for ExtractFrame
+    // below. The sweep itself runs there, once (F5 plan 1 Task 5).
+    io.runtime->SetRenderContext(&io.gpu->Batch());
 
 #if !defined(ARC_BUILD_DIST)
     // --pick-probe. THE ONE PLACE the entity ids
@@ -660,7 +669,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // it to the graph; RuntimeFrame.cpp is not compiled into ArcaneTests, so
     // the logic that decides what the frame holds lives in the tested header.
     //
-    // `meshScene` only needs to outlive `io.graph->RenderFrame(graphFrame)`
+    // `meshScene` only needs to outlive the graph's RenderFrame* call
     // below, which happens inside THIS function call -- a RenderGraph-local
     // is enough for it. THE GATE IS Empty(), NOT HasDraws() (ruling R-D): a
     // frame whose meshes are all culled, or with no perspective camera at
@@ -726,15 +735,28 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     graphFrame.capture = willBeLastFrame &&
                           (!io.config.screenshotPath.empty() || !io.config.reportPath.empty());
 
+    // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1): the sprite sweep runs
+    // into the host batcher Begin()'d above and the drained batch is copied
+    // into this frame's packet, which the graph's batch node draws instead of
+    // draining the batcher again. graphFrame.batch stays that same batcher,
+    // so the registered sprite materials resolve where they were registered.
+    // The vehicle unbinds the packet before RenderFrame* returns.
+    Arcane::ExtractRequest req;
+    req.viewport = { frameWidth, frameHeight };
+    req.device = io.graph->Scene();
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
+    io.graph->BindPacket(&packet);
+
     // Timed into accPresent rather than left unmeasured, so `--perf`
     // reports something real on this path too (the spec's waiting-
     // frame budget is mostly the pacing wait inside
     // AcquireNextTexture, which is inside this call). It is the whole
     // record + submit + present cost, not just the present: Execute()
     // does all three, and splitting one call across three
-    // accumulators would be a fiction. accRec IS real (the submission
-    // above is the work it names), but accEnd/accTone stay 0 -- there is
-    // no separate flush or tonemap step left to time, both being inside
+    // accumulators would be a fiction. accRec, accEnd and accTone stay
+    // 0: the sprite submission now runs inside ExtractFrame above, whose
+    // SubmitRender-only bracket went with it (F5 plan 1 Task 5), and there
+    // is no separate flush or tonemap step left to time, both being inside
     // this one call.
     //
     // THE ONE LINE IN THIS FILE THAT NAMES THE MODE, and it is forced. The
@@ -793,8 +815,12 @@ bool CaptureTail(FrameIo& io)
 
     if (io.perf.On())
     {
-        const Arcane::Batch2DStats bs = io.gpu->Batch().Stats();
-        io.perf.Tick(bs.quads, bs.drawCalls);
+        // This frame's packet (RenderGraph extracted it, and CaptureTail
+        // runs only after a Presented frame): quads = vertices / 4, draws =
+        // spans.
+        const Arcane::RenderFramePacket& last = io.packetRing.Slot(0);
+        io.perf.Tick(static_cast<std::uint32_t>(last.batchVertices.size() / 4u),
+                     static_cast<std::uint32_t>(last.batchSpans.size()));
     }
 
     ++io.frameCount;

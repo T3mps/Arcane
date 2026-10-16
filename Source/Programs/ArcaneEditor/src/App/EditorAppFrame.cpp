@@ -60,6 +60,7 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/ExtractFrame.hpp>   // ExtractFrame / ExtractRequest -- the viewport frame's one extract (F5 plan 1 Task 5)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
@@ -1024,7 +1025,7 @@ namespace Arcane::Editor
         // Edit mode: the EDITOR camera owns RMB-drag pan and wheel zoom
         // (see UpdateEditorCamera below), so the plugin must not see those
         // either. Both cameras write the SAME Runtime slot, and the
-        // editor's push (before SubmitRender) wins in Edit mode -- so a
+        // editor's push (before ExtractFrame) wins in Edit mode -- so a
         // plugin still panning underneath would just be invisible work
         // whose result reappears the moment Play starts, from a viewpoint
         // the user never chose. RMB=bit1; InputSnapshot.hpp. Play is
@@ -1257,7 +1258,7 @@ namespace Arcane::Editor
 
         // Push the editor camera BEFORE the gizmo block below reads
         // ClientRuntime::View(). Those reads happen earlier
-        // in the frame than the pre-SubmitRender push further down, so
+        // in the frame than the pre-ExtractFrame push further down, so
         // without this the gizmo would hit-test against whatever camera
         // was stored LAST frame -- and on the very first frame against
         // the identity (zoom 1), placing the handles 100x off the
@@ -1629,7 +1630,7 @@ namespace Arcane::Editor
         // the plugin's UpdateAll ran above: a plugin that pushes its own
         // camera every frame -- Sandbox does -- would otherwise own the
         // Edit-mode view. Must stay after that Advance and before
-        // SubmitRender below; moving it earlier hands the view back to
+        // ExtractFrame below; moving it earlier hands the view back to
         // the plugin.
         //
         // Play mode pushes the SCENE's camera instead of the editor's, so
@@ -1741,15 +1742,15 @@ namespace Arcane::Editor
             // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and
             // the frame's batches -- between the schedulers (phase 9's
             // Advance left WorldTransform + WorldBounds current) and the
-            // sprite sweep inside SubmitSceneToBatcher (which reads views[0]
+            // sprite sweep inside ExtractFrame below (which reads views[0]
             // through MainVisibleSet). The mesh view is the editor view in
             // Edit and the perspective scene camera in Play (RuntimeFrame.cpp's
             // rule); nullopt when Play has none, and then no batch is built --
             // the pass still declares itself for any staged rows (R-D).
             //
-            // HERE, not inside SubmitSceneToBatcher next to its SubmitRender:
-            // that function is also CaptureGraphViewportPng's (a scene save's
-            // cover, shutdown), and a second GpuSceneSync there would stage
+            // HERE, not inside SubmitSceneToBatcher: that function is also
+            // CaptureGraphViewportPng's (a scene save's cover, shutdown),
+            // and a second GpuSceneSync there would stage
             // rows into m_gpuSceneFrame that no mesh pass uploads -- the
             // mirror's lastModel history having already advanced past them,
             // the next viewport frame would never re-stage them. One sync per
@@ -1765,6 +1766,16 @@ namespace Arcane::Editor
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
+
+            // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1), AFTER the
+            // Begin + SubmitSceneToBatcher bracket above (before it, the drain
+            // would copy the previous bracket): the sprite sweep runs into `b`
+            // and the drained batch is copied into this frame's packet, which
+            // the batch node draws instead of draining `b` again. Bound just
+            // before RenderFrameOffscreen below, which unbinds it on return.
+            const Arcane::ExtractRequest extractReq = BuildExtractRequest(w, h);
+            const Arcane::RenderFramePacket& packet =
+                Arcane::ExtractFrame(m_runtime->Registry(), extractReq, m_packetRing);
 
             // Copied, not borrowed, by FrameDesc -- but the local has to
             // outlive the call all the same, and it is the SAME GlobalParams
@@ -1827,6 +1838,7 @@ namespace Arcane::Editor
                 const Arcane::Editor::AxisRoleColors roles = Arcane::Editor::DeriveAxisRoles(Arcane::Editor::Theme::Live());
                 outline->SetColors(roles.outlineSelect, roles.outlineHover);
             }
+            m_viewportTargets.graph->BindPacket(&packet);
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Any outcome but Presented means GpuSceneSyncNode did not run, so
@@ -1972,8 +1984,9 @@ namespace Arcane::Editor
             Arcane::Editor::DrawGrid2D(grid, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
         }
 
+        // The batcher the sprite sweep submits into, published for the
+        // caller's ExtractFrame, which runs that sweep once (F5 plan 1 Task 5).
         m_runtime->SetRenderContext(&b);
-        m_runtime->Loop().SubmitRender();
 
         // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3), drawn AFTER
         // the sprites and BEFORE the gizmo, through the SAME camera and the
@@ -2083,6 +2096,18 @@ namespace Arcane::Editor
         // gizmo paints over the other always-on-top primitives (physics debug,
         // the camera rect) and its own fills stay under its own bars.
         m_overlayPrims.Append(m_gizmoPrims);
+    }
+
+    Arcane::ExtractRequest EditorApp::BuildExtractRequest(std::uint32_t w, std::uint32_t h)
+    {
+        Arcane::ExtractRequest req;
+        req.viewport = { w, h };
+        // Edit mode draws through the editor camera; Play leaves it empty, so
+        // extract resolves the scene camera itself.
+        if (!InPlayMode())
+            req.editorView = m_runtime->View();
+        req.device = m_viewportTargets.graph ? m_viewportTargets.graph->Scene() : nullptr;
+        return req;
     }
 
     void EditorApp::BuildGizmoOverlayPrims()

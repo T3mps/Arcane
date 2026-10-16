@@ -43,6 +43,7 @@
 #include <Arcane/Render/GpuSceneTypes.hpp>          // GpuSceneFrame (FrameIo::gpuSceneFrame, F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
+#include <Arcane/Render/RenderFramePacket.hpp>       // PacketRing (FrameIo::packetRing, F5 plan 1 Task 5)
 #include <Arcane/Render/ShaderCompiler.hpp>          // --settle N's IsIdle() quiescence check (Task 10 fix round 1)
 
 
@@ -286,6 +287,14 @@ namespace Arcane::RuntimeFrame
         // clears it. MainLoop checks it after both calls and `continue`s in
         // turn.
         bool skipFrame = false;
+
+        // ---- the extract stage's packets (F5 plan 1 Task 5) -----------------
+        // RenderGraph's one ExtractFrame call publishes into this ring and binds
+        // the returned slot on io.graph; FramesInFlight() slots, so the packet
+        // the graph reads outlives the RenderFrame call. Owned HERE, by value,
+        // as the one FrameIo member that is not a binding (MainLoop's
+        // designated initializer leaves it default-constructed).
+        Arcane::PacketRing packetRing{};
     };
 
     // Heartbeat + device-lost check + this frame's ONE window-event pump +

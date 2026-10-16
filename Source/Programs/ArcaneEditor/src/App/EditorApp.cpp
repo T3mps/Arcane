@@ -2042,8 +2042,9 @@ namespace Arcane::Editor
     // an image taken twice a session.
     //
     // AND THE FRESH FRAME IS THE BETTER PICTURE, which is the part worth
-    // stating: it carries the scene, the post chain and the Edit-mode overlays
-    // (SubmitSceneToBatcher's gizmo + camera rect) but NOT the selection
+    // stating: it carries the scene and the post chain, its overlays come
+    // from its own extracted packet and it has no gizmo (the gizmo is the
+    // viewport's ImGui foreground chrome), and it carries NOT the selection
     // outline and NOT the game HUD, because it does not call
     // ArmGraphViewportFrame. WriteAutoScreenshot's own comment calls the
     // outline-free shot the one it would rather have, and rejects it because
@@ -2067,6 +2068,15 @@ namespace Arcane::Editor
         b.Begin(graph->SurfaceWidth(), graph->SurfaceHeight());
         SubmitSceneToBatcher(b);
 
+        // A SECOND FRAME BUILDER, so it extracts too (F5 plan 1 Task 5): the
+        // sprite sweep runs only inside ExtractFrame, so without it this
+        // batcher would drain empty and the cover would lose its sprites. The
+        // same request builder as the viewport frame, minus the gizmo the
+        // cover has never drawn.
+        Arcane::ExtractRequest req = BuildExtractRequest(graph->SurfaceWidth(), graph->SurfaceHeight());
+        req.gizmoPrims.Clear();
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(m_runtime->Registry(), req, m_packetRing);
+
         const Arcane::GlobalParams globals =
             m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{};
 
@@ -2075,6 +2085,7 @@ namespace Arcane::Editor
         vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
         vp.globals = &globals;
         vp.capture = true;
+        graph->BindPacket(&packet);   // the vehicle unbinds it before RenderFrameOffscreen returns
         if (graph->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
             return false;   // Skipped (collapsed panel) or Failed (already latched + logged)
 

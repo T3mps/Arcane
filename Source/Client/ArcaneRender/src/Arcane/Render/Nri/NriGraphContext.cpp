@@ -66,6 +66,16 @@ namespace Arcane
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
 
+        // BindPacket's pointer lives for exactly one RenderFrame /
+        // RenderFrameOffscreen call: this resets it on every return path of
+        // the function that declares it, so a later frame -- one whose host
+        // bound nothing -- can never draw a stale packet.
+        struct PacketBindingReset
+        {
+            const RenderFramePacket*& packet;
+            ~PacketBindingReset() { packet = nullptr; }
+        };
+
         // Where the offline shader artifacts live, relative to the
         // executable. Resolved through ShaderPaths::ResolveFlavorDir, so a
         // desk user pointing ARCANE_SHADER_DIR at a live recompile moves
@@ -1757,6 +1767,8 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
     {
+        const PacketBindingReset packetReset{ m_packet };
+
         // HOST-WINDOW ONLY. An offscreen context has no swapchain, so every
         // line below would dereference null; the twin is RenderFrameOffscreen.
         if (m_mode == Mode::Offscreen)
@@ -1924,6 +1936,8 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrameOffscreen(const FrameDesc& frame)
     {
+        const PacketBindingReset packetReset{ m_packet };
+
         if (m_mode != Mode::Offscreen)
         {
             GraphError("NriGraphContext: RenderFrameOffscreen() on a HOST-WINDOW context -- call "
