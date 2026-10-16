@@ -30,6 +30,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <imgui.h>
+
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -665,4 +667,131 @@ TEST_CASE("extract: a grid line stays 1 px wide at ppm 8, 32 and 128", "[nri][ex
         }
         CHECK(measured > 0);
     }
+}
+
+static void DummyImGuiCallback(const ImDrawList*, const ImDrawCmd*) {}
+
+TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][extract]")
+{
+    ImGuiContext* previous = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    REQUIRE(ctx != nullptr);
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(32.0f, 32.0f);
+    // Before NewFrame, matching the live backend (ImGuiNri.cpp:119):
+    // without RendererHasTextures NewFrame demands a built font atlas
+    // (imgui_draw.cpp:2778).
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
+
+    ImGui::NewFrame();
+    // First-frame windows are hidden unless both sizes are API-set
+    // (imgui.cpp:8093-8095, :6394-6395); see Task 4's case.
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(32.0f, 32.0f), ImGuiCond_Always);
+    ImGui::Begin("one");
+    ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(42), ImVec2(0.0f, 0.0f), ImVec2(8.0f, 8.0f));
+    ImGui::End();
+    ImGui::SetNextWindowPos(ImVec2(32.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(32.0f, 32.0f), ImGuiCond_Always);
+    ImGui::Begin("two");
+    ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(7), ImVec2(1.0f, 1.0f), ImVec2(4.0f, 4.0f));
+    ImGui::End();
+    ImGui::Render();
+    ImDrawData* live = ImGui::GetDrawData();
+    REQUIRE(live != nullptr);
+    REQUIRE(live->CmdLists.Size >= 2);
+    REQUIRE(live->Textures != nullptr);
+
+    auto bytes = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{ 1, 2, 3, 4 });
+    Arcane::PostChainDesc desc;
+    desc.passes.push_back({});
+    desc.passes.back().vsBytes = bytes;
+
+    World world;
+    auto batcher = Arcane::Batcher2D::Create();
+    batcher->Begin(32u, 32u);
+    Arcane::RenderContext2D renderCtx;
+    renderCtx.batcher = batcher.get();
+    world.reg.SetResource<Arcane::RenderContext2D>(std::move(renderCtx));
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 32u, 32u };
+    req.imgui = live;
+    req.post = &desc;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    REQUIRE(packet.imgui.lists.size() == static_cast<std::size_t>(live->CmdLists.Size));
+    REQUIRE(packet.imgui.lists.size() >= 2u);
+    CHECK(packet.imgui.hasTextures);
+    REQUIRE(packet.imgui.textures.size() == static_cast<std::size_t>(live->Textures->Size));
+    bool saw42 = false;
+    bool saw7 = false;
+    for (std::size_t li = 0; li < packet.imgui.lists.size(); ++li)
+    {
+        CHECK(packet.imgui.lists[li].vertices.size() ==
+              static_cast<std::size_t>(live->CmdLists[static_cast<int>(li)]->VtxBuffer.Size));
+        for (const Arcane::ImDrawListSnapshot::Cmd& cmd : packet.imgui.lists[li].cmds)
+        {
+            if (cmd.managed == nullptr && cmd.texture == static_cast<ImTextureID>(42))
+                saw42 = true;
+            if (cmd.managed == nullptr && cmd.texture == static_cast<ImTextureID>(7))
+                saw7 = true;
+        }
+    }
+    CHECK(saw42);
+    CHECK(saw7);
+    CHECK(packet.hasPost);
+    desc = {};
+    bytes.reset();
+    REQUIRE(packet.post.passes.size() == 1u);
+    REQUIRE(packet.post.passes[0].vsBytes);
+    CHECK(packet.post.passes[0].vsBytes->size() == 4u);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(32.0f, 32.0f), ImGuiCond_Always);
+    ImGui::Begin("callback");
+    ImGui::GetWindowDrawList()->AddCallback(&DummyImGuiCallback, nullptr);
+    ImGui::End();
+    ImGui::Render();
+    Arcane::ExtractRequest req2;
+    req2.viewport = { 32u, 32u };
+    req2.imgui = ImGui::GetDrawData();
+    Arcane::PacketRing ring2;
+    const Arcane::RenderFramePacket& refusedPacket = Arcane::ExtractFrame(world.reg, req2, ring2);
+    CHECK(refusedPacket.imgui.lists.empty());
+    CHECK_FALSE(refusedPacket.imgui.hasTextures);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(previous);
+}
+
+static std::string MemberBody(const std::string& text, const char* signature)
+{
+    const std::size_t fn = text.find(signature);
+    REQUIRE(fn != std::string::npos);
+    const std::size_t end = text.find("\n    }\n", fn);
+    REQUIRE(end != std::string::npos);
+    return text.substr(fn, end - fn);
+}
+
+TEST_CASE("the editor builds its game HUD before extract and hands it to the request", "[nri][extract]")
+{
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    REQUIRE(in.good());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string text = ss.str();
+    const std::string render = MemberBody(text, "void EditorApp::RenderSceneToViewport(");
+    const std::size_t hud = render.find("RenderToDrawData()");
+    const std::size_t extract = render.find("ExtractFrame(");
+    REQUIRE(hud != std::string::npos);
+    REQUIRE(extract != std::string::npos);
+    CHECK(hud < extract);
+    CHECK(render.find("req.gameUi = m_gameUiDrawData;") != std::string::npos);
+    const std::string arm = MemberBody(text, "void EditorApp::ArmGraphViewportFrame(");
+    CHECK(arm.find("RenderToDrawData()") == std::string::npos);
+    CHECK(arm.find("vp.gameUi = m_gameUiDrawData;") != std::string::npos);
 }

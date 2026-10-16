@@ -2736,6 +2736,77 @@ TEST_CASE("an ImDrawSnapshot rebuild reaches ImGuiNri (vulkan)",
 }
 
 // ---------------------------------------------------------------------------
+// F5 plan 1 Task 10: a bound packet's gameUi snapshot is what the gameui
+// node draws. The live FrameDesc::gameUi is empty and only declares the node.
+// ---------------------------------------------------------------------------
+namespace
+{
+    void CheckPacketGameUiReachesTheHud(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        ImGuiContext* const previous = ImGui::GetCurrentContext();
+        ImGuiContext* const game = ImGui::CreateContext();
+        REQUIRE(game != nullptr);
+        ImGui::SetCurrentContext(game);
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2(static_cast<float>(kW), static_cast<float>(kH));
+        io.DeltaTime = 1.0f / 60.0f;
+
+        Arcane::NriGraphContext::NodeSet nodes;
+        nodes.gameUi = true;
+        PixelVehicle v = MakeVehicle(backend, nodes);
+        Arcane::RenderOverlayNode* const hud = v.ctx->ImGuiGame();
+        REQUIRE(hud != nullptr);
+        hud->AdoptImGuiContext(game);
+
+        // The Play HUD the editor built before extract.
+        ImGui::NewFrame();
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            ImVec2(70.0f, 40.0f), ImVec2(90.0f, 56.0f), IM_COL32(255, 0, 0, 255));
+        ImGui::Render();
+        Arcane::RenderFramePacket packet;
+        REQUIRE(Arcane::CopyImDrawSnapshot(ImGui::GetDrawData(), packet.gameUi));
+        REQUIRE(packet.gameUi.hasTextures);
+
+        // An empty live frame: it declares the gameui node and draws nothing itself.
+        ImGui::NewFrame();
+        ImGui::Render();
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.gameUi = ImGui::GetDrawData();
+        frame.capture = true;
+        v.ctx->BindPacket(&packet);
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        REQUIRE(w == kW);
+        REQUIRE(h == kH);
+        const Rgba px = At(rgba, w, 80u, 48u);
+        CHECK(px.r > px.g + 60);
+        CHECK(px.r > px.b + 60);
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        v.ctx.reset();
+        ImGui::DestroyContext(game);
+        ImGui::SetCurrentContext(previous);
+    }
+}
+
+TEST_CASE("a bound packet's game HUD reaches the gameui node (d3d12)", "[gpu][packet][imgui][nri][d3d12]")
+{
+    CheckPacketGameUiReachesTheHud(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("a bound packet's game HUD reaches the gameui node (vulkan)", "[gpu][packet][imgui][nri][vulkan]")
+{
+    CheckPacketGameUiReachesTheHud(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
 // EXTRACT KEEPS A REGISTERED SPRITE MATERIAL (F5 plan 1 Task 5). ExtractFrame
 // submits into the batcher the material was registered on and copies the
 // drained batch into the packet; the bound packet is what Batch2DNode draws.

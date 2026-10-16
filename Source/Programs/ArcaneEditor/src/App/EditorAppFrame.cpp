@@ -67,7 +67,6 @@
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
 #include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -1638,12 +1637,6 @@ namespace Arcane::Editor
         {
             m_runtime->SetView(m_camera.Resolve(ViewportSize()));
         }
-        else if (const auto sceneCam = Arcane::ActiveSceneCamera(
-                     m_runtime->Registry(),
-                     glm::uvec2{ ViewportWidth(), ViewportHeight() }))
-        {
-            m_runtime->SetView(sceneCam->view);
-        }
 
         // THE POST CHAIN'S HANDOFF IS NOT MADE HERE, and needs no statement:
         // the resolver runs device-less (StageSpriteTables) and PostChainCache
@@ -1745,28 +1738,48 @@ namespace Arcane::Editor
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
 
+            // The Play HUD, after scene submission and before extract. A
+            // plugin DrawUI that edits the scene still lands this frame: the
+            // sprite sweep runs inside the extract that follows. Edit mode
+            // and a plugin with no DrawUI leave the pointer null.
+            m_gameUiDrawData = BeginGameUiFrame() ? m_gameImgui->RenderToDrawData() : nullptr;
+
             // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1), AFTER the
             // Begin + SubmitSceneToBatcher bracket above (before it, the drain
             // would copy the previous bracket): the sprite sweep runs into `b`
             // and the drained batch is copied into this frame's packet, which
             // the batch node draws instead of draining `b` again. Bound just
             // before RenderFrameOffscreen below, which unbinds it on return.
-            Arcane::ExtractRequest extractReq = BuildExtractRequest(w, h);
+            Arcane::ExtractRequest req = BuildExtractRequest(w, h);
+            req.gameUi = m_gameUiDrawData;
+            // The scene light is render.mesh.defaultLight.* (Live), read once
+            // here and published by extract. ArmGraphViewportFrame copies the
+            // three vectors onto m_meshScene.
+            Arcane::MeshSceneDesc light{};
+            Arcane::ApplyDefaultLight(light, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+            req.lightDirection = light.lightDirection;
+            req.lightColor = light.lightColor;
+            req.ambient = light.ambient;
             // The 3D grid is viewport chrome only. The scene-save cover calls
             // BuildExtractRequest and does not reach this block.
             if (!InPlayMode() && m_camera.mode == ViewMode::Perspective
                 && Arcane::Settings<EditorViewportSettings>().showGrid)
             {
-                extractReq.showGrid3d = true;
-                extractReq.grid3d = MakeGridScene(Arcane::Settings<EditorGridSettings>(),
-                                                  Arcane::Settings<EditorGrid3DSettings>());
-                extractReq.grid3d.view = m_runtime->View();
-                extractReq.grid3d.SetPlane(Arcane::Settings<EditorViewportSettings>().gridPlane == GridPlane::XY
-                                               ? Arcane::GridSceneDesc::Plane::XY
-                                               : Arcane::GridSceneDesc::Plane::XZ);
+                req.showGrid3d = true;
+                req.grid3d = MakeGridScene(Arcane::Settings<EditorGridSettings>(),
+                                           Arcane::Settings<EditorGrid3DSettings>());
+                req.grid3d.view = m_runtime->View();
+                req.grid3d.SetPlane(Arcane::Settings<EditorViewportSettings>().gridPlane == GridPlane::XY
+                                        ? Arcane::GridSceneDesc::Plane::XY
+                                        : Arcane::GridSceneDesc::Plane::XZ);
             }
             const Arcane::RenderFramePacket& packet =
-                Arcane::ExtractFrame(m_runtime->Registry(), extractReq, m_packetRing);
+                Arcane::ExtractFrame(m_runtime->Registry(), req, m_packetRing);
+            // Play: the scene camera extract resolved. No scene camera leaves
+            // the plugin's own view (spriteViewFromScene stays false). Edit
+            // already pushed the editor camera in RefreshSceneResolution.
+            if (packet.spriteViewFromScene && packet.spriteView)
+                m_runtime->SetView(packet.spriteView->view);
             // The shutdown report reads this member. The graph borrows
             // packet.mesh. The cover's later extract must not replace it.
             m_gpuSceneFrame = packet.mesh;
@@ -1788,11 +1801,8 @@ namespace Arcane::Editor
             // WITHOUT a post chain at all.
             vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
             vp.globals = &globals;
-            // Phases 11, 12 and 17's contribution to THIS declaration. Strictly
-            // AFTER SubmitSceneToBatcher above, which is not incidental: it
-            // runs the plugin's DrawUI, and phase 11 follows phase 10. A
-            // DrawUI that mutates the scene must land on THIS frame, not the
-            // next.
+            // Phases 12 and 17, plus the gameui node declared from the HUD
+            // draw data built before extract above.
             ArmGraphViewportFrame(vp, packet);
 
             // THE --screenshot CAPTURE, armed on the LAST frame only -- the
@@ -2022,8 +2032,8 @@ namespace Arcane::Editor
 
     // Phase 11's CPU HALF -- see the declaration. The GPU composite is a NODE
     // inside the viewport frame rather than a call from here, so this is all
-    // of phase 11 there is as code, and ArmGraphViewportFrame is its only
-    // caller.
+    // of phase 11 there is as code, and RenderSceneToViewport calls it after
+    // SubmitSceneToBatcher and before ExtractFrame.
     bool EditorApp::BeginGameUiFrame()
     {
         // Edit mode: not run (clean viewport); the input is reset so a stray
@@ -2052,7 +2062,7 @@ namespace Arcane::Editor
         m_plugin->DrawUIAll();   // game module + any secondary plugins, into the game context
         // The caller now owes EXACTLY ONE of Render / RenderToDrawData /
         // EndFrameDiscard. Returning true rather than doing it here is what
-        // keeps that obligation visible at the two call sites instead of split
+        // keeps that obligation visible at the call site instead of split
         // across a helper.
         return true;
     }
@@ -2064,27 +2074,23 @@ namespace Arcane::Editor
     // are NODES in one graph that is declared, compiled and executed by a
     // single RenderFrameOffscreen call -- so everything the frame will contain
     // has to be known BEFORE that call, and phase 10 is where it is made.
-    // Moving the call EARLIER is not an option either: the game HUD's draw
-    // data must be produced AFTER the scene submission, so that a plugin whose
-    // DrawUI mutates the scene lands on this frame rather than the next.
+    // The game HUD's draw data is produced in RenderSceneToViewport, before
+    // extract and still after SubmitSceneToBatcher, so a plugin whose DrawUI
+    // mutates the scene still lands on this frame: the sprite sweep runs
+    // inside the extract that follows. This function only hands that draw
+    // data to the frame so the gameui node is declared.
     // Phases 11, 12 and 17 keep their gates and each points at this
     // function.
     void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
                                           const Arcane::RenderFramePacket& packet)
     {
         // ---- phase 11's content: the game HUD ---------------------------
-        // Play-mode only, exactly as that phase is. The draw data lives in the
-        // game context until its next NewFrame -- a whole frame away -- which
-        // is what lets the node copy the geometry at record time
-        // (FrameDesc::gameUi).
-        if (BeginGameUiFrame())
-        {
-            // The draw data goes to the graph, which declares the GameUi
-            // node for it. A caller that wants the frame WITHOUT the game HUD
-            // leaves vp.gameUi null instead -- that is the whole mechanism
-            // now, and it lives in FrameDesc rather than in a stage ordinal.
-            vp.gameUi = m_gameImgui->RenderToDrawData();
-        }
+        // Produced in RenderSceneToViewport before extract (so the packet
+        // carries it) and still after SubmitSceneToBatcher. Null in Edit, and
+        // null when no plugin draws a HUD: leaving it null is how a frame
+        // asks for no gameui node. The draw data lives in the game context
+        // until its next NewFrame.
+        vp.gameUi = m_gameUiDrawData;
 
         // ---- F2a Task 10's content: the opaque 3D pass (F3 plan 1 T8) -----
         // UNCONDITIONAL, unlike the pick + outline chain below: a scene's
@@ -2113,9 +2119,12 @@ namespace Arcane::Editor
         // NO LIGHT COMPONENT YET: this engine has none anywhere --
         // Scene/Components.hpp declares none and SceneModule.hpp registers
         // none -- so the scene's one light is render.mesh.defaultLight.*
-        // (RenderLookSettings.hpp; Live, read once per frame). A light
-        // component is future work and a reviewed scene-schema change.
-        Arcane::ApplyDefaultLight(m_meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+        // (RenderLookSettings.hpp; Live, read once per frame into the packet).
+        // A light component is future work and a reviewed scene-schema change.
+        const Arcane::RenderFramePacket& lit = m_packetRing.Latest();
+        m_meshScene.lightDirection = lit.lightDirection;
+        m_meshScene.lightColor = lit.lightColor;
+        m_meshScene.ambient = lit.ambient;
 
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
@@ -2229,9 +2238,9 @@ namespace Arcane::Editor
     // The HUD is a NODE inside the viewport frame, and that frame is
     // declared, compiled and executed by phase 10's single
     // RenderFrameOffscreen call -- which has already happened by the time
-    // control reaches here. ArmGraphViewportFrame (above) is where this
-    // phase's content is produced, through the SAME BeginGameUiFrame helper,
-    // at the same point relative to the scene submission.
+    // control reaches here. RenderSceneToViewport produces the draw data
+    // after SubmitSceneToBatcher and before ExtractFrame, and
+    // ArmGraphViewportFrame assigns it to FrameDesc::gameUi.
     //
     // THE GAME HUD HAS ITS OWN ImGui CONTEXT, and that is load-bearing rather
     // than tidy: the editor's context has io.IniFilename pointed at the

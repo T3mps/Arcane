@@ -112,6 +112,7 @@ namespace Arcane::AssetPipeline { struct GltfSurvey; }
 struct ImGuiContext;
 struct ImGuiSettingsHandler;
 struct ImGuiTextBuffer;
+struct ImDrawData;
 
 namespace Arcane::Editor
 {
@@ -672,6 +673,13 @@ namespace Arcane::Editor
         // blank after the first switch. The full obligation is stated on
         // ImGuiNri's m_imguiContext member.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
+
+        // This frame's Play HUD draw data. RenderSceneToViewport builds it
+        // after SubmitSceneToBatcher and before ExtractFrame, so the packet
+        // snapshot is this frame's HUD; ArmGraphViewportFrame assigns it to
+        // FrameDesc::gameUi so the gameui node is declared. Null in Edit and
+        // when no plugin draws. Not owned.
+        ImDrawData* m_gameUiDrawData = nullptr;
 
         std::unique_ptr<Arcane::ProcessContext> m_process;          // the process's ONE (spec s3); declared before m_runtime so it outlives it
         std::optional<Arcane::ClientRuntime> m_runtime;             // destructs before m_gpu

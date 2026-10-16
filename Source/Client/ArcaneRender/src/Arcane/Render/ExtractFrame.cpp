@@ -1,5 +1,10 @@
 #include <Arcane/Render/ExtractFrame.hpp>
 
+// Before Log.hpp: this header includes NRI.h, and windows.h (pulled by the
+// logger) #defines ERROR. GetRenderOverlayHooks is how extract copies ImGui
+// draw data without including an ImGui header (ruling PR-1).
+#include <Arcane/Render/Nri/RenderOverlayNode.hpp>
+
 #include <Arcane/Base/ExtractAccounting.hpp>
 #include <Arcane/Base/Log.hpp>                   // ARC_WARN (no-camera / multi-camera, once)
 #include <Arcane/Render/Batcher2D.hpp>
@@ -430,6 +435,20 @@ namespace Arcane
             }
         }
         packet.overlay.Append(req.gizmoPrims);
+
+        // Ruling PR-1: ArcaneRender cannot call ArcaneImGui directly; the copy is the
+        // overlay hook. No hook (a host without ImGui) leaves both snapshots empty.
+        const RenderOverlayHooks overlayHooks = GetRenderOverlayHooks();
+        if (!overlayHooks.snapshot || !overlayHooks.snapshot(req.imgui, packet.imgui))
+            packet.imgui = {};
+        if (!overlayHooks.snapshot || !overlayHooks.snapshot(req.gameUi, packet.gameUi))
+            packet.gameUi = {};
+        packet.hasPost = req.post != nullptr;
+        if (req.post)
+            packet.post = *req.post;
+        packet.lightDirection = req.lightDirection;
+        packet.lightColor = req.lightColor;
+        packet.ambient = req.ambient;
         return packet;
     }
 }

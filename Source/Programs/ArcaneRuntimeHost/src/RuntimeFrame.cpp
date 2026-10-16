@@ -586,6 +586,16 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     Arcane::ExtractRequest req;
     req.viewport = { frameWidth, frameHeight };
     req.device = io.graph->Scene();
+    // The scene light, read once per frame (Live) and published into the
+    // packet. The mesh block below copies the three vectors back out.
+    Arcane::MeshSceneDesc light{};
+    Arcane::ApplyDefaultLight(light, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+    req.lightDirection = light.lightDirection;
+    req.lightColor = light.lightColor;
+    req.ambient = light.ambient;
+    req.imgui = graphFrame.imgui;
+    req.gameUi = graphFrame.gameUi;
+    req.post = graphFrame.post;
     const auto extractT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
     io.perf.Add(io.perf.accRec, extractT0, io.perf.Now());   // --perf's "extract" column
@@ -617,9 +627,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // NO LIGHT COMPONENT YET: this engine has none anywhere --
     // Scene/Components.hpp declares none and SceneModule.hpp registers
     // none -- so the scene's one light is render.mesh.defaultLight.*
-    // (RenderLookSettings.hpp; Live, read once per frame). A light
-    // component is future work and a reviewed scene-schema change.
-    Arcane::ApplyDefaultLight(meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+    // (RenderLookSettings.hpp; Live, read once per frame into the packet
+    // above). A light component is future work and a reviewed scene-schema
+    // change.
+    meshScene.lightDirection = packet.lightDirection;
+    meshScene.lightColor = packet.lightColor;
+    meshScene.ambient = packet.ambient;
     if (!meshScene.Empty())
         graphFrame.mesh = &meshScene;
 
