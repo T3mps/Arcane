@@ -82,8 +82,10 @@ namespace Arcane
     // the host's stored RenderContext2D view, still with the flag false.
     //
     // `warn` emits the once-per-process no-camera and multi-camera
-    // diagnostics. ExtractFrame passes true. A host that resolves again
-    // before DrawUI passes false, so the same frame does not warn twice.
+    // diagnostics, and is passed through to both camera sweeps. The
+    // perspective sweep's degenerate-basis warning fires on every call
+    // that asks. ExtractFrame passes true. A host that resolves again
+    // before DrawUI passes false, so that line is once per frame.
     struct ResolvedFrameViews
     {
         std::optional<SceneCameraView> spriteView;

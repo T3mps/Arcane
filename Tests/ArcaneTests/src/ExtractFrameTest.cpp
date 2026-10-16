@@ -4,6 +4,7 @@
 // the packet. Device-free, under ~[gpu]; the GPU witness that a registered
 // sprite material id survives the copy is in NriGraphPixelTest.cpp.
 #include <Arcane/Base/ExtractAccounting.hpp>
+#include <Arcane/Base/Log.hpp>                    // the degenerate-basis warning's logger
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Mesh/MeshBuilder.hpp>
@@ -32,6 +33,9 @@
 
 #include <imgui.h>
 
+#include <spdlog/sinks/callback_sink.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -155,6 +159,36 @@ namespace
             cam.farZ = 500.0f;
             reg.AddComponent<Arcane::Camera>(e, cam);
         }
+    };
+
+    // MeshCacheTest's warn counter, narrowed to the degenerate-basis line.
+    // The callback sink is the seam those camera-adjacent warn tests use:
+    // attach to Log::Engine(), count warn payloads, detach on the way out.
+    struct DegenerateBasisWarns
+    {
+        int count = 0;
+        std::shared_ptr<spdlog::sinks::callback_sink_mt> sink;
+
+        DegenerateBasisWarns()
+        {
+            sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
+                [this](const spdlog::details::log_msg& m)
+                {
+                    if (m.level != spdlog::level::warn)
+                        return;
+                    const std::string text(m.payload.data(), m.payload.size());
+                    if (text.find("degenerate basis") != std::string::npos)
+                        ++count;
+                });
+            Arcane::Log::Engine()->sinks().push_back(sink);
+        }
+        ~DegenerateBasisWarns()
+        {
+            auto& sinks = Arcane::Log::Engine()->sinks();
+            sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+        }
+        DegenerateBasisWarns(const DegenerateBasisWarns&) = delete;
+        DegenerateBasisWarns& operator=(const DegenerateBasisWarns&) = delete;
     };
 }
 
@@ -943,4 +977,50 @@ TEST_CASE("frame view before DrawUI: hosts resolve before the HUD", "[nri][extra
     extractSs << extractIn.rdbuf();
     const std::string extractCpp = extractSs.str();
     CHECK(extractCpp.find("ResolveFrameViews(reg, req, true)") != std::string::npos);
+}
+
+// Before the host resolved ahead of DrawUI, one Play frame called
+// ActivePerspectiveSceneCamera once, so a persistent degenerate basis
+// warned once. The early resolve and ExtractFrame both resolve that
+// camera now. The early call passes warn false; the extract keeps the
+// warning. Two frames still warn twice: the line is not latched for
+// the process.
+TEST_CASE("a Play frame warns once for a degenerate perspective basis", "[nri][extract]")
+{
+    World world;
+    world.AddOrthoCamera();
+    Astra::Entity cam = world.reg.CreateEntity();
+    Arcane::Transform t;
+    t.position = { 0.0f, 0.0f, 5.0f };
+    t.scale = glm::vec3(0.0f);
+    world.reg.AddComponent<Arcane::Transform>(cam, t);
+    world.reg.SetParent(cam, world.root);
+    Arcane::Camera c;
+    c.active = true;
+    c.projection = Arcane::CameraProjection::Perspective;
+    world.reg.AddComponent<Arcane::Camera>(cam, c);
+    Arcane::TransformPropagationSystem{}(world.reg);
+
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.playMode = true;
+
+    DegenerateBasisWarns warns;
+
+    const Arcane::ResolvedFrameViews early = Arcane::ResolveFrameViews(world.reg, req, false);
+    CHECK(early.meshView.has_value());
+    CHECK(warns.count == 0);
+
+    Arcane::PacketRing ring;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    CHECK(packet.meshView.has_value());
+    CHECK(warns.count == 1);
+
+    const Arcane::ResolvedFrameViews earlyAgain = Arcane::ResolveFrameViews(world.reg, req, false);
+    CHECK(earlyAgain.meshView.has_value());
+    CHECK(warns.count == 1);
+    Arcane::PacketRing ring2;
+    const Arcane::RenderFramePacket& packet2 = Arcane::ExtractFrame(world.reg, req, ring2);
+    CHECK(packet2.meshView.has_value());
+    CHECK(warns.count == 2);
 }

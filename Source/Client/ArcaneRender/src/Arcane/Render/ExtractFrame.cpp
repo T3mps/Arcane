@@ -260,12 +260,14 @@ namespace Arcane
         }
 
         // Once per process, and only when `warn` is set, the two warnings
-        // PushSceneCamera used to print. A host that resolves again before
-        // DrawUI passes false, so a frame that also extracts warns once.
+        // PushSceneCamera used to print. The same flag is passed into both
+        // camera sweeps. The perspective sweep's degenerate-basis line warns
+        // on every call that asks, so a host that resolves again before
+        // DrawUI passes false and a frame that also extracts warns once.
         int camCount = 0;
-        out.spriteView = ActiveSceneCamera(reg, req.viewport, &camCount);
+        out.spriteView = ActiveSceneCamera(reg, req.viewport, &camCount, warn);
         out.spriteViewFromScene = out.spriteView.has_value();
-        out.meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
+        out.meshView = ActivePerspectiveSceneCamera(reg, req.viewport, nullptr, warn);
         if (warn)
         {
             static bool warnedNoSceneCamera = false;

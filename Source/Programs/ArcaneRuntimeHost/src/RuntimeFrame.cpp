@@ -364,9 +364,9 @@ void BuildHud(FrameIo& io)
 
     // DrawUI reads ClientRuntime::View(). Resolve this frame's scene camera
     // the way RenderGraph's ExtractFrame will -- no editor view, this frame's
-    // extent -- and push it first. warn is false so the once-only diagnostics
-    // still fire once, inside ExtractFrame. No scene camera leaves a
-    // plugin-driven view alone.
+    // extent -- and push it first. warn is false, so the no-camera,
+    // multi-camera, and degenerate-basis diagnostics still fire once, inside
+    // ExtractFrame. No scene camera leaves a plugin-driven view alone.
     {
         std::uint32_t viewW = 0, viewH = 0;
         FrameExtent(io, viewW, viewH);

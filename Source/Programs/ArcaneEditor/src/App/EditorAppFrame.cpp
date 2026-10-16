@@ -1738,9 +1738,10 @@ namespace Arcane::Editor
             Arcane::ExtractRequest req = BuildExtractRequest(w, h);
             // Play: DrawUI reads ClientRuntime::View(). Push this frame's
             // scene camera before the HUD. warn is false -- ExtractFrame
-            // emits the once-only diagnostics. No scene camera leaves the
-            // plugin's view (spriteViewFromScene stays false). Edit keeps
-            // the editor camera RefreshSceneResolution already pushed.
+            // emits the no-camera, multi-camera, and degenerate-basis
+            // diagnostics. No scene camera leaves the plugin's view
+            // (spriteViewFromScene stays false). Edit keeps the editor
+            // camera RefreshSceneResolution already pushed.
             if (InPlayMode())
             {
                 const Arcane::ResolvedFrameViews views =
