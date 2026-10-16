@@ -9,6 +9,7 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ExtractFrame.hpp>
+#include <Arcane/Render/Grid2D.hpp>
 #include <Arcane/Render/GpuSceneSync.hpp>         // the World fixture's GpuSceneSync
 #include <Arcane/Render/GpuSceneTypes.hpp>        // the World fixture's GpuSceneMirror / GpuSceneStage
 #include <Arcane/Render/RenderFramePacket.hpp>
@@ -26,8 +27,10 @@
 
 #include "Helpers/ConstantScan.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <memory>
@@ -554,4 +557,112 @@ TEST_CASE("a selected body outlines only that body", "[nri][extract]")
     const auto [playSelLeft, playSelRight] = sides(left, false, true);
     CHECK(playSelLeft == 0);
     CHECK(playSelRight == 0);
+}
+
+namespace
+{
+    // Alpha of the vertical grey grid line at world x, or nullopt when that
+    // line was not emitted. Axes are coloured, so they do not match.
+    std::optional<float> VerticalGreyAlpha(const Arcane::RenderFramePacket& packet, float worldX)
+    {
+        std::optional<float> alpha;
+        float best = 1.0e9f;
+        for (const Arcane::OverlayPrimitive& prim : packet.overlay.prims)
+        {
+            if (prim.tag != Arcane::OverlayPrimitive::Tag::Line)
+                continue;
+            const Arcane::OverlayLine& line = prim.line;
+            if (line.screenSpace)
+                continue;
+            if (std::abs(line.a.x - line.b.x) > 1.0e-4f)
+                continue;
+            if (std::abs(line.color.r - 0.5f) > 1.0e-3f || std::abs(line.color.g - 0.5f) > 1.0e-3f
+                || std::abs(line.color.b - 0.5f) > 1.0e-3f)
+                continue;
+            const float d = std::abs(line.a.x - worldX);
+            if (d < best)
+            {
+                best = d;
+                alpha = line.color.a;
+            }
+        }
+        if (best > 1.0e-3f)
+            return std::nullopt;
+        return alpha;
+    }
+
+    // The width the overlay will rasterise: screen-space thickness is already
+    // pixels; a world line is expanded in metres and projected.
+    float OnScreenWidth(const Arcane::ViewTransform& view, const Arcane::OverlayLine& line)
+    {
+        if (line.screenSpace)
+            return line.thickness;
+        const glm::vec2 d = glm::vec2(line.b) - glm::vec2(line.a);
+        const float len = glm::length(d);
+        if (!(len > 0.0f))
+            return 0.0f;
+        const glm::vec2 n = glm::vec2(-d.y, d.x) / len * (line.thickness * 0.5f);
+        const glm::vec3 mid = (line.a + line.b) * 0.5f;
+        const glm::vec2 p0 = glm::vec2(view.WorldToScreen(mid + glm::vec3(n, 0.0f)));
+        const glm::vec2 p1 = glm::vec2(view.WorldToScreen(mid - glm::vec3(n, 0.0f)));
+        return glm::length(p1 - p0);
+    }
+}
+
+TEST_CASE("extract: a non-default grid fade changes minor and major line alphas", "[nri][extract]")
+{
+    // 200 px over 2 m is 100 px/m. The 0.1 m level sits at 10 px, inside the
+    // default 8..24 window and fully in once the window is 4..10. x = 1 m is
+    // the decade above it (the major).
+    auto alphas = [](float fadeIn, float fadeFull)
+    {
+        World world;
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { 200u, 200u };
+        req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 1.0f, req.viewport);
+        req.showGrid2d = true;
+        req.gridFadeInPx = fadeIn;
+        req.gridFadeFullPx = fadeFull;
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        const std::optional<float> minor = VerticalGreyAlpha(packet, 0.1f);
+        const std::optional<float> major = VerticalGreyAlpha(packet, 1.0f);
+        REQUIRE(minor.has_value());
+        REQUIRE(major.has_value());
+        return std::pair<float, float>{ *minor, *major };
+    };
+
+    const auto [minorDefault, majorDefault] = alphas(8.0f, 24.0f);
+    const auto [minorCustom, majorCustom] = alphas(4.0f, 10.0f);
+    CHECK(minorCustom != minorDefault);
+    CHECK(majorCustom != majorDefault);
+}
+
+TEST_CASE("extract: a grid line stays 1 px wide at ppm 8, 32 and 128", "[nri][extract]")
+{
+    for (const float ppmWanted : { 8.0f, 32.0f, 128.0f })
+    {
+        World world;
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { 256u, 256u };
+        const float halfHeight = static_cast<float>(req.viewport.y) / (2.0f * ppmWanted);
+        req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, halfHeight, req.viewport);
+        req.showGrid2d = true;
+        REQUIRE(Arcane::GridPixelsPerMetre(*req.editorView) == Catch::Approx(ppmWanted).margin(1.0e-3));
+
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        int measured = 0;
+        for (const Arcane::OverlayPrimitive& prim : packet.overlay.prims)
+        {
+            if (prim.tag != Arcane::OverlayPrimitive::Tag::Line)
+                continue;
+            const Arcane::OverlayLine& line = prim.line;
+            if (line.depth != Arcane::OverlayDepthClass::DepthTested)
+                continue;
+            ++measured;
+            CHECK(OnScreenWidth(*req.editorView, line) == Catch::Approx(1.0f).margin(1.0e-3));
+        }
+        CHECK(measured > 0);
+    }
 }

@@ -1975,6 +1975,8 @@ namespace Arcane::Editor
             && Arcane::Settings<EditorViewportSettings>().showGrid;
         req.gridMinorAlpha = grid.minorAlpha;
         req.gridMajorAlpha = grid.majorAlpha;
+        req.gridFadeInPx = grid.fadeInPx;
+        req.gridFadeFullPx = grid.fadeFullPx;
         req.gridLineRgb = glm::vec3(grid.lineColor.r, grid.lineColor.g, grid.lineColor.b);
         req.gridLineThicknessPx = grid.lineThickness;
         req.gridMaxLinesPerAxis = static_cast<std::int64_t>(grid.maxLinesPerAxis);

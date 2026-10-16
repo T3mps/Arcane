@@ -8,8 +8,9 @@
 // slot) that the graph binds through NriGraphContext::BindPacket and reads
 // instead of the world.
 //
-// THE REQUEST IS STABLE: later F5 plan 1 tasks fill more of these fields
-// inside ExtractFrame; they add no members.
+// Later tasks fill these fields inside ExtractFrame. Grid fade was added in
+// the Task 9 review (ruling T9-3) so editor.viewport.grid.fade* reaches
+// PlanGrid2D. The struct is engine-internal.
 //
 // This header names the registry and the device only by forward declaration
 // and includes no scene-camera sweep, so a consumer of the request type does
@@ -50,6 +51,10 @@ namespace Arcane
         GridSceneDesc                grid3d{};
         float                        gridMinorAlpha = 0.35f;
         float                        gridMajorAlpha = 0.55f;
+        // editor.viewport.grid.fade{In,Full}Px. Defaults match PlanGrid2D, so a
+        // caller that leaves them unset keeps the 8..24 px crossfade.
+        float                        gridFadeInPx = 8.0f;
+        float                        gridFadeFullPx = 24.0f;
         glm::vec3                    gridLineRgb{ 0.5f, 0.5f, 0.5f };
         float                        gridLineThicknessPx = 1.0f;
         std::int64_t                 gridMaxLinesPerAxis = 4096;

@@ -352,7 +352,8 @@ namespace Arcane
             style.axisY = req.gridAxisY;
             const float ppm = GridPixelsPerMetre(packet.spriteView->view);
             EmitGrid2D(packet.spriteView->view,
-                       PlanGrid2D(ppm, req.gridMinorAlpha, req.gridMajorAlpha),
+                       PlanGrid2D(ppm, req.gridMinorAlpha, req.gridMajorAlpha,
+                                  req.gridFadeInPx, req.gridFadeFullPx),
                        style, packet.overlay);
         }
         if (req.showGrid3d)

@@ -112,11 +112,15 @@ namespace Arcane
     struct RenderContext2D
     {
         // THE ONE camera (F4 plan 1, spec s3): the ViewTransform the host pushed
-        // through ClientRuntime::SetView. RenderSubmissionSystem AND the physics
-        // overlay read the same one, so sprites + the overlay pan/zoom together.
+        // through ClientRuntime::SetView. Sprites do not read it
+        // (RenderSubmissionSystem draws world quads; ExtractFrame sets the
+        // batcher's view-projection from packet.spriteView). The physics
+        // overlay uses packet.spriteView too, and reads only alpha here.
+        // ExtractFrame still copies this view into packet.spriteView when the
+        // scene has no usable Camera (the host SetView fallback).
         // The default (identity matrices, viewport 0) is a host that never pushed
-        // a view: it has no Affine2D (AsAffine2D() is nullopt), so the pixel
-        // overlays skip drawing; sprites are world quads (F4 plan 1 T5) and draw
+        // a view: it has no Affine2D (AsAffine2D() is nullopt), so that fallback
+        // has no pixel map; sprites are world quads (F4 plan 1 T5) and draw
         // through the identity view-projection. ExtractFrame warns when no scene
         // camera exists.
         class Batcher2D* batcher = nullptr;   // set by the host between Begin and Drain
