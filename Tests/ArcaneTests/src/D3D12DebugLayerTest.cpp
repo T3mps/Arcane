@@ -12,6 +12,11 @@
 // stored message when the NRI device is destroyed. The count is read after
 // both owners are released, so either delivery moves it. With the layer off
 // the HRESULT still fails and the latch does not move.
+//
+// [expects-render-errors] tells the suite listener that a rise across this
+// case is deliberate. The reset destructor still runs, and it runs before
+// the listener's testCaseEnded sample, so the next case does not inherit
+// the count. The tag is what keeps the run green if that reset moves.
 
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
@@ -21,7 +26,10 @@
 
 #include "Helpers/GpuCapability.hpp"
 
+#include "Helpers/RenderErrorGate.hpp"
+
 #include <cstdint>
+#include <string>
 
 #if ARC_PLATFORM_WINDOWS
 #    ifndef NOMINMAX
@@ -44,7 +52,7 @@ namespace
 }
 
 TEST_CASE("D3D12 debug layer: an invalid CreateCommittedResource increments RenderErrorCount",
-          "[gpu][d3d12][validation]")
+          "[gpu][d3d12][validation][expects-render-errors]")
 {
     ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
 
@@ -97,6 +105,107 @@ TEST_CASE("D3D12 debug layer: an invalid CreateCommittedResource increments Rend
     nri.reset();
     native.reset();
     CHECK(Arcane::RenderErrorCount() > 0);
+    (void)reset;
+}
+
+// The suite listener would fail the run for this same call: the case is not
+// tagged [expects-render-errors], and the count moves when the device is
+// destroyed. ResetRenderErrors puts the latch back before testCaseEnded, so
+// the real listener sees no rise and the suite stays green. The gate below
+// is the listener's decision, fed the counts the listener would have sampled.
+TEST_CASE("D3D12 debug layer: an untagged validation error fails the run after device teardown",
+          "[gpu][d3d12][validation]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+
+    ResetRenderErrors reset;
+
+    Arcane::RenderDeviceDesc desc;
+    desc.backend = Arcane::GraphicsBackend::D3D12;
+
+    auto native = Arcane::NativeDeviceOwner::Create(desc);
+    REQUIRE(native != nullptr);
+    auto nri = Arcane::NriDevice::Wrap(*native);
+    REQUIRE(nri != nullptr);
+
+    void* const nativeObject = nri->Core().GetDeviceNativeObject(&nri->Device());
+    REQUIRE(nativeObject != nullptr);
+    auto* const device = static_cast<ID3D12Device*>(nativeObject);
+
+    Arcane::ResetRenderErrorCount();
+    REQUIRE(Arcane::RenderErrorCount() == 0);
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC resourceDesc{};
+    resourceDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    resourceDesc.Width            = 0;
+    resourceDesc.Height           = 1;
+    resourceDesc.DepthOrArraySize = 1;
+    resourceDesc.MipLevels        = 1;
+    resourceDesc.Format           = DXGI_FORMAT_UNKNOWN;
+    resourceDesc.SampleDesc.Count = 1;
+    resourceDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    ID3D12Resource* resource = nullptr;
+    const HRESULT hr = device->CreateCommittedResource(
+        &heap, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+        __uuidof(ID3D12Resource), reinterpret_cast<void**>(&resource));
+    if (resource)
+        resource->Release();
+    CHECK(FAILED(hr));
+
+    nri.reset();
+    native.reset();
+    const std::uint64_t risen = Arcane::RenderErrorCount();
+    CHECK(risen > 0);
+
+    {
+        Arcane::Test::RenderErrorGate gate;
+        gate.BeginCase("untagged invalid CreateCommittedResource", false, 0);
+        gate.EndCase(risen);
+        REQUIRE(gate.ExitStatus() != 0);
+        REQUIRE(gate.Offenders().size() == 1);
+        CHECK(gate.Offenders()[0].name == "untagged invalid CreateCommittedResource");
+        CHECK(gate.Offenders()[0].before == 0);
+        CHECK(gate.Offenders()[0].after == risen);
+        CHECK(gate.Summary().find("untagged invalid CreateCommittedResource") != std::string::npos);
+        CHECK(gate.Summary().find("(+" + std::to_string(risen) + ")") != std::string::npos);
+    }
+    {
+        Arcane::Test::RenderErrorGate gate;
+        gate.BeginCase("tagged invalid CreateCommittedResource", true, 0);
+        gate.EndCase(risen);
+        CHECK(gate.ExitStatus() == 0);
+        CHECK(gate.Summary().empty());
+    }
+    {
+        Arcane::Test::RenderErrorGate gate;
+        gate.BeginRun(0);
+        gate.BeginCase("quiet", false, 0);
+        gate.EndCase(0);
+        gate.EndRun(risen);
+        REQUIRE(gate.ExitStatus() != 0);
+        REQUIRE(gate.Offenders().size() == 1);
+        CHECK(gate.Offenders()[0].name == Arcane::Test::RenderErrorGate::kAfterLastCase);
+        CHECK(gate.Offenders()[0].before == 0);
+        CHECK(gate.Offenders()[0].after == risen);
+        CHECK(gate.Summary().find(Arcane::Test::RenderErrorGate::kAfterLastCase) != std::string::npos);
+    }
+    {
+        Arcane::Test::RenderErrorGate gate;
+        gate.BeginRun(0);
+        gate.BeginCase("first", false, 0);
+        gate.EndCase(0);
+        gate.BeginCase("second", false, risen);
+        gate.EndCase(risen);
+        REQUIRE(gate.Offenders().size() == 1);
+        CHECK(gate.Offenders()[0].before == 0);
+        CHECK(gate.Offenders()[0].after == risen);
+        CHECK(gate.Offenders()[0].name.find("second") != std::string::npos);
+        CHECK(gate.ExitStatus() != 0);
+    }
     (void)reset;
 }
 #endif

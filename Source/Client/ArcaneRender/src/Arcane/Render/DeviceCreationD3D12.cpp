@@ -10,6 +10,7 @@
 
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Render/D3D12DebugLayer.hpp>
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceRemovedObservers.hpp>
@@ -26,6 +27,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <string>
 
@@ -224,34 +226,97 @@ namespace Arcane
             NoteGpuDeviceLost();
         }
 
-        // WHICH d3d12SDKLayers.dll is
-        // servicing the debug layer is the one fact that separates the two
-        // ways ID3D12InfoQueue1 can be missing, and it is observable only in
-        // a live run -- hence logged at the failure site rather than assumed.
+        // A failed ID3D12InfoQueue1 QueryInterface is not "System32's
+        // d3d12SDKLayers.dll answered". That in-box binary (10.0.19041)
+        // does not contain IID_ID3D12InfoQueue1
+        // (2852dd88-b484-4c0c-b6b1-67168500e600). The vendored Agility
+        // 1.619.3 layers DLL does, and both D3D12Core.dll and
+        // d3d12SDKLayers.dll export D3D12SDKVersion 619, which is
+        // AgilitySdk::kVersion -- the handshake this exe publishes. A
+        // handshake miss fails device creation with
+        // D3D12_ERROR_INVALID_REDIST before this line.
         //
-        // Background, because the old WARN here guessed wrong: the vendored
-        // Agility redistributable (ThirdParty/AgilitySDK 1.619.3, copied to
-        // <exedir>/D3D12/ beside D3D12Core.dll) DOES implement the interface,
-        // while the Windows 10 in-box layer (C:\Windows\System32\
-        // d3d12SDKLayers.dll, 10.0.19041.x) does not carry it at all -- the
-        // IID does not appear anywhere in that binary. So a failed QI means
-        // the in-box layer answered, NOT that the D3D12 runtime is
-        // "pre-Agility" (NRI logs "Using ID3D12Device15" in the same run,
-        // which only the Agility runtime can satisfy).
-        std::string LoadedD3D12SDKLayersModule()
+        // What refuses the QI on Windows 10 is the OS build. The callback
+        // interface is exposed from build 20236 up (that preview shipped as
+        // Windows 11). Windows 10 is 1904x, and the Agility redist does not
+        // turn the interface on there: the staged layers DLL is mapped, the
+        // base ID3D12InfoQueue succeeds, InfoQueue1 still returns
+        // E_NOINTERFACE. No other create path on this OS makes the QI
+        // succeed. DrainD3D12DebugMessages in ~NriDevice is the delivery
+        // that works, which is why the suite listener samples the latch
+        // after the device is destroyed.
+        //
+        // The warning names the module that owns the device vtable and the
+        // module that owns the info-queue vtable, plus each exported
+        // D3D12SDKVersion. GetModuleHandle by file name is the wrong probe
+        // once two copies can be mapped: it returns whichever loaded first.
+        // An injected proxy shows up as a vtable outside D3D12Core.dll /
+        // d3d12SDKLayers.dll.
+        HMODULE ModuleContaining(const void* address)
         {
-            const HMODULE module = GetModuleHandleW(L"d3d12SDKLayers.dll");
-            if (!module)
-                return "d3d12SDKLayers.dll not loaded";
+            if (!address)
+                return nullptr;
+            HMODULE module = nullptr;
+            if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                    reinterpret_cast<LPCWSTR>(address), &module))
+                return nullptr;
+            return module;
+        }
 
+        const void* ComVtable(IUnknown* object)
+        {
+            if (!object)
+                return nullptr;
+            const void* vtable = nullptr;
+            std::memcpy(&vtable, object, sizeof(vtable));
+            return vtable;
+        }
+
+        std::string ModulePathOr(HMODULE module, const char* fallback)
+        {
+            if (!module)
+                return fallback;
             wchar_t wide[MAX_PATH]{};
             if (GetModuleFileNameW(module, wide, static_cast<DWORD>(std::size(wide))) == 0)
-                return "d3d12SDKLayers.dll loaded, path unavailable";
-
+                return "path unavailable";
             char narrow[MAX_PATH * 2]{};
             size_t converted = 0;
             wcstombs_s(&converted, narrow, wide, _TRUNCATE);
             return narrow;
+        }
+
+        // -1: not loaded, or no D3D12SDKVersion export. The Agility core and
+        // layers export it; the System32 loader DLL does not.
+        int ExportedD3D12SdkVersion(HMODULE module)
+        {
+            if (!module)
+                return -1;
+            const auto* version =
+                reinterpret_cast<const unsigned*>(GetProcAddress(module, "D3D12SDKVersion"));
+            return version ? static_cast<int>(*version) : -1;
+        }
+
+        std::string SdkVersionText(int version)
+        {
+            return version < 0 ? std::string("absent") : std::to_string(version);
+        }
+
+        unsigned WindowsBuildNumber()
+        {
+            using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOEXW*);
+            const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+            if (!ntdll)
+                return 0;
+            const auto rtlGetVersion =
+                reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion"));
+            if (!rtlGetVersion)
+                return 0;
+            OSVERSIONINFOEXW info{};
+            info.dwOSVersionInfoSize = sizeof(info);
+            if (rtlGetVersion(&info) != 0)
+                return 0;
+            return info.dwBuildNumber;
         }
 
         // NRI capability contract item 12: the D3D12 debug layer's own channel
@@ -441,9 +506,10 @@ namespace Arcane
                 // those messages reach the latch -- through the InfoQueue1
                 // callback when that interface registers, and through
                 // DrainD3D12DebugMessages at device destruction when it does
-                // not. The in-box Win10 layer's missing InfoQueue1 is a
-                // different degradation, logged further down, and it is not
-                // the layer an Agility-linked process loads.
+                // not. On Windows 10 that callback does not register even when
+                // the staged Agility layers are the ones loaded; the QI
+                // failure further down says why. The drain is the path that
+                // stays.
                 //
                 // HOW TO GET IT BACK: the layer has to be turned on before the
                 // first device. ForceD3D12DebugLayerForProcess does that for
@@ -620,10 +686,9 @@ namespace Arcane
                     ARC_WARN("ID3D12InfoQueue::PushStorageFilter failed; D3D12 INFO/MESSAGE "
                              "chatter will reach the debug-layer callback");
                 }
-                // Kept for the device's life: where ID3D12InfoQueue1 is
-                // missing (below), DrainD3D12DebugMessages reads the stored
-                // messages through this -- the only channel the in-box layer
-                // leaves open.
+                // Kept for the device's life. Where ID3D12InfoQueue1 does not
+                // register (below), DrainD3D12DebugMessages reads the stored
+                // messages through this.
                 out.infoQueueBase = infoQueue;
             }
 
@@ -632,8 +697,20 @@ namespace Arcane
             // ID3D12InfoQueue1::RegisterMessageCallback is what actually
             // delivers them (see D3D12DebugLayerCallback). Missing it is a
             // diagnostics degradation, never a create failure.
+            //
+            // The device QI is the documented path. When it fails, ask the
+            // info-queue object itself: a proxy that wraps the device and
+            // forwards ID3D12InfoQueue but not InfoQueue1 still holds an
+            // object whose own QI may succeed. On Windows 10 both fail.
             ComPtr<ID3D12InfoQueue1> infoQueue1;
-            const HRESULT infoQueue1Hr = out.device.As(&infoQueue1);
+            const HRESULT deviceQiHr = out.device.As(&infoQueue1);
+            HRESULT queueQiHr = S_OK;
+            if (FAILED(deviceQiHr))
+            {
+                infoQueue1.Reset();
+                queueQiHr = infoQueue ? infoQueue.As(&infoQueue1) : E_NOINTERFACE;
+            }
+            const HRESULT infoQueue1Hr = SUCCEEDED(deviceQiHr) ? deviceQiHr : queueQiHr;
             if (SUCCEEDED(infoQueue1Hr))
             {
                 DWORD         cookie     = 0;
@@ -647,16 +724,16 @@ namespace Arcane
                 else
                 {
                     ARC_WARN("ID3D12InfoQueue1::RegisterMessageCallback failed (hr=0x{:08X}); "
-                             "D3D12 debug-layer messages will not reach the log",
+                             "D3D12 debug-layer messages reach the latch when the device is destroyed",
                              static_cast<uint32_t>(registerHr));
                 }
             }
             else if (FAILED(infoQueueHr))
             {
-                // TRUE failure case 1: no info queue of any generation, i.e.
-                // the debug layer is not attached to this device. Either
-                // EnableDebugLayer above did not take effect for the runtime
-                // that created the device, or the device predates the enable.
+                // No info queue of any generation: the debug layer is not
+                // attached to this device. Either EnableDebugLayer above did
+                // not take effect for the runtime that created the device,
+                // or the device predates the enable.
                 ARC_WARN("the D3D12 debug layer is not active on this device (ID3D12InfoQueue "
                          "QueryInterface failed, hr=0x{:08X}); D3D12 debug-layer messages will "
                          "not reach the log",
@@ -664,16 +741,31 @@ namespace Arcane
             }
             else
             {
-                // TRUE failure case 2: the debug layer IS attached (the base
-                // interface resolved) but the SDK layers servicing it predate
-                // ID3D12InfoQueue1. The module path is the actionable half --
-                // <exedir>/D3D12/ is the vendored Agility layer, which has the
-                // interface; System32 is the Windows 10 in-box layer, which
-                // does not carry the IID at all.
-                ARC_WARN("the loaded D3D12 debug layer does not implement ID3D12InfoQueue1 "
-                         "(hr=0x{:08X}); D3D12 debug-layer messages will not reach the log. "
-                         "Layer servicing this device: {}",
-                         static_cast<uint32_t>(infoQueue1Hr), LoadedD3D12SDKLayersModule());
+                const HMODULE deviceModule = ModuleContaining(ComVtable(out.device.Get()));
+                const HMODULE queueModule  = ModuleContaining(ComVtable(infoQueue.Get()));
+                const int deviceSdk = ExportedD3D12SdkVersion(deviceModule);
+                const int queueSdk  = ExportedD3D12SdkVersion(queueModule);
+                const unsigned requested = AgilitySdk::kVersion;
+                const unsigned osBuild   = WindowsBuildNumber();
+                const bool handshake = deviceSdk == static_cast<int>(requested) &&
+                                       queueSdk == static_cast<int>(requested);
+                const char* why;
+                if (!handshake)
+                    why = "SDK handshake does not match this exe's D3D12SDKVersion";
+                else if (osBuild != 0 && osBuild < 20236)
+                    why = "handshake matches; ID3D12InfoQueue1 is not exposed before OS build "
+                          "20236 (Windows 11). Stored messages are drained when the device is destroyed";
+                else
+                    why = "handshake matches and the OS build is new enough; the vtable module "
+                          "above is what refused the interface";
+                ARC_WARN("ID3D12InfoQueue1 QueryInterface failed (device hr=0x{:08X}, info-queue hr=0x{:08X}). "
+                         "Device module: {} (D3D12SDKVersion {}). "
+                         "InfoQueue module: {} (D3D12SDKVersion {}). "
+                         "Exe requests {}. OS build {}. {}",
+                         static_cast<uint32_t>(deviceQiHr), static_cast<uint32_t>(queueQiHr),
+                         ModulePathOr(deviceModule, "none"), SdkVersionText(deviceSdk),
+                         ModulePathOr(queueModule, "none"), SdkVersionText(queueSdk),
+                         requested, osBuild, why);
             }
         }
 

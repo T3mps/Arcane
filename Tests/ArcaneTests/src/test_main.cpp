@@ -2,7 +2,11 @@
 // Add new test files under Arcane/Tests/ArcaneTests/src; premake picks them up via the glob.
 
 #include <catch2/catch_session.hpp>
+#include <catch2/catch_test_case_info.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 
+#include "Helpers/RenderErrorGate.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "Helpers/UserDataDirs.hpp"
 
@@ -14,15 +18,74 @@
 #include <Arcane/ImGui/ImGuiHostHooks.hpp>
 #include <Arcane/Render/AgilitySdk.hpp>
 #include <Arcane/Render/D3D12DebugLayer.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 // Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
 // The macro is empty off Windows.
 ARC_AGILITY_SDK_EXPORTS();
+
+namespace
+{
+    Arcane::Test::RenderErrorGate& SuiteRenderErrorGate()
+    {
+        static Arcane::Test::RenderErrorGate gate;
+        return gate;
+    }
+
+    bool ExpectsRenderErrors(Catch::TestCaseInfo const& info)
+    {
+        for (const Catch::Tag& tag : info.tags)
+        {
+            if (tag.original == Catch::StringRef("expects-render-errors"))
+                return true;
+        }
+        return false;
+    }
+
+    // Samples RenderErrorCount around each case. testCaseEnded runs after the
+    // case function returns, so the case's device is already destroyed and a
+    // stored D3D12 message has had its chance to reach the latch. The rise is
+    // recorded, not asserted: a listener cannot fail the case. main reads the
+    // gate after session.run.
+    class RenderErrorListener final : public Catch::EventListenerBase
+    {
+    public:
+        using Catch::EventListenerBase::EventListenerBase;
+
+        void testRunStarting(Catch::TestRunInfo const&) override
+        {
+            SuiteRenderErrorGate().BeginRun(Arcane::RenderErrorCount());
+        }
+
+        void testCaseStarting(Catch::TestCaseInfo const& info) override
+        {
+            SuiteRenderErrorGate().BeginCase(info.name, ExpectsRenderErrors(info),
+                                             Arcane::RenderErrorCount());
+        }
+
+        void testCaseEnded(Catch::TestCaseStats const&) override
+        {
+            SuiteRenderErrorGate().EndCase(Arcane::RenderErrorCount());
+        }
+
+        // After every case. A device that outlived its case (a static or a
+        // fixture shared across cases) is not covered by testCaseEnded. Nothing
+        // in the suite holds one past the case today; the sample still runs so
+        // a rise during run teardown is named in the summary.
+        void testRunEnded(Catch::TestRunStats const&) override
+        {
+            SuiteRenderErrorGate().EndRun(Arcane::RenderErrorCount());
+        }
+    };
+}
+
+CATCH_REGISTER_LISTENER(RenderErrorListener)
 
 int main(int argc, char* argv[]) {
     Arcane::InstallVerifyHooks();
@@ -83,5 +146,14 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    return Catch::Session().run(argc, argv);
+    // The listener records offenders; it cannot fail a case. A non-zero status
+    // from the gate is the suite failing, including when Catch itself passed.
+    const int catchResult = Catch::Session().run(argc, argv);
+    if (const std::string summary = SuiteRenderErrorGate().Summary(); !summary.empty())
+    {
+        std::fputs(summary.c_str(), stderr);
+        std::fflush(stderr);
+        return catchResult == 0 ? SuiteRenderErrorGate().ExitStatus() : catchResult;
+    }
+    return catchResult;
 }
