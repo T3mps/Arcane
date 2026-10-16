@@ -38,6 +38,9 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
+
+namespace Arcane { struct RenderFramePacket; }
+
 class RuntimeApp
 {
 public:
@@ -62,16 +65,18 @@ public:
     // Whether that hook has fired. Read once per frame by MainLoop.
     [[nodiscard]] static bool CleanExitRequested() noexcept;
 
-    // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
-    // with the once-only diagnostics for "no usable camera" / "several".
-    // ONE copy of this reasoning, shared: it is the view the plugin's render
-    // submission is driven with.
+    // Stores the scene camera ExtractFrame resolved into the plugin's stored
+    // camera. When the packet's sprite view came from a scene Camera, that
+    // view is pushed; with no scene camera the stored view is left untouched
+    // (a plugin that drives the camera via ClientRuntime::SetView therefore
+    // still works). The once-only no-camera and multi-camera warnings live
+    // in ExtractFrame.
     //
     // PUBLIC because MainLoop's frame body lives in free functions in
     // namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp): RenderGraph
     // calls this through FrameIo::app, and a free function cannot reach a
     // private RuntimeApp member. See RuntimeFrame.hpp's header comment.
-    void PushSceneCamera(float viewportWidth, float viewportHeight);
+    void PushSceneCamera(const Arcane::RenderFramePacket& packet);
 private:
     // ---- Boot (RuntimeApp.cpp) -------------------------------------------
     // Run() builds Arcane::HostBoot::RuntimeStages(ctx) -- the SAME shared
@@ -337,10 +342,4 @@ private:
     double m_hostClock   = 0.0;   // seconds since the loop started (compile debounce clock)
     double m_lastFrameDt = 0.0;   // last frame's wall-clock delta, for the material globals
 
-    // Scene-camera warnings, latched so a per-frame condition is reported ONCE and
-    // does not bury the log it would be found in (the same warn-once shape the
-    // resolver's PostProcess sweep uses). Never reset: a host run is one scene's
-    // worth of complaint, and the log is truncated per launch anyway.
-    bool m_warnedNoSceneCamera    = false;
-    bool m_warnedMultiSceneCamera = false;
 };

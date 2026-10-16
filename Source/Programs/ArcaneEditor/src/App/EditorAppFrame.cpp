@@ -71,7 +71,7 @@
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
 #include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
+#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -1739,18 +1739,13 @@ namespace Arcane::Editor
             const std::uint32_t w = ViewportWidth();
             const std::uint32_t h = ViewportHeight();
 
-            // The mesh view is the editor view in Edit and the perspective
-            // scene camera in Play; nullopt when Play has none. ExtractFrame
-            // publishes the visible set and the GPU scene and culls against
-            // this same camera. The scene-save cover extracts too and does
-            // not declare a mesh pass, so it invalidates the mirror after
+            // ExtractFrame publishes the visible set, the GPU scene and both
+            // views, and culls against the mesh view. m_meshView is copied
+            // from the packet after the extract below: the editor view in
+            // Edit, the perspective scene camera in Play, nullopt when Play
+            // has none. The scene-save cover extracts too and does not
+            // declare a mesh pass, so it invalidates the mirror after
             // (ruling R-F) rather than leaving a stage that never uploaded.
-            m_meshView.reset();
-            if (!InPlayMode())
-                m_meshView = m_runtime->View();
-            else
-                m_meshView = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), glm::uvec2{ w, h });
-
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
@@ -1767,6 +1762,7 @@ namespace Arcane::Editor
             // The shutdown report reads this member. The graph borrows
             // packet.mesh. The cover's later extract must not replace it.
             m_gpuSceneFrame = packet.mesh;
+            m_meshView = packet.meshView;
 
             // Copied, not borrowed, by FrameDesc -- but the local has to
             // outlive the call all the same, and it is the SAME GlobalParams

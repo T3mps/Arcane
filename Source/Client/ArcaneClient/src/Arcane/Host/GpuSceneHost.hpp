@@ -116,7 +116,7 @@ namespace Arcane
     // that never reached the GPU and would never be re-staged: the next
     // frame's out.Clear() drops it, and the rows draw stale (or never-written)
     // bytes when they come into view. A host calls this on every such outcome
-    // AFTER PrepareSceneForRender ran for that frame. It hands the mirror a
+    // AFTER ExtractFrame ran for that frame. It hands the mirror a
     // NEW generation, so the next GpuSceneSync sees the device's stamp
     // mismatch and re-stages every live row with prev == model -- spans and
     // batch ids stay put (cheaper and safer than dropping the resource). A

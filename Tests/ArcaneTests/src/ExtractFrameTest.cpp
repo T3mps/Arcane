@@ -15,6 +15,7 @@
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView
+#include <Arcane/Scene/SceneCamera.hpp>          // ActiveSceneCamera, ActivePerspectiveSceneCamera
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -307,4 +308,75 @@ TEST_CASE("the scene-save cover invalidates the GPU-scene mirror after its extra
     // Before the early return on a non-Presented outcome, so every outcome invalidates.
     const std::size_t early = body.find("return false;", render);
     CHECK((early == std::string::npos || invalidate < early));
+}
+
+static void CheckView(const Arcane::ViewTransform& a, const Arcane::ViewTransform& b)
+{
+    CHECK(a.view == b.view);
+    CHECK(a.projection == b.projection);
+    CHECK(a.viewport == b.viewport);
+}
+
+TEST_CASE("runtime extract keeps the ortho sprite view and the perspective mesh view", "[nri][extract]")
+{
+    World world;
+    world.AddOrthoCamera();
+    world.AddPerspectiveCamera();
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 200u, 100u };
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    const std::optional<Arcane::SceneCameraView> ortho = Arcane::ActiveSceneCamera(world.reg, req.viewport);
+    const std::optional<Arcane::ViewTransform> persp = Arcane::ActivePerspectiveSceneCamera(world.reg, req.viewport);
+    REQUIRE(packet.spriteView.has_value());
+    REQUIRE(packet.meshView.has_value());
+    REQUIRE(ortho.has_value());
+    REQUIRE(persp.has_value());
+    CheckView(packet.spriteView->view, ortho->view);
+    CHECK(packet.spriteView->worldCenter == ortho->worldCenter);
+    CHECK(packet.spriteView->halfHeight == ortho->halfHeight);
+    CheckView(*packet.meshView, *persp);
+    CHECK(packet.spriteViewFromScene);
+}
+
+TEST_CASE("with no scene camera the sprite view is the host's stored view, not identity", "[nri][extract]")
+{
+    World world;   // no Camera component
+    Arcane::RenderContext2D ctx;
+    ctx.view = Arcane::Ortho2DView({ 3.0f, 1.0f }, 2.0f, { 64u, 64u });
+    // SetResource takes T&&. With the template argument explicit, an lvalue
+    // does not bind; the move leaves this trivial view intact for the check.
+    world.reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 64u, 64u };
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    REQUIRE(packet.spriteView.has_value());
+    CheckView(packet.spriteView->view, ctx.view);
+    CHECK_FALSE(packet.spriteViewFromScene);
+}
+
+TEST_CASE("an editorView is the world view and is not replaced by a scene camera", "[nri][extract]")
+{
+    World world;
+    world.AddOrthoCamera();
+    world.AddPerspectiveCamera();
+    world.reg.GetComponent<Arcane::Transform>(world.root)->position = { 4.0f, 0.0f, 0.0f };
+    const std::optional<Arcane::SceneCameraView> scene = Arcane::ActiveSceneCamera(world.reg, { 64u, 64u });
+    REQUIRE(scene.has_value());
+    Arcane::ViewTransform editor = scene->view;
+    editor.view[3][0] += 3.0f;
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 64u, 64u };
+    req.editorView = editor;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    REQUIRE(packet.spriteView.has_value());
+    REQUIRE(packet.meshView.has_value());
+    CHECK(packet.spriteView->view.view == editor.view);
+    CHECK(packet.spriteView->view.projection == editor.projection);
+    CHECK(packet.meshView->view == editor.view);
+    CHECK(packet.meshView->projection == editor.projection);
+    CHECK(packet.spriteView->worldCenter == glm::vec2(0.0f));
+    CHECK(scene->worldCenter != packet.spriteView->worldCenter);
 }

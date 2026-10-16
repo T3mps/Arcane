@@ -29,7 +29,6 @@
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 #include <Arcane/Render/RenderLookSettings.hpp>       // render.mesh.defaultLight.* (the scene light, Live)
-#include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 
 #include <imgui.h>
@@ -534,22 +533,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // batch reaches the GPU through the graph's Batch2DNode, which drains it.
     io.gpu->Batch().Begin(frameWidth, frameHeight);
     io.gpu->Batch().SetGlobals(io.frameGlobals);
-    io.app.PushSceneCamera((float)frameWidth, (float)frameHeight);
-    // The frame's view-projection for the WORLD-space spans (F4 plan 1 T5):
-    // sprites submit world METRES through QuadWorld/CircleWorld and the vertex
-    // shader projects them. AFTER PushSceneCamera, which is what installs this
-    // frame's view -- before it the stored view is last frame's -- and before
-    // the submit that records against it. Sticky within this Begin() bracket.
-    io.gpu->Batch().SetViewProjection(io.runtime->View().ViewProjection());
-
-    // The mesh pass's view, for the MeshSceneDesc matrices after extract.
-    // ExtractFrame publishes the visible set and the GPU scene and culls
-    // meshes against this same camera: the perspective scene camera, or
-    // nullopt when there is none (no batches; the stage still lands, R-D).
-    const std::optional<Arcane::ViewTransform> meshView =
-        Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight });
     // The batcher the sprite sweep submits into, published for ExtractFrame
-    // below. The sweep itself runs there, once (F5 plan 1 Task 5).
+    // below. The sweep itself runs there, once (F5 plan 1 Task 5). Extract
+    // sets this batcher's view-projection from the published sprite view
+    // before that submit.
     io.runtime->SetRenderContext(&io.gpu->Batch());
 
     graphFrame.batch = &io.gpu->Batch();
@@ -603,6 +590,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     const auto extractT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
     io.perf.Add(io.perf.accRec, extractT0, io.perf.Now());   // --perf's "extract" column
+    // After extract, before the mesh block and both pick blocks, so
+    // graphFrame.pickView = io.runtime->View() reads the view just installed.
+    io.app.PushSceneCamera(packet);
     io.graph->BindPacket(&packet);
 
     // The HUD and ShutdownGraphPath read the member. The graph borrows the
@@ -621,10 +611,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // graphFrame.mesh is left null for an Empty() scene.
     Arcane::MeshSceneDesc meshScene;
     meshScene.scene = &packet.mesh;
-    if (meshView)
+    if (packet.meshView)
     {
-        meshScene.view       = meshView->view;
-        meshScene.projection = meshView->projection;
+        meshScene.view       = packet.meshView->view;
+        meshScene.projection = packet.meshView->projection;
     }
     // NO LIGHT COMPONENT YET: this engine has none anywhere --
     // Scene/Components.hpp declares none and SceneModule.hpp registers

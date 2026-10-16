@@ -1,6 +1,7 @@
 #include <Arcane/Render/ExtractFrame.hpp>
 
 #include <Arcane/Base/ExtractAccounting.hpp>
+#include <Arcane/Base/Log.hpp>                   // ARC_WARN (no-camera / multi-camera, once)
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/GpuSceneSync.hpp>        // GpuSceneSync, BuildGpuSceneFrame, MeshSectionRanges
 #include <Arcane/Render/RenderSystems.hpp>      // RenderSubmissionSystem
@@ -39,21 +40,18 @@ namespace Arcane
         // Time/DeltaTime, and QuadWorld on a fresh batcher rewrites every
         // registered id to kMaterialSprite. A null batcher submits nothing
         // and leaves the packet's batch empty.
-        void ExtractSprites(Astra::Registry& reg, const ExtractRequest& req, RenderFramePacket& packet)
+        void ExtractSprites(Astra::Registry& reg, RenderFramePacket& packet)
         {
             RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
             Batcher2D* batcher = ctx ? ctx->batcher : nullptr;
             if (!batcher)
                 return;
 
-            glm::mat4 vp{ 1.0f };
-            if (req.editorView)
-                vp = req.editorView->ViewProjection();
-            else if (const std::optional<SceneCameraView> cam = ActiveSceneCamera(reg, req.viewport))
-                vp = cam->view.ViewProjection();
-            else
-                vp = ctx->view.ViewProjection();   // no scene camera: the host's stored view (a plugin's SetView), never identity
-            batcher->SetViewProjection(vp);   // does not clear geometry
+            // The sprite view the caller published: scene camera, editor view,
+            // or the host's stored view. Identity only when none of those exist.
+            batcher->SetViewProjection(packet.spriteView
+                ? packet.spriteView->view.ViewProjection()
+                : glm::mat4{ 1.0f });   // does not clear geometry
             RenderSubmissionSystem{}(reg);
             const Batch2DDrained drained = batcher->Drain();
             packet.batchVertices.assign(drained.vertices.begin(), drained.vertices.end());
@@ -72,23 +70,56 @@ namespace Arcane
         packet.viewport = req.viewport;
         packet.origin.translation = { 0.0f, 0.0f, 0.0f };
 
-        // The two views the hosts pass PrepareSceneForRender today: the main (sprite)
-        // view and the mesh view. Task 7 publishes both on the packet.
-        std::optional<ViewTransform> mainView;
-        std::optional<ViewTransform> meshView;
+        // The two views. Edit uses the one editor camera for both. Otherwise
+        // the orthographic scene camera is the sprite view and the perspective
+        // scene camera is the mesh view. The cull below still reads mainView
+        // and meshView, with the cull viewport forced to req.viewport.
         if (req.editorView)
         {
-            mainView = *req.editorView;
-            meshView = *req.editorView;   // Edit: one camera for both (EditorAppFrame.cpp)
+            packet.spriteView = SceneCameraView{};
+            packet.spriteView->view = *req.editorView;
+            packet.meshView = *req.editorView;   // Edit: one camera for both (EditorAppFrame.cpp)
         }
         else
         {
-            if (const std::optional<SceneCameraView> cam = ActiveSceneCamera(reg, req.viewport))
-                mainView = cam->view;
-            else if (const RenderContext2D* rc = reg.GetResource<RenderContext2D>())
-                mainView = rc->view;   // no scene camera: the host's stored view (a plugin's SetView)
-            meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
+            // Once per process, the same two warnings PushSceneCamera used to
+            // print. A host run is one scene's worth of complaint.
+            static bool warnedNoSceneCamera = false;
+            static bool warnedMultiSceneCamera = false;
+            int camCount = 0;
+            packet.spriteView = ActiveSceneCamera(reg, req.viewport, &camCount);
+            packet.spriteViewFromScene = packet.spriteView.has_value();
+            packet.meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
+            if (!packet.spriteView && !warnedNoSceneCamera)
+            {
+                warnedNoSceneCamera = true;
+                int total = 0;
+                reg.CreateView<const Camera>().ForEach([&](Astra::Entity, const Camera&) { ++total; });
+                if (total == 0)
+                    ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
+                             "Add a Camera component to an entity (a New Scene ships one).");
+                else
+                    ARC_WARN("scene carries {} Camera component(s) but none is usable "
+                             "as the sprite camera.", total);
+            }
+            if (camCount > 1 && !warnedMultiSceneCamera)
+            {
+                warnedMultiSceneCamera = true;
+                ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
+            }
+            // No scene camera: keep the host's stored view, as PushSceneCamera
+            // does -- a plugin driving ClientRuntime::SetView still works.
+            // RenderContext2D::view is that stored view (ClientRuntime.cpp).
+            if (!packet.spriteView)
+                if (const RenderContext2D* rc = reg.GetResource<RenderContext2D>())
+                {
+                    packet.spriteView = SceneCameraView{};
+                    packet.spriteView->view = rc->view;
+                }
         }
+        const std::optional<ViewTransform> mainView =
+            packet.spriteView ? std::optional<ViewTransform>(packet.spriteView->view) : std::nullopt;
+        const std::optional<ViewTransform>& meshView = packet.meshView;
         ViewTransform cullView = mainView.value_or(ViewTransform{});
         cullView.viewport = req.viewport;
 
@@ -126,7 +157,7 @@ namespace Arcane
         }
         packet.mesh.stage = stage;
 
-        ExtractSprites(reg, req, packet);
+        ExtractSprites(reg, packet);
         return packet;
     }
 }

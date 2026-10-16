@@ -263,8 +263,8 @@ namespace Arcane
         // WHEN THIS MAY BE CALLED IS A LIFETIME CONTRACT, not a preference.
         // GpuSceneSync still looks the Guid up in MeshTable to decide
         // whether the entity is drawable; MeshCache::Invalidate ERASES that
-        // entry. So this must never land between a host's PrepareSceneForRender
-        // call (Host/GpuSceneHost.hpp) and the RenderFrame call that consumes its output. Both call
+        // entry. So this must never land between a host's ExtractFrame
+        // (which publishes the GPU scene) and the RenderFrame call that consumes its output. Both call
         // sites today satisfy that by construction: MeshDocument::Save and
         // MeshDocument::ApplyMeshData run from the editor's document phases
         // (PumpEditorDocuments / DrawEditorUi), which are strictly AFTER phase
