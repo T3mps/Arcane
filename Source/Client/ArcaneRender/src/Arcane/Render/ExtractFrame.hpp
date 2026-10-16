@@ -75,6 +75,26 @@ namespace Arcane
         GpuScene*                    device = nullptr;
     };
 
+    // The two views ExtractFrame publishes, resolved from `req` and `reg`.
+    // spriteViewFromScene is true only when an orthographic scene Camera
+    // produced spriteView. An editorView fills both views from that camera
+    // and leaves the flag false. No usable scene camera leaves spriteView as
+    // the host's stored RenderContext2D view, still with the flag false.
+    //
+    // `warn` emits the once-per-process no-camera and multi-camera
+    // diagnostics. ExtractFrame passes true. A host that resolves again
+    // before DrawUI passes false, so the same frame does not warn twice.
+    struct ResolvedFrameViews
+    {
+        std::optional<SceneCameraView> spriteView;
+        bool                           spriteViewFromScene = false;
+        std::optional<ViewTransform>   meshView;
+    };
+
+    ARC_RENDER_API ResolvedFrameViews ResolveFrameViews(Astra::Registry& reg,
+                                                        const ExtractRequest& req,
+                                                        bool warn);
+
     // Counts the call (ExtractAccounting.hpp), takes the ring's next slot and
     // fills it from `reg` and `req`. The returned packet stays intact until
     // FramesInFlight() further extracts on the same ring.

@@ -795,3 +795,152 @@ TEST_CASE("the editor builds its game HUD before extract and hands it to the req
     CHECK(arm.find("RenderToDrawData()") == std::string::npos);
     CHECK(arm.find("vp.gameUi = m_gameUiDrawData;") != std::string::npos);
 }
+
+// What the host does before DrawUI: resolve, and push only a scene camera.
+// The stored view is ClientRuntime::View(). There is no editor or runtime
+// DrawUI seam in this suite, so the push itself lives here and the source
+// scan below checks that both hosts do the same thing.
+static Arcane::ViewTransform PushResolvedSpriteView(Astra::Registry& reg,
+                                                    const Arcane::ExtractRequest& req,
+                                                    Arcane::ViewTransform stored)
+{
+    const Arcane::ResolvedFrameViews views = Arcane::ResolveFrameViews(reg, req, false);
+    if (views.spriteViewFromScene && views.spriteView)
+        stored = views.spriteView->view;
+    return stored;
+}
+
+TEST_CASE("frame view before DrawUI: the observer reads this frame's scene camera", "[nri][extract]")
+{
+    World world;
+    world.AddOrthoCamera();
+    world.reg.GetComponent<Arcane::Transform>(world.root)->position = { 1.0f, 2.0f, 0.0f };
+    Arcane::TransformPropagationSystem{}(world.reg);
+
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.playMode = true;   // Play: no editorView, so the scene camera wins
+
+    const std::optional<Arcane::SceneCameraView> frame0 = Arcane::ActiveSceneCamera(world.reg, req.viewport);
+    REQUIRE(frame0.has_value());
+    // Last frame already pushed its scene camera. That is what DrawUI would
+    // still be reading if this frame did not push before the HUD.
+    Arcane::ViewTransform runtimeView = frame0->view;
+
+    world.reg.GetComponent<Arcane::Transform>(world.root)->position = { 6.0f, -2.0f, 0.0f };
+    Arcane::TransformPropagationSystem{}(world.reg);
+    const std::optional<Arcane::SceneCameraView> frame1 = Arcane::ActiveSceneCamera(world.reg, req.viewport);
+    REQUIRE(frame1.has_value());
+    CHECK(frame1->view.view != runtimeView.view);
+
+    const Arcane::ViewTransform observed = PushResolvedSpriteView(world.reg, req, runtimeView);
+
+    Arcane::PacketRing ring;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+    REQUIRE(packet.spriteView.has_value());
+    CHECK(packet.spriteViewFromScene);
+    CheckView(packet.spriteView->view, frame1->view);
+    // DrawUI's read is this frame's scene camera, not the view frame 0 pushed.
+    CheckView(observed, frame1->view);
+    CheckView(observed, packet.spriteView->view);
+}
+
+TEST_CASE("ResolveFrameViews matches the views ExtractFrame publishes", "[nri][extract]")
+{
+    auto check = [](World& world, const Arcane::ExtractRequest& req)
+    {
+        const Arcane::ResolvedFrameViews views = Arcane::ResolveFrameViews(world.reg, req, false);
+        Arcane::PacketRing ring;
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        CHECK(views.spriteViewFromScene == packet.spriteViewFromScene);
+        CHECK(views.spriteView.has_value() == packet.spriteView.has_value());
+        if (views.spriteView && packet.spriteView)
+        {
+            CheckView(views.spriteView->view, packet.spriteView->view);
+            CHECK(views.spriteView->worldCenter == packet.spriteView->worldCenter);
+            CHECK(views.spriteView->halfHeight == packet.spriteView->halfHeight);
+        }
+        CHECK(views.meshView.has_value() == packet.meshView.has_value());
+        if (views.meshView && packet.meshView)
+            CheckView(*views.meshView, *packet.meshView);
+    };
+
+    {
+        World world;
+        world.AddOrthoCamera();
+        world.AddPerspectiveCamera();
+        Arcane::TransformPropagationSystem{}(world.reg);
+        Arcane::ExtractRequest req;
+        req.viewport = { 200u, 100u };
+        req.playMode = true;
+        check(world, req);
+    }
+    {
+        World world;
+        Arcane::RenderContext2D ctx;
+        ctx.view = Arcane::Ortho2DView({ 3.0f, 1.0f }, 2.0f, { 64u, 64u });
+        world.reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
+        Arcane::ExtractRequest req;
+        req.viewport = { 64u, 64u };
+        check(world, req);
+    }
+    {
+        World world;
+        world.AddOrthoCamera();
+        world.AddPerspectiveCamera();
+        Arcane::ExtractRequest req;
+        req.viewport = { 64u, 64u };
+        req.editorView = Arcane::Ortho2DView({ 1.0f, 2.0f }, 3.0f, req.viewport);
+        check(world, req);
+        const Arcane::ResolvedFrameViews views = Arcane::ResolveFrameViews(world.reg, req, false);
+        CHECK_FALSE(views.spriteViewFromScene);
+    }
+}
+
+TEST_CASE("frame view before DrawUI: hosts resolve before the HUD", "[nri][extract]")
+{
+    std::ifstream editorIn(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    REQUIRE(editorIn.good());
+    std::ostringstream editorSs;
+    editorSs << editorIn.rdbuf();
+    const std::string editor = editorSs.str();
+    const std::string render = MemberBody(editor, "void EditorApp::RenderSceneToViewport(");
+    const std::size_t resolve = render.find("ResolveFrameViews(m_runtime->Registry(), req, false)");
+    const std::size_t hud = render.find("BeginGameUiFrame()");
+    const std::size_t extract = render.find("ExtractFrame(");
+    REQUIRE(resolve != std::string::npos);
+    REQUIRE(hud != std::string::npos);
+    REQUIRE(extract != std::string::npos);
+    CHECK(resolve < hud);
+    CHECK(hud < extract);
+    const std::size_t guard = render.rfind("if (InPlayMode())", resolve);
+    REQUIRE(guard != std::string::npos);
+    CHECK(resolve - guard < 400u);
+    const std::string refresh = MemberBody(editor, "void EditorApp::RefreshSceneResolution(");
+    CHECK(refresh.find("ActiveSceneCamera(") == std::string::npos);
+    CHECK(refresh.find("ResolveFrameViews(") == std::string::npos);
+    CHECK(refresh.find("m_camera.Resolve(ViewportSize())") != std::string::npos);
+
+    std::ifstream runtimeIn(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneRuntimeHost/src/RuntimeFrame.cpp");
+    REQUIRE(runtimeIn.good());
+    std::ostringstream runtimeSs;
+    runtimeSs << runtimeIn.rdbuf();
+    const std::string runtime = runtimeSs.str();
+    const std::size_t buildHud = runtime.find("void BuildHud(");
+    const std::size_t prepare = runtime.find("void PrepareFrame(", buildHud);
+    REQUIRE(buildHud != std::string::npos);
+    REQUIRE(prepare != std::string::npos);
+    const std::string hudBody = runtime.substr(buildHud, prepare - buildHud);
+    const std::size_t runtimeResolve = hudBody.find("ResolveFrameViews(io.runtime->Registry(), viewReq, false)");
+    const std::size_t drawUi = hudBody.find("DrawUIAll()");
+    REQUIRE(runtimeResolve != std::string::npos);
+    REQUIRE(drawUi != std::string::npos);
+    CHECK(runtimeResolve < drawUi);
+
+    std::ifstream extractIn(Arcane::Test::RepoRoot() / "Source/Client/ArcaneRender/src/Arcane/Render/ExtractFrame.cpp");
+    REQUIRE(extractIn.good());
+    std::ostringstream extractSs;
+    extractSs << extractIn.rdbuf();
+    const std::string extractCpp = extractSs.str();
+    CHECK(extractCpp.find("ResolveFrameViews(reg, req, true)") != std::string::npos);
+}

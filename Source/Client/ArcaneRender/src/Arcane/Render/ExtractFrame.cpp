@@ -245,34 +245,32 @@ namespace Arcane
         }
     }
 
-    const RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring)
+    ResolvedFrameViews ResolveFrameViews(Astra::Registry& reg, const ExtractRequest& req, bool warn)
     {
-        NoteExtractFrameCall();
-        RenderFramePacket& packet = ring.BeginExtract();
-        packet.viewport = req.viewport;
-        packet.origin.translation = { 0.0f, 0.0f, 0.0f };
-
-        // The two views. Edit uses the one editor camera for both. Otherwise
-        // the orthographic scene camera is the sprite view and the perspective
-        // scene camera is the mesh view. The cull below still reads mainView
-        // and meshView, with the cull viewport forced to req.viewport.
+        ResolvedFrameViews out;
+        // Edit uses the one editor camera for both. Otherwise the orthographic
+        // scene camera is the sprite view and the perspective scene camera is
+        // the mesh view.
         if (req.editorView)
         {
-            packet.spriteView = SceneCameraView{};
-            packet.spriteView->view = *req.editorView;
-            packet.meshView = *req.editorView;   // Edit: one camera for both (EditorAppFrame.cpp)
+            out.spriteView = SceneCameraView{};
+            out.spriteView->view = *req.editorView;
+            out.meshView = *req.editorView;
+            return out;
         }
-        else
+
+        // Once per process, and only when `warn` is set, the two warnings
+        // PushSceneCamera used to print. A host that resolves again before
+        // DrawUI passes false, so a frame that also extracts warns once.
+        int camCount = 0;
+        out.spriteView = ActiveSceneCamera(reg, req.viewport, &camCount);
+        out.spriteViewFromScene = out.spriteView.has_value();
+        out.meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
+        if (warn)
         {
-            // Once per process, the same two warnings PushSceneCamera used to
-            // print. A host run is one scene's worth of complaint.
             static bool warnedNoSceneCamera = false;
             static bool warnedMultiSceneCamera = false;
-            int camCount = 0;
-            packet.spriteView = ActiveSceneCamera(reg, req.viewport, &camCount);
-            packet.spriteViewFromScene = packet.spriteView.has_value();
-            packet.meshView = ActivePerspectiveSceneCamera(reg, req.viewport);
-            if (!packet.spriteView && !warnedNoSceneCamera)
+            if (!out.spriteView && !warnedNoSceneCamera)
             {
                 warnedNoSceneCamera = true;
                 int total = 0;
@@ -289,16 +287,34 @@ namespace Arcane
                 warnedMultiSceneCamera = true;
                 ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
             }
-            // No scene camera: keep the host's stored view, as PushSceneCamera
-            // does -- a plugin driving ClientRuntime::SetView still works.
-            // RenderContext2D::view is that stored view (ClientRuntime.cpp).
-            if (!packet.spriteView)
-                if (const RenderContext2D* rc = reg.GetResource<RenderContext2D>())
-                {
-                    packet.spriteView = SceneCameraView{};
-                    packet.spriteView->view = rc->view;
-                }
         }
+        // No scene camera: keep the host's stored view, as PushSceneCamera
+        // does -- a plugin driving ClientRuntime::SetView still works.
+        // RenderContext2D::view is that stored view (ClientRuntime.cpp).
+        if (!out.spriteView)
+            if (const RenderContext2D* rc = reg.GetResource<RenderContext2D>())
+            {
+                out.spriteView = SceneCameraView{};
+                out.spriteView->view = rc->view;
+            }
+        return out;
+    }
+
+    const RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring)
+    {
+        NoteExtractFrameCall();
+        RenderFramePacket& packet = ring.BeginExtract();
+        packet.viewport = req.viewport;
+        packet.origin.translation = { 0.0f, 0.0f, 0.0f };
+
+        // The two views, from the one resolver. warn is true here and false
+        // on a host's pre-DrawUI call, so the diagnostics fire once. The cull
+        // below still reads mainView and meshView, with the cull viewport
+        // forced to req.viewport.
+        const ResolvedFrameViews views = ResolveFrameViews(reg, req, true);
+        packet.spriteView = views.spriteView;
+        packet.spriteViewFromScene = views.spriteViewFromScene;
+        packet.meshView = views.meshView;
         const std::optional<ViewTransform> mainView =
             packet.spriteView ? std::optional<ViewTransform>(packet.spriteView->view) : std::nullopt;
         const std::optional<ViewTransform>& meshView = packet.meshView;

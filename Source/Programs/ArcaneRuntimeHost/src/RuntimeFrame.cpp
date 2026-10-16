@@ -362,6 +362,22 @@ void BuildHud(FrameIo& io)
         ImGui::End();
     }
 
+    // DrawUI reads ClientRuntime::View(). Resolve this frame's scene camera
+    // the way RenderGraph's ExtractFrame will -- no editor view, this frame's
+    // extent -- and push it first. warn is false so the once-only diagnostics
+    // still fire once, inside ExtractFrame. No scene camera leaves a
+    // plugin-driven view alone.
+    {
+        std::uint32_t viewW = 0, viewH = 0;
+        FrameExtent(io, viewW, viewH);
+        Arcane::ExtractRequest viewReq;
+        viewReq.viewport = { viewW, viewH };
+        const Arcane::ResolvedFrameViews views =
+            Arcane::ResolveFrameViews(io.runtime->Registry(), viewReq, false);
+        if (views.spriteViewFromScene && views.spriteView)
+            io.runtime->SetView(views.spriteView->view);
+    }
+
     // ABI v2: the game module + any secondary plugins draw their own ImGui between
     // BeginFrame and Render. Each entry point is null-checked inside DrawUIAll.
     io.plugin->DrawUIAll();

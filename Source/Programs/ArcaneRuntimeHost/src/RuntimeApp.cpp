@@ -862,11 +862,14 @@ void RuntimeApp::MainLoop()
 void RuntimeApp::PushSceneCamera(const Arcane::RenderFramePacket& packet)
 {
     // The scene camera ExtractFrame resolved. Pushed after extract, so the
-    // pick pass reads the view this frame's sprites used. A scene that ships
-    // a camera beats a plugin that also pushes one -- the scene is the
-    // authored artifact. No scene camera leaves the stored view untouched
-    // (a plugin that drives the camera itself via ClientRuntime::SetView
-    // therefore still works). The once-only diagnostics live in ExtractFrame.
+    // pick pass reads the view this frame's sprites used. BuildHud already
+    // resolved and pushed before DrawUI, so the HUD saw this frame's camera;
+    // this write publishes the view extract used, including a camera DrawUI
+    // itself moved. A scene that ships a camera beats a plugin that also
+    // pushes one -- the scene is the authored artifact. No scene camera
+    // leaves the stored view untouched (a plugin that drives the camera
+    // itself via ClientRuntime::SetView therefore still works). The
+    // once-only diagnostics live in ExtractFrame.
     if (packet.spriteViewFromScene && packet.spriteView)
         m_runtime->SetView(packet.spriteView->view);
 }

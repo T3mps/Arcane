@@ -1627,12 +1627,10 @@ namespace Arcane::Editor
         // ExtractFrame below; moving it earlier hands the view back to
         // the plugin.
         //
-        // Play mode pushes the SCENE's camera instead of the editor's, so
-        // play-in-editor shows what a standalone ArcaneRuntime would show --
-        // both now resolve the view from the same place (ActiveSceneCamera).
-        // Falls through to the plugin's own camera when the scene has no
-        // active Camera entity, which is what keeps the Sandbox showcase
-        // (a plugin that drives its own camera) working unchanged.
+        // Play does not push here. RenderSceneToViewport resolves the scene
+        // camera through ResolveFrameViews and pushes it before DrawUI, with
+        // the same request extract uses. No scene camera leaves the plugin's
+        // own view, which keeps a plugin-driven camera working.
         if (!InPlayMode())
         {
             m_runtime->SetView(m_camera.Resolve(ViewportSize()));
@@ -1734,6 +1732,23 @@ namespace Arcane::Editor
             // has none. The scene-save cover extracts too and does not
             // declare a mesh pass, so it invalidates the mirror after
             // (ruling R-F) rather than leaving a stage that never uploaded.
+            // The request ExtractFrame uses below, built first so the Play
+            // push and the extract share it. View resolution reads viewport
+            // and editorView; Play leaves editorView empty.
+            Arcane::ExtractRequest req = BuildExtractRequest(w, h);
+            // Play: DrawUI reads ClientRuntime::View(). Push this frame's
+            // scene camera before the HUD. warn is false -- ExtractFrame
+            // emits the once-only diagnostics. No scene camera leaves the
+            // plugin's view (spriteViewFromScene stays false). Edit keeps
+            // the editor camera RefreshSceneResolution already pushed.
+            if (InPlayMode())
+            {
+                const Arcane::ResolvedFrameViews views =
+                    Arcane::ResolveFrameViews(m_runtime->Registry(), req, false);
+                if (views.spriteViewFromScene && views.spriteView)
+                    m_runtime->SetView(views.spriteView->view);
+            }
+
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
@@ -1750,7 +1765,6 @@ namespace Arcane::Editor
             // and the drained batch is copied into this frame's packet, which
             // the batch node draws instead of draining `b` again. Bound just
             // before RenderFrameOffscreen below, which unbinds it on return.
-            Arcane::ExtractRequest req = BuildExtractRequest(w, h);
             req.gameUi = m_gameUiDrawData;
             // The scene light is render.mesh.defaultLight.* (Live), read once
             // here and published by extract. ArmGraphViewportFrame copies the
