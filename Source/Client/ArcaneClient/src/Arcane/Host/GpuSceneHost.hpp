@@ -1,12 +1,10 @@
 #pragma once
 #include <Arcane/Modules/ArcaneClientApi.hpp>
 
-// PrepareSceneForRender -- the host's three calls per frame (F3, spec s4/s5):
-// build the visible set(s), sync the GPU-scene mirror, build the frame. Called
-// AFTER the fixed/update schedulers (WorldTransform + WorldBounds current) and
-// BEFORE the frame's ExtractFrame (its sprite sweep reads views[0]). Header-only
-// so the two frame drivers (EditorAppFrame.cpp, RuntimeFrame.cpp) share one
-// definition and ArcaneTests can drive it without a device.
+// PrepareSceneForRender -- the three calls (F3, spec s4/s5): build the visible
+// set(s), sync the GPU-scene mirror, build the frame. Header-only so
+// ArcaneTests can drive it without a device. F5 plan 1 Task 6 moved the hosts'
+// call into ExtractFrame; this function stays for the tests that already call it.
 //
 // TWO VIEWS when they differ: in Play the sprites draw with View() (the scene
 // camera's orthographic view) while the mesh pass draws with the perspective
@@ -107,7 +105,7 @@ namespace Arcane
             return;   // no mesh pass this frame; the stage still lands (rows stay current for the frame that has one)
         }
         const VisibleSet* meshVis = twoViews ? &sv->views[1] : &sv->views[0];
-        BuildGpuSceneFrame(*mirror, meshVis, reg.GetResource<MeshTable>(), *meshView, out);
+        BuildGpuSceneFrame(*mirror, meshVis, MeshSectionRanges(reg.GetResource<MeshTable>()), *meshView, out);
     }
 
     // THE DROPPED-STAGE REMEDY (ruling R-F). GpuSceneSync records lastModel and

@@ -207,9 +207,9 @@ private:
     // MeshSceneDesc::scene is a POINTER BORROWED for the duration of the
     // RenderFrame call (MeshNode.hpp), so the object it names must outlive
     // that call -- and RenderGraph (RuntimeFrame.cpp) is a free function, not
-    // a method, so it has nowhere of its own to keep one. Rebuilt every frame
-    // by PrepareSceneForRender (Host/GpuSceneHost.hpp; its containers are
-    // reused), reached from RenderGraph through FrameIo::gpuSceneFrame.
+    // a method, so it has nowhere of its own to keep one. The graph borrows
+    // the extract packet; this member is a copy of that frame for the HUD and
+    // ShutdownGraphPath, reached from RenderGraph through FrameIo::gpuSceneFrame.
     Arcane::GpuSceneFrame                m_gpuSceneFrame;
 
     // THE LAST-FRAME CAPTURE (Task 8: --report wiring). CaptureTail

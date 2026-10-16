@@ -55,7 +55,7 @@
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Render/OverlayBatchCollector.hpp>   // Batcher2D producers -> overlay primitives (F5 plan 1 T3)
-#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame, once per viewport frame
+#include <Arcane/Host/GpuSceneHost.hpp>   // GpuSceneInvalidate (R-F) after a viewport frame that did not present
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include "Documents/InputActionsDocument.hpp"
@@ -1739,29 +1739,17 @@ namespace Arcane::Editor
             const std::uint32_t w = ViewportWidth();
             const std::uint32_t h = ViewportHeight();
 
-            // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and
-            // the frame's batches -- between the schedulers (phase 9's
-            // Advance left WorldTransform + WorldBounds current) and the
-            // sprite sweep inside ExtractFrame below (which reads views[0]
-            // through MainVisibleSet). The mesh view is the editor view in
-            // Edit and the perspective scene camera in Play (RuntimeFrame.cpp's
-            // rule); nullopt when Play has none, and then no batch is built --
-            // the pass still declares itself for any staged rows (R-D).
-            //
-            // HERE, not inside SubmitSceneToBatcher: that function is also
-            // CaptureGraphViewportPng's (a scene save's cover, shutdown),
-            // and a second GpuSceneSync there would stage
-            // rows into m_gpuSceneFrame that no mesh pass uploads -- the
-            // mirror's lastModel history having already advanced past them,
-            // the next viewport frame would never re-stage them. One sync per
-            // viewport frame, from the one function that declares the frame.
+            // The mesh view is the editor view in Edit and the perspective
+            // scene camera in Play; nullopt when Play has none. ExtractFrame
+            // publishes the visible set and the GPU scene and culls against
+            // this same camera. The scene-save cover extracts too and does
+            // not declare a mesh pass, so it invalidates the mirror after
+            // (ruling R-F) rather than leaving a stage that never uploaded.
             m_meshView.reset();
             if (!InPlayMode())
                 m_meshView = m_runtime->View();
             else
                 m_meshView = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), glm::uvec2{ w, h });
-            Arcane::PrepareSceneForRender(m_runtime->Registry(), m_runtime->View(), m_meshView,
-                                          m_viewportTargets.graph->Scene(), m_gpuSceneFrame);
 
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
@@ -1776,6 +1764,9 @@ namespace Arcane::Editor
             const Arcane::ExtractRequest extractReq = BuildExtractRequest(w, h);
             const Arcane::RenderFramePacket& packet =
                 Arcane::ExtractFrame(m_runtime->Registry(), extractReq, m_packetRing);
+            // The shutdown report reads this member. The graph borrows
+            // packet.mesh. The cover's later extract must not replace it.
+            m_gpuSceneFrame = packet.mesh;
 
             // Copied, not borrowed, by FrameDesc -- but the local has to
             // outlive the call all the same, and it is the SAME GlobalParams
@@ -1798,7 +1789,7 @@ namespace Arcane::Editor
             // runs the plugin's DrawUI, and phase 11 follows phase 10. A
             // DrawUI that mutates the scene must land on THIS frame, not the
             // next.
-            ArmGraphViewportFrame(vp);
+            ArmGraphViewportFrame(vp, packet);
 
             // THE --screenshot CAPTURE, armed on the LAST frame only -- the
             // same "+1" the runtime's RenderGraph uses (there io.frameCount is
@@ -1842,7 +1833,7 @@ namespace Arcane::Editor
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Any outcome but Presented means GpuSceneSyncNode did not run, so
-            // the rows PrepareSceneForRender staged above never reached the
+            // the rows the extract staged above never reached the
             // GPU and would otherwise never be re-staged (ruling R-F): give
             // the mirror a new generation so the next sync is a full rebuild.
             if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
@@ -2184,7 +2175,8 @@ namespace Arcane::Editor
     // DrawUI mutates the scene lands on this frame rather than the next.
     // Phases 11, 12 and 17 keep their gates and each points at this
     // function.
-    void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp)
+    void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
+                                          const Arcane::RenderFramePacket& packet)
     {
         // ---- phase 11's content: the game HUD ---------------------------
         // Play-mode only, exactly as that phase is. The draw data lives in the
@@ -2209,10 +2201,8 @@ namespace Arcane::Editor
         // return just below, or a frame with no selection and no hover would
         // silently stop submitting meshes too.
         //
-        // m_gpuSceneFrame was built by PrepareSceneForRender in
-        // RenderSceneToViewport (see the comment there for why it runs
-        // BEFORE the sprite sweep rather than here); this site only hands
-        // it to the graph. THE GATE IS Empty(), NOT HasDraws() (ruling R-D):
+        // packet.mesh is the frame ExtractFrame published. THE GATE IS
+        // Empty(), NOT HasDraws() (ruling R-D):
         // a frame whose meshes are all culled -- or that has no mesh view at
         // all (Play with no perspective scene camera) -- can still carry
         // staged rows or a full rebuild, and the mirror's lastModel history
@@ -2220,7 +2210,7 @@ namespace Arcane::Editor
         // for GpuSceneSyncNode's upload; MeshNode then records only its
         // depth clear. Without a mesh view the matrices are left as they
         // were (no batch reads them).
-        m_meshScene.scene = &m_gpuSceneFrame;
+        m_meshScene.scene = &packet.mesh;
         if (m_meshView)
         {
             m_meshScene.view       = m_meshView->view;

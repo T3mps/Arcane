@@ -16,7 +16,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/HostSettings.hpp>       // app.window.minimizedSleepMs
 #include <Arcane/Host/RuntimeSettings.hpp>    // runtime.hud.show (BuildHud)
-#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
+#include <Arcane/Host/GpuSceneHost.hpp>   // GpuSceneInvalidate (R-F) and the HUD's GpuSceneVisibleRows
 #if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #endif
@@ -337,7 +337,7 @@ void BuildHud(FrameIo& io)
         // THE 3D PASS'S VISIBILITY, beside the 2D batcher's counts (F3 plan 2
         // T5): the CPU's own figures, then what the GPU CULL PASS itself
         // emitted. Both describe the LAST frame, not this one -- the HUD is
-        // built before PrepareSceneForRender rebuilds `gpuSceneFrame` and the
+        // built before this frame's extract copies `gpuSceneFrame` and the
         // GPU's answer is asynchronous by construction -- which is the same
         // one-frame lag the batcher's counts above already carry.
         //
@@ -542,24 +542,100 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // the submit that records against it. Sticky within this Begin() bracket.
     io.gpu->Batch().SetViewProjection(io.runtime->View().ViewProjection());
 
-    // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and the
-    // frame's batches -- AFTER the schedulers (AdvanceSim left WorldTransform
-    // + WorldBounds current) and PushSceneCamera (View() is this frame's),
-    // and BEFORE the ExtractFrame below, whose sprite sweep reads views[0]
-    // through MainVisibleSet. The mesh pass draws with the
-    // perspective scene camera (the SAME guarded path the mesh block below
-    // has always used: a validated ViewTransform or nullopt, never identity),
-    // and culls against it as views[1] when it differs from the sprites'
-    // orthographic view; nullopt = no batch this frame, though the stage
-    // still lands (ruling R-D, see the mesh block).
+    // The mesh pass's view, for the MeshSceneDesc matrices after extract.
+    // ExtractFrame publishes the visible set and the GPU scene and culls
+    // meshes against this same camera: the perspective scene camera, or
+    // nullopt when there is none (no batches; the stage still lands, R-D).
     const std::optional<Arcane::ViewTransform> meshView =
         Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight });
-    Arcane::PrepareSceneForRender(io.runtime->Registry(), io.runtime->View(), meshView,
-                                  io.graph->Scene(), io.gpuSceneFrame);
     // The batcher the sprite sweep submits into, published for ExtractFrame
     // below. The sweep itself runs there, once (F5 plan 1 Task 5).
     io.runtime->SetRenderContext(&io.gpu->Batch());
 
+    graphFrame.batch = &io.gpu->Batch();
+    // The scene post chain as BYTES (SceneRenderResolver::PostDesc).
+    // Re-read every frame for the same reason PostChain() is above:
+    // a drain may swap the bound instance under an asset re-save.
+    // Null (no PostProcess assignment, or the compile has not landed
+    // yet) simply renders canvas -> tonemap -- which is also how a caller
+    // asks for the frame WITHOUT a post chain at all (see FrameDesc).
+    graphFrame.post    = io.resolver ? io.resolver->PostDesc() : nullptr;
+    // The same GlobalParams the batcher got via SetGlobals, so the post
+    // chain and the batch cannot bind different b1 contents.
+    graphFrame.globals = &io.frameGlobals;
+    // The capture is taken on the LAST frame, which has to be known
+    // BEFORE the frame is declared (the readback is a graph NODE, not
+    // an after-the-fact copy). Hence `+ 1`: io.frameCount is bumped in
+    // CaptureTail, i.e. after this arm returns Presented.
+    //
+    // --settle N (Task 10): this predicate's NAME says "last frame", and
+    // under an ordinary (non-settle) run it is exactly that -- CaptureTail
+    // stops the loop the moment it fires. Under --settle it stays true for
+    // EVERY frame from here on (io.frameCount only grows), which is exactly
+    // what is wanted: each such frame is one more settle attempt, and
+    // CaptureTail -- not this predicate -- is what decides when the loop
+    // actually ends (converged, or the bail conjunction fired: BOTH the
+    // attempt budget and --settle-timeout spent). No settle-
+    // specific arming logic is needed here as a result: MainLoop's while
+    // condition already stops calling this function once CaptureTail says
+    // so, so "arm every frame past the base budget" and "arm the one last
+    // frame" are the SAME expression.
+    const bool willBeLastFrame =
+        io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
+    // Armed for --report too (Task 8), not --screenshot alone: a report's
+    // Brightness/Luma/Rgba probes read this SAME readback, and CaptureTail
+    // (this file) widens its own read gate to match -- without this, a run
+    // that passed --report/--probe but no --screenshot would never declare
+    // the readback node, and every positional probe would report an honest
+    // but avoidable "no capture set".
+    graphFrame.capture = willBeLastFrame &&
+                          (!io.config.screenshotPath.empty() || !io.config.reportPath.empty());
+
+    // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1): the sprite sweep runs
+    // into the host batcher Begin()'d above and the drained batch is copied
+    // into this frame's packet, which the graph's batch node draws instead of
+    // draining the batcher again. graphFrame.batch stays that same batcher,
+    // so the registered sprite materials resolve where they were registered.
+    // The vehicle unbinds the packet before RenderFrame* returns.
+    Arcane::ExtractRequest req;
+    req.viewport = { frameWidth, frameHeight };
+    req.device = io.graph->Scene();
+    const auto extractT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
+    io.perf.Add(io.perf.accRec, extractT0, io.perf.Now());   // --perf's "extract" column
+    io.graph->BindPacket(&packet);
+
+    // The HUD and ShutdownGraphPath read the member. The graph borrows the
+    // packet, which outlives this RenderFrame call (the ring holds it).
+    io.gpuSceneFrame = packet.mesh;
+
+    // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8). The frame is the one
+    // ExtractFrame just published. `meshScene` only needs to outlive the
+    // RenderFrame* call below, inside this function. THE GATE IS Empty(),
+    // NOT HasDraws() (ruling R-D): a frame whose meshes are all culled, or
+    // with no perspective camera at all, can still carry staged rows or a
+    // full rebuild, and the mirror's lastModel history has already advanced
+    // past them -- the pass must declare itself so GpuSceneSyncNode uploads
+    // them; MeshNode then records only its depth clear. Without a mesh view
+    // the matrices stay at their defaults (no batch reads them).
+    // graphFrame.mesh is left null for an Empty() scene.
+    Arcane::MeshSceneDesc meshScene;
+    meshScene.scene = &packet.mesh;
+    if (meshView)
+    {
+        meshScene.view       = meshView->view;
+        meshScene.projection = meshView->projection;
+    }
+    // NO LIGHT COMPONENT YET: this engine has none anywhere --
+    // Scene/Components.hpp declares none and SceneModule.hpp registers
+    // none -- so the scene's one light is render.mesh.defaultLight.*
+    // (RenderLookSettings.hpp; Live, read once per frame). A light
+    // component is future work and a reviewed scene-schema change.
+    Arcane::ApplyDefaultLight(meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+    if (!meshScene.Empty())
+        graphFrame.mesh = &meshScene;
+
+    // After ExtractFrame, so CollectPickables reads this frame's MainVisibleSet.
 #if !defined(ARC_BUILD_DIST)
     // --pick-probe. THE ONE PLACE the entity ids
     // are produced: CollectPickables is a pure walk of the registry and
@@ -660,94 +736,6 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     }
 #endif
 
-    // ============================================================
-    // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8) -- this frame's mesh
-    // scene: the GpuSceneFrame PrepareSceneForRender built above (a RuntimeApp
-    // member reached through FrameIo, the SAME "must outlive the RenderFrame
-    // call" storage io.pickDrawables is, because MeshSceneDesc::scene is a
-    // pointer borrowed for the duration of that call). This site only hands
-    // it to the graph; RuntimeFrame.cpp is not compiled into ArcaneTests, so
-    // the logic that decides what the frame holds lives in the tested header.
-    //
-    // `meshScene` only needs to outlive the graph's RenderFrame* call
-    // below, which happens inside THIS function call -- a RenderGraph-local
-    // is enough for it. THE GATE IS Empty(), NOT HasDraws() (ruling R-D): a
-    // frame whose meshes are all culled, or with no perspective camera at
-    // all, can still carry staged rows or a full rebuild, and the mirror's
-    // lastModel history has already advanced past them -- the pass must
-    // declare itself so GpuSceneSyncNode uploads them; MeshNode then records
-    // only its depth clear. Without a mesh view the matrices stay at their
-    // defaults (no batch reads them). graphFrame.mesh is left null (its
-    // default) for an Empty() scene, the "ask for the frame WITHOUT this
-    // stage" mechanism FrameDesc documents.
-    Arcane::MeshSceneDesc meshScene;
-    meshScene.scene = &io.gpuSceneFrame;
-    if (meshView)
-    {
-        meshScene.view       = meshView->view;
-        meshScene.projection = meshView->projection;
-    }
-    // NO LIGHT COMPONENT YET: this engine has none anywhere --
-    // Scene/Components.hpp declares none and SceneModule.hpp registers
-    // none -- so the scene's one light is render.mesh.defaultLight.*
-    // (RenderLookSettings.hpp; Live, read once per frame). A light
-    // component is future work and a reviewed scene-schema change.
-    Arcane::ApplyDefaultLight(meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
-    if (!meshScene.Empty())
-        graphFrame.mesh = &meshScene;
-
-    graphFrame.batch = &io.gpu->Batch();
-    // The scene post chain as BYTES (SceneRenderResolver::PostDesc).
-    // Re-read every frame for the same reason PostChain() is above:
-    // a drain may swap the bound instance under an asset re-save.
-    // Null (no PostProcess assignment, or the compile has not landed
-    // yet) simply renders canvas -> tonemap -- which is also how a caller
-    // asks for the frame WITHOUT a post chain at all (see FrameDesc).
-    graphFrame.post    = io.resolver ? io.resolver->PostDesc() : nullptr;
-    // The same GlobalParams the batcher got via SetGlobals, so the post
-    // chain and the batch cannot bind different b1 contents.
-    graphFrame.globals = &io.frameGlobals;
-    // The capture is taken on the LAST frame, which has to be known
-    // BEFORE the frame is declared (the readback is a graph NODE, not
-    // an after-the-fact copy). Hence `+ 1`: io.frameCount is bumped in
-    // CaptureTail, i.e. after this arm returns Presented.
-    //
-    // --settle N (Task 10): this predicate's NAME says "last frame", and
-    // under an ordinary (non-settle) run it is exactly that -- CaptureTail
-    // stops the loop the moment it fires. Under --settle it stays true for
-    // EVERY frame from here on (io.frameCount only grows), which is exactly
-    // what is wanted: each such frame is one more settle attempt, and
-    // CaptureTail -- not this predicate -- is what decides when the loop
-    // actually ends (converged, or the bail conjunction fired: BOTH the
-    // attempt budget and --settle-timeout spent). No settle-
-    // specific arming logic is needed here as a result: MainLoop's while
-    // condition already stops calling this function once CaptureTail says
-    // so, so "arm every frame past the base budget" and "arm the one last
-    // frame" are the SAME expression.
-    const bool willBeLastFrame =
-        io.config.maxFrames != 0 && (io.frameCount + 1) >= io.config.maxFrames;
-    // Armed for --report too (Task 8), not --screenshot alone: a report's
-    // Brightness/Luma/Rgba probes read this SAME readback, and CaptureTail
-    // (this file) widens its own read gate to match -- without this, a run
-    // that passed --report/--probe but no --screenshot would never declare
-    // the readback node, and every positional probe would report an honest
-    // but avoidable "no capture set".
-    graphFrame.capture = willBeLastFrame &&
-                          (!io.config.screenshotPath.empty() || !io.config.reportPath.empty());
-
-    // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1): the sprite sweep runs
-    // into the host batcher Begin()'d above and the drained batch is copied
-    // into this frame's packet, which the graph's batch node draws instead of
-    // draining the batcher again. graphFrame.batch stays that same batcher,
-    // so the registered sprite materials resolve where they were registered.
-    // The vehicle unbinds the packet before RenderFrame* returns.
-    Arcane::ExtractRequest req;
-    req.viewport = { frameWidth, frameHeight };
-    req.device = io.graph->Scene();
-    const auto extractT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
-    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
-    io.perf.Add(io.perf.accRec, extractT0, io.perf.Now());   // --perf's "extract" column
-    io.graph->BindPacket(&packet);
 
     // Timed into accPresent rather than left unmeasured, so `--perf`
     // reports something real on this path too (the spec's waiting-
@@ -777,7 +765,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
                                 : io.graph->RenderFrame(graphFrame);
     io.perf.Add(io.perf.accPresent, graphT0, io.perf.Now());
     // Any outcome but Presented means GpuSceneSyncNode did not run, so the
-    // rows PrepareSceneForRender staged above never reached the GPU and would
+    // rows the extract staged above never reached the GPU and would
     // otherwise never be re-staged (ruling R-F): give the mirror a new
     // generation so the next sync is a full rebuild.
     if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)

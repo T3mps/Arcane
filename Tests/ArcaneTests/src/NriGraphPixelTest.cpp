@@ -2228,7 +2228,7 @@ namespace
         Arcane::GpuSceneMirror mirror;
         Arcane::GpuSceneFrame frame;
         Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, frame.stage);
-        Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+        Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), view, frame);
         REQUIRE(frame.stage.rows.size() == 1u);
         REQUIRE(frame.stage.values.size() == 1u);
         REQUIRE(frame.batches.size() == 1u);
@@ -2308,7 +2308,7 @@ namespace
         Arcane::GpuSceneMirror mirror;
         Arcane::GpuSceneFrame  frame;
         Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, frame.stage);
-        Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+        Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), view, frame);
         REQUIRE(frame.stage.fullRebuild);
         REQUIRE(frame.stage.rows.size() == 2);
         REQUIRE(frame.batches.size() == 1);
@@ -2366,7 +2366,7 @@ namespace
         coarseOffscreen.Insert(offscreenE, offscreenBounds->box, 0.0f);
         Arcane::GpuSceneFrame culled;
         Arcane::BuildGpuSceneFrame(offscreenMirror, &coarseOffscreen,
-                                   offscreen.reg.GetResource<Arcane::MeshTable>(), view, culled);
+                                   Arcane::MeshSectionRanges(offscreen.reg.GetResource<Arcane::MeshTable>()), view, culled);
         REQUIRE(culled.batches.size() == 1);
         REQUIRE(culled.args.size() == 1);
         CHECK(culled.stats.coarseVisible == 1);
@@ -2394,7 +2394,7 @@ namespace
         none.Clear();
         Arcane::GpuSceneFrame nothing;
         nothing.stage = frame.stage;
-        Arcane::BuildGpuSceneFrame(mirror, &none, w.reg.GetResource<Arcane::MeshTable>(), view, nothing);
+        Arcane::BuildGpuSceneFrame(mirror, &none, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), view, nothing);
         CHECK(nothing.batches.empty());
         CHECK(nothing.args.empty());
         CHECK_FALSE(nothing.HasDraws());

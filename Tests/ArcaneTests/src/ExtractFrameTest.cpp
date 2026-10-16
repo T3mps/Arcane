@@ -22,10 +22,14 @@
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include "Helpers/ConstantScan.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -120,6 +124,29 @@ namespace
             reg.AddComponent<Arcane::SpriteRenderer>(sprite, Arcane::SpriteRenderer{});
             return sprite;
         }
+        void AddOrthoCamera()
+        {
+            Arcane::Camera cam;
+            cam.active = true;
+            cam.projection = Arcane::CameraProjection::Orthographic;
+            cam.orthographicSize = 2.0f;
+            reg.AddComponent<Arcane::Camera>(root, cam);
+        }
+        void AddPerspectiveCamera()
+        {
+            Astra::Entity e = reg.CreateEntity();
+            Arcane::Transform t;
+            t.position = { 0.0f, 0.0f, 5.0f };
+            reg.AddComponent<Arcane::Transform>(e, t);
+            reg.SetParent(e, root);
+            Arcane::Camera cam;
+            cam.active = true;
+            cam.projection = Arcane::CameraProjection::Perspective;
+            cam.fovYDegrees = 50.0f;
+            cam.nearZ = 0.05f;
+            cam.farZ = 500.0f;
+            reg.AddComponent<Arcane::Camera>(e, cam);
+        }
     };
 }
 
@@ -209,4 +236,75 @@ TEST_CASE("extract keeps a registered sprite material id", "[nri][extract]")
     CHECK(packet.batchSpans[0].material != Arcane::Batcher2D::kMaterialSprite);
     CHECK(packet.batchSpans[0].worldSpace);
     CHECK(packet.batchVertices.size() == 4u);
+}
+
+TEST_CASE("extract publishes one mesh row and ignores a later transform edit", "[nri][extract][gpuscene]")
+{
+    World world;
+    const Arcane::Guid mesh = world.Mesh(1);
+    Astra::Entity spawned = world.Spawn({ 0.0f, 0.0f, 0.0f }, mesh);
+    Arcane::TransformPropagationSystem{}(world.reg);
+    Arcane::BoundsSystem{}(world.reg);
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    REQUIRE(packet.mesh.stats.total >= 1u);
+    const std::uint32_t total = packet.mesh.stats.total;
+    world.reg.GetComponent<Arcane::Transform>(spawned)->position = { 40.0f, 0.0f, 0.0f };
+    CHECK(packet.mesh.stats.total == total);
+    CHECK(packet.visible.entries.size() >= 1u);
+}
+
+TEST_CASE("meshes cull against the perspective mesh view, not the orthographic sprite view", "[nri][extract][gpuscene]")
+{
+    auto coarse = [](glm::vec3 position)
+    {
+        World world;
+        world.AddOrthoCamera();
+        world.AddPerspectiveCamera();
+        world.Spawn(position, world.Mesh(1));
+        Arcane::TransformPropagationSystem{}(world.reg);
+        Arcane::BoundsSystem{}(world.reg);
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { 200u, 100u };
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        REQUIRE(packet.mesh.stats.total == 1u);
+        return packet.mesh.stats.coarseVisible;
+    };
+    // x = 30 at depth 55: inside the perspective frustum (half-width about 51 m),
+    // outside the orthographic view (half-width 4 m).
+    CHECK(coarse({ 30.0f, 0.0f, -50.0f }) == 1u);
+    // z = -600: inside the orthographic slab (+-render.ortho2D.depthRange, 1000 m),
+    // 605 m from the perspective eye, past its far plane.
+    CHECK(coarse({ 0.0f, 0.0f, -600.0f }) == 0u);
+}
+
+TEST_CASE("the scene-save cover invalidates the GPU-scene mirror after its extract", "[nri][extract][gpuscene]")
+{
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorApp.cpp");
+    REQUIRE(in.good());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string text = ss.str();
+    const std::size_t fn = text.find("bool EditorApp::CaptureGraphViewportPng(");
+    REQUIRE(fn != std::string::npos);
+    const std::size_t end = text.find("\n    }\n", fn);   // four-space-indented member definitions
+    REQUIRE(end != std::string::npos);
+    const std::string body = text.substr(fn, end - fn);
+    const std::size_t extract = body.find("ExtractFrame(");
+    const std::size_t render = body.find("RenderFrameOffscreen(");
+    const std::size_t invalidate = body.find("GpuSceneInvalidate(m_runtime->Registry())");
+    REQUIRE(extract != std::string::npos);
+    REQUIRE(render != std::string::npos);
+    REQUIRE(invalidate != std::string::npos);
+    CHECK(extract < render);
+    CHECK(render < invalidate);
+    // Before the early return on a non-Presented outcome, so every outcome invalidates.
+    const std::size_t early = body.find("return false;", render);
+    CHECK((early == std::string::npos || invalidate < early));
 }

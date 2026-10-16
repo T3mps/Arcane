@@ -107,10 +107,10 @@ namespace Arcane::RuntimeFrame
         // above: MeshSceneDesc::scene is BORROWED for the duration of the
         // RenderFrame call (MeshNode.hpp), and RenderGraph is a free function
         // with nothing of its own to hold that storage, so it has to be a
-        // RuntimeApp member reached through here. Rebuilt every frame by
-        // PrepareSceneForRender (Host/GpuSceneHost.hpp), whose containers are
-        // reused -- so, again like pickDrawables, a steady-state frame with a
-        // static scene allocates nothing after the first.
+        // RuntimeApp member reached through here. The graph borrows the extract
+        // packet's mesh frame; this member is a copy of that frame for the HUD
+        // and the shutdown report. Containers are reused, so a steady-state
+        // frame with a static scene allocates nothing after the first.
         Arcane::GpuSceneFrame& gpuSceneFrame;
 
         // ---- THE LAST-FRAME CAPTURE (Task 8: --report wiring) ---------------

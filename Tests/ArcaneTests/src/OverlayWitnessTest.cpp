@@ -447,7 +447,7 @@ void CheckOverlayClasses(Arcane::GraphicsBackend backend)
     Arcane::GpuSceneMirror mirror;
     Arcane::GpuSceneFrame gpu;
     Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
-    Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, gpu);
+    Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), view, gpu);
     REQUIRE(gpu.stage.rows.size() == 1u);
     for (Arcane::GpuInstance& row : gpu.stage.values)
         row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -678,7 +678,7 @@ void CheckPerspectiveGridDepth(Arcane::GraphicsBackend backend)
     Arcane::GpuSceneMirror mirror;
     Arcane::GpuSceneFrame gpu;
     Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
-    Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, gpu);
+    Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), view, gpu);
     for (Arcane::GpuInstance& row : gpu.stage.values)
         row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 
@@ -1051,7 +1051,7 @@ void CheckOverlayWorldCamera(Arcane::GraphicsBackend backend)
     Arcane::GpuSceneMirror mirror;
     Arcane::GpuSceneFrame gpu;
     Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
-    Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), meshView, gpu);
+    Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), meshView, gpu);
     for (Arcane::GpuInstance& row : gpu.stage.values)
         row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 

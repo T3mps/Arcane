@@ -350,7 +350,8 @@ namespace Arcane::Editor
         // point at (m_pickDrawables / m_pickSelectedIds) and returns nothing by
         // value, because a span into a temporary is the one mistake this shape
         // exists to make impossible.
-        void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp);
+        void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
+                                   const Arcane::RenderFramePacket& packet);
         // NO phase 11 / phase 12 members. CompositeGameUi and
         // RenderSelectionOutline were declared here and called from MainLoop
         // between phases 10 and 13; ArmGraphViewportFrame above satisfies both
@@ -1392,28 +1393,19 @@ namespace Arcane::Editor
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
         // ---- The viewport's opaque 3D pass (F2a Task 10; F3 plan 1 T8) -----
-        // THIS FRAME's GPU-scene frame -- the staged rows, the batch table,
-        // the indirect args and the CPU-written visible-index list -- held as
-        // a MEMBER for the identical reason m_pickDrawables above is one:
-        // FrameDesc::mesh -> MeshSceneDesc::scene BORROWS it for the duration
-        // of the RenderFrame call, so a per-frame temporary would dangle the
-        // moment the declaration outlives the statement that filled it.
-        //
-        // Rebuilt every frame by PrepareSceneForRender (Host/GpuSceneHost.hpp)
-        // from RenderSceneToViewport, between the schedulers and the sprite
-        // sweep -- the visible set(s) it builds are what that sweep and the
-        // pick pass cull against, so it cannot run later, inside
-        // ArmGraphViewportFrame where the pick spans are filled. Its
-        // containers are reused, so a steady-state frame with a static scene
-        // allocates nothing after the first.
+        // The last VIEWPORT frame's GPU scene, copied from that frame's extract
+        // packet so the shutdown report still reads a member. The graph borrows
+        // packet.mesh, not this copy. The scene-save cover extracts again and
+        // must not overwrite it. Containers are reused, so a steady-state frame
+        // with a static scene allocates nothing after the first.
         Arcane::GpuSceneFrame m_gpuSceneFrame;
 
         // THE VIEW THE MESH PASS DRAWS WITH this frame -- the editor view in
         // Edit, the perspective scene camera in Play (RuntimeFrame.cpp's
         // rule), nullopt when Play has no such camera (no mesh batches then;
         // the pass still declares itself for any staged rows, ruling R-D).
-        // Resolved beside the PrepareSceneForRender call (it culls against
-        // this view) and read again by ArmGraphViewportFrame for the
+        // Resolved in RenderSceneToViewport (ExtractFrame culls against the
+        // same camera) and read again by ArmGraphViewportFrame for the
         // MeshSceneDesc's matrices, so the two cannot disagree.
         std::optional<Arcane::ViewTransform> m_meshView;
 

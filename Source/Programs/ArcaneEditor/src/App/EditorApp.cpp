@@ -2086,7 +2086,13 @@ namespace Arcane::Editor
         vp.globals = &globals;
         vp.capture = true;
         graph->BindPacket(&packet);   // the vehicle unbinds it before RenderFrameOffscreen returns
-        if (graph->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
+        const Arcane::NriGraphContext::FrameOutcome outcome = graph->RenderFrameOffscreen(vp);
+        // The cover's extract synced the mirror and vp.mesh stays unset, so
+        // no mesh pass uploaded that stage. Invalidate on every outcome,
+        // before the non-Presented return, so the next viewport sync is a
+        // full rebuild (ruling R-F).
+        Arcane::GpuSceneInvalidate(m_runtime->Registry());
+        if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
             return false;   // Skipped (collapsed panel) or Failed (already latched + logged)
 
         std::uint32_t w = 0, h = 0;
