@@ -37,7 +37,7 @@ set L=--project ReferenceProject
 set P=--project ReferenceProject --client claude-code
 
 :: what is running
-%S% %P% status
+%S% %L% status
 
 :: headless runtime, deterministic picture
 %S% %L% launch runtime --headless -- --fixed-time 0
