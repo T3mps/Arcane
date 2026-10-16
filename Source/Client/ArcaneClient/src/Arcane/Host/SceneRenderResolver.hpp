@@ -157,8 +157,8 @@ namespace Arcane
         // THE per-frame call. Sweep -> request -> pump -> latch -> publish, in
         // that order (see the .cpp for why each step sits where it does).
         //
-        // Call it BEFORE the frame's Batcher2D::Begin and before
-        // RunLoop::SubmitRender: the drain REGISTERS materials with the batcher
+        // Call it BEFORE the frame's Batcher2D::Begin and before its
+        // ExtractFrame: the drain REGISTERS materials with the batcher
         // (pipeline + binding-set table mutation), which does not belong inside
         // a Begin..Drain recording, and the tables it publishes are what that
         // frame's submission reads.

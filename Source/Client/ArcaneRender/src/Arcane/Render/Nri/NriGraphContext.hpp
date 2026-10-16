@@ -426,11 +426,15 @@ namespace Arcane
             // and the HUD tail (F5 plan 1, Task 2).
             bool world = true;
 
-            // This frame's 2D content, ALREADY SUBMITTED into the batcher by
-            // the frame driver (ClientRuntime::SetRenderContext + SubmitRender) and
-            // not yet drained -- this path drains it. Borrowed for
-            // the duration of the RenderFrame call and never stored; null
-            // renders a cleared canvas.
+            // This frame's 2D batcher. With a packet bound (BindPacket; every
+            // host frame builder, F5 plan 1 Task 5) the frame driver's
+            // ExtractFrame has already submitted into and drained it, the batch
+            // node draws the packet's copy, and this batcher only resolves the
+            // registered sprite materials named in it. With none bound
+            // (thumbnail harvest, shader preview) it holds content not yet
+            // drained, and this path drains it. Borrowed for the duration of
+            // the RenderFrame call and never stored; null renders a cleared
+            // canvas.
             Batcher2D* batch = nullptr;
 
             // ---- the mesh pass (Task 7; opaque + masked + ordered ----------

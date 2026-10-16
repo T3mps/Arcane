@@ -6,9 +6,10 @@
 //
 // Advance() runs >=0 FixedUpdate steps then Update once, through the parallel
 // executor. SubmitRender() runs the Render scheduler SEQUENTIALLY on the calling
-// thread (Batcher2D is not thread-safe and must be recorded where Begin was
-// called). The host brackets SubmitRender() between Batcher2D::Begin and
-// Batcher2D::Drain.
+// thread -- but the Render phase is RETIRED (F5 plan 1 Task 5): no host calls
+// SubmitRender any more. Sprites are submitted once per frame by the frame
+// extract (Arcane/Render/ExtractFrame.hpp), which runs RenderSubmissionSystem
+// itself between the host's Batcher2D::Begin and the drain it copies.
 //
 // Sim-time control (Epic 04): pause / single-step / time-scale gate the FIXED
 // phase only; Update + Render keep running so an editor's camera/UI/input stay
@@ -137,6 +138,7 @@ namespace Arcane
         }
 
         // Run the Render scheduler on the calling thread (single-threaded).
+        // RETIRED (F5 plan 1 Task 5): no host calls this; kept for the ABI.
         void SubmitRender()
         {
             m_schedulers->render.Execute(*m_registry);

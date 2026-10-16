@@ -744,7 +744,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     Arcane::ExtractRequest req;
     req.viewport = { frameWidth, frameHeight };
     req.device = io.graph->Scene();
+    const auto extractT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(io.runtime->Registry(), req, io.packetRing);
+    io.perf.Add(io.perf.accRec, extractT0, io.perf.Now());   // --perf's "extract" column
     io.graph->BindPacket(&packet);
 
     // Timed into accPresent rather than left unmeasured, so `--perf`
@@ -753,11 +755,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // AcquireNextTexture, which is inside this call). It is the whole
     // record + submit + present cost, not just the present: Execute()
     // does all three, and splitting one call across three
-    // accumulators would be a fiction. accRec, accEnd and accTone stay
-    // 0: the sprite submission now runs inside ExtractFrame above, whose
-    // SubmitRender-only bracket went with it (F5 plan 1 Task 5), and there
-    // is no separate flush or tonemap step left to time, both being inside
-    // this one call.
+    // accumulators would be a fiction. accRec IS real -- it times the
+    // ExtractFrame call above, the sprite submission included (F5 plan 1
+    // Task 5) -- but accEnd/accTone stay 0: there is no separate flush or
+    // tonemap step left to time, both being inside this one call.
     //
     // THE ONE LINE IN THIS FILE THAT NAMES THE MODE, and it is forced. The
     // vehicle deliberately exposes a PAIR that refuses each other's mode --

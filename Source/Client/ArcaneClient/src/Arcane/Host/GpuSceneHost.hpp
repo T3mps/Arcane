@@ -4,7 +4,7 @@
 // PrepareSceneForRender -- the host's three calls per frame (F3, spec s4/s5):
 // build the visible set(s), sync the GPU-scene mirror, build the frame. Called
 // AFTER the fixed/update schedulers (WorldTransform + WorldBounds current) and
-// BEFORE RunLoop::SubmitRender (the sprite sweep reads views[0]). Header-only
+// BEFORE the frame's ExtractFrame (its sprite sweep reads views[0]). Header-only
 // so the two frame drivers (EditorAppFrame.cpp, RuntimeFrame.cpp) share one
 // definition and ArcaneTests can drive it without a device.
 //

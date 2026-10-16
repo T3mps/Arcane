@@ -3,8 +3,9 @@
 // The CPU coarse visibility stage (F3, spec s4): one VisibleSet per view,
 // linear over every WorldBounds. A registry RESOURCE (SceneVisibility)
 // because RenderSubmissionSystem is an Astra::System and must read it; the
-// host builds views[0] between the fixed and render schedulers
-// (Sim/SystemSchedulers.hpp) from the viewport's ViewTransform.
+// host builds views[0] between the fixed scheduler (Sim/SystemSchedulers.hpp)
+// and the frame extract's sprite sweep (ExtractFrame.hpp) from the
+// viewport's ViewTransform.
 //
 // NO RESOURCE => NOTHING IS CULLED. Every consumer (the sprite sweep,
 // CollectPickables, the GPU batch builder) reads MainVisibleSet() and treats
