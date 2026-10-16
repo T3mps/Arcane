@@ -47,7 +47,7 @@ namespace Manifold2D::Physics
 namespace Arcane
 {
     class Batcher2D;
-    // Render interpolation buffer (Epic 04.2, defined in Scene/SceneResources.hpp).
+    // Render interpolation buffer (Epic 04.2, defined in Scene/SceneCacheRecords.hpp).
     // Only referenced here through a pointer (PhysicsDebugDrawOptions::interp), so
     // a forward declaration is sufficient -- keeps this header free of the
     // Astra/Scene include chain (see the boundary note above).
