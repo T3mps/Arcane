@@ -583,7 +583,6 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // into this frame's packet, which the graph's batch node draws instead of
     // draining the batcher again. graphFrame.batch stays that same batcher,
     // so the registered sprite materials resolve where they were registered.
-    // The vehicle unbinds the packet before RenderFrame* returns.
     Arcane::ExtractRequest req;
     req.viewport = { frameWidth, frameHeight };
     req.device = io.graph->Scene();
@@ -593,10 +592,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // After extract, before the mesh block and both pick blocks, so
     // graphFrame.pickView = io.runtime->View() reads the view just installed.
     io.app.PushSceneCamera(packet);
-    io.graph->BindPacket(&packet);
 
-    // The HUD and ShutdownGraphPath read the member. The graph borrows the
-    // packet, which outlives this RenderFrame call (the ring holds it).
+    // The HUD and ShutdownGraphPath read the member. The ring holds the
+    // packet, which outlives this call.
     io.gpuSceneFrame = packet.mesh;
 
     // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8). The frame is the one
@@ -749,6 +747,9 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // is identical in both modes, which is the property Task 14's parity check
     // rests on.
     const auto graphT0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
+    // ExtractFrame -> write selection (both pick blocks above) -> BindPacket
+    // -> render. The vehicle nulls the pointer on return.
+    io.graph->BindPacket(&packet);
     const Arcane::NriGraphContext::FrameOutcome outcome =
         io.graph->IsOffscreen() ? io.graph->RenderFrameOffscreen(graphFrame)
                                 : io.graph->RenderFrame(graphFrame);
