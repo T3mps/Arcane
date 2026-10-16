@@ -14,6 +14,8 @@
 
 #undef ERROR
 
+#include <Arcane/Render/RenderFramePacket.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -937,8 +939,19 @@ namespace Arcane
             {
                 if (!context)
                     return;   // device-less declaration-shape drive
+                OverlayRecordDesc draw = desc;
+                // A bound packet is the list. The matrices and depth-test
+                // flags were fixed at declaration from that same packet.
+                if (const RenderFramePacket* packet = context->Packet())
+                {
+                    draw.list = &packet->overlay;
+                    if (packet->overlay.hasGrid3d)
+                        draw.grid = packet->overlay.grid3d;
+                    else
+                        draw.grid.reset();
+                }
                 if (OverlayNode* node = context->Overlay())
-                    node->Record(nodeContext, target, depth, desc, context->FrameSlot());
+                    node->Record(nodeContext, target, depth, draw, context->FrameSlot());
             });
     }
 }

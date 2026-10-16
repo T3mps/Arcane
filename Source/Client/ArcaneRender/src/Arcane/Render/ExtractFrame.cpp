@@ -4,6 +4,9 @@
 #include <Arcane/Base/Log.hpp>                   // ARC_WARN (no-camera / multi-camera, once)
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/GpuSceneSync.hpp>        // GpuSceneSync, BuildGpuSceneFrame, MeshSectionRanges
+#include <Arcane/Render/Grid2D.hpp>
+#include <Arcane/Render/OverlayBatchCollector.hpp>
+#include <Arcane/Render/PhysicsDebugDraw.hpp>
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem
 #include <Arcane/Render/SpriteGeometry.hpp>
@@ -333,6 +336,99 @@ namespace Arcane
 
         ExtractSprites(reg, packet);
         CollectPickables(reg, packet.pickDrawables);
+
+        // Overlays, in submission order: the 2D grid, the 3D grid request,
+        // physics debug, the camera rect, then the gizmo. The gizmo arrives
+        // already tagged; Append keeps its own line/fill order.
+        if (req.showGrid2d && packet.spriteView)
+        {
+            Grid2DStyle style;
+            style.minorAlpha = req.gridMinorAlpha;
+            style.majorAlpha = req.gridMajorAlpha;
+            style.lineRgb = req.gridLineRgb;
+            style.lineThicknessPx = req.gridLineThicknessPx;
+            style.maxLinesPerAxis = req.gridMaxLinesPerAxis;
+            style.axisX = req.gridAxisX;
+            style.axisY = req.gridAxisY;
+            const float ppm = GridPixelsPerMetre(packet.spriteView->view);
+            EmitGrid2D(packet.spriteView->view,
+                       PlanGrid2D(ppm, req.gridMinorAlpha, req.gridMajorAlpha),
+                       style, packet.overlay);
+        }
+        if (req.showGrid3d)
+        {
+            packet.overlay.hasGrid3d = true;
+            packet.overlay.grid3d = req.grid3d;
+        }
+        if (req.physicsDebug && packet.spriteView)
+        {
+            PhysicsWorld2D* phys = reg.GetResource<PhysicsWorld2D>();
+            std::optional<Detail::Physics2D::BodyHandle> selected;
+            if (phys && req.physicsSelectedBody)
+            {
+                const auto& entities = Detail::Physics2D::Access::Entities(*phys);
+                if (const auto it = entities.find(*req.physicsSelectedBody); it != entities.end())
+                    selected = it->second;
+            }
+            const bool drawPhysics = req.physicsWholeWorld || (!req.playMode && selected.has_value());
+            const Detail::Physics2D::PhysicsWorld* solver =
+                phys ? Detail::Physics2D::Access::Solver(*phys) : nullptr;
+            const std::optional<Affine2D> affine = packet.spriteView->view.AsAffine2D();
+            if (drawPhysics && solver && affine)
+            {
+                OverlayBatchCollector collector(packet.overlay);
+                collector.Begin(req.viewport.x, req.viewport.y);
+                PhysicsDebugDrawOptions2D opts = MakePhysicsDebugDrawOptions();
+                opts.view = *affine;
+                if (const RenderContext2D* rc = reg.GetResource<RenderContext2D>())
+                    opts.alpha = rc->alpha;
+                opts.interp = reg.GetResource<PhysicsInterpBuffer2D>();
+                opts.velocities = false;
+                opts.comMarkers = false;
+                opts.orientations = false;
+                opts.contacts = req.physicsWholeWorld;
+                if (!req.physicsWholeWorld && selected)
+                    opts.onlyBody = (static_cast<std::uint64_t>(selected->index) << 32) | selected->generation;
+                DrawPhysicsDebug(*solver, collector, opts);
+            }
+        }
+        if (req.cameraRect && req.editorView && !req.playMode)
+        {
+            if (const auto cam = ActiveSceneCamera(reg, req.viewport))
+            {
+                const float aspect = (req.viewport.y > 0u)
+                    ? (float(req.viewport.x) / float(req.viewport.y)) : 1.0f;
+                const float hw = cam->halfHeight * aspect;
+                const float hh = cam->halfHeight;
+                const glm::vec2 c = cam->worldCenter;
+                const ViewTransform& ev = *req.editorView;
+                const glm::vec3 p[4] = {
+                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y - hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y - hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y + hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y + hh, 0.0f)),
+                };
+                bool finite = true;
+                for (const glm::vec3& q : p)
+                    finite = finite && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+                if (finite)
+                {
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        OverlayLine line{};
+                        line.a = glm::vec3(glm::vec2(p[i]), 0.0f);
+                        line.b = glm::vec3(glm::vec2(p[(i + 1) % 4]), 0.0f);
+                        line.thickness = 1.0f;
+                        line.color = req.cameraFrameColor;
+                        line.depth = OverlayDepthClass::AlwaysOnTop;
+                        line.space = OverlayColorSpace::Linear;
+                        line.screenSpace = true;
+                        packet.overlay.AddLine(line);
+                    }
+                }
+            }
+        }
+        packet.overlay.Append(req.gizmoPrims);
         return packet;
     }
 }

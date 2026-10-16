@@ -31,6 +31,8 @@
 
 #undef ERROR
 
+#include <Arcane/Render/RenderFramePacket.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -1482,22 +1484,59 @@ namespace Arcane
         // GATED ON CONTENT: a frame with no grid and an empty (or null) list
         // declares nothing, so the runtime's frame is unchanged.
         // ---------------------------------------------------------------
-        const bool wantOverlay = (shape.grid != nullptr) ||
-            (shape.overlay != nullptr &&
-             (!shape.overlay->prims.empty() || shape.overlay->hasGrid3d));
+        // A bound packet owns the overlay. FrameDesc's list, grid and world
+        // camera are the packet-less path (tests and any caller that does
+        // not extract).
+        const RenderFramePacket* packet = context ? context->Packet() : nullptr;
+        bool wantOverlay = false;
+        const OverlayPrimitiveList* overlayList = nullptr;
+        const GridSceneDesc* overlayGrid = nullptr;
+        const glm::mat4* worldVp = nullptr;
+        const glm::mat4* meshVp = nullptr;
+        glm::mat4 packetWorldVp{ 1.0f };
+        glm::mat4 packetMeshVp{ 1.0f };
+        glm::mat4 shapeMeshVp{ 1.0f };
+        if (packet)
+        {
+            wantOverlay = !packet->overlay.prims.empty() || packet->overlay.hasGrid3d;
+            overlayList = &packet->overlay;
+            overlayGrid = packet->overlay.hasGrid3d ? &packet->overlay.grid3d : nullptr;
+            packetWorldVp = packet->spriteView
+                ? packet->spriteView->view.ViewProjection()
+                : packet->viewProjection;
+            worldVp = &packetWorldVp;
+            if (packet->meshView)
+            {
+                packetMeshVp = packet->meshView->ViewProjection();
+                meshVp = &packetMeshVp;
+            }
+            else
+            {
+                // No mesh view: a null mesh VP cannot compare equal, so
+                // world-space primitives are not depth-tested.
+                meshVp = nullptr;
+            }
+        }
+        else
+        {
+            wantOverlay = (shape.grid != nullptr) ||
+                (shape.overlay != nullptr &&
+                 (!shape.overlay->prims.empty() || shape.overlay->hasGrid3d));
+            overlayList = shape.overlay;
+            overlayGrid = shape.grid;
+            worldVp = shape.overlayWorldViewProjection;
+            if (wantsMesh)
+            {
+                shapeMeshVp = shape.mesh->projection * shape.mesh->view;
+                meshVp = &shapeMeshVp;
+            }
+        }
         if (shape.world && wantOverlay)
         {
-            // THE CAMERAS (review ruling I2; OverlayNode.hpp, AddOverlayNode):
-            // world-space primitives project through the frame's world camera
-            // (the sprite/main view); they and the grid sample the mesh depth
-            // only when their camera IS the mesh camera below.
-            const glm::mat4 meshViewProjection =
-                wantsMesh ? shape.mesh->projection * shape.mesh->view : glm::mat4(1.0f);
             AddOverlayNode(graph, context, handles.backbuffer,
                            wantsMesh ? handles.depth : RgTexture{},
-                           shape.grid, shape.overlay, shape.canvasWidth, shape.canvasHeight,
-                           shape.overlayWorldViewProjection,
-                           wantsMesh ? &meshViewProjection : nullptr);
+                           overlayGrid, overlayList, shape.canvasWidth, shape.canvasHeight,
+                           worldVp, meshVp);
         }
 
         // ---------------------------------------------------------------

@@ -75,6 +75,7 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
 #include <Arcane/Render/RenderFramePacket.hpp>    // ImDrawSnapshot -- the packet's ImGui copy (F5 plan 1 Task 4)
 #include <Arcane/Render/ExtractFrame.hpp>         // ExtractFrame / ExtractRequest -- the registered-material witness (F5 plan 1 Task 5)
+#include <Arcane/Scene/PhysicsSystem.hpp>         // PhysicsWorld2D, Detail::Physics2D::Adopt / Access -- the extracted overlay witness
 #include <Arcane/Material/MaterialSource.hpp>     // BuildMaterialShaderSource / MaterialTemplateFile
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -127,6 +128,7 @@
 
 #include <array>        // the world quad's four corners (case 3b)
 #include <cstdint>
+#include <cmath>        // std::lround, std::abs -- the extracted-overlay sample
 #include <cstdlib>      // std::abs over the integer luma difference
 #include <cstring>      // std::memcmp -- the byte-exact instance-row check
 #include <filesystem>   // case 9's own temp artifact dir
@@ -2859,4 +2861,238 @@ TEST_CASE("extract keeps a registered sprite material on screen (vulkan)",
           "[gpu][extract][shadercompile][nri][vulkan]")
 {
     CheckExtractKeepsRegisteredMaterial(Arcane::GraphicsBackend::Vulkan);
+}
+
+namespace
+{
+    void CheckExtractedOverlayReachesTheBackbuffer(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ components };
+        Arcane::RegisterSceneComponents(reg);
+
+        Manifold2D::Physics::WorldDef wd;
+        wd.gravityX = Manifold2D::Physics::Real(0);
+        wd.gravityY = Manifold2D::Physics::Real(0);
+        reg.SetResource(Arcane::Detail::Physics2D::Adopt(
+            std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+        Manifold2D::Physics::PhysicsWorld& solver =
+            *Arcane::Detail::Physics2D::Access::Solver(*reg.GetResource<Arcane::PhysicsWorld2D>());
+        Manifold2D::Physics::BodyDef bd;
+        bd.type = Manifold2D::Physics::BodyType::Static;
+        bd.position = Manifold2D::Physics::Vec2(
+            Manifold2D::Physics::Real(15), Manifold2D::Physics::Real(6));
+        bd.shape = Manifold2D::Physics::MakeAabb(
+            Manifold2D::Physics::Real(1), Manifold2D::Physics::Real(1));
+        solver.AddBody(bd);
+
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { kW, kH };
+        req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 16.0f, req.viewport);
+        req.playMode = false;
+        req.showGrid2d = true;
+        req.gridMinorAlpha = 0.35f;
+        req.gridMajorAlpha = 0.55f;
+        req.gridLineRgb = { 0.5f, 0.5f, 0.5f };
+        req.gridLineThicknessPx = 8.0f;
+        req.gridMaxLinesPerAxis = 4096;
+        req.physicsDebug = true;
+        req.physicsWholeWorld = true;
+        req.cameraRect = false;
+        Arcane::OverlayLine gizmo{};
+        gizmo.a = { 4.0f, 10.0f, 0.0f };
+        gizmo.b = { 16.0f, 10.0f, 0.0f };
+        gizmo.color = { 0.0f, 0.0f, 1.0f, 1.0f };
+        gizmo.thickness = 8.0f;
+        gizmo.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+        gizmo.space = Arcane::OverlayColorSpace::DisplayReferred;
+        gizmo.screenSpace = true;
+        req.gizmoPrims.AddLine(gizmo);
+
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(reg, req, ring);
+        REQUIRE(packet.spriteView.has_value());
+        const glm::vec3 origin = packet.spriteView->view.WorldToScreen({ 0.0f, 0.0f, 0.0f });
+        CHECK(std::abs(origin.x - 80.0f) < 0.5f);
+        CHECK(std::abs(origin.y - 48.0f) < 0.5f);
+
+        const Arcane::OverlayLine* physics = nullptr;
+        float best = -1.0f;
+        for (const Arcane::OverlayPrimitive& prim : packet.overlay.prims)
+        {
+            if (prim.tag != Arcane::OverlayPrimitive::Tag::Line)
+                continue;
+            const Arcane::OverlayLine& line = prim.line;
+            if (!line.screenSpace || line.space != Arcane::OverlayColorSpace::Linear
+                || line.depth != Arcane::OverlayDepthClass::AlwaysOnTop)
+                continue;
+            const float len = glm::length(glm::vec2(line.b) - glm::vec2(line.a));
+            if (len > best)
+            {
+                best = len;
+                physics = &line;
+            }
+        }
+        REQUIRE(physics != nullptr);
+        const int px = (int)std::lround(0.5f * (physics->a.x + physics->b.x));
+        const int py = (int)std::lround(0.5f * (physics->a.y + physics->b.y));
+        REQUIRE((std::abs(px - 80) > 8 || std::abs(py - 20) > 8));
+        REQUIRE((std::abs(px - 10) > 8 || std::abs(py - 10) > 8));
+
+        Arcane::RenderFramePacket cleared = packet;
+        cleared.overlay.prims.clear();
+        cleared.overlay.hasGrid3d = false;
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+
+        PixelVehicle v = MakeVehicle(backend);
+        v.ctx->BindPacket(&packet);
+        RenderOne(*v.ctx, frame);
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> drawn;
+        REQUIRE(v.ctx->ReadCapture(w, h, drawn));
+
+        v.ctx->BindPacket(&cleared);
+        RenderOne(*v.ctx, frame);
+        std::uint32_t w2 = 0, h2 = 0;
+        std::vector<unsigned char> bare;
+        REQUIRE(v.ctx->ReadCapture(w2, h2, bare));
+        REQUIRE((w == kW && h == kH && w2 == w && h2 == h));
+
+        const Rgba gridOn = At(drawn, w, 80, 20);
+        const Rgba gridOff = At(bare, w, 80, 20);
+        CHECK((gridOn.r != gridOff.r || gridOn.g != gridOff.g || gridOn.b != gridOff.b));
+
+        const Rgba gizmoOn = At(drawn, w, 10, 10);
+        CHECK(gizmoOn.r == 0);
+        CHECK(gizmoOn.g == 0);
+        CHECK(gizmoOn.b == 255);
+        const Rgba gizmoOff = At(bare, w, 10, 10);
+        CHECK((!(gizmoOff.r == 0 && gizmoOff.g == 0 && gizmoOff.b == 255)));
+
+        bool physicsDiff = false;
+        const glm::ivec2 samples[5] = {
+            { px, py }, { px - 1, py }, { px + 1, py }, { px, py - 1 }, { px, py + 1 } };
+        for (const glm::ivec2 s : samples)
+        {
+            if (s.x < 0 || s.y < 0 || s.x >= (int)w || s.y >= (int)h)
+                continue;
+            const Rgba a = At(drawn, w, (std::uint32_t)s.x, (std::uint32_t)s.y);
+            const Rgba b = At(bare, w, (std::uint32_t)s.x, (std::uint32_t)s.y);
+            if (a.r != b.r || a.g != b.g || a.b != b.b)
+                physicsDiff = true;
+        }
+        CHECK(physicsDiff);
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+
+    // Packet-bound frames take both overlay matrices from the packet. Equal
+    // sprite and mesh views depth-test a world line; differing views do not.
+    void CheckPacketBoundDifferingViewWorldLine(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid cubeId{ 1, 1 };
+        GpuSceneWorld w;
+        w.AddMesh(cubeId, cube);
+        w.Spawn(glm::vec3(0.0f), cubeId);
+        w.Schedulers();
+
+        Arcane::MeshSceneDesc scene;
+        FillCamera(scene);
+        Arcane::ViewTransform meshView;
+        meshView.view       = scene.view;
+        meshView.projection = scene.projection;
+        meshView.viewport   = glm::uvec2{ kW, kH };
+
+        Arcane::VisibleSet vis;
+        Arcane::BuildVisibleSet(w.reg, meshView, vis);
+        Arcane::GpuSceneMirror mirror;
+        Arcane::GpuSceneFrame gpu;
+        Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, gpu.stage);
+        Arcane::BuildGpuSceneFrame(mirror, &vis, Arcane::MeshSectionRanges(w.reg.GetResource<Arcane::MeshTable>()), meshView, gpu);
+        for (Arcane::GpuInstance& row : gpu.stage.values)
+            row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+        scene.scene = &gpu;
+
+        Arcane::ViewTransform otherView = meshView;
+        otherView.projection = Arcane::PerspectiveProjection(kFovYDegrees + 1.0f,
+                                                             static_cast<float>(kW) / static_cast<float>(kH),
+                                                             kNearZ, kFarZ);
+        REQUIRE(meshView.ViewProjection() != otherView.ViewProjection());
+
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { kW, kH };
+        req.editorView = meshView;
+        Arcane::ExtractFrame(w.reg, req, ring);
+        Arcane::RenderFramePacket& packet = ring.Latest();
+        REQUIRE(packet.spriteView.has_value());
+        REQUIRE(packet.meshView.has_value());
+
+        Arcane::OverlayLine line{};
+        line.a = { -0.4f, 0.0f, -2.0f };
+        line.b = {  0.4f, 0.0f, -2.0f };
+        line.thickness = 0.5f;
+        line.depth = Arcane::OverlayDepthClass::DepthTested;
+        line.space = Arcane::OverlayColorSpace::DisplayReferred;
+        line.color = { 0.0f, 1.0f, 0.0f, 1.0f };
+        line.screenSpace = false;
+        packet.overlay.AddLine(line);
+
+        PixelVehicle v = MakeVehicle(backend);
+        v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.mesh = &scene;
+
+        auto centre = [&]() {
+            v.ctx->BindPacket(&packet);
+            RenderOne(*v.ctx, frame);
+            std::uint32_t width = 0, height = 0;
+            std::vector<unsigned char> rgba;
+            REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+            REQUIRE(width == kW);
+            REQUIRE(height == kH);
+            return At(rgba, kW, kW / 2u, kH / 2u);
+        };
+
+        packet.spriteView->view = meshView;
+        packet.meshView = meshView;
+        const Rgba hidden = centre();
+        CHECK(hidden.r > hidden.g + 60);
+
+        packet.spriteView->view = otherView;
+        packet.meshView = meshView;
+        REQUIRE(packet.spriteView->view.ViewProjection() != packet.meshView->ViewProjection());
+        const Rgba shown = centre();
+        CHECK(shown.g == 255);
+        CHECK(shown.r == 0);
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("extracted overlay reaches the backbuffer (d3d12)", "[gpu][pixel][overlay][nri][d3d12]")
+{
+    CheckExtractedOverlayReachesTheBackbuffer(Arcane::GraphicsBackend::D3D12);
+}
+TEST_CASE("extracted overlay reaches the backbuffer (vulkan)", "[gpu][pixel][overlay][nri][vulkan]")
+{
+    CheckExtractedOverlayReachesTheBackbuffer(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("packet-bound overlay draws a differing-view world line untested (d3d12)", "[gpu][pixel][overlay][nri][d3d12]")
+{
+    CheckPacketBoundDifferingViewWorldLine(Arcane::GraphicsBackend::D3D12);
+}
+TEST_CASE("packet-bound overlay draws a differing-view world line untested (vulkan)", "[gpu][pixel][overlay][nri][vulkan]")
+{
+    CheckPacketBoundDifferingViewWorldLine(Arcane::GraphicsBackend::Vulkan);
 }

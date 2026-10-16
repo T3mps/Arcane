@@ -15,6 +15,7 @@
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView
+#include <Arcane/Scene/PhysicsSystem.hpp>        // PhysicsWorld2D, Detail::Physics2D::Adopt / Access
 #include <Arcane/Scene/SceneCamera.hpp>          // ActiveSceneCamera, ActivePerspectiveSceneCamera
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -30,6 +31,7 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -400,4 +402,156 @@ TEST_CASE("extract publishes a pick drawable that survives a later edit", "[nri]
     const glm::vec3 corner = packet.pickDrawables[0].corners[0];
     world.reg.GetComponent<Arcane::Transform>(sprite)->position = { 30.0f, 30.0f, 0.0f };
     CHECK(packet.pickDrawables[0].corners[0] == corner);
+}
+
+TEST_CASE("overlay tags: grid is depth-tested linear, physics camera and gizmo are always on top", "[nri][extract]")
+{
+    World world;
+    world.AddOrthoCamera();
+    world.AddSprite({ 0.0f, 0.0f, 0.0f });
+    Arcane::TransformPropagationSystem{}(world.reg);
+
+    Manifold2D::Physics::WorldDef wd;
+    wd.gravityX = Manifold2D::Physics::Real(0);
+    wd.gravityY = Manifold2D::Physics::Real(0);
+    // PhysicsWorld2D owns the solver privately; tests adopt one (PhysicsPauseTest.cpp:25).
+    world.reg.SetResource(Arcane::Detail::Physics2D::Adopt(
+        std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+    Manifold2D::Physics::PhysicsWorld& solver =
+        *Arcane::Detail::Physics2D::Access::Solver(*world.reg.GetResource<Arcane::PhysicsWorld2D>());
+    Manifold2D::Physics::BodyDef bd;
+    bd.type = Manifold2D::Physics::BodyType::Static;
+    bd.position = Manifold2D::Physics::Vec2(Manifold2D::Physics::Real(0), Manifold2D::Physics::Real(0));
+    bd.shape = Manifold2D::Physics::MakeAabb(Manifold2D::Physics::Real(1), Manifold2D::Physics::Real(1));
+    solver.AddBody(bd);
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    req.showGrid2d = true;
+    req.gridMinorAlpha = 0.35f;
+    req.gridMajorAlpha = 0.55f;
+    req.gridLineRgb = { 0.5f, 0.5f, 0.5f };
+    req.gridLineThicknessPx = 1.0f;
+    req.gridMaxLinesPerAxis = 4096;
+    req.physicsDebug = true;
+    req.physicsWholeWorld = true;
+    req.cameraRect = true;
+    Arcane::OverlayLine gizmo{};
+    gizmo.a = { 0.0f, 0.0f, 0.0f };
+    gizmo.b = { 10.0f, 0.0f, 0.0f };
+    gizmo.color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    gizmo.thickness = 1.0f;
+    gizmo.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+    gizmo.space = Arcane::OverlayColorSpace::DisplayReferred;
+    gizmo.screenSpace = true;
+    req.gizmoPrims.AddLine(gizmo);
+
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    bool sawGrid = false;
+    bool sawGizmo = false;
+    bool sawScreenLinear = false;
+    for (const Arcane::OverlayPrimitive& prim : packet.overlay.prims)
+    {
+        if (prim.tag != Arcane::OverlayPrimitive::Tag::Line)
+            continue;
+        const Arcane::OverlayLine& line = prim.line;
+        if (line.space == Arcane::OverlayColorSpace::Linear &&
+            line.depth == Arcane::OverlayDepthClass::DepthTested &&
+            line.screenSpace == false)
+            sawGrid = true;
+        if (line.space == Arcane::OverlayColorSpace::DisplayReferred)
+        {
+            sawGizmo = true;
+            CHECK(line.depth == Arcane::OverlayDepthClass::AlwaysOnTop);
+            CHECK(line.screenSpace == true);
+        }
+        if (line.space == Arcane::OverlayColorSpace::Linear &&
+            line.depth == Arcane::OverlayDepthClass::AlwaysOnTop &&
+            line.screenSpace == true)
+            sawScreenLinear = true;
+    }
+    CHECK(sawGrid);
+    CHECK(sawGizmo);
+    CHECK(sawScreenLinear);
+}
+
+TEST_CASE("a selected body outlines only that body", "[nri][extract]")
+{
+    World world;
+    Manifold2D::Physics::WorldDef wd;
+    wd.gravityX = Manifold2D::Physics::Real(0);
+    wd.gravityY = Manifold2D::Physics::Real(0);
+    world.reg.SetResource(Arcane::Detail::Physics2D::Adopt(
+        std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd)));
+    Arcane::PhysicsWorld2D& physics = *world.reg.GetResource<Arcane::PhysicsWorld2D>();
+    Manifold2D::Physics::PhysicsWorld& solver = *Arcane::Detail::Physics2D::Access::Solver(physics);
+    auto addBox = [&](float x)
+    {
+        Manifold2D::Physics::BodyDef bd;
+        bd.type = Manifold2D::Physics::BodyType::Static;
+        bd.position = Manifold2D::Physics::Vec2(Manifold2D::Physics::Real(x), Manifold2D::Physics::Real(0));
+        bd.shape = Manifold2D::Physics::MakeAabb(Manifold2D::Physics::Real(1), Manifold2D::Physics::Real(1));
+        const Astra::Entity e = world.reg.CreateEntity();
+        Arcane::Detail::Physics2D::Access::Entities(physics)[e] = solver.AddBody(bd);
+        return e;
+    };
+    const Astra::Entity left = addBox(-6.0f);
+    addBox(6.0f);
+    // The Play rows render through the scene camera: the same 3 px/m framing
+    // (orthographicSize is the half-height, SceneCamera.hpp:86).
+    world.AddOrthoCamera();
+    world.reg.GetComponent<Arcane::Camera>(world.root)->orthographicSize = 16.0f;
+
+    // Physics lines are the screen-space, linear, always-on-top lines: no grid,
+    // no camera rect, and no gizmo are requested here.
+    auto sides = [&](std::optional<Astra::Entity> selected, bool wholeWorld, bool play = false)
+    {
+        Arcane::PacketRing ring;
+        Arcane::ExtractRequest req;
+        req.viewport = { 160u, 96u };
+        req.playMode = play;
+        if (!play)
+            req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 16.0f, req.viewport);
+        req.physicsDebug = true;
+        req.physicsWholeWorld = wholeWorld;
+        req.physicsSelectedBody = selected;
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        int leftLines = 0;
+        int rightLines = 0;
+        for (const Arcane::OverlayPrimitive& prim : packet.overlay.prims)
+        {
+            if (prim.tag != Arcane::OverlayPrimitive::Tag::Line)
+                continue;
+            const Arcane::OverlayLine& line = prim.line;
+            if (!line.screenSpace || line.space != Arcane::OverlayColorSpace::Linear
+                || line.depth != Arcane::OverlayDepthClass::AlwaysOnTop)
+                continue;
+            if (0.5f * (line.a.x + line.b.x) < 80.0f)
+                ++leftLines;
+            else
+                ++rightLines;
+        }
+        return std::pair<int, int>{ leftLines, rightLines };
+    };
+
+    const auto [selectedLeft, selectedRight] = sides(left, false);
+    CHECK(selectedLeft > 0);
+    CHECK(selectedRight == 0);
+    const auto [noneLeft, noneRight] = sides(std::nullopt, false);
+    CHECK(noneLeft == 0);
+    CHECK(noneRight == 0);
+    const auto [allLeft, allRight] = sides(std::nullopt, true);
+    CHECK(allLeft > 0);
+    CHECK(allRight > 0);
+    // Play: the toggled whole-world overlay still draws, with no editor camera;
+    // a selection alone draws nothing (PlanPhysicsOverlay's Edit-only outline).
+    const auto [playAllLeft, playAllRight] = sides(std::nullopt, true, true);
+    CHECK(playAllLeft > 0);
+    CHECK(playAllRight > 0);
+    const auto [playSelLeft, playSelRight] = sides(left, false, true);
+    CHECK(playSelLeft == 0);
+    CHECK(playSelRight == 0);
 }

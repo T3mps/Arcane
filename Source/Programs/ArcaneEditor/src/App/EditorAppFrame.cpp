@@ -19,7 +19,6 @@
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
-#include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
@@ -54,7 +53,6 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
-#include <Arcane/Render/OverlayBatchCollector.hpp>   // Batcher2D producers -> overlay primitives (F5 plan 1 T3)
 #include <Arcane/Host/GpuSceneHost.hpp>   // GpuSceneInvalidate (R-F) after a viewport frame that did not present
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -63,11 +61,9 @@
 #include <Arcane/Render/ExtractFrame.hpp>   // ExtractFrame / ExtractRequest -- the viewport frame's one extract (F5 plan 1 Task 5)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
-#include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsWorld2D (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
 #include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
@@ -87,7 +83,6 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
 #include <cstdint>
 #include <cstdio>      // std::snprintf (the Rename modal's prefill)
 #include <filesystem>
@@ -1756,7 +1751,20 @@ namespace Arcane::Editor
             // and the drained batch is copied into this frame's packet, which
             // the batch node draws instead of draining `b` again. Bound just
             // before RenderFrameOffscreen below, which unbinds it on return.
-            const Arcane::ExtractRequest extractReq = BuildExtractRequest(w, h);
+            Arcane::ExtractRequest extractReq = BuildExtractRequest(w, h);
+            // The 3D grid is viewport chrome only. The scene-save cover calls
+            // BuildExtractRequest and does not reach this block.
+            if (!InPlayMode() && m_camera.mode == ViewMode::Perspective
+                && Arcane::Settings<EditorViewportSettings>().showGrid)
+            {
+                extractReq.showGrid3d = true;
+                extractReq.grid3d = MakeGridScene(Arcane::Settings<EditorGridSettings>(),
+                                                  Arcane::Settings<EditorGrid3DSettings>());
+                extractReq.grid3d.view = m_runtime->View();
+                extractReq.grid3d.SetPlane(Arcane::Settings<EditorViewportSettings>().gridPlane == GridPlane::XY
+                                               ? Arcane::GridSceneDesc::Plane::XY
+                                               : Arcane::GridSceneDesc::Plane::XZ);
+            }
             const Arcane::RenderFramePacket& packet =
                 Arcane::ExtractFrame(m_runtime->Registry(), extractReq, m_packetRing);
             // The shutdown report reads this member. The graph borrows
@@ -1922,10 +1930,8 @@ namespace Arcane::Editor
         // requested, and this frame just ends here without a fault.
     }
 
-    // The scene submission plus the two Edit-mode overlays, against whichever
-    // batcher the caller hands in. Kept as its own function so the ORDER of
-    // these statements is stated in one place -- every overlay's position
-    // relative to the scene submission is part of the contract.
+    // The scene-batcher setup. Overlays are filled by ExtractFrame from
+    // the request BuildExtractRequest returns.
     void EditorApp::SubmitSceneToBatcher(Arcane::Batcher2D& b)
     {
         // Globals for registered sprite materials (Time/Delta/
@@ -1938,162 +1944,52 @@ namespace Arcane::Editor
 
         // The frame's view-projection for the WORLD-space spans (F4 plan 1
         // T5): sprites submit world METRES through QuadWorld/CircleWorld and
-        // the vertex shader projects them, so the batcher needs the same view
-        // the overlay and the gizmo below read. Sticky within this Begin()
-        // bracket only -- both callers (the viewport frame and the capture
-        // re-Begin) reach this line right after their Begin.
+        // the vertex shader projects them. ExtractSprites overwrites it from
+        // the sprite view; SetGlobals still has to happen before that sweep.
+        // Sticky within this Begin() bracket only -- both callers (the
+        // viewport frame and the capture re-Begin) reach this line right
+        // after their Begin.
         b.SetViewProjection(m_runtime->View().ViewProjection());
-
-        // THE POST-TONEMAP OVERLAY (F5 plan 1 Task 3): the 2D grid, physics
-        // debug and the camera rect no longer go into the scene batcher. Each
-        // is collected through an OverlayBatchCollector into m_overlayPrims,
-        // which ArmGraphViewportFrame hands to the graph's overlay node.
-        // Cleared here, so it lives until the next submission.
-        m_overlayPrims.Clear();
-
-        // The 2D reference grid (F4 plan 1 T9, spec s5.1), FIRST and at the
-        // BOTTOM batcher layer (0, 0) so every sprite paints over it: decade
-        // levels on the metre, chosen from this frame's pixels-per-metre and
-        // clipped to the view's own world rect (ViewportGrid.hpp). Edit mode,
-        // the 2D view mode and the Show grid setting gate it; the Persp view's
-        // grid is Task 10's depth-tested GridNode, not these lines. In Play
-        // the view is the scene camera's and the grid is an editor affordance,
-        // so it stays off.
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
-            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
-        {
-            // Into the overlay, DepthTested: DrawGrid2D projects each world
-            // segment to pixels, so the lines land screenSpace with z = 0 (the
-            // near plane -- no mesh occludes them in this interim; Task 9
-            // replaces them with world-space lines).
-            const Arcane::ViewTransform& view = m_runtime->View();
-            Arcane::OverlayBatchCollector grid(m_overlayPrims, Arcane::OverlayDepthClass::DepthTested);
-            Arcane::Editor::DrawGrid2D(grid, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
-        }
 
         // The batcher the sprite sweep submits into, published for the
         // caller's ExtractFrame, which runs that sweep once (F5 plan 1 Task 5).
         m_runtime->SetRenderContext(&b);
-
-        // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3), drawn AFTER
-        // the sprites and BEFORE the gizmo, through the SAME camera and the
-        // SAME interp buffer + alpha the sprites used, so overlay and sprite
-        // agree to the bit. The decision is PlanPhysicsOverlay (pure, tested).
-        {
-            Astra::Registry& reg = m_runtime->Registry();
-            const Arcane::PhysicsWorld2D* phys = reg.GetResource<Arcane::PhysicsWorld2D>();
-            std::optional<Manifold2D::Physics::BodyHandle> selectedBody;
-            // entityToBody (a plain Arcane-level map), not Arcane::PhysicsBodyRef2D +
-            // PhysicsWorld::IsValid: ArcaneEditor.exe does not link Manifold2D
-            // (physics logic lives inside Arcane.dll only, same boundary the
-            // NRI include-only comment above documents) -- a direct call into
-            // an out-of-line PhysicsWorld method here is an unresolved symbol.
-            if (m_selection.HasSelection() && phys)
-                if (auto it = Arcane::Detail::Physics2D::Access::Entities(*phys).find(m_selection.Primary()); it != Arcane::Detail::Physics2D::Access::Entities(*phys).end())
-                    selectedBody = it->second;
-            const Arcane::Editor::PhysicsOverlayPlan plan =
-                Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
-            // The overlay draws in pixels through the view's Affine2D (F4 plan 1
-            // T3): no context, or a view with no per-axis affine (perspective,
-            // Task 7), skips the overlay this frame.
-            const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
-            const std::optional<Arcane::Affine2D> overlayAffine =
-                ctx ? ctx->view.AsAffine2D() : std::nullopt;
-            if (plan.draw && phys && Arcane::Detail::Physics2D::Access::Solver(*phys) && overlayAffine)
-            {
-                Arcane::PhysicsDebugDrawOptions2D opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
-                opts.view   = *overlayAffine;
-                opts.alpha  = ctx->alpha;
-                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
-                opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
-                opts.contacts   = plan.wholeWorld;
-                if (!plan.wholeWorld && selectedBody)
-                    opts.onlyBody = (static_cast<std::uint64_t>(selectedBody->index) << 32) | selectedBody->generation;
-                // Into the overlay, AlwaysOnTop (above the grid), already pixels.
-                Arcane::OverlayBatchCollector debug(m_overlayPrims);
-                Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), debug, opts);
-            }
-        }
-
-        // Transform gizmo, drawn AFTER the scene submit so it renders on
-        // top. Frame ordering guarantees the input block above already ran
-        // this frame, so m_gizmoHovered/m_gizmoDrag and the live
-        // Transform read here are current. Edit-mode + has-selection
-        // only (mirrors the interaction gate; no viewport-hover requirement
-        // here -- the gizmo should stay visible while e.g. the mouse is over
-        // the Inspector, just not be interactable there).
-        // Camera rect: what the scene camera will actually capture, drawn
-        // in the EDIT view so framing is authorable without guessing (the
-        // affordance Unity's camera gizmo provides). Edit mode only -- in
-        // Play the view IS the camera, so a rect would just trace the
-        // viewport border.
-        //
-        // Asked for at the camera's OWN aspect (the viewport's), then drawn
-        // through the EDITOR's view: ActiveSceneCamera reports the authored
-        // worldCenter/halfHeight precisely so a caller can draw the camera
-        // instead of looking through it. The four WORLD corners go through
-        // ViewTransform::WorldToScreen (F4 plan 1 T3), which works in both
-        // view modes; a corner that projects to a non-finite pixel (behind a
-        // perspective eye) skips the rect for the frame.
-        if (!InPlayMode())
-        {
-            const glm::uvec2 vp{ ViewportWidth(), ViewportHeight() };
-            if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vp))
-            {
-                const float aspect = (vp.y > 0u) ? (float(vp.x) / float(vp.y)) : 1.0f;
-                const float hw = cam->halfHeight * aspect;
-                const float hh = cam->halfHeight;
-                const glm::vec2 c = cam->worldCenter;
-                const Arcane::ViewTransform& ev = m_runtime->View();
-                const glm::vec3 p[4] = {
-                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y - hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y - hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y + hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y + hh, 0.0f)),
-                };
-                bool finite = true;
-                for (const glm::vec3& q : p)
-                    finite = finite && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
-                if (finite)
-                {
-                    // A thin desaturated line stays legible over both bright and
-                    // dark scene content without competing with the selection
-                    // outline or the gizmo axes. (Dashed would read better still,
-                    // but the batcher has no dash primitive.)
-                    // editor.theme.viewport.cameraFrame (settings S6-26).
-                    static const EditorThemeViewportSettings kVpDefaults{};
-                    const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
-                                                            kVpDefaults.cameraFrame, kCameraFrameColor);
-                    const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
-                    // Into the overlay, AlwaysOnTop; the corners are pixels.
-                    Arcane::OverlayBatchCollector rect(m_overlayPrims);
-                    for (int i = 0; i < 4; ++i)
-                        rect.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
-                }
-            }
-        }
-
-        // The gizmo is NOT drawn into the scene batcher (F4 plan 2, desk
-        // finding 2026-09-18): the scene batch is painted before the mesh
-        // pass, so a gizmo in it vanished inside any mesh covering its
-        // handles. Since F5 plan 1 Task 3 it is a post-tonemap overlay
-        // primitive set, built by BuildGizmoOverlayPrims before this frame's
-        // render and appended LAST. The overlay keeps submission order within
-        // a depth class, and every gizmo primitive is AlwaysOnTop, so the
-        // gizmo paints over the other always-on-top primitives (physics debug,
-        // the camera rect) and its own fills stay under its own bars.
-        m_overlayPrims.Append(m_gizmoPrims);
     }
 
     Arcane::ExtractRequest EditorApp::BuildExtractRequest(std::uint32_t w, std::uint32_t h)
     {
         Arcane::ExtractRequest req;
         req.viewport = { w, h };
+        req.playMode = InPlayMode();
         // Edit mode draws through the editor camera; Play leaves it empty, so
         // extract resolves the scene camera itself.
         if (!InPlayMode())
             req.editorView = m_runtime->View();
         req.device = m_viewportTargets.graph ? m_viewportTargets.graph->Scene() : nullptr;
+
+        // The 2D grid, physics debug, the camera rect and the gizmo. The 3D
+        // grid is NOT here: only the viewport frame arms it (the scene-save
+        // cover shares this builder and has never drawn that grid).
+        const EditorGridSettings& grid = Arcane::Settings<EditorGridSettings>();
+        req.showGrid2d = !InPlayMode() && m_camera.mode == ViewMode::TwoD
+            && Arcane::Settings<EditorViewportSettings>().showGrid;
+        req.gridMinorAlpha = grid.minorAlpha;
+        req.gridMajorAlpha = grid.majorAlpha;
+        req.gridLineRgb = glm::vec3(grid.lineColor.r, grid.lineColor.g, grid.lineColor.b);
+        req.gridLineThicknessPx = grid.lineThickness;
+        req.gridMaxLinesPerAxis = static_cast<std::int64_t>(grid.maxLinesPerAxis);
+        req.gridAxisX = kGridAxisXColor;
+        req.gridAxisY = kGridAxisYColor;
+        req.physicsDebug = true;
+        req.physicsWholeWorld = m_physicsOverlay;
+        if (m_selection.HasSelection())
+            req.physicsSelectedBody = m_selection.Primary();
+        req.cameraRect = !InPlayMode();
+        static const EditorThemeViewportSettings kVpDefaults{};
+        const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
+                                                kVpDefaults.cameraFrame, kCameraFrameColor);
+        req.cameraFrameColor = glm::vec4(frame.x, frame.y, frame.z, frame.w);
+        req.gizmoPrims = m_gizmoPrims;
         return req;
     }
 
@@ -2224,44 +2120,6 @@ namespace Arcane::Editor
         // the field null" mechanism vp.gameUi just used above.
         if (!m_meshScene.Empty())
             vp.mesh = &m_meshScene;
-
-        // ---- F4 plan 1 T10's content: the 3D reference grid ----------------
-        // EDITOR CHROME, gated three ways: Edit mode (an editor affordance,
-        // never the game's picture), the PERSPECTIVE view mode (the 2D view's
-        // grid is the batched ViewportGrid lines drawn in SubmitSceneToBatcher
-        // -- one grid per view mode, never both), and the Show grid setting.
-        // The plane is the view setting; SetPlane also picks the V-axis
-        // colour spec s5.2 pairs with it (Z blue on XZ, Y green on XY). The
-        // camera is the SAME ViewTransform the sprites, the mesh pass and the
-        // gizmo just used, so the grid sits under the meshes to the pixel.
-        // Nothing here reaches the pick chain below: the grid is canvas
-        // content only (GridNode.hpp).
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
-            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
-        {
-            // The tunables are editor.viewport.grid.* / grid3D.* (settings
-            // S6-21), rebuilt every frame so a Live edit lands next frame.
-            m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
-                                                        Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
-            m_gridScene.view = m_runtime->View();
-            m_gridScene.SetPlane(Arcane::Settings<Arcane::Editor::EditorViewportSettings>().gridPlane == Arcane::Editor::GridPlane::XY
-                                     ? Arcane::GridSceneDesc::Plane::XY
-                                     : Arcane::GridSceneDesc::Plane::XZ);
-            vp.grid = &m_gridScene;
-        }
-
-        // ---- F5 plan 1 T3: the post-tonemap overlay ----------------------
-        // The 2D grid, physics debug, the camera rect and the gizmo, collected
-        // by SubmitSceneToBatcher (called from RenderSceneToViewport just
-        // before this function). UNCONDITIONAL, above the pick chain's early
-        // return; an empty list declares no overlay node.
-        vp.overlay = &m_overlayPrims;
-        // The overlay's WORLD camera is the sprite/main view -- the same
-        // view-projection SubmitSceneToBatcher hands the scene batcher
-        // (review ruling I2). Task 9 takes it from the packet's sprite view
-        // instead. In Edit mode it equals the mesh camera (m_meshView is
-        // m_runtime->View() there), so depth-tested world primitives test.
-        vp.overlayWorldViewProjection = m_runtime->View().ViewProjection();
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // THE HOVER GOES THROUGH HoverLive(), not m_gameUi.inViewport

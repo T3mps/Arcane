@@ -314,13 +314,9 @@ namespace Arcane::Editor
         void RefreshSceneResolution();
         void RenderSceneToViewport();
         // The scene's 2D submission SETUP -- globals, view-projection and the
-        // render context; the sprite sweep itself runs in the caller's
-        // ExtractFrame (F5 plan 1 Task 5) -- plus the Edit-mode overlays
-        // (the scene-camera rect and the transform gizmo), against
-        // whichever batcher the caller hands in -- in practice the
-        // device-less GpuContext batcher RenderSceneToViewport Begin()s
-        // itself. Contains no target, no command list and no device, which is
-        // what keeps the ORDER of its statements the whole of its contract.
+        // render context. The sprite sweep and the overlays run in the
+        // caller's ExtractFrame (F5 plan 1 Tasks 5 and 9). Contains no
+        // target, no command list and no device.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
         // THE EXTRACT REQUEST (F5 plan 1 Task 5) for a w x h frame -- the ONE
         // builder, so the viewport frame and the scene-save cover ask for the
@@ -332,7 +328,7 @@ namespace Arcane::Editor
         // view as this frame's hit-test, in viewport pixels (image origin),
         // AlwaysOnTop + DisplayReferred. Called from MainLoop immediately
         // BEFORE RenderSceneToViewport, so the gizmo is not a frame late;
-        // SubmitSceneToBatcher appends the result to m_overlayPrims.
+        // BuildExtractRequest copies the result onto the extract request.
         void BuildGizmoOverlayPrims();
         // Phase 11's CPU HALF: the game context's
         // per-frame input, and -- in Play, with a plugin that draws one --
@@ -1421,19 +1417,9 @@ namespace Arcane::Editor
         // that outlives the function that fills it.
         Arcane::MeshSceneDesc m_meshScene;
 
-        // THIS FRAME'S 3D REFERENCE GRID (F4 plan 1 T10, spec s5.2) -- a
-        // member for exactly m_meshScene's reason: FrameDesc::grid is a
-        // POINTER read by RenderFrameOffscreen after ArmGraphViewportFrame
-        // (which fills it) has returned.
-        Arcane::GridSceneDesc m_gridScene;
-
-        // THIS FRAME'S POST-TONEMAP OVERLAY (F5 plan 1 Task 3): the 2D grid,
-        // physics debug and the camera rect that SubmitSceneToBatcher collects,
-        // plus the gizmo's primitives. A member for m_gridScene's reason
-        // (FrameDesc::overlay is a pointer read after ArmGraphViewportFrame
-        // returns); alive until the next SubmitSceneToBatcher clears it.
-        Arcane::OverlayPrimitiveList m_overlayPrims;
-        // The gizmo's primitives, rebuilt by BuildGizmoOverlayPrims each frame.
+        // The gizmo's primitives, rebuilt by BuildGizmoOverlayPrims each frame
+        // and copied onto the extract request. The packet owns the overlay
+        // the graph draws.
         Arcane::OverlayPrimitiveList m_gizmoPrims;
 
         // THE EXTRACT STAGE'S PACKETS (F5 plan 1 Task 5): the viewport frame
