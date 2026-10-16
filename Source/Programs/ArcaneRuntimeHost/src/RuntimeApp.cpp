@@ -14,6 +14,8 @@
 #if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
+#include <Arcane/Base/ExtractAccounting.hpp>  // ExtractFrameCallCount (the extract-frames witness line)
+#include <cstdio>   // fprintf/fflush for that line
 #endif
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
 #include <Arcane/Assets/ImageCompare.hpp>   // Arcane::CompareImages/ImageCompareOptions (Task 8: --compare)
@@ -1237,6 +1239,12 @@ void RuntimeApp::ShutdownGraphPath()
     // (run identity + whatever AddCensus below always contributes), and a
     // bare `--probe` with no `--report` intentionally writes nothing -- there
     // is nowhere for it to go.
+    // Witness line for the extract counter. Outside the reportPath guard, so a
+    // --headless run with no --report still prints it. fprintf, not ARC_INFO,
+    // so the line is byte-exact. A package never compiles this region.
+    std::fprintf(stdout, "extract-frames: %llu\n",
+                 static_cast<unsigned long long>(Arcane::ExtractFrameCallCount()));
+    std::fflush(stdout);
     if (!m_config.reportPath.empty())
     {
         const bool completedAllFrames =
