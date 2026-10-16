@@ -117,7 +117,7 @@ namespace Arcane
         // The default (identity matrices, viewport 0) is a host that never pushed
         // a view: it has no Affine2D (AsAffine2D() is nullopt), so the pixel
         // overlays skip drawing; sprites are world quads (F4 plan 1 T5) and draw
-        // through the identity view-projection. RuntimeApp warns when no scene
+        // through the identity view-projection. ExtractFrame warns when no scene
         // camera exists.
         class Batcher2D* batcher = nullptr;   // set by the host between Begin and Drain
         ViewTransform    view{};

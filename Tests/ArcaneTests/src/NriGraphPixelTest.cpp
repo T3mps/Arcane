@@ -788,6 +788,63 @@ namespace
 
         CHECK(Arcane::RenderErrorCount() == before);
     }
+
+    std::vector<unsigned char> CaptureBoundSelection(
+        PixelVehicle& v, const Arcane::RenderFramePacket* packet,
+        std::span<const Arcane::PickDrawable> drawables,
+        std::span<const std::uint32_t> frameSelected,
+        std::uint32_t& w, std::uint32_t& h)
+    {
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture     = true;
+        frame.pickOutline = true;
+        frame.pickables   = drawables;
+        frame.pickView    = PixelIdentityView();
+        frame.selectedIds = frameSelected;
+        frame.hoverPixel  = glm::ivec2(-1, -1);
+        if (packet)
+            v.ctx->BindPacket(packet);
+        RenderOne(*v.ctx, frame);
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        return rgba;
+    }
+
+    void CheckPacketSelectionDrawsTheOutline(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+        Arcane::NriGraphContext::NodeSet nodes;
+        nodes.pickOutline = true;
+
+        const Arcane::PickDrawable quad = WorldQuadAtPixel({ 60.0f, 40.0f }, { 20.0f, 14.0f });
+        Arcane::RenderFramePacket fromPacket;
+        fromPacket.pickDrawables.push_back(quad);
+        fromPacket.selectedIds = { 1u };
+        Arcane::RenderFramePacket fromFrameIgnored;
+        fromFrameIgnored.pickDrawables.push_back(quad);
+
+        std::uint32_t wP = 0, hP = 0, wF = 0, hF = 0, wB = 0, hB = 0;
+        std::vector<unsigned char> packetPx, framePx, baseline;
+        {
+            PixelVehicle v = MakeVehicle(backend, nodes);
+            packetPx = CaptureBoundSelection(v, &fromPacket, fromPacket.pickDrawables, {}, wP, hP);
+        }
+        {
+            PixelVehicle v = MakeVehicle(backend, nodes);
+            const std::uint32_t selected[] = { 1u };
+            framePx = CaptureBoundSelection(v, &fromFrameIgnored, fromFrameIgnored.pickDrawables, selected, wF, hF);
+        }
+        {
+            PixelVehicle v = MakeVehicle(backend, nodes);
+            const Arcane::PickDrawable drawables[] = { quad };
+            baseline = CaptureBoundSelection(v, nullptr, drawables, {}, wB, hB);
+        }
+        REQUIRE((wP == wB && hP == hB && wF == wB && hF == hB));
+        CHECK(DifferingTexels(packetPx, baseline, wB, hB) > 40u);
+        CHECK(DifferingTexels(framePx, baseline, wB, hB) == 0u);
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
 }
 
 TEST_CASE("outline: the JFA traces the selected silhouette and nothing when the selection is empty (d3d12)",
@@ -800,6 +857,16 @@ TEST_CASE("outline: the JFA traces the selected silhouette and nothing when the 
           "[gpu][pixel][outline][nri][vulkan]")
 {
     CheckSelectionOutlineTracesOnlyTheSelection(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("packet selection draws the outline (d3d12)", "[gpu][pixel][pick][nri][d3d12]")
+{
+    CheckPacketSelectionDrawsTheOutline(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("packet selection draws the outline (vulkan)", "[gpu][pixel][pick][nri][vulkan]")
+{
+    CheckPacketSelectionDrawsTheOutline(Arcane::GraphicsBackend::Vulkan);
 }
 
 // ---------------------------------------------------------------------------

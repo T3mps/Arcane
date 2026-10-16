@@ -2305,8 +2305,8 @@ namespace Arcane::Editor
         // through the ViewTransform handed over below, so they register
         // pixel-for-pixel with what was drawn in EVERY view mode. The k-th
         // entry IS hit-proxy id k+1.
-        m_pickDrawables.clear();
-        Arcane::CollectPickables(m_runtime->Registry(), m_pickDrawables);
+        Arcane::RenderFramePacket& published = m_packetRing.Latest();
+        m_pickDrawables = published.pickDrawables;
 
         // Every selected entity that made it into THIS frame's id pass, over
         // the same drawables that were just handed to the pick node rather
@@ -2320,18 +2320,18 @@ namespace Arcane::Editor
             m_pickSelectedIds.reserve(m_selection.Count());
             for (Astra::Entity e : m_selection.Entities())
             {
-                const std::uint32_t id = Arcane::PickPassIdOf(m_pickDrawables, e);
+                const std::uint32_t id = Arcane::PickPassIdOf(published.pickDrawables, e);
                 if (id != 0u)
                     m_pickSelectedIds.push_back(id);
             }
         }
+        published.selectedIds = m_pickSelectedIds;
 
         vp.pickOutline = true;
-        vp.pickables   = m_pickDrawables;
+        vp.pickables   = published.pickDrawables;
         // The same ViewTransform the sprites, the mesh pass and the gizmo just
         // used -- Edit: the editor camera; Play: the scene camera SetView pushed.
         vp.pickView    = m_runtime->View();
-        vp.selectedIds = m_pickSelectedIds;
         // The HOVER cursor: the viewport-local pointer when it is over the
         // viewport, and the (-1,-1) "no hover" sentinel otherwise -- including
         // in Play, where the outline must not light anything.

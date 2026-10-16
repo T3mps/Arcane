@@ -380,3 +380,24 @@ TEST_CASE("an editorView is the world view and is not replaced by a scene camera
     CHECK(packet.spriteView->worldCenter == glm::vec2(0.0f));
     CHECK(scene->worldCenter != packet.spriteView->worldCenter);
 }
+
+TEST_CASE("extract publishes a pick drawable that survives a later edit", "[nri][extract]")
+{
+    World world;
+    Astra::Entity sprite = world.AddSprite({ 1.0f, 2.0f, 0.0f });
+    Arcane::TransformPropagationSystem{}(world.reg);
+    // BuildVisibleSet only inserts entities that already have WorldBounds,
+    // and CollectPickables culls sprites against that set.
+    Arcane::BoundsSystem{}(world.reg);
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 4.0f, req.viewport);
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+
+    REQUIRE(packet.pickDrawables.size() == 1u);
+    CHECK(packet.pickDrawables[0].entity == sprite);
+    const glm::vec3 corner = packet.pickDrawables[0].corners[0];
+    world.reg.GetComponent<Arcane::Transform>(sprite)->position = { 30.0f, 30.0f, 0.0f };
+    CHECK(packet.pickDrawables[0].corners[0] == corner);
+}

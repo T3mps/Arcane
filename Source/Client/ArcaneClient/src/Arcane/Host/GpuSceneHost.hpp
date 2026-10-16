@@ -7,8 +7,8 @@
 // call into ExtractFrame; this function stays for the tests that already call it.
 //
 // TWO VIEWS when they differ: in Play the sprites draw with View() (the scene
-// camera's orthographic view) while the mesh pass draws with the perspective
-// scene camera (RuntimeFrame.cpp's ActivePerspectiveSceneCamera). Each pass
+// camera's orthographic view) while the mesh pass draws with packet.meshView,
+// the perspective scene camera ExtractFrame resolved. Each pass
 // culls against its own camera: views[0] = main, views[1] = mesh. F5 unifies
 // the two passes under one view; until then the second set is the honest one.
 //

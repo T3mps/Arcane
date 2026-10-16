@@ -646,8 +646,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // an offscreen context declines to arm the fixed probe pixel.
     if (io.config.pickProbe)
     {
-        io.pickDrawables.clear();
-        Arcane::CollectPickables(io.runtime->Registry(), io.pickDrawables);
+        io.pickDrawables = packet.pickDrawables;
 
         // THE SCRIPTED SELECTION -- a stand-in for the editor selection
         // this host does not have: the FIRST pickable entity in the
@@ -658,9 +657,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
             io.pickSelectedIds.push_back(1u);
 
         graphFrame.pickOutline = true;
-        graphFrame.pickables   = io.pickDrawables;
+        graphFrame.pickables   = packet.pickDrawables;
         graphFrame.pickView    = io.runtime->View();
-        graphFrame.selectedIds = io.pickSelectedIds;
+        if (!packet.pickDrawables.empty())
+            io.packetRing.Latest().selectedIds = { 1u };
     }
 #endif
 
@@ -696,11 +696,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes);
         if (pickSpec)
         {
-            io.pickDrawables.clear();
-            Arcane::CollectPickables(io.runtime->Registry(), io.pickDrawables);
+            io.pickDrawables = packet.pickDrawables;
 
             graphFrame.pickOutline = true;
-            graphFrame.pickables   = io.pickDrawables;
+            graphFrame.pickables   = packet.pickDrawables;
             graphFrame.pickView    = io.runtime->View();   // the scene camera, as above
             graphFrame.pickPixel   = glm::ivec2(pickSpec->x, pickSpec->y);
             // selectedIds left empty (default): this probe reports FACTS, not

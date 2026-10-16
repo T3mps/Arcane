@@ -18,6 +18,7 @@
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/RenderFramePacket.hpp>   // Packet()->selectedIds (the header only forward-declares the packet)
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry / kPsEntry
 // EVERY CB LAYOUT HERE -- the seed CB's id capacity above all -- is pinned
 // against the SHADER (the static_asserts below) rather than against a second
@@ -1372,7 +1373,12 @@ namespace Arcane
         // reason AddPickNodes prepares its geometry here: the driver's span is
         // published for the span of one BuildFrame and every Record runs later.
         if (OutlineNode* node = context ? context->Outline() : nullptr)
-            node->PrepareSelection(context->CurrentSelectedIds());
+        {
+            if (context->Packet())
+                node->PrepareSelection(context->Packet()->selectedIds);
+            else
+                node->PrepareSelection(context->CurrentSelectedIds());
+        }
 
         // Shared rather than captured by value: a later step reads an EARLIER
         // step's target, and every handle is minted inside its own setup fn.
