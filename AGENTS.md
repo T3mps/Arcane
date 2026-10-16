@@ -17,7 +17,8 @@ the summary is in [CLAUDE.md](CLAUDE.md) under "Servitor". The core loop:
 `screenshot` / `compare` / `step N` / `entity get` / `ecs query` / `logs`,
 then `quit`.
 
-Pass `--project ReferenceProject --client <agent-name>`, and branch on the
+Pass `--project ReferenceProject` always and `--client <agent-name>` on every call
+except `launch` (it refuses `--client`, exit 2), and branch on the
 exit code (0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed).
 Never drive an editor the user has open, and never `--bless` through Servitor.
 Codex: allow localhost network access in the sandbox, or every call fails

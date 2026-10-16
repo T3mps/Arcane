@@ -33,13 +33,14 @@ How each host gets remote:
 
 ```bat
 set S=Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe
+set L=--project ReferenceProject
 set P=--project ReferenceProject --client claude-code
 
 :: what is running
 %S% %P% status
 
 :: headless runtime, deterministic picture
-%S% %P% launch runtime --headless -- --fixed-time 0
+%S% %L% launch runtime --headless -- --fixed-time 0
 %S% %P% --host runtime wait settled
 %S% %P% --host runtime screenshot window --out %TEMP%\shot.png
 %S% %P% --host runtime compare runtime-scene --source window
