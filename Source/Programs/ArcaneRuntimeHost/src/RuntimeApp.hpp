@@ -38,6 +38,10 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+#include <Arcane/Base/DiagnosticStore.hpp> // Servitor P0 --remote: problems.list's store (Task 22)
+#include <Arcane/Remote/HostSession.hpp>   // Servitor P0 --remote (ruling D-1: never in a package)
+#endif
 
 namespace Arcane { struct RenderFramePacket; }
 
@@ -316,6 +320,29 @@ private:
     // --hang-main N (crash window plan 2, D10). Same shape as
     // m_gpuFaultFired directly above.
     bool                                      m_hangMainFired = false;
+#endif
+
+#if !defined(ARC_BUILD_DIST) && !defined(ARC_MONOLITHIC)
+    // Servitor P0 (Task 11): the --remote surface. Armed just before the frame
+    // loop, drained after each frame's event pump and before the sim advance,
+    // stopped once ShutdownGraphPath has read its quit/idle state for the
+    // report. Compiled out of every package (ruling D-1): a monolithic build
+    // links no ArcaneRemote, and its Run() refuses --remote at startup.
+    //
+    // Task 22 fix round 1: the store problems.list reads, as the editor's
+    // Problems panel store. Under --remote, Run() installs it as the engine's
+    // diagnostics sink before any boot stage, so project-open, plugin-load and
+    // scene-load diagnostics are in it when the session arms (Diagnostics does
+    // not replay). Declared before m_remote, so it outlives the session.
+    Arcane::DiagnosticStore                      m_problems;
+    std::unique_ptr<Arcane::Remote::HostSession> m_remote;
+    // 2 when an open-ended --headless --remote run's surface did not start:
+    // it has no other stop path, so Run() returns this instead of looping.
+    int                                          m_remoteArmExit = 0;
+    // Task 29 (ruling B): the windowed title shows " [held]" while the remote
+    // tick gate holds the sim; this is what the title says now, so SetTitle
+    // runs only on a change.
+    bool                                         m_remoteTitleHeld = false;
 #endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,

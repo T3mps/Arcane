@@ -195,7 +195,7 @@ bool PumpAndResize(FrameIo& io)
     return false;
 }
 
-void AdvanceSim(FrameIo& io)
+void AdvanceSim(FrameIo& io, SimPace pace)
 {
     Arcane::CVarRegistry::Get().Publish();
     io.perf.FrameStart();
@@ -210,10 +210,32 @@ void AdvanceSim(FrameIo& io)
     // PulseSpeed)`), so an UN-frozen clock would make every settle-hold
     // frame legitimately differ from the last regardless of whether the
     // compile race has resolved, and CaptureTail's byte-equal comparison
-    // would never converge on anything. Computed once, read by both the
-    // frameDt and simDt branches below.
-    const bool settleHold = io.config.headless && io.config.settleAttempts != 0 &&
-                             io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames;
+    // would never converge on anything. Computed once, read by the Hold pass
+    // and by both the frameDt and simDt branches below.
+    //
+    // Task 30 fix round 1: a remote `wait settled` in its capture phase holds
+    // the same freeze (io.remoteSettleHold), on a held, running, headless or
+    // windowed runtime alike: spec s4.7's frozen-clock captures.
+    const bool settleHold = io.remoteSettleHold ||
+                            (io.config.headless && io.config.settleAttempts != 0 &&
+                             io.config.maxFrames != 0 && io.frameCount >= io.config.maxFrames);
+
+    // AM1 Hold (the remote tick gate is Idle): see SimPace's comment in the
+    // header. The host clock advances by wall time even under --headless (a
+    // held run has no fixed cadence to stand in for it), and the frame dt the
+    // material globals read is that same wall delta, so Time and DeltaTime
+    // stay consistent -- except under the settle hold, which freezes it.
+    // No input, no RunLoop::Advance, no audio tick.
+    if (pace == SimPace::Hold)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const double wallDt = settleHold ? 0.0 : std::chrono::duration<double>(now - io.lastFrameTime).count();
+        io.lastFrameTime = now;
+        io.simPrev       = now;
+        io.lastFrameDt   = wallDt;
+        io.hostClock    += wallDt;
+        return;
+    }
 
     // Input: sample SDL state, evaluate actions. Must precede ImGui BeginFrame
     // so capture flags are set before the evaluator reads them.
@@ -234,6 +256,10 @@ void AdvanceSim(FrameIo& io)
         if (settleHold)
         {
             frameDt = 0.0;   // see settleHold's own comment above
+            // A remote settle hold ends (Task 30): a windowed clock resumes
+            // from here, not with the whole hold as one frame's dt.
+            if (!io.config.headless)
+                io.lastFrameTime = std::chrono::steady_clock::now();
         }
         else if (io.config.headless)
         {
@@ -280,9 +306,22 @@ void AdvanceSim(FrameIo& io)
         // positive (HostConfig.cpp) and is a deliberate per-run choice, not a
         // stall to guard against.
         double simDt;
-        if (settleHold)
+        if (pace == SimPace::SingleTick)
+        {
+            // AM1 Step: exactly one canonical fixed step. RequestSingleStep runs
+            // one tick without touching the accumulator (RunLoop::StepFixed), so
+            // neither a wall-clock dt nor a leftover backlog nor the time scale
+            // can turn it into zero or two; Update sees one fixed dt.
+            io.runtime->Loop().RequestSingleStep();
+            simDt = 1.0 / io.runtime->Loop().FixedHz();
+            if (!io.config.headless)
+                io.simPrev = std::chrono::steady_clock::now();   // the next Run step starts from here
+        }
+        else if (settleHold)
         {
             simDt = 0.0;   // see settleHold's own comment above AdvanceSim's input block
+            if (!io.config.headless)
+                io.simPrev = std::chrono::steady_clock::now();   // as frameDt's hold branch
         }
         else if (io.config.headless)
         {
@@ -428,12 +467,13 @@ void PrepareFrame(FrameIo& io)
         FrameExtent(io, width, height);
 
         Arcane::SceneRenderResolver::FrameInfo frame;
-        // --fixed-time overrides ONLY what the scene sees. io.hostClock keeps
-        // accumulating untouched, because it is also the clock the shader
+        // --fixed-time overrides ONLY what the scene sees (sceneTime). now is
+        // io.hostClock, untouched, because it is also the clock the shader
         // compile service debounces against (see this file's dispatch gate) --
-        // a frozen accumulator would stall that, which is not what pinning
-        // scene time means.
-        frame.now            = io.config.fixedTimeSeconds.value_or(io.hostClock);
+        // a pinned compile clock would stall every compile, which is not what
+        // pinning scene time means.
+        frame.now            = io.hostClock;
+        frame.sceneTime      = io.config.fixedTimeSeconds;
         frame.dt             = io.lastFrameDt;
         frame.viewportWidth  = (float)width;
         frame.viewportHeight = (float)height;

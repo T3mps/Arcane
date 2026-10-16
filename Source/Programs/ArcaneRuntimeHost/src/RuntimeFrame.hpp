@@ -295,6 +295,11 @@ namespace Arcane::RuntimeFrame
         // as the one FrameIo member that is not a binding (MainLoop's
         // designated initializer leaves it default-constructed).
         Arcane::PacketRing packetRing{};
+        // remoteSettleHold (Task 30 fix round 1): a remote `wait settled` is
+        // in its capture phase (HostSession::SettleClockFrozen), set by
+        // MainLoop after each drain. AdvanceSim ORs it into its --settle
+        // `settleHold`, so the captures see one frozen clock, held or running.
+        bool remoteSettleHold = false;
     };
 
     // Heartbeat + device-lost check + this frame's ONE window-event pump +
@@ -318,7 +323,24 @@ namespace Arcane::RuntimeFrame
     // them -- see the .cpp's own comment for why that is load-bearing (a
     // Time-driven material would otherwise never let CaptureTail's
     // byte-equal comparison converge on anything).
-    void AdvanceSim(FrameIo& io);
+    //
+    // `pace` is the remote tick gate's answer for this frame (AM1; MainLoop
+    // maps Arcane::Remote::TickDecision onto it, and a host without a remote
+    // session always passes Run):
+    //   Run        -- the paragraph above, unchanged.
+    //   SingleTick -- exactly ONE canonical fixed step (RunLoop::
+    //                 RequestSingleStep, 1 / FixedHz) on every runtime shape,
+    //                 windowed or --headless, whatever the wall-clock dt or the
+    //                 loop's backlog: `servitor step N` is N sim ticks.
+    //   Hold       -- no input sampling and no sim step. The frame preamble
+    //                 (cvar publish, perf window) still runs, and the HOST clock
+    //                 keeps advancing by wall time: it is the shader-compile
+    //                 debounce clock, so a frozen one would never dispatch a
+    //                 compile submitted while held. The wall stamps are
+    //                 re-taken, so the next windowed Run step is not handed the
+    //                 held interval as its sim dt.
+    enum class SimPace : std::uint8_t { Run, SingleTick, Hold };
+    void AdvanceSim(FrameIo& io, SimPace pace = SimPace::Run);
 
     // ImGui BeginFrame + the host's own "ArcaneRuntime" HUD window + the
     // plugin's DrawUIAll. Nothing else. RenderGraph renders the ImGui frame

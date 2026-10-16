@@ -97,6 +97,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include "Remote/SelectionCommand.hpp"   // StopEditorRemote (Servitor final fix round 4, N3-3)
 #include <string>
 #include <utility>
 #include <vector>
@@ -1395,15 +1396,19 @@ namespace Arcane::Editor
         // and then watch the editor's own world diverge from it.
         if (!m_config.playAs.empty())
         {
-            using Topo = Arcane::Editor::PlayTopology;
-            const Topo topo = m_config.playAs == "listen-server"   ? Topo::ListenServer
-                             : m_config.playAs == "embedded-server" ? Topo::EmbeddedServer
-                             : m_config.playAs == "client"          ? Topo::ClientOnly
-                                                                    : Topo::Standalone;
-            // HostConfig::Parse already refused every other spelling, so the
-            // fall-through above is "standalone" and nothing else.
+            // HostConfig::Parse already refused every other spelling, so
+            // EnterScriptedPlay's fall-through is "standalone" and nothing else.
             m_documents.FlushGestures();
-            if (!m_play.Play(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr, topo))
+            // Servitor final fix round 3 (N-3): the remote session arms first,
+            // in the edit-mode topology, exactly as when the same session is
+            // entered interactively (arm, then Play), so --remote --play-as
+            // embedded-server|client keeps its remote surface.
+            void (*armRemote)(void*) = nullptr;
+#if !defined(ARC_BUILD_DIST)
+            armRemote = [](void* user) { static_cast<EditorApp*>(user)->UpdateRemoteSession(); };
+#endif
+            if (!Arcane::Editor::EnterScriptedPlay(m_play, m_runtime->Core(), m_plugin ? &*m_plugin : nullptr,
+                                                   m_config.playAs, armRemote, this))
                 ARC_ERROR("--play-as {}: Play refused", m_config.playAs);
         }
         return true;
@@ -2108,6 +2113,71 @@ namespace Arcane::Editor
         return Arcane::WriteThumbnailPngRgba(file, w, h, std::move(rgba), 512);
     }
 
+#if !defined(ARC_BUILD_DIST)
+    // ---- Servitor capture hooks (P0 Task 27, R8-2) ---------------------------
+    // capture.viewport / capture.window reach the editor's graph contexts only
+    // through these (CaptureHooks, installed in UpdateRemoteSession). They
+    // forward to each context's capture ring: Arm stores the ticket, Drain
+    // hands back the retired copy. Never ReadCapture, never DeviceWaitIdle --
+    // CaptureGraphViewportPng above stays the cover path and Remote does not
+    // call it. Viewport = m_viewportTargets.graph, the same target
+    // CaptureGraphViewportPng and --compare read (so the host pair is this
+    // pair, ruling F20); window = ChromeGraph(), the backbuffer after ImGui.
+    // A context that is gone answers a drain with a null map (capture.no-frame).
+    namespace
+    {
+        bool DrainRing(Arcane::NriGraphContext* graph, std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw)
+        {
+            if (!graph)
+                return true;   // raw stays empty: mapped null, the capture is lost
+            Arcane::TicketCaptureBytes bytes;
+            if (!graph->DrainTicketCapture(ticket, bytes))
+                return false;
+            raw->width       = bytes.width;
+            raw->height      = bytes.height;
+            raw->rowPitch    = bytes.rowPitch;
+            raw->bgra        = bytes.bgra;
+            raw->mapped      = bytes.mapped;
+            raw->mappedBytes = bytes.mappedBytes;
+            return true;
+        }
+    }
+
+    bool EditorApp::RemoteArmViewport(std::uint64_t ticket, void* user)
+    {
+        Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->m_viewportTargets.graph.get();
+        return graph && graph->ArmTicketCapture(ticket);
+    }
+
+    bool EditorApp::RemoteDrainViewport(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user)
+    {
+        return DrainRing(static_cast<EditorApp*>(user)->m_viewportTargets.graph.get(), ticket, raw);
+    }
+
+    bool EditorApp::RemoteArmWindow(std::uint64_t ticket, void* user)
+    {
+        Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->ChromeGraph();
+        return graph && graph->ArmTicketCapture(ticket);
+    }
+
+    bool EditorApp::RemoteDrainWindow(std::uint64_t ticket, Arcane::Remote::CaptureMapped* raw, void* user)
+    {
+        return DrainRing(static_cast<EditorApp*>(user)->ChromeGraph(), ticket, raw);
+    }
+
+    void EditorApp::RemoteCancelViewport(std::uint64_t ticket, void* user)
+    {
+        if (Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->m_viewportTargets.graph.get())
+            graph->CancelTicketCapture(ticket);
+    }
+
+    void EditorApp::RemoteCancelWindow(std::uint64_t ticket, void* user)
+    {
+        if (Arcane::NriGraphContext* graph = static_cast<EditorApp*>(user)->ChromeGraph())
+            graph->CancelTicketCapture(ticket);
+    }
+#endif
+
     namespace
     {
         using StageFn = bool (Arcane::Editor::EditorApp::*)(Arcane::HostBoot::BootContext&);
@@ -2717,6 +2787,10 @@ namespace Arcane::Editor
         if (!CreateGraphVehicles())
             return 1;
         MainLoop();
+#if !defined(ARC_BUILD_DIST)
+        if (m_remoteArmExit != 0)
+            return m_remoteArmExit;   // an open-ended headless --remote run with no remote surface (MainLoop logged why)
+#endif
         return 0;
     }
 
@@ -3306,6 +3380,14 @@ namespace Arcane::Editor
                 exitReason = "compare-blessed";
             else if (compareWriteFailed)
                 exitReason = "compare-failed";
+#if !defined(ARC_BUILD_DIST)
+            // Servitor P0 (Task 16): the loop broke on a remote quit
+            // (host.quit) or the --remote-idle-exit timeout, latched where it
+            // broke (HostSession::DrainFrame) and kept by MainLoop. Mirrors
+            // RuntimeApp::ShutdownGraphPath's place for it.
+            else if (!m_remoteExitReason.empty())
+                exitReason = m_remoteExitReason;
+#endif
             else if (!completedAllFrames)
                 exitReason = "stopped-early";
 
@@ -3578,6 +3660,15 @@ namespace Arcane::Editor
 
     void EditorApp::Shutdown()
     {
+#if !defined(ARC_BUILD_DIST)
+        // Servitor final fix round 4 (N3-3): --play-as arms the remote session
+        // inside StageFinalize, so a boot that exits before MainLoop (a splash
+        // close after finalize, a CreateGraphVehicles failure) reaches here with
+        // it live. Stop it first, as MainLoop's end does: parked calls answer
+        // host.died, the descriptor goes, the selection view is cleared. A
+        // no-op when MainLoop already stopped it.
+        (void)Arcane::Editor::StopEditorRemote(m_remote, "exit");
+#endif
         // Deregister both sinks FIRST, before anything below can dispatch into
         // a half-torn-down editor -- see ConsoleDiagnostics::Uninstall()'s doc
         // comment for the ordering rationale (diagnostics store, then console).

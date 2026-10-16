@@ -71,9 +71,15 @@ namespace Arcane
         [[nodiscard]] double TimeScale() const noexcept { return m_timeScale; }
 
         // Request exactly one canonical fixed step on the next Advance, even while
-        // paused; one-shot (auto-clears after it runs). Ignored if not paused (the
-        // running loop already steps), but harmless to call.
+        // paused; one-shot (auto-clears after it runs). On a running loop that
+        // Advance runs the one step INSTEAD of accumulating its realDt, so it is
+        // one tick whatever the dt, backlog or time scale, and the backlog is
+        // left as it was (StepFixed; the runtime's remote `step` relies on it).
         void RequestSingleStep() noexcept { m_singleStep = true; }
+        // A single step is requested and the next Advance will run it (the
+        // editor counts that Advance as a sim advance for host.frame, Servitor
+        // P0 Task 29).
+        [[nodiscard]] bool SingleStepPending() const noexcept { return m_singleStep; }
 
         // The fixed step's rate (Hz) -- a RUNTIME value (Core-DLL split, plan 1
         // Task 6 review round 1): StepFixed's canonical `fixedDt` (`1.0 /

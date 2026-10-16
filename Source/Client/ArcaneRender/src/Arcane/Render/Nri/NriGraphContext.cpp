@@ -26,6 +26,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>       // GpuDeviceLostObserved -- the device-lost teardown gate
 #include <Arcane/Render/ShaderPaths.hpp>            // ShaderPaths::ResolveFlavorDir
 #include <Arcane/Render/FramePacing.hpp>              // FramesInFlight(), LatchFramesInFlight()
+#include <Arcane/Assets/ImageIo.hpp>                 // NormalizeCaptureRows -- the one capture normalization
 
 #include <SDL3/SDL_timer.h>                         // SDL_DelayNS -- the offscreen pacing wait's sleep
 
@@ -824,6 +825,12 @@ namespace Arcane
             graves.Bury(fence, [graveCore, b = m_capture] { graveCore->DestroyBuffer(b); });
             m_capture = nullptr;
         }
+#if !defined(ARC_BUILD_DIST)
+        // The Servitor capture ring's staging buffer, at the same fence. No
+        // retire: the device may be lost here, and a capture still waiting on
+        // this context is answered capture.no-frame by its host hook.
+        ReleaseTicketRing(graves, fence, false);
+#endif
 
         // The nodes' own objects go out at the same fence, and BEFORE the
         // graph releases its transient pool below -- the tonemap's source view
@@ -1036,6 +1043,12 @@ namespace Arcane
             m_capture = nullptr;
         }
         m_captureRecorded = false;
+#if !defined(ARC_BUILD_DIST)
+        // The capture ring's buffer is extent-sized too. The idle above means
+        // a pending slot's copy has landed, so it is retired (kept for its
+        // ticket) before the buffer goes: a resize mid-capture still answers.
+        ReleaseTicketRing(graves, m_graph ? m_graph->DebugSubmitCount() : 0, true);
+#endif
 
         // Both fullscreen nodes hold SHADER_RESOURCE views over pool textures
         // -- the tonemap over whatever it samples, the chain over the canvas
@@ -1150,6 +1163,9 @@ namespace Arcane
             m_capture = nullptr;
         }
         m_captureRecorded = false;
+#if !defined(ARC_BUILD_DIST)
+        ReleaseTicketRing(graves, fence, true);   // see Resize(): idled above, so pending copies retire
+#endif
 
         if (m_tonemap)
             m_tonemap->InvalidateSource(graves, fence);
@@ -1618,6 +1634,42 @@ namespace Arcane
             if (auto addNode = GetRenderOverlayHooks().addNode)
                 addNode(graph, context, handles.backbuffer, false);
 
+#if !defined(ARC_BUILD_DIST)
+        // The Servitor capture ring's copy node (Task 27): the backbuffer, after
+        // every node that writes it, into this frame's slot of the ring's
+        // HOST_READBACK buffer. Declared beside (before) the --screenshot
+        // `capture` node; both only READ the backbuffer, so their order is
+        // free. The exec fn drains first and records second
+        // (NriGraphContext::NoteRenderSubmission), the PickNode rule.
+        if (shape.ticketCapture && shape.ticketCaptureBuffer)
+        {
+            auto ringHandle = std::make_shared<RgBuffer>();
+            const RgTexture ringSource = handles.backbuffer;
+            graph.AddNode("ticket-capture", RenderGraph::NodeKind::Copy,
+                [shape, ringSource, ringHandle](RenderGraphBuilder& builder)
+                {
+                    *ringHandle = builder.ImportBuffer("ticket-capture", shape.ticketCaptureBuffer,
+                                                        shape.ticketCaptureBytes);
+                    builder.Read(ringSource, RgUsage::CopySrc);
+                    builder.Write(*ringHandle, RgUsage::ReadbackHost);
+                },
+                [context, ringSource, ringHandle](RenderGraphNodeContext& ctx)
+                {
+                    if (!context)
+                        return;   // device-less declaration-shape drive
+                    nri::Texture* source = ctx.Resolve(ringSource);
+                    nri::Buffer*  dest   = ctx.Resolve(*ringHandle);
+                    if (!source || !dest)
+                    {
+                        GraphError("NriGraphContext: the ticket-capture node could not resolve its "
+                                   "backbuffer or the capture ring's buffer");
+                        return;
+                    }
+                    context->NoteRenderSubmission(ctx.core, ctx.cmd, *source, *dest);
+                });
+        }
+#endif
+
         if (!shape.capture)
             return handles;
 
@@ -1753,6 +1805,13 @@ namespace Arcane
         shape.canvasHeight  = SurfaceHeight();
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
+#if !defined(ARC_BUILD_DIST)
+        // The Servitor capture ring (Task 27): declared only while a copy is
+        // wanted or pending, so a frame with no remote capture keeps its shape.
+        shape.ticketCapture       = PrepareTicketCapture();
+        shape.ticketCaptureBuffer = m_ringBuffer;
+        shape.ticketCaptureBytes  = m_ringSlicePitch * kMaxFramesInFlight;
+#endif
         shape.post          = frame.post;
         // The mesh pass (Task 7). Belt-and-braces the same way
         // `pickOutline` and the two HUDs are: a scene for THIS frame and a node
@@ -1955,6 +2014,9 @@ namespace Arcane
         // until here.
         if (m_scene)
             m_scene->FlushGraves(m_graves);
+#if !defined(ARC_BUILD_DIST)
+        ConfirmCaptureRingSubmission(m_captureRing, m_frameIndex);   // this frame's ring copy was submitted
+#endif
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, after the frame's present and
@@ -2108,6 +2170,9 @@ namespace Arcane
                                          m_graph ? m_graph->DebugSubmitCount() : 0);
         if (m_scene)
             m_scene->FlushGraves(m_graves);   // same contract as RenderFrame() above
+#if !defined(ARC_BUILD_DIST)
+        ConfirmCaptureRingSubmission(m_captureRing, m_frameIndex);   // this frame's ring copy was submitted
+#endif
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, published ONLY when the caller has said
@@ -2228,29 +2293,230 @@ namespace Arcane
         // Tight RGBA8 out, whatever came in: the row pitch is dropped and
         // BGRA is swizzled. NRI cannot be told which channel order to
         // resolve, so the normalization has to happen HERE -- and then a
-        // capture's bytes mean the same thing on every backend.
-        const bool swizzle = IsBgraFormat(m_format);
-        rgba.resize(static_cast<std::size_t>(m_captureWidth) * m_captureHeight * 4);
-        for (std::uint32_t y = 0; y < m_captureHeight; ++y)
-        {
-            const std::uint8_t* src = mapped + static_cast<std::size_t>(y * m_captureRowPitch);
-            unsigned char* dst = rgba.data() + static_cast<std::size_t>(y) * m_captureWidth * 4;
-            std::memcpy(dst, src, static_cast<std::size_t>(m_captureWidth) * 4);
-            if (swizzle)
-            {
-                for (std::uint32_t x = 0; x < m_captureWidth; ++x)
-                {
-                    unsigned char* p = dst + static_cast<std::size_t>(x) * 4;
-                    const unsigned char b = p[0];
-                    p[0] = p[2];
-                    p[2] = b;
-                }
-            }
-        }
+        // capture's bytes mean the same thing on every backend. The one copy
+        // of that loop is NormalizeCaptureRows (ImageIo.hpp), which the
+        // Servitor capture job shares.
+        NormalizeCaptureRows(mapped, m_captureWidth, m_captureHeight,
+                             static_cast<std::uint32_t>(m_captureRowPitch),
+                             IsBgraFormat(m_format), rgba);
         core.UnmapBuffer(*m_capture);
 
         width  = m_captureWidth;
         height = m_captureHeight;
         return true;
     }
+
+#if !defined(ARC_BUILD_DIST)
+    // =====================================================================
+    // THE SERVITOR CAPTURE RING (Task 27). See CaptureRing in the header.
+    // Main thread throughout: Arm/Drain run inside the host's remote Drain,
+    // PrepareTicketCapture inside BuildFrame, NoteRenderSubmission inside
+    // Execute's record pass.
+    // =====================================================================
+    bool NriGraphContext::ArmTicketCapture(std::uint64_t ticket)
+    {
+        if (ticket == 0 || !m_device)
+            return false;
+        CaptureRing& ring = m_captureRing;
+        ring.framesInFlight = FramesInFlight();
+        ring.wanted         = ticket;
+        // One capture in flight per host (CaptureInFlight in ArcaneRemote), so
+        // the previous capture's bytes have been consumed by now.
+        ring.haveRetired   = false;
+        ring.retiredTicket = 0;
+        ring.retiredBytes.clear();
+        ring.retiredBytes.shrink_to_fit();
+        return true;
+    }
+
+    void NriGraphContext::CancelTicketCapture(std::uint64_t ticket)
+    {
+        CancelCaptureRingTicket(m_captureRing, ticket);
+    }
+
+    bool NriGraphContext::DrainTicketCapture(std::uint64_t ticket, TicketCaptureBytes& out) const
+    {
+        out = {};
+        if (ticket == 0)
+            return false;
+        if (m_lostTicket == ticket)
+            return true;   // the copy never happened or was dropped: a true drain with a null map
+        const CaptureRing& ring = m_captureRing;
+        if (!ring.haveRetired || ring.retiredTicket != ticket)
+            return false;
+        out.width       = ring.retiredW;
+        out.height      = ring.retiredH;
+        out.rowPitch    = ring.retiredPitch;
+        out.bgra        = ring.retiredBgra;
+        out.mapped      = ring.retiredBytes.empty() ? nullptr : ring.retiredBytes.data();
+        out.mappedBytes = static_cast<std::uint32_t>(ring.retiredBytes.size());
+        return true;
+    }
+
+    bool NriGraphContext::PrepareTicketCapture()
+    {
+        CaptureRing& ring = m_captureRing;
+        bool anyPending = false;
+        for (std::uint32_t i = 0; i < kMaxFramesInFlight; ++i)
+            anyPending = anyPending || ring.pending[i];
+        if (ring.wanted == 0)
+            return anyPending && m_ringBuffer != nullptr;
+
+        const std::uint32_t width  = SurfaceWidth();
+        const std::uint32_t height = SurfaceHeight();
+        const bool sized = m_ringBuffer && m_ringWidth == width && m_ringHeight == height;
+        if (sized || anyPending)
+            return m_ringBuffer != nullptr;   // a pending slot keeps the old buffer; the wanted copy waits
+
+        const nri::CoreInterface& core = m_device->Core();
+        ReleaseTicketRing(m_graves, m_graph ? m_graph->DebugSubmitCount() : 0, false);
+
+        // The --screenshot buffer's alignment rules (EnsureCaptureBuffer),
+        // one aligned slice per frame slot.
+        const nri::DeviceDesc& deviceDesc = core.GetDeviceDesc(m_device->Device());
+        const std::uint64_t rowPitch   = AlignUp(std::uint64_t(width) * 4,
+                                                 deviceDesc.memoryAlignment.uploadBufferTextureRow);
+        const std::uint64_t slicePitch = AlignUp(rowPitch * height,
+                                                 deviceDesc.memoryAlignment.uploadBufferTextureSlice);
+        nri::BufferDesc bufferDesc = {};
+        bufferDesc.size  = slicePitch * kMaxFramesInFlight;
+        bufferDesc.usage = nri::BufferUsageBits::NONE;   // copy destination only
+        nri::Buffer* buffer = nullptr;
+        const void* cpu = nullptr;
+        if (width != 0 && height != 0
+            && ARC_NRI_CHECK(core.CreateCommittedBuffer(m_device->Device(), nri::MemoryLocation::HOST_READBACK,
+                                                         0.0f, bufferDesc, buffer))
+            && buffer)
+        {
+            core.SetDebugName(buffer, "nri-graph ticket capture");
+            cpu = core.MapBuffer(*buffer, 0, nri::WHOLE_SIZE);
+        }
+        if (!buffer || !cpu)
+        {
+            ARC_ERROR("[nri-graph] the capture ring's staging buffer ({}x{}) could not be created or mapped -- "
+                      "the remote capture for ticket {} is lost", width, height, ring.wanted);
+            if (buffer)
+                core.DestroyBuffer(buffer);   // never recorded into: nothing in flight names it
+            m_lostTicket = ring.wanted;
+            ring.wanted  = 0;
+            return false;
+        }
+        m_ringBuffer     = buffer;
+        m_ringCpu        = static_cast<const std::uint8_t*>(cpu);
+        m_ringRowPitch   = rowPitch;
+        m_ringSlicePitch = slicePitch;
+        m_ringWidth      = width;
+        m_ringHeight     = height;
+        return true;
+    }
+
+    void NriGraphContext::NoteRenderSubmission(const nri::CoreInterface& core, nri::CommandBuffer& cmd,
+                                               nri::Texture& source, nri::Buffer& dest)
+    {
+        CaptureRing& ring = m_captureRing;
+        // The ring's slot IS this frame's slot (FrameSlot(), m_frameIndex %
+        // FramesInFlight()): `submission` follows the context's own clock, so
+        // the pacing wait this frame already paid for its slot covers the ring's.
+        ring.submission = static_cast<std::uint32_t>(m_frameIndex);
+        if (ring.framesInFlight == 0)
+            ring.framesInFlight = 1;
+        const std::uint32_t slot = ring.submission % ring.framesInFlight;
+        if (slot >= kMaxFramesInFlight || &dest != m_ringBuffer || !m_ringCpu)
+        {
+            GraphError("NriGraphContext: the ticket-capture node ran with a slot outside the ring or "
+                       "without its buffer");
+            return;
+        }
+
+        const CaptureRingStep step = PlanCaptureRingSlot(
+            ring, slot, m_frameIndex, m_ringWidth == SurfaceWidth() && m_ringHeight == SurfaceHeight());
+
+        // DRAIN FIRST: the copy in this slot was SUBMITTED FramesInFlight() or
+        // more frames ago, so the pacing wait this frame paid has retired it
+        // (PickNode::RecordReadback's argument). No fence query, no idle.
+        if (step.drain)
+        {
+            const std::size_t bytes = static_cast<std::size_t>(m_ringRowPitch) * m_ringHeight;
+            const std::uint8_t* src = m_ringCpu + static_cast<std::size_t>(slot) * m_ringSlicePitch;
+            ring.retiredBytes.assign(src, src + bytes);
+            ring.retiredW      = m_ringWidth;
+            ring.retiredH      = m_ringHeight;
+            ring.retiredPitch  = static_cast<std::uint32_t>(m_ringRowPitch);
+            ring.retiredBgra   = IsBgraFormat(m_format);
+            RetireCaptureRingSlot(ring, slot);
+        }
+
+        // RECORD SECOND: the wanted copy into this slot, only at the buffer's
+        // extent (PrepareTicketCapture resizes it only while nothing is pending).
+        if (step.record)
+        {
+            nri::TextureDataLayoutDesc layout = {};
+            layout.offset     = static_cast<std::uint64_t>(slot) * m_ringSlicePitch;
+            layout.rowPitch   = static_cast<std::uint32_t>(m_ringRowPitch);
+            layout.slicePitch = static_cast<std::uint32_t>(m_ringSlicePitch);
+
+            nri::TextureRegionDesc region = {};
+            region.width  = static_cast<nri::Dim_t>(m_ringWidth);
+            region.height = static_cast<nri::Dim_t>(m_ringHeight);
+            region.depth  = 1;
+
+            core.CmdReadbackTextureToBuffer(cmd, dest, layout, source, region);
+            RecordCaptureRingSlot(ring, slot, m_frameIndex);
+        }
+        ++ring.submission;
+    }
+
+    void NriGraphContext::ReleaseTicketRing(Graveyard& graves, std::uint64_t fence, bool retire)
+    {
+        CaptureRing& ring = m_captureRing;
+        const bool canRetire = retire && m_ringCpu != nullptr;
+        for (std::uint32_t slot = 0; slot < kMaxFramesInFlight; ++slot)
+        {
+            if (!ring.pending[slot])
+                continue;
+            if (ring.abandoned[slot])
+            {
+                // Its job gave up (CancelCaptureRingTicket): drop it, never retire it.
+                ring.pending[slot]   = false;
+                ring.abandoned[slot] = false;
+                continue;
+            }
+            if (canRetire && ring.submitted[slot])
+            {
+                const std::size_t bytes = static_cast<std::size_t>(m_ringRowPitch) * m_ringHeight;
+                const std::uint8_t* src = m_ringCpu + static_cast<std::size_t>(slot) * m_ringSlicePitch;
+                ring.retiredBytes.assign(src, src + bytes);
+                ring.retiredW      = m_ringWidth;
+                ring.retiredH      = m_ringHeight;
+                ring.retiredPitch  = static_cast<std::uint32_t>(m_ringRowPitch);
+                ring.retiredBgra   = IsBgraFormat(m_format);
+                ring.retiredTicket = ring.ticket[slot];
+                ring.haveRetired   = true;
+            }
+            else if (ring.submitted[slot])
+            {
+                m_lostTicket = ring.ticket[slot];   // its drain answers with a null map: capture.no-frame
+            }
+            else if (ring.wanted == 0)
+            {
+                ring.wanted = ring.ticket[slot];    // never submitted: copy it again from the next frame
+            }
+            ring.pending[slot] = false;
+        }
+        if (m_ringBuffer)
+        {
+            const nri::CoreInterface* graveCore = &m_device->Core();
+            graves.Bury(fence, [graveCore, b = m_ringBuffer] {
+                graveCore->UnmapBuffer(*b);
+                graveCore->DestroyBuffer(b);
+            });
+        }
+        m_ringBuffer     = nullptr;
+        m_ringCpu        = nullptr;
+        m_ringRowPitch   = 0;
+        m_ringSlicePitch = 0;
+        m_ringWidth      = 0;
+        m_ringHeight     = 0;
+    }
+#endif
 }

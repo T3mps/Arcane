@@ -176,14 +176,67 @@ namespace Arcane::Editor
         return ok;
     }
 
-    void PlaySession::TickServer(double realDt)
+    void PlaySession::TickServer(double realDt, bool primaryPaused, bool primarySingleStep)
     {
         if (!m_server) return;
+        // Lockstep (round 2, I-3): the primary's pause and its single step of
+        // this frame, mirrored before the server's Advance.
+        m_server->Loop().SetPaused(primaryPaused);
+        if (primarySingleStep)
+            m_server->Loop().RequestSingleStep();
         m_server->EnsurePhysics();
         // sim.maxStepsPerFrame is Live: the server world takes the cap the editor's
         // primary loop took this frame (EditorAppFrame), so a hitch that clamps one
         // world clamps the other identically and the two do not desync.
         Arcane::ApplySimStepCap(m_server->Loop());
         m_server->Loop().Advance(realDt);
+    }
+
+    bool EnterScriptedPlay(PlaySession& play, Arcane::Runtime& runtime, Arcane::PluginHost* host,
+                           std::string_view playAs, void (*armFirst)(void*), void* user)
+    {
+        const PlayTopology topo = playAs == "listen-server"   ? PlayTopology::ListenServer
+                                : playAs == "embedded-server" ? PlayTopology::EmbeddedServer
+                                : playAs == "client"          ? PlayTopology::ClientOnly
+                                                              : PlayTopology::Standalone;
+        // The arm first, in the edit-mode topology (N-3), then Play.
+        if (armFirst)
+            armFirst(user);
+        return play.Play(runtime, host, topo);
+    }
+
+    std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling)
+    {
+        if (spelling == "standalone")    return PlayTopology::Standalone;
+        if (spelling == "listen")        return PlayTopology::ListenServer;
+        if (spelling == "client+server") return PlayTopology::EmbeddedServer;
+        return std::nullopt;
+    }
+
+    std::string_view PlayTopologyRemoteName(PlayTopology topology)
+    {
+        switch (topology)
+        {
+            case PlayTopology::Standalone:     return "standalone";
+            case PlayTopology::ListenServer:   return "listen";
+            case PlayTopology::EmbeddedServer: return "client+server";
+            case PlayTopology::ClientOnly:     return "client";
+        }
+        return "standalone";
+    }
+
+    PlayFlipFollowUps PlanPlayFlip(bool wasPlaying, bool nowPlaying)
+    {
+        PlayFlipFollowUps f;
+        f.stopServerProcess    = wasPlaying && !nowPlaying;
+        f.settingsWorldCreated = !wasPlaying && nowPlaying;
+        f.clearPlayRefusal     = !wasPlaying && nowPlaying;
+        f.sceneReplaced        = wasPlaying != nowPlaying;
+        return f;
+    }
+
+    bool CountsAsSimAdvance(bool playing, const Arcane::RunLoop& loop)
+    {
+        return playing && (!loop.IsPaused() || loop.SingleStepPending());
     }
 }

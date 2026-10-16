@@ -34,6 +34,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Arcane { class PluginHost; struct PluginVTable; }
@@ -124,7 +125,13 @@ namespace Arcane::Editor
         // bound to the PRIMARY (the editor's world) and is deliberately NOT re-run
         // here, the same rule MultiRuntimeReloadTest's StepAll documents -- what this
         // world runs is its own instantiated (Server-masked) system set.
-        void TickServer(double realDt);
+        //
+        // Final fix round 2 (I-3): the server world's loop mirrors the primary's
+        // every frame -- paused when it is paused, and one single step when the
+        // primary took one this frame (read before the primary's Advance
+        // consumed it). Toolbar and servitor pause, resume and step therefore
+        // keep both worlds in lockstep, whoever drove them.
+        void TickServer(double realDt, bool primaryPaused = false, bool primarySingleStep = false);
 
     private:
         EditorMode              m_mode = EditorMode::Edit;
@@ -138,4 +145,40 @@ namespace Arcane::Editor
         std::optional<Arcane::Runtime> m_server;
         std::vector<std::byte>         m_serverSeed;
     };
+
+    // --play-as's scripted Play (EditorApp::Init, last in boot; Servitor final
+    // fix round 3, N-3): `armFirst` (the editor's remote arm; null = none)
+    // runs BEFORE Play, so the remote session arms in the edit-mode topology
+    // as it does when the same session is entered interactively, then Play
+    // enters `playAs` (listen-server | embedded-server | client | standalone).
+    // Returns Play's result.
+    bool EnterScriptedPlay(PlaySession& play, Arcane::Runtime& runtime, Arcane::PluginHost* host,
+                           std::string_view playAs, void (*armFirst)(void*), void* user);
+
+    // `servitor play --topology` (Servitor P0 Task 29, spec s7.3): standalone ->
+    // Standalone, listen -> ListenServer, client+server -> EmbeddedServer.
+    // ClientOnly has no remote spelling in P0. nullopt for anything else.
+    [[nodiscard]] std::optional<PlayTopology> PlayTopologyFromRemote(std::string_view spelling);
+    // The running topology as servitor reports it: the three spellings above,
+    // and "client" for ClientOnly (reported, never accepted as input in P0).
+    [[nodiscard]] std::string_view PlayTopologyRemoteName(PlayTopology topology);
+
+    // What follows a Play/Edit flip, wherever it happened: the toolbar, servitor
+    // play/stop, or a scene/save Stop (Task 29 fix round 1: one rule, so the
+    // sites cannot drift). EditorApp::AfterPlayFlip applies it.
+    struct PlayFlipFollowUps
+    {
+        bool stopServerProcess    = false;   // Play -> Edit: the separate server process is the session's other half
+        bool settingsWorldCreated = false;   // Edit -> Play: NextWorld settings apply with the new world (spec s6.5)
+        bool clearPlayRefusal     = false;   // Edit -> Play: retract the "editor:play" Problems row a refused Play left
+        bool sceneReplaced        = false;   // either way: Play and Stop swap the registry OBJECT (scene epoch)
+    };
+    [[nodiscard]] PlayFlipFollowUps PlanPlayFlip(bool wasPlaying, bool nowPlaying);
+
+    // Whether this frame's RunLoop::Advance is a sim advance the remote
+    // surface counts in host.frame (Task 29, ruling A; AM1): playing, and
+    // either running or holding a requested single step. Ask BEFORE Advance
+    // (it consumes the step). A paused Play frame and every Edit frame (Edit's
+    // loop is paused; EditModeSchedule owns its pass) are not advances.
+    [[nodiscard]] bool CountsAsSimAdvance(bool playing, const Arcane::RunLoop& loop);
 }

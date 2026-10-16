@@ -1,10 +1,10 @@
-#include <Panels/DiagnosticStore.hpp>
+#include <Arcane/Base/DiagnosticStore.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <tuple>
 
-namespace Arcane::Editor
+namespace Arcane
 {
     namespace
     {

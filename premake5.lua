@@ -443,7 +443,7 @@ group ""
 group "Programs"
 project "ArcaneRuntimeHost"
     arc_module_consumer(engine_modules,
-        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui" },
+        ARC_MONOLITHIC_LAYOUT and { "ArcaneImGui" } or { "ArcaneVerify", "ArcaneImGui", "ArcaneRemote" },
         { stage = false })
     location(ARC_MONOLITHIC_PROJECTS and path.join(ARC_MONOLITHIC_PROJECTS, "ArcaneRuntimeHost") or "Source/Programs/ArcaneRuntimeHost")
     kind "StaticLib"
@@ -613,6 +613,75 @@ project "arcbuild"
     -- The driver loads ArcaneCore.dll from its own directory (dev bin
     -- layout: Binaries/<cfg>/arcbuild/); a packaged layout ships it beside the
     -- editor, where the DLL already is.
+    postbuildcommands(arcane_cmds {
+    })
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARC_BUILD_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
+-- Servitor (servitor): the loopback CLI that attaches to running engine hosts
+-- (spec docs/superpowers/specs/2026-10-05-arc-cli-design.md, plan rev 8.3).
+-- The client is program code (namespace Servitor, no export macro) and links
+-- ONLY ArcaneCore, ArcaneNet and ArcaneRemoteProtocol (spec AM9, ruling V5):
+-- never ArcaneRemote or ArcaneEngine. arc_module_consumer stages that closure
+-- beside the exe (and adds the modules' public vendor include dirs), so there
+-- is no DLL copy here; ServitorBoundaryTest.cpp ([servitor][boundary]) checks
+-- the staged folder holds nothing else. The client sources (src/Servitor/**)
+-- also source-compile into ArcaneTests, the arcbuild precedent; main.cpp is
+-- the exe's alone. SERVITOR_OUTPUTDIR (V7) lets HostsDir map a source-checkout
+-- --engine root to this configuration's Binaries folder. Never on PATH: P0
+-- runs it from Binaries/.
+-- ============================================================================
+group "Programs"
+project "Servitor"
+    arc_module_consumer(engine_modules, { "ArcaneCore", "ArcaneNet", "ArcaneRemoteProtocol" })
+    location "Source/Programs/Servitor"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetname "servitor"
+
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/main.cpp",
+        "%{prj.location}/src/Servitor/**.hpp",
+        "%{prj.location}/src/Servitor/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+    }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "SERVITOR_OUTPUTDIR=\"" .. outputdir .. "\"",
+    }
+
     postbuildcommands(arcane_cmds {
     })
 
@@ -882,9 +951,12 @@ end   -- ArcaneCrashReporter: Windows target only
 -- ============================================================================
 group "Programs"
 project "ArcaneServer"
-    -- Links Engine/Net/Crypto ONLY (P10) but STAGES a game module's full set: the
+    -- Links Engine/Net/Crypto ONLY (P10), plus ArcaneRemote (the Servitor listener,
+    -- a Runtime module, so still no Client module), but STAGES a game module's full set: the
     -- loader must resolve every module DLL a game module imports to MAP it at all.
-    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto" }, { stage = ARC_GAME_DEFAULT_MODULES })
+    -- The stage list names ArcaneRemote too: the game set's closure does not hold
+    -- it (or ArcaneRemoteProtocol), and the exe imports it.
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" }, { stage = table.join(ARC_GAME_DEFAULT_MODULES, { "ArcaneRemote" }) })
     location "Source/Programs/ArcaneServer"
     kind "ConsoleApp"
     language "C++"
@@ -967,7 +1039,7 @@ project "ArcaneRuntime"
     -- module .so listed before the archive that references it is dropped.
     links { "ArcaneRuntimeHost" }
     includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
-    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto" })
+    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" })
     location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
@@ -1255,6 +1327,10 @@ project "ArcaneTests"
         -- source-compiles into the test exe so the [editor] unit tests drive it
         -- directly, same pattern as ConsoleBuffer/ViewportInput above.
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/EntityList.cpp",
+        -- Servitor P0 Task 25: editor.selection.get (the editor program's
+        -- remote command over SelectionContext) source-compiles into the test
+        -- exe so the [remote][scene] cases drive it directly.
+        "%{wks.location}/Source/Programs/ArcaneEditor/src/Remote/SelectionCommand.cpp",
         -- Task 6: InspectorFields (reflected field classification + pure write-backs
         -- for the Inspector panel) source-compiles into the test exe so the
         -- [editor] unit tests drive it directly -- no ImGui dependency, same
@@ -1461,11 +1537,6 @@ project "ArcaneTests"
         -- handle's IsRunning/Stop) IS covered, because the editor calls Stop()
         -- unconditionally after every Play->Stop.
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Project/ServerLaunch.cpp",
-        -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
-        -- publication-group replace semantics, filter/sort/count) source-compiles
-        -- into the test exe so the [diagnostics] units drive it directly -- no
-        -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
-        "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
         -- node-page phase s8.2: which Problems rows route, and how (pure, fake facts in LocatorRouteTest).
         "%{wks.location}/Source/Programs/ArcaneEditor/src/Panels/LocatorRoute.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
@@ -1575,6 +1646,13 @@ project "ArcaneTests"
         -- prove real CreateProcessW quoting/streaming/handle-inheritance
         -- behavior end to end.
         "%{wks.location}/Source/Programs/arcbuild/src/Process.cpp",
+        -- Servitor P0 Task 14 (rev 8.3 V3): the Servitor client (namespace
+        -- Servitor -- Format, Client, Verbs and every later client TU) source-
+        -- compiles into the test exe the way arcbuild's core does above, so the
+        -- [servitor][client] units drive Render/ParseGlobals/Call directly. The
+        -- glob covers later client files with no further premake edit;
+        -- Source/Programs/Servitor/src/main.cpp sits outside it (the exe's own).
+        "%{wks.location}/Source/Programs/Servitor/src/Servitor/**.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-
@@ -1776,6 +1854,7 @@ project "ArcaneTests"
         "%{wks.location}/Source/Programs/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
         "%{wks.location}/Source/Programs/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
         "%{wks.location}/Source/Programs/ArcaneCrashReporter/src",   -- ReporterArgs.hpp for the [reporter] units (crash window plan 2, Task 4)
+        "%{wks.location}/Source/Programs/Servitor/src",   -- <Servitor/*.hpp> for the [servitor] units (Servitor P0 Task 14, rev 8.3 V3)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -1811,14 +1890,21 @@ project "ArcaneTests"
     -- their normal per-config behaviour.
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
+    -- The source-compiled Servitor client reads the same define the Servitor
+    -- exe does (rev 8.3 V7: HostsDir's source-checkout mapping).
+    defines { "SERVITOR_OUTPUTDIR=\"" .. outputdir .. "\"" }
+
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    -- Servitor (Servitor P0 Task 14) must be built and its closure staged before
+    -- ServitorBoundaryTest.cpp ([servitor][boundary]) lists ../Servitor/.
     -- arcbuild-process-fixture (Task 5, multibackend hardening) must exist
     -- before the [build] process-fixture integration tests can spawn it --
     -- this is the ONLY thing that makes that happen for a
     -- `/t:arcbuild,ArcaneTests` build (the fixture is not itself a named
     -- target there).
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
-                "HotReloadPluginInitFail", "ReferenceGameUnderTest", "TemplateSmokePlugin", "arccook" }
+                "HotReloadPluginInitFail", "ReferenceGameUnderTest", "TemplateSmokePlugin", "arccook",
+                "Servitor" }
 
     -- Task 6 (multibackend hardening): the fixture project exists only for a
     -- Windows target (see its own gate below), so only a Windows generation

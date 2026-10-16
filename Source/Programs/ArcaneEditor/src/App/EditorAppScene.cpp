@@ -130,8 +130,10 @@ namespace Arcane::Editor
         // ResetRegistry, or PlaySession::Stop's RestoreRegistry). Play is stopped
         // FIRST because Stop restores the pre-Play snapshot: left running, it would
         // later overwrite whatever scene is loaded after this.
-        if (InPlayMode())
+        const bool wasPlaying = InPlayMode();
+        if (wasPlaying)
             m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
+        AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
         // The separate-server topology's other half dies with the session it
         // belongs to. Unconditional: a silent no-op on every other topology.
         m_serverProcess.Stop();
