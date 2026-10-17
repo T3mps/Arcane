@@ -157,10 +157,6 @@ jobs:
       ARCANE_CI_LEG: ${{ matrix.leg }}
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
-      # Two seeds per leg (ArcaneTests runs in RANDOM order). Both are printed
-      # in the suite banner and in each JUnit file name.
-      SEED_A: ${{ github.run_number }}
-      SEED_B: ${{ github.run_number }}50021
       LINUX_GPU_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Debug' }}
       # The package lane: Release on linux-gcc-14 (engine modularization s6).
       PACKAGE_LANE: ${{ matrix.leg == 'linux-gcc-14' && matrix.config == 'Release' }}
@@ -174,6 +170,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Derive the uint32 CI seeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed_a="${{ github.run_number }}"
+          case "$seed_a" in
+            ''|*[!0-9]*) echo "run_number is not an integer" >&2; exit 1 ;;
+          esac
+          if [ "$seed_a" -gt 4294967295 ]; then
+            echo "run_number does not fit uint32" >&2
+            exit 1
+          fi
+          # bash $(( )) is signed 64-bit. This sum fits.
+          seed_b=$(( (seed_a + 50021) % 4294967296 ))
+          echo "SEED_A=${seed_a}" >> "$GITHUB_ENV"
+          echo "SEED_B=${seed_b}" >> "$GITHUB_ENV"
 
       - name: Toolchain (CI image)
         run: |
@@ -301,8 +314,6 @@ jobs:
       ARCANE_CI_LEG: ${{ matrix.leg }}
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
-      SEED_A: ${{ github.run_number }}
-      SEED_B: ${{ github.run_number }}50021
       MACOS_GPU_LANE: ${{ matrix.leg == 'macos-appleclang' && matrix.config == 'Debug' }}
       PACKAGE_LANE: ${{ matrix.config == 'Release' }}
       # macos-15 arm64 runners are 3 vCPU / 7 GB, and since the settings arc
@@ -318,6 +329,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Derive the uint32 CI seeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed_a="${{ github.run_number }}"
+          case "$seed_a" in
+            ''|*[!0-9]*) echo "run_number is not an integer" >&2; exit 1 ;;
+          esac
+          if [ "$seed_a" -gt 4294967295 ]; then
+            echo "run_number does not fit uint32" >&2
+            exit 1
+          fi
+          # bash $(( )) is signed 64-bit. This sum fits.
+          seed_b=$(( (seed_a + 50021) % 4294967296 ))
+          echo "SEED_A=${seed_a}" >> "$GITHUB_ENV"
+          echo "SEED_B=${seed_b}" >> "$GITHUB_ENV"
 
       # ------------------------------------------------------------------
       # Toolchains
