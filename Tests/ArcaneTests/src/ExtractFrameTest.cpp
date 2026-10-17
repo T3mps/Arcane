@@ -545,7 +545,11 @@ TEST_CASE("a second extract keeps the packet vector capacity", "[nri][extract]")
     KeptBuffer<std::uint32_t> stageRows;
     KeptBuffer<Arcane::GpuInstance> stageValues;
     KeptBuffer<Arcane::PostChainPassDesc> passes;
+    KeptBuffer<std::uint32_t> postInputs;
     KeptBuffer<Arcane::ImDrawListSnapshot> imguiLists;
+    KeptBuffer<Arcane::ImDrawSnapshotVert> imguiVertices;
+    KeptBuffer<std::uint16_t> imguiIndices;
+    KeptBuffer<Arcane::ImDrawListSnapshot::Cmd> imguiCmds;
     KeptBuffer<void*> imguiTextures;
 
     for (std::uint32_t i = 0; i < depth; ++i)
@@ -570,7 +574,13 @@ TEST_CASE("a second extract keeps the packet vector capacity", "[nri][extract]")
         stageRows = TakeBuffer(packet.mesh.stage.rows);
         stageValues = TakeBuffer(packet.mesh.stage.values);
         passes = TakeBuffer(packet.post.passes);
+        REQUIRE(!packet.post.passes.empty());
+        postInputs = TakeBuffer(packet.post.passes[0].inputs);
         imguiLists = TakeBuffer(packet.imgui.lists);
+        REQUIRE(packet.imgui.listCount >= 1u);
+        imguiVertices = TakeBuffer(packet.imgui.lists[0].vertices);
+        imguiIndices = TakeBuffer(packet.imgui.lists[0].indices);
+        imguiCmds = TakeBuffer(packet.imgui.lists[0].cmds);
         imguiTextures = TakeBuffer(packet.imgui.textures);
     }
     REQUIRE(slot != nullptr);
@@ -593,7 +603,13 @@ TEST_CASE("a second extract keeps the packet vector capacity", "[nri][extract]")
     CheckBufferKept(again.mesh.stage.rows, stageRows);
     CheckBufferKept(again.mesh.stage.values, stageValues);
     CheckBufferKept(again.post.passes, passes);
+    REQUIRE(!again.post.passes.empty());
+    CheckBufferKept(again.post.passes[0].inputs, postInputs);
     CheckBufferKept(again.imgui.lists, imguiLists);
+    REQUIRE(again.imgui.listCount >= 1u);
+    CheckBufferKept(again.imgui.lists[0].vertices, imguiVertices);
+    CheckBufferKept(again.imgui.lists[0].indices, imguiIndices);
+    CheckBufferKept(again.imgui.lists[0].cmds, imguiCmds);
     CheckBufferKept(again.imgui.textures, imguiTextures);
 
     ImGui::DestroyContext(imgui);
@@ -912,13 +928,13 @@ TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][e
     req.post = &desc;
     const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
 
-    REQUIRE(packet.imgui.lists.size() == static_cast<std::size_t>(live->CmdLists.Size));
-    REQUIRE(packet.imgui.lists.size() >= 2u);
+    REQUIRE(packet.imgui.listCount == static_cast<std::uint32_t>(live->CmdLists.Size));
+    REQUIRE(packet.imgui.listCount >= 2u);
     CHECK(packet.imgui.hasTextures);
     REQUIRE(packet.imgui.textures.size() == static_cast<std::size_t>(live->Textures->Size));
     bool saw42 = false;
     bool saw7 = false;
-    for (std::size_t li = 0; li < packet.imgui.lists.size(); ++li)
+    for (std::uint32_t li = 0; li < packet.imgui.listCount; ++li)
     {
         CHECK(packet.imgui.lists[li].vertices.size() ==
               static_cast<std::size_t>(live->CmdLists[static_cast<int>(li)]->VtxBuffer.Size));

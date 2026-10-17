@@ -11,7 +11,9 @@
 // that carries a UserCallback is skipped (the NRI renderer asserts there is
 // none) and the function returns false; every other command and every list
 // stays, and `out`'s buffers keep their capacity. A null src clears `out` in
-// place and returns true. A managed command (TexRef._TexData set)
+// place (listCount 0; the list elements stay) and returns true. Readers use
+// listCount, not lists.size(): elements past listCount are retained storage.
+// A managed command (TexRef._TexData set)
 // keeps that pointer and never calls GetTexID: on the first frame and on an
 // atlas rebuild the TexID is still invalid until declaration-time
 // NewFrameTexUpdates stamps it.

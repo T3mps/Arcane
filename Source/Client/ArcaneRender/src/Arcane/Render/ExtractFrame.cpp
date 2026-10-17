@@ -42,6 +42,11 @@ namespace Arcane
 
     namespace
     {
+        // PublishUiSnapshot warns once per process per list. Tests reset
+        // these; ArcaneTests runs in random order.
+        bool g_warnedUiSnapshotImgui = false;
+        bool g_warnedUiSnapshotGameUi = false;
+
         // Rotate a body-local offset by the body's world angle (radians).
         glm::vec2 RotateVec(glm::vec2 v, float angle)
         {
@@ -100,6 +105,32 @@ namespace Arcane
             if (drained.globals)
                 packet.globals = *drained.globals;
             packet.viewProjection = drained.viewProjection;
+        }
+
+        // passes.size() after this is the live count. resize keeps a pass
+        // element when the chain length does not change, and inputs.assign
+        // reuses that element's buffer. A shorter chain drops the tail.
+        void CopyPostInPlace(PostChainDesc& dst, const PostChainDesc& src)
+        {
+            dst.templ = src.templ;
+            dst.instance = src.instance;
+            dst.chainInputSlots = src.chainInputSlots;
+            dst.passes.resize(src.passes.size());
+            for (std::size_t i = 0; i < src.passes.size(); ++i)
+            {
+                dst.passes[i].vsBytes = src.passes[i].vsBytes;
+                dst.passes[i].psBytes = src.passes[i].psBytes;
+                dst.passes[i].inputs.assign(src.passes[i].inputs.begin(), src.passes[i].inputs.end());
+            }
+        }
+    }
+
+    namespace Detail
+    {
+        void ResetExtractUiSnapshotWarnForTest() noexcept
+        {
+            g_warnedUiSnapshotImgui = false;
+            g_warnedUiSnapshotGameUi = false;
         }
     }
 
@@ -471,18 +502,19 @@ namespace Arcane
 
         // Ruling PR-1: ArcaneRender cannot call ArcaneImGui directly; the copy is the
         // overlay hook. No hook (a host without ImGui) leaves both snapshots at the
-        // empty state Clear() already published, buffers included.
+        // empty state Clear() already published: listCount 0. Retained list
+        // elements are not live.
         const RenderOverlayHooks overlayHooks = GetRenderOverlayHooks();
         if (overlayHooks.snapshot)
         {
-            static bool warnedImgui = false;
-            static bool warnedGameUi = false;
-            PublishUiSnapshot(overlayHooks.snapshot, req.imgui, packet.imgui, "imgui", warnedImgui);
-            PublishUiSnapshot(overlayHooks.snapshot, req.gameUi, packet.gameUi, "gameUi", warnedGameUi);
+            PublishUiSnapshot(overlayHooks.snapshot, req.imgui, packet.imgui, "imgui", g_warnedUiSnapshotImgui);
+            PublishUiSnapshot(overlayHooks.snapshot, req.gameUi, packet.gameUi, "gameUi", g_warnedUiSnapshotGameUi);
         }
         packet.hasPost = req.post != nullptr;
         if (req.post)
-            packet.post = *req.post;
+            CopyPostInPlace(packet.post, *req.post);
+        else
+            packet.post.passes.clear();
         packet.lightDirection = req.lightDirection;
         packet.lightColor = req.lightColor;
         packet.ambient = req.ambient;

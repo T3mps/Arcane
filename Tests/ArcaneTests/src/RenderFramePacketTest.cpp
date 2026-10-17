@@ -111,6 +111,7 @@ static void DummyImGuiCallback(const ImDrawList*, const ImDrawCmd*) {}
 
 TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skips a callback command", "[nri][packet][imgui]")
 {
+    Arcane::Detail::ResetExtractUiSnapshotWarnForTest();
     // A default ImDrawData has Textures == nullptr (imgui_draw.cpp:2284-2291).
     // That arm is not what ImGui::Render produces.
     ImDrawData cleared;
@@ -189,7 +190,7 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skip
 
     Arcane::ImDrawSnapshot snap;
     REQUIRE(Arcane::CopyImDrawSnapshot(src, snap));
-    REQUIRE(snap.lists.size() == static_cast<std::size_t>(src->CmdLists.Size));
+    REQUIRE(snap.listCount == static_cast<std::uint32_t>(src->CmdLists.Size));
     CHECK(snap.hasTextures);
     REQUIRE(snap.textures.size() == static_cast<std::size_t>(src->Textures->Size));
     for (int i = 0; i < src->Textures->Size; ++i)
@@ -200,7 +201,7 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skip
 
     bool saw42 = false;
     bool saw7 = false;
-    for (std::size_t li = 0; li < snap.lists.size(); ++li)
+    for (std::uint32_t li = 0; li < snap.listCount; ++li)
     {
         const ImDrawList* live = src->CmdLists[static_cast<int>(li)];
         const Arcane::ImDrawListSnapshot& copied = snap.lists[li];
@@ -339,11 +340,11 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skip
     Arcane::ImDrawSnapshot skipped;
     // false: a callback was skipped. The snapshot still holds every other command.
     CHECK_FALSE(Arcane::CopyImDrawSnapshot(callbackDraw, skipped));
-    REQUIRE(skipped.lists.size() == static_cast<std::size_t>(callbackDraw->CmdLists.Size));
+    REQUIRE(skipped.listCount == static_cast<std::uint32_t>(callbackDraw->CmdLists.Size));
     CHECK(skipped.hasTextures == (callbackDraw->Textures != nullptr));
     int copiedCommands = 0;
     bool copiedTheRect = false;
-    for (std::size_t li = 0; li < skipped.lists.size(); ++li)
+    for (std::uint32_t li = 0; li < skipped.listCount; ++li)
     {
         const ImDrawList* live = callbackDraw->CmdLists[static_cast<int>(li)];
         const Arcane::ImDrawListSnapshot& copied = skipped.lists[li];
@@ -372,8 +373,8 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skip
     CHECK(copiedTheRect);
 
     // ExtractFrame warns once per process per list (imgui, then gameUi) and
-    // keeps the commands CopyImDrawSnapshot kept. This is the only test that
-    // extracts a UserCallback, so the first call is the process's first warn.
+    // keeps the commands CopyImDrawSnapshot kept. The flags were reset at
+    // the start of this case, so the counts do not depend on test order.
     int imguiWarns = 0;
     int gameUiWarns = 0;
     auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
@@ -400,22 +401,22 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skip
     const Arcane::RenderFramePacket& extracted = Arcane::ExtractFrame(reg, req, ring);
     CHECK(imguiWarns == 1);
     CHECK(gameUiWarns == 0);
-    REQUIRE(extracted.imgui.lists.size() == skipped.lists.size());
+    REQUIRE(extracted.imgui.listCount == skipped.listCount);
     CHECK(extracted.imgui.lists[0].cmds.size() == skipped.lists[0].cmds.size());
     const Arcane::RenderFramePacket& extractedAgain = Arcane::ExtractFrame(reg, req, ring);
     CHECK(imguiWarns == 1);
-    CHECK(extractedAgain.imgui.lists.size() == skipped.lists.size());
+    CHECK(extractedAgain.imgui.listCount == skipped.listCount);
 
     req.imgui = nullptr;
     req.gameUi = callbackDraw;
     const Arcane::RenderFramePacket& game = Arcane::ExtractFrame(reg, req, ring);
     CHECK(gameUiWarns == 1);
     CHECK(imguiWarns == 1);
-    REQUIRE(game.gameUi.lists.size() == skipped.lists.size());
-    CHECK(game.imgui.lists.empty());
+    REQUIRE(game.gameUi.listCount == skipped.listCount);
+    CHECK(game.imgui.listCount == 0u);
     const Arcane::RenderFramePacket& gameAgain = Arcane::ExtractFrame(reg, req, ring);
     CHECK(gameUiWarns == 1);
-    CHECK(gameAgain.gameUi.lists.size() == skipped.lists.size());
+    CHECK(gameAgain.gameUi.listCount == skipped.listCount);
 
     auto& sinks = Arcane::Log::Engine()->sinks();
     sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());

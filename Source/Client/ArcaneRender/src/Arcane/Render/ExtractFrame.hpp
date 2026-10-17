@@ -106,4 +106,13 @@ namespace Arcane
     // globals set and its materials registered -- and the drained batch is
     // copied into the packet. Extract never Begin()s it and never makes one.
     ARC_RENDER_API RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring);
+
+    namespace Detail
+    {
+        // Test-only. The UserCallback skip warns once per process per list.
+        // A case that counts those warns resets them first, the same way
+        // ResetExtractFrameCallCount resets the extract counter. ArcaneTests
+        // runs in random order.
+        ARC_RENDER_API void ResetExtractUiSnapshotWarnForTest() noexcept;
+    }
 }

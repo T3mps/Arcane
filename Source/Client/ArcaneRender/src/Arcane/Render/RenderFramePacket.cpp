@@ -6,8 +6,14 @@ namespace Arcane
 {
     namespace
     {
-        // clear() keeps each vector's buffer. Assigning a fresh object would
-        // drop it, and the next extract would allocate again.
+        // clear() keeps that vector's own buffer. Assigning a fresh object
+        // would drop it, and the next extract would allocate again.
+        // A list or a pass element owns further buffers. clear() on the
+        // outer vector destroys those elements and frees the inner ones,
+        // so the elements stay and only the inners are cleared. The copy
+        // sets the live count (listCount, or passes.size() after it
+        // resizes to this frame's chain) and refills that prefix in place.
+        // Readers use the live count. Elements past it are not live.
         void ClearVisible(VisibleSet& set) noexcept
         {
             set.view = {};
@@ -42,7 +48,6 @@ namespace Arcane
                 pass.psBytes.reset();
                 pass.inputs.clear();
             }
-            post.passes.clear();
             post.templ.reset();
             post.instance.reset();
             post.chainInputSlots = 1;
@@ -56,7 +61,7 @@ namespace Arcane
                 list.indices.clear();
                 list.cmds.clear();
             }
-            snap.lists.clear();
+            snap.listCount = 0;
             snap.textures.clear();
             snap.hasTextures = false;
             snap.displayPos = {};

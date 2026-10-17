@@ -24,7 +24,7 @@ namespace
             list.indices.clear();
             list.cmds.clear();
         }
-        out.lists.clear();
+        out.listCount = 0;
         out.textures.clear();
         out.hasTextures = false;
         out.displayPos = {};
@@ -113,8 +113,16 @@ namespace Arcane
             FillListInPlace(out.lists[dst], *list, skipped);
             ++dst;
         }
-        if (out.lists.size() > dst)
-            out.lists.resize(dst);
+        // Keep elements past dst. Their inner buffers are the next frame's
+        // capacity when the list count grows back. listCount is the live
+        // prefix; readers must not walk past it.
+        for (std::size_t i = dst; i < out.lists.size(); ++i)
+        {
+            out.lists[i].vertices.clear();
+            out.lists[i].indices.clear();
+            out.lists[i].cmds.clear();
+        }
+        out.listCount = static_cast<std::uint32_t>(dst);
         return !skipped;
     }
 
@@ -138,8 +146,10 @@ namespace Arcane
         }
         else
             m_data.Textures = nullptr;
-        for (const ImDrawListSnapshot& src : snap.lists)
+        const std::uint32_t liveLists = snap.listCount;
+        for (std::uint32_t li = 0; li < liveLists; ++li)
         {
+            const ImDrawListSnapshot& src = snap.lists[li];
             ImDrawList* list = IM_NEW(ImDrawList(nullptr));
             if (!src.vertices.empty())
             {

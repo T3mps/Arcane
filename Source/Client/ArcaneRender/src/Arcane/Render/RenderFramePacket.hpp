@@ -75,9 +75,14 @@ namespace Arcane
     // One ImDrawData's copy; it owns its lists. CopyImDrawSnapshot /
     // ImDrawSnapshotRebuild (ArcaneImGui, Arcane/ImGui/ImDrawSnapshot.hpp) are
     // the only code that converts to and from the live ImGui types.
+    //
+    // lists.size() is retained storage. listCount is the live prefix.
+    // Readers stop there. Elements at and past listCount stay so the next
+    // frame reuses their vertex, index and command buffers.
     struct ImDrawSnapshot
     {
         std::vector<ImDrawListSnapshot> lists;
+        std::uint32_t listCount = 0;
         std::vector<void*> textures;            // ImTextureData* pointer copy. Not owned.
         bool hasTextures = false;               // false when src->Textures was null, including an empty default ImDrawData
         glm::vec2 displayPos{ 0.0f };
