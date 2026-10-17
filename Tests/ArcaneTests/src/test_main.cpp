@@ -21,6 +21,8 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
+#include "Helpers/GpuCapability.hpp"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,11 +50,13 @@ namespace
         return false;
     }
 
-    // Samples RenderErrorCount around each case. testCaseEnded runs after the
-    // case function returns, so the case's device is already destroyed and a
-    // stored D3D12 message has had its chance to reach the latch. The rise is
-    // recorded, not asserted: a listener cannot fail the case. main reads the
-    // gate after session.run.
+    // Samples RenderErrorTotal around each case. The total is monotonic:
+    // ResetRenderErrorCount does not clear it, so a scope guard that puts
+    // the resettable count back cannot hide a rise. testCaseEnded runs after
+    // the case function returns, so the case's device is already destroyed
+    // and a stored D3D12 message has had its chance to reach the latch. The
+    // rise is recorded, not asserted: a listener cannot fail the case. main
+    // reads the gate after session.run.
     class RenderErrorListener final : public Catch::EventListenerBase
     {
     public:
@@ -60,27 +64,25 @@ namespace
 
         void testRunStarting(Catch::TestRunInfo const&) override
         {
-            SuiteRenderErrorGate().BeginRun(Arcane::RenderErrorCount());
+            SuiteRenderErrorGate().BeginRun(Arcane::RenderErrorTotal());
         }
 
         void testCaseStarting(Catch::TestCaseInfo const& info) override
         {
             SuiteRenderErrorGate().BeginCase(info.name, ExpectsRenderErrors(info),
-                                             Arcane::RenderErrorCount());
+                                             Arcane::RenderErrorTotal());
         }
 
         void testCaseEnded(Catch::TestCaseStats const&) override
         {
-            SuiteRenderErrorGate().EndCase(Arcane::RenderErrorCount());
+            SuiteRenderErrorGate().EndCase(Arcane::RenderErrorTotal());
         }
 
-        // After every case. A device that outlived its case (a static or a
-        // fixture shared across cases) is not covered by testCaseEnded. Nothing
-        // in the suite holds one past the case today; the sample still runs so
-        // a rise during run teardown is named in the summary.
+        // ~RunContext calls this before Session::run returns. main samples
+        // once more after that, once any helper-held device has been released.
         void testRunEnded(Catch::TestRunStats const&) override
         {
-            SuiteRenderErrorGate().EndRun(Arcane::RenderErrorCount());
+            SuiteRenderErrorGate().EndRun(Arcane::RenderErrorTotal());
         }
     };
 }
@@ -148,7 +150,11 @@ int main(int argc, char* argv[]) {
 
     // The listener records offenders; it cannot fail a case. A non-zero status
     // from the gate is the suite failing, including when Catch itself passed.
+    // testRunEnded samples from inside run(), before this line. Release any
+    // device the helpers still hold, then sample the monotonic total again.
     const int catchResult = Catch::Session().run(argc, argv);
+    Arcane::Test::ReleaseSharedTestGpuDevices();
+    SuiteRenderErrorGate().EndRun(Arcane::RenderErrorTotal());
     if (const std::string summary = SuiteRenderErrorGate().Summary(); !summary.empty())
     {
         std::fputs(summary.c_str(), stderr);

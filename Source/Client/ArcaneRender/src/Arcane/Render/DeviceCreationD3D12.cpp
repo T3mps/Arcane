@@ -248,10 +248,12 @@ namespace Arcane
         //
         // The warning names the module that owns the device vtable and the
         // module that owns the info-queue vtable, plus each exported
-        // D3D12SDKVersion. GetModuleHandle by file name is the wrong probe
-        // once two copies can be mapped: it returns whichever loaded first.
-        // An injected proxy shows up as a vtable outside D3D12Core.dll /
-        // d3d12SDKLayers.dll.
+        // D3D12SDKVersion. Those are address probes: GetModuleHandle by file
+        // name returns whichever copy loaded first once two can be mapped.
+        // The warning also logs that name probe for D3D12Core.dll, because
+        // the vtable here is the layers DLL and a path on disk is not the
+        // module the process loaded. An injected proxy shows up as a vtable
+        // outside D3D12Core.dll / d3d12SDKLayers.dll.
         HMODULE ModuleContaining(const void* address)
         {
             if (!address)
@@ -743,8 +745,10 @@ namespace Arcane
             {
                 const HMODULE deviceModule = ModuleContaining(ComVtable(out.device.Get()));
                 const HMODULE queueModule  = ModuleContaining(ComVtable(infoQueue.Get()));
+                const HMODULE loadedCore   = GetModuleHandleW(L"D3D12Core.dll");
                 const int deviceSdk = ExportedD3D12SdkVersion(deviceModule);
                 const int queueSdk  = ExportedD3D12SdkVersion(queueModule);
+                const int coreSdk   = ExportedD3D12SdkVersion(loadedCore);
                 const unsigned requested = AgilitySdk::kVersion;
                 const unsigned osBuild   = WindowsBuildNumber();
                 const bool handshake = deviceSdk == static_cast<int>(requested) &&
@@ -759,10 +763,12 @@ namespace Arcane
                     why = "handshake matches and the OS build is new enough; the vtable module "
                           "above is what refused the interface";
                 ARC_WARN("ID3D12InfoQueue1 QueryInterface failed (device hr=0x{:08X}, info-queue hr=0x{:08X}). "
+                         "Loaded D3D12Core.dll: {} (D3D12SDKVersion {}). "
                          "Device module: {} (D3D12SDKVersion {}). "
                          "InfoQueue module: {} (D3D12SDKVersion {}). "
                          "Exe requests {}. OS build {}. {}",
                          static_cast<uint32_t>(deviceQiHr), static_cast<uint32_t>(queueQiHr),
+                         ModulePathOr(loadedCore, "not loaded"), SdkVersionText(coreSdk),
                          ModulePathOr(deviceModule, "none"), SdkVersionText(deviceSdk),
                          ModulePathOr(queueModule, "none"), SdkVersionText(queueSdk),
                          requested, osBuild, why);

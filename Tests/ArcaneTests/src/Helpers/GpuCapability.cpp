@@ -49,4 +49,14 @@ namespace Arcane::Test
             slot = Probe(backend);
         return *slot;
     }
+
+    void ReleaseSharedTestGpuDevices()
+    {
+        // Probe's NativeDeviceOwner is a local and is destroyed before Probe
+        // returns, so that device's stored messages are latched inside the
+        // case that first asked, and EndCase samples them. MeshNodeTest's
+        // parity vehicle used to be a function-local static; it is a case
+        // local now because a static destructor runs after main. Nothing else
+        // under Tests/ArcaneTests/src/Helpers keeps an NriDevice.
+    }
 }
