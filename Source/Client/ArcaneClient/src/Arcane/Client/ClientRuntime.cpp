@@ -7,15 +7,11 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Input/GameInput.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
-#include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem -- instantiated IN this module
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Host/HostOverlay.hpp>
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>
-
-
-#include <tuple>
 
 namespace Arcane
 {
@@ -46,9 +42,10 @@ namespace Arcane
 
     void ClientRuntime::InstallRenderSystems()
     {
-        auto& render = m_core.Schedulers().render;
-        if (!render.HasSystem<RenderSubmissionSystem>())
-            std::ignore = render.AddSystem<RenderSubmissionSystem>();
+        // Installs nothing since F5 plan 1 Task 5: sprites are submitted once
+        // per frame by the extract stage (Arcane/Render/ExtractFrame.hpp), so
+        // RenderSubmissionSystem in the render scheduler would run the sprite
+        // sweep a second time. Kept as the OnSystemsCleared seam.
     }
 
     // --- IClientHooks ------------------------------------------------------------

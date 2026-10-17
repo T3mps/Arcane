@@ -14,6 +14,8 @@
 #if defined(ARC_RUNTIME_HOST_VERIFY)
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
+#include <Arcane/Base/ExtractAccounting.hpp>  // ExtractFrameCallCount (the extract-frames witness line)
+#include <cstdio>   // fprintf/fflush for that line
 #endif
 #include <Arcane/Assets/Assets.hpp>      // Arcane::Assets (AssetsFacade().PixelsFor -- the pre-loop SetPixelSupply lambda)
 #include <Arcane/Assets/ImageCompare.hpp>   // Arcane::CompareImages/ImageCompareOptions (Task 8: --compare)
@@ -31,8 +33,8 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>  // RenderErrorCount (the graph latch fold)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/PickEmit.hpp>    // PickEntityForId (ShutdownGraphPath's --pick-probe AND pick@x,y reports)
+#include <Arcane/Render/RenderFramePacket.hpp>   // PushSceneCamera reads the extracted sprite view
 #include <Arcane/Scene/Components.hpp>   // Arcane::Identity (ShutdownGraphPath's pick@x,y readback resolution, Task 9)
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (PushSceneCamera; RenderGraph calls it via FrameIo::app)
 // Assets.hpp/AudioDevice.hpp/InputActions.hpp/InputSnapshot.hpp/Batcher2D.hpp
 // live in RuntimeFrame.cpp instead: every symbol they are needed for (the
 // audio voice reap, input sampling, Batch2DStats) belongs to MainLoop's frame
@@ -810,7 +812,7 @@ void RuntimeApp::MainLoop()
         .lastFrameDt     = m_lastFrameDt,
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
-        .gpuSceneFrame   = m_gpuSceneFrame,
+        .gpuSceneStats   = m_gpuSceneStats,
         .captureRead     = m_captureRead,
         .captureWidth    = m_captureWidth,
         .captureHeight   = m_captureHeight,
@@ -1131,49 +1133,19 @@ void RuntimeApp::MainLoop()
 #endif
 }
 
-void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
+void RuntimeApp::PushSceneCamera(const Arcane::RenderFramePacket& packet)
 {
-    // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
-    // the plugin's update ran, so a scene that ships a camera beats a plugin
-    // that also pushes one -- the scene is the authored artifact. No camera
+    // The scene camera ExtractFrame resolved. Pushed after extract, so the
+    // pick pass reads the view this frame's sprites used. BuildHud already
+    // resolved and pushed before DrawUI, so the HUD saw this frame's camera;
+    // this write publishes the view extract used, including a camera DrawUI
+    // itself moved. A scene that ships a camera beats a plugin that also
+    // pushes one -- the scene is the authored artifact. No scene camera
     // leaves the stored view untouched (a plugin that drives the camera
-    // itself via ClientRuntime::SetView therefore still works) and says so
-    // once, rather than substituting an identity view that would render an
-    // older scene as an unexplained black window.
-    int camCount = 0;
-    const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
-                                                glm::uvec2{ static_cast<std::uint32_t>(viewportWidth),
-                                                            static_cast<std::uint32_t>(viewportHeight) },
-                                                &camCount);
-    if (view)
-        m_runtime->SetView(view->view);
-    else if (!m_warnedNoSceneCamera)
-    {
-        // The old message said "no active Camera entity" for THREE
-        // different situations and cost a debugging round: no Camera
-        // component in the scene at all, one present but active==false or
-        // orthographicSize<=0, or a component view that is empty in THIS
-        // module because it disagrees with the loader about the component
-        // id. Count the components here, host-side, and say which it is --
-        // the resolver logs its own census from inside Arcane.dll, so the
-        // two lines together localise the last case.
-        int total = 0;
-        m_runtime->Registry().CreateView<const Arcane::Camera>().ForEach(
-            [&](Astra::Entity, const Arcane::Camera&) { ++total; });
-        if (total == 0)
-            ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
-                     "Add a Camera component to an entity (a New Scene ships one).");
-        else
-            ARC_WARN("scene carries {} Camera component(s) but none is usable "
-                     "(active == false, or orthographicSize <= 0) -- nothing sets "
-                     "the view", total);
-        m_warnedNoSceneCamera = true;
-    }
-    if (camCount > 1 && !m_warnedMultiSceneCamera)
-    {
-        ARC_WARN("scene carries {} active Camera entities -- the first found wins", camCount);
-        m_warnedMultiSceneCamera = true;
-    }
+    // itself via ClientRuntime::SetView therefore still works). The
+    // once-only diagnostics live in ExtractFrame.
+    if (packet.spriteViewFromScene && packet.spriteView)
+        m_runtime->SetView(packet.spriteView->view);
 }
 
 void RuntimeApp::ShutdownGraphPath()
@@ -1539,6 +1511,12 @@ void RuntimeApp::ShutdownGraphPath()
     // (run identity + whatever AddCensus below always contributes), and a
     // bare `--probe` with no `--report` intentionally writes nothing -- there
     // is nowhere for it to go.
+    // Witness line for the extract counter. Outside the reportPath guard, so a
+    // --headless run with no --report still prints it. fprintf, not ARC_INFO,
+    // so the line is byte-exact. A package never compiles this region.
+    std::fprintf(stdout, "extract-frames: %llu\n",
+                 static_cast<unsigned long long>(Arcane::ExtractFrameCallCount()));
+    std::fflush(stdout);
     if (!m_config.reportPath.empty())
     {
         const bool completedAllFrames =
@@ -1671,16 +1649,16 @@ void RuntimeApp::ShutdownGraphPath()
         // coarse-visible ones against the mesh view, the batches and draws
         // emitted. Carried unconditionally like the census: a 2D scene
         // honestly reports zeros, and so does a scene with no active
-        // perspective camera -- no mesh view means no frame was built at
-        // all (PrepareSceneForRender's early return), not "everything culled".
+        // perspective camera -- no mesh view means extract published no mesh
+        // batches (its no-mesh-view arm zeroes the stats), not "everything culled".
         //
         // `gpuVisible` (plan 2 T5) is the LAST COMPLETED readback's count, or
         // nullopt -- never the coarse count wearing the GPU's name: a run that
         // never armed the ring, or one whose frames were all still in flight,
         // has not measured it and says so.
-        report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                             m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
-                             static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+        report.SetVisibility(m_gpuSceneStats.stats.total, m_gpuSceneStats.stats.coarseVisible,
+                             m_gpuSceneStats.stats.batches, m_gpuSceneStats.stats.draws,
+                             m_gpuSceneStats.transparentDraws,
                              gpuVisibleRows);
 
         // THE INJECTED MODULES (schemaVersion 10): the scan taken above for

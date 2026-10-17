@@ -19,7 +19,6 @@
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
-#include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
@@ -55,24 +54,21 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
-#include "Viewport/GizmoOverlay.hpp"   // ImGuiGizmoSink (the gizmo as foreground chrome)
-#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame, once per viewport frame
+#include <Arcane/Host/GpuSceneHost.hpp>   // GpuSceneInvalidate (R-F) after a viewport frame that did not present
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/ExtractFrame.hpp>   // ExtractFrame / ExtractRequest -- the viewport frame's one extract (F5 plan 1 Task 5)
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
-#include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/RenderLookSettings.hpp>   // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Render/FramePacing.hpp>   // FramesInFlight() -- the capture hooks' ring depth (Task 27)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsWorld2D (physics overlay)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 #include <Arcane/Host/HostSettings.hpp>   // app.window.minimizedSleepMs
 #include "Settings/EditorPerfSettings.hpp"   // editor.perf.backgroundFps
-#include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -88,7 +84,6 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
 #include <cstdint>
 #include <cstdio>      // std::snprintf (the Rename modal's prefill)
 #include <filesystem>
@@ -104,6 +99,67 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // The transform gizmo's sink (F5 plan 1 Task 3): the same Line /
+        // Triangle / Rect / Circle callbacks ImGuiGizmoSink used to paint into
+        // the Viewport window's draw list, recorded instead as post-tonemap
+        // overlay primitives -- viewport pixels (image origin (0, 0)),
+        // AlwaysOnTop, DisplayReferred (the gizmo colours were ImGui colours,
+        // i.e. already display-referred).
+        class OverlayGizmoSink final : public Arcane::GizmoDrawSink
+        {
+        public:
+            explicit OverlayGizmoSink(Arcane::OverlayPrimitiveList& out) : m_out(out) {}
+
+            void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) override
+            {
+                Arcane::OverlayLine line{};
+                line.a           = glm::vec3(a, 0.0f);
+                line.b           = glm::vec3(b, 0.0f);
+                line.color       = rgba;
+                line.thickness   = thickness;
+                line.depth       = Arcane::OverlayDepthClass::AlwaysOnTop;
+                line.space       = Arcane::OverlayColorSpace::DisplayReferred;
+                line.screenSpace = true;
+                m_out.AddLine(line);
+            }
+            void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Triangle, rgba);
+                fill.a = glm::vec3(a, 0.0f);
+                fill.b = glm::vec3(b, 0.0f);
+                fill.c = glm::vec3(c, 0.0f);
+                m_out.AddFill(fill);
+            }
+            void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Rect, rgba);
+                fill.a    = glm::vec3(pos, 0.0f);
+                fill.size = size;
+                m_out.AddFill(fill);
+            }
+            void Circle(glm::vec2 center, float radius, glm::vec4 rgba) override
+            {
+                Arcane::OverlayFill fill = Fill(Arcane::OverlayPrimKind::Circle, rgba);
+                fill.a      = glm::vec3(center, 0.0f);
+                fill.radius = radius;
+                m_out.AddFill(fill);
+            }
+
+        private:
+            [[nodiscard]] static Arcane::OverlayFill Fill(Arcane::OverlayPrimKind kind, glm::vec4 rgba) noexcept
+            {
+                Arcane::OverlayFill fill{};
+                fill.kind        = kind;
+                fill.color       = rgba;
+                fill.depth       = Arcane::OverlayDepthClass::AlwaysOnTop;
+                fill.space       = Arcane::OverlayColorSpace::DisplayReferred;
+                fill.screenSpace = true;
+                return fill;
+            }
+
+            Arcane::OverlayPrimitiveList& m_out;
+        };
+
         // --compare / --bless (Task 9). Own private copy, matching
         // RuntimeApp.cpp's (which explains the reasoning in full): this is a
         // FILE PATH COMPONENT ("dx12"/"vulkan", matching HostConfig.cpp's
@@ -569,6 +625,9 @@ namespace Arcane::Editor
             AdvanceSim(ls);
             ApplyPendingViewportResize();
             RefreshSceneResolution();
+            // The gizmo's overlay primitives, BEFORE the scene render that
+            // carries them (F5 plan 1 Task 3) -- not a frame late.
+            BuildGizmoOverlayPrims();
 #if !defined(ARC_BUILD_DIST)
             const auto renderStart = std::chrono::steady_clock::now();
 #endif
@@ -1081,7 +1140,7 @@ namespace Arcane::Editor
         // Edit mode: the EDITOR camera owns RMB-drag pan and wheel zoom
         // (see UpdateEditorCamera below), so the plugin must not see those
         // either. Both cameras write the SAME Runtime slot, and the
-        // editor's push (before SubmitRender) wins in Edit mode -- so a
+        // editor's push (before ExtractFrame) wins in Edit mode -- so a
         // plugin still panning underneath would just be invisible work
         // whose result reappears the moment Play starts, from a viewpoint
         // the user never chose. RMB=bit1; InputSnapshot.hpp. Play is
@@ -1314,7 +1373,7 @@ namespace Arcane::Editor
 
         // Push the editor camera BEFORE the gizmo block below reads
         // ClientRuntime::View(). Those reads happen earlier
-        // in the frame than the pre-SubmitRender push further down, so
+        // in the frame than the pre-ExtractFrame push further down, so
         // without this the gizmo would hit-test against whatever camera
         // was stored LAST frame -- and on the very first frame against
         // the identity (zoom 1), placing the handles 100x off the
@@ -1746,24 +1805,16 @@ namespace Arcane::Editor
         // the plugin's UpdateAll ran above: a plugin that pushes its own
         // camera every frame -- Sandbox does -- would otherwise own the
         // Edit-mode view. Must stay after that Advance and before
-        // SubmitRender below; moving it earlier hands the view back to
+        // ExtractFrame below; moving it earlier hands the view back to
         // the plugin.
         //
-        // Play mode pushes the SCENE's camera instead of the editor's, so
-        // play-in-editor shows what a standalone ArcaneRuntime would show --
-        // both now resolve the view from the same place (ActiveSceneCamera).
-        // Falls through to the plugin's own camera when the scene has no
-        // active Camera entity, which is what keeps the Sandbox showcase
-        // (a plugin that drives its own camera) working unchanged.
+        // Play does not push here. RenderSceneToViewport resolves the scene
+        // camera through ResolveFrameViews and pushes it before DrawUI, with
+        // the same request extract uses. No scene camera leaves the plugin's
+        // own view, which keeps a plugin-driven camera working.
         if (!InPlayMode())
         {
             m_runtime->SetView(m_camera.Resolve(ViewportSize()));
-        }
-        else if (const auto sceneCam = Arcane::ActiveSceneCamera(
-                     m_runtime->Registry(),
-                     glm::uvec2{ ViewportWidth(), ViewportHeight() }))
-        {
-            m_runtime->SetView(sceneCam->view);
         }
 
         // THE POST CHAIN'S HANDOFF IS NOT MADE HERE, and needs no statement:
@@ -2108,33 +2159,83 @@ namespace Arcane::Editor
             const std::uint32_t w = ViewportWidth();
             const std::uint32_t h = ViewportHeight();
 
-            // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and
-            // the frame's batches -- between the schedulers (phase 9's
-            // Advance left WorldTransform + WorldBounds current) and the
-            // sprite sweep inside SubmitSceneToBatcher (which reads views[0]
-            // through MainVisibleSet). The mesh view is the editor view in
-            // Edit and the perspective scene camera in Play (RuntimeFrame.cpp's
-            // rule); nullopt when Play has none, and then no batch is built --
-            // the pass still declares itself for any staged rows (R-D).
-            //
-            // HERE, not inside SubmitSceneToBatcher next to its SubmitRender:
-            // that function is also CaptureGraphViewportPng's (a scene save's
-            // cover, shutdown), and a second GpuSceneSync there would stage
-            // rows into m_gpuSceneFrame that no mesh pass uploads -- the
-            // mirror's lastModel history having already advanced past them,
-            // the next viewport frame would never re-stage them. One sync per
-            // viewport frame, from the one function that declares the frame.
-            m_meshView.reset();
-            if (!InPlayMode())
-                m_meshView = m_runtime->View();
-            else
-                m_meshView = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), glm::uvec2{ w, h });
-            Arcane::PrepareSceneForRender(m_runtime->Registry(), m_runtime->View(), m_meshView,
-                                          m_viewportTargets.graph->Scene(), m_gpuSceneFrame);
+            // ExtractFrame publishes the visible set, the GPU scene and both
+            // views, and culls against the mesh view. m_meshView is copied
+            // from the packet after the extract below: the editor view in
+            // Edit, the perspective scene camera in Play, nullopt when Play
+            // has none. The scene-save cover extracts too and does not
+            // declare a mesh pass, so it invalidates the mirror after
+            // (ruling R-F) rather than leaving a stage that never uploaded.
+            // The request ExtractFrame uses below, built first so the Play
+            // push and the extract share it. View resolution reads viewport
+            // and editorView; Play leaves editorView empty.
+            Arcane::ExtractRequest req = BuildExtractRequest(w, h);
+            // Play: DrawUI reads ClientRuntime::View(). Push this frame's
+            // scene camera before the HUD. warn is false -- ExtractFrame
+            // emits the no-camera, multi-camera, and degenerate-basis
+            // diagnostics. No scene camera leaves the plugin's view
+            // (spriteViewFromScene stays false). Edit keeps the editor
+            // camera RefreshSceneResolution already pushed.
+            if (InPlayMode())
+            {
+                const Arcane::ResolvedFrameViews views =
+                    Arcane::ResolveFrameViews(m_runtime->Registry(), req, false);
+                if (views.spriteViewFromScene && views.spriteView)
+                    m_runtime->SetView(views.spriteView->view);
+            }
 
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
+
+            // The Play HUD, after scene submission and before extract. A
+            // plugin DrawUI that edits the scene still lands this frame: the
+            // sprite sweep runs inside the extract that follows. Edit mode
+            // and a plugin with no DrawUI leave the pointer null.
+            m_gameUiDrawData = BeginGameUiFrame() ? m_gameImgui->RenderToDrawData() : nullptr;
+
+            // THE ONE EXTRACT (F5 plan 1 Task 5, spec s4.1), AFTER the
+            // Begin + SubmitSceneToBatcher bracket above (before it, the drain
+            // would copy the previous bracket): the sprite sweep runs into `b`
+            // and the drained batch is copied into this frame's packet, which
+            // the batch node draws instead of draining `b` again. Bound just
+            // before RenderFrameOffscreen below, which unbinds it on return.
+            req.gameUi = m_gameUiDrawData;
+            // The scene light is render.mesh.defaultLight.* (Live), read once
+            // here and published by extract. ArmGraphViewportFrame copies the
+            // three vectors onto m_meshScene.
+            Arcane::MeshSceneDesc light{};
+            Arcane::ApplyDefaultLight(light, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+            req.lightDirection = light.lightDirection;
+            req.lightColor = light.lightColor;
+            req.ambient = light.ambient;
+            // The 3D grid is viewport chrome only. The scene-save cover calls
+            // BuildExtractRequest and does not reach this block.
+            if (!InPlayMode() && m_camera.mode == ViewMode::Perspective
+                && Arcane::Settings<EditorViewportSettings>().showGrid)
+            {
+                req.showGrid3d = true;
+                req.grid3d = MakeGridScene(Arcane::Settings<EditorGridSettings>(),
+                                           Arcane::Settings<EditorGrid3DSettings>());
+                req.grid3d.view = m_runtime->View();
+                req.grid3d.SetPlane(Arcane::Settings<EditorViewportSettings>().gridPlane == GridPlane::XY
+                                        ? Arcane::GridSceneDesc::Plane::XY
+                                        : Arcane::GridSceneDesc::Plane::XZ);
+            }
+            Arcane::RenderFramePacket& packet =
+                Arcane::ExtractFrame(m_runtime->Registry(), req, m_packetRing);
+            // Play: the scene camera extract resolved. No scene camera leaves
+            // the plugin's own view (spriteViewFromScene stays false). Edit
+            // already pushed the editor camera in RefreshSceneResolution.
+            if (packet.spriteViewFromScene && packet.spriteView)
+                m_runtime->SetView(packet.spriteView->view);
+            // The shutdown report reads these scalars. The graph borrows
+            // packet.mesh. The cover's later extract must not replace the
+            // viewport frame's figures, so they are snapshotted here.
+            m_gpuSceneStats.stats = packet.mesh.stats;
+            m_gpuSceneStats.transparentDraws =
+                static_cast<std::uint32_t>(packet.mesh.transparentDraws.size());
+            m_meshView = packet.meshView;
 
             // Copied, not borrowed, by FrameDesc -- but the local has to
             // outlive the call all the same, and it is the SAME GlobalParams
@@ -2152,12 +2253,9 @@ namespace Arcane::Editor
             // WITHOUT a post chain at all.
             vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
             vp.globals = &globals;
-            // Phases 11, 12 and 17's contribution to THIS declaration. Strictly
-            // AFTER SubmitSceneToBatcher above, which is not incidental: it
-            // runs the plugin's DrawUI, and phase 11 follows phase 10. A
-            // DrawUI that mutates the scene must land on THIS frame, not the
-            // next.
-            ArmGraphViewportFrame(vp);
+            // Phases 12 and 17, plus the gameui node declared from the HUD
+            // draw data built before extract above.
+            ArmGraphViewportFrame(vp, packet);
 
             // THE --screenshot CAPTURE, armed on the LAST frame only -- the
             // same "+1" the runtime's RenderGraph uses (there io.frameCount is
@@ -2197,10 +2295,11 @@ namespace Arcane::Editor
                 const Arcane::Editor::AxisRoleColors roles = Arcane::Editor::DeriveAxisRoles(Arcane::Editor::Theme::Live());
                 outline->SetColors(roles.outlineSelect, roles.outlineHover);
             }
+            m_viewportTargets.graph->BindPacket(&packet);
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
             // Any outcome but Presented means GpuSceneSyncNode did not run, so
-            // the rows PrepareSceneForRender staged above never reached the
+            // the rows the extract staged above never reached the
             // GPU and would otherwise never be re-staged (ruling R-F): give
             // the mirror a new generation so the next sync is a full rebuild.
             if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
@@ -2226,9 +2325,9 @@ namespace Arcane::Editor
             // pairing: nothing is owed at this point in the frame. Phase 10
             // runs BEFORE DrawEditorUi (phase 13) begins the editor's frame, so
             // there is nothing begun to pair; and the GAME context's frame is
-            // begun and paired entirely inside ArmGraphViewportFrame above,
-            // before the call that just failed. Bailing here would strand
-            // neither.
+            // begun and paired inside RenderSceneToViewport, before
+            // ArmGraphViewportFrame and before the call that just failed.
+            // Bailing here would strand neither.
             //
             // The reason is that this phase has no stop channel and should not
             // grow one: RenderSceneToViewport returns void, and threading an
@@ -2293,10 +2392,8 @@ namespace Arcane::Editor
         // requested, and this frame just ends here without a fault.
     }
 
-    // The scene submission plus the two Edit-mode overlays, against whichever
-    // batcher the caller hands in. Kept as its own function so the ORDER of
-    // these statements is stated in one place -- every overlay's position
-    // relative to the scene submission is part of the contract.
+    // The scene-batcher setup. Overlays are filled by ExtractFrame from
+    // the request BuildExtractRequest returns.
     void EditorApp::SubmitSceneToBatcher(Arcane::Batcher2D& b)
     {
         // Globals for registered sprite materials (Time/Delta/
@@ -2309,135 +2406,86 @@ namespace Arcane::Editor
 
         // The frame's view-projection for the WORLD-space spans (F4 plan 1
         // T5): sprites submit world METRES through QuadWorld/CircleWorld and
-        // the vertex shader projects them, so the batcher needs the same view
-        // the overlay and the gizmo below read. Sticky within this Begin()
-        // bracket only -- both callers (the viewport frame and the capture
-        // re-Begin) reach this line right after their Begin.
+        // the vertex shader projects them. ExtractSprites overwrites it from
+        // the sprite view; SetGlobals still has to happen before that sweep.
+        // Sticky within this Begin() bracket only -- both callers (the
+        // viewport frame and the capture re-Begin) reach this line right
+        // after their Begin.
         b.SetViewProjection(m_runtime->View().ViewProjection());
 
-        // The 2D reference grid (F4 plan 1 T9, spec s5.1), FIRST and at the
-        // BOTTOM batcher layer (0, 0) so every sprite paints over it: decade
-        // levels on the metre, chosen from this frame's pixels-per-metre and
-        // clipped to the view's own world rect (ViewportGrid.hpp). Edit mode,
-        // the 2D view mode and the Show grid setting gate it; the Persp view's
-        // grid is Task 10's depth-tested GridNode, not these lines. In Play
-        // the view is the scene camera's and the grid is an editor affordance,
-        // so it stays off.
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD
-            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
-        {
-            const Arcane::ViewTransform& view = m_runtime->View();
-            Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
-        }
-
+        // The batcher the sprite sweep submits into, published for the
+        // caller's ExtractFrame, which runs that sweep once (F5 plan 1 Task 5).
         m_runtime->SetRenderContext(&b);
-        m_runtime->Loop().SubmitRender();
+    }
 
-        // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3), drawn AFTER
-        // the sprites and BEFORE the gizmo, through the SAME camera and the
-        // SAME interp buffer + alpha the sprites used, so overlay and sprite
-        // agree to the bit. The decision is PlanPhysicsOverlay (pure, tested).
-        {
-            Astra::Registry& reg = m_runtime->Registry();
-            const Arcane::PhysicsWorld2D* phys = reg.GetResource<Arcane::PhysicsWorld2D>();
-            std::optional<Manifold2D::Physics::BodyHandle> selectedBody;
-            // entityToBody (a plain Arcane-level map), not Arcane::PhysicsBodyRef2D +
-            // PhysicsWorld::IsValid: ArcaneEditor.exe does not link Manifold2D
-            // (physics logic lives inside Arcane.dll only, same boundary the
-            // NRI include-only comment above documents) -- a direct call into
-            // an out-of-line PhysicsWorld method here is an unresolved symbol.
-            if (m_selection.HasSelection() && phys)
-                if (auto it = Arcane::Detail::Physics2D::Access::Entities(*phys).find(m_selection.Primary()); it != Arcane::Detail::Physics2D::Access::Entities(*phys).end())
-                    selectedBody = it->second;
-            const Arcane::Editor::PhysicsOverlayPlan plan =
-                Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
-            // The overlay draws in pixels through the view's Affine2D (F4 plan 1
-            // T3): no context, or a view with no per-axis affine (perspective,
-            // Task 7), skips the overlay this frame.
-            const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
-            const std::optional<Arcane::Affine2D> overlayAffine =
-                ctx ? ctx->view.AsAffine2D() : std::nullopt;
-            if (plan.draw && phys && Arcane::Detail::Physics2D::Access::Solver(*phys) && overlayAffine)
-            {
-                Arcane::PhysicsDebugDrawOptions2D opts = Arcane::MakePhysicsDebugDrawOptions();   // debug.physics.*
-                opts.view   = *overlayAffine;
-                opts.alpha  = ctx->alpha;
-                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
-                opts.velocities = opts.comMarkers = opts.orientations = false;   // outlines + contacts (spec)
-                opts.contacts   = plan.wholeWorld;
-                if (!plan.wholeWorld && selectedBody)
-                    opts.onlyBody = (static_cast<std::uint64_t>(selectedBody->index) << 32) | selectedBody->generation;
-                Arcane::DrawPhysicsDebug(*Arcane::Detail::Physics2D::Access::Solver(*phys), b, opts);
-            }
-        }
-
-        // Transform gizmo, drawn AFTER the scene submit so it renders on
-        // top. Frame ordering guarantees the input block above already ran
-        // this frame, so m_gizmoHovered/m_gizmoDrag and the live
-        // Transform read here are current. Edit-mode + has-selection
-        // only (mirrors the interaction gate; no viewport-hover requirement
-        // here -- the gizmo should stay visible while e.g. the mouse is over
-        // the Inspector, just not be interactable there).
-        // Camera rect: what the scene camera will actually capture, drawn
-        // in the EDIT view so framing is authorable without guessing (the
-        // affordance Unity's camera gizmo provides). Edit mode only -- in
-        // Play the view IS the camera, so a rect would just trace the
-        // viewport border.
-        //
-        // Asked for at the camera's OWN aspect (the viewport's), then drawn
-        // through the EDITOR's view: ActiveSceneCamera reports the authored
-        // worldCenter/halfHeight precisely so a caller can draw the camera
-        // instead of looking through it. The four WORLD corners go through
-        // ViewTransform::WorldToScreen (F4 plan 1 T3), which works in both
-        // view modes; a corner that projects to a non-finite pixel (behind a
-        // perspective eye) skips the rect for the frame.
+    Arcane::ExtractRequest EditorApp::BuildExtractRequest(std::uint32_t w, std::uint32_t h)
+    {
+        Arcane::ExtractRequest req;
+        req.viewport = { w, h };
+        req.playMode = InPlayMode();
+        // Edit mode draws through the editor camera; Play leaves it empty, so
+        // extract resolves the scene camera itself.
         if (!InPlayMode())
-        {
-            const glm::uvec2 vp{ ViewportWidth(), ViewportHeight() };
-            if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vp))
-            {
-                const float aspect = (vp.y > 0u) ? (float(vp.x) / float(vp.y)) : 1.0f;
-                const float hw = cam->halfHeight * aspect;
-                const float hh = cam->halfHeight;
-                const glm::vec2 c = cam->worldCenter;
-                const Arcane::ViewTransform& ev = m_runtime->View();
-                const glm::vec3 p[4] = {
-                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y - hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y - hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y + hh, 0.0f)),
-                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y + hh, 0.0f)),
-                };
-                bool finite = true;
-                for (const glm::vec3& q : p)
-                    finite = finite && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
-                if (finite)
-                {
-                    // A thin desaturated line stays legible over both bright and
-                    // dark scene content without competing with the selection
-                    // outline or the gizmo axes. (Dashed would read better still,
-                    // but the batcher has no dash primitive.)
-                    // editor.theme.viewport.cameraFrame (settings S6-26).
-                    static const EditorThemeViewportSettings kVpDefaults{};
-                    const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
-                                                            kVpDefaults.cameraFrame, kCameraFrameColor);
-                    const glm::vec4 col(frame.x, frame.y, frame.z, frame.w);
-                    for (int i = 0; i < 4; ++i)
-                        b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
-                }
-            }
-        }
+            req.editorView = m_runtime->View();
+        req.device = m_viewportTargets.graph ? m_viewportTargets.graph->Scene() : nullptr;
 
-        // The gizmo is NOT drawn here any more (F4 plan 2, desk finding
-        // 2026-09-18): the scene batch is painted before the mesh pass, so a
-        // gizmo in it vanished inside any mesh covering its handles. It paints
-        // as viewport FOREGROUND chrome instead -- see the gizmoOverlay lambda
-        // handed to DrawViewportPanel.
+        // The 2D grid, physics debug, the camera rect and the gizmo. The 3D
+        // grid is NOT here: only the viewport frame arms it (the scene-save
+        // cover shares this builder and has never drawn that grid).
+        const EditorGridSettings& grid = Arcane::Settings<EditorGridSettings>();
+        req.showGrid2d = !InPlayMode() && m_camera.mode == ViewMode::TwoD
+            && Arcane::Settings<EditorViewportSettings>().showGrid;
+        req.gridMinorAlpha = grid.minorAlpha;
+        req.gridMajorAlpha = grid.majorAlpha;
+        req.gridFadeInPx = grid.fadeInPx;
+        req.gridFadeFullPx = grid.fadeFullPx;
+        req.gridLineRgb = glm::vec3(grid.lineColor.r, grid.lineColor.g, grid.lineColor.b);
+        req.gridLineThicknessPx = grid.lineThickness;
+        req.gridMaxLinesPerAxis = static_cast<std::int64_t>(grid.maxLinesPerAxis);
+        req.gridAxisX = kGridAxisXColor;
+        req.gridAxisY = kGridAxisYColor;
+        req.physicsDebug = true;
+        req.physicsWholeWorld = m_physicsOverlay;
+        if (m_selection.HasSelection())
+            req.physicsSelectedBody = m_selection.Primary();
+        req.cameraRect = !InPlayMode();
+        static const EditorThemeViewportSettings kVpDefaults{};
+        const ImVec4 frame = ResolveDomainColor(Arcane::Settings<EditorThemeViewportSettings>().cameraFrame,
+                                                kVpDefaults.cameraFrame, kCameraFrameColor);
+        req.cameraFrameColor = glm::vec4(frame.x, frame.y, frame.z, frame.w);
+        req.gizmoPrims = m_gizmoPrims;
+        return req;
+    }
+
+    void EditorApp::BuildGizmoOverlayPrims()
+    {
+        m_gizmoPrims.Clear();
+        // Edit mode with a live gizmo and a selection only -- the same gate the
+        // hit-test uses, and the SAME handle mask, size and view as this
+        // frame's hit-test.
+        if (InPlayMode() || !GizmoLive() || !m_selection.HasSelection() || !m_runtime)
+            return;
+        Astra::Registry& reg = m_runtime->Registry();
+        const Arcane::Transform* lt =
+            std::as_const(reg).GetComponent<Arcane::Transform>(m_selection.Primary());
+        if (!lt)
+            return;
+        // WORLD pose, matching the interaction block's -- the gizmo draws
+        // where it hit-tests, including for a parented primary.
+        const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
+            Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
+        OverlayGizmoSink sink(m_gizmoPrims);
+        Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
+                     Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
+                     m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                     Arcane::Editor::MakeGizmoTuning(),
+                     m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
     }
 
     // Phase 11's CPU HALF -- see the declaration. The GPU composite is a NODE
     // inside the viewport frame rather than a call from here, so this is all
-    // of phase 11 there is as code, and ArmGraphViewportFrame is its only
-    // caller.
+    // of phase 11 there is as code, and RenderSceneToViewport calls it after
+    // SubmitSceneToBatcher and before ExtractFrame.
     bool EditorApp::BeginGameUiFrame()
     {
         // Edit mode: not run (clean viewport); the input is reset so a stray
@@ -2466,7 +2514,7 @@ namespace Arcane::Editor
         m_plugin->DrawUIAll();   // game module + any secondary plugins, into the game context
         // The caller now owes EXACTLY ONE of Render / RenderToDrawData /
         // EndFrameDiscard. Returning true rather than doing it here is what
-        // keeps that obligation visible at the two call sites instead of split
+        // keeps that obligation visible at the call site instead of split
         // across a helper.
         return true;
     }
@@ -2478,26 +2526,23 @@ namespace Arcane::Editor
     // are NODES in one graph that is declared, compiled and executed by a
     // single RenderFrameOffscreen call -- so everything the frame will contain
     // has to be known BEFORE that call, and phase 10 is where it is made.
-    // Moving the call EARLIER is not an option either: the game HUD's draw
-    // data must be produced AFTER the scene submission, so that a plugin whose
-    // DrawUI mutates the scene lands on this frame rather than the next.
+    // The game HUD's draw data is produced in RenderSceneToViewport, before
+    // extract and still after SubmitSceneToBatcher, so a plugin whose DrawUI
+    // mutates the scene still lands on this frame: the sprite sweep runs
+    // inside the extract that follows. This function only hands that draw
+    // data to the frame so the gameui node is declared.
     // Phases 11, 12 and 17 keep their gates and each points at this
     // function.
-    void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp)
+    void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
+                                          Arcane::RenderFramePacket& packet)
     {
         // ---- phase 11's content: the game HUD ---------------------------
-        // Play-mode only, exactly as that phase is. The draw data lives in the
-        // game context until its next NewFrame -- a whole frame away -- which
-        // is what lets the node copy the geometry at record time
-        // (FrameDesc::gameUi).
-        if (BeginGameUiFrame())
-        {
-            // The draw data goes to the graph, which declares the GameUi
-            // node for it. A caller that wants the frame WITHOUT the game HUD
-            // leaves vp.gameUi null instead -- that is the whole mechanism
-            // now, and it lives in FrameDesc rather than in a stage ordinal.
-            vp.gameUi = m_gameImgui->RenderToDrawData();
-        }
+        // Produced in RenderSceneToViewport before extract (so the packet
+        // carries it) and still after SubmitSceneToBatcher. Null in Edit, and
+        // null when no plugin draws a HUD: leaving it null is how a frame
+        // asks for no gameui node. The draw data lives in the game context
+        // until its next NewFrame.
+        vp.gameUi = m_gameUiDrawData;
 
         // ---- F2a Task 10's content: the opaque 3D pass (F3 plan 1 T8) -----
         // UNCONDITIONAL, unlike the pick + outline chain below: a scene's
@@ -2508,10 +2553,8 @@ namespace Arcane::Editor
         // return just below, or a frame with no selection and no hover would
         // silently stop submitting meshes too.
         //
-        // m_gpuSceneFrame was built by PrepareSceneForRender in
-        // RenderSceneToViewport (see the comment there for why it runs
-        // BEFORE the sprite sweep rather than here); this site only hands
-        // it to the graph. THE GATE IS Empty(), NOT HasDraws() (ruling R-D):
+        // packet.mesh is the frame ExtractFrame published. THE GATE IS
+        // Empty(), NOT HasDraws() (ruling R-D):
         // a frame whose meshes are all culled -- or that has no mesh view at
         // all (Play with no perspective scene camera) -- can still carry
         // staged rows or a full rebuild, and the mirror's lastModel history
@@ -2519,7 +2562,7 @@ namespace Arcane::Editor
         // for GpuSceneSyncNode's upload; MeshNode then records only its
         // depth clear. Without a mesh view the matrices are left as they
         // were (no batch reads them).
-        m_meshScene.scene = &m_gpuSceneFrame;
+        m_meshScene.scene = &packet.mesh;
         if (m_meshView)
         {
             m_meshScene.view       = m_meshView->view;
@@ -2528,40 +2571,17 @@ namespace Arcane::Editor
         // NO LIGHT COMPONENT YET: this engine has none anywhere --
         // Scene/Components.hpp declares none and SceneModule.hpp registers
         // none -- so the scene's one light is render.mesh.defaultLight.*
-        // (RenderLookSettings.hpp; Live, read once per frame). A light
-        // component is future work and a reviewed scene-schema change.
-        Arcane::ApplyDefaultLight(m_meshScene, Arcane::Settings<Arcane::RenderMeshDefaultLightSettings>());
+        // (RenderLookSettings.hpp; Live, read once per frame into the packet).
+        // A light component is future work and a reviewed scene-schema change.
+        m_meshScene.lightDirection = packet.lightDirection;
+        m_meshScene.lightColor = packet.lightColor;
+        m_meshScene.ambient = packet.ambient;
 
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
         // the field null" mechanism vp.gameUi just used above.
         if (!m_meshScene.Empty())
             vp.mesh = &m_meshScene;
-
-        // ---- F4 plan 1 T10's content: the 3D reference grid ----------------
-        // EDITOR CHROME, gated three ways: Edit mode (an editor affordance,
-        // never the game's picture), the PERSPECTIVE view mode (the 2D view's
-        // grid is the batched ViewportGrid lines drawn in SubmitSceneToBatcher
-        // -- one grid per view mode, never both), and the Show grid setting.
-        // The plane is the view setting; SetPlane also picks the V-axis
-        // colour spec s5.2 pairs with it (Z blue on XZ, Y green on XY). The
-        // camera is the SAME ViewTransform the sprites, the mesh pass and the
-        // gizmo just used, so the grid sits under the meshes to the pixel.
-        // Nothing here reaches the pick chain below: the grid is canvas
-        // content only (GridNode.hpp).
-        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
-            && Arcane::Settings<Arcane::Editor::EditorViewportSettings>().showGrid)
-        {
-            // The tunables are editor.viewport.grid.* / grid3D.* (settings
-            // S6-21), rebuilt every frame so a Live edit lands next frame.
-            m_gridScene = Arcane::Editor::MakeGridScene(Arcane::Settings<Arcane::Editor::EditorGridSettings>(),
-                                                        Arcane::Settings<Arcane::Editor::EditorGrid3DSettings>());
-            m_gridScene.view = m_runtime->View();
-            m_gridScene.SetPlane(Arcane::Settings<Arcane::Editor::EditorViewportSettings>().gridPlane == Arcane::Editor::GridPlane::XY
-                                     ? Arcane::GridSceneDesc::Plane::XY
-                                     : Arcane::GridSceneDesc::Plane::XZ);
-            vp.grid = &m_gridScene;
-        }
 
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // THE HOVER GOES THROUGH HoverLive(), not m_gameUi.inViewport
@@ -2605,8 +2625,7 @@ namespace Arcane::Editor
         // through the ViewTransform handed over below, so they register
         // pixel-for-pixel with what was drawn in EVERY view mode. The k-th
         // entry IS hit-proxy id k+1.
-        m_pickDrawables.clear();
-        Arcane::CollectPickables(m_runtime->Registry(), m_pickDrawables);
+        m_pickDrawables.assign(packet.pickDrawables.begin(), packet.pickDrawables.end());
 
         // Every selected entity that made it into THIS frame's id pass, over
         // the same drawables that were just handed to the pick node rather
@@ -2620,18 +2639,18 @@ namespace Arcane::Editor
             m_pickSelectedIds.reserve(m_selection.Count());
             for (Astra::Entity e : m_selection.Entities())
             {
-                const std::uint32_t id = Arcane::PickPassIdOf(m_pickDrawables, e);
+                const std::uint32_t id = Arcane::PickPassIdOf(packet.pickDrawables, e);
                 if (id != 0u)
                     m_pickSelectedIds.push_back(id);
             }
         }
+        packet.selectedIds = m_pickSelectedIds;
 
         vp.pickOutline = true;
-        vp.pickables   = m_pickDrawables;
+        vp.pickables   = packet.pickDrawables;
         // The same ViewTransform the sprites, the mesh pass and the gizmo just
         // used -- Edit: the editor camera; Play: the scene camera SetView pushed.
         vp.pickView    = m_runtime->View();
-        vp.selectedIds = m_pickSelectedIds;
         // The HOVER cursor: the viewport-local pointer when it is over the
         // viewport, and the (-1,-1) "no hover" sentinel otherwise -- including
         // in Play, where the outline must not light anything.
@@ -2669,9 +2688,9 @@ namespace Arcane::Editor
     // The HUD is a NODE inside the viewport frame, and that frame is
     // declared, compiled and executed by phase 10's single
     // RenderFrameOffscreen call -- which has already happened by the time
-    // control reaches here. ArmGraphViewportFrame (above) is where this
-    // phase's content is produced, through the SAME BeginGameUiFrame helper,
-    // at the same point relative to the scene submission.
+    // control reaches here. RenderSceneToViewport produces the draw data
+    // after SubmitSceneToBatcher and before ExtractFrame, and
+    // ArmGraphViewportFrame assigns it to FrameDesc::gameUi.
     //
     // THE GAME HUD HAS ITS OWN ImGui CONTEXT, and that is load-bearing rather
     // than tidy: the editor's context has io.IniFilename pointed at the
@@ -4140,39 +4159,16 @@ namespace Arcane::Editor
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
             m_camera.mode,
         };
-        // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
-        // SDPG_Foreground for its widget): drawn by the panel right after the
-        // image, under the tool buttons, through an ImGui sink. Edit mode with
-        // a live gizmo and a selection only -- the same gate the hit-test uses,
-        // and the SAME handle mask, size and view as this frame's hit-test.
-        const Arcane::Editor::ViewportImageOverlayFn gizmoOverlay =
-            [this](ImDrawList& list, ImVec2 origin)
-            {
-                if (InPlayMode() || !GizmoLive() || !m_selection.HasSelection() || !m_runtime)
-                    return;
-                Astra::Registry& reg = m_runtime->Registry();
-                const Arcane::Transform* lt =
-                    std::as_const(reg).GetComponent<Arcane::Transform>(m_selection.Primary());
-                if (!lt)
-                    return;
-                // WORLD pose, matching the interaction block's -- the gizmo draws
-                // where it hit-tests, including for a parented primary.
-                const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
-                    Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
-                Arcane::Editor::ImGuiGizmoSink sink(list, origin);
-                Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             Arcane::Settings<Arcane::Editor::EditorGizmoSettings>().size, m_gizmoHovered,
-                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
-                             Arcane::Editor::MakeGizmoTuning(),
-                             m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
-            };
+        // The gizmo is no longer painted here as ImGui foreground chrome (F5
+        // plan 1 Task 3): BuildGizmoOverlayPrims records it as post-tonemap
+        // overlay primitives BEFORE this frame's render, so the panel draws no
+        // image overlay (and a later packet path cannot double-draw it).
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
                                             tools,
                                             Arcane::Editor::ViewportChrome{ /*showToolOverlay=*/!InPlayMode(),
                                                                             /*playing=*/InPlayMode(),
-                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty },
-                                            gizmoOverlay);
+                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty });
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;
         m_viewportTargets.pendingH = fs.vp.desiredH;
@@ -4368,12 +4364,13 @@ namespace Arcane::Editor
     // Phase 19: what puts the editor's main window on screen.
     //
     // ---- THE FRAME'S DECLARED SHAPE, and why it is what it is -------------
-    // Exactly three nodes: batch2d -> tonemap -> imgui -> present.
+    // Exactly three nodes: letterbox -> tonemap -> imgui -> present.
     //
-    //   batch2d   with NO batcher. AddBatch2DNode drains nothing, and
-    //             Batch2DNode::Record's first statement is the canvas CLEAR --
-    //             so a null batcher IS the clear, not a degenerate draw ("an
-    //             empty frame is a cleared canvas, not an error").
+    //   letterbox `frame.world = false` (F5 plan 1 T2) declares no world node
+    //             at all -- no batch2d, mesh, grid, post or empty D1 slot.
+    //             DeclareGraphFrame mints the canvas through the same
+    //             DeclareClearedCanvas call batch2d uses, whose CLEAR colour
+    //             load op is the clear; the node records nothing.
     //   tonemap   is the ONLY thing in the tree that produces a backbuffer
     //             handle at all (AddTonemapNode -> ImportSwapChainTexture), so
     //             it is not decoration on top of the clear -- it is how the
@@ -4467,6 +4464,7 @@ namespace Arcane::Editor
             return true;
 
         Arcane::NriGraphContext::FrameDesc frame;
+        frame.world = false;
         frame.imgui = chrome;
 
         // ===== THE --headless FORK, AND THE FULL-FRAME CAPTURE ===============

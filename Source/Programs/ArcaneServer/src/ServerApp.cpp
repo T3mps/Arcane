@@ -1,6 +1,7 @@
 #include "ServerApp.hpp"
 
 #include <Arcane/Base/Diagnostics.hpp>
+#include <Arcane/Base/ExtractAccounting.hpp>  // ExtractFrameCallCount (census)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
@@ -331,6 +332,7 @@ namespace Arcane::Server
         rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>();
         rep.hasPropagation = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>();
         rep.hasRenderSubmission = false;   // by construction: no ClientRuntime exists in this process
+        rep.extractFrameCalls   = Arcane::ExtractFrameCallCount();
         rep.clientAttached      = m_runtime->Client() != nullptr;
 
         // "clean-exit" is a SUCCESSFUL stop (exit code 0) that simply is not

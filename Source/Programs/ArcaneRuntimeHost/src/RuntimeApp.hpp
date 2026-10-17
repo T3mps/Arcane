@@ -34,7 +34,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the opaque 3D pass's per-frame frame (F3 plan 1 T8)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrameStats -- the HUD/shutdown figures (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -42,6 +42,9 @@
 #include <Arcane/Base/DiagnosticStore.hpp> // Servitor P0 --remote: problems.list's store (Task 22)
 #include <Arcane/Remote/HostSession.hpp>   // Servitor P0 --remote (ruling D-1: never in a package)
 #endif
+
+namespace Arcane { struct RenderFramePacket; }
+
 class RuntimeApp
 {
 public:
@@ -66,16 +69,18 @@ public:
     // Whether that hook has fired. Read once per frame by MainLoop.
     [[nodiscard]] static bool CleanExitRequested() noexcept;
 
-    // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
-    // with the once-only diagnostics for "no usable camera" / "several".
-    // ONE copy of this reasoning, shared: it is the view the plugin's render
-    // submission is driven with.
+    // Stores the scene camera ExtractFrame resolved into the plugin's stored
+    // camera. When the packet's sprite view came from a scene Camera, that
+    // view is pushed; with no scene camera the stored view is left untouched
+    // (a plugin that drives the camera via ClientRuntime::SetView therefore
+    // still works). The once-only no-camera and multi-camera warnings live
+    // in ExtractFrame.
     //
     // PUBLIC because MainLoop's frame body lives in free functions in
     // namespace Arcane::RuntimeFrame (RuntimeFrame.hpp/.cpp): RenderGraph
     // calls this through FrameIo::app, and a free function cannot reach a
     // private RuntimeApp member. See RuntimeFrame.hpp's header comment.
-    void PushSceneCamera(float viewportWidth, float viewportHeight);
+    void PushSceneCamera(const Arcane::RenderFramePacket& packet);
 private:
     // ---- Boot (RuntimeApp.cpp) -------------------------------------------
     // Run() builds Arcane::HostBoot::RuntimeStages(ctx) -- the SAME shared
@@ -204,17 +209,13 @@ private:
     std::vector<Arcane::PickDrawable>    m_pickDrawables;
     std::vector<std::uint32_t>           m_pickSelectedIds;
 
-    // THE OPAQUE 3D PASS'S PER-FRAME GPU-SCENE FRAME (F2a Task 10; F3 plan 1
-    // T8): the staged rows, the batch table, the indirect args and the
-    // CPU-written visible-index list. Same ownership shape as m_pickDrawables
-    // just above and for the identical reason: FrameDesc::mesh ->
-    // MeshSceneDesc::scene is a POINTER BORROWED for the duration of the
-    // RenderFrame call (MeshNode.hpp), so the object it names must outlive
-    // that call -- and RenderGraph (RuntimeFrame.cpp) is a free function, not
-    // a method, so it has nowhere of its own to keep one. Rebuilt every frame
-    // by PrepareSceneForRender (Host/GpuSceneHost.hpp; its containers are
-    // reused), reached from RenderGraph through FrameIo::gpuSceneFrame.
-    Arcane::GpuSceneFrame                m_gpuSceneFrame;
+    // GPU-scene figures for the HUD and ShutdownGraphPath (F2a Task 10; F3
+    // plan 1 T8). The graph borrows the extract packet's mesh frame
+    // (MeshSceneDesc::scene points at that packet for the RenderFrame call).
+    // RenderGraph is a free function, so these scalars live here and are
+    // reached through FrameIo::gpuSceneStats. Only the stats and the
+    // transparent-draw count are copied, so the copy allocates nothing.
+    Arcane::GpuSceneFrameStats           m_gpuSceneStats;
 
     // THE LAST-FRAME CAPTURE (Task 8: --report wiring). CaptureTail
     // (RuntimeFrame.cpp) fills these on the run's last frame whenever
@@ -364,10 +365,4 @@ private:
     double m_hostClock   = 0.0;   // seconds since the loop started (compile debounce clock)
     double m_lastFrameDt = 0.0;   // last frame's wall-clock delta, for the material globals
 
-    // Scene-camera warnings, latched so a per-frame condition is reported ONCE and
-    // does not bury the log it would be found in (the same warn-once shape the
-    // resolver's PostProcess sweep uses). Never reset: a host run is one scene's
-    // worth of complaint, and the log is truncated per launch anyway.
-    bool m_warnedNoSceneCamera    = false;
-    bool m_warnedMultiSceneCamera = false;
 };

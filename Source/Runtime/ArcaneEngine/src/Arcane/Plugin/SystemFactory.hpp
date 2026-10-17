@@ -57,6 +57,10 @@ namespace Arcane
     struct SystemSchedulers;
 
     enum class RoleMask : std::uint8_t { Server = 1, Client = 2, Both = 3 };
+    // Render is RETIRED (F5 plan 1 Task 5): no host runs the render scheduler
+    // (sprites come from the frame extract, Arcane/Render/ExtractFrame.hpp). The
+    // value stays so the ABI and older modules are unchanged; a Render-phase
+    // registration is accepted, never runs, and warns once per system name.
     enum class SystemPhase : std::uint8_t { FixedUpdate, Update, Render };
 
     // RoleMask is a bitmask, so it needs the two operators RoleMatches is written

@@ -40,9 +40,10 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (kPassName only; RenderGraph fires through NriDiagnostics::FireFault)
-#include <Arcane/Render/GpuSceneTypes.hpp>          // GpuSceneFrame (FrameIo::gpuSceneFrame, F3 plan 1 T8)
+#include <Arcane/Render/GpuSceneTypes.hpp>          // GpuSceneFrameStats (FrameIo::gpuSceneStats, F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
+#include <Arcane/Render/RenderFramePacket.hpp>       // PacketRing (FrameIo::packetRing, F5 plan 1 Task 5)
 #include <Arcane/Render/ShaderCompiler.hpp>          // --settle N's IsIdle() quiescence check (Task 10 fix round 1)
 
 
@@ -101,16 +102,12 @@ namespace Arcane::RuntimeFrame
         std::vector<Arcane::PickDrawable>& pickDrawables;
         std::vector<std::uint32_t>&        pickSelectedIds;
 
-        // THIS FRAME'S GPU-SCENE FRAME (F2a Task 10; F3 plan 1 T8) -- the
-        // same "member, not a RenderGraph local" reasoning as pickDrawables
-        // above: MeshSceneDesc::scene is BORROWED for the duration of the
-        // RenderFrame call (MeshNode.hpp), and RenderGraph is a free function
-        // with nothing of its own to hold that storage, so it has to be a
-        // RuntimeApp member reached through here. Rebuilt every frame by
-        // PrepareSceneForRender (Host/GpuSceneHost.hpp), whose containers are
-        // reused -- so, again like pickDrawables, a steady-state frame with a
-        // static scene allocates nothing after the first.
-        Arcane::GpuSceneFrame& gpuSceneFrame;
+        // GPU-scene figures for the HUD and ShutdownGraphPath (F2a Task 10;
+        // F3 plan 1 T8). The graph borrows the extract packet's mesh frame.
+        // RenderGraph is a free function, so the copy lives on RuntimeApp and
+        // is reached through here. Only the stats and the transparent-draw
+        // count are copied, so the copy allocates nothing.
+        Arcane::GpuSceneFrameStats& gpuSceneStats;
 
         // ---- THE LAST-FRAME CAPTURE (Task 8: --report wiring) ---------------
         // CaptureTail fills these on the run's LAST frame whenever --screenshot
@@ -286,6 +283,14 @@ namespace Arcane::RuntimeFrame
         // clears it. MainLoop checks it after both calls and `continue`s in
         // turn.
         bool skipFrame = false;
+
+        // ---- the extract stage's packets (F5 plan 1 Task 5) -----------------
+        // RenderGraph's one ExtractFrame call publishes into this ring and binds
+        // the returned slot on io.graph; FramesInFlight() slots, so the packet
+        // the graph reads outlives the RenderFrame call. Owned HERE, by value,
+        // as the one FrameIo member that is not a binding (MainLoop's
+        // designated initializer leaves it default-constructed).
+        Arcane::PacketRing packetRing{};
         // remoteSettleHold (Task 30 fix round 1): a remote `wait settled` is
         // in its capture phase (HostSession::SettleClockFrozen), set by
         // MainLoop after each drain. AdvanceSim ORs it into its --settle

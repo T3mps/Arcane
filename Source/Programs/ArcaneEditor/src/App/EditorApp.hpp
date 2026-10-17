@@ -91,9 +91,11 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the viewport's per-frame GPU-scene frame (F3 plan 1 T8)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrameStats -- the viewport frame's HUD/shutdown figures (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the frame's pickables
+#include <Arcane/Render/ExtractFrame.hpp>        // ExtractRequest (BuildExtractRequest) -- F5 plan 1 Task 5
+#include <Arcane/Render/RenderFramePacket.hpp>   // PacketRing (m_packetRing)
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
@@ -113,6 +115,7 @@ namespace Arcane::AssetPipeline { struct GltfSurvey; }
 struct ImGuiContext;
 struct ImGuiSettingsHandler;
 struct ImGuiTextBuffer;
+struct ImDrawData;
 
 namespace Arcane::Editor
 {
@@ -314,13 +317,23 @@ namespace Arcane::Editor
         void ApplyPendingViewportResize();
         void RefreshSceneResolution();
         void RenderSceneToViewport();
-        // The scene's 2D submission plus the two Edit-mode overlays drawn on
-        // top of it (the scene-camera rect and the transform gizmo), against
-        // whichever batcher the caller hands in -- in practice the
-        // device-less GpuContext batcher RenderSceneToViewport Begin()s
-        // itself. Contains no target, no command list and no device, which is
-        // what keeps the ORDER of its statements the whole of its contract.
+        // The scene's 2D submission SETUP -- globals, view-projection and the
+        // render context. The sprite sweep and the overlays run in the
+        // caller's ExtractFrame (F5 plan 1 Tasks 5 and 9). Contains no
+        // target, no command list and no device.
         void SubmitSceneToBatcher(Arcane::Batcher2D& b);
+        // THE EXTRACT REQUEST (F5 plan 1 Task 5) for a w x h frame -- the ONE
+        // builder, so the viewport frame and the scene-save cover ask for the
+        // same picture. Fills only editor state and settings, never a registry
+        // read; ExtractFrame does the reading.
+        [[nodiscard]] Arcane::ExtractRequest BuildExtractRequest(std::uint32_t w, std::uint32_t h);
+        // The transform gizmo as post-tonemap overlay primitives (F5 plan 1
+        // Task 3): fills m_gizmoPrims from the same gate, handle mask, size and
+        // view as this frame's hit-test, in viewport pixels (image origin),
+        // AlwaysOnTop + DisplayReferred. Called from MainLoop immediately
+        // BEFORE RenderSceneToViewport, so the gizmo is not a frame late;
+        // BuildExtractRequest copies the result onto the extract request.
+        void BuildGizmoOverlayPrims();
         // Phase 11's CPU HALF: the game context's
         // per-frame input, and -- in Play, with a plugin that draws one --
         // its BeginFrame + DrawUIAll. Returns true when a game-UI frame was
@@ -337,7 +350,8 @@ namespace Arcane::Editor
         // point at (m_pickDrawables / m_pickSelectedIds) and returns nothing by
         // value, because a span into a temporary is the one mistake this shape
         // exists to make impossible.
-        void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp);
+        void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
+                                   Arcane::RenderFramePacket& packet);
         // NO phase 11 / phase 12 members. CompositeGameUi and
         // RenderSelectionOutline were declared here and called from MainLoop
         // between phases 10 and 13; ArmGraphViewportFrame above satisfies both
@@ -662,6 +676,13 @@ namespace Arcane::Editor
         // blank after the first switch. The full obligation is stated on
         // ImGuiNri's m_imguiContext member.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
+
+        // This frame's Play HUD draw data. RenderSceneToViewport builds it
+        // after SubmitSceneToBatcher and before ExtractFrame, so the packet
+        // snapshot is this frame's HUD; ArmGraphViewportFrame assigns it to
+        // FrameDesc::gameUi so the gameui node is declared. Null in Edit and
+        // when no plugin draws. Not owned.
+        ImDrawData* m_gameUiDrawData = nullptr;
 
         std::unique_ptr<Arcane::ProcessContext> m_process;          // the process's ONE (spec s3); declared before m_runtime so it outlives it
         std::optional<Arcane::ClientRuntime> m_runtime;             // destructs before m_gpu
@@ -1379,8 +1400,9 @@ namespace Arcane::Editor
         // THIS FRAME's pickable silhouettes and the hit-proxy ids the outline
         // traces, held as MEMBERS because FrameDesc borrows both as spans and a
         // span into a per-frame temporary is a dangling read the moment the
-        // declaration outlives the statement. Reused rather than rebuilt, so a
-        // steady-state Edit frame allocates nothing.
+        // declaration outlives the statement. Copy-assigned from the packet, so
+        // the vectors keep their capacity and a steady-state Edit frame
+        // allocates nothing after the first.
         //
         // Produced by CollectPickables, whose k-th entry IS hit-proxy id k+1
         // -- the ONE id assignment in the process.
@@ -1388,28 +1410,21 @@ namespace Arcane::Editor
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
         // ---- The viewport's opaque 3D pass (F2a Task 10; F3 plan 1 T8) -----
-        // THIS FRAME's GPU-scene frame -- the staged rows, the batch table,
-        // the indirect args and the CPU-written visible-index list -- held as
-        // a MEMBER for the identical reason m_pickDrawables above is one:
-        // FrameDesc::mesh -> MeshSceneDesc::scene BORROWS it for the duration
-        // of the RenderFrame call, so a per-frame temporary would dangle the
-        // moment the declaration outlives the statement that filled it.
-        //
-        // Rebuilt every frame by PrepareSceneForRender (Host/GpuSceneHost.hpp)
-        // from RenderSceneToViewport, between the schedulers and the sprite
-        // sweep -- the visible set(s) it builds are what that sweep and the
-        // pick pass cull against, so it cannot run later, inside
-        // ArmGraphViewportFrame where the pick spans are filled. Its
-        // containers are reused, so a steady-state frame with a static scene
-        // allocates nothing after the first.
-        Arcane::GpuSceneFrame m_gpuSceneFrame;
+        // The last VIEWPORT frame's GPU-scene figures, snapshotted from that
+        // frame's extract so the shutdown report still reads them. The graph
+        // borrows packet.mesh. The scene-save cover extracts again and must
+        // not replace these scalars, which is why they are taken at the
+        // viewport extract rather than read off the ring at shutdown. Only the
+        // stats and the transparent-draw count are copied, so the copy
+        // allocates nothing.
+        Arcane::GpuSceneFrameStats m_gpuSceneStats;
 
         // THE VIEW THE MESH PASS DRAWS WITH this frame -- the editor view in
         // Edit, the perspective scene camera in Play (RuntimeFrame.cpp's
         // rule), nullopt when Play has no such camera (no mesh batches then;
         // the pass still declares itself for any staged rows, ruling R-D).
-        // Resolved beside the PrepareSceneForRender call (it culls against
-        // this view) and read again by ArmGraphViewportFrame for the
+        // Resolved in RenderSceneToViewport (ExtractFrame culls against the
+        // same camera) and read again by ArmGraphViewportFrame for the
         // MeshSceneDesc's matrices, so the two cannot disagree.
         std::optional<Arcane::ViewTransform> m_meshView;
 
@@ -1425,11 +1440,17 @@ namespace Arcane::Editor
         // that outlives the function that fills it.
         Arcane::MeshSceneDesc m_meshScene;
 
-        // THIS FRAME'S 3D REFERENCE GRID (F4 plan 1 T10, spec s5.2) -- a
-        // member for exactly m_meshScene's reason: FrameDesc::grid is a
-        // POINTER read by RenderFrameOffscreen after ArmGraphViewportFrame
-        // (which fills it) has returned.
-        Arcane::GridSceneDesc m_gridScene;
+        // The gizmo's primitives, rebuilt by BuildGizmoOverlayPrims each frame
+        // and copied onto the extract request. The packet owns the overlay
+        // the graph draws.
+        Arcane::OverlayPrimitiveList m_gizmoPrims;
+
+        // THE EXTRACT STAGE'S PACKETS (F5 plan 1 Task 5): the viewport frame
+        // and the scene-save cover each ExtractFrame into this ring and bind
+        // the returned slot on m_viewportTargets.graph for their one
+        // RenderFrameOffscreen; FramesInFlight() slots keep a bound packet
+        // alive past that call.
+        Arcane::PacketRing m_packetRing;
 
         // The click-pick, which cannot answer in the frame it is asked -- see
         // DeferredPick.hpp for the three hazards it closes.

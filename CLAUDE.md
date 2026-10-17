@@ -97,9 +97,8 @@ Binaries\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project Refer
   click-selectable in EVERY view mode (the id pass rasterises world-space
   drawables through the frame's `ViewTransform`, spec §7.1), and the transform
   gizmo is 3D -- one ray-based code path, the 2D view only masks its Z handles
-  (planar handles; spec §7.2). It paints as viewport FOREGROUND chrome (an ImGui
-  sink over the image, `Viewport/GizmoOverlay.hpp` -- never into the scene
-  batch, which the mesh pass overpaints) and its look is Unreal's widget
+  (planar handles; spec §7.2). BuildGizmoOverlayPrims (EditorAppFrame.cpp)
+  feeds it into the post-tonemap overlay, and its look is Unreal's widget
   (`UnrealWidgetRender.cpp` proportions and colours, in pixels).
 - **Bounds, visibility and the GPU scene (F3 plan 1, 2026-09-18, ABI 36, raised to 37 by the review fix 4363b825 -- MeshTable/SpriteTable carry the cache's publish generation):**
   every drawable carries `WorldBounds` (`BoundsSystem`, after transform

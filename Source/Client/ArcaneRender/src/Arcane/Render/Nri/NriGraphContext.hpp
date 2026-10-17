@@ -249,6 +249,8 @@
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
+#include <Arcane/Render/Nri/nodes/OverlayNode.hpp>
+#include <Arcane/Render/OverlayPrimitive.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <cstdint>
@@ -267,6 +269,7 @@ namespace Arcane
 {
     class Batcher2D;
     struct PostChainDesc;
+    struct RenderFramePacket;
 
     // THE LINEAR CANVAS FORMAT every node on this path renders into: the batch
     // node's canvas, and every post-chain pass's target. Colours are LINEAR
@@ -556,11 +559,23 @@ namespace Arcane
             // Set on the last frame of a --screenshot run.
             bool capture = false;
 
-            // This frame's 2D content, ALREADY SUBMITTED into the batcher by
-            // the frame driver (ClientRuntime::SetRenderContext + SubmitRender) and
-            // not yet drained -- this path drains it. Borrowed for
-            // the duration of the RenderFrame call and never stored; null
-            // renders a cleared canvas.
+            // A WORLD frame (the default) declares the world nodes: the empty
+            // gbuffer/lighting slots, batch2d, the mesh/grid/post blocks and
+            // the empty taa slot. A host-chrome frame (the editor's
+            // PresentChromeFrame) sets this false and gets only a "letterbox"
+            // node that clears the canvas to render.clearColor, then tonemap
+            // and the HUD tail (F5 plan 1, Task 2).
+            bool world = true;
+
+            // This frame's 2D batcher. With a packet bound (BindPacket; every
+            // host frame builder, F5 plan 1 Task 5) the frame driver's
+            // ExtractFrame has already submitted into and drained it, the batch
+            // node draws the packet's copy, and this batcher only resolves the
+            // registered sprite materials named in it. With none bound
+            // (thumbnail harvest, shader preview) it holds content not yet
+            // drained, and this path drains it. Borrowed for the duration of
+            // the RenderFrame call and never stored; null renders a cleared
+            // canvas.
             Batcher2D* batch = nullptr;
 
             // ---- the mesh pass (Task 7; opaque + masked + ordered ----------
@@ -585,12 +600,27 @@ namespace Arcane
             // ---- the 3D reference grid (F4 plan 1 T10, spec s5.2) --------
             // THIS FRAME'S GRID -- the editor camera and the plane. Null (the
             // default) is "no grid", the same slice-by-nulling rule as `mesh`.
-            // Declared AFTER the mesh pass and depth-tested against its depth
-            // transient (never writing it); with no mesh pass the grid draws
-            // unoccluded. Editor chrome: the editor arms it only in Edit mode
-            // with the Perspective view and Show grid on; the runtime never
-            // does. BORROWED for the duration of the RenderFrame call.
+            // Since F5 plan 1 Task 3 it is drawn by the post-tonemap OVERLAY
+            // pass (OverlayNode), which samples the mesh pass's depth (never
+            // writing it); with no mesh pass the grid draws unoccluded.
+            // Editor chrome: the editor arms it only in Edit mode with the
+            // Perspective view and Show grid on; the runtime never does. BORROWED for the duration of the RenderFrame call.
             const GridSceneDesc* grid = nullptr;
+
+            // ---- the post-tonemap overlay (F5 plan 1 Task 3) -------------
+            // Lines and fills drawn AFTER the tonemap by OverlayNode: the 2D
+            // grid, physics debug, the camera rect and the gizmo (the editor),
+            // or a test's primitives. Null, or a list with no line, no fill and
+            // no 3D grid, declares no overlay node (with `grid` also null).
+            // BORROWED for the duration of the RenderFrame call.
+            const OverlayPrimitiveList* overlay = nullptr;
+
+            // The WORLD camera the overlay's world-space primitives project
+            // through: the sprite/main view (review ruling I2; Task 9 fills it
+            // from the packet's sprite view). Empty falls back to the mesh
+            // camera. A depth-tested world primitive samples the mesh depth
+            // only when this equals the mesh camera (projection * view).
+            std::optional<glm::mat4> overlayWorldViewProjection;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
             // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
@@ -1164,6 +1194,10 @@ namespace Arcane
         // two-region constant arena.
         [[nodiscard]] GridNode*      Grid()      noexcept { return m_grid.get(); }
 
+        // The post-tonemap overlay pass (F5 plan 1 Task 3). Built EAGERLY like
+        // Grid(): a frame with no overlay declares no node.
+        [[nodiscard]] OverlayNode*   Overlay()   noexcept { return m_overlay.get(); }
+
         // The pick + outline pair (Task 11). NULL on every run that neither
         // passed --pick-probe nor asked for them through NodeSet::pickOutline:
         // an ordinary --nri-graph run creates no readback buffer, no descriptor
@@ -1266,6 +1300,17 @@ namespace Arcane
         // FrameDesc::batch. Valid only inside a RenderFrame() call; null
         // outside one and on a frame the driver submitted nothing for.
         [[nodiscard]] Batcher2D* CurrentBatch() noexcept { return m_currentBatch; }
+
+        // THE FRAME'S PACKET (F5 plan 1 Task 5): what ExtractFrame published
+        // for the frame about to be rendered. The host binds it immediately
+        // before RenderFrame / RenderFrameOffscreen; both reset it to null
+        // before they return, so a later frame can never read a stale one.
+        // With a packet bound, the batch node draws the packet's copied batch
+        // and does not Drain CurrentBatch() again; with none (thumbnail
+        // harvest, shader preview), it keeps the Drain path. The packet is a
+        // PacketRing slot, alive for FramesInFlight() further extracts.
+        void BindPacket(const RenderFramePacket* packet) noexcept { m_packet = packet; }
+        [[nodiscard]] const RenderFramePacket* Packet() const noexcept { return m_packet; }
 
         // FrameDesc::globals for the frame currently being declared, COPIED so
         // it stays readable for the whole RenderFrame call (the post chain's
@@ -1644,6 +1689,7 @@ namespace Arcane
         std::unique_ptr<MeshCullNode>      m_meshCull;
         std::unique_ptr<MeshNode>          m_mesh;
         std::unique_ptr<GridNode>          m_grid;
+        std::unique_ptr<OverlayNode>       m_overlay;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
         // Built only under --pick-probe or NodeSet::pickOutline (see
@@ -1719,6 +1765,10 @@ namespace Arcane
         // CurrentBatch(). Cleared at the end of every RenderFrame so a stale
         // batcher can never be drained by a later frame.
         Batcher2D* m_currentBatch = nullptr;
+
+        // BindPacket's packet -- see Packet(). Reset at the end of every
+        // RenderFrame / RenderFrameOffscreen, on every return path.
+        const RenderFramePacket* m_packet = nullptr;
 
         // FrameDesc::globals, by VALUE -- see CurrentGlobals().
         GlobalParams m_currentGlobals{};
@@ -1819,6 +1869,9 @@ namespace Arcane
     struct RgFrameShape
     {
         bool          capture      = false;
+        // FrameDesc::world. False declares "letterbox" in place of every world
+        // node (see DeclareGraphFrame).
+        bool          world        = true;
         // The canvas transient's extent -- the swapchain's, so the tonemap
         // samples 1:1.
         std::uint32_t canvasWidth  = 0;
@@ -1940,13 +1993,20 @@ namespace Arcane
         const MeshSceneDesc* mesh = nullptr;
 
         // F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID's desc, or null
-        // for none. Read for its PRESENCE here and for nothing else: the node
-        // is declared after the mesh block, reading the mesh pass's depth
-        // transient as its depth attachment when `mesh` above declared one
-        // (and with no depth attachment otherwise). The camera, the plane and
-        // the colours are consumed by GridNode at Record time. A device-less
-        // drive can point this at a default GridSceneDesc.
+        // for none. Since F5 plan 1 Task 3 it declares the post-tonemap
+        // "overlay" node (no "grid" node any more), which SAMPLES the mesh
+        // pass's depth transient when `mesh` above declared one. The camera,
+        // the plane and the colours are consumed by OverlayNode at Record
+        // time. A device-less drive can point this at a default GridSceneDesc.
         const GridSceneDesc* grid = nullptr;
+
+        // F5 plan 1 Task 3: the post-tonemap overlay primitives. The "overlay"
+        // node is declared after "tonemap" and before "gameui" when `grid` is
+        // non-null or this list has any line, fill, or hasGrid3d.
+        const OverlayPrimitiveList* overlay = nullptr;
+
+        // FrameDesc::overlayWorldViewProjection, or null for none.
+        const glm::mat4* overlayWorldViewProjection = nullptr;
     };
 
     struct RgFrameHandles

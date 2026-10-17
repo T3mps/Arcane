@@ -2003,10 +2003,12 @@ namespace Arcane::Editor
     // (a hand-placed <Name>.png beside the .arcproj outranks it -- see the
     // Hub's resolve.rs). Refreshed on scene save and clean exit, so the tile
     // shows roughly what the project looked like when it was last worked on.
-    // The capture is the viewport output AS COMPOSITED: post-tonemap LDR,
-    // including the selection outline in Edit mode and the game HUD in Play.
-    // Accepted deliberately -- an outline-free shot would need a second scene
-    // render, and this is a memory aid, not a render product. Saved/ sits
+    // The capture is one extra viewport frame: post-tonemap LDR of the scene
+    // and its post chain, plus the overlays that extract published for that
+    // frame. The gizmo primitives are cleared on the request (the viewport
+    // frame's gizmo comes from BuildGizmoOverlayPrims into the post-tonemap
+    // overlay). The cover does not call ArmGraphViewportFrame, so the picture
+    // has no selection outline and no game HUD. Saved/ sits
     // OUTSIDE Content/ on purpose: RegisterCreatedAsset would (correctly)
     // refuse to register it, and the asset registry has no business knowing.
     void EditorApp::WriteAutoScreenshot()
@@ -2046,14 +2048,12 @@ namespace Arcane::Editor
     // EVERY viewport frame instead would pay a full-surface copy per frame for
     // an image taken twice a session.
     //
-    // AND THE FRESH FRAME IS THE BETTER PICTURE, which is the part worth
-    // stating: it carries the scene, the post chain and the Edit-mode overlays
-    // (SubmitSceneToBatcher's gizmo + camera rect) but NOT the selection
-    // outline and NOT the game HUD, because it does not call
-    // ArmGraphViewportFrame. WriteAutoScreenshot's own comment calls the
-    // outline-free shot the one it would rather have, and rejects it because
-    // "an outline-free shot would need a second scene render" -- on this arm
-    // the second scene render is what a capture costs anyway.
+    // AND THE FRESH FRAME IS THE PICTURE THE COVER STORES: the scene, the
+    // post chain, and the overlays from its own extracted packet. The gizmo
+    // primitives are cleared on the request; the viewport frame's gizmo is
+    // BuildGizmoOverlayPrims into the post-tonemap overlay. This arm does not
+    // call ArmGraphViewportFrame, so the picture has no selection outline and
+    // no game HUD.
     //
     // BOTH CALL SITES ARE RARE EVENTS (a scene save, shutdown), which is what
     // pays for ReadCapture's DeviceWaitIdle -- the same stall SaveTexturePng
@@ -2072,6 +2072,15 @@ namespace Arcane::Editor
         b.Begin(graph->SurfaceWidth(), graph->SurfaceHeight());
         SubmitSceneToBatcher(b);
 
+        // A SECOND FRAME BUILDER, so it extracts too (F5 plan 1 Task 5): the
+        // sprite sweep runs only inside ExtractFrame, so without it this
+        // batcher would drain empty and the cover would lose its sprites. The
+        // same request builder as the viewport frame, minus the gizmo the
+        // cover has never drawn.
+        Arcane::ExtractRequest req = BuildExtractRequest(graph->SurfaceWidth(), graph->SurfaceHeight());
+        req.gizmoPrims.Clear();
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(m_runtime->Registry(), req, m_packetRing);
+
         const Arcane::GlobalParams globals =
             m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{};
 
@@ -2080,7 +2089,14 @@ namespace Arcane::Editor
         vp.post    = m_resolver ? m_resolver->PostDesc() : nullptr;
         vp.globals = &globals;
         vp.capture = true;
-        if (graph->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
+        graph->BindPacket(&packet);   // the vehicle unbinds it before RenderFrameOffscreen returns
+        const Arcane::NriGraphContext::FrameOutcome outcome = graph->RenderFrameOffscreen(vp);
+        // The cover's extract synced the mirror and vp.mesh stays unset, so
+        // no mesh pass uploaded that stage. Invalidate on every outcome,
+        // before the non-Presented return, so the next viewport sync is a
+        // full rebuild (ruling R-F).
+        Arcane::GpuSceneInvalidate(m_runtime->Registry());
+        if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
             return false;   // Skipped (collapsed panel) or Failed (already latched + logged)
 
         std::uint32_t w = 0, h = 0;
@@ -3445,9 +3461,9 @@ namespace Arcane::Editor
             // (no --report), or one whose frames were all still in flight.
             // NEVER the coarse count under the GPU's name: see
             // VerifyReport::SetVisibility's own contract.
-            report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                                 m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
-                                 static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+            report.SetVisibility(m_gpuSceneStats.stats.total, m_gpuSceneStats.stats.coarseVisible,
+                                 m_gpuSceneStats.stats.batches, m_gpuSceneStats.stats.draws,
+                                 m_gpuSceneStats.transparentDraws,
                                  gpuVisibleRows);
 
             // THE INJECTED MODULES (schemaVersion 10): the scan taken above

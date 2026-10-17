@@ -24,6 +24,7 @@ namespace Arcane::Server
 
         j["framesTicked"] = framesTicked;
         j["fixedDt"]      = fixedDt;
+        j["extractFrameCalls"] = extractFrameCalls;
 
         j["systems"] = { { "fixedUpdate",          fixedUpdate },
                           { "update",               update },

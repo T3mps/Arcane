@@ -32,6 +32,8 @@
 
 #undef ERROR
 
+#include <Arcane/Render/RenderFramePacket.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -66,6 +68,16 @@ namespace Arcane
         {
             RenderErrorLatch::Instance().NoteError("nri-graph", text.c_str());
         }
+
+        // BindPacket's pointer lives for exactly one RenderFrame /
+        // RenderFrameOffscreen call: this resets it on every return path of
+        // the function that declares it, so a later frame -- one whose host
+        // bound nothing -- can never draw a stale packet.
+        struct PacketBindingReset
+        {
+            const RenderFramePacket*& packet;
+            ~PacketBindingReset() { packet = nullptr; }
+        };
 
         // Where the offline shader artifacts live, relative to the
         // executable. Resolved through ShaderPaths::ResolveFlavorDir, so a
@@ -471,6 +483,10 @@ namespace Arcane
         m_grid = GridNode::Create(*this);
         if (!m_grid)
             return false;   // already logged
+        // The post-tonemap overlay pass (F5 plan 1 T3), eagerly -- see Overlay().
+        m_overlay = OverlayNode::Create(*this);
+        if (!m_overlay)
+            return false;   // already logged
         m_post = PostChainNode::Create(*this);
         if (!m_post)
             return false;   // already logged
@@ -835,6 +851,8 @@ namespace Arcane
             m_tonemap->Release(graves, fence);
         if (m_post)
             m_post->Release(graves, fence);
+        if (m_overlay)
+            m_overlay->Release(graves, fence);
         if (m_grid)
             m_grid->Release(graves, fence);
         if (m_meshCull)
@@ -1254,39 +1272,34 @@ namespace Arcane
                                       NriGraphContext* context)
     {
         // ---------------------------------------------------------------
-        // THE CLEAR SEAM (Task 7's decision; Task 8 is its first real user).
+        // THE CLEAR IS DECLARATIVE (F5 plan 1, Task 2; it replaced Task 7's
+        // clear-in-the-exec-fn seam). A node that wants a cleared attachment
+        // declares a load op beside the attachment
+        // (RenderGraph::SetColorAttachmentOps / SetDepthAttachmentOp) and the
+        // executor lowers it to nri::LoadOp::CLEAR at CmdBeginRendering. An
+        // attachment with no declared op LOADs; the store op is always STORE.
+        //   - batch2d (and, on a chrome frame, letterbox) CLEARs the canvas to
+        //     render.clearColor. The canvas is a TRANSIENT whose pool slot the
+        //     graph hands over with a contents-discarding barrier, so its
+        //     LOADed contents would be undefined.
+        //   - mesh LOADs the canvas (it carries batch2d's content) and CLEARs
+        //     its fresh depth transient to DepthClearValue(
+        //     kSelectedDepthConvention).
+        //   - The BACKBUFFER needs no clear: the tonemap covers it with a
+        //     fullscreen triangle, and neither does a POST-CHAIN target, for
+        //     the same reason.
+        //   - Pick keeps its own exec-fn clear (PickOutlineNodes.cpp).
         //
-        // Task 6's executor begins every raster pass with `nri::AttachmentDesc
-        // = {}`, i.e. LoadOp::LOAD + StoreOp::STORE, and the graph's
-        // declaration API carries no clear ops at all. So a node that wants a
-        // cleared attachment has exactly two options: CmdClearAttachments
-        // inside its own exec fn, or a new declarative clear-op on the
-        // attachment declaration.
-        //
-        // THIS TAKES THE FIRST, on purpose:
-        //   - It changes NO frozen API mid-phase. RgExecuteDesc,
-        //     RenderGraphNodeContext and the attachment setters are contracts
-        //     Tasks 8-12 are already written against; a declarative clear op
-        //     is a real design (per-attachment load op + clear value, its
-        //     interaction with the swapchain's fixed discarding entry state,
-        //     depth/stencil planes, and the compile-time validation that a
-        //     CLEAR attachment is also declared as a Write) and deserves its
-        //     own task rather than a rushed corner of this one.
-        //   - It is correct here. The canvas is a TRANSIENT whose pool slot
-        //     the graph hands over with a contents-discarding barrier, so its
-        //     LOADed contents are undefined -- and Batch2DNode::Record clears
-        //     it in full before drawing. The BACKBUFFER needs no clear at all:
-        //     the tonemap covers it with a fullscreen triangle, and neither
-        //     does a POST-CHAIN target, for the same reason (an opaque
-        //     fullscreen pass writes every pixel of it).
-        //   - It costs nothing measurable at Phase 2's scale: one full-target
-        //     clear per frame on an immediate-mode desktop GPU is what
-        //     LoadOp::CLEAR lowers to anyway.
-        // WHEN TO REVISIT: tile-based hardware (where LoadOp::CLEAR genuinely
-        // avoids a tile read) or a node that needs a partial/multi-attachment
-        // clear pattern CmdClearAttachments makes awkward. Both are a Phase
-        // 4+ concern, and both want the declarative version -- so this is a
-        // deferral, not a rejection.
+        // WORLD vs CHROME. A world frame (shape.world, the default) declares
+        // the empty D1 slots "gbuffer" and "lighting" ahead of batch2d and
+        // "taa" just before the tonemap: compute nodes with no access and no
+        // attachment, so Compile gives them no barrier and no pool slot. They
+        // are not literally free on the command buffer: the executor wraps
+        // every node in its NodeScope, so each records one empty
+        // begin/end annotation pair (and a breadcrumb scope while a crash
+        // backend is armed) -- three empty scopes in a PIX/RenderDoc capture,
+        // no draw, dispatch or barrier. A chrome frame (world == false) declares none of the world nodes --
+        // only "letterbox", which clears the canvas the tonemap samples.
         //
         // RING FOOTGUN, for whoever adds the next node here: the vehicle calls
         // ring.BeginFrame(slot) AFTER this function returns, so an allocation
@@ -1296,7 +1309,33 @@ namespace Arcane
         // ---------------------------------------------------------------
         RgFrameHandles handles;
 
-        handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
+        const auto addEmpty = [&](const char* name) {
+            graph.AddNode(name, RenderGraph::NodeKind::Compute,
+                [](RenderGraphBuilder&) {},
+                [](RenderGraphNodeContext&) {});
+        };
+
+        if (shape.world)
+        {
+            addEmpty("gbuffer");
+            addEmpty("lighting");
+            handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
+        }
+        else
+        {
+            // THE CHROME LETTERBOX: AddBatch2DNode's setup minus the batch --
+            // the SAME DeclareClearedCanvas call, so chrome and world can never
+            // disagree on the canvas. The canvas is still minted (the tonemap
+            // samples it) and cleared by its load op; the exec records nothing.
+            // The attachment is required anyway: Compile refuses a Raster node
+            // with no attachment.
+            graph.AddNode("letterbox", RenderGraph::NodeKind::Raster,
+                [&](RenderGraphBuilder& builder)
+                {
+                    handles.canvas = DeclareClearedCanvas(graph, builder, shape.canvasWidth, shape.canvasHeight);
+                },
+                [](RenderGraphNodeContext&) {});
+        }
 
         // ---------------------------------------------------------------
         // THE MESH PASS (Task 4 declared its depth target; Task 7 is the pass
@@ -1308,8 +1347,8 @@ namespace Arcane
         //
         // POSITIONED AFTER batch2d, BEFORE the post chain and the tonemap.
         // After batch2d because the canvas is MINTED AND CLEARED there and this
-        // pass draws on top of it (MeshNode::Record clears the DEPTH plane and
-        // deliberately not the colour one); before the tonemap because the
+        // pass draws on top of it (its colour load op LOADs; only its depth
+        // load op CLEARs); before the tonemap because the
         // canvas is linear and the mesh pass writes linear colour.
         //
         // GATED ON A NON-EMPTY SCENE, and an empty span reads exactly like a
@@ -1320,9 +1359,9 @@ namespace Arcane
         // Since F3 plan 1 T6 "non-empty" is MeshSceneDesc::Empty(): ad-hoc
         // instances OR a registry-backed scene with draws OR (T7, ruling R-D)
         // a registry-backed scene with STAGED rows and nothing emitted --
-        // the upload still has to happen; the mesh node records only its
-        // depth clear then.
-        const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
+        // the upload still has to happen; the mesh node's pass then only
+        // clears depth through its load op.
+        const bool wantsMesh = shape.world && shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {
             // GraphCanvasFormat() is passed EXPLICITLY because it is the format
@@ -1371,7 +1410,7 @@ namespace Arcane
         // transient no node touches has no lifetime and no pool slot",
         // RenderGraph.hpp), so RealizePool never allocates it.
         // ---------------------------------------------------------------
-        else if (shape.depth)
+        else if (shape.world && shape.depth)
         {
             graph.AddNode("depth", RenderGraph::NodeKind::Compute,
                 [&handles, &shape](RenderGraphBuilder& builder)
@@ -1386,37 +1425,9 @@ namespace Arcane
                 [](RenderGraphNodeContext&) {});
         }
 
-        // ---------------------------------------------------------------
-        // THE 3D REFERENCE GRID (F4 plan 1 Task 10, spec s5.2). Declared
-        // AFTER both branches above -- after the mesh pass, before the post
-        // chain and the tonemap -- so it blends over the opaque geometry and
-        // is DEPTH-TESTED against the depth transient AddMeshNode returned
-        // (never writing it: GridNode's PSO has depth.write = false; the
-        // graph-level DepthWrite is just the barrier state of a bound depth
-        // attachment). A frame with no mesh pass hands it an INVALID handle
-        // and the grid draws unoccluded with no depth attachment at all. The
-        // Task 4 placeholder's depth (the `else` above) is deliberately NOT
-        // handed over: that resource is pinned as declared-and-unconsumed,
-        // and a grid attached to it would test against undefined contents.
-        //
-        // THE SPEC S14 LIFETIME RISK, SETTLED AS A DECLARATION FACT: the grid
-        // reads the depth transient MeshNode minted, which must therefore
-        // outlive MeshNode's record. It does, with NO ownership move and NO
-        // MeshNode change: RenderGraph::Compile derives every transient's
-        // pool tenancy as [first toucher, LAST toucher] (RgCompiled::
-        // Lifetime), so AddGridNode's Write(depth, DepthWrite) alone carries
-        // the depth's life through the grid node. RenderGraphTest.cpp's
-        // (T10F4) case pins that lifetime -- mesh first, grid last.
-        //
-        // GATED ON THE DESC ALONE, like `mesh`: null declares nothing, and a
-        // frame that never sets it is byte for byte the pre-T10 frame.
-        // ---------------------------------------------------------------
-        if (shape.grid)
-        {
-            AddGridNode(graph, context, handles.canvas, GraphCanvasFormat(),
-                        wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
-                        shape.canvasWidth, shape.canvasHeight);
-        }
+        // THE 3D REFERENCE GRID is no longer a canvas node here (F5 plan 1
+        // Task 3): it is drawn after the tonemap by the overlay pass below,
+        // which SAMPLES the mesh depth instead of attaching it.
 
         // ---------------------------------------------------------------
         // THE POST CHAIN (Task 10). One node per chain pass, between the
@@ -1432,7 +1443,7 @@ namespace Arcane
         // works the same way, off FrameDesc::imgui.
         // ---------------------------------------------------------------
         RgTexture sceneColor = handles.canvas;
-        if (shape.post && !shape.post->passes.empty())
+        if (shape.world && shape.post && !shape.post->passes.empty())
         {
             // With a context the NODE decides: PrepareChain builds the
             // pipelines, the descriptor sets and the packed constants, and
@@ -1459,12 +1470,90 @@ namespace Arcane
             }
         }
 
+        // The empty TAA slot (D1), last of the world nodes, just ahead of the
+        // tonemap. A chrome frame has no world and no TAA.
+        if (shape.world)
+            addEmpty("taa");
+
         // The frame's FINAL TARGET: the acquired backbuffer, or -- when the
         // shape carries one -- the vehicle's persistent offscreen output
         // (Task 7). Everything below writes `handles.backbuffer` and neither
         // knows nor cares which it got, which is what keeps the two modes one
         // frame shape rather than two.
         handles.backbuffer = AddTonemapNode(graph, context, sceneColor, shape.offscreenOutput);
+
+        // ---------------------------------------------------------------
+        // THE POST-TONEMAP OVERLAY PASS (F5 plan 1 Task 3, spec s3.3),
+        // declared right AFTER the tonemap and BEFORE the game HUD: the 3D
+        // grid, then depth-tested lines and fills (the 2D grid), then
+        // always-on-top ones (physics debug, the camera rect, the gizmo),
+        // each class in submission order, blended
+        // straight-alpha onto the DISPLAY-REFERRED target -- so the post
+        // chain never grades them. Linear colours run the tonemap operator in
+        // overlay.hlsl; display-referred ones are written as given.
+        //
+        // DEPTH IS SAMPLED, NOT ATTACHED: with a mesh pass the node Reads that
+        // pass's depth transient as ShaderRead (its lifetime then runs mesh ->
+        // overlay); with none it Reads no depth at all -- in particular NOT the
+        // placeholder `depth` node above, which stays declared-and-unconsumed.
+        //
+        // GATED ON CONTENT: a frame with no grid and an empty (or null) list
+        // declares nothing, so the runtime's frame is unchanged.
+        // ---------------------------------------------------------------
+        // A bound packet owns the overlay. FrameDesc's list, grid and world
+        // camera are the packet-less path (tests and any caller that does
+        // not extract).
+        const RenderFramePacket* packet = context ? context->Packet() : nullptr;
+        bool wantOverlay = false;
+        const OverlayPrimitiveList* overlayList = nullptr;
+        const GridSceneDesc* overlayGrid = nullptr;
+        const glm::mat4* worldVp = nullptr;
+        const glm::mat4* meshVp = nullptr;
+        glm::mat4 packetWorldVp{ 1.0f };
+        glm::mat4 packetMeshVp{ 1.0f };
+        glm::mat4 shapeMeshVp{ 1.0f };
+        if (packet)
+        {
+            wantOverlay = !packet->overlay.prims.empty() || packet->overlay.hasGrid3d;
+            overlayList = &packet->overlay;
+            overlayGrid = packet->overlay.hasGrid3d ? &packet->overlay.grid3d : nullptr;
+            packetWorldVp = packet->spriteView
+                ? packet->spriteView->view.ViewProjection()
+                : packet->viewProjection;
+            worldVp = &packetWorldVp;
+            if (packet->meshView)
+            {
+                packetMeshVp = packet->meshView->ViewProjection();
+                meshVp = &packetMeshVp;
+            }
+            else
+            {
+                // No mesh view: a null mesh VP cannot compare equal, so
+                // world-space primitives are not depth-tested.
+                meshVp = nullptr;
+            }
+        }
+        else
+        {
+            wantOverlay = (shape.grid != nullptr) ||
+                (shape.overlay != nullptr &&
+                 (!shape.overlay->prims.empty() || shape.overlay->hasGrid3d));
+            overlayList = shape.overlay;
+            overlayGrid = shape.grid;
+            worldVp = shape.overlayWorldViewProjection;
+            if (wantsMesh)
+            {
+                shapeMeshVp = shape.mesh->projection * shape.mesh->view;
+                meshVp = &shapeMeshVp;
+            }
+        }
+        if (shape.world && wantOverlay)
+        {
+            AddOverlayNode(graph, context, handles.backbuffer,
+                           wantsMesh ? handles.depth : RgTexture{},
+                           overlayGrid, overlayList, shape.canvasWidth, shape.canvasHeight,
+                           worldVp, meshVp);
+        }
 
         // ---------------------------------------------------------------
         // THE GAME HUD (Task 9), declared BETWEEN the tonemap and the
@@ -1683,6 +1772,7 @@ namespace Arcane
         if (m_post)     m_post->SyncPoolEpoch(*m_graph);
         if (m_tonemap)  m_tonemap->SyncPoolEpoch(*m_graph);
         if (m_outline)  m_outline->SyncPoolEpoch(*m_graph);
+        if (m_overlay)  m_overlay->SyncPoolEpoch(*m_graph);
 
         // Thin on purpose: the frame's SHAPE lives in DeclareGraphFrame so the
         // device-less [nri] frame-shape cases drive the real declarations instead
@@ -1692,6 +1782,25 @@ namespace Arcane
         // that would go stale on the next Reset().
         RgFrameShape shape;
         shape.capture       = frame.capture;
+        // World or host-chrome frame (F5 plan 1, Task 2). Default true, so every
+        // caller stays a world frame until it opts out.
+        shape.world         = frame.world;
+        // A chrome frame declares no world node, so world inputs on it are
+        // dropped -- and a `batch` is never drained. Nothing sets them today
+        // (PresentChromeFrame passes only `imgui`); say so loudly, once, if a
+        // future caller does.
+        if (!frame.world && (frame.batch != nullptr || frame.mesh != nullptr
+                             || frame.grid != nullptr || frame.post != nullptr
+                             || frame.overlay != nullptr))
+        {
+            static bool warned = false;
+            if (!warned)
+            {
+                warned = true;
+                ARC_WARN("[nri-graph] a world=false (chrome) frame carries world inputs "
+                         "(batch/mesh/grid/post/overlay); they are ignored and the batch is not drained");
+            }
+        }
         shape.canvasWidth   = SurfaceWidth();
         shape.canvasHeight  = SurfaceHeight();
         shape.captureBuffer = m_capture;
@@ -1711,7 +1820,11 @@ namespace Arcane
         // declaring a node that does not exist.
         shape.mesh          = m_mesh ? frame.mesh : nullptr;
         // The 3D reference grid (F4 plan 1 T10), belt-and-braces the same way.
-        shape.grid          = m_grid ? frame.grid : nullptr;
+        shape.grid          = m_overlay ? frame.grid : nullptr;
+        // The post-tonemap overlay (F5 plan 1 T3), against ITS node the same way.
+        shape.overlay       = m_overlay ? frame.overlay : nullptr;
+        shape.overlayWorldViewProjection =
+            frame.overlayWorldViewProjection ? &*frame.overlayWorldViewProjection : nullptr;
         // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
         // host-window mode, so the tonemap imports the swapchain exactly as it
         // always has; the vehicle's output texture otherwise. Nothing else in
@@ -1752,6 +1865,8 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrame(const FrameDesc& frame)
     {
+        const PacketBindingReset packetReset{ m_packet };
+
         // HOST-WINDOW ONLY. An offscreen context has no swapchain, so every
         // line below would dereference null; the twin is RenderFrameOffscreen.
         if (m_mode == Mode::Offscreen)
@@ -1922,6 +2037,8 @@ namespace Arcane
 
     NriGraphContext::FrameOutcome NriGraphContext::RenderFrameOffscreen(const FrameDesc& frame)
     {
+        const PacketBindingReset packetReset{ m_packet };
+
         if (m_mode != Mode::Offscreen)
         {
             GraphError("NriGraphContext: RenderFrameOffscreen() on a HOST-WINDOW context -- call "

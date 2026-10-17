@@ -6,12 +6,13 @@
 //
 // Advance() runs >=0 FixedUpdate steps then Update once, through the parallel
 // executor. SubmitRender() runs the Render scheduler SEQUENTIALLY on the calling
-// thread (Batcher2D is not thread-safe and must be recorded where Begin was
-// called). The host brackets SubmitRender() between Batcher2D::Begin and
-// Batcher2D::Drain.
+// thread -- but the Render phase is RETIRED (F5 plan 1 Task 5): no host calls
+// SubmitRender any more. Sprites are submitted once per frame by the frame
+// extract (Arcane/Render/ExtractFrame.hpp), which runs RenderSubmissionSystem
+// itself between the host's Batcher2D::Begin and the drain it copies.
 //
 // Sim-time control (Epic 04): pause / single-step / time-scale gate the FIXED
-// phase only; Update + Render keep running so an editor's camera/UI/input stay
+// phase only; Update and the frame (extract + render) keep running so an editor's camera/UI/input stay
 // live while the sim is frozen. Consumers reach these through Runtime::Loop();
 // there is no separate Runtime API and no plugin-ABI surface. TIME-SCALE scales
 // the SIM CLOCK by scaling the accumulator input -- the fixed step stays canonical
@@ -59,7 +60,7 @@ namespace Arcane
 
         // ---- sim-time control -------------------------------------------------
         // Freeze/thaw the fixed phase. While paused the sim clock does not advance
-        // (no accumulation, zero fixed steps) but Update + Render still run.
+        // (no accumulation, zero fixed steps) but Update and the frame still run.
         void SetPaused(bool p) noexcept { m_paused = p; }
         [[nodiscard]] bool IsPaused() const noexcept { return m_paused; }
 
@@ -143,6 +144,7 @@ namespace Arcane
         }
 
         // Run the Render scheduler on the calling thread (single-threaded).
+        // RETIRED (F5 plan 1 Task 5): no host calls this; kept for the ABI.
         void SubmitRender()
         {
             m_schedulers->render.Execute(*m_registry);

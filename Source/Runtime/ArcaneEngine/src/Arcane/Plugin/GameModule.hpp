@@ -18,9 +18,12 @@
 // ARC_COMPONENT drain (GameComponents.hpp), and the registry Save/LoadState
 // round-trip for hot reload. Every hook has a default; override what the
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
-// InstallEngineSystems: Arcane::PhysicsSystem2D -> TransformPropagationSystem in
-// fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
-// own systems. Default-constructible systems use ARC_SYSTEM in one .cpp;
+// InstallEngineSystems: Arcane::PhysicsSystem2D -> TransformPropagationSystem ->
+// BoundsSystem in fixedUpdate; RenderSubmissionSystem runs inside the frame
+// extract, Arcane/Render/ExtractFrame.hpp) -- a module registers ONLY its own
+// systems, in FixedUpdate or Update. The Render phase is RETIRED (F5 plan 1
+// Task 5): no host runs it, so a Render-phase system never runs and its
+// registration warns once (SystemFactory.cpp). Default-constructible systems use ARC_SYSTEM in one .cpp;
 // systems needing runtime constructor values use RegisterSystem<T>(mask, phase)
 // in OnInit. Both paths place them with Arcane::Before<...> / Arcane::After<...>
 // against the engine's types (Astra keys systems by a hash of the type NAME, so
