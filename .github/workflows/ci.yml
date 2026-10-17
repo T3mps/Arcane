@@ -197,6 +197,18 @@ jobs:
       - name: Build
         run: scripts/ci/build.sh ${{ matrix.config }} -j "$MAKE_JOBS"
 
+      # After the image toolchain is on PATH and the tree is built, before the
+      # Catch2 seed loop. Debug gcc only: that leg has the compiler. Replay is CPU.
+      - name: Replay fuzz regressions and namespace compile-fail
+        if: matrix.leg == 'linux-gcc-14' && matrix.config == 'Debug'
+        run: |
+          set -euo pipefail
+          bash scripts/namespace-compile-fail.sh
+          # Job CXX is g++-14. libFuzzer needs clang; unset so run-fuzz.sh
+          # keeps its default (clang++-19, else clang++). `all` is required:
+          # regress with no target hits ${2:?target} and replays nothing.
+          env -u CXX bash scripts/run-fuzz.sh regress all
+
       # Under Xvfb with SDL's x11 driver, so windows are real native windows.
       - name: Test (two seeds)
         env:
