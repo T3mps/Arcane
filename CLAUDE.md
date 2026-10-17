@@ -184,6 +184,7 @@ carry the repo-specific traps the sections above only summarize:
 | `arcane-tests` | running and reproducing ArcaneTests, seeds, which CI lane ran what, the coverage baselines |
 | `arcane-verify` | the golden gate, judging lanes, the slot/bless table, copying blesses back to source |
 | `arcane-graph` | impact analysis and "what connects to X" via the knowledge graph |
+| `arcane-servitor` | checking a change in a RUNNING host: launch, wait, screenshot/compare, step N ticks, inspect entities/ECS, cvars, live logs/Problems, hot-reload confirmation |
 
 **Use the knowledge graph before assuming how files, symbols or docs
 connect.** `graphify-out/` (gitignored; build it per machine with
@@ -195,8 +196,38 @@ union them -- each finds things the other misses. Confirm in source before
 asserting.
 
 **Agent tooling goes the CLI route (shell tools + these skills), not MCP.**
-The live-query gap (asking a RUNNING host a new question) is to be closed by
-a CLI client to an in-host listener, designed with the cvar/console build.
+
+### Servitor: check changes in a running engine (every agent, every model)
+
+`servitor` (`Binaries\<Cfg>-windows-x86_64-md\Servitor\servitor.exe`, built
+with `Arcane.slnx`, compiled out of Dist) is a loopback CLI that attaches to
+running ArcaneEditor / ArcaneRuntime / ArcaneServer hosts and prints one JSON
+envelope per call. It is not an MCP server: run it from the shell, like `git`.
+The full guide is `.claude/skills/arcane-servitor/SKILL.md`. Read it before
+you use Servitor. This applies to every agent, whatever the model: Claude
+sessions and subagents, Grok, Codex/GPT, and any SDD implementer or reviewer.
+
+- **When.** Any change whose effect shows up in a running host: pixels, a Play/Edit
+  transition, camera or UI behaviour, a hot reload, cvars, log/Problems output,
+  or entity/ECS state after N ticks. Unit tests and goldens stay the regression
+  net. A Servitor check is the evidence that THIS change does what you claim.
+  Put it in your report: the command, the exit code, and the result file paths.
+- **Core loop.**
+  `servitor --project ReferenceProject launch runtime --headless -- --fixed-time 0`
+  (`launch` takes no `--client`; it exits 2), then
+  `servitor --project ReferenceProject --client <your-agent-name> --host runtime wait settled`, then `screenshot window --out <png>` /
+  `compare <lane> --source window` / `step N` / `entity get ...` /
+  `ecs query ...` / `logs --level warn`, then `quit` what you launched.
+  `describe <cmd>` and `commands` print the arguments and exit codes.
+- **Branch on the exit code.** 0 ok; 2 usage; 3 permission; 4 no host; 5 busy
+  (safe to retry); 6 the command failed (read `errors[0].code`); 7 the host died;
+  8 a check failed (that IS the finding).
+- **Rules.** Name yourself with `--client` on host calls; `launch` and `status` refuse it (exit 2). Launch your own `--headless` host;
+  never drive (`play`/`stop`/`quit`/`cvar set`) an editor the user has open.
+  Never `--bless` through Servitor. `quit` every host you launched.
+- **Sandboxed CLIs.** Codex blocks loopback by default, so every call fails
+  with exit 4/7. Run it with network access to localhost allowed. Grok's
+  default shell can reach localhost.
 
 ## Engine-as-SDK
 
