@@ -2859,7 +2859,8 @@ TEST_CASE("rendergraph exec: a graph with no nodes still submits and advances th
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain", "[nri]")
+TEST_CASE("rendergraph exec: a swapchain-importing node refuses a null swapChain",
+          "[nri][expects-render-errors]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
@@ -3148,7 +3149,7 @@ TEST_CASE("rendergraph exec: two graphs on one device bury into their OWN lanes,
 }
 
 TEST_CASE("rendergraph exec: a second Graveyard lane is refused on a graph that already buried "
-          "into another", "[nri]")
+          "into another", "[nri][expects-render-errors]")
 {
     // The lane's half of the "one graph belongs to one device" refusal. Every
     // burial already pending sits in the FIRST lane, keyed to this graph's
@@ -3261,7 +3262,7 @@ TEST_CASE("rendergraph exec: a graph whose Execute was never ENTERED buries noth
 }
 
 TEST_CASE("rendergraph exec: a graph whose Execute ENTERED and FAILED buries its tail in its own "
-          "lane, at fence 0, past a sibling lane already at 4096", "[nri]")
+          "lane, at fence 0, past a sibling lane already at 4096", "[nri][expects-render-errors]")
 {
     // HEADER WINDOW (b2) -- the sharpest edge, and the one the lane exists for.
     //
@@ -3742,7 +3743,8 @@ TEST_CASE("imgui-nri: Release stamps the ADOPTED context's atlas, never whicheve
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nri]")
+TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused",
+          "[nri][expects-render-errors]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
@@ -3779,7 +3781,8 @@ TEST_CASE("rendergraph exec: an RgCompiled from before a Reset is refused", "[nr
     Arcane::ResetRenderErrorCount();
 }
 
-TEST_CASE("rendergraph exec: an out-of-range frame slot is refused", "[nri]")
+TEST_CASE("rendergraph exec: an out-of-range frame slot is refused",
+          "[nri][expects-render-errors]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
@@ -4484,7 +4487,7 @@ TEST_CASE("nri graph frame: an offscreen capture frame copies the output BEFORE 
 }
 
 TEST_CASE("nri graph frame: a zero-extent canvas COMPILES but is a latched refusal at Execute",
-          "[nri]")
+          "[nri][expects-render-errors]")
 {
     // Fix round 1, finding 1 -- the two halves of why NriGraphContext::
     // RenderFrame skips a zero-sized surface BEFORE it declares anything.
@@ -5111,7 +5114,7 @@ TEST_CASE("nri pipeline cache: GetCompute creates once per key and serves the re
 }
 
 TEST_CASE("nri pipeline cache: GetCompute refuses an unbound cache or unregistered layoutId "
-          "without invoking fill, and never caches the refusal", "[nri]")
+          "without invoking fill, and never caches the refusal", "[nri][expects-render-errors]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
@@ -5202,7 +5205,8 @@ TEST_CASE("nri pipeline cache: Clear buries everything at one fence and reissues
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
-TEST_CASE("nri pipeline cache: caller-contract breaches are refused and latched, not served", "[nri]")
+TEST_CASE("nri pipeline cache: caller-contract breaches are refused and latched, not served",
+          "[nri][expects-render-errors]")
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
