@@ -57,6 +57,21 @@ namespace Arcane
             return a.view == b.view && a.projection == b.projection && a.viewport == b.viewport;
         }
 
+        // False from the snapshot hook means a UserCallback command was skipped
+        // and the rest of the draw data was kept. Warn once per process per list.
+        void PublishUiSnapshot(bool (*snapshot)(const ImDrawData*, ImDrawSnapshot&),
+                               const ImDrawData* src, ImDrawSnapshot& dest,
+                               const char* listName, bool& warned)
+        {
+            if (snapshot(src, dest))
+                return;
+            if (warned)
+                return;
+            warned = true;
+            ARC_WARN("extract skipped an ImGui UserCallback command in {}; the rest of that draw data was kept",
+                     listName);
+        }
+
         // The sprite batch, copied. The host already called Begin, SetGlobals
         // and SetRenderContext on its persistent batcher, and the sprite
         // materials are registered on that batcher, so extract submits into
@@ -282,7 +297,7 @@ namespace Arcane
                              "Add a Camera component to an entity (a New Scene ships one).");
                 else
                     ARC_WARN("scene carries {} Camera component(s) but none is usable "
-                             "as the sprite camera.", total);
+                             "as the sprite camera (active == false, or orthographicSize <= 0).", total);
             }
             if (camCount > 1 && !warnedMultiSceneCamera)
             {
@@ -302,7 +317,7 @@ namespace Arcane
         return out;
     }
 
-    const RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring)
+    RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring)
     {
         NoteExtractFrameCall();
         RenderFramePacket& packet = ring.BeginExtract();
@@ -455,12 +470,16 @@ namespace Arcane
         packet.overlay.Append(req.gizmoPrims);
 
         // Ruling PR-1: ArcaneRender cannot call ArcaneImGui directly; the copy is the
-        // overlay hook. No hook (a host without ImGui) leaves both snapshots empty.
+        // overlay hook. No hook (a host without ImGui) leaves both snapshots at the
+        // empty state Clear() already published, buffers included.
         const RenderOverlayHooks overlayHooks = GetRenderOverlayHooks();
-        if (!overlayHooks.snapshot || !overlayHooks.snapshot(req.imgui, packet.imgui))
-            packet.imgui = {};
-        if (!overlayHooks.snapshot || !overlayHooks.snapshot(req.gameUi, packet.gameUi))
-            packet.gameUi = {};
+        if (overlayHooks.snapshot)
+        {
+            static bool warnedImgui = false;
+            static bool warnedGameUi = false;
+            PublishUiSnapshot(overlayHooks.snapshot, req.imgui, packet.imgui, "imgui", warnedImgui);
+            PublishUiSnapshot(overlayHooks.snapshot, req.gameUi, packet.gameUi, "gameUi", warnedGameUi);
+        }
         packet.hasPost = req.post != nullptr;
         if (req.post)
             packet.post = *req.post;

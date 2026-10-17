@@ -375,8 +375,8 @@ void BuildHud(FrameIo& io)
         // THE 3D PASS'S VISIBILITY, beside the 2D batcher's counts (F3 plan 2
         // T5): the CPU's own figures, then what the GPU CULL PASS itself
         // emitted. Both describe the LAST frame, not this one -- the HUD is
-        // built before this frame's extract copies `gpuSceneFrame` and the
-        // GPU's answer is asynchronous by construction -- which is the same
+        // built before this frame's extract copies the GPU-scene stats, and
+        // the GPU's answer is asynchronous by construction -- which is the same
         // one-frame lag the batcher's counts above already carry.
         //
         // This host arms the ring at boot, UNCONDITIONALLY (RuntimeApp's own
@@ -389,10 +389,10 @@ void BuildHud(FrameIo& io)
         // all. A HUD that printed the coarse count there instead would be
         // showing the CPU's expectation under the GPU's name -- exactly the
         // conflation this arc removed from the report.
-        const Arcane::GpuSceneFrame::Stats& vis = io.gpuSceneFrame.stats;
+        const Arcane::GpuSceneFrame::Stats& vis = io.gpuSceneStats.stats;
         ImGui::Text("Rows: %u  Coarse: %u  Batches: %u  Draws: %u (+%u transparent)",
                     vis.total, vis.coarseVisible, vis.batches, vis.draws,
-                    static_cast<std::uint32_t>(io.gpuSceneFrame.transparentDraws.size()));
+                    io.gpuSceneStats.transparentDraws);
         if (const std::optional<std::uint32_t> gpuVisible =
                 Arcane::GpuSceneVisibleRows(io.graph ? io.graph->Scene() : nullptr))
             ImGui::Text("GPU visible: %u", *gpuVisible);
@@ -659,9 +659,11 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // graphFrame.pickView = io.runtime->View() reads the view just installed.
     io.app.PushSceneCamera(packet);
 
-    // The HUD and ShutdownGraphPath read the member. The ring holds the
+    // The HUD and ShutdownGraphPath read these scalars. The ring holds the
     // packet, which outlives this call.
-    io.gpuSceneFrame = packet.mesh;
+    io.gpuSceneStats.stats = packet.mesh.stats;
+    io.gpuSceneStats.transparentDraws =
+        static_cast<std::uint32_t>(packet.mesh.transparentDraws.size());
 
     // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8). The frame is the one
     // ExtractFrame just published. `meshScene` only needs to outlive the
@@ -694,14 +696,13 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 
     // After ExtractFrame, so CollectPickables reads this frame's MainVisibleSet.
 #if !defined(ARC_BUILD_DIST)
-    // --pick-probe. THE ONE PLACE the entity ids
-    // are produced: CollectPickables is a pure walk of the registry and
-    // the k-th drawable it appends IS hit-proxy id k+1, which is what
-    // the graph's pick node rasterises and what RuntimeApp::
-    // ShutdownGraphPath inverts through PickEntityForId. It lives here,
-    // not in the vehicle, because this is the object that owns a
-    // registry and a camera -- NriGraphContext is a render vehicle and
-    // must not grow either.
+    // --pick-probe. CollectPickables ran inside ExtractFrame; the k-th
+    // drawable it appended IS hit-proxy id k+1, which is what the graph's
+    // pick node rasterises and what RuntimeApp::ShutdownGraphPath inverts
+    // through PickEntityForId. This block copies that list onto the frame.
+    // It lives here, not in the vehicle, because this is the object that
+    // owns a registry and a camera -- NriGraphContext is a render vehicle
+    // and must not grow either.
     //
     // The view handed over (pickView) is the SCENE camera PushSceneCamera
     // just installed, so the id pass projects the same world silhouettes the

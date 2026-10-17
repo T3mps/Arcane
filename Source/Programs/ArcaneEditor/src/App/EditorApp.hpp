@@ -91,7 +91,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the viewport's per-frame GPU-scene frame (F3 plan 1 T8)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrameStats -- the viewport frame's HUD/shutdown figures (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the frame's pickables
 #include <Arcane/Render/ExtractFrame.hpp>        // ExtractRequest (BuildExtractRequest) -- F5 plan 1 Task 5
@@ -351,7 +351,7 @@ namespace Arcane::Editor
         // value, because a span into a temporary is the one mistake this shape
         // exists to make impossible.
         void ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
-                                   const Arcane::RenderFramePacket& packet);
+                                   Arcane::RenderFramePacket& packet);
         // NO phase 11 / phase 12 members. CompositeGameUi and
         // RenderSelectionOutline were declared here and called from MainLoop
         // between phases 10 and 13; ArmGraphViewportFrame above satisfies both
@@ -1400,8 +1400,9 @@ namespace Arcane::Editor
         // THIS FRAME's pickable silhouettes and the hit-proxy ids the outline
         // traces, held as MEMBERS because FrameDesc borrows both as spans and a
         // span into a per-frame temporary is a dangling read the moment the
-        // declaration outlives the statement. Reused rather than rebuilt, so a
-        // steady-state Edit frame allocates nothing.
+        // declaration outlives the statement. Copy-assigned from the packet, so
+        // the vectors keep their capacity and a steady-state Edit frame
+        // allocates nothing after the first.
         //
         // Produced by CollectPickables, whose k-th entry IS hit-proxy id k+1
         // -- the ONE id assignment in the process.
@@ -1409,12 +1410,14 @@ namespace Arcane::Editor
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
         // ---- The viewport's opaque 3D pass (F2a Task 10; F3 plan 1 T8) -----
-        // The last VIEWPORT frame's GPU scene, copied from that frame's extract
-        // packet so the shutdown report still reads a member. The graph borrows
-        // packet.mesh, not this copy. The scene-save cover extracts again and
-        // must not overwrite it. Containers are reused, so a steady-state frame
-        // with a static scene allocates nothing after the first.
-        Arcane::GpuSceneFrame m_gpuSceneFrame;
+        // The last VIEWPORT frame's GPU-scene figures, snapshotted from that
+        // frame's extract so the shutdown report still reads them. The graph
+        // borrows packet.mesh. The scene-save cover extracts again and must
+        // not replace these scalars, which is why they are taken at the
+        // viewport extract rather than read off the ring at shutdown. Only the
+        // stats and the transparent-draw count are copied, so the copy
+        // allocates nothing.
+        Arcane::GpuSceneFrameStats m_gpuSceneStats;
 
         // THE VIEW THE MESH PASS DRAWS WITH this frame -- the editor view in
         // Edit, the perspective scene camera in Play (RuntimeFrame.cpp's

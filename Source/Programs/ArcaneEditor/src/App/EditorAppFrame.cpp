@@ -2222,16 +2222,19 @@ namespace Arcane::Editor
                                         ? Arcane::GridSceneDesc::Plane::XY
                                         : Arcane::GridSceneDesc::Plane::XZ);
             }
-            const Arcane::RenderFramePacket& packet =
+            Arcane::RenderFramePacket& packet =
                 Arcane::ExtractFrame(m_runtime->Registry(), req, m_packetRing);
             // Play: the scene camera extract resolved. No scene camera leaves
             // the plugin's own view (spriteViewFromScene stays false). Edit
             // already pushed the editor camera in RefreshSceneResolution.
             if (packet.spriteViewFromScene && packet.spriteView)
                 m_runtime->SetView(packet.spriteView->view);
-            // The shutdown report reads this member. The graph borrows
-            // packet.mesh. The cover's later extract must not replace it.
-            m_gpuSceneFrame = packet.mesh;
+            // The shutdown report reads these scalars. The graph borrows
+            // packet.mesh. The cover's later extract must not replace the
+            // viewport frame's figures, so they are snapshotted here.
+            m_gpuSceneStats.stats = packet.mesh.stats;
+            m_gpuSceneStats.transparentDraws =
+                static_cast<std::uint32_t>(packet.mesh.transparentDraws.size());
             m_meshView = packet.meshView;
 
             // Copied, not borrowed, by FrameDesc -- but the local has to
@@ -2322,9 +2325,9 @@ namespace Arcane::Editor
             // pairing: nothing is owed at this point in the frame. Phase 10
             // runs BEFORE DrawEditorUi (phase 13) begins the editor's frame, so
             // there is nothing begun to pair; and the GAME context's frame is
-            // begun and paired entirely inside ArmGraphViewportFrame above,
-            // before the call that just failed. Bailing here would strand
-            // neither.
+            // begun and paired inside RenderSceneToViewport, before
+            // ArmGraphViewportFrame and before the call that just failed.
+            // Bailing here would strand neither.
             //
             // The reason is that this phase has no stop channel and should not
             // grow one: RenderSceneToViewport returns void, and threading an
@@ -2531,7 +2534,7 @@ namespace Arcane::Editor
     // Phases 11, 12 and 17 keep their gates and each points at this
     // function.
     void EditorApp::ArmGraphViewportFrame(Arcane::NriGraphContext::FrameDesc& vp,
-                                          const Arcane::RenderFramePacket& packet)
+                                          Arcane::RenderFramePacket& packet)
     {
         // ---- phase 11's content: the game HUD ---------------------------
         // Produced in RenderSceneToViewport before extract (so the packet
@@ -2570,10 +2573,9 @@ namespace Arcane::Editor
         // none -- so the scene's one light is render.mesh.defaultLight.*
         // (RenderLookSettings.hpp; Live, read once per frame into the packet).
         // A light component is future work and a reviewed scene-schema change.
-        const Arcane::RenderFramePacket& lit = m_packetRing.Latest();
-        m_meshScene.lightDirection = lit.lightDirection;
-        m_meshScene.lightColor = lit.lightColor;
-        m_meshScene.ambient = lit.ambient;
+        m_meshScene.lightDirection = packet.lightDirection;
+        m_meshScene.lightColor = packet.lightColor;
+        m_meshScene.ambient = packet.ambient;
 
         // vp.mesh is left at FrameDesc's own default (null) for an Empty()
         // scene -- the same "ask for the frame WITHOUT this stage by leaving
@@ -2623,8 +2625,7 @@ namespace Arcane::Editor
         // through the ViewTransform handed over below, so they register
         // pixel-for-pixel with what was drawn in EVERY view mode. The k-th
         // entry IS hit-proxy id k+1.
-        Arcane::RenderFramePacket& published = m_packetRing.Latest();
-        m_pickDrawables = published.pickDrawables;
+        m_pickDrawables.assign(packet.pickDrawables.begin(), packet.pickDrawables.end());
 
         // Every selected entity that made it into THIS frame's id pass, over
         // the same drawables that were just handed to the pick node rather
@@ -2638,15 +2639,15 @@ namespace Arcane::Editor
             m_pickSelectedIds.reserve(m_selection.Count());
             for (Astra::Entity e : m_selection.Entities())
             {
-                const std::uint32_t id = Arcane::PickPassIdOf(published.pickDrawables, e);
+                const std::uint32_t id = Arcane::PickPassIdOf(packet.pickDrawables, e);
                 if (id != 0u)
                     m_pickSelectedIds.push_back(id);
             }
         }
-        published.selectedIds = m_pickSelectedIds;
+        packet.selectedIds = m_pickSelectedIds;
 
         vp.pickOutline = true;
-        vp.pickables   = published.pickDrawables;
+        vp.pickables   = packet.pickDrawables;
         // The same ViewTransform the sprites, the mesh pass and the gizmo just
         // used -- Edit: the editor camera; Play: the scene camera SetView pushed.
         vp.pickView    = m_runtime->View();

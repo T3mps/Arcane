@@ -14,13 +14,81 @@ static_assert(offsetof(Arcane::ImDrawSnapshotVert, col) == offsetof(ImDrawVert, 
 static_assert(sizeof(ImDrawIdx) == sizeof(std::uint16_t));
 static_assert(sizeof(ImTextureID) == sizeof(std::uint64_t));
 
+namespace
+{
+    void ClearSnapshotInPlace(Arcane::ImDrawSnapshot& out)
+    {
+        for (Arcane::ImDrawListSnapshot& list : out.lists)
+        {
+            list.vertices.clear();
+            list.indices.clear();
+            list.cmds.clear();
+        }
+        out.lists.clear();
+        out.textures.clear();
+        out.hasTextures = false;
+        out.displayPos = {};
+        out.displaySize = {};
+        out.framebufferScale = { 1.0f, 1.0f };
+    }
+
+    void FillListInPlace(Arcane::ImDrawListSnapshot& snap, const ImDrawList& list, bool& skipped)
+    {
+        if (list.VtxBuffer.Size > 0)
+        {
+            snap.vertices.resize(static_cast<std::size_t>(list.VtxBuffer.Size));   // PR-1
+            std::memcpy(snap.vertices.data(), list.VtxBuffer.Data,
+                        sizeof(ImDrawVert) * static_cast<std::size_t>(list.VtxBuffer.Size));
+        }
+        else
+            snap.vertices.clear();
+        if (list.IdxBuffer.Size > 0)
+            snap.indices.assign(list.IdxBuffer.Data, list.IdxBuffer.Data + list.IdxBuffer.Size);
+        else
+            snap.indices.clear();
+        snap.cmds.clear();
+        for (const ImDrawCmd& cmd : list.CmdBuffer)
+        {
+            // A callback (including ImDrawCallback_ResetRenderState) is not
+            // something the NRI renderer can replay. Skip that command and
+            // keep the rest of the list.
+            if (cmd.UserCallback != nullptr)
+            {
+                skipped = true;
+                continue;
+            }
+            Arcane::ImDrawListSnapshot::Cmd c;
+            c.clip = glm::vec4(cmd.ClipRect.x, cmd.ClipRect.y, cmd.ClipRect.z, cmd.ClipRect.w);   // PR-1
+            c.idxOffset = cmd.IdxOffset;
+            c.elemCount = cmd.ElemCount;
+            c.vtxOffset = cmd.VtxOffset;
+            // Do not call GetTexID here. A managed texture whose TexID is still
+            // Invalid asserts (imgui.h:4073-4081). NewFrameTexUpdates stamps
+            // that id later, at declaration.
+            if (cmd.TexRef._TexData != nullptr)
+            {
+                c.managed = cmd.TexRef._TexData;
+                c.texture = 0;
+            }
+            else
+            {
+                c.managed = nullptr;
+                c.texture = cmd.TexRef._TexID;
+            }
+            snap.cmds.push_back(c);
+        }
+    }
+}
+
 namespace Arcane
 {
     bool CopyImDrawSnapshot(const ImDrawData* src, ImDrawSnapshot& out)
     {
-        out = {};
         if (!src)
+        {
+            ClearSnapshotInPlace(out);
             return true;
+        }
         out.displayPos = { src->DisplayPos.x, src->DisplayPos.y };
         out.displaySize = { src->DisplaySize.x, src->DisplaySize.y };
         out.framebufferScale = { src->FramebufferScale.x, src->FramebufferScale.y };
@@ -29,53 +97,25 @@ namespace Arcane
             out.hasTextures = true;
             out.textures.assign(src->Textures->Data, src->Textures->Data + src->Textures->Size);
         }
-        out.lists.reserve(static_cast<std::size_t>(src->CmdLists.Size));
+        else
+        {
+            out.hasTextures = false;
+            out.textures.clear();
+        }
+        bool skipped = false;
+        std::size_t dst = 0;
         for (const ImDrawList* list : src->CmdLists)
         {
             if (!list)
                 continue;
-            for (const ImDrawCmd& cmd : list->CmdBuffer)
-            {
-                if (cmd.UserCallback != nullptr)
-                {
-                    out = {};
-                    return false;
-                }
-            }
-            ImDrawListSnapshot snap;
-            if (list->VtxBuffer.Size > 0)
-            {
-                snap.vertices.resize(static_cast<std::size_t>(list->VtxBuffer.Size));   // PR-1
-                std::memcpy(snap.vertices.data(), list->VtxBuffer.Data,
-                            sizeof(ImDrawVert) * static_cast<std::size_t>(list->VtxBuffer.Size));
-            }
-            if (list->IdxBuffer.Size > 0)
-                snap.indices.assign(list->IdxBuffer.Data, list->IdxBuffer.Data + list->IdxBuffer.Size);
-            for (const ImDrawCmd& cmd : list->CmdBuffer)
-            {
-                ImDrawListSnapshot::Cmd c;
-                c.clip = glm::vec4(cmd.ClipRect.x, cmd.ClipRect.y, cmd.ClipRect.z, cmd.ClipRect.w);   // PR-1
-                c.idxOffset = cmd.IdxOffset;
-                c.elemCount = cmd.ElemCount;
-                c.vtxOffset = cmd.VtxOffset;
-                // Do not call GetTexID here. A managed texture whose TexID is still
-                // Invalid asserts (imgui.h:4073-4081). NewFrameTexUpdates stamps
-                // that id later, at declaration.
-                if (cmd.TexRef._TexData != nullptr)
-                {
-                    c.managed = cmd.TexRef._TexData;
-                    c.texture = 0;
-                }
-                else
-                {
-                    c.managed = nullptr;
-                    c.texture = cmd.TexRef._TexID;
-                }
-                snap.cmds.push_back(c);
-            }
-            out.lists.push_back(std::move(snap));
+            if (dst == out.lists.size())
+                out.lists.emplace_back();
+            FillListInPlace(out.lists[dst], *list, skipped);
+            ++dst;
         }
-        return true;
+        if (out.lists.size() > dst)
+            out.lists.resize(dst);
+        return !skipped;
     }
 
     ImDrawSnapshotRebuild::ImDrawSnapshotRebuild(const ImDrawSnapshot& snap)

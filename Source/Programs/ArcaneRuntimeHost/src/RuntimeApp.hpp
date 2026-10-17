@@ -34,7 +34,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
-#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the opaque 3D pass's per-frame frame (F3 plan 1 T8)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrameStats -- the HUD/shutdown figures (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -209,17 +209,13 @@ private:
     std::vector<Arcane::PickDrawable>    m_pickDrawables;
     std::vector<std::uint32_t>           m_pickSelectedIds;
 
-    // THE OPAQUE 3D PASS'S PER-FRAME GPU-SCENE FRAME (F2a Task 10; F3 plan 1
-    // T8): the staged rows, the batch table, the indirect args and the
-    // CPU-written visible-index list. Same ownership shape as m_pickDrawables
-    // just above and for the identical reason: FrameDesc::mesh ->
-    // MeshSceneDesc::scene is a POINTER BORROWED for the duration of the
-    // RenderFrame call (MeshNode.hpp), so the object it names must outlive
-    // that call -- and RenderGraph (RuntimeFrame.cpp) is a free function, not
-    // a method, so it has nowhere of its own to keep one. The graph borrows
-    // the extract packet; this member is a copy of that frame for the HUD and
-    // ShutdownGraphPath, reached from RenderGraph through FrameIo::gpuSceneFrame.
-    Arcane::GpuSceneFrame                m_gpuSceneFrame;
+    // GPU-scene figures for the HUD and ShutdownGraphPath (F2a Task 10; F3
+    // plan 1 T8). The graph borrows the extract packet's mesh frame
+    // (MeshSceneDesc::scene points at that packet for the RenderFrame call).
+    // RenderGraph is a free function, so these scalars live here and are
+    // reached through FrameIo::gpuSceneStats. Only the stats and the
+    // transparent-draw count are copied, so the copy allocates nothing.
+    Arcane::GpuSceneFrameStats           m_gpuSceneStats;
 
     // THE LAST-FRAME CAPTURE (Task 8: --report wiring). CaptureTail
     // (RuntimeFrame.cpp) fills these on the run's last frame whenever

@@ -10,6 +10,7 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ExtractFrame.hpp>
+#include <Arcane/Render/FramePacing.hpp>
 #include <Arcane/Render/Grid2D.hpp>
 #include <Arcane/Render/GpuSceneSync.hpp>         // the World fixture's GpuSceneSync
 #include <Arcane/Render/GpuSceneTypes.hpp>        // the World fixture's GpuSceneMirror / GpuSceneStage
@@ -443,6 +444,162 @@ TEST_CASE("extract publishes a pick drawable that survives a later edit", "[nri]
     CHECK(packet.pickDrawables[0].corners[0] == corner);
 }
 
+// The buffer a vector owned after the first extract. The second extract of
+// that same ring slot must keep it: data() stable and capacity not grown.
+template <typename T>
+struct KeptBuffer
+{
+    const T* data = nullptr;
+    std::size_t capacity = 0;
+    std::size_t size = 0;
+};
+
+template <typename T>
+KeptBuffer<T> TakeBuffer(const std::vector<T>& v)
+{
+    return { v.data(), v.capacity(), v.size() };
+}
+
+template <typename T>
+void CheckBufferKept(const std::vector<T>& v, const KeptBuffer<T>& before)
+{
+    REQUIRE(before.size > 0u);
+    CHECK(v.size() == before.size);
+    CHECK(v.capacity() >= before.capacity);
+    CHECK(v.capacity() == before.capacity);
+    CHECK(v.data() == before.data);
+}
+
+TEST_CASE("a second extract keeps the packet vector capacity", "[nri][extract]")
+{
+    Arcane::LatchFramesInFlight();
+    const std::uint32_t depth = Arcane::FramesInFlight();
+    REQUIRE(depth >= 2u);
+
+    World world;
+    world.AddSprite({ 0.0f, 0.0f, 0.0f });
+    world.Spawn({ 0.0f, 0.0f, 0.0f }, world.Mesh(1));
+    Arcane::TransformPropagationSystem{}(world.reg);
+    Arcane::BoundsSystem{}(world.reg);
+
+    auto batcher = Arcane::Batcher2D::Create();
+    REQUIRE(batcher != nullptr);
+    Arcane::RenderContext2D ctx;
+    ctx.batcher = batcher.get();
+    world.reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
+
+    ImGuiContext* previous = ImGui::GetCurrentContext();
+    ImGuiContext* imgui = ImGui::CreateContext();
+    REQUIRE(imgui != nullptr);
+    ImGui::SetCurrentContext(imgui);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(128.0f, 128.0f);
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(64.0f, 64.0f), ImGuiCond_Always);
+    ImGui::Begin("capacity");
+    ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(3), ImVec2(0.0f, 0.0f), ImVec2(8.0f, 8.0f));
+    ImGui::End();
+    ImGui::Render();
+    ImDrawData* draw = ImGui::GetDrawData();
+    REQUIRE(draw != nullptr);
+    REQUIRE(draw->CmdLists.Size >= 1);
+
+    auto bytes = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{ 1, 2, 3, 4 });
+    Arcane::PostChainDesc post;
+    post.passes.push_back({});
+    post.passes.back().vsBytes = bytes;
+    post.passes.back().inputs.push_back(0u);
+
+    Arcane::ExtractRequest req;
+    req.viewport = { 128u, 128u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    req.imgui = draw;
+    req.post = &post;
+    Arcane::OverlayLine gizmo{};
+    gizmo.a = { 0.0f, 0.0f, 0.0f };
+    gizmo.b = { 8.0f, 0.0f, 0.0f };
+    gizmo.color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    gizmo.thickness = 1.0f;
+    gizmo.depth = Arcane::OverlayDepthClass::AlwaysOnTop;
+    gizmo.space = Arcane::OverlayColorSpace::DisplayReferred;
+    gizmo.screenSpace = true;
+    req.gizmoPrims.AddLine(gizmo);
+
+    Arcane::PacketRing ring;
+    const Arcane::RenderFramePacket* slot = nullptr;
+    KeptBuffer<Arcane::Batch2DVertex> batchVertices;
+    KeptBuffer<std::uint32_t> batchIndices;
+    KeptBuffer<Arcane::Batch2DDrawSpan> batchSpans;
+    KeptBuffer<Arcane::OverlayPrimitive> prims;
+    KeptBuffer<Arcane::PickDrawable> pick;
+    KeptBuffer<Arcane::VisibleEntry> entries;
+    KeptBuffer<std::uint64_t> members;
+    KeptBuffer<Arcane::GpuBatchDraw> batches;
+    KeptBuffer<Arcane::DrawIndexedArgs> args;
+    KeptBuffer<Arcane::GpuCullBatch> cullBatches;
+    KeptBuffer<std::uint32_t> visibleIndices;
+    KeptBuffer<std::uint32_t> oracleIndices;
+    KeptBuffer<std::uint32_t> stageRows;
+    KeptBuffer<Arcane::GpuInstance> stageValues;
+    KeptBuffer<Arcane::PostChainPassDesc> passes;
+    KeptBuffer<Arcane::ImDrawListSnapshot> imguiLists;
+    KeptBuffer<void*> imguiTextures;
+
+    for (std::uint32_t i = 0; i < depth; ++i)
+    {
+        batcher->Begin(req.viewport.x, req.viewport.y);
+        const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(world.reg, req, ring);
+        if (i != 0)
+            continue;
+        slot = &packet;
+        batchVertices = TakeBuffer(packet.batchVertices);
+        batchIndices = TakeBuffer(packet.batchIndices);
+        batchSpans = TakeBuffer(packet.batchSpans);
+        prims = TakeBuffer(packet.overlay.prims);
+        pick = TakeBuffer(packet.pickDrawables);
+        entries = TakeBuffer(packet.visible.entries);
+        members = TakeBuffer(packet.visible.members);
+        batches = TakeBuffer(packet.mesh.batches);
+        args = TakeBuffer(packet.mesh.args);
+        cullBatches = TakeBuffer(packet.mesh.cullBatches);
+        visibleIndices = TakeBuffer(packet.mesh.visibleIndices);
+        oracleIndices = TakeBuffer(packet.mesh.oracleVisibleIndices);
+        stageRows = TakeBuffer(packet.mesh.stage.rows);
+        stageValues = TakeBuffer(packet.mesh.stage.values);
+        passes = TakeBuffer(packet.post.passes);
+        imguiLists = TakeBuffer(packet.imgui.lists);
+        imguiTextures = TakeBuffer(packet.imgui.textures);
+    }
+    REQUIRE(slot != nullptr);
+
+    batcher->Begin(req.viewport.x, req.viewport.y);
+    const Arcane::RenderFramePacket& again = Arcane::ExtractFrame(world.reg, req, ring);
+    CHECK(&again == slot);
+    CheckBufferKept(again.batchVertices, batchVertices);
+    CheckBufferKept(again.batchIndices, batchIndices);
+    CheckBufferKept(again.batchSpans, batchSpans);
+    CheckBufferKept(again.overlay.prims, prims);
+    CheckBufferKept(again.pickDrawables, pick);
+    CheckBufferKept(again.visible.entries, entries);
+    CheckBufferKept(again.visible.members, members);
+    CheckBufferKept(again.mesh.batches, batches);
+    CheckBufferKept(again.mesh.args, args);
+    CheckBufferKept(again.mesh.cullBatches, cullBatches);
+    CheckBufferKept(again.mesh.visibleIndices, visibleIndices);
+    CheckBufferKept(again.mesh.oracleVisibleIndices, oracleIndices);
+    CheckBufferKept(again.mesh.stage.rows, stageRows);
+    CheckBufferKept(again.mesh.stage.values, stageValues);
+    CheckBufferKept(again.post.passes, passes);
+    CheckBufferKept(again.imgui.lists, imguiLists);
+    CheckBufferKept(again.imgui.textures, imguiTextures);
+
+    ImGui::DestroyContext(imgui);
+    ImGui::SetCurrentContext(previous);
+}
+
 TEST_CASE("overlay tags: grid is depth-tested linear, physics camera and gizmo are always on top", "[nri][extract]")
 {
     World world;
@@ -703,8 +860,6 @@ TEST_CASE("extract: a grid line stays 1 px wide at ppm 8, 32 and 128", "[nri][ex
     }
 }
 
-static void DummyImGuiCallback(const ImDrawList*, const ImDrawCmd*) {}
-
 TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][extract]")
 {
     ImGuiContext* previous = ImGui::GetCurrentContext();
@@ -784,20 +939,6 @@ TEST_CASE("extract copies two ImGui lists and keeps the post bytecode", "[nri][e
     REQUIRE(packet.post.passes[0].vsBytes);
     CHECK(packet.post.passes[0].vsBytes->size() == 4u);
 
-    ImGui::NewFrame();
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(32.0f, 32.0f), ImGuiCond_Always);
-    ImGui::Begin("callback");
-    ImGui::GetWindowDrawList()->AddCallback(&DummyImGuiCallback, nullptr);
-    ImGui::End();
-    ImGui::Render();
-    Arcane::ExtractRequest req2;
-    req2.viewport = { 32u, 32u };
-    req2.imgui = ImGui::GetDrawData();
-    Arcane::PacketRing ring2;
-    const Arcane::RenderFramePacket& refusedPacket = Arcane::ExtractFrame(world.reg, req2, ring2);
-    CHECK(refusedPacket.imgui.lists.empty());
-    CHECK_FALSE(refusedPacket.imgui.hasTextures);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(previous);
 }

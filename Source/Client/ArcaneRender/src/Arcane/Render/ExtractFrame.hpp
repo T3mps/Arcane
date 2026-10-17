@@ -105,5 +105,5 @@ namespace Arcane
     // system submits into THAT batcher -- the host's, already Begin()'d, its
     // globals set and its materials registered -- and the drained batch is
     // copied into the packet. Extract never Begin()s it and never makes one.
-    ARC_RENDER_API const RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring);
+    ARC_RENDER_API RenderFramePacket& ExtractFrame(Astra::Registry& reg, const ExtractRequest& req, PacketRing& ring);
 }

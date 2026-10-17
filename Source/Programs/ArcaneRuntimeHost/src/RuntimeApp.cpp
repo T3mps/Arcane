@@ -812,7 +812,7 @@ void RuntimeApp::MainLoop()
         .lastFrameDt     = m_lastFrameDt,
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
-        .gpuSceneFrame   = m_gpuSceneFrame,
+        .gpuSceneStats   = m_gpuSceneStats,
         .captureRead     = m_captureRead,
         .captureWidth    = m_captureWidth,
         .captureHeight   = m_captureHeight,
@@ -1656,9 +1656,9 @@ void RuntimeApp::ShutdownGraphPath()
         // nullopt -- never the coarse count wearing the GPU's name: a run that
         // never armed the ring, or one whose frames were all still in flight,
         // has not measured it and says so.
-        report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                             m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
-                             static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+        report.SetVisibility(m_gpuSceneStats.stats.total, m_gpuSceneStats.stats.coarseVisible,
+                             m_gpuSceneStats.stats.batches, m_gpuSceneStats.stats.draws,
+                             m_gpuSceneStats.transparentDraws,
                              gpuVisibleRows);
 
         // THE INJECTED MODULES (schemaVersion 10): the scan taken above for

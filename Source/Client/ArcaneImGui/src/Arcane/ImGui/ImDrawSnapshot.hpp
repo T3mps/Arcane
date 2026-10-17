@@ -7,9 +7,11 @@
 // <imgui.h>; the two functions that read or write ImGui types live here.
 //
 // CopyImDrawSnapshot: extract's copy, reached through
-// RenderOverlayHooks::snapshot (InstallImGuiHostHooks installs it). Returns
-// false and an empty `out` when any command carries a UserCallback (the NRI
-// renderer asserts there is none). A managed command (TexRef._TexData set)
+// RenderOverlayHooks::snapshot (InstallImGuiHostHooks installs it). A command
+// that carries a UserCallback is skipped (the NRI renderer asserts there is
+// none) and the function returns false; every other command and every list
+// stays, and `out`'s buffers keep their capacity. A null src clears `out` in
+// place and returns true. A managed command (TexRef._TexData set)
 // keeps that pointer and never calls GetTexID: on the first frame and on an
 // atlas rebuild the TexID is still invalid until declaration-time
 // NewFrameTexUpdates stamps it.

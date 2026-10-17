@@ -2003,10 +2003,12 @@ namespace Arcane::Editor
     // (a hand-placed <Name>.png beside the .arcproj outranks it -- see the
     // Hub's resolve.rs). Refreshed on scene save and clean exit, so the tile
     // shows roughly what the project looked like when it was last worked on.
-    // The capture is the viewport output AS COMPOSITED: post-tonemap LDR,
-    // including the selection outline in Edit mode and the game HUD in Play.
-    // Accepted deliberately -- an outline-free shot would need a second scene
-    // render, and this is a memory aid, not a render product. Saved/ sits
+    // The capture is one extra viewport frame: post-tonemap LDR of the scene
+    // and its post chain, plus the overlays that extract published for that
+    // frame. The gizmo primitives are cleared on the request (the viewport
+    // frame's gizmo comes from BuildGizmoOverlayPrims into the post-tonemap
+    // overlay). The cover does not call ArmGraphViewportFrame, so the picture
+    // has no selection outline and no game HUD. Saved/ sits
     // OUTSIDE Content/ on purpose: RegisterCreatedAsset would (correctly)
     // refuse to register it, and the asset registry has no business knowing.
     void EditorApp::WriteAutoScreenshot()
@@ -2046,15 +2048,12 @@ namespace Arcane::Editor
     // EVERY viewport frame instead would pay a full-surface copy per frame for
     // an image taken twice a session.
     //
-    // AND THE FRESH FRAME IS THE BETTER PICTURE, which is the part worth
-    // stating: it carries the scene and the post chain, its overlays come
-    // from its own extracted packet and it has no gizmo (the gizmo is the
-    // viewport's ImGui foreground chrome), and it carries NOT the selection
-    // outline and NOT the game HUD, because it does not call
-    // ArmGraphViewportFrame. WriteAutoScreenshot's own comment calls the
-    // outline-free shot the one it would rather have, and rejects it because
-    // "an outline-free shot would need a second scene render" -- on this arm
-    // the second scene render is what a capture costs anyway.
+    // AND THE FRESH FRAME IS THE PICTURE THE COVER STORES: the scene, the
+    // post chain, and the overlays from its own extracted packet. The gizmo
+    // primitives are cleared on the request; the viewport frame's gizmo is
+    // BuildGizmoOverlayPrims into the post-tonemap overlay. This arm does not
+    // call ArmGraphViewportFrame, so the picture has no selection outline and
+    // no game HUD.
     //
     // BOTH CALL SITES ARE RARE EVENTS (a scene save, shutdown), which is what
     // pays for ReadCapture's DeviceWaitIdle -- the same stall SaveTexturePng
@@ -3462,9 +3461,9 @@ namespace Arcane::Editor
             // (no --report), or one whose frames were all still in flight.
             // NEVER the coarse count under the GPU's name: see
             // VerifyReport::SetVisibility's own contract.
-            report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                                 m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
-                                 static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+            report.SetVisibility(m_gpuSceneStats.stats.total, m_gpuSceneStats.stats.coarseVisible,
+                                 m_gpuSceneStats.stats.batches, m_gpuSceneStats.stats.draws,
+                                 m_gpuSceneStats.transparentDraws,
                                  gpuVisibleRows);
 
             // THE INJECTED MODULES (schemaVersion 10): the scan taken above

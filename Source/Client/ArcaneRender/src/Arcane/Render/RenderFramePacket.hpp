@@ -112,9 +112,10 @@ namespace Arcane
         bool                         hasPost = false;
         ImDrawSnapshot               imgui{};
         ImDrawSnapshot               gameUi{};
-        // The one field written after extract: the selection loop and the
-        // runtime pick-probe stand-in fill it through PacketRing::Latest(),
-        // before the frame is recorded.
+        // The one field written after extract, before the frame is recorded.
+        // The editor writes it on the packet handed to ArmGraphViewportFrame
+        // (the slot ExtractFrame just returned). The runtime pick-probe writes
+        // it through PacketRing::Latest().
         std::vector<std::uint32_t>   selectedIds;
 
         glm::vec3 lightDirection{ 0.0f };

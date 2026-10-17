@@ -2,13 +2,22 @@
 
 #include <Arcane/Render/RenderFramePacket.hpp>
 #include <Arcane/Render/FramePacing.hpp>
+#include <Arcane/Render/ExtractFrame.hpp>
 #include <Arcane/ImGui/ImDrawSnapshot.hpp>   // CopyImDrawSnapshot / ImDrawSnapshotRebuild (ArcaneImGui) ruling PR-1
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Scene/RenderViewSettings.hpp>   // Ortho2DView, so the callback extract does not warn "no camera"
+#include <Arcane/Scene/SceneModule.hpp>
 
 #include "Helpers/ConstantScan.hpp"
 
+#include <Astra/Component/ComponentRegistry.hpp>
+#include <Astra/Registry/Registry.hpp>
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
+#include <spdlog/sinks/callback_sink.h>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -100,7 +109,7 @@ TEST_CASE("spriteView is a SceneCameraView and meshView is a ViewTransform", "[n
 
 static void DummyImGuiCallback(const ImDrawList*, const ImDrawCmd*) {}
 
-TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and refuses a callback", "[nri][packet]")
+TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and skips a callback command", "[nri][packet][imgui]")
 {
     // A default ImDrawData has Textures == nullptr (imgui_draw.cpp:2284-2291).
     // That arm is not what ImGui::Render produces.
@@ -288,13 +297,128 @@ TEST_CASE("an ImDrawSnapshot matches the live draw data field for field and refu
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(64.0f, 64.0f), ImGuiCond_Always);
     ImGui::Begin("callback");
-    ImGui::GetWindowDrawList()->AddCallback(&DummyImGuiCallback, nullptr);
+    ImDrawList* callbackList = ImGui::GetWindowDrawList();
+    callbackList->AddRectFilled(ImVec2(2.0f, 2.0f), ImVec2(10.0f, 10.0f), IM_COL32(0, 255, 0, 255));
+    callbackList->AddCallback(&DummyImGuiCallback, nullptr);
     ImGui::End();
     ImGui::Render();
-    Arcane::ImDrawSnapshot refused;
-    CHECK_FALSE(Arcane::CopyImDrawSnapshot(ImGui::GetDrawData(), refused));
-    CHECK(refused.lists.empty());
-    CHECK_FALSE(refused.hasTextures);
+    ImDrawData* callbackDraw = ImGui::GetDrawData();
+    REQUIRE(callbackDraw != nullptr);
+    REQUIRE(callbackDraw->CmdLists.Size >= 1);
+
+    int liveCommands = 0;
+    int liveCallbacks = 0;
+    int plainCommands = 0;
+    bool callbackListSurvives = false;
+    for (const ImDrawList* live : callbackDraw->CmdLists)
+    {
+        REQUIRE(live != nullptr);
+        int plainHere = 0;
+        int callbacksHere = 0;
+        for (const ImDrawCmd& cmd : live->CmdBuffer)
+        {
+            ++liveCommands;
+            if (cmd.UserCallback != nullptr)
+            {
+                ++liveCallbacks;
+                ++callbacksHere;
+            }
+            else
+            {
+                ++plainCommands;
+                ++plainHere;
+            }
+        }
+        if (live == callbackList || callbacksHere > 0)
+            callbackListSurvives = plainHere > 0;
+    }
+    REQUIRE(liveCallbacks >= 1);
+    REQUIRE(plainCommands >= 1);
+    REQUIRE(callbackListSurvives);
+
+    Arcane::ImDrawSnapshot skipped;
+    // false: a callback was skipped. The snapshot still holds every other command.
+    CHECK_FALSE(Arcane::CopyImDrawSnapshot(callbackDraw, skipped));
+    REQUIRE(skipped.lists.size() == static_cast<std::size_t>(callbackDraw->CmdLists.Size));
+    CHECK(skipped.hasTextures == (callbackDraw->Textures != nullptr));
+    int copiedCommands = 0;
+    bool copiedTheRect = false;
+    for (std::size_t li = 0; li < skipped.lists.size(); ++li)
+    {
+        const ImDrawList* live = callbackDraw->CmdLists[static_cast<int>(li)];
+        const Arcane::ImDrawListSnapshot& copied = skipped.lists[li];
+        CHECK(copied.vertices.size() == static_cast<std::size_t>(live->VtxBuffer.Size));
+        CHECK(copied.indices.size() == static_cast<std::size_t>(live->IdxBuffer.Size));
+        std::size_t plainIndex = 0;
+        for (const ImDrawCmd& liveCmd : live->CmdBuffer)
+        {
+            if (liveCmd.UserCallback != nullptr)
+                continue;
+            REQUIRE(plainIndex < copied.cmds.size());
+            const Arcane::ImDrawListSnapshot::Cmd& c = copied.cmds[plainIndex];
+            CHECK(c.elemCount == liveCmd.ElemCount);
+            CHECK(c.idxOffset == liveCmd.IdxOffset);
+            CHECK(c.vtxOffset == liveCmd.VtxOffset);
+            if (c.elemCount == liveCmd.ElemCount && liveCmd.ElemCount > 0
+                && live == callbackList)
+                copiedTheRect = true;
+            ++plainIndex;
+            ++copiedCommands;
+        }
+        CHECK(plainIndex == copied.cmds.size());
+    }
+    CHECK(copiedCommands == plainCommands);
+    CHECK(copiedCommands < liveCommands);
+    CHECK(copiedTheRect);
+
+    // ExtractFrame warns once per process per list (imgui, then gameUi) and
+    // keeps the commands CopyImDrawSnapshot kept. This is the only test that
+    // extracts a UserCallback, so the first call is the process's first warn.
+    int imguiWarns = 0;
+    int gameUiWarns = 0;
+    auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
+        [&](const spdlog::details::log_msg& m)
+        {
+            if (m.level != spdlog::level::warn)
+                return;
+            const std::string text(m.payload.data(), m.payload.size());
+            if (text.find("UserCallback command in imgui") != std::string::npos)
+                ++imguiWarns;
+            if (text.find("UserCallback command in gameUi") != std::string::npos)
+                ++gameUiWarns;
+        });
+    Arcane::Log::Engine()->sinks().push_back(sink);
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{ components };
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 64u, 64u };
+    req.editorView = Arcane::Ortho2DView({ 0.0f, 0.0f }, 2.0f, req.viewport);
+    req.imgui = callbackDraw;
+    const Arcane::RenderFramePacket& extracted = Arcane::ExtractFrame(reg, req, ring);
+    CHECK(imguiWarns == 1);
+    CHECK(gameUiWarns == 0);
+    REQUIRE(extracted.imgui.lists.size() == skipped.lists.size());
+    CHECK(extracted.imgui.lists[0].cmds.size() == skipped.lists[0].cmds.size());
+    const Arcane::RenderFramePacket& extractedAgain = Arcane::ExtractFrame(reg, req, ring);
+    CHECK(imguiWarns == 1);
+    CHECK(extractedAgain.imgui.lists.size() == skipped.lists.size());
+
+    req.imgui = nullptr;
+    req.gameUi = callbackDraw;
+    const Arcane::RenderFramePacket& game = Arcane::ExtractFrame(reg, req, ring);
+    CHECK(gameUiWarns == 1);
+    CHECK(imguiWarns == 1);
+    REQUIRE(game.gameUi.lists.size() == skipped.lists.size());
+    CHECK(game.imgui.lists.empty());
+    const Arcane::RenderFramePacket& gameAgain = Arcane::ExtractFrame(reg, req, ring);
+    CHECK(gameUiWarns == 1);
+    CHECK(gameAgain.gameUi.lists.size() == skipped.lists.size());
+
+    auto& sinks = Arcane::Log::Engine()->sinks();
+    sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
 
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(previous);
