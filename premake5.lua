@@ -1304,6 +1304,11 @@ project "ArcaneTests"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
+    -- The test exe outgrew MSVC's incremental-link table: a Debug relink
+    -- fails with LNK1116 "cannot grow ilk file" (error 487) on the hosted
+    -- runner and intermittently on the desk. A full link every time is the
+    -- price.
+    incrementallink "Off"
 
     targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
     objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
