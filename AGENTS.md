@@ -3,7 +3,9 @@
 Canonical agent guidance for this repository lives in [CLAUDE.md](CLAUDE.md)
 -- read that file. It covers the repository layout, build commands, workspace
 rules (/MD, MKS units, shaders-as-data, dispatcher TU ownership), test
-conventions, and the engine-as-SDK contract.
+conventions, and the engine-as-SDK contract. Before any change, read
+[docs/onboarding.md](docs/onboarding.md): the spec-first workflow, the
+engineering rules, and the files other arcs are rewriting.
 
 ## Servitor: live engine checks (all agents and models: Claude, Grok, Codex/GPT)
 
