@@ -3,6 +3,27 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with
 code in this repository.
 
+## Start here: workflow and onboarding (every contributor, every session)
+
+Read `docs/onboarding.md` before planning or changing anything. It is
+binding, not background:
+- **Workflow.** Use the superpowers skills (`.claude/settings.json` enables
+  the plugin). Brainstorm first. An architectural change (a new system or
+  module, any D-row arc) gets a written spec in `docs/superpowers/specs/`
+  that the engine lead approves before any plan is written. Then a reviewed
+  plan in `docs/superpowers/plans/`, then execution in a worktree on its own
+  branch with TDD, and a final review. Use Servitor for host-visible changes.
+  Push or merge only when the engine lead agrees.
+- **Engineering rules** that are not all written below: errors are
+  `Mosaic::Result`s (no new `throw`); events are pulled as data; every
+  tunable is a setting; long-lived entity references use the GUID; Astra
+  changes go upstream first.
+- **Coordination.** Do not touch the files listed in the onboarding doc's
+  section 4 without asking: other arcs are rewriting them.
+- **If the superpowers skills are missing,** tell the user to install the
+  plugin (`/plugin install superpowers@claude-plugins-official`) before
+  starting architectural work.
+
 ## Repository layout
 
 The repo root IS the premake workspace (`premake5.lua` here generates
@@ -173,7 +194,7 @@ build steps live in `scripts/ci/build.{sh,ps1}`, not in the workflow YAML.
 
 ## Agent skills and the knowledge graph
 
-Project skills live in `.claude/skills/` (checked in; the rest of `.claude/`
+Project skills live in `.claude/skills/` (checked in, with `.claude/settings.json`; the rest of `.claude/`
 stays ignored). Claude Code loads them on demand by their descriptions; they
 carry the repo-specific traps the sections above only summarize:
 
