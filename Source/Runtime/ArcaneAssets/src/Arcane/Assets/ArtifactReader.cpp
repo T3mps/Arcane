@@ -9,6 +9,7 @@
 #include <string>
 #include <system_error>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/IO/PathConfine.hpp>
 #include <Arcane/IO/ReadRegularFile.hpp>
 
 namespace Arcane
@@ -1006,8 +1007,15 @@ namespace Arcane
             // uri carrying a reserved character (space -> "%20", ...) is not a valid
             // filename component as-is. See DecodeUriPercentEscapes's own comment for why
             // this step is required to agree with the pipeline's cgltf_decode_uri call.
-            std::optional<std::vector<std::byte>> bytes =
-                ReadWholeFile(baseDir / DecodeUriPercentEscapes(uri));
+            // An absolute decoded uri is refused before the join (operator/ would replace
+            // baseDir), and the joined path must stay strictly inside the asset directory.
+            const std::filesystem::path decoded = DecodeUriPercentEscapes(uri);
+            if (decoded.is_absolute())
+                return std::nullopt;
+            const std::filesystem::path bufferPath = baseDir / decoded;
+            if (!PathIsInsideDirectory(baseDir, bufferPath))
+                return std::nullopt;
+            std::optional<std::vector<std::byte>> bytes = ReadWholeFile(bufferPath);
             if (!bytes)
                 return std::nullopt;   // referenced buffer unreadable
             buffers.push_back(std::move(*bytes));

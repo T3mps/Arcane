@@ -3,6 +3,7 @@
 #include "Arcane/AssetPipeline/CgltfGuard.hpp"
 #include "Arcane/AssetPipeline/CookKey.hpp"
 #include "Arcane/AssetPipeline/SourceHash.hpp"
+#include <Arcane/IO/PathConfine.hpp>
 #include <Arcane/IO/ReadRegularFile.hpp>
 
 #include <cgltf.h>
@@ -764,7 +765,15 @@ namespace Arcane::AssetPipeline
             if (buffer.uri == nullptr || StartsWith(buffer.uri, "data:"))
                 continue;
 
-            const fs::path bufferPath = baseDir / DecodeUriToPath(buffer.uri);
+            // operator/ replaces its left side for an absolute right side, so an absolute
+            // decoded uri is refused BEFORE the join; the joined path must then stay
+            // strictly inside the asset directory (no "../", no symlink out).
+            const fs::path decoded = DecodeUriToPath(buffer.uri);
+            if (decoded.is_absolute())
+                return std::nullopt;
+            const fs::path bufferPath = baseDir / decoded;
+            if (!Arcane::PathIsInsideDirectory(baseDir, bufferPath))
+                return std::nullopt;
             const std::optional<std::vector<std::byte>> bytes = ReadWholeFileBytes(bufferPath);
             if (!bytes)
                 return std::nullopt;   // referenced buffer unreadable -- CookSession turns

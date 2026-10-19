@@ -8,9 +8,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Assets/ArtifactReader.hpp>
+#include <Arcane/AssetPipeline/MeshImporter.hpp>
+#include <Arcane/IO/PathConfine.hpp>
 
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <span>
 #include <string>
 #include <system_error>
@@ -47,4 +50,82 @@ TEST_CASE("ReadClientExternalBuffers refuses a buffer uri that names a directory
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+namespace
+{
+    // <tmp>/asset/{mesh.gltf (not written), ok.bin} and <tmp>/outside.bin.
+    struct ConfineFixture
+    {
+        std::filesystem::path root = std::filesystem::temp_directory_path() / "arcane-confine-test";
+        std::filesystem::path assetDir = root / "asset";
+        std::filesystem::path source = assetDir / "mesh.gltf";
+        std::filesystem::path outside = root / "outside.bin";
+
+        ConfineFixture()
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(root, ec);
+            std::filesystem::create_directories(assetDir);
+            std::ofstream(assetDir / "ok.bin", std::ios::binary) << "okok";
+            std::ofstream(outside, std::ios::binary) << "out!";
+        }
+        ~ConfineFixture()
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(root, ec);
+        }
+
+        static std::string Gltf(const std::string& uri)
+        {
+            return std::string(R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":4,"uri":")") + uri + R"("}]})";
+        }
+    };
+
+
+}
+
+TEST_CASE("ReadClientExternalBuffers confines a buffer uri to the asset directory", "[artifact][confine]")
+{
+    ConfineFixture fx;
+
+    const std::string okGltf = ConfineFixture::Gltf("ok.bin");
+    const auto ok = Arcane::ReadClientExternalBuffers(AsBytes(okGltf), fx.source);
+    REQUIRE(ok.has_value());
+    REQUIRE(ok->size() == 1);
+    CHECK((*ok)[0].size() == 4);
+
+    const std::string absGltf = ConfineFixture::Gltf(fx.outside.generic_string());
+    CHECK_FALSE(Arcane::ReadClientExternalBuffers(AsBytes(absGltf), fx.source).has_value());
+
+    const std::string upGltf = ConfineFixture::Gltf("../outside.bin");
+    CHECK_FALSE(Arcane::ReadClientExternalBuffers(AsBytes(upGltf), fx.source).has_value());
+}
+
+TEST_CASE("ReadExternalBuffers confines a buffer uri to the asset directory", "[pipeline][confine]")
+{
+    ConfineFixture fx;
+
+    const std::string okGltf = ConfineFixture::Gltf("ok.bin");
+    const auto ok = Arcane::AssetPipeline::ReadExternalBuffers(AsBytes(okGltf), fx.source);
+    REQUIRE(ok.has_value());
+    REQUIRE(ok->size() == 1);
+    CHECK((*ok)[0].size() == 4);
+
+    const std::string absGltf = ConfineFixture::Gltf(fx.outside.generic_string());
+    CHECK_FALSE(Arcane::AssetPipeline::ReadExternalBuffers(AsBytes(absGltf), fx.source).has_value());
+
+    const std::string upGltf = ConfineFixture::Gltf("../outside.bin");
+    CHECK_FALSE(Arcane::AssetPipeline::ReadExternalBuffers(AsBytes(upGltf), fx.source).has_value());
+}
+
+TEST_CASE("PathIsInsideDirectory accepts a file strictly inside and refuses the rest", "[artifact][confine]")
+{
+    ConfineFixture fx;
+    CHECK(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / "ok.bin"));
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.outside));
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / "."));
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / ".."));
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / "missing.bin"));
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, std::filesystem::path{}));
 }
