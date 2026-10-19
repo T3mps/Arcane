@@ -17,6 +17,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace Arcane::AssetPipeline
@@ -189,14 +190,31 @@ namespace Arcane::AssetPipeline
         // trusted). A node with no mesh of its own still contributes its transform to its
         // children (nested.gltf's parent node). `out` collects one (mesh*, worldTransform) pair
         // per node that DOES carry a mesh, in walk order.
-        void WalkNodeTree(const cgltf_node& node, const glm::mat4& parentWorld,
+        void WalkNodeTree(const cgltf_node& root, const glm::mat4& parentWorld,
                            std::vector<std::pair<const cgltf_mesh*, glm::mat4>>& out)
         {
-            const glm::mat4 world = parentWorld * LocalTransform(node);
-            if (node.mesh != nullptr)
-                out.emplace_back(node.mesh, world);
-            for (cgltf_size i = 0; i < node.children_count; ++i)
-                WalkNodeTree(*node.children[i], world, out);
+            // Explicit stack: a hostile glTF can nest nodes as deep as its file allows, and
+            // the recursive walk this replaces overflowed the native stack on one. The
+            // visited set (insert is the membership test, so the walk stays linear in the
+            // node count) also ends a malformed child cycle instead of looping.
+            struct Frame { const cgltf_node* node; glm::mat4 parent; };
+            std::vector<Frame> stack;
+            stack.push_back({ &root, parentWorld });
+            std::unordered_set<const cgltf_node*> seen;
+            while (!stack.empty())
+            {
+                const Frame frame = stack.back();
+                stack.pop_back();
+                if (!seen.insert(frame.node).second)
+                    continue;
+                const glm::mat4 world = frame.parent * LocalTransform(*frame.node);
+                if (frame.node->mesh != nullptr)
+                    out.emplace_back(frame.node->mesh, world);
+                // Right to left, so the left-most child pops first: the order the
+                // recursive walk produced.
+                for (cgltf_size i = frame.node->children_count; i > 0; --i)
+                    stack.push_back({ frame.node->children[i - 1], world });
+            }
         }
 
         // One drawable range before slot dedup runs -- indexOffset/indexCount are already final
