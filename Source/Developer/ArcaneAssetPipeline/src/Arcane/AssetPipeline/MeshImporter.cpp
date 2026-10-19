@@ -3,6 +3,7 @@
 #include "Arcane/AssetPipeline/CgltfGuard.hpp"
 #include "Arcane/AssetPipeline/CookKey.hpp"
 #include "Arcane/AssetPipeline/SourceHash.hpp"
+#include <Arcane/IO/ReadRegularFile.hpp>
 
 #include <cgltf.h>
 #include <meshoptimizer.h>
@@ -34,21 +35,7 @@ namespace Arcane::AssetPipeline
         // for why: the cook key and the importer must see the SAME bytes, by construction).
         std::optional<std::vector<std::byte>> ReadWholeFileBytes(const fs::path& path)
         {
-            std::ifstream in(path, std::ios::binary);
-            if (!in) return std::nullopt;
-
-            in.seekg(0, std::ios::end);
-            const std::streamoff len = in.tellg();
-            if (len < 0) return std::nullopt;
-            in.seekg(0, std::ios::beg);
-
-            std::vector<std::byte> out(static_cast<std::size_t>(len));
-            if (!out.empty())
-            {
-                in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
-                if (!in) return std::nullopt;
-            }
-            return out;
+            return Arcane::ReadRegularFile(path);
         }
 
         bool StartsWith(const char* s, const char* prefix) noexcept

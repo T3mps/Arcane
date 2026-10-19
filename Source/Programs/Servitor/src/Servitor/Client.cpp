@@ -748,6 +748,11 @@ void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& en
                                         "no live host, and its log file " + shown + " could not be read",
                                         "launch the host (servitor launch editor|runtime|server)");
     };
+    // A directory (or any non-regular path) opens as an ifstream on some
+    // standard libraries and tellg() then reports a nonsense size.
+    std::error_code regularEc;
+    if (!std::filesystem::is_regular_file(path, regularEc) || regularEc)
+        return unreadable();
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in.is_open())
         return unreadable();

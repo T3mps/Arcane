@@ -5,6 +5,7 @@
 #include "Arcane/AssetPipeline/CookKey.hpp"
 
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/IO/ReadRegularFile.hpp>
 
 #include <Json.hpp>
 
@@ -160,21 +161,7 @@ namespace Arcane::AssetPipeline
 
         std::optional<std::vector<std::byte>> ReadWholeFileBytes(const fs::path& path)
         {
-            std::ifstream ifs(path, std::ios::binary);
-            if (!ifs) return std::nullopt;
-
-            ifs.seekg(0, std::ios::end);
-            const std::streamoff len = ifs.tellg();
-            if (len < 0) return std::nullopt;
-            ifs.seekg(0, std::ios::beg);
-
-            std::vector<std::byte> out(static_cast<std::size_t>(len));
-            if (!out.empty())
-            {
-                ifs.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
-                if (!ifs) return std::nullopt;
-            }
-            return out;
+            return Arcane::ReadRegularFile(path);
         }
 
         // Flattens ReadExternalBuffers' own result into the span-of-spans shape

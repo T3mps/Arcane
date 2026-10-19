@@ -2,6 +2,7 @@
 #include <Arcane/Base/Engine.hpp>   // ExecutablePathUtf8: the exe directory off-Windows
 
 #include <Arcane/Assets/ArtifactReader.hpp>
+#include <Arcane/IO/ReadRegularFile.hpp>
 #include <Arcane/Assets/AssetCache.hpp>
 #include <Arcane/Assets/AssetsSettings.hpp>   // assets.material.maxParentDepth
 #include <Arcane/Base/Diagnostics.hpp>
@@ -60,17 +61,11 @@ namespace Arcane
         // ShaderLibrary::ReadFileBytes, which was deleted at ABI v15.)
         std::vector<uint8_t> ReadFileBytes(const std::filesystem::path& path)
         {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file)
+            const auto raw = Arcane::ReadRegularFile(path);
+            if (!raw || raw->empty())
                 return {};
-            const std::streamsize size = file.tellg();
-            if (size <= 0)
-                return {};
-            file.seekg(0, std::ios::beg);
-            std::vector<uint8_t> bytes((size_t)size);
-            if (!file.read(reinterpret_cast<char*>(bytes.data()), size))
-                return {};
-            return bytes;
+            const auto* p = reinterpret_cast<const uint8_t*>(raw->data());
+            return std::vector<uint8_t>(p, p + raw->size());
         }
 
         // Cache key: normalised absolute path string so that relative and

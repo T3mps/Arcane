@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/IO/ReadRegularFile.hpp>
 
 namespace Arcane::AssetPipeline
 {
@@ -293,22 +294,9 @@ namespace Arcane::AssetPipeline
 
     std::optional<LoadedArtifact> ReadTextureArtifact(const std::filesystem::path& path)
     {
-        std::ifstream ifs(path, std::ios::binary);
-        if (!ifs) return std::nullopt;
-
-        std::vector<std::byte> raw;
-        {
-            ifs.seekg(0, std::ios::end);
-            const std::streamoff len = ifs.tellg();
-            if (len < 0) return std::nullopt;
-            raw.resize(static_cast<std::size_t>(len));
-            ifs.seekg(0, std::ios::beg);
-            if (!raw.empty())
-            {
-                ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
-                if (!ifs) return std::nullopt;
-            }
-        }
+        auto rawOpt = Arcane::ReadRegularFile(path);
+        if (!rawOpt) return std::nullopt;
+        std::vector<std::byte> raw = std::move(*rawOpt);
 
         ByteReader r(raw.data(), raw.size());
 
@@ -523,22 +511,9 @@ namespace Arcane::AssetPipeline
 
     std::optional<LoadedMeshArtifact> ReadMeshArtifact(const std::filesystem::path& path)
     {
-        std::ifstream ifs(path, std::ios::binary);
-        if (!ifs) return std::nullopt;
-
-        std::vector<std::byte> raw;
-        {
-            ifs.seekg(0, std::ios::end);
-            const std::streamoff len = ifs.tellg();
-            if (len < 0) return std::nullopt;
-            raw.resize(static_cast<std::size_t>(len));
-            ifs.seekg(0, std::ios::beg);
-            if (!raw.empty())
-            {
-                ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
-                if (!ifs) return std::nullopt;
-            }
-        }
+        auto rawOpt = Arcane::ReadRegularFile(path);
+        if (!rawOpt) return std::nullopt;
+        std::vector<std::byte> raw = std::move(*rawOpt);
 
         ByteReader r(raw.data(), raw.size());
 

@@ -23,6 +23,7 @@
 // create dialog is in-editor ImGui and returns its result synchronously.
 
 #include "App/EditorApp.hpp"
+#include <Arcane/IO/ReadRegularFile.hpp>
 #include "Settings/SettingsHost.hpp"
 #include "Documents/SpriteDocument.hpp"   // SpriteDocument::NewSpriteData (MintOrReuseSpriteForTexture)
 #include "Settings/AssetBrowserSettings.hpp"   // editor.assets.* polls + EditorOpenOptions (settings S6-38)
@@ -1466,22 +1467,7 @@ namespace Arcane::Editor
         // ReadWholeFile takes for extraction ("the cook will refuse it too").
         std::optional<std::vector<std::byte>> ReadWholeGltfSource(const std::filesystem::path& path)
         {
-            std::ifstream in(path, std::ios::binary);
-            if (!in)
-                return std::nullopt;
-            in.seekg(0, std::ios::end);
-            const std::streamoff len = in.tellg();
-            if (len < 0)
-                return std::nullopt;
-            in.seekg(0, std::ios::beg);
-            std::vector<std::byte> out(static_cast<std::size_t>(len));
-            if (!out.empty())
-            {
-                in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
-                if (!in)
-                    return std::nullopt;
-            }
-            return out;
+            return Arcane::ReadRegularFile(path);
         }
 
         // F2c Task 15 (spec s6) Step 6's never-reassign rule: only a slot whose
