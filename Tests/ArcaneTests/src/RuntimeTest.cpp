@@ -33,6 +33,8 @@
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <utility>
 
 namespace { struct Counter { int value = 0; }; }
@@ -452,14 +454,26 @@ TEST_CASE("Runtime RestoreRegistry rejects a valid registry blob with a corrupt 
 
 TEST_CASE("two Runtimes share one JobSystem and the survivor can Submit", "[runtime][jobs]")
 {
-    std::atomic<int> n{0};
+    // With private pools a's destructor drains a's task (n == 1 after a's scope)
+    // and &a.Jobs() != &b.Jobs(). Shared, a's drop leaves the pool and its
+    // gated task alone, so n is still 0 until the last Runtime drops.
+    std::atomic<int>  n{0};
+    std::atomic<bool> release{false};
     {
         Arcane::Runtime b(Arcane::Test::Process(), Arcane::NetMode::Standalone);
         {
             Arcane::Runtime a(Arcane::Test::Process(), Arcane::NetMode::Standalone);
             CHECK(&a.Jobs() == &b.Jobs());
-            a.Jobs().Submit([&] { n.fetch_add(1); });
+            a.Jobs().Submit([&]
+            {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!release.load() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                n.fetch_add(1);
+            });
         }   // a is gone; the pool lives on through b
+        CHECK(n.load() == 0);   // a's destructor did not drain the shared pool
+        release.store(true);
         b.Jobs().Submit([&] { n.fetch_add(1); });
     }       // b's drop is the last: ~JobSystem drains both tasks
     REQUIRE(n.load() == 2);

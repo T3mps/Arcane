@@ -57,7 +57,10 @@ namespace Arcane
         // caller's `workerCount` sizes the pool; a later caller while the pool is
         // alive gets the same pool and its `workerCount` is ignored. The check and
         // the mint run under one lock, so overlapping Runtime constructors cannot
-        // each mint. Hosts destroy every Runtime before ~ProcessContext.
+        // each mint. Hosts destroy every Runtime before ~ProcessContext. Every
+        // Runtime on this context ticks on the thread that built the first one
+        // (enkiTS gives every unregistered thread pipe 0, so two ticking threads
+        // would race on the one pool).
         [[nodiscard]] std::shared_ptr<JobSystem> AcquireJobSystem(std::uint32_t workerCount);
     private:
         explicit ProcessContext(const ProcessContextDesc& desc);

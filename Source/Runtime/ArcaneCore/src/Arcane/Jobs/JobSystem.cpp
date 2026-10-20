@@ -124,7 +124,9 @@ namespace Arcane
         // shared_ptr<IWorkScheduler> from WorkScheduler() past this object, and
         // a null executor runs ParallelFor inline as worker 0 instead of
         // dereferencing the dead taskExec. Only then drop the adapter and the
-        // executor.
+        // executor. A kept WorkScheduler must not be inside a ParallelFor on
+        // another thread while ~JobSystem runs (the write is atomic, the call in
+        // flight is not drained).
         m_impl->ts.WaitforAllAndShutdown();
         m_impl->adapter->SetExecutor(nullptr);
         m_impl->adapter.reset();
