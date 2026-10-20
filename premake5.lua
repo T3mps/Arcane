@@ -640,6 +640,80 @@ project "arcbuild"
     filter {}
 
 -- ============================================================================
+-- arcane-abi-digest: the compiler-derived plugin ABI digest tool (3D-readiness
+-- Plan B, Task 1). HEADER-ONLY consumer of every engine module (links only ArcaneCore): it includes Core/AbiManifest.hpp, which evaluates sizeof /
+-- alignof / offsetof of the game-facing by-value closure. `--write` writes
+-- build/abi-digest.txt, `--check` fails when that file or kGamePluginABIDigest
+-- disagrees (scripts/ci/build.* run it after the engine build). The prebuild
+-- step copies AbiManifest.hpp with a comment line appended into
+-- Intermediate/AbiDigest; AbiDigestCommented.cpp compiles that copy so the
+-- [abi] test can prove a comment-only edit does not move the mix. Flags mirror a
+-- game TU (build/arcane.lua): /arch:AVX2, /Zc:__cplusplus.
+-- ============================================================================
+group "Programs"
+project "arcane-abi-digest"
+    arc_module_consumer(engine_modules, engine_modules.order, { link = false, stage = false })
+    -- Debug keeps the inline header code that names ArcaneCore exports (Guid ctor,
+    -- settings-enum warnings), so ArcaneCore is linked and staged beside the exe.
+    arc_module_consumer(engine_modules, { "ArcaneCore" })
+    location "Source/Programs/arcane-abi-digest"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs { "%{wks.location}/Intermediate/AbiDigest" }
+
+    defines {
+        "ARC_MODULE_NAME=ArcaneAbiDigest",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
+    }
+
+    prebuildcommands {
+        '{MKDIR} "%{wks.location}/Intermediate/AbiDigest"',
+        '{COPYFILE} "%{wks.location}/Source/Runtime/ArcaneCore/src/Arcane/Core/AbiManifest.hpp" "%{wks.location}/Intermediate/AbiDigest/AbiManifest.commented.hpp"',
+        'echo // appended comment line, no code>> "%{wks.location}/Intermediate/AbiDigest/AbiManifest.commented.hpp"',
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
+        fatalwarnings { "4715" }
+    filter { "system:linux or system:macosx", "architecture:x86_64" }
+        buildoptions { "-mavx2", "-mfma" }
+    filter "system:not windows"
+        links { "dl", "pthread" }
+
+    filter "configurations:Debug"
+        defines { "ARC_BUILD_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Servitor (servitor): the loopback CLI that attaches to running engine hosts
 -- (spec docs/superpowers/specs/2026-10-05-arc-cli-design.md, plan rev 8.3).
 -- The client is program code (namespace Servitor, no export macro) and links
@@ -1930,6 +2004,9 @@ project "ArcaneTests"
     -- "../ArcaneCrashReporter/ArcaneCrashReporter.exe" directly (Task 5).
     -- death-fixture builds for every target since the Diagnostics POSIX port.
     dependson { "death-fixture" }
+    -- AbiDigestTest.cpp ([abi]) runs arcane-abi-digest.exe (../arcane-abi-digest/) for the
+    -- comment-stability case; it must be built first.
+    dependson { "arcane-abi-digest" }
     if os.target() == "windows" then
         dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
