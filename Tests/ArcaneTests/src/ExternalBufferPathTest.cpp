@@ -8,7 +8,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Assets/ArtifactReader.hpp>
+#include <Arcane/AssetPipeline/GltfSurvey.hpp>
 #include <Arcane/AssetPipeline/MeshImporter.hpp>
+#include <Arcane/AssetPipeline/MeshMetaSettings.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/IO/PathConfine.hpp>
 
 #include <cstddef>
@@ -100,6 +103,11 @@ TEST_CASE("ReadClientExternalBuffers confines a buffer uri to the asset director
 
     const std::string upGltf = ConfineFixture::Gltf("../outside.bin");
     CHECK_FALSE(Arcane::ReadClientExternalBuffers(AsBytes(upGltf), fx.source).has_value());
+
+    // Rooted without a drive: not is_absolute() on Windows, so only confinement stops it.
+    const std::string outsideStr = fx.outside.generic_string();
+    const std::string rootedGltf = ConfineFixture::Gltf(outsideStr.size() > 2 && outsideStr[1] == ':' ? outsideStr.substr(2) : outsideStr);
+    CHECK_FALSE(Arcane::ReadClientExternalBuffers(AsBytes(rootedGltf), fx.source).has_value());
 }
 
 TEST_CASE("ReadExternalBuffers confines a buffer uri to the asset directory", "[pipeline][confine]")
@@ -117,6 +125,11 @@ TEST_CASE("ReadExternalBuffers confines a buffer uri to the asset directory", "[
 
     const std::string upGltf = ConfineFixture::Gltf("../outside.bin");
     CHECK_FALSE(Arcane::AssetPipeline::ReadExternalBuffers(AsBytes(upGltf), fx.source).has_value());
+
+    // Rooted without a drive: not is_absolute() on Windows, so only confinement stops it.
+    const std::string outsideStr = fx.outside.generic_string();
+    const std::string rootedGltf = ConfineFixture::Gltf(outsideStr.size() > 2 && outsideStr[1] == ':' ? outsideStr.substr(2) : outsideStr);
+    CHECK_FALSE(Arcane::AssetPipeline::ReadExternalBuffers(AsBytes(rootedGltf), fx.source).has_value());
 }
 
 TEST_CASE("PathIsInsideDirectory accepts a file strictly inside and refuses the rest", "[artifact][confine]")
@@ -126,6 +139,37 @@ TEST_CASE("PathIsInsideDirectory accepts a file strictly inside and refuses the 
     CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.outside));
     CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / "."));
     CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / ".."));
+    // A regular file whose lexical form escapes: reaches the relative-path logic.
+    CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / ".." / "outside.bin"));
     CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, fx.assetDir / "missing.bin"));
     CHECK_FALSE(Arcane::PathIsInsideDirectory(fx.assetDir, std::filesystem::path{}));
+}
+
+// cgltf's own default file reader concatenates dir + uri, so "../outside.bin" was read by
+// cgltf_load_buffers inside SurveyGltf (at discovery) and ImportMesh. Both now load buffers
+// through a confining reader. Pipeline-side cases live in this file beside the reader cases
+// they mirror (not beside the mesh importer tests).
+TEST_CASE("SurveyGltf and ImportMesh refuse a buffer uri that escapes the asset directory", "[pipeline][confine]")
+{
+    ConfineFixture fx;
+    std::string rootedUri = fx.outside.generic_string();
+    if (rootedUri.size() > 2 && rootedUri[1] == ':') rootedUri = rootedUri.substr(2);
+
+    const auto importRefusal = [&](const std::string& gltf) {
+        return Arcane::AssetPipeline::ImportMesh(AsBytes(gltf), {}, fx.source, Arcane::Guid{},
+                                                 Arcane::AssetPipeline::MeshMetaSettings{}).refusal;
+    };
+
+    // Control: the in-folder sibling loads through both (no buffer-load refusal).
+    const std::string okGltf = ConfineFixture::Gltf("ok.bin");
+    CHECK(Arcane::AssetPipeline::SurveyGltf(AsBytes(okGltf), fx.source).has_value());
+    CHECK(importRefusal(okGltf).find("failed to load buffer") == std::string::npos);
+
+    for (const std::string& uri : { std::string("../outside.bin"), fx.outside.generic_string(), rootedUri })
+    {
+        INFO("uri = " << uri);
+        const std::string gltf = ConfineFixture::Gltf(uri);
+        CHECK_FALSE(Arcane::AssetPipeline::SurveyGltf(AsBytes(gltf), fx.source).has_value());
+        CHECK(importRefusal(gltf).find("failed to load buffer") != std::string::npos);
+    }
 }

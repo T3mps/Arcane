@@ -278,6 +278,10 @@ namespace Arcane::AssetPipeline
         // sees, the client refuses with HashMismatch, and the next cook heals it -- ACCEPTED,
         // not a bug: the alternative would be threading one already-read buffer through both
         // cgltf's own buffer resolution and the hash, which cgltf's API gives no seam for.
+        // Buffer uris resolve through the confining reader (CgltfGuard.hpp): "../" and
+        // absolute uris are refused here, not only in ReadExternalBuffers.
+        CgltfConfinedReads confinedReads(sourcePath);
+        confinedReads.Apply(options);
         const cgltf_result loadResult = cgltf_load_buffers(&options, guard.data, sourcePath.string().c_str());
         if (loadResult != cgltf_result_success)
         {
