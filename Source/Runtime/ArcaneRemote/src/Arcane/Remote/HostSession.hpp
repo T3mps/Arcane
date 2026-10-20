@@ -90,7 +90,9 @@ public:
         CVarContext cvarContext;
         std::filesystem::path projectRoot;
         std::filesystem::path descriptorOverride;
-        std::uint32_t idleExitSeconds = 600;
+        // 0 = never. Every host sets it through Arming::IdleExitSeconds; a
+        // Config site that skips Arming never idles out (final fix pass, b7 m5).
+        std::uint32_t idleExitSeconds = 0;
         bool readOnly = false;
         bool holdSim = false;          // Task 12: --remote && maxFrames == 0; Start leaves Tick() Idle
         std::vector<std::string> capabilities;

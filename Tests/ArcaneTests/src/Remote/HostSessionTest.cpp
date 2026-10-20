@@ -713,6 +713,14 @@ TEST_CASE("an editor armed only by editor.remote.enable never idle-exits or watc
     CHECK(Arming::OwnerPid(true, 4242) == 4242);
 }
 
+// Final fix pass (b7 m5): a Config built without Arming never idles out. All
+// three host sites set idleExitSeconds through Arming::IdleExitSeconds; a
+// future site that forgets must not reopen C2 with a 600 s default.
+TEST_CASE("HostSession::Config's idle exit defaults to never", "[host][remote]") {
+    const Arcane::Remote::HostSession::Config cfg{};
+    CHECK(cfg.idleExitSeconds == 0u);
+}
+
 TEST_CASE("a descriptor without ownerPid reads zero, and one with it round-trips", "[host][remote][descriptor]") {
     Arcane::Test::TempDir tmp("remote-descriptor-owner");
     const auto path = tmp.path / "runtime-77.json";
