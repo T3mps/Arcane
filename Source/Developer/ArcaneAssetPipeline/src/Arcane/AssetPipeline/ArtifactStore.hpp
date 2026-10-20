@@ -24,6 +24,11 @@
 // the cook key is recoverable from the artifact's own filename -- so RebuildIndexFromScan can
 // always reconstruct the index from the Artifacts/ directory alone. Losing it is never data
 // loss.
+//
+// Cross-process note: the cook key includes the texture settings, so two cookers that resolve
+// DIFFERENT project defaults for the same source (arccook's ApplyProjectCookConfig vs the
+// editor's Settings<TextureMetaSettings>) disagree about which artifact is current, and each
+// one's RemoveAllExcept deletes the other's on every pass. Keep the defaults identical.
 
 #include <cstddef>
 #include <cstdint>
@@ -92,11 +97,23 @@ namespace Arcane::AssetPipeline
         // there). Files that are still present afterwards (a locked file, a failed remove) are
         // appended to `*remaining` when it is non-null. Returns the number removed. Does not
         // touch the in-memory index.
+        //
+        // It works off the file list RebuildIndexFromScan recorded (call that first, once per
+        // pass): the removals never walk the directory again, so a pass over N sources costs
+        // one scan, not N. A file written after that scan is not seen. If the scan itself
+        // could not be completed, `*remaining` receives the Artifacts directory so the caller
+        // fails the guid instead of reporting it clean. On Windows a reader that holds a stale
+        // file open through std::ifstream (no FILE_SHARE_DELETE) makes the remove fail; the
+        // file lands in `*remaining` and the next pass retries.
         std::size_t RemoveAllExcept(const Guid& guid, std::uint64_t keepKey,
                                     std::vector<std::filesystem::path>* remaining);
 
     private:
         std::filesystem::path m_intermediateDir;
         std::unordered_map<Guid, std::uint64_t> m_index;
+        // Every parsed artifact file the last scan saw, by source guid (the index keeps one
+        // key per guid; this keeps them all). RemoveAllExcept reads and prunes it.
+        std::unordered_map<Guid, std::vector<std::filesystem::path>> m_allByGuid;
+        bool m_scanComplete = true;   // false when the last scan hit an I/O error part-way
     };
 }

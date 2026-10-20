@@ -257,6 +257,22 @@ namespace Arcane::AssetPipeline
         }
     }
 
+    namespace
+    {
+        // True iff the file at `path` parses with the reader for `kind`. A closed-enum switch
+        // with no default: a third kind fails to compile here instead of silently reading
+        // with the texture reader and re-importing forever.
+        bool CurrentArtifactParses(CookKind kind, const fs::path& path)
+        {
+            switch (kind)
+            {
+            case CookKind::Texture: return ReadTextureArtifact(path).has_value();
+            case CookKind::Mesh:    return ReadMeshArtifact(path).has_value();
+            }
+            return false;
+        }
+    }
+
     std::span<const CookKindEntry> CookKinds() noexcept
     {
         return std::span<const CookKindEntry>(kCookKindTable);
@@ -395,10 +411,7 @@ namespace Arcane::AssetPipeline
                 std::error_code existsEc;
                 if (fs::exists(finalPath, existsEc))
                 {
-                    const bool readable = (kindEntry.kind == CookKind::Mesh)
-                        ? ReadMeshArtifact(finalPath).has_value()
-                        : ReadTextureArtifact(finalPath).has_value();
-                    if (readable)
+                    if (CurrentArtifactParses(kindEntry.kind, finalPath))
                     {
                         store.PutIndex(*guid, cookKey);
                         if (!removeNonCurrent())
@@ -553,8 +566,11 @@ namespace Arcane::AssetPipeline
                 }
                 }
 
+                // Same test CookProject's up-to-date branch applies: present AND parses. A
+                // truncated file at the current key is stale, not clean.
                 std::error_code ec;
-                if (!fs::exists(store.PathFor(*cookKeyOpt), ec))
+                const fs::path current = store.PathFor(*cookKeyOpt);
+                if (!fs::exists(current, ec) || !CurrentArtifactParses(kindEntry.kind, current))
                     return true;   // at least one stale source -- short-circuit
             }
         }

@@ -851,3 +851,66 @@ TEST_CASE("pipeline: a truncated artifact at the current key is re-cooked, not c
     CHECK(healthy.upToDate == 1u);
     CHECK(healthy.cooked == 0u);
 }
+
+// ---- Review fix round 1, B4 fix 1: --check validates the current artifact too ------------
+
+TEST_CASE("pipeline: CheckProject reports a truncated current artifact as needing a cook",
+          "[pipeline]")
+{
+    const fs::path project = TempProjectDir("t10_check_truncated_current");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 3, 6, 9, 255));
+    WriteMetaSidecar(png, Guid::Generate());
+
+    CookSession session;
+    REQUIRE(session.CookProject(project).cooked == 1u);
+    CHECK_FALSE(session.CheckProject(project));   // healthy -> clean
+
+    const fs::path current = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    REQUIRE(fs::exists(current));
+    {
+        std::ofstream out(current, std::ios::binary | std::ios::trunc);
+        out << "ARC";
+    }
+    REQUIRE_FALSE(ReadTextureArtifact(current).has_value());
+
+    CHECK(session.CheckProject(project));   // exists but does not parse -> stale
+
+    REQUIRE(session.CookProject(project).cooked == 1u);   // the cook heals it
+    CHECK_FALSE(session.CheckProject(project));
+}
+
+#if defined(_WIN32)
+TEST_CASE("pipeline: a superseded artifact held open by a reader fails the guid instead of reporting it cooked",
+          "[pipeline]")
+{
+    const fs::path project = TempProjectDir("t10_stray_held_open");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 21, 22, 23, 255));
+    const Guid guid = Guid::Generate();
+    WriteMetaSidecar(png, guid);
+
+    {
+        CookSession first;
+        REQUIRE(first.CookProject(project).cooked == 1u);
+    }
+    const fs::path current = ExpectedArtifactPath(project, png, TextureMetaSettings{});
+    const fs::path stray = current.parent_path() / "00000000000000cc.arcart";
+    std::error_code ec;
+    fs::copy_file(current, stray, fs::copy_options::overwrite_existing, ec);
+    REQUIRE_FALSE(ec);
+
+    // An ifstream opens without FILE_SHARE_DELETE, so the remove cannot succeed.
+    std::ifstream holder(stray, std::ios::binary);
+    REQUIRE(holder.good());
+
+    CookSession second;
+    const CookResult result = second.CookProject(project);
+    CHECK(result.failed == 1u);
+    CHECK(result.upToDate == 0u);
+    CHECK(result.cooked == 0u);
+    REQUIRE(result.failures.size() == 1u);
+    CHECK(result.failures[0].first == guid);
+    CHECK(fs::exists(stray));
+}
+#endif

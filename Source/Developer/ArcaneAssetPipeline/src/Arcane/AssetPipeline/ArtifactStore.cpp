@@ -154,20 +154,23 @@ namespace Arcane::AssetPipeline
     void ArtifactStore::RebuildIndexFromScan()
     {
         m_index.clear();
+        m_allByGuid.clear();
+        m_scanComplete = true;
 
         const std::filesystem::path artifactsDir = m_intermediateDir / "Artifacts";
 
         std::error_code ec;
-        if (!std::filesystem::exists(artifactsDir, ec) || ec)
-            return;
+        const bool dirExists = std::filesystem::exists(artifactsDir, ec);
+        if (ec) { m_scanComplete = false; return; }
+        if (!dirExists) return;   // nothing cooked yet: a complete (empty) scan
 
         std::filesystem::recursive_directory_iterator it(artifactsDir, ec);
-        if (ec) return;
+        if (ec) { m_scanComplete = false; return; }
 
         const std::filesystem::recursive_directory_iterator end;
         for (; it != end; it.increment(ec))
         {
-            if (ec) break;
+            if (ec) { m_scanComplete = false; break; }
 
             const std::filesystem::directory_entry& entry = *it;
 
@@ -187,6 +190,7 @@ namespace Arcane::AssetPipeline
             if (!prefix) continue;   // corrupt/unreadable -- skip, never abort the scan
 
             m_index[prefix->sourceGuid] = *cookKey;
+            m_allByGuid[prefix->sourceGuid].push_back(path);
         }
     }
 
@@ -215,57 +219,41 @@ namespace Arcane::AssetPipeline
     std::size_t ArtifactStore::RemoveAllExcept(const Guid& guid, std::uint64_t keepKey,
                                                std::vector<std::filesystem::path>* remaining)
     {
-        std::size_t removed = 0;
+        // The last scan could not finish, so a stray may be invisible: report the whole
+        // Artifacts directory as "left" and let the caller fail the guid rather than call it clean.
+        if (!m_scanComplete && remaining)
+            remaining->push_back(m_intermediateDir / "Artifacts");
 
-        const std::filesystem::path artifactsDir = m_intermediateDir / "Artifacts";
-
-        std::error_code ec;
-        if (!std::filesystem::exists(artifactsDir, ec) || ec)
+        const auto found = m_allByGuid.find(guid);
+        if (found == m_allByGuid.end())
             return 0;
 
-        // Collect first, remove after: erasing under a live recursive iterator is not safe.
-        std::vector<std::filesystem::path> victims;
-        std::filesystem::recursive_directory_iterator it(artifactsDir, ec);
-        if (ec) return 0;
-
-        const std::filesystem::recursive_directory_iterator end;
-        for (; it != end; it.increment(ec))
+        std::size_t removed = 0;
+        std::vector<std::filesystem::path> kept;   // what stays in the scan record for this guid
+        for (const std::filesystem::path& file : found->second)
         {
-            if (ec) break;
+            const std::optional<std::uint64_t> key = FromHex16(file.stem().string());
+            if (key && *key == keepKey)
+            {
+                kept.push_back(file);
+                continue;
+            }
 
-            const std::filesystem::directory_entry& entry = *it;
-
-            std::error_code fileEc;
-            if (!entry.is_regular_file(fileEc) || fileEc) continue;
-
-            const std::filesystem::path& path = entry.path();
-            if (path.extension() != ".arcart") continue;
-
-            const std::optional<std::uint64_t> key = FromHex16(path.stem().string());
-            if (!key || *key == keepKey) continue;
-
-            const std::optional<ArtifactPrefix> prefix = ReadArtifactPrefix(path);
-            if (!prefix || !(prefix->sourceGuid == guid)) continue;
-
-            victims.push_back(path);
-        }
-
-        for (const std::filesystem::path& victim : victims)
-        {
             std::error_code removeEc;
-            std::filesystem::remove(victim, removeEc);
+            std::filesystem::remove(file, removeEc);
 
             std::error_code existsEc;
-            if (std::filesystem::exists(victim, existsEc))
+            if (std::filesystem::exists(file, existsEc) || existsEc)
             {
-                if (remaining) remaining->push_back(victim);
+                kept.push_back(file);
+                if (remaining) remaining->push_back(file);
             }
             else
             {
                 ++removed;
             }
         }
-
+        found->second = std::move(kept);
         return removed;
     }
 }
