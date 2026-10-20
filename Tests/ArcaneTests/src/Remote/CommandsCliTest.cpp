@@ -1057,13 +1057,14 @@ TEST_CASE("omitted --client is not forwarded, and status and quit select the nam
     CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 0);
     CHECK(posts.count == 1);
 
-    // No match is target.none (4); --pid with --client is a usage error (2).
+    // No match is target.none (4). --pid wins over the tag (B7 fix round 1, I4):
+    // pid 5 is no live host here, so it is target.none too, and nothing is posted.
     opt.client = "nobody";
     CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 4);
     opt.client = "grok-review-r1";
     opt.pid = 5;
     posts.count = 0;
-    CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 2);
+    CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 4);
     CHECK(posts.count == 0);
 
     // --yes without --all is still refused for everything but quit --client.
@@ -1082,6 +1083,89 @@ TEST_CASE("omitted --client is not forwarded, and status and quit select the nam
     CHECK(run.exitCode == 2);
     CHECK(run.err.empty());
     CHECK(run.out.find("--yes applies only with --all") != std::string::npos);
+}
+
+// B7 fix round 1 (C1, I1-I4): `--client X --host H quit` keeps working for a host
+// launched without --client, --host narrows X's own hosts before they are
+// counted, --force and --pid still apply, and one host answers one envelope.
+TEST_CASE("quit --client: --host falls back to an untagged host, narrows, and keeps --force and --pid",
+          "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.clientSet = true;
+    opt.client = "b7-x";
+    opt.format = Servitor::Format::Json;
+    QuitPosts posts;
+    Servitor::FanOutResult result;
+    const auto parsed = [&result] { return nlohmann::json::parse(result.text, nullptr, false); };
+
+    // C1: a runtime launched WITHOUT --client (its descriptor client is "").
+    Arcane::Test::TempDir untagged("servitor-quit-untagged");
+    const auto dirU = Arcane::Remote::DescriptorDir(untagged.path, false);
+    WriteClientDescriptor(dirU, Arcane::Remote::HostKind::Runtime, "");
+    opt.hostKind = "runtime";
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    // I3: one host answers one envelope (top-level ok), not the fan-out wrapper.
+    auto one = parsed();
+    REQUIRE(one.is_object());
+    CHECK(one.value("ok", false));
+    CHECK_FALSE(one.contains("hosts"));
+    // Without --host there is neither a tag match nor a kind to select: exit 4,
+    // nothing posted (it could be the user's own editor).
+    posts.count = 0;
+    opt.hostKind.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+
+    // The fallback never takes a host another client launched.
+    Arcane::Test::TempDir other("servitor-quit-other-client");
+    const auto dirO = Arcane::Remote::DescriptorDir(other.path, false);
+    WriteClientDescriptor(dirO, Arcane::Remote::HostKind::Runtime, "someone-else");
+    opt.hostKind = "runtime";
+    CHECK(Servitor::QuitByClient({}, opt, dirO, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+    const auto refused = parsed();
+    REQUIRE(refused.is_object());
+    CHECK(refused.at("errors").at(0).at("code") == "target.none");
+    CHECK(refused.at("errors").at(0).at("message").get<std::string>().find("someone-else") != std::string::npos);
+
+    // I1: X owns a runtime and a server; --host runtime selects one before the count.
+    Arcane::Test::TempDir both("servitor-quit-client-both");
+    const auto dirB = Arcane::Remote::DescriptorDir(both.path, false);
+    WriteClientDescriptor(dirB, Arcane::Remote::HostKind::Runtime, "b7-x");
+    WriteClientDescriptor(dirB, Arcane::Remote::HostKind::Server, "b7-x");
+    posts.kinds.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirB, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    REQUIRE(posts.kinds.size() == 1);
+    CHECK(posts.kinds.front() == "runtime");
+
+    // I2: --force on the one selected host is not refused as if --all were given.
+    posts.count = 0;
+    const std::vector<std::string> force = {"--force"};
+    CHECK(Servitor::QuitByClient(force, opt, dirB, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+
+    // I4: --pid wins and --client stays the audit header.
+    posts.count = 0;
+    opt.hostKind.clear();
+    opt.pid = Arcane::EditorLock::Self().pid;
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+
+    // Run -> QuitVerb -> RemoteDirFor -> the fallback (review ruling 2): another
+    // client's runtime under --project is refused by name and nothing connects.
+    const auto arcproj = other.path / "b7.arcproj";
+    {
+        std::ofstream touch(arcproj, std::ios::binary | std::ios::trunc);
+        touch << "{}";
+    }
+    const RunStreams run = RunCaptured({"servitor", "--json", "--project", Servitor::PathUtf8(arcproj), "--client",
+                                        "b7-x", "--host", "runtime", "quit"});
+    REQUIRE(run.captured);
+    CHECK(run.exitCode == 4);
+    CHECK(run.err.empty());
+    CHECK(run.out.find("someone-else") != std::string::npos);
 }
 
 #endif

@@ -520,11 +520,13 @@ std::string UsageText(const std::string& problem)
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
             "--host editor|runtime|server, --pid <n>, --engine <root>, --world <name>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
             "--retry-on-death, --client <name>, --verbose, --version, --help (-h)\n"
-            "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>)\n"
+            "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>); "
+            "launch records it in the host's descriptor, status lists only that client's hosts, and quit quits "
+            "them (with --host <kind>, also that kind's host launched without --client; --pid wins)\n"
             "  --verbose prints each request's payload, including the values you pass (a cvar set's value too); "
             "the bearer token is redacted\n"
             "  --retry-on-death resends only after the host died or hung and a new host was found (servitor status)\n"
-            "  --yes confirms a Drive command sent to several hosts with --all\n";
+            "  --yes confirms a Drive command sent to several hosts with --all, or quit --client matching several\n";
     return text;
 }
 

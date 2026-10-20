@@ -53,13 +53,22 @@ int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const Globa
 int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt, const Scan& scan,
                FanOutPost post, void* user, FanOutResult* captured = nullptr);
 
-// `quit --client NAME`: quits the hosts whose descriptor `client` is NAME (the
-// ones `servitor --client NAME launch` started), read from `remoteDir` before
-// any scan. An empty client is a usage error, so is --pid. No match is
-// target.none (exit 4). More than one match without --yes is arg.inapplicable
-// (exit 2) and connects to nothing; one match, or --yes, sends host.quit to each
-// through `post` (null = the live transport). Hosts whose process already
-// exited are skipped. captured non-null: stores the result instead of printing.
+// `quit --client NAME` (B7 fix round 1). The host is chosen in this order:
+//  1. --pid N wins: that one process (Select); --client is only the
+//     X-Remote-Client audit header of the quit sent to it.
+//  2. The live hosts whose descriptor `client` is NAME (the ones `servitor
+//     --client NAME launch` started), narrowed by --host before they are
+//     counted. One is quit; several need --yes (and refuse --force).
+//  3. None, with --host KIND: the one live KIND host launched without
+//     --client, as quit selected it before descriptors carried a client. A
+//     KIND host another client launched is never taken (target.none naming
+//     that client).
+//  4. None, without --host: target.none (exit 4); nothing safe to guess.
+// One chosen host goes through QuitOne (so --force applies, and one envelope
+// answers); several fan out (one envelope per host). Read from `remoteDir`.
+// `post` null = the live transport; non-null (the test seam) posts host.quit
+// through it instead, one host or several. captured non-null: stores the
+// result instead of printing.
 int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, const std::filesystem::path& remoteDir,
                  FanOutPost post, void* user, FanOutResult* captured = nullptr);
 

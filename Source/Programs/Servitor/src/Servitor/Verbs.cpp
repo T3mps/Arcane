@@ -606,8 +606,9 @@ bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::s
     return true;
 }
 
-// quit: posts host.quit. With --client NAME it quits the hosts that client
-// launched instead (QuitByClient). With --force (spec s4.7) it then watches the target
+// quit: posts host.quit. With --client NAME, QuitByClient picks the host (the
+// ones that client launched, --host's untagged host, or --pid) and runs QuitOne
+// on it. With --force (spec s4.7) QuitOne then watches the target
 // process (pid + creation stamp from its descriptor) until --timeout, measured
 // from the start of the verb, and terminates it if it is still alive -- also
 // when the host answered host.busy{modal} (--force does not discard changes;
@@ -623,8 +624,9 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
         return PrintUsage(error, opt.format);
     if (opt.clientSet) {
         // --client NAME on quit selects the hosts that client launched (their
-        // descriptors record it); it is not the X-Remote-Client audit header
-        // here. QuitByClient reads those descriptors before any host scan.
+        // descriptors record it), and is still the X-Remote-Client audit
+        // header of the host.quit it sends. QuitByClient reads those
+        // descriptors before any host scan.
         Arcane::Remote::Envelope refusal;
         const auto dir = RemoteDirFor(opt, &refusal);
         if (!dir) {
@@ -635,6 +637,18 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
         }
         return QuitByClient(rest, opt, *dir, nullptr, nullptr);
     }
+    return QuitOne(rest, opt);
+}
+
+} // namespace
+
+int QuitOne(std::span<const std::string> rest, const GlobalOptions& opt)
+{
+    CallRequest req;
+    req.command = "host.quit";
+    std::string error;
+    if (!QuitArgs(rest, req.args, &error))
+        return PrintUsage(error, opt.format);
     const bool force = QuitForced(rest);
     const auto started = std::chrono::steady_clock::now();
     PostedCall posted = PostVerb(*FindVerb("quit"), req, opt, force);
@@ -689,6 +703,8 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     posted.client.exitCode = Arcane::Remote::ExitFromHost(env);
     return PrintEnvelope(env, posted.client, opt);
 }
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // logs and problems (Task 22). Both rows are client-side: logs falls back to

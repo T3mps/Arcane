@@ -232,11 +232,7 @@ int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, co
                  FanOutPost post, void* user, FanOutResult* captured)
 {
     const VerbRow& row = *FindVerb("quit");
-    if (opt.pid != 0)
-        return PrintUsage("--client selects quit's hosts by launching client; it does not combine with --pid",
-                          opt.format);
-    const auto finish = [&](Arcane::Remote::Envelope env) {
-        const FanOutResult result = Refuse(std::move(env), nlohmann::json{{"command", "host.quit"}}, opt.format);
+    const auto emit = [&](const FanOutResult& result) {
         if (captured != nullptr) {
             *captured = result;
             return result.exitCode;
@@ -246,25 +242,115 @@ int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, co
         printed.stderrText = result.diagnostics;
         return Emit(printed, result.exitCode);
     };
+    const auto finish = [&](Arcane::Remote::Envelope env) {
+        return emit(Refuse(std::move(env), nlohmann::json{{"command", "host.quit"}}, opt.format));
+    };
+    // One chosen host: quit's own single-host body with the pid pinned, so
+    // --force applies and one envelope answers (B7 fix round 1, I2/I3).
+    const auto quitOne = [&](const LiveHost& host) -> int {
+        if (post == nullptr) {
+            GlobalOptions pinned = opt;
+            pinned.pid = host.descriptor.pid;
+            pinned.hostKind = Arcane::Remote::ToString(host.descriptor.hostKind);
+            pinned.retryOnDeath = false;   // a pinned pid is never retargeted (N3-1)
+            return QuitOne(rest, pinned);
+        }
+        // The test seam: the same one envelope, posted through `post`.
+        nlohmann::json args;
+        std::string error;
+        if (!row.args(rest, args, &error))
+            return PrintUsage(error, opt.format);
+        HostSlot slot;
+        slot.host = &host;
+        RunSlot(slot, nlohmann::json{{"command", "host.quit"}, {"args", args}}, post, user);
+        Arcane::Remote::ClientBlock client;
+        client.exitCode = slot.exitCode;
+        client.descriptor = PathUtf8(host.path);
+        client.token = host.descriptor.token;
+        RenderOptions ro;
+        ro.format = opt.format;
+        const Printed printed = Render(slot.envelope, client, ro);
+        FanOutResult result;
+        result.wrapper = HostEnvelopeJson(slot);
+        result.exitCode = slot.exitCode;
+        result.text = printed.stdoutText;
+        result.diagnostics = printed.stderrText;
+        return emit(result);
+    };
+    // Discovery's own selection (--host / --pid; none is target.none, several target.ambiguous).
+    const auto quitSelected = [&](const Scan& scan) -> int {
+        Arcane::Remote::Envelope refusal;
+        const auto host = Select(scan, opt, &refusal);
+        return host ? quitOne(*host) : finish(std::move(refusal));
+    };
 
+    // --pid wins (I4): it names one process, and --client is only the
+    // X-Remote-Client audit header of the quit sent to it.
+    if (opt.pid != 0)
+        return quitSelected(ScanDirectory(remoteDir));
+
+    // The hosts this client launched, narrowed by --host BEFORE they are
+    // counted (I1). A host whose process already exited needs no quit.
+    std::vector<LiveHost> tagged;
+    for (LiveHost& host : HostsForClient(remoteDir, opt.client)) {
+        if (Arcane::Remote::IsStale(host.descriptor))
+            continue;
+        if (!opt.hostKind.empty() && opt.hostKind != Arcane::Remote::ToString(host.descriptor.hostKind))
+            continue;
+        tagged.push_back(std::move(host));
+    }
+
+    if (tagged.empty()) {
+        // Neither a tag match nor a kind: nothing safe to guess (it could be
+        // the user's own editor).
+        if (opt.hostKind.empty())
+            return finish(Arcane::Remote::MakeError(
+                "host.quit", "target.none", "no live host was launched by client " + opt.client,
+                "servitor status lists the live hosts and their client; a host launched without --client is "
+                "quit with --host <kind> or --pid"));
+        // C1: a host launched without --client. --host selects it as before
+        // Task 21 and --client is the audit header, but a host another client
+        // launched is never taken.
+        Scan scan = ScanDirectory(remoteDir);
+        std::vector<std::string> owners;
+        std::erase_if(scan.live, [&](const LiveHost& h) {
+            if (h.descriptor.client.empty())
+                return false;
+            if (opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind))
+                owners.push_back(h.descriptor.client);
+            return true;
+        });
+        if (!owners.empty() && std::none_of(scan.live.begin(), scan.live.end(), [&](const LiveHost& h) {
+                return opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind);
+            })) {
+            std::string names;
+            for (const std::string& name : owners)
+                names += (names.empty() ? "" : ", ") + name;
+            return finish(Arcane::Remote::MakeError(
+                "host.quit", "target.none",
+                "the live " + opt.hostKind + " host belongs to client " + names + ", not " + opt.client,
+                "--client never quits another client's host; quit it as that client, or by --pid if you launched it"));
+        }
+        return quitSelected(scan);
+    }
+
+    if (tagged.size() == 1)
+        return quitOne(tagged.front());
+
+    const std::string count = std::to_string(tagged.size());
+    if (!opt.yes)
+        return finish(Arcane::Remote::MakeError(
+            "host.quit", "arg.inapplicable", "--client " + opt.client + " matches " + count + " hosts",
+            "narrow it with --host <kind> or --pid, or pass --yes to quit all of them"));
+    if (QuitForced(rest))
+        return PrintUsage("quit --force ends one host, and --client " + opt.client + " matches " + count +
+                              " hosts: narrow it with --host <kind> or --pid",
+                          opt.format);
     Scan scan;
     scan.nowUnixMs = NowUnixMs();
-    for (LiveHost& host : HostsForClient(remoteDir, opt.client)) {
-        if (!Arcane::Remote::IsStale(host.descriptor))   // a host that already left needs no quit
-            scan.live.push_back(std::move(host));
-    }
-    if (scan.live.empty())
-        return finish(Arcane::Remote::MakeError("host.quit", "target.none",
-                                                "no live host was launched by client " + opt.client,
-                                                "servitor status lists the live hosts and their client"));
-    if (scan.live.size() > 1 && !opt.yes)
-        return finish(Arcane::Remote::MakeError(
-            "host.quit", "arg.inapplicable",
-            "--client " + opt.client + " matches " + std::to_string(scan.live.size()) + " hosts",
-            "pass --yes to quit all of them, or end one with --pid (and without --client)"));
-
+    scan.live = std::move(tagged);
     GlobalOptions fan = opt;
-    fan.yes = true;   // one match, or the operator confirmed the several
+    fan.yes = true;   // the operator confirmed the several
     LiveCtx ctx;
     ctx.scan = &scan;
     ctx.opt = opt;

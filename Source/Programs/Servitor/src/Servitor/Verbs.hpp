@@ -76,6 +76,11 @@ std::optional<std::string> FollowUnusedGlobal(std::string_view words, const Glob
 // quit's tokens carry --force: the client ends the process after --timeout.
 // The host has no force path (C-M7), so it is never posted in host.quit's args.
 bool QuitForced(std::span<const std::string> rest);
+// quit's single-host body: posts host.quit to the one host opt selects
+// (--host / --pid, the usual discovery) and, with --force, ends the process
+// after --timeout. Prints one envelope. `quit` without --client runs it as is;
+// QuitByClient (FanOut.hpp) runs it with --pid pinned to the one host it chose.
+int QuitOne(std::span<const std::string> rest, const GlobalOptions& opt);
 
 // The tokens after a verb, split by the row's declared flags.
 struct VerbTokens {
