@@ -27,6 +27,7 @@ struct Printed {
 //         then {"type":"result","count":1,"envelope":<ToJson plus client>}.
 // human: one summary line on stdout ("ok <command>" or "error <code>"), data keys as
 //        "key: value", artifacts as paths. Diagnostics (errors, warnings) on stderr.
+// json and ndjson leave stderrText empty: errors and warnings live in the envelope.
 // Both streams pass through Arcane::Remote::RedactSecrets with client.token.
 Printed Render(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client, RenderOptions opt);
 

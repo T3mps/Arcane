@@ -13,8 +13,15 @@
 #include "RemoteDemoArgs.hpp"
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#if defined(_WIN32)
+    #include <io.h>
+#else
+    #include <unistd.h>
+#endif
 #include <optional>
 #include <set>
 #include <string>
@@ -758,6 +765,172 @@ TEST_CASE("servitor --help and -h with no verb print the usage and exit 0", "[se
     CHECK(Servitor::Run(2, const_cast<char**>(longForm)) == 0);
     const char* shortForm[] = {"servitor", "--json", "-h"};
     CHECK(Servitor::Run(3, const_cast<char**>(shortForm)) == 0);
+}
+
+namespace
+{
+// Redirects one process stream (stdout or stderr) to a temp file for the scope,
+// restoring it on every path (the HostConfigTest StderrCapture shape).
+class StreamCapture
+{
+public:
+    explicit StreamCapture(std::FILE* stream) : m_stream(stream)
+    {
+        std::fflush(m_stream);
+#if defined(_WIN32)
+        m_saved = _dup(_fileno(m_stream));
+#else
+        m_saved = dup(fileno(m_stream));
+#endif
+        static int n = 0;
+        m_path = std::filesystem::temp_directory_path() / ("servitor_stream_" + std::to_string(++n) + ".txt");
+        std::FILE* redirected = nullptr;
+#if defined(_WIN32)
+        if (freopen_s(&redirected, m_path.string().c_str(), "w", m_stream) != 0)
+            redirected = nullptr;
+#else
+        redirected = std::freopen(m_path.string().c_str(), "w", m_stream);
+#endif
+        m_ok = m_saved != -1 && redirected != nullptr;
+    }
+    StreamCapture(const StreamCapture&) = delete;
+    StreamCapture& operator=(const StreamCapture&) = delete;
+    ~StreamCapture()
+    {
+        Restore();
+        std::error_code ec;
+        std::filesystem::remove(m_path, ec);
+    }
+    bool Ok() const { return m_ok; }
+    std::string Text()
+    {
+        Restore();
+        std::ifstream in(m_path, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+
+private:
+    void Restore()
+    {
+        if (m_restored)
+            return;
+        m_restored = true;
+        std::fflush(m_stream);
+        if (m_saved != -1) {
+#if defined(_WIN32)
+            _dup2(m_saved, _fileno(m_stream));
+            _close(m_saved);
+#else
+            dup2(m_saved, fileno(m_stream));
+            close(m_saved);
+#endif
+            m_saved = -1;
+        }
+        std::clearerr(m_stream);
+    }
+    std::FILE* m_stream;
+    int m_saved = -1;
+    bool m_ok = false;
+    bool m_restored = false;
+    std::filesystem::path m_path;
+};
+
+struct RunStreams {
+    int exitCode = -1;
+    std::string out;
+    std::string err;
+    bool captured = false;
+};
+
+RunStreams RunCaptured(std::vector<std::string> args)
+{
+    std::vector<char*> argv;
+    for (std::string& a : args)
+        argv.push_back(a.data());
+    RunStreams r;
+    StreamCapture out(stdout);
+    StreamCapture err(stderr);
+    r.captured = out.Ok() && err.Ok();
+    r.exitCode = Servitor::Run(static_cast<int>(argv.size()), argv.data());
+    r.err = err.Text();
+    r.out = out.Text();
+    return r;
+}
+} // namespace
+
+TEST_CASE("json usage and a verbose posted call leave stderr empty", "[remote][cli]") {
+    // Early ParseArgs failures return before out.format is assigned, so the
+    // default Human format used to send the usage to stderr.
+    const std::vector<std::vector<std::string>> early = {
+        {"servitor", "--json", "--host"},
+        {"servitor", "--format", "json", "--timeout"},
+        {"servitor", "--json", "--format", "not-a-format"},
+        {"servitor", "--json", "--not-a-flag"},   // verb-match failure, after ParseArgs
+    };
+    for (const auto& args : early) {
+        INFO(args.back());
+        const RunStreams r = RunCaptured(args);
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.err.empty());
+        const auto env = nlohmann::json::parse(r.out, nullptr, false);
+        REQUIRE(env.is_object());
+        CHECK(env.at("ok") == false);
+        CHECK(env.at("errors").at(0).at("code") == "arg.invalid");
+        CHECK_FALSE(env.at("errors").at(0).at("message").get<std::string>().empty());
+        CHECK(env.at("client").at("exitCode") == 2);
+    }
+    {
+        // ndjson: one result line carrying the same envelope.
+        const RunStreams r = RunCaptured({"servitor", "--format", "ndjson", "--host"});
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.err.empty());
+        const auto line = nlohmann::json::parse(r.out.substr(0, r.out.find('\n')), nullptr, false);
+        REQUIRE(line.is_object());
+        CHECK(line.at("envelope").at("errors").at(0).at("code") == "arg.invalid");
+    }
+    {
+        // Human stays on stderr.
+        const RunStreams r = RunCaptured({"servitor", "--format", "human", "--host"});
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.out.empty());
+        CHECK(r.err.find("usage: servitor") != std::string::npos);
+    }
+
+    // Posted: --verbose on json adds the redacted request line to the envelope
+    // and writes nothing to stderr.
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.verbose = true;
+    Servitor::CallRequest req;
+    req.command = "stats";
+    Captured captured;
+    Arcane::Remote::ClientBlock client;
+    std::string out;
+    std::string err;
+    {
+        StreamCapture so(stdout);
+        StreamCapture se(stderr);
+        REQUIRE(so.Ok());
+        REQUIRE(se.Ok());
+        const Servitor::Printed printed = Servitor::Call(req, opt, &CaptureExchange, &captured, &client);
+        Servitor::Emit(printed, client.exitCode);
+        err = se.Text();
+        out = so.Text();
+    }
+    CHECK_FALSE(captured.body.empty());
+    CHECK(err.empty());
+    CHECK(err.find("servitor request:") == std::string::npos);
+    const auto env = nlohmann::json::parse(out, nullptr, false);
+    REQUIRE(env.is_object());
+    bool sawVerbose = false;
+    for (const auto& w : env.at("warnings"))
+        if (w.at("code") == "servitor.verbose" &&
+            w.at("message").get<std::string>().find("servitor request:") != std::string::npos)
+            sawVerbose = true;
+    CHECK(sawVerbose);
 }
 
 #endif

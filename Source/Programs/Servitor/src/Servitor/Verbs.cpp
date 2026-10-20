@@ -618,7 +618,7 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     req.command = "host.quit";
     std::string error;
     if (!QuitArgs(rest, req.args, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     const bool force = QuitForced(rest);
     const auto started = std::chrono::steady_clock::now();
     PostedCall posted = PostVerb(*FindVerb("quit"), req, opt, force);
@@ -945,7 +945,7 @@ int FollowVerb(std::string_view words, const char* topic, const char* command, c
 {
     // Rule 3: a stream posts no call, so these globals would be dropped silently.
     if (const auto problem = FollowUnusedGlobal(words, opt))
-        return PrintUsage(*problem);
+        return PrintUsage(*problem, opt.format);
 
     Arcane::Remote::Envelope env;
     Arcane::Remote::ClientBlock client;
@@ -1067,7 +1067,7 @@ int LogsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     bool follow = false;
     std::string error;
     if (!ParseLogsTokens(rest, req.args, follow, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     if (follow)
         return FollowVerb("logs", "logs", "log.follow", req.args, opt);
 
@@ -1111,7 +1111,7 @@ int ProblemsVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     bool follow = false;
     std::string error;
     if (!ParseProblemsTokens(rest, req.args, follow, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     if (follow)
         return FollowVerb("problems", "problems", "problem.follow", req.args, opt);
     const PostedCall posted = PostVerb(*FindVerb("problems"), req, opt, false);

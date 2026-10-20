@@ -236,18 +236,18 @@ int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const Glob
     std::string error;
     if (words == "call") {
         if (!ParseCallTokens(rest, req, &error))
-            return PrintUsage(error);
+            return PrintUsage(error, opt.format);
     } else if (row.command != nullptr) {
         req.command = row.command;
         if (row.args != nullptr && !row.args(rest, req.args, &error))
-            return PrintUsage(error);
+            return PrintUsage(error, opt.format);
         if (words == "quit" && QuitForced(rest))
-            return PrintUsage("--all does not combine with quit --force: end each host by hand with --pid");
+            return PrintUsage("--all does not combine with quit --force: end each host by hand with --pid", opt.format);
         // Every host would write the same file (Task 27): each writes its own artifact instead.
         if (words.starts_with("screenshot ") && req.args.contains("out"))
-            return PrintUsage("--all does not combine with screenshot --out: each host writes its own artifact");
+            return PrintUsage("--all does not combine with screenshot --out: each host writes its own artifact", opt.format);
     } else {
-        return PrintUsage("--all does not apply to " + std::string(words));
+        return PrintUsage("--all does not apply to " + std::string(words), opt.format);
     }
 
     Scan narrowed = scan;

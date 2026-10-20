@@ -135,12 +135,18 @@ std::string HelpText();
 // True when the verb tokens (globals removed) are exactly one "--help" or
 // "-h": a help request with no verb. Run prints HelpText and exits 0.
 bool IsHelpRequest(std::span<const std::string> tokens);
-// Prints UsageText(problem) to stderr; returns 2.
-int PrintUsage(const std::string& problem);
+// Human: prints UsageText(problem) to stderr. json / ndjson: one arg.invalid
+// envelope on stdout (client.exitCode 2) and nothing on stderr. Returns 2.
+int PrintUsage(const std::string& problem, Format format);
+// The format a failed ParseArgs answers in, read from argv again (ParseArgs
+// returns before it assigns out.format): --json, else --format json|ndjson|human,
+// else Human. Stops at "--".
+Format ScanFormat(int argc, char** argv);
 // Writes printed.stdoutText to stdout and printed.stderrText to stderr (main
 // thread only); returns exitCode.
 int Emit(const Printed& printed, int exitCode);
-// Renders `env` in opt's format (stdout, diagnostics on stderr); returns client.exitCode.
+// Renders `env` in opt's format (human: diagnostics on stderr; json and ndjson:
+// everything in the envelope on stdout, stderr empty); returns client.exitCode.
 int PrintEnvelope(const Arcane::Remote::Envelope& env, const Arcane::Remote::ClientBlock& client,
                   const GlobalOptions& opt);
 

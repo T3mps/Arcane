@@ -714,7 +714,8 @@ TEST_CASE("a leftover --flag after the verb is refused with usage exit 2", "[ser
     const std::vector<std::string> negative = {"-1", "name=value"};
     CHECK_FALSE(Servitor::LeftoverFlag(negative).has_value());
 
-    std::vector<std::string> words = {"servitor", "status", "--bogus"};
+    // --format human: the human usage stays on stderr (json/ndjson answer on stdout, Task 20).
+    std::vector<std::string> words = {"servitor", "--format", "human", "status", "--bogus"};
     std::vector<char*> argv;
     for (auto& w : words)
         argv.push_back(w.data());
@@ -736,8 +737,8 @@ TEST_CASE("a leftover --flag after the verb is refused with usage exit 2", "[ser
 // that posts no call, before discovery, with usage exit 2.
 TEST_CASE("Run refuses --world and --read-only on a verb that posts no call", "[servitor][client]") {
     const std::vector<std::pair<std::vector<std::string>, std::string>> cases = {
-        {{"servitor", "--world", "main", "status"}, "servitor: --world does not apply to status"},
-        {{"servitor", "list", "--read-only"}, "servitor: --read-only does not apply to list"},
+        {{"servitor", "--format", "human", "--world", "main", "status"}, "servitor: --world does not apply to status"},
+        {{"servitor", "--format", "human", "list", "--read-only"}, "servitor: --read-only does not apply to list"},
     };
     for (const auto& [words, expected] : cases) {
         INFO(expected);

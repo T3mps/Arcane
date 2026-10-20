@@ -597,7 +597,7 @@ int LaunchVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     nlohmann::json args;
     std::string error;
     if (!LaunchArgs(rest, args, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     Arcane::Remote::HostKind kind{};
     ParseKind(args["kind"].get<std::string>(), kind);
     std::vector<std::string> hostArgs;
