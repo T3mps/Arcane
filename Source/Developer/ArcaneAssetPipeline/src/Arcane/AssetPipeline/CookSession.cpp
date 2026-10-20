@@ -282,6 +282,11 @@ namespace Arcane::AssetPipeline
         {
             for (const fs::path& source : EnumerateSources(contentDir, kindEntry.extensions))
             {
+                // CookQueue's destructor asks a pass on a worker to stop; one import is the
+                // longest the caller then waits.
+                if (m_cancel.load(std::memory_order_acquire))
+                    return result;
+
                 fs::path metaPath = source;
                 metaPath += ".meta";
 

@@ -88,6 +88,11 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "arccook: the cook threw: %s\n", ex.what());
             return 1;
         }
+        catch (...)
+        {
+            std::fprintf(stderr, "arccook: the cook threw\n");
+            return 1;
+        }
 
         // ResolveCurrentArtifactPath, NEVER an ArtifactStore::RebuildIndexFromScan +
         // Lookup round-trip: that index maps a Guid to ONE cook key by last-write-wins
@@ -155,6 +160,11 @@ int main(int argc, char** argv)
     catch (const std::exception& ex)
     {
         std::fprintf(stderr, "arccook: the cook threw: %s\n", ex.what());
+        return 1;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "arccook: the cook threw\n");
         return 1;
     }
 }
