@@ -54,6 +54,7 @@ std::string ToText(const Descriptor& d)
         { "frame", d.frame },
         { "abi", d.abi },
         { "client", d.client },
+        { "ownerPid", d.ownerPid },
     };
     // replace, not throw: a project path is never worth an exception here.
     return j.dump(2, ' ', false, Json::error_handler_t::replace);
@@ -271,6 +272,7 @@ std::optional<Descriptor> ReadDescriptor(const std::filesystem::path& path)
     ReadUnsigned(j, "frame", d.frame);
     ReadUnsigned(j, "abi", d.abi);
     ReadString(j, "client", d.client);
+    ReadUnsigned(j, "ownerPid", d.ownerPid);
     return d;
 }
 

@@ -30,7 +30,7 @@ namespace Arcane
             "crash-gpu", "hang-main", "frames", "report", "compare", "settle", "screenshot",
             "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
             "fixed-dt", "fixed-time", "pick-probe", "window-size",
-            "remote-descriptor", "remote-idle-exit", "client",
+            "remote-descriptor", "remote-idle-exit", "client", "owner-pid",
         };
         constexpr std::string_view kStripBareFlags[] = { "headless", "bless", "remote" };
 
@@ -65,7 +65,8 @@ namespace Arcane
                     continue;
                 arg.remove_prefix(2);
                 const std::string_view name = arg.substr(0, arg.find('='));
-                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit" || name == "client")
+                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit" || name == "client"
+                    || name == "owner-pid")
                     return true;
             }
             return false;
@@ -239,6 +240,8 @@ namespace Arcane
                                       "request (0 = never)");
         cli.Option("client", "", "DEV: with --remote, the caller name recorded in the attach descriptor "
                                  "(servitor launch --client NAME; empty = unnamed)");
+        cli.Option("owner-pid", "0", "DEV: with --remote, exit when this process id is no longer running "
+                                     "(0 = watch none; opt-in, never defaulted)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -341,6 +344,12 @@ namespace Arcane
             return { std::nullopt, 2 };
         }
         cfg.remoteClient     = r.Get("client");
+        if (r.Supplied("owner-pid") && !ParseIdleExitSeconds(r.Get("owner-pid"), cfg.ownerPid))
+        {
+            std::fprintf(stderr, "error: --owner-pid wants a process id (a whole number, 0 = none), "
+                                 "got '%s'\n", r.Get("owner-pid").c_str());
+            return { std::nullopt, 2 };
+        }
         cfg.remoteIdleExitSupplied = r.Supplied("remote-idle-exit");
         if (cfg.remoteIdleExitSupplied
             && !ParseIdleExitSeconds(r.Get("remote-idle-exit"), cfg.remoteIdleExitSeconds))

@@ -881,7 +881,8 @@ void RuntimeApp::MainLoop()
             rc.projectRoot    = proj->Root();
         rc.descriptorOverride = m_config.remoteDescriptor;
         rc.client             = m_config.remoteClient;
-        rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
+        rc.ownerPid           = m_config.ownerPid;
+        rc.idleExitSeconds    = (m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
         rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };
         rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()

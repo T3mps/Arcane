@@ -29,6 +29,7 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/Platform/Process.hpp>   // IsProcessLive: --owner-pid
 #include <Arcane/Project/Project.hpp> // EditorLock::Self: this process's pid + creation stamp
 
 #include <algorithm>
@@ -271,6 +272,7 @@ bool HostSession::Start()
     desc.frame = m_gate.frame.load(std::memory_order_acquire);
     desc.abi = kGamePluginABIVersion; // ruling F27
     desc.client = m_config.client;
+    desc.ownerPid = m_config.ownerPid;
     m_descriptor = desc;
     if (m_descriptorPath.empty() || !WriteDescriptorAtomic(m_descriptorPath, desc)) {
         ARC_ERROR("remote: could not write the descriptor {}; this host runs without remote",
@@ -359,7 +361,7 @@ bool HostSession::DrainFrame(std::uint32_t pluginGeneration, std::uint64_t reloa
     if (m_exitReason == nullptr) { // the first reason wins: it is what ended the loop
         if (TakeQuit())
             m_exitReason = "remote-quit";
-        else if (IdleExpired())
+        else if (IdleExpired() || OwnerGone())
             m_exitReason = "remote-idle";
     }
     return m_exitReason != nullptr;
@@ -454,6 +456,13 @@ void HostSession::Teardown()
     CommandRegistry::Get().SetHostKind(m_kindBefore); // ruling S3-9
 }
 
+bool HostSession::OwnerGone() const
+{
+    // Opt-in: 0 watches nothing. IsProcessLive treats access-denied as live, so
+    // an owner this host may not query never ends it.
+    return m_started && m_config.ownerPid != 0 && !Platform::IsProcessLive(m_config.ownerPid, 0);
+}
+
 bool HostSession::IdleExpired() const
 {
     if (!m_started || m_config.idleExitSeconds == 0)
@@ -522,6 +531,7 @@ void HostSession::WriteHeartbeat(std::int64_t nowUnixMs)
     // invisible to servitor status (final fix pass, C-M3).
     m_descriptor.heartbeatUnixMs = nowUnixMs;
     m_descriptor.client = m_config.client;
+    m_descriptor.ownerPid = m_config.ownerPid;
     m_descriptor.state = m_gate.State();
     m_descriptor.frame = m_gate.frame.load(std::memory_order_acquire);
     WriteDescriptorAtomic(m_descriptorPath, m_descriptor);

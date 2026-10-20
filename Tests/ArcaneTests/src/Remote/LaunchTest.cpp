@@ -410,4 +410,27 @@ TEST_CASE("omitted --client is not forwarded to the host, and an explicit one is
     CHECK(std::count(plan->argv.begin(), plan->argv.end(), "--client") == 1);
     CHECK_FALSE(has(plan->argv, "grok-review-r1"));
 }
+
+TEST_CASE("launch passes --owner-pid through only when the operator typed it", "[servitor][client]") {
+    Arcane::Test::TempDir tmp("servitor-launch-owner");
+    const auto exe = FakeHostExe(tmp.path / "engine", "ArcaneRuntime");
+    std::filesystem::create_directories(exe.parent_path());
+    std::ofstream(exe) << "not a program";
+    const auto project = MakeProject(tmp.path / "Game");
+    Servitor::GlobalOptions opt;
+    opt.engine = (tmp.path / "engine").string();
+    opt.project = project.string();
+    Arcane::Remote::Envelope err;
+    const std::vector<std::string> none = {"--headless"};
+    auto plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, none, &err);
+    REQUIRE(plan.has_value());
+    CHECK(std::find(plan->argv.begin(), plan->argv.end(), "--owner-pid") == plan->argv.end());
+    const std::vector<std::string> owned = {"--headless", "--owner-pid", "4242"};
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, owned, &err);
+    REQUIRE(plan.has_value());
+    CHECK(std::count(plan->argv.begin(), plan->argv.end(), "--owner-pid") == 1);
+    const auto at = std::find(plan->argv.begin(), plan->argv.end(), "--owner-pid");
+    REQUIRE(at + 1 != plan->argv.end());
+    CHECK(*(at + 1) == "4242");
+}
 #endif

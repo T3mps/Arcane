@@ -152,6 +152,11 @@ public:
         // --client <name> (servitor launch --client NAME): the caller name Start
         // writes into the descriptor and every heartbeat rewrites. Empty = unnamed.
         std::string client;
+        // --owner-pid <pid>: opt-in. Non-zero and no longer a live process
+        // (Platform::IsProcessLive(pid, 0)) -> DrainFrame takes the same exit
+        // as an expired idle timer ("remote-idle"). 0 watches nothing. Start
+        // writes it into the descriptor and every heartbeat rewrites it.
+        std::uint32_t ownerPid = 0;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started
@@ -214,6 +219,7 @@ public:
     // idleExitSeconds > 0 and the last completed command (or Start, if none) is
     // older than that. 0 never expires. False before Start.
     bool IdleExpired() const;
+    bool OwnerGone() const;   // ownerPid is set and that process is no longer live
     // Main thread, once per loop iteration, from the predicate the host's own
     // pump uses to skip a frame (the editor's IsMinimized()): publishes it as
     // the gate's `minimized`, so Drain refuses needsFrame commands with

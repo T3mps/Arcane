@@ -3,6 +3,11 @@
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Platform/Process.hpp>
+#include "ServerConfig.hpp"
+#include "../Helpers/ConstantScan.hpp"   // Arcane::Test::RepoRoot (the source pins)
+#include <sstream>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -486,5 +491,121 @@ TEST_CASE("HostSession records its client in the descriptor at Start and on ever
         CHECK(desc->client == client);
         session.Stop("test");
     }
+}
+
+TEST_CASE("omitted --owner-pid is zero, and a dead owner pid exits", "[host][remote]") {
+    // The flag: omitted is 0, typed is the number (HostConfig and ServerConfig).
+    {
+        char* bare[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote")};
+        char* owned[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                         const_cast<char*>("--owner-pid"), const_cast<char*>("4242")};
+        auto h0 = Arcane::HostConfig::Parse(2, bare);
+        auto h1 = Arcane::HostConfig::Parse(4, owned);
+        REQUIRE(h0.config);
+        REQUIRE(h1.config);
+        CHECK(h0.config->ownerPid == 0);
+        CHECK(h1.config->ownerPid == 4242);
+        char* serverBare[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                              const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote")};
+        char* serverOwned[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                               const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote"),
+                               const_cast<char*>("--owner-pid"), const_cast<char*>("4242")};
+        auto s0 = Arcane::Server::ServerConfig::Parse(4, serverBare);
+        auto s1 = Arcane::Server::ServerConfig::Parse(6, serverOwned);
+        REQUIRE(s0.config);
+        REQUIRE(s1.config);
+        CHECK(s0.config->ownerPid == 0);
+        CHECK(s1.config->ownerPid == 4242);
+    }
+
+    // HostSession, ownerPid 0: nothing is watched, nothing exits, the key reads 0 across Start and the rewrite.
+    {
+        RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+        Arcane::Test::TempDir tmp("remote-session-owner0");
+        auto cfg = ServerConfig(tmp.path);
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == 0);
+        CHECK_FALSE(session.DrainFrame(1));
+        CHECK(session.ExitReason() == nullptr);
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // the heartbeat rewrite
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == 0);
+        session.Stop("test");
+    }
+
+    // HostSession, a dead owner: the first pid below 0x0FFFFFF0 that IsProcessLive refuses
+    // (never this process, never the shell). DrainFrame takes the idle exit.
+    {
+        std::uint32_t dead = 0x0FFFFFF0u;
+        while (dead > 1u && Arcane::Platform::IsProcessLive(dead, 0))
+            --dead;
+        REQUIRE(dead > 1u);
+        REQUIRE_FALSE(Arcane::Platform::IsProcessLive(dead, 0));
+        RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+        Arcane::Test::TempDir tmp("remote-session-ownerdead");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.ownerPid = dead;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == dead);
+        CHECK(session.DrainFrame(1));
+        REQUIRE(session.ExitReason() != nullptr);
+        CHECK(std::string(session.ExitReason()) == "remote-idle");
+        session.Stop("test");
+    }
+
+    // Source pins: the idle assignments key off maxFrames/frames alone, and every rc block copies ownerPid.
+    const auto read = [](const char* relative) {
+        std::ifstream in(Arcane::Test::RepoRoot() / relative);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    const auto lineWith = [](const std::string& text, const std::string& needle) {
+        const auto at = text.find(needle);
+        REQUIRE(at != std::string::npos);
+        const auto end = text.find('\n', at);
+        return text.substr(at, end - at);
+    };
+    const std::string runtime = read("Source/Programs/ArcaneRuntimeHost/src/RuntimeApp.cpp");
+    const std::string editor = read("Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    const std::string server = read("Source/Programs/ArcaneServer/src/ServerApp.cpp");
+    const std::string runtimeIdle = lineWith(runtime, "rc.idleExitSeconds");
+    const std::string editorIdle = lineWith(editor, "rc.idleExitSeconds");
+    CHECK(runtimeIdle.find("headless") == std::string::npos);
+    CHECK(runtimeIdle.find("maxFrames == 0") != std::string::npos);
+    CHECK(editorIdle.find("headless") == std::string::npos);
+    CHECK(editorIdle.find("maxFrames == 0") != std::string::npos);
+    CHECK(lineWith(server, "rc.idleExitSeconds").find("frames == 0") != std::string::npos);
+    CHECK(runtime.find("rc.ownerPid") != std::string::npos);
+    CHECK(editor.find("rc.ownerPid") != std::string::npos);
+    CHECK(server.find("rc.ownerPid") != std::string::npos);
+}
+
+TEST_CASE("a descriptor without ownerPid reads zero, and one with it round-trips", "[host][remote][descriptor]") {
+    Arcane::Test::TempDir tmp("remote-descriptor-owner");
+    const auto path = tmp.path / "runtime-77.json";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << R"({"protocol":1,"hostKind":"runtime","pid":77,"port":5555,"token":"t"})";
+    }
+    auto back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->ownerPid == 0);
+    Arcane::Remote::Descriptor d = *back;
+    d.ownerPid = 4242;
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(path, d));
+    back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->ownerPid == 4242);
 }
 #endif

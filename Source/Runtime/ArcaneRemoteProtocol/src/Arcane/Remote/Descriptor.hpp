@@ -32,6 +32,7 @@ struct Descriptor {
     std::string state;
     std::uint64_t frame = 0;
     std::uint32_t abi = 0;  // kGamePluginABIVersion of the host that wrote it (ruling F27); HostSession::Start writes it
+    std::uint32_t ownerPid = 0; // --owner-pid the host watches (0 = none); a missing key reads 0
     std::string client;     // --client NAME the host was launched with ("" = none); HostSession writes it, a missing key reads ""
 };
 

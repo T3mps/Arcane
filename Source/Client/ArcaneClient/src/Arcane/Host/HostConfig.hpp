@@ -404,6 +404,10 @@ namespace Arcane
         // other remote flags: DEV only, refused by a Dist Parse, stripped from
         // a relaunch line.
         std::string     remoteClient;
+        // --owner-pid <pid>: with --remote, the host exits ("remote-idle") when
+        // that process is gone. Opt-in only: 0 (omitted) watches nothing, and
+        // Servitor never fills it in. Stripped from a relaunch line.
+        std::uint32_t   ownerPid = 0;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the
