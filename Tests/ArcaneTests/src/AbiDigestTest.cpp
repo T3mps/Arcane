@@ -68,7 +68,7 @@ namespace
         "Source/Runtime/ArcaneScene/src/Arcane/Scene/Components.hpp",
         "Source/Runtime/ArcaneScene/src/Arcane/Scene/TransformSystems.hpp",
         "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsComponents.hpp",
-        "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsSystem.hpp",
+        "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsSystem2D.hpp",
         "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsEvents2D.hpp",
         "Source/Runtime/ArcanePhysics2D/src/Arcane/Physics2D.hpp",
         "Source/Runtime/ArcanePhysics2D/src/Arcane/Physics2DFwd.hpp",

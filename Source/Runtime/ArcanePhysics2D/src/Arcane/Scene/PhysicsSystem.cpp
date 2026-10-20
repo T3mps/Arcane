@@ -1,12 +1,10 @@
-#pragma once
+// PhysicsSystem2D's pass body. It used to be header-only under the pre-attach
+// TypeID rule; AttachAllModules makes one translation unit enough.
 
-// PhysicsSystem2D's pass body. Header-only: Astra's type id is per module,
-// so the host that owns the simulation registry (and the tests) include this
-// header and instantiate the body there. Physics2D.hpp declares PhysicsSystem2D and
-// does not include this file. A game includes Physics2D.hpp.
-
+#include <Arcane/Modules/ArcanePhysics2DApi.hpp>
 #include <Arcane/Physics2D.hpp>
 #include <Arcane/Scene/Physics2DDetail.hpp>
+#include <Arcane/Scene/Physics2DWorld.hpp>
 
 #include <glm/vec2.hpp>
 
@@ -16,7 +14,7 @@
 
 namespace Arcane
 {
-    inline void PhysicsSystem2D::operator()(Arcane::Registry& reg)
+    ARC_PHYSICS2D_API void PhysicsSystem2D::operator()(Arcane::Registry& reg)
     {
         namespace Phys = Detail::Physics2D::Phys;
 

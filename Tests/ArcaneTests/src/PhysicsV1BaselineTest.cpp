@@ -17,7 +17,7 @@
 #include <Arcane/Scene/Physics2DDetail.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsEvents2D.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Sim/SimSettings.hpp>
 
 #include <algorithm>
@@ -433,6 +433,15 @@ TEST_CASE("v1 collider pick matches the checked-in bytes", "[physics][baseline]"
     Arcane::Runtime rt(Arcane::Test::Process());
     StepScene(rt);
     CompareSnapshot("v1-pick", DumpV1Pick(rt));
+}
+
+TEST_CASE("PhysicsSystem.hpp is gone and the pass body is not a header", "[physics][baseline]")
+{
+    const auto root = Arcane::Test::RepoRoot();
+    CHECK_FALSE(std::filesystem::exists(root / "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsSystem.hpp"));
+    const std::string cpp = ReadFileBinary(root / "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsSystem.cpp");
+    CHECK(cpp.find("PhysicsSystem2D::operator()") != std::string::npos);
+    CHECK(cpp.find("Physics2DDetail.hpp") != std::string::npos);
 }
 
 TEST_CASE("capture v1 step trace", "[.][physics-baseline]")

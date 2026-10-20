@@ -18,7 +18,8 @@
 #include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/Physics2DDetail.hpp>
+#include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>          // ActiveSceneCamera, ActivePerspectiveSceneCamera
 #include <Arcane/Scene/SceneResources.hpp>       // RenderContext2D, MeshTable
 

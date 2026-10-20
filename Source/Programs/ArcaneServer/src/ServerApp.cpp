@@ -7,7 +7,7 @@
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>        // VerifySharedTypeContext / GameModule / PluginModules / BootScene
-#include <Arcane/Scene/PhysicsSystem.hpp>        // Arcane::PhysicsSystem2D (systems.hasPhysics)
+#include <Arcane/Scene/PhysicsSystem2D.hpp>        // Arcane::PhysicsSystem2D (systems.hasPhysics)
 #include <Arcane/Scene/TransformSystems.hpp>     // Arcane::TransformPropagationSystem (systems.hasPropagation)
 
 #include <Astra/Core/TypeContext.hpp>

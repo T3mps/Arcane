@@ -23,7 +23,8 @@
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/EngineRoster.hpp>        // EngineComponentRoster -- THE roster list (registered below, verified in ProjectHost.hpp)
 #include <Arcane/Scene/PhysicsComponents.hpp>   // Arcane::RigidBody2D/Arcane::Collider2D/Arcane::PhysicsBodyRef2D (engine roster types)
-#include <Arcane/Scene/PhysicsSystem.hpp>       // Arcane::PhysicsSystem2D/Arcane::PhysicsWorld2D (instantiated IN this module)
+#include <Arcane/Scene/Physics2DDetail.hpp>
+#include <Arcane/Scene/Physics2DWorld.hpp>       // Arcane::PhysicsSystem2D (declaration; body in ArcanePhysics2D PhysicsSystem.cpp)/Arcane::PhysicsWorld2D
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot (ResolvedGravity's scene-root lookup)
 #include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>

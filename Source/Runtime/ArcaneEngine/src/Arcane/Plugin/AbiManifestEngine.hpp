@@ -78,7 +78,7 @@
 #include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsEvents2D.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/PhysicsSystem2D.hpp>
 #include <Arcane/Scene/SceneCacheRecords.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>

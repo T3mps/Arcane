@@ -8,7 +8,7 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>      // Arcane::PhysicsWorld2D
+#include <Arcane/Scene/Physics2DWorld.hpp>      // Arcane::PhysicsWorld2D
 #include <Arcane/Scene/SceneResources.hpp>     // SceneRoot / Arcane::PhysicsInterpBuffer2D / the four tables
 #include <Arcane/Scene/TransformSystems.hpp>   // TransformOrder
 

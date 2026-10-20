@@ -25,7 +25,8 @@
 
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/Physics2DDetail.hpp>
+#include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
