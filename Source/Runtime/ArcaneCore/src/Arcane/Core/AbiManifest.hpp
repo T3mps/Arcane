@@ -1,4 +1,9 @@
-#pragma once
+// A macro guard, not pragma once: GameModule.hpp includes this header, and the
+// [abi] comment-stability witness compiles a byte-copy of it under another path
+// (Intermediate/AbiDigest/AbiManifest.commented.hpp). A path-keyed pragma once
+// would let both copies define the same entities in one TU.
+#ifndef ARC_CORE_ABI_MANIFEST_HPP
+#define ARC_CORE_ABI_MANIFEST_HPP
 
 // The compiler-derived plugin ABI digest (3D-readiness Plan B, Task 1).
 //
@@ -285,6 +290,7 @@ namespace Arcane
         f.Field("SaveState", offsetof(Arcane::PluginVTable, SaveState), sizeof(Arcane::PluginVTable::SaveState), alignof(decltype(Arcane::PluginVTable::SaveState)), "void (*)(Arcane::BinaryWriter&)");
         f.Field("LoadState", offsetof(Arcane::PluginVTable, LoadState), sizeof(Arcane::PluginVTable::LoadState), alignof(decltype(Arcane::PluginVTable::LoadState)), "bool (*)(Arcane::BinaryReader&)");
         f.Field("DrawUI", offsetof(Arcane::PluginVTable, DrawUI), sizeof(Arcane::PluginVTable::DrawUI), alignof(decltype(Arcane::PluginVTable::DrawUI)), "void (*)()");
+        f.Field("ABIDigest", offsetof(Arcane::PluginVTable, ABIDigest), sizeof(Arcane::PluginVTable::ABIDigest), alignof(decltype(Arcane::PluginVTable::ABIDigest)), "uint64_t (*)()");
         f.Type("Arcane::ProcessContextDesc", sizeof(Arcane::ProcessContextDesc), alignof(Arcane::ProcessContextDesc));
         f.Field("isDedicatedServerProcess", offsetof(Arcane::ProcessContextDesc, isDedicatedServerProcess), sizeof(Arcane::ProcessContextDesc::isDedicatedServerProcess), alignof(decltype(Arcane::ProcessContextDesc::isDedicatedServerProcess)), "bool");
         f.Field("externalTypeContext", offsetof(Arcane::ProcessContextDesc, externalTypeContext), sizeof(Arcane::ProcessContextDesc::externalTypeContext), alignof(decltype(Arcane::ProcessContextDesc::externalTypeContext)), "Arcane::TypeContext*");
@@ -513,3 +519,5 @@ namespace Arcane
 #elif defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+
+#endif   // ARC_CORE_ABI_MANIFEST_HPP

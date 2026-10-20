@@ -56,6 +56,8 @@ namespace
         // Optional: resolution is lenient, the host null-checks before calling.
         out.DrawUI = Resolve<void(*)()>(module, Arcane::PluginEntry::kDrawUI);
 
+        // The epoch FIRST: a module from an older epoch (HotReloadPluginBad, an
+        // old game) fails here without being required to export the digest.
         const std::uint32_t pluginAbi = out.ABIVersion();
         if (pluginAbi != Arcane::kGamePluginABIVersion)
         {
@@ -67,7 +69,12 @@ namespace
             }
             return false;
         }
-        return true;
+
+        // Epoch matches: now the digest export is required (a missing symbol is
+        // the unresolved-symbol failure, not AbiMismatch), then compared.
+        out.ABIDigest = Resolve<std::uint64_t(*)()>(module, Arcane::PluginEntry::kABIDigest);
+        if (!need(out.ABIDigest, Arcane::PluginEntry::kABIDigest)) return false;
+        return Arcane::AcceptPluginAbi(out, error);
     }
 
     bool ResolveGamePluginAbi(Arcane::Module& module, Arcane::PluginVTable& out) noexcept
@@ -83,6 +90,37 @@ namespace Arcane
     {
         const Module::ImageSpan image = m_module.Image();
         m_cvars = CVarOwner(std::move(cvarModule), image.base, image.size);
+    }
+
+    bool AcceptPluginAbi(const PluginVTable& table, PluginResolveError* error) noexcept
+    {
+        const auto refuse = [&](std::uint32_t pluginAbi, std::uint64_t pluginDigest) -> bool
+        {
+            if (error)
+            {
+                error->kind         = PluginResolveError::Kind::AbiMismatch;
+                error->pluginAbi    = pluginAbi;
+                error->engineAbi    = kGamePluginABIVersion;
+                error->pluginDigest = pluginDigest;
+                error->engineDigest = kGamePluginABIDigest;
+            }
+            return false;
+        };
+        if (!table.ABIVersion) return refuse(0, 0);
+        const std::uint32_t pluginAbi = table.ABIVersion();
+        if (pluginAbi != kGamePluginABIVersion) return refuse(pluginAbi, 0);
+        if (!table.ABIDigest) return refuse(pluginAbi, 0);
+        const std::uint64_t pluginDigest = table.ABIDigest();
+        if (pluginDigest != kGamePluginABIDigest) return refuse(pluginAbi, pluginDigest);
+        return true;
+    }
+
+    bool AdoptStaticGameModule(const PluginVTable& table, PluginResolveError* error,
+                               std::optional<Plugin>* out, std::string cvarModule)
+    {
+        if (!AcceptPluginAbi(table, error)) return false;
+        if (out) out->emplace(Plugin::FromStatic(table, std::move(cvarModule)));
+        return true;
     }
 
     Plugin Plugin::FromStatic(const PluginVTable& table, std::string cvarModule)

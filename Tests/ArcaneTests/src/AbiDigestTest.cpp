@@ -11,10 +11,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Core/AbiManifest.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
+#include <Arcane/Plugin/Plugin.hpp>
 
 #include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -22,6 +26,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -700,4 +705,156 @@ TEST_CASE("a by-value public parameter is in the abi root list", "[plugin][abi]"
         INFO(name);
         CHECK(ManifestHasRoot(manifest, name));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task 2: the load gate. Capture-free function pointers only: a capturing
+// lambda does not convert to uint64_t (*)() or to bool (*)(EngineContext*).
+// ---------------------------------------------------------------------------
+namespace
+{
+    std::uint32_t TestAbiEpoch() { return Arcane::kGamePluginABIVersion; }
+    std::uint64_t TestAbiWrongDigest() { return Arcane::kGamePluginABIDigest ^ 0x1ull; }
+    std::uint64_t TestAbiRightDigest() { return Arcane::kGamePluginABIDigest; }
+    int g_initCalls = 0;
+    bool TestAbiInit(Arcane::EngineContext*) { ++g_initCalls; return true; }
+
+    struct WarnCapture
+    {
+        std::vector<std::string> lines;
+    };
+    void WarnSink(const Arcane::LogRecord& record, void* user)
+    {
+        static_cast<WarnCapture*>(user)->lines.push_back(record.text);
+    }
+
+    struct DigestChildRun
+    {
+        int         exitCode = -1;
+        std::string kind;
+        fs::path    sentinel;
+    };
+
+    // Spawns AbiDigestChild on the named fixture DLL. A missing fixture is a
+    // failure of the task, not a skip.
+    DigestChildRun RunDigestChild(const char* fixture)
+    {
+        DigestChildRun run;
+        const fs::path exe = SiblingTool("AbiDigestChild", "AbiDigestChild");
+        const fs::path dll = SiblingTool(fixture, fixture).replace_extension(
+#if defined(_WIN32)
+            ".dll"
+#elif defined(__APPLE__)
+            ".dylib"
+#else
+            ".so"
+#endif
+        );
+        REQUIRE(fs::exists(exe));
+        REQUIRE(fs::exists(dll));
+        run.sentinel = fs::temp_directory_path() / (std::string(fixture) + ".init.sentinel");
+        std::error_code ec;
+        fs::remove(run.sentinel, ec);
+#if defined(_WIN32)
+        const std::string line = "\"\"" + exe.string() + "\" \"" + dll.string() + "\" \""
+                               + run.sentinel.string() + "\"\"";
+#else
+        const std::string line = "'" + exe.string() + "' '" + dll.string() + "' '"
+                               + run.sentinel.string() + "'";
+#endif
+        FILE* pipe = ABI_TEST_POPEN(line.c_str(), "r");
+        REQUIRE(pipe != nullptr);
+        std::string out;
+        char buf[512];
+        while (std::fgets(buf, sizeof(buf), pipe)) out += buf;
+        run.exitCode = ABI_TEST_PCLOSE(pipe);
+        const std::string tag = "kind=";
+        const auto at = out.rfind(tag);
+        if (at != std::string::npos)
+        {
+            const auto end = out.find_first_of("\r\n", at);
+            run.kind = out.substr(at + tag.size(), end == std::string::npos ? std::string::npos : end - at - tag.size());
+        }
+        INFO("child output: " << out);
+        return run;
+    }
+}
+
+TEST_CASE("a matching epoch with the wrong digest is refused before Init", "[plugin][abi]")
+{
+    g_initCalls = 0;
+    Arcane::PluginVTable table{};
+    table.ABIVersion = &TestAbiEpoch;
+    table.ABIDigest = &TestAbiWrongDigest;
+    table.Init = &TestAbiInit;
+    Arcane::PluginResolveError err{};
+    CHECK_FALSE(Arcane::AcceptPluginAbi(table, &err));
+    CHECK(err.kind == Arcane::PluginResolveError::Kind::AbiMismatch);
+    CHECK(g_initCalls == 0);
+
+    table.ABIDigest = &TestAbiRightDigest;
+    Arcane::PluginResolveError ok{};
+    CHECK(Arcane::AcceptPluginAbi(table, &ok));
+    CHECK(ok.kind == Arcane::PluginResolveError::Kind::None);
+
+    table.ABIDigest = nullptr;   // a missing digest is refused too
+    Arcane::PluginResolveError missing{};
+    CHECK_FALSE(Arcane::AcceptPluginAbi(table, &missing));
+    CHECK(missing.kind == Arcane::PluginResolveError::Kind::AbiMismatch);
+    CHECK(g_initCalls == 0);
+}
+
+TEST_CASE("a static table with the wrong digest is refused before Init", "[plugin][abi]")
+{
+    g_initCalls = 0;
+    Arcane::PluginVTable table{};
+    table.ABIVersion = &TestAbiEpoch;
+    table.ABIDigest = &TestAbiWrongDigest;
+    table.Init = &TestAbiInit;
+    Arcane::PluginResolveError err{};
+    std::optional<Arcane::Plugin> adopted;
+    CHECK_FALSE(Arcane::AdoptStaticGameModule(table, &err, &adopted, "abi-test"));
+    CHECK_FALSE(adopted.has_value());
+    CHECK(err.kind == Arcane::PluginResolveError::Kind::AbiMismatch);
+    CHECK(g_initCalls == 0);
+}
+
+TEST_CASE("OpenProject warns and still opens when engineAbi is stale", "[plugin][abi]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arc-abi-stale-project";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "Content");
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":1,"name":"P","engine":{"abi":)"
+        << (static_cast<int>(Arcane::kGamePluginABIVersion) - 1) << "}}";
+
+    WarnCapture capture;
+    const auto sub = Arcane::Log::Subscribe(&WarnSink, &capture);
+    bool opened = false;
+    {
+        Arcane::Runtime rt(Arcane::Test::Process());
+        opened = rt.OpenProject(dir);
+    }
+    Arcane::Log::Unsubscribe(sub);
+    fs::remove_all(dir, ec);
+
+    CHECK(opened);
+    bool warned = false;
+    for (const std::string& line : capture.lines)
+        if (line.find("opening") != std::string::npos && line.find("engine ABI") != std::string::npos)
+            warned = true;
+    CHECK(warned);
+}
+
+TEST_CASE("a 64-bit digest DLL and a stale digest DLL are refused before Init", "[plugin][abi]")
+{
+    const DigestChildRun bits64 = RunDigestChild("AbiDigestBits64");
+    CHECK(bits64.exitCode == 0);
+    CHECK(bits64.kind == "AbiMismatch");
+    CHECK_FALSE(fs::exists(bits64.sentinel));
+    const DigestChildRun stale = RunDigestChild("AbiDigestStale");
+    CHECK(stale.exitCode == 0);
+    CHECK(stale.kind == "AbiMismatch");
+    CHECK_FALSE(fs::exists(stale.sentinel));
 }

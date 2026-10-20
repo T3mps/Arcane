@@ -11,7 +11,7 @@
 //   };
 //   ARC_GAME_MODULE(MyGame::Module)
 //
-// The macro emits the eight exports the host resolves (PluginEntry::k*,
+// The macro emits the nine exports the host resolves (PluginEntry::k*,
 // PluginABI.hpp) and everything a module used to copy: the shared TypeContext
 // pin, the Mosaic log-sink + assert-handler installs, the ImGui context/
 // allocator adoption, this module's Arcane::ComponentModule with the
@@ -66,7 +66,7 @@
 #include <type_traits>
 #include <vector>
 
-// Modular layout: the eight GamePlugin_* entry points (and ArcGameModule_Get)
+// Modular layout: the nine GamePlugin_* entry points (and ArcGameModule_Get)
 // leave the game DLL. Monolithic layout (ARC_MONOLITHIC, the packaged exe):
 // the game is a static library linked into the host, so nothing is exported --
 // the host calls ArcGameModule_Get() as a linked symbol (Plugin/PluginHost.cpp).
@@ -351,7 +351,9 @@ namespace Arcane
 #if defined(ARC_MONOLITHIC)
   #define ARC_GAME_MODULE_ABI_CHECK_(Abi)                                                          \
       static_assert(static_cast<uint32_t>(Abi) == ::Arcane::kGamePluginABIVersion,                 \
-                    "ARC_GAME_MODULE: a monolithic game must report the SDK's ABI version");
+                    "ARC_GAME_MODULE: a monolithic game must report the SDK's ABI version"); \
+      static_assert(::Arcane::AbiManifestMix() == ::Arcane::kGamePluginABIDigest,                  \
+                    "ARC_GAME_MODULE: digest does not match build/abi-digest.txt");
 #else
   #define ARC_GAME_MODULE_ABI_CHECK_(Abi)
 #endif
@@ -360,9 +362,9 @@ namespace Arcane
 // build, which must report a version the host's gate refuses. A real module
 // never passes anything but the SDK's constant.
 //
-// Besides the eight GamePlugin_* entry points it emits ArcGameModule_Get(): the
-// same eight as one Arcane::PluginVTable (the game table, s3.1). Modular hosts
-// resolve the GamePlugin_* exports by name (Plugin::Load); a monolithic host
+// Besides the nine GamePlugin_* entry points (the eight plus GamePlugin_ABIDigest)
+// it emits ArcGameModule_Get(): the same nine as one Arcane::PluginVTable
+// (the game table, s3.1). Modular hosts resolve the GamePlugin_* exports by name (Plugin::Load); a monolithic host
 // adopts ArcGameModule_Get() (Plugin::FromStatic). Both layouts emit it so one
 // acquisition test covers both.
 #define ARC_GAME_MODULE_ABI(Type, Abi)                                                          \
@@ -381,6 +383,8 @@ namespace Arcane
         { if (auto* m = arcane_game_module_state_.instance) m->OnFixedUpdate(dt); }                \
         ARC_GAME_MODULE_EXPORT void GamePlugin_Update(double dt, double alpha)                  \
         { if (auto* m = arcane_game_module_state_.instance) m->OnUpdate(dt, alpha); }              \
+        ARC_GAME_MODULE_EXPORT std::uint64_t GamePlugin_ABIDigest()                             \
+        { return ::Arcane::AbiManifestMix(); }                                                     \
         ARC_GAME_MODULE_EXPORT void GamePlugin_DrawUI()                                         \
         {                                                                                          \
             arcane_game_module_state_.DrawUI();                                                   \
@@ -394,7 +398,15 @@ namespace Arcane
             static const ::Arcane::PluginVTable table{                                            \
                 &GamePlugin_ABIVersion, &GamePlugin_Init, &GamePlugin_Shutdown,                   \
                 &GamePlugin_FixedUpdate, &GamePlugin_Update, &GamePlugin_SaveState,               \
-                &GamePlugin_LoadState, &GamePlugin_DrawUI };                                      \
+                &GamePlugin_LoadState, &GamePlugin_DrawUI,       \
+                &GamePlugin_ABIDigest };                                                          \
             return &table;                                                                        \
         }                                                                                         \
     }
+
+// The macro above calls ::Arcane::AbiManifestMix() in the GAME's translation
+// unit, so the digest it exports is the one THAT TU computed (a game built with
+// -DASTRA_ENTITY_BITS=64 exports a different integer). AbiManifest.hpp includes
+// this header, so it is pulled in last, after every definition it needs; its
+// own pragma once breaks the cycle in either include order.
+#include <Arcane/Core/AbiManifest.hpp>

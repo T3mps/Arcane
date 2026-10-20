@@ -189,10 +189,22 @@ namespace Arcane
                     break;
                 case PluginResolveError::Kind::AbiMismatch:
                     d.code    = "plugin.abi.mismatch";
-                    d.message = "Plugin '" + name + "' targets engine ABI " +
-                                std::to_string(resolveError.pluginAbi) + ", but this engine is ABI " +
-                                std::to_string(resolveError.engineAbi) + ".";
-                    d.detail  = "Rebuild the game DLL against this engine and update its manifest.";
+                    if (resolveError.pluginAbi == resolveError.engineAbi)
+                    {
+                        d.message = "Plugin '" + name + "' matches engine ABI " +
+                                    std::to_string(resolveError.engineAbi) +
+                                    " but its layout digest differs from this engine's.";
+                        d.detail  = "The module was compiled against different engine headers or "
+                                    "defines (for example ASTRA_ENTITY_BITS). Rebuild the game DLL "
+                                    "against this engine.";
+                    }
+                    else
+                    {
+                        d.message = "Plugin '" + name + "' targets engine ABI " +
+                                    std::to_string(resolveError.pluginAbi) + ", but this engine is ABI " +
+                                    std::to_string(resolveError.engineAbi) + ".";
+                        d.detail  = "Rebuild the game DLL against this engine and update its manifest.";
+                    }
                     break;
                 case PluginResolveError::Kind::CrtFlavorMismatch:
                     d.code    = "plugin.crt.mismatch";
@@ -1074,12 +1086,19 @@ namespace Arcane
 
 #if defined(ARC_MONOLITHIC)
         // STATIC MODE (engine modularization s3.1/s3.2): the game is linked into
-        // this executable. No copy, no Module::Load, no ABI probe (ARC_GAME_MODULE's
-        // static_assert pinned it), no hot reload -- adopt ArcGameModule_Get()'s
-        // table and run the same Init/instantiate sequence as a loaded image.
+        // this executable. No copy, no Module::Load, no hot reload -- adopt
+        // ArcGameModule_Get()'s table (AdoptStaticGameModule runs the same epoch +
+        // digest gate a loaded image gets, before Init) and run the same
+        // Init/instantiate sequence as a loaded image.
         {
             PluginImage img;
-            img.plugin = Plugin::FromStatic(*ArcGameModule_Get(), name);
+            PluginResolveError adoptError{};
+            if (!AdoptStaticGameModule(*ArcGameModule_Get(), &adoptError, &img.plugin, name))
+            {
+                PublishPluginLoadFailure(name, m_impl->source, adoptError);
+                ARC_ERROR("plugin: static game module '{}' refused: ABI epoch/digest mismatch", name);
+                return false;
+            }
             m_impl->LayerModuleCVars(*img.plugin);
             m_impl->RefreshContext();
             if (!m_impl->InitImage(*img.plugin))

@@ -2116,6 +2116,8 @@ project "ArcaneTests"
     -- AbiDigestTest.cpp ([abi]) runs arcane-abi-digest.exe and arcane-abi-digest-mutants.exe
     -- (sibling dirs) for the comment-stability and mutation cases; build them first.
     dependson { "arcane-abi-digest", "arcane-abi-digest-mutants" }
+    -- The two digest-gate fixture DLLs and their child exe (Plan B Task 2).
+    dependson { "AbiDigestBits64", "AbiDigestStale", "AbiDigestChild" }
     if os.target() == "windows" then
         dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
@@ -2285,10 +2287,17 @@ end
 -- the SAME reader build/arcane.lua uses for a real game (engine modularization
 -- s4): link + include only the descriptor's closure, ARC_GAME_HAS_IMGUI and the
 -- ImGui import decoration only when ImGui is in it. Call inside a project.
-local function game_fixture_modules(descriptor, sourceRoot)
-    local game = arc_game_descriptor(engine_modules, path.join(_MAIN_SCRIPT_DIR, descriptor), path.join(_MAIN_SCRIPT_DIR, sourceRoot))
+local function game_fixture_modules(descriptor, sourceRoot, handWrittenExports)
+    -- handWrittenExports: the fixture hand-writes its GamePlugin_* exports (the
+    -- AbiDigest* fixtures must NOT use ARC_GAME_MODULE), so the descriptor's
+    -- "exactly one ARC_GAME_MODULE" source check does not apply.
+    local game = arc_game_descriptor(engine_modules, path.join(_MAIN_SCRIPT_DIR, descriptor), (not handWrittenExports) and path.join(_MAIN_SCRIPT_DIR, sourceRoot) or nil)
     if not game then error("[arcmodule] schema: missing game descriptor " .. descriptor, 0) end
     arc_module_consumer(engine_modules, game.modules, { stage = false })   -- loaded by a host that carries the modules
+    -- ARC_GAME_MODULE's GamePlugin_ABIDigest evaluates AbiManifestMix() in the
+    -- game's TU; the manifest includes every module's game-facing headers
+    -- (include dirs only, exactly as build/arcane.lua gives a game).
+    arc_module_consumer(engine_modules, engine_modules.order, { link = false, stage = false })
     for _, include in ipairs(game.thirdPartyIncludes) do includedirs { "%{wks.location}/" .. include } end
     if arc_closure_contains(engine_modules, game.modules, "ImGui") then
         -- IMGUI_API=dllimport: adopt ImGui.dll's single GImGui, exactly as
@@ -2349,6 +2358,77 @@ test_plugin("HotReloadPluginV1",  { "HOTRELOAD_STEP=1",          "_CRT_SECURE_NO
 test_plugin("HotReloadPluginV2",  { "HOTRELOAD_STEP=10",         "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginBad", { "HOTRELOAD_ABI_OFFSET=999",  "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_NO_WARNINGS" })
+
+-- ============================================================================
+-- AbiDigestBits64 / AbiDigestStale / AbiDigestChild (3D-readiness Plan B Task 2):
+-- the plugin ABI-digest load gate's two refusal witnesses. Two REAL game-module
+-- DLLs with the host's epoch and a wrong digest -- Bits64 is compiled with
+-- ASTRA_ENTITY_BITS=64 so its own AbiManifestMix() differs, Stale returns a
+-- constant -- and a disposable child exe that calls Plugin::Load on the path it
+-- is given. ArcaneTests spawns the child once per DLL ([abi]); neither DLL is
+-- ever loaded into ArcaneTests.exe (the 21 game headers' registrars and a
+-- 64-bit Entity would corrupt its TypeContext).
+-- ============================================================================
+local function abi_digest_fixture(name, defs)
+    group "Tests/Fixtures"
+    project(name)
+        game_fixture_modules("Tests/Fixtures/" .. name .. "/" .. name .. ".arcmodule", "Tests/Fixtures/" .. name, true)
+        location("Tests/Fixtures/" .. name)
+        kind "SharedLib"
+        language "C++"
+        cppdialect "C++23"
+        staticruntime "off"
+        targetname(name)
+        filter "system:not windows"
+            targetprefix ""
+            visibility "Hidden"
+            inlinesvisibility "Hidden"
+        filter { "system:not windows", "toolset:gcc" }
+            buildoptions { "-fno-gnu-unique" }
+        filter {}
+        macos_unloadable_module()
+        targetdir ("Binaries/" .. outputdir .. "/" .. name)
+        objdir ("Intermediate/Build/" .. outputdir .. "/" .. name)
+        files { "%{prj.location}/" .. name .. ".cpp" }
+        defines (defs)
+        filter "system:windows"
+            systemversion "latest"
+            buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }
+            fatalwarnings { "4715" }
+        filter "configurations:Debug"   defines { "ARC_BUILD_DEBUG" }                    runtime "Debug"   symbols "on"
+        filter "configurations:Release" defines { "ARC_BUILD_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
+        filter "configurations:Dist"    defines { "ARC_BUILD_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
+        filter {}
+end
+
+abi_digest_fixture("AbiDigestBits64", { "ASTRA_ENTITY_BITS=64", "_CRT_SECURE_NO_WARNINGS" })
+abi_digest_fixture("AbiDigestStale",  { "_CRT_SECURE_NO_WARNINGS" })
+
+group "Tests/Fixtures"
+project "AbiDigestChild"
+    arc_module_consumer(engine_modules, { "ArcaneEngine" })
+    location "Tests/Fixtures/AbiDigestChild"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+
+    files { "%{prj.location}/AbiDigestChild.cpp" }
+
+    defines { "_CRT_SECURE_NO_WARNINGS", "NOMINMAX", "WIN32_LEAN_AND_MEAN" }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }
+    filter "system:not windows"
+        links { "dl", "pthread" }
+    filter "configurations:Debug"   defines { "ARC_BUILD_DEBUG" }                    runtime "Debug"   symbols "on"
+    filter "configurations:Release" defines { "ARC_BUILD_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"    defines { "ARC_BUILD_DIST", "NDEBUG" }           runtime "Release" optimize "speed" symbols "off"
+    filter {}
 
 -- ============================================================================
 -- ReferenceGameUnderTest: ReferenceProject's REAL game-module sources
