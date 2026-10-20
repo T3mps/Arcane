@@ -2118,7 +2118,7 @@ project "ArcaneTests"
     -- (sibling dirs) for the comment-stability and mutation cases; build them first.
     dependson { "arcane-abi-digest", "arcane-abi-digest-mutants" }
     -- The digest-gate fixture DLLs and their child exe (Plan B Task 2).
-    dependson { "AbiDigestBits64", "AbiDigestStale", "AbiDigestChild" }
+    dependson { "AbiDigestBits64", "AbiDigestStale", "AbiDigestOldEpoch", "AbiDigestNoExport", "AbiDigestChild" }
     if os.target() == "windows" then
         dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
@@ -2405,6 +2405,8 @@ end
 
 abi_digest_fixture("AbiDigestBits64", { "ASTRA_ENTITY_BITS=64", "_CRT_SECURE_NO_WARNINGS" })
 abi_digest_fixture("AbiDigestStale",  { "_CRT_SECURE_NO_WARNINGS" })
+abi_digest_fixture("AbiDigestOldEpoch", { "_CRT_SECURE_NO_WARNINGS" })
+abi_digest_fixture("AbiDigestNoExport", { "_CRT_SECURE_NO_WARNINGS" })
 
 group "Tests/Fixtures"
 project "AbiDigestChild"

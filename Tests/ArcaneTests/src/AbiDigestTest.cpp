@@ -821,6 +821,8 @@ namespace
     {
         int         exitCode = -1;
         std::string kind;
+        std::string output;                          // the child's whole stdout
+        std::map<std::string, std::string> fields;   // its `key=value` lines
         fs::path    sentinel;
     };
 
@@ -857,14 +859,15 @@ namespace
         char buf[512];
         while (std::fgets(buf, sizeof(buf), pipe)) out += buf;
         run.exitCode = ABI_TEST_PCLOSE(pipe);
-        const std::string tag = "kind=";
-        const auto at = out.rfind(tag);
-        if (at != std::string::npos)
+        run.output = out;
+        std::istringstream lines(out);
+        for (std::string line; std::getline(lines, line);)
         {
-            const auto end = out.find_first_of("\r\n", at);
-            run.kind = out.substr(at + tag.size(), end == std::string::npos ? std::string::npos : end - at - tag.size());
+            line = TrimTrailingNewline(line);
+            const auto eq = line.find('=');
+            if (eq != std::string::npos) run.fields[line.substr(0, eq)] = line.substr(eq + 1);
         }
-        INFO("child output: " << out);
+        if (const auto it = run.fields.find("kind"); it != run.fields.end()) run.kind = it->second;
         return run;
     }
 }
@@ -938,14 +941,65 @@ TEST_CASE("OpenProject warns and still opens when engineAbi is stale", "[plugin]
 
 TEST_CASE("a 64-bit digest DLL and a stale digest DLL are refused before Init", "[plugin][abi]")
 {
+    // Refused at the DIGEST compare, not at the epoch: the child prints the
+    // PluginResolveError's numbers, and only the digest branch leaves the epochs
+    // equal with the digests different (a fixture left over from an older epoch
+    // also prints kind=AbiMismatch, but with pluginAbi != engineAbi).
+    const std::string engineAbi = std::to_string(Arcane::kGamePluginABIVersion);
+    const std::string engineDigest = Hex16(Arcane::kGamePluginABIDigest);
+
     const DigestChildRun bits64 = RunDigestChild("AbiDigestBits64");
+    INFO("child output: " << bits64.output);
     CHECK(bits64.exitCode == 0);
     CHECK(bits64.kind == "AbiMismatch");
+    REQUIRE(bits64.fields.count("pluginAbi") == 1);
+    REQUIRE(bits64.fields.count("engineAbi") == 1);
+    REQUIRE(bits64.fields.count("pluginDigest") == 1);
+    REQUIRE(bits64.fields.count("engineDigest") == 1);
+    CHECK(bits64.fields.at("pluginAbi") == engineAbi);
+    CHECK(bits64.fields.at("engineAbi") == engineAbi);
+    CHECK(bits64.fields.at("engineDigest") == engineDigest);
+    CHECK(bits64.fields.at("pluginDigest") != engineDigest);
+    CHECK(bits64.fields.at("pluginDigest") != Hex16(0));   // it exported a digest of its own
     CHECK_FALSE(fs::exists(bits64.sentinel));
+
     const DigestChildRun stale = RunDigestChild("AbiDigestStale");
+    INFO("child output: " << stale.output);
     CHECK(stale.exitCode == 0);
     CHECK(stale.kind == "AbiMismatch");
+    REQUIRE(stale.fields.count("pluginAbi") == 1);
+    REQUIRE(stale.fields.count("pluginDigest") == 1);
+    REQUIRE(stale.fields.count("engineDigest") == 1);
+    CHECK(stale.fields.at("pluginAbi") == engineAbi);
+    CHECK(stale.fields.at("engineDigest") == engineDigest);
+    CHECK(stale.fields.at("pluginDigest") == Hex16(1));
     CHECK_FALSE(fs::exists(stale.sentinel));
+}
+
+TEST_CASE("an older-epoch module fails at the epoch and a digest-less module at the export", "[plugin][abi]")
+{
+    // Plugin.cpp's resolve order: (2) the epoch is compared BEFORE the digest
+    // export is resolved, so an old module without GamePlugin_ABIDigest still
+    // reports the ABI error kind; (3) once the epoch matches, the export is
+    // required, and its absence is the unresolved-symbol failure. Both fixtures
+    // hand-write their exports and export no digest.
+    const DigestChildRun old = RunDigestChild("AbiDigestOldEpoch");
+    INFO("child output: " << old.output);
+    CHECK(old.exitCode == 0);
+    CHECK(old.kind == "AbiMismatch");
+    REQUIRE(old.fields.count("pluginAbi") == 1);
+    REQUIRE(old.fields.count("engineAbi") == 1);
+    CHECK(old.fields.at("pluginAbi") == std::to_string(Arcane::kGamePluginABIVersion - 1));
+    CHECK(old.fields.at("engineAbi") == std::to_string(Arcane::kGamePluginABIVersion));
+    CHECK_FALSE(fs::exists(old.sentinel));
+
+    const DigestChildRun none = RunDigestChild("AbiDigestNoExport");
+    INFO("child output: " << none.output);
+    CHECK(none.exitCode != 0);   // the child exits 0 only for AbiMismatch
+    CHECK(none.kind == "MissingExport");
+    REQUIRE(none.fields.count("symbol") == 1);
+    CHECK(none.fields.at("symbol") == "GamePlugin_ABIDigest");
+    CHECK_FALSE(fs::exists(none.sentinel));
 }
 
 TEST_CASE("a stale committed sub-digest fails arcane-abi-digest --check", "[plugin][abi]")
