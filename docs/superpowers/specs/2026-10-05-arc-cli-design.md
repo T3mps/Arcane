@@ -199,7 +199,7 @@ Most of that review is already covered here: the Origin/Host checks and the head
     - `engine.not-found`: no engine is registered, or the chosen engine's folder is gone.
     - `package.not-installed`: the engine exists, but Servitor is not installed on it.
     - `package.incompatible` (reserved for a later user-scope install): the installed Servitor does not speak the engine's remote protocol major.
-  - **The launcher's output.** In human format the sentence goes to stderr. Under `--json` or `--format json|ndjson`, a minimal envelope (`ok:false`, `errors:[{code, message}]`) goes to stdout and stderr stays empty; ndjson carries it inside the final result frame.
+  - **The launcher's output.** The sentence goes to stderr. Under `--json` or `--format json|ndjson`, a minimal envelope (`ok:false`, `errors:[{code, message}]`) also goes to stdout; ndjson carries it inside the final result frame.
   - **Servitor never exits 9.** The static manifest (`servitor commands --format json`) lists 9 with these codes, marked launcher-only.
   - **Engine root.** Hosts to launch, and their exe-relative log and diagnostics directories, resolve in this order, first match wins:
     1. `--engine <root>`;

@@ -17,11 +17,16 @@ the summary is in [CLAUDE.md](CLAUDE.md) under "Servitor". The core loop:
 `screenshot` / `compare` / `step N` / `entity get` / `ecs query` / `logs`,
 then `quit`.
 
-Pass `--project ReferenceProject` and `--client <agent-name>` on every call,
-`launch` and `status` included. `status --client NAME` lists that client's hosts,
-and `quit --client NAME` quits the hosts that client launched (several need
-`--yes`; none is exit 4), so launch and quit with the same name. Under
-`--json`/`--format json|ndjson` all output is on stdout and stderr stays empty.
+Pass `--project ReferenceProject` and `--client <name>` on every call,
+`launch`, `status` and `quit` included, with a name unique to you (agent name
+plus a session or run id; never a shared name like `claude-code`).
+`status --client NAME` lists only that client's hosts (use `status` alone to see
+everything running). `quit --client NAME` quits that client's host (`--host`
+narrows, several need `--yes`, `--pid N` wins); with none, `--host KIND` quits
+the KIND host launched without `--client`, never another client's; with none
+and no `--host` it is exit 4. Under `--json`/`--format json|ndjson` all output
+is on stdout and stderr stays empty. Hosts Servitor launched exit after
+`--remote-idle-exit` seconds idle; an editor the user opens by hand never does.
 `--owner-pid` is opt-in (Servitor never sets it). Branch on the exit code
 (0 ok, 2 usage, 3 permission, 4 no host, 5 retry, 6 failed, 7 host died,
 8 check failed).
