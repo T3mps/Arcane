@@ -575,6 +575,7 @@ namespace Arcane
                     {
                         std::uint32_t idx = 0;
                         if (!ir.U32(idx)) return std::nullopt;
+                        if (idx >= out.header.vertexCount) return std::nullopt;   // would read past the vertex buffer
                         out.indices.push_back(idx);
                     }
                     break;

@@ -613,6 +613,7 @@ namespace Arcane::AssetPipeline
                 {
                     std::uint32_t idx = 0;
                     if (!ir.U32(idx)) return std::nullopt;
+                    if (idx >= desc.vertexCount) return std::nullopt;   // would read past the vertex buffer
                     loaded.indices.push_back(idx);
                 }
                 break;
