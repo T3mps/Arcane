@@ -229,12 +229,16 @@ sessions and subagents, Grok, Codex/GPT, and any SDD implementer or reviewer.
   `--client` to see everything running. `quit --client <name>`: `--pid N` wins
   (that process); otherwise your hosts, narrowed by `--host` (one is quit,
   `--force` works; several need `--yes`); with none of yours, `--host KIND`
-  quits the KIND host launched WITHOUT `--client`, never another client's;
-  with none and no `--host`, exit 4.
+  quits the KIND host Servitor launched WITHOUT `--client` (its descriptor
+  records the explicit `--remote`), never another client's and never a host
+  Servitor did not launch (exit 4 naming it); with none and no `--host`,
+  exit 4. That fallback never selects an editor the user opened by hand, even
+  with `--force`; quit an editor you launched by your `--client` or its `--pid`.
 - **Rules.** Under `--json`/`--format json|ndjson` everything is on stdout and
   stderr stays empty. A host launched with `--remote` (Servitor always adds
-  it) exits after `--remote-idle-exit` seconds idle (default 600); an editor the
-  user opens by hand never does. `--owner-pid <pid>` (a host flag, after `--`)
+  it) on an open-ended run (no `--frames N`) exits after `--remote-idle-exit`
+  seconds idle (default 600); a `--frames N` run and an editor the user opens
+  by hand never do. `--owner-pid <pid>` (a host flag, after `--`)
   is opt-in and Servitor never sets it. Launch your own `--headless` host;
   never drive (`play`/`stop`/`quit`/`cvar set`) an editor the user has open.
   Never `--bless` through Servitor. `quit` every host you launched.
