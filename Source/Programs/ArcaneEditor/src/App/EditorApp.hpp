@@ -162,6 +162,7 @@ namespace Arcane::Editor
         bool                      ArmModalProbe();          // queue an error + open the create dialog; true when the dialog opened
         void                      DismissModalProbe();      // the error modal's OK pop
         [[nodiscard]] Arcane::Editor::ModalKind ModalProbeKind() const noexcept;   // the last DrawModals winner
+        bool                      ArmGizmoAbandonProbe();   // arm a two-target drag, delete one target; the frame's else-branch abandons it
 #endif
 
     private:

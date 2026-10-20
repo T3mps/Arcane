@@ -22,6 +22,7 @@
 #include "Scene/SelectionOps.hpp"
 #include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
 #include "Remote/ModalProbeCommand.hpp"   // editor.modal.probe (review fix round 1, Task 5)
+#include "Remote/GizmoProbeCommand.hpp"   // editor.gizmo.probe (Task 6)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -41,6 +42,7 @@
 #include "Input/EditorActions.hpp"
 #include "Viewport/ViewportActions.hpp"
 
+#include <array>
 #include <Arcane/AssetPipeline/CookSession.hpp>   // F2b Task 12: MainLoop's pre-loop cook gate
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
@@ -1553,11 +1555,15 @@ namespace Arcane::Editor
         {
             m_gizmoHovered = Arcane::GizmoAxis::None;
             // Only reached with an active drag when the entity/component
-            // genuinely vanished (deleted/deselected mid-drag) -- discard the
-            // now-meaningless transaction.
+            // genuinely vanished (deleted/deselected mid-drag) -- close the
+            // now-orphaned transaction.
             if (m_gizmoDrag.active)
             {
-                m_undo->Cancel(m_gizmoDrag.txn);
+                // Abandon, not Cancel: Cancel discards the transaction WITHOUT
+                // reverting, stranding a mid-drag pose with no undo record.
+                // Abandon commits when every target survived (the pose stays and
+                // is undoable) and restores the survivors when one is gone.
+                m_undo->Abandon(m_gizmoDrag.txn);
                 m_gizmoDrag = {};
             }
         }
@@ -2135,6 +2141,10 @@ namespace Arcane::Editor
         // dockspace modals so a Servitor run can witness the gate.
         Arcane::Editor::SetModalProbeApp(this);
         Arcane::Editor::RegisterModalProbeCommand();
+        // editor.gizmo.probe: starts a two-target gizmo drag, deletes one target,
+        // and lets the frame's else-branch abandon it.
+        Arcane::Editor::SetGizmoProbeApp(this);
+        Arcane::Editor::RegisterGizmoProbeCommand();
     }
 #endif
 
@@ -3975,6 +3985,58 @@ namespace Arcane::Editor
     }
     void EditorApp::DismissModalProbe() { m_modalErrors.Pop(); }
     Arcane::Editor::ModalKind EditorApp::ModalProbeKind() const noexcept { return m_modalDrawn; }
+
+    // editor.gizmo.probe's only touch point. Mirrors the press path of
+    // UpdateGizmoInteraction (Begin + SnapshotComponent per root + the drag
+    // fields), then deletes one target and clears the selection, so THIS
+    // frame's UpdateGizmoInteraction takes the else-branch with a live drag.
+    // Does not call Abandon or Cancel itself. False when there is no live
+    // scene root, a drag/transaction is already open, or the runtime is absent.
+    bool EditorApp::ArmGizmoAbandonProbe()
+    {
+        if (!m_runtime || !m_undo || m_gizmoDrag.active || m_undo->InTransaction() || InPlayMode())
+            return false;
+        Astra::Registry& reg = m_runtime->Registry();
+        const Astra::Entity a = Arcane::Edit::CreateEntityInScene(reg, Astra::Entity::Invalid());
+        const Astra::Entity b = Arcane::Edit::CreateEntityInScene(reg, Astra::Entity::Invalid());
+        if (!a.IsValid() || !b.IsValid())
+        {
+            std::vector<Astra::Entity> made;
+            if (a.IsValid()) made.push_back(a);
+            if (b.IsValid()) made.push_back(b);
+            if (!made.empty())
+                (void)Arcane::Edit::DeleteEntities(reg, made);
+            return false;
+        }
+        (void)Arcane::Edit::RenameEntity(reg, a, "GizmoProbeA");
+        (void)Arcane::Edit::RenameEntity(reg, b, "GizmoProbeB");
+        const Astra::ComponentDescriptor* desc = FindTransformDescriptor(reg, a);
+        Arcane::Transform* ta = reg.GetComponent<Arcane::Transform>(a);
+        Arcane::Transform* tb = reg.GetComponent<Arcane::Transform>(b);
+        if (!desc || !ta || !tb)
+            return false;
+        ta->position = glm::vec3(0.0f);
+        tb->position = glm::vec3(0.0f);
+
+        m_selection.Clear();
+        m_selection.AddRange(std::array<Astra::Entity, 2>{ a, b }, a);
+        m_gizmoDrag.targets.clear();
+        m_gizmoDrag.txn = m_undo->Begin("Gizmo");
+        for (Astra::Entity e : { a, b })
+        {
+            m_undo->SnapshotComponent(e, desc);
+            m_gizmoDrag.targets.push_back({ e, Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(reg, e)), 0 });
+        }
+        ta->position.x = 5.0f;
+        tb->position.x = 5.0f;
+        m_gizmoDrag.active = true;
+        m_gizmoDrag.axis   = Arcane::GizmoAxis::None;
+
+        const std::array<Astra::Entity, 1> doomed{ b };
+        (void)Arcane::Edit::DeleteEntities(reg, doomed);
+        m_selection.Clear();   // HasSelection() false: gizmoActive is false, the drag is still live
+        return true;
+    }
 #endif
 
     // Phase 15: the modals. Opened and drawn at DOCKSPACE level, outside any
