@@ -32,6 +32,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Arcane/Guid.hpp"
 
@@ -84,6 +85,15 @@ namespace Arcane::AssetPipeline
         // left completely untouched. Returns the number of artifact files actually removed. Call
         // RebuildIndexFromScan first for a sweep grounded in the current disk state.
         std::size_t SweepOrphans(const std::unordered_set<Guid>& liveGuids);
+
+        // Deletes every artifact file under Artifacts/ whose prefix names `guid` and whose
+        // file stem is not `keepKey` -- the same scan RebuildIndexFromScan does, but it removes
+        // EVERY such file, not just the one key the index happened to hold (last writer wins
+        // there). Files that are still present afterwards (a locked file, a failed remove) are
+        // appended to `*remaining` when it is non-null. Returns the number removed. Does not
+        // touch the in-memory index.
+        std::size_t RemoveAllExcept(const Guid& guid, std::uint64_t keepKey,
+                                    std::vector<std::filesystem::path>* remaining);
 
     private:
         std::filesystem::path m_intermediateDir;

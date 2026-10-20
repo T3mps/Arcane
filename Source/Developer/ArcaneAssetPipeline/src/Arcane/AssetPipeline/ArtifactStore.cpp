@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 // Only for CurrentProcessId() below -- part of the per-invocation tmp-path uniqueness that
 // makes concurrent same-key Commit() calls safe (see ArtifactStore.hpp's concurrency contract).
@@ -206,6 +207,63 @@ namespace Arcane::AssetPipeline
                 ++removed;
 
             it = m_index.erase(it);
+        }
+
+        return removed;
+    }
+
+    std::size_t ArtifactStore::RemoveAllExcept(const Guid& guid, std::uint64_t keepKey,
+                                               std::vector<std::filesystem::path>* remaining)
+    {
+        std::size_t removed = 0;
+
+        const std::filesystem::path artifactsDir = m_intermediateDir / "Artifacts";
+
+        std::error_code ec;
+        if (!std::filesystem::exists(artifactsDir, ec) || ec)
+            return 0;
+
+        // Collect first, remove after: erasing under a live recursive iterator is not safe.
+        std::vector<std::filesystem::path> victims;
+        std::filesystem::recursive_directory_iterator it(artifactsDir, ec);
+        if (ec) return 0;
+
+        const std::filesystem::recursive_directory_iterator end;
+        for (; it != end; it.increment(ec))
+        {
+            if (ec) break;
+
+            const std::filesystem::directory_entry& entry = *it;
+
+            std::error_code fileEc;
+            if (!entry.is_regular_file(fileEc) || fileEc) continue;
+
+            const std::filesystem::path& path = entry.path();
+            if (path.extension() != ".arcart") continue;
+
+            const std::optional<std::uint64_t> key = FromHex16(path.stem().string());
+            if (!key || *key == keepKey) continue;
+
+            const std::optional<ArtifactPrefix> prefix = ReadArtifactPrefix(path);
+            if (!prefix || !(prefix->sourceGuid == guid)) continue;
+
+            victims.push_back(path);
+        }
+
+        for (const std::filesystem::path& victim : victims)
+        {
+            std::error_code removeEc;
+            std::filesystem::remove(victim, removeEc);
+
+            std::error_code existsEc;
+            if (std::filesystem::exists(victim, existsEc))
+            {
+                if (remaining) remaining->push_back(victim);
+            }
+            else
+            {
+                ++removed;
+            }
         }
 
         return removed;

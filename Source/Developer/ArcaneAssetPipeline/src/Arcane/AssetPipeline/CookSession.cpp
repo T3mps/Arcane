@@ -363,33 +363,46 @@ namespace Arcane::AssetPipeline
                 // -- for a settings-only edit, the stale artifact's sourceHash still matches
                 // the CURRENT source bytes (only the settings changed), so it would even
                 // hash-validate as if it were current, silently masking the settings change.
-                const std::optional<std::uint64_t> previousKeyForGuid = store.Lookup(*guid);
-
-                // Best-effort removal of a superseded old-key artifact for `guid`, now that
-                // `newKey` is the artifact this pass is about to make current for it. A no-op
-                // when there was nothing indexed yet, or the key didn't actually change.
-                // Failure (e.g. a locked file) is silently tolerated -- ResolveCurrentArtifactPath
-                // never trusts the index anyway (see this file's own header comment), and a
-                // future SweepOrphans/self-heal pass gets another chance at it once the guid's
-                // OWN source is ever removed.
-                auto removeSupersededArtifact = [&](std::uint64_t newKey)
+                // Review fix round 1: delete EVERY artifact for this guid except the current
+                // key, not just the one key the index held (it is last-writer-wins, so a
+                // stray same-guid file that was never the indexed key survived, and a
+                // client-side directory scan by guid could still resolve it). Returns false
+                // and records a failure when a stale file could not be removed: the guid is
+                // then NOT up to date / cooked, since the stale bytes may still be served.
+                auto removeNonCurrent = [&]() -> bool
                 {
-                    if (previousKeyForGuid && *previousKeyForGuid != newKey)
-                    {
-                        std::error_code removeEc;
-                        fs::remove(store.PathFor(*previousKeyForGuid), removeEc);
-                    }
+                    std::vector<fs::path> left;
+                    store.RemoveAllExcept(*guid, cookKey, &left);
+                    if (left.empty())
+                        return true;
+
+                    const std::string reason = "superseded artifact could not be removed";
+                    m_lastFailures[*guid] = reason;
+                    result.failures.emplace_back(*guid, reason);
+                    ++result.failed;
+                    if (m_progress) m_progress(source, false, reason);
+                    return false;
                 };
 
+                // The up-to-date outcome needs the current-key file to exist AND parse with
+                // the reader for its kind; a truncated or garbled file falls through into the
+                // import path below, which rewrites it.
                 std::error_code existsEc;
                 if (fs::exists(finalPath, existsEc))
                 {
-                    store.PutIndex(*guid, cookKey);
-                    removeSupersededArtifact(cookKey);
-                    result.upToDateGuids.push_back(*guid);   // I3: every kind, beside the count
-                    ++result.upToDate;
-                    if (m_progress) m_progress(source, true, "up to date");
-                    continue;
+                    const bool readable = (kindEntry.kind == CookKind::Mesh)
+                        ? ReadMeshArtifact(finalPath).has_value()
+                        : ReadTextureArtifact(finalPath).has_value();
+                    if (readable)
+                    {
+                        store.PutIndex(*guid, cookKey);
+                        if (!removeNonCurrent())
+                            continue;
+                        result.upToDateGuids.push_back(*guid);   // I3: every kind, beside the count
+                        ++result.upToDate;
+                        if (m_progress) m_progress(source, true, "up to date");
+                        continue;
+                    }
                 }
 
                 if (const std::optional<std::string> memo = ReadFailureMemo(intermediateDir, cookKey))
@@ -476,7 +489,8 @@ namespace Arcane::AssetPipeline
                 }
 
                 store.PutIndex(*guid, cookKey);
-                removeSupersededArtifact(cookKey);
+                if (!removeNonCurrent())
+                    continue;
                 result.cookedGuids.push_back(*guid);
                 ++result.cooked;
                 if (m_progress) m_progress(source, true, "cooked");
