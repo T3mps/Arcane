@@ -202,6 +202,7 @@ namespace Arcane::Server
             rc.client             = m_cfg.remoteClient;
             rc.ownerPid           = Arcane::Remote::Arming::OwnerPid(m_cfg.remote, m_cfg.ownerPid);
             rc.idleExitSeconds    = Arcane::Remote::Arming::IdleExitSeconds(m_cfg.remote, m_cfg.frames, m_cfg.remoteIdleExitSeconds);
+            rc.explicitRemote     = m_cfg.remote;   // I1: the server arms only under --remote
             rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
             rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()

@@ -165,6 +165,12 @@ public:
         // as an expired idle timer ("remote-idle"). 0 watches nothing. Start
         // writes it into the descriptor and every heartbeat rewrites it.
         std::uint32_t ownerPid = 0;
+        // Final fix pass (I1): the host was armed by an explicit --remote
+        // (servitor launch always passes it), not by editor.remote.enable
+        // alone. Start writes it into the descriptor (explicitRemote) and
+        // every heartbeat keeps it; quit --client's untagged --host fallback
+        // takes only a host that has it, so never the user's own editor.
+        bool explicitRemote = false;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

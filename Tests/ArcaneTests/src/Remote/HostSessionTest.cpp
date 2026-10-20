@@ -494,6 +494,61 @@ TEST_CASE("HostSession records its client in the descriptor at Start and on ever
     }
 }
 
+// Final fix pass (I1): the descriptor says whether an explicit --remote armed
+// the host, at Start and on every rewrite, and every host copies its own flag
+// (the editor's m_config.remote, never editor.remote.enable). A descriptor
+// without the key (an older host) reads false.
+TEST_CASE("HostSession records the explicit --remote mark in the descriptor", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    for (const bool marked : {false, true}) {
+        INFO("explicitRemote " << marked);
+        Arcane::Test::TempDir tmp("remote-session-explicit");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.explicitRemote = marked;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->explicitRemote == marked);
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // WriteHeartbeat, at once
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->explicitRemote == marked);
+        session.Stop("test");
+    }
+    CHECK_FALSE(Arcane::Remote::HostSession::Config{}.explicitRemote);
+
+    Arcane::Test::TempDir old("remote-descriptor-explicit");
+    const auto path = old.path / "editor-77.json";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << R"({"protocol":1,"hostKind":"editor","pid":77,"port":5555,"token":"t"})";
+    }
+    const auto back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK_FALSE(back->explicitRemote);
+
+    const auto read = [](const char* relative) {
+        std::ifstream in(Arcane::Test::RepoRoot() / relative);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    const auto lineWith = [](const std::string& text, const std::string& needle) {
+        const auto at = text.find(needle);
+        REQUIRE(at != std::string::npos);
+        return text.substr(at, text.find('\n', at) - at);
+    };
+    const std::regex editorFlag(R"(rc\.explicitRemote\s*=\s*m_config\.remote;)");
+    const std::regex serverFlag(R"(rc\.explicitRemote\s*=\s*m_cfg\.remote;)");
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp"), "rc.explicitRemote"), editorFlag));
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneRuntimeHost/src/RuntimeApp.cpp"), "rc.explicitRemote"), editorFlag));
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneServer/src/ServerApp.cpp"), "rc.explicitRemote"), serverFlag));
+}
+
 // B7 fix round 1 (M2): Cli takes the next token as --client's value even when it
 // is another flag, so --client --headless would swallow --headless. Both hosts
 // refuse that and an empty name, as --remote-descriptor does (exit 2).

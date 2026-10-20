@@ -1998,6 +1998,10 @@ namespace Arcane::Editor
         // ends itself and watches no process (B7 fix round 1, C2).
         rc.ownerPid           = Arcane::Remote::Arming::OwnerPid(m_config.remote, m_config.ownerPid);
         rc.idleExitSeconds    = Arcane::Remote::Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames, m_config.remoteIdleExitSeconds);
+        // Final fix pass (I1): only the explicit --remote marks the descriptor;
+        // the hand-opened editor's stays false, so quit --client's fallback
+        // never selects it.
+        rc.explicitRemote     = m_config.remote;
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
                                   "problems", "scene", "selection", "stats" };
         // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the

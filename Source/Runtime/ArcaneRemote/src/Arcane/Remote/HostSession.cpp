@@ -283,6 +283,7 @@ bool HostSession::Start()
     desc.abi = kGamePluginABIVersion; // ruling F27
     desc.client = m_config.client;
     desc.ownerPid = m_config.ownerPid;
+    desc.explicitRemote = m_config.explicitRemote;
     m_descriptor = desc;
     if (m_descriptorPath.empty() || !WriteDescriptorAtomic(m_descriptorPath, desc)) {
         ARC_ERROR("remote: could not write the descriptor {}; this host runs without remote",
@@ -542,6 +543,7 @@ void HostSession::WriteHeartbeat(std::int64_t nowUnixMs)
     m_descriptor.heartbeatUnixMs = nowUnixMs;
     m_descriptor.client = m_config.client;
     m_descriptor.ownerPid = m_config.ownerPid;
+    m_descriptor.explicitRemote = m_config.explicitRemote;
     m_descriptor.state = m_gate.State();
     m_descriptor.frame = m_gate.frame.load(std::memory_order_acquire);
     WriteDescriptorAtomic(m_descriptorPath, m_descriptor);

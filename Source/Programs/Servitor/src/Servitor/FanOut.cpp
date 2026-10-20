@@ -7,7 +7,9 @@
 #include <Arcane/Remote/Redact.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <exception>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -310,19 +312,43 @@ int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, co
                 "quit with --host <kind> or --pid"));
         // C1: a host launched without --client. --host selects it as before
         // Task 21 and --client is the audit header, but a host another client
-        // launched is never taken.
+        // launched is never taken. Final fix pass (I1): nor is a host servitor
+        // did not launch (no explicit --remote in its descriptor). The editor a
+        // user opens by hand arms remote by default and records no client, so
+        // without this the fallback would quit it (and --force would kill it).
         Scan scan = ScanDirectory(remoteDir);
         std::vector<std::string> owners;
+        std::vector<std::uint32_t> notLaunched;
         std::erase_if(scan.live, [&](const LiveHost& h) {
-            if (h.descriptor.client.empty())
-                return false;
-            if (opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind))
-                owners.push_back(h.descriptor.client);
-            return true;
+            const bool ofKind = opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind);
+            if (!h.descriptor.client.empty()) {
+                if (ofKind)
+                    owners.push_back(h.descriptor.client);
+                return true;
+            }
+            if (!h.descriptor.explicitRemote) {
+                if (ofKind)
+                    notLaunched.push_back(h.descriptor.pid);
+                return true;
+            }
+            return false;
         });
-        if (!owners.empty() && std::none_of(scan.live.begin(), scan.live.end(), [&](const LiveHost& h) {
-                return opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind);
-            })) {
+        const bool anyOfKind = std::any_of(scan.live.begin(), scan.live.end(), [&](const LiveHost& h) {
+            return opt.hostKind == Arcane::Remote::ToString(h.descriptor.hostKind);
+        });
+        if (!notLaunched.empty() && !anyOfKind) {
+            std::string pids;
+            for (const std::uint32_t pid : notLaunched)
+                pids += (pids.empty() ? "" : ", ") + std::to_string(pid);
+            return finish(Arcane::Remote::MakeError(
+                "host.quit", "target.none",
+                "the live " + opt.hostKind + " (pid " + pids + ") was not launched by servitor (no explicit --remote)" +
+                    (opt.hostKind == "editor" ? ", so it may be the user's own editor" : "") + "; client " +
+                    opt.client + " has no " + opt.hostKind + " to quit",
+                "--client never quits a host servitor did not launch, --force included; never quit an editor the "
+                "user opened"));
+        }
+        if (!owners.empty() && !anyOfKind) {
             std::string names;
             for (const std::string& name : owners)
                 names += (names.empty() ? "" : ", ") + name;

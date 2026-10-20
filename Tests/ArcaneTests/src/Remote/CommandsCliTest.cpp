@@ -960,8 +960,10 @@ int FakeQuitPost(const Arcane::Remote::Descriptor& d, const nlohmann::json& call
 }
 
 // A descriptor file for a LIVE process (this one), so IsStale is false; the
-// kind differs per file, so two files never share a name.
-void WriteClientDescriptor(const std::filesystem::path& dir, Arcane::Remote::HostKind kind, const std::string& client)
+// kind differs per file, so two files never share a name. explicitRemote: the
+// host was armed by --remote (servitor launch); false is the hand-opened editor.
+void WriteClientDescriptor(const std::filesystem::path& dir, Arcane::Remote::HostKind kind, const std::string& client,
+                           bool explicitRemote = false)
 {
     Arcane::Remote::Descriptor d;
     d.hostKind = kind;
@@ -969,6 +971,7 @@ void WriteClientDescriptor(const std::filesystem::path& dir, Arcane::Remote::Hos
     d.port = 1;
     d.token = "tok";
     d.client = client;
+    d.explicitRemote = explicitRemote;
     REQUIRE(Arcane::Remote::WriteDescriptorAtomic(
         Arcane::Remote::DescriptorPath(dir.parent_path().parent_path(), kind, d.pid), d));
 }
@@ -1098,10 +1101,11 @@ TEST_CASE("quit --client: --host falls back to an untagged host, narrows, and ke
     Servitor::FanOutResult result;
     const auto parsed = [&result] { return nlohmann::json::parse(result.text, nullptr, false); };
 
-    // C1: a runtime launched WITHOUT --client (its descriptor client is "").
+    // C1: a runtime servitor launched WITHOUT --client (its descriptor client
+    // is "", and it carries the explicit --remote mark).
     Arcane::Test::TempDir untagged("servitor-quit-untagged");
     const auto dirU = Arcane::Remote::DescriptorDir(untagged.path, false);
-    WriteClientDescriptor(dirU, Arcane::Remote::HostKind::Runtime, "");
+    WriteClientDescriptor(dirU, Arcane::Remote::HostKind::Runtime, "", true);
     opt.hostKind = "runtime";
     CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 0);
     CHECK(posts.count == 1);
@@ -1166,6 +1170,72 @@ TEST_CASE("quit --client: --host falls back to an untagged host, narrows, and ke
     CHECK(run.exitCode == 4);
     CHECK(run.err.empty());
     CHECK(run.out.find("someone-else") != std::string::npos);
+}
+
+// Final fix pass (I1): the untagged --host fallback takes only a host servitor
+// launched. A hand-opened editor arms remote by default (editor.remote.enable)
+// and records no client, so when X's own editor is gone (idle exit, crash) the
+// fallback must refuse it, even with --force, and post nothing.
+TEST_CASE("quit --client --host never falls back to a host servitor did not launch", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.clientSet = true;
+    opt.client = "final-x";
+    opt.format = Servitor::Format::Json;
+    QuitPosts posts;
+    Servitor::FanOutResult result;
+
+    Arcane::Test::TempDir byHand("servitor-quit-hand-editor");
+    const auto dirH = Arcane::Remote::DescriptorDir(byHand.path, false);
+    WriteClientDescriptor(dirH, Arcane::Remote::HostKind::Editor, "");   // the user's editor: no client, no marker
+    opt.hostKind = "editor";
+    for (const std::vector<std::string>& rest : {std::vector<std::string>{}, std::vector<std::string>{"--force"}}) {
+        INFO("rest " << (rest.empty() ? "(none)" : rest.front()));
+        posts.count = 0;
+        CHECK(Servitor::QuitByClient(rest, opt, dirH, &FakeQuitPost, &posts, &result) == 4);
+        CHECK(posts.count == 0);
+        const auto refused = nlohmann::json::parse(result.text, nullptr, false);
+        REQUIRE(refused.is_object());
+        CHECK(refused.at("errors").at(0).at("code") == "target.none");
+        const std::string message = refused.at("errors").at(0).at("message").get<std::string>();
+        CHECK(message.find("editor") != std::string::npos);
+        CHECK(message.find(std::to_string(Arcane::EditorLock::Self().pid)) != std::string::npos);
+    }
+
+    // The same refusal for any kind servitor did not launch.
+    Arcane::Test::TempDir bare("servitor-quit-unmarked-runtime");
+    const auto dirR = Arcane::Remote::DescriptorDir(bare.path, false);
+    WriteClientDescriptor(dirR, Arcane::Remote::HostKind::Runtime, "");
+    opt.hostKind = "runtime";
+    posts.count = 0;
+    CHECK(Servitor::QuitByClient({}, opt, dirR, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+
+    // An editor servitor launched without --client (explicit --remote) is still
+    // the fallback's: one envelope, one post.
+    Arcane::Test::TempDir launched("servitor-quit-launched-editor");
+    const auto dirL = Arcane::Remote::DescriptorDir(launched.path, false);
+    WriteClientDescriptor(dirL, Arcane::Remote::HostKind::Editor, "", true);
+    opt.hostKind = "editor";
+    posts.count = 0;
+    posts.kinds.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirL, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    REQUIRE(posts.kinds.size() == 1);
+    CHECK(posts.kinds.front() == "editor");
+
+    // Through Run -> QuitVerb -> RemoteDirFor: the hand-opened editor under
+    // --project is refused by name and nothing connects.
+    const auto arcproj = byHand.path / "final.arcproj";
+    {
+        std::ofstream touch(arcproj, std::ios::binary | std::ios::trunc);
+        touch << "{}";
+    }
+    const RunStreams run = RunCaptured({"servitor", "--json", "--project", Servitor::PathUtf8(arcproj), "--client",
+                                        "final-x", "--host", "editor", "quit", "--force"});
+    REQUIRE(run.captured);
+    CHECK(run.exitCode == 4);
+    CHECK(run.err.empty());
+    CHECK(run.out.find("not launched by servitor") != std::string::npos);
 }
 
 // B7 fix round 1 (Task 20 minor): with no format flag, a non-TTY stdout means
