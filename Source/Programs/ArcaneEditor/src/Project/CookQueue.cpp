@@ -160,6 +160,9 @@ namespace Arcane::Editor
             }
 
             bool idle = false;
+#if !defined(ARC_BUILD_DIST)
+            std::function<void()> exitHook;   // copied under the lock: no member is read once m_running clears
+#endif
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 m_results.push_back(std::move(result));
@@ -169,6 +172,9 @@ namespace Arcane::Editor
                 if (threw || !m_dirty || m_session.CancelRequested())
                 {
                     idle = true;
+#if !defined(ARC_BUILD_DIST)
+                    exitHook = m_passExitHook;
+#endif
                     m_running = false;
                     guard.armed = false;
                 }
@@ -178,8 +184,8 @@ namespace Arcane::Editor
             if (idle)
             {
 #if !defined(ARC_BUILD_DIST)
-                if (m_passExitHook)
-                    m_passExitHook();
+                if (exitHook)
+                    exitHook();
 #endif
                 return;
             }

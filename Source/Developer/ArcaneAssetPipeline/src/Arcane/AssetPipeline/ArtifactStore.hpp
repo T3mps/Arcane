@@ -92,11 +92,11 @@ namespace Arcane::AssetPipeline
         std::size_t SweepOrphans(const std::unordered_set<Guid>& liveGuids);
 
         // Deletes every artifact file under Artifacts/ whose prefix names `guid` and whose
-        // file stem is not `keepKey` -- the same scan RebuildIndexFromScan does, but it removes
+        // file stem is not `keepKey` -- the files RebuildIndexFromScan's scan recorded, removing
         // EVERY such file, not just the one key the index happened to hold (last writer wins
         // there). Files that are still present afterwards (a locked file, a failed remove) are
-        // appended to `*remaining` when it is non-null. Returns the number removed. Does not
-        // touch the in-memory index.
+        // appended to `*remaining` when it is non-null. Returns the number removed. Prunes the
+        // removed files from the recorded scan list (m_allByGuid); the key index is untouched.
         //
         // It works off the file list RebuildIndexFromScan recorded (call that first, once per
         // pass): the removals never walk the directory again, so a pass over N sources costs
@@ -114,6 +114,6 @@ namespace Arcane::AssetPipeline
         // Every parsed artifact file the last scan saw, by source guid (the index keeps one
         // key per guid; this keeps them all). RemoveAllExcept reads and prunes it.
         std::unordered_map<Guid, std::vector<std::filesystem::path>> m_allByGuid;
-        bool m_scanComplete = true;   // false when the last scan hit an I/O error part-way
+        bool m_scanComplete = false;   // false until a scan finishes cleanly (and when one hit an I/O error part-way)
     };
 }

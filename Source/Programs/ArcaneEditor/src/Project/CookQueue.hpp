@@ -80,7 +80,8 @@ namespace Arcane::Editor
 #if !defined(ARC_BUILD_DIST)
         // Test-only seam: runs on the pass's own thread at the one instant RunOnePass has
         // decided to go idle (m_running already false, mutex released), just before the job
-        // returns. A test calls NoteChanged() from it to prove an edit landing in that window
+        // returns. The worker copies the hook under the lock before m_running clears and calls the copy,
+        // since the queue may be destroyed the instant m_running is false. A test calls NoteChanged() from it to prove an edit landing in that window
         // is cooked, not dropped. Compiled out of Dist; never set by production code.
         void SetPassExitHookForTesting(std::function<void()> fn) { m_passExitHook = std::move(fn); }
 #endif

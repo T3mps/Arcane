@@ -259,9 +259,11 @@ namespace Arcane::AssetPipeline
 
     namespace
     {
-        // True iff the file at `path` parses with the reader for `kind`. A closed-enum switch
-        // with no default: a third kind fails to compile here instead of silently reading
-        // with the texture reader and re-importing forever.
+        // True iff the file at `path` parses with the reader for `kind`. The static_assert fails
+        // the build when a kind row is added to the table without a case below (C4062 is off by
+        // default on MSVC, so the switch alone would not catch it).
+        static_assert(kCookKindTable.size() == 2, "a new CookKind needs a case in CurrentArtifactParses");
+
         bool CurrentArtifactParses(CookKind kind, const fs::path& path)
         {
             switch (kind)

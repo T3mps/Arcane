@@ -539,3 +539,14 @@ TEST_CASE("pipeline: RemoveAllExcept removes the scanned non-current files for a
     // A second call has nothing left from the scan to remove.
     CHECK(store.RemoveAllExcept(guid, 0x1111ull, nullptr) == 0u);
 }
+
+TEST_CASE("pipeline: RemoveAllExcept without a prior scan fails the guid loudly instead of reporting clean",
+          "[pipeline]")
+{
+    const fs::path root = TempDir("remove_all_except_no_scan");
+    ArtifactStore store(root);
+
+    std::vector<fs::path> remaining;
+    CHECK(store.RemoveAllExcept(Guid::Generate(), 0x1111ull, &remaining) == 0u);
+    CHECK_FALSE(remaining.empty());   // the caller missed RebuildIndexFromScan: not a clean sweep
+}
