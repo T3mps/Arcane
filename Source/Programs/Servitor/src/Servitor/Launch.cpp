@@ -380,6 +380,16 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
             hasRemote = true;
         } else if (argv[i] == "--client") {
             hasClient = true;
+            // M1 (B7 fix round 1): a host --client that differs from servitor's
+            // own would hide the host from a later `quit --client <servitor's>`.
+            if (opt.clientSet && (i + 1 >= argv.size() || argv[i + 1] != opt.client)) {
+                if (error != nullptr)
+                    *error = Arcane::Remote::MakeError("", "arg.invalid",
+                                                       "--client is given both to servitor (" + opt.client +
+                                                           ") and after -- with another value",
+                                                       "pass --client once, before the verb");
+                return std::nullopt;
+            }
         } else if (argv[i] == "--headless") {
             headless = true;
         } else if (argv[i] == "--project" && i + 1 < argv.size()) {

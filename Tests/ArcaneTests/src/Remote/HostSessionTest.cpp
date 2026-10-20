@@ -494,6 +494,33 @@ TEST_CASE("HostSession records its client in the descriptor at Start and on ever
     }
 }
 
+// B7 fix round 1 (M2): Cli takes the next token as --client's value even when it
+// is another flag, so --client --headless would swallow --headless. Both hosts
+// refuse that and an empty name, as --remote-descriptor does (exit 2).
+TEST_CASE("host --client refuses an empty name or another flag as its value", "[host][remote]") {
+    char* flagValue[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                         const_cast<char*>("--client"), const_cast<char*>("--headless")};
+    char* emptyValue[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                          const_cast<char*>("--client=")};
+    char* named[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                     const_cast<char*>("--client"), const_cast<char*>("b7-x")};
+    auto h0 = Arcane::HostConfig::Parse(4, flagValue);
+    CHECK_FALSE(h0.config);
+    CHECK(h0.exitCode == 2);
+    auto h1 = Arcane::HostConfig::Parse(3, emptyValue);
+    CHECK_FALSE(h1.config);
+    CHECK(h1.exitCode == 2);
+    auto h2 = Arcane::HostConfig::Parse(4, named);
+    REQUIRE(h2.config);
+    CHECK(h2.config->remoteClient == "b7-x");
+    char* serverFlag[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                          const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote"),
+                          const_cast<char*>("--client"), const_cast<char*>("--frames")};
+    auto s0 = Arcane::Server::ServerConfig::Parse(6, serverFlag);
+    CHECK_FALSE(s0.config);
+    CHECK(s0.exitCode == 2);
+}
+
 TEST_CASE("omitted --owner-pid is zero, and a dead owner pid exits", "[host][remote]") {
     // The flag: omitted is 0, typed is the number (HostConfig and ServerConfig).
     {

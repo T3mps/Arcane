@@ -1168,4 +1168,14 @@ TEST_CASE("quit --client: --host falls back to an untagged host, narrows, and ke
     CHECK(run.out.find("someone-else") != std::string::npos);
 }
 
+// B7 fix round 1 (Task 20 minor): with no format flag, a non-TTY stdout means
+// json for a failed parse too (ScanFormat), as it does for a parsed command line.
+TEST_CASE("a parse failure with no format flag on a non-TTY stdout answers in json", "[remote][cli]") {
+    const RunStreams r = RunCaptured({"servitor", "--host"});
+    REQUIRE(r.captured);
+    CHECK(r.exitCode == 2);
+    CHECK(r.err.empty());
+    CHECK(r.out.find("\"arg.invalid\"") != std::string::npos);
+}
+
 #endif

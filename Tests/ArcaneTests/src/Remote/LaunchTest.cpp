@@ -404,11 +404,23 @@ TEST_CASE("omitted --client is not forwarded to the host, and an explicit one is
     CHECK(*(at + 1) == "grok-review-r1");
     CHECK_FALSE(has(plan->argv, Servitor::DefaultClientId()));
 
-    // A --client the operator typed after "--" is theirs: not doubled.
+    // B7 fix round 1 (M1): a --client after "--" that differs from servitor's
+    // own is refused (a later quit --client grok-review-r1 could not find the host).
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, ownClientArgs, &err);
+    CHECK_FALSE(plan.has_value());
+    REQUIRE_FALSE(err.errors.empty());
+    CHECK(err.errors.front().code == "arg.invalid");
+    // The same name typed twice is not doubled; without servitor's --client, the host's own is kept.
+    const std::vector<std::string> sameClientArgs = {"--client", "grok-review-r1"};
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, sameClientArgs, &err);
+    REQUIRE(plan.has_value());
+    CHECK(std::count(plan->argv.begin(), plan->argv.end(), "--client") == 1);
+    opt.client = Servitor::DefaultClientId();
+    opt.clientSet = false;
     plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, ownClientArgs, &err);
     REQUIRE(plan.has_value());
     CHECK(std::count(plan->argv.begin(), plan->argv.end(), "--client") == 1);
-    CHECK_FALSE(has(plan->argv, "grok-review-r1"));
+    CHECK(has(plan->argv, "mine"));
 }
 
 TEST_CASE("launch passes --owner-pid through only when the operator typed it", "[servitor][client]") {

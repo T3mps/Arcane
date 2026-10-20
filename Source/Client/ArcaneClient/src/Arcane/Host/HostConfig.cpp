@@ -344,6 +344,14 @@ namespace Arcane
             return { std::nullopt, 2 };
         }
         cfg.remoteClient     = r.Get("client");
+        // M2 (B7 fix round 1): Cli takes the NEXT token as the value even when
+        // it is another flag (--client --headless would swallow --headless).
+        if (r.Supplied("client") && (cfg.remoteClient.empty() || cfg.remoteClient.starts_with("--")))
+        {
+            std::fprintf(stderr, "error: --client wants a caller name (an empty value or another "
+                                 "flag is not a name)\n");
+            return { std::nullopt, 2 };
+        }
         if (r.Supplied("owner-pid") && !ParseIdleExitSeconds(r.Get("owner-pid"), cfg.ownerPid))
         {
             std::fprintf(stderr, "error: --owner-pid wants a process id (a whole number, 0 = none), "

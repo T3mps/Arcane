@@ -503,7 +503,7 @@ Format ScanFormat(int argc, char** argv)
     }
     if (json)
         return Format::Json;
-    return format.value_or(Format::Human);
+    return format.value_or(StdoutIsTty() ? Format::Human : Format::Json);   // ParseGlobals' default
 }
 
 std::string UsageText(const std::string& problem)
